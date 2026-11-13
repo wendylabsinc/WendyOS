@@ -1,11 +1,21 @@
 ---
 name: wendy-device-ops
-description: "Use when a developer or coding agent needs Wendy CLI-native device operations: discover devices, set defaults, inspect device version/system/hardware/WiFi state, update the agent, or gather evidence before SSH/debugging."
+description: "Use for Wendy CLI or MCP device operations on WendyOS and Wendy Lite: discover devices, inspect hardware and software, configure WiFi, pair SensorLink sources, update the agent or OS, use cameras, Bluetooth or Cloud tunnels, or gather evidence before debugging."
 ---
 
 # Wendy Device Ops Workflow
 
-Use this for device operations that are not app build/run lifecycle. Prefer CLI-native, non-interactive commands before SSH.
+Use this for device operations that are not app build/run lifecycle. Access devices through Wendy CLI or MCP only. Do not use SSH. If Wendy cannot retrieve a needed fact, report the missing capability or failed check.
+
+## Start with device info
+
+Before asking the user for their board, firmware, OS, or agent version, inspect the device yourself:
+
+```bash
+wendy --json device info --device <target>
+```
+
+Reuse the target from the failing command or conversation, or omit `--device` to use the configured default. If the target is unknown, use discovery below and select the unambiguous match to the user's context. Ask only for an unresolved target choice or relevant facts the inspection could not retrieve.
 
 ## Discover and select a device
 
@@ -13,9 +23,15 @@ Bound discovery so agents do not hang:
 
 ```bash
 wendy discover --json --type all --timeout 5s
-wendy discover --json --type usb --timeout 5s
-wendy discover --json --type lan --timeout 5s
 ```
+
+Ordinary LAN discovery and direct device management work even when Wendy Net is
+disabled on the device. Use the returned selector and advertised port; enrolled
+WendyOS agents commonly use TLS on port 50052, while unprovisioned agents use
+port 50051. On Linux, a USB-tethered device needs a one-time host setup: ask the user
+to run `wendy discover` in a terminal and accept its USB setup prompt (it
+needs sudo). An empty scan can also mean a board without WendyOS; use
+`wendy-device-install` for that.
 
 Use explicit hostnames when possible:
 
@@ -25,7 +41,13 @@ wendy device get-default
 wendy device unset-default
 ```
 
-Passing the hostname to `set-default` avoids the interactive picker. Use `--device <hostname>` on later commands when you do not want to depend on local default state.
+Passing the hostname to `set-default` avoids the interactive picker. Change the default only when that is part of the user's task. For diagnostic commands, use `--device <target>` to select the device without changing the default.
+
+## Reach devices through Wendy Net
+
+Before joining, selecting a mesh destination or disconnecting, read
+[Wendy Net access](references/wendy-net.md). Nearby routers are discovered
+automatically; choose only the destination device.
 
 ## Inspect device state
 
@@ -33,13 +55,6 @@ Local CLI info:
 
 ```bash
 wendy --json info
-```
-
-Target device info and platform facts:
-
-```bash
-wendy --json device info --device <hostname>
-wendy --json device info --check-updates --device <hostname>
 ```
 
 Hardware capabilities:
@@ -74,12 +89,24 @@ wendy device wifi rank --order "Home,Office,Cafe" --device <hostname>
 
 Do not echo or store WiFi passwords in issues, PRs, reusable docs, or final summaries. If a password was passed on the command line, avoid copying the full command into shared output.
 
+## SensorLink pairing
+
+Pair a SensorLink source, such as an ESP32 camera, with the consuming device only when the user asks:
+
+```bash
+wendy --json device pair --device <hostname> --list
+wendy --json device pair --device <hostname> --sensorlink "<source>"
+wendy --json device pair --device <hostname> --forget "<source>"
+```
+
+Name the source by its name, asset ID or principal URI; `--forget` takes the pairing name `--list` shows. When none or several match, the error lists candidates; ask the user instead of guessing.
+
 ## Agent update
 
 Only update the agent when the user asks, when the device is clearly behind the CLI, or when a fix requires a newer agent. Prefer checking first:
 
 ```bash
-wendy --json device version --check-updates --device <hostname>
+wendy --json device info --check-updates --device <hostname>
 ```
 
 Stable update:
@@ -95,26 +122,10 @@ wendy --json device update --nightly --device <hostname>
 wendy --json device update --binary ./path/to/wendy-agent --device <hostname>
 ```
 
-## SSH fallback
+## With MCP tools
 
-If CLI-native inspection cannot answer the question, WendyOS devices may temporarily allow:
-
-```bash
-ssh root@<hostname>
-```
-
-Use SSH primarily for read-only evidence collection and WendyOS issue filing. On the device, use containerd/`nerdctl`, not Docker:
-
-```bash
-cat /etc/wendyos/device-type 2>/dev/null || true
-cat /etc/os-release 2>/dev/null || true
-systemctl status wendy-agent --no-pager
-journalctl -u wendy-agent -n 200 --no-pager
-sudo nerdctl -n default ps -a
-sudo nerdctl -n default logs <container>
-```
-
-Prefer changing app containers, `wendy.json`, or repo code over changing bare-metal device settings. If a direct device change is necessary, make it minimal and document it.
+Read [MCP tools and groups](references/mcp-tools.md) before device operations.
+It lists supported tools, required groups and when to use the CLI instead.
 
 ## Routing
 

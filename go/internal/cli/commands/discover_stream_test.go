@@ -157,6 +157,9 @@ func TestLANPickerCachedDevicesStayHiddenUntilConfirmed(t *testing.T) {
 		if step.ev.Probed {
 			step.ev.Device.AgentVersion = "0.10.4"
 		}
+		if step.ev.ProbeFailed {
+			step.ev.Device.ProbeFailure = missingLANCredentials()
+		}
 		if msg := lanPickerEventMsg(step.ev); msg != nil {
 			updated, _ := m.Update(devicePickerLocalMsg{msg: msg})
 			m = updated.(devicePickerModel)
@@ -165,7 +168,7 @@ func TestLANPickerCachedDevicesStayHiddenUntilConfirmed(t *testing.T) {
 		if got := strings.Contains(view, dev.DisplayName); got != step.visible {
 			t.Fatalf("event %+v: visible = %v, want %v; view=%q", step.ev, got, step.visible, view)
 		}
-		if got := strings.Contains(view, "does not have access"); got != step.hint {
+		if got := strings.Contains(view, "no client certificates"); got != step.hint {
 			t.Fatalf("event %+v: no-access hint = %v, want %v; view=%q", step.ev, got, step.hint, view)
 		}
 	}

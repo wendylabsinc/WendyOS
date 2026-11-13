@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build (darwin || linux) && !ios
 
 // USB device handling for the RCM stage (bootROM level).
 // USB transfer mechanics translated from NVIDIA tegrarcm usb.c
@@ -131,6 +131,16 @@ func (d *Device) ReadWithTimeout(buf []byte, timeout time.Duration) (int, error)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return d.in.ReadContext(ctx, buf)
+}
+
+// ReadChipID reads BR_CID over EP0 on this already-claimed device handle.
+func (d *Device) ReadChipID() (string, error) {
+	buf := make([]byte, 96)
+	n, err := d.dev.Control(0x80, 0x06, 0x0303, 0, buf)
+	if err != nil {
+		return "", err
+	}
+	return parseChipIDDescriptor(buf, n)
 }
 
 // Write sends buf to the bulk OUT endpoint the way the bootROM expects:

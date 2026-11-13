@@ -207,7 +207,63 @@ type ReplyConfig struct {
 	Lease     time.Duration // lease time
 }
 
-// BuildReply encodes an OFFER or ACK for the given request.
+// requestLease validates the REQUEST state before confirming its exact address.
+// A zero message type means remain silent (RFC 2131 section 4.3.2).
+func requestLease(req *Packet, serverIP net.IP, pool *LeasePool) (MessageType, net.IP, error) {
+	selecting := req.ServerID != nil
+	if selecting && !req.ServerID.Equal(serverIP) {
+		return 0, nil, nil // The client selected another server's offer.
+	}
+	current := req.CIAddr.To4()
+	hasCurrent := current != nil && !current.IsUnspecified()
+	requested := req.RequestedIP
+	if requested != nil {
+		if hasCurrent || requested.To4() == nil || requested.IsUnspecified() {
+			return 0, nil, nil
+		}
+	} else {
+		if selecting || !hasCurrent {
+			return 0, nil, nil
+		}
+		requested = current // RENEWING or REBINDING.
+	}
+	addr, err := pool.confirmLease(req.CHAddr, requested)
+	switch {
+	case errors.Is(err, errUnknownLease):
+		if selecting {
+			return Nak, nil, nil // Our offer is no longer reserved.
+		}
+		return 0, nil, nil // No binding: do not override another server's lease.
+	case errors.Is(err, errLeaseMismatch):
+		return Nak, nil, nil
+	case err != nil:
+		return 0, nil, err
+	default:
+		return Ack, addr, nil
+	}
+}
+
+// endClientLease accepts only messages naming this server and the client's
+// exact reservation. Other servers' RELEASE/DECLINE messages cannot alter it.
+func endClientLease(req *Packet, serverIP net.IP, pool *LeasePool) error {
+	if !req.ServerID.Equal(serverIP) {
+		return nil
+	}
+	switch req.Type {
+	case Release:
+		if req.CIAddr.To4() != nil && !req.CIAddr.IsUnspecified() {
+			return pool.release(req.CHAddr, req.CIAddr)
+		}
+	case Decline:
+		if req.RequestedIP.To4() != nil && !req.RequestedIP.IsUnspecified() &&
+			(req.CIAddr.To4() == nil || req.CIAddr.IsUnspecified()) {
+			return pool.decline(req.CHAddr, req.RequestedIP)
+		}
+	}
+	return nil
+}
+
+// BuildReply encodes an OFFER, ACK, or NAK for the given request.
 func BuildReply(req *Packet, kind MessageType, cfg ReplyConfig) []byte {
 	buf := make([]byte, dhcpMinLen)
 	buf[0] = bootReply
@@ -221,8 +277,10 @@ func BuildReply(req *Packet, kind MessageType, cfg ReplyConfig) []byte {
 	// it has configured the address we are handing it.
 	buf[10] = byte(req.Flags >> 8)
 	buf[11] = byte(req.Flags)
-	copy(buf[16:20], cfg.ClientIP.To4())
-	copy(buf[20:24], cfg.ServerIP.To4())
+	if kind != Nak {
+		copy(buf[16:20], cfg.ClientIP.To4())
+		copy(buf[20:24], cfg.ServerIP.To4())
+	}
 	copy(buf[24:28], req.GIAddr.To4())
 	copy(buf[28:34], req.CHAddr)
 	copy(buf[dhcpHeaderLen:], dhcpMagicCookie[:])
@@ -230,6 +288,11 @@ func BuildReply(req *Packet, kind MessageType, cfg ReplyConfig) []byte {
 	opts := []byte{optMessageType, 1, byte(kind)}
 	opts = append(opts, optServerID, 4)
 	opts = append(opts, cfg.ServerIP.To4()...)
+	if kind == Nak {
+		// A NAK supplies no address, lease, or network configuration.
+		buf[10] |= 0x80
+		return append(buf, append(opts, optEnd)...)
+	}
 	opts = append(opts, optLeaseTime, 4)
 	opts = append(opts, secondsBE(cfg.Lease)...)
 	// Renewal at half and rebinding at seven eighths, per RFC 2131 section 4.4.5.
@@ -281,102 +344,4 @@ func BuildDiscover(xid uint32, mac net.HardwareAddr, hostname string) []byte {
 	opts = append(opts, optParamRequest, 4, optSubnetMask, optRouter, optHostname, optBroadcastAddr)
 	opts = append(opts, optEnd)
 	return append(buf, opts...)
-}
-
-// LeasePool hands out addresses from a contiguous range and remembers which MAC
-// holds which address, so a camera keeps its address across renewals.
-type LeasePool struct {
-	base   net.IP // first assignable address
-	count  int    // how many addresses the pool holds
-	byMAC  map[string]net.IP
-	byAddr map[string]string // address -> MAC
-}
-
-// NewLeasePool returns a pool of count addresses starting at base.
-func NewLeasePool(base net.IP, count int) *LeasePool {
-	return &LeasePool{
-		base:   base.To4(),
-		count:  count,
-		byMAC:  make(map[string]net.IP),
-		byAddr: make(map[string]string),
-	}
-}
-
-// ErrPoolExhausted is returned when every address in the pool is held.
-var ErrPoolExhausted = errors.New("no free addresses in the lease pool")
-
-// Lease returns the address for a MAC, allocating one on first request.
-//
-// preferred honours a client's option 50, which is what lets a camera keep the
-// address it had before a reboot.
-func (p *LeasePool) Lease(mac net.HardwareAddr, preferred net.IP) (net.IP, error) {
-	key := mac.String()
-	if existing, ok := p.byMAC[key]; ok {
-		return existing, nil
-	}
-	if preferred != nil && p.contains(preferred) {
-		if holder, taken := p.byAddr[preferred.String()]; !taken || holder == key {
-			addr := preferred.To4()
-			p.assign(key, addr)
-			return addr, nil
-		}
-	}
-	for i := 0; i < p.count; i++ {
-		addr := p.addrAt(i)
-		if _, taken := p.byAddr[addr.String()]; !taken {
-			p.assign(key, addr)
-			return addr, nil
-		}
-	}
-	return nil, ErrPoolExhausted
-}
-
-// Holder returns the MAC holding an address.
-func (p *LeasePool) Holder(addr net.IP) (string, bool) {
-	mac, ok := p.byAddr[addr.String()]
-	return mac, ok
-}
-
-// Leases returns the current MAC to address mapping.
-func (p *LeasePool) Leases() map[string]net.IP {
-	out := make(map[string]net.IP, len(p.byMAC))
-	for mac, addr := range p.byMAC {
-		out[mac] = addr
-	}
-	return out
-}
-
-// Release drops a lease so the address can be reused.
-func (p *LeasePool) Release(mac net.HardwareAddr) {
-	key := mac.String()
-	if addr, ok := p.byMAC[key]; ok {
-		delete(p.byAddr, addr.String())
-		delete(p.byMAC, key)
-	}
-}
-
-func (p *LeasePool) assign(macKey string, addr net.IP) {
-	p.byMAC[macKey] = addr
-	p.byAddr[addr.String()] = macKey
-}
-
-func (p *LeasePool) addrAt(i int) net.IP {
-	addr := make(net.IP, 4)
-	copy(addr, p.base)
-	// The pool never spans more than a /24, so only the last octet moves.
-	addr[3] += byte(i)
-	return addr
-}
-
-func (p *LeasePool) contains(ip net.IP) bool {
-	v4 := ip.To4()
-	if v4 == nil {
-		return false
-	}
-	for i := 0; i < p.count; i++ {
-		if p.addrAt(i).Equal(v4) {
-			return true
-		}
-	}
-	return false
 }

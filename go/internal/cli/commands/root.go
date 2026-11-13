@@ -2,18 +2,23 @@
 package commands
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/permission"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/scan"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
+
+const DiscordSupportPrompt = "Get support in our Discord community: https://discord.gg/wendylabsinc"
 
 var (
 	jsonOutput bool
@@ -22,7 +27,7 @@ var (
 
 func NewRootCmd() *cobra.Command {
 	// firstRun records whether this invocation showed the first-run analytics
-	// notice in PreRunE, so PostRunE can avoid stacking another prompt on top.
+	// notice during initialization, so FinishInvocation avoids another prompt.
 	var firstRun bool
 
 	root := &cobra.Command{
@@ -32,12 +37,20 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// First, before the early returns below, so every command sees one
+			// answer to "which device": --device, else WENDY_DEVICE, else the
+			// saved default.
+			applyDeviceEnv()
+			// Progress tips never recommend the command already running.
+			tui.SetRunningCommand(cmd.CommandPath())
+
 			// Skip heavy init for commands that don't need device/cloud setup.
-			// __usb-setup and __t234-write run as root under sudo; skipping init
-			// avoids config/analytics writes (and an update check) as root, and
-			// keeps the first-run banner out of the helper's captured output.
+			// __usb-setup, __t234-write and __bmap-write run as root under sudo;
+			// skipping init avoids config/analytics writes (and an update check)
+			// as root, and keeps the first-run banner out of the helper's
+			// captured output.
 			switch cmd.Name() {
-			case permission.CheckArg, "__session-broker", "__usb-setup", "__t234-write", "open-browser":
+			case permission.CheckArg, "__session-broker", "__usb-setup", "__t234-write", "__bmap-write", "open-browser":
 				return nil
 			}
 
@@ -57,40 +70,36 @@ func NewRootCmd() *cobra.Command {
 			}
 			premark("  prerun: config.Load")
 
-			firstRun = analytics.Init(cfg)
+			firstRun = initializeCommandAnalytics(cmd, cfg, true)
 			premark("  prerun: analytics.Init")
-			if firstRun {
-				cmd.PrintErrln("Attention: The Wendy CLI collects anonymous analytics.")
-				cmd.PrintErrln("They help us understand which commands are used most, identify common errors, and prioritize improvements.")
-				cmd.PrintErrln("Analytics are enabled by default. If you'd like to opt-out, use the following command:")
-				cmd.PrintErrln("  wendy analytics disable")
-				cmd.PrintErrln("Or, set the following environment variable:")
-				cmd.PrintErrln("  WENDY_ANALYTICS=false")
 
-				cmd.PrintErrln("")
-				cmd.PrintErrln("New to Wendy? Run `wendy tour` for a guided setup.")
-
-				cfg.Analytics = &config.AnalyticsConfig{Enabled: true}
-				if err := config.Save(cfg); err != nil {
-					return err
-				}
+			// Under sudo with the user's HOME (the Thor flash's re-exec, or
+			// `sudo wendy` on macOS), leave the housekeeping below to the
+			// user's own runs: as root it would write their files, and the
+			// update check would leave them a root-owned auth refresh lock.
+			if runsAsForeignUser() {
+				return nil
 			}
 
 			// Refresh MCP config and skills if the CLI was upgraded since the
 			// user last ran `wendy mcp setup`. Runs synchronously here, before
-			// the update-check goroutine below also mutates and saves cfg.
+			// the update-check goroutine below also writes config.json.
 			maybeRefreshMCPSetup(cfg)
 			premark("  prerun: maybeRefreshMCPSetup")
 
 			// Reconcile credentials with the configured storage policy. Runs in
-			// the synchronous zone: the update-check goroutine below saves cfg
-			// too, and its Save must observe an already-migrated on-disk state.
+			// the synchronous zone: the update-check goroutine below rewrites
+			// config.json too, and must find it already migrated.
 			if config.MigrateSecretsIfNeeded(cfg) {
 				cmd.PrintErrln("Moved wendy credentials into ~/.wendy/config.json.")
 			}
 
-			if dueCLIUpdateCheck(cfg) {
-				scheduleCLIUpdateCheck(cfg)
+			// mcp serve owns a cancellable periodic checker for its lifetime.
+			if cmd.CommandPath() != "wendy mcp serve" && cmd.Name() != cobra.ShellCompRequestCmd && !backgroundCLIUpdatesDisabled() && !strings.HasPrefix(cmd.CommandPath(), "wendy completion") {
+				cmd.SetContext(context.WithValue(cmd.Context(), cliUpdateNoticeEligible{}, true))
+				if dueCLIUpdateCheck(cfg) {
+					scheduleCLIUpdateCheck()
+				}
 			}
 			premark("  prerun: dueCLIUpdateCheck")
 
@@ -102,14 +111,15 @@ func NewRootCmd() *cobra.Command {
 			maybeShowOptimizeTip(cmd)
 			maybeShowNextStep(cmd)
 
-			// Surface any pending CLI-update notice first. If it showed a prompt,
-			// don't stack the completion prompt on top of it this invocation.
-			updateShown, err := notifyCLIUpdate(cmd)
-			if err != nil {
-				return err
+			// Under sudo, don't offer a CLI update or shell completions: either
+			// would install files as root.
+			if runsAsForeignUser() {
+				return nil
 			}
 
-			maybePromptInstallCompletions(cmd, firstRun, updateShown)
+			// Defer optional prompts until main has recorded the command's
+			// outcome. Leaving a prompt must not hide work that already finished.
+			cmd.SetContext(context.WithValue(cmd.Context(), postCommandFirstRun{}, firstRun))
 			return nil
 		},
 	}
@@ -118,7 +128,10 @@ func NewRootCmd() *cobra.Command {
 	// Do not name the hidden --build-host flag here: this description shows in
 	// every command's --help (persistent flag), and the E2E help specs guard
 	// that the unreleased flag never leaks into help output.
-	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device hostname; `wendy run` accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach)")
+	//
+	// pflag shows the first `backticked` word of a usage string as the flag's
+	// placeholder ("--device host"), so quote commands here with '...'.
+	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device `host` (hostname, IP, or host:port); 'wendy run' accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach). Defaults to $WENDY_DEVICE, then the saved default device")
 
 	// Render the top-level command groups in the deliberate order below rather
 	// than alphabetically, so e.g. "project" lists before "device".
@@ -149,18 +162,28 @@ func NewRootCmd() *cobra.Command {
 	projectCmd.GroupID = "manage"
 	deviceCmd := newDeviceCmd()
 	deviceCmd.GroupID = "manage"
+	netCmd := newNetCmd()
+	netCmd.GroupID = "manage"
 	dataCmd := newDataCmd()
 	dataCmd.GroupID = "manage"
 
 	// Cloud
 	cloudCmd := newCloudCmd()
 	cloudCmd.GroupID = "cloud"
+	appCmd := newAppCmd()
+	appCmd.GroupID = "cloud"
+	registryCmd := newRegistryCmd()
+	registryCmd.GroupID = "cloud"
 
 	// Settings
 	analyticsCmd := newAnalyticsCmd()
 	analyticsCmd.GroupID = "settings"
 	cacheCmd := newCacheCmd()
 	cacheCmd.GroupID = "settings"
+	updateCmd := newCLIUpdateCmd()
+	updateCmd.GroupID = "settings"
+	doctorCmd := newDoctorCmd()
+	doctorCmd.GroupID = "settings"
 	docsCmd := newDocsCmd()
 	docsCmd.GroupID = "settings"
 	tourCmd := newTourCmd()
@@ -227,7 +250,18 @@ func NewRootCmd() *cobra.Command {
 			if sessionParentLease {
 				parentLease = os.NewFile(3, "parent-lease")
 			}
-			return sessionbroker.Run(cmd.Context(), sessionSpec, sessionbroker.DefaultIdleTTL, parentLease)
+			idle := sessionbroker.DefaultIdleTTL
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if cfg.SessionBrokerIdleTimeout != "" {
+				idle, err = time.ParseDuration(cfg.SessionBrokerIdleTimeout)
+				if err != nil || idle <= 0 {
+					return fmt.Errorf("sessionBrokerIdleTimeout must be a positive duration")
+				}
+			}
+			return sessionbroker.Run(cmd.Context(), sessionSpec, idle, parentLease)
 		},
 	}
 	sessionBrokerCmd.Flags().StringVar(&sessionSpec, "spec", "", "Encoded session connection recipe")
@@ -236,20 +270,34 @@ func NewRootCmd() *cobra.Command {
 
 	var bmapDevice, bmapFile, bmapSource string
 	var bmapWriters int
+	var bmapWriteLimit int64
 	bmapWriteCmd := &cobra.Command{
 		Use:    "__bmap-write",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if bmapSource != "" {
-				return runBmapWriteSeekable(bmapDevice, bmapFile, bmapSource, bmapWriters, cmd.OutOrStdout())
+				return runBmapWriteSeekable(bmapDevice, bmapFile, bmapSource, bmapWriters, bmapWriteLimit, cmd.OutOrStdout())
 			}
-			return runBmapWrite(bmapDevice, bmapFile, cmd.InOrStdin())
+			return runBmapWrite(bmapDevice, bmapFile, cmd.InOrStdin(), bmapWriteLimit)
 		},
 	}
 	bmapWriteCmd.Flags().StringVar(&bmapDevice, "device", "", "Raw device path to write")
 	bmapWriteCmd.Flags().StringVar(&bmapFile, "bmap", "", "Path to the .bmap file")
 	bmapWriteCmd.Flags().StringVar(&bmapSource, "source", "", "Path to the seekable .img.zst source")
 	bmapWriteCmd.Flags().IntVar(&bmapWriters, "writers", 0, "Concurrent writer goroutines (0 = sequential default)")
+	bmapWriteCmd.Flags().Int64Var(&bmapWriteLimit, "write-limit", 0, "Skip image bytes at or past this offset, the end of a smaller drive (0 = write all)")
+
+	var gptDevice string
+	gptRelocateCmd := &cobra.Command{
+		Use:    "__gpt-relocate",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runGPTRelocate(gptDevice)
+		},
+	}
+	gptRelocateCmd.Flags().StringVar(&gptDevice, "device", "", "Raw device path whose GPT to rewrite for its size")
+	_ = gptRelocateCmd.MarkFlagRequired("device")
 
 	// Visible commands are added in display order (command sorting is disabled
 	// above); hidden commands follow and never appear in help.
@@ -262,14 +310,20 @@ func NewRootCmd() *cobra.Command {
 		// Manage
 		projectCmd,
 		deviceCmd,
+		netCmd,
 		newVMCmd(),
 		dataCmd,
+		newJobCmd(),
 		// Cloud
 		cloudCmd,
+		appCmd,
+		registryCmd,
 		// Settings
 		analyticsCmd,
 		cacheCmd,
 		docsCmd,
+		doctorCmd,
+		updateCmd,
 		tourCmd,
 		// Hidden
 		agentCmd,
@@ -277,6 +331,7 @@ func NewRootCmd() *cobra.Command {
 		bleCheckCmd,
 		sessionBrokerCmd,
 		bmapWriteCmd,
+		gptRelocateCmd,
 		newT234WriteCmd(),
 		newUSBSetupHiddenCmd(),
 		watchCmd,
@@ -293,9 +348,11 @@ func NewRootCmd() *cobra.Command {
 
 	root.SetHelpCommandGroupID("settings")
 	root.SetCompletionCommandGroupID("settings")
+	root.SetHelpTemplate(root.HelpTemplate() + "{{if not .HasParent}}\n" + DiscordSupportPrompt + "\n{{end}}")
 
 	addUSBDriverCommand(root)
 	rejectStrayArguments(root)
+	markUsageErrors(root)
 
 	root.Version = version.Version
 	return root
@@ -338,6 +395,8 @@ func rejectStrayArguments(cmd *cobra.Command) {
 // cobra command path (e.g. "wendy device info").
 func nextStepHint(commandPath string) string {
 	switch commandPath {
+	case "wendy init":
+		return "Next: run `wendy project` to review app settings, then `wendy run` to deploy."
 	case "wendy discover":
 		return "Next: run `wendy init` to create an app, then `wendy run` to deploy it."
 	case "wendy device info", "wendy device top", "wendy device apps list":
@@ -349,8 +408,11 @@ func nextStepHint(commandPath string) string {
 }
 
 // maybeShowNextStep prints a next-step hint after a successful command. cobra
-// only runs PersistentPostRunE when RunE succeeded, so this is success-only. It
-// is suppressed for JSON output, non-interactive terminals, and CI.
+// only runs PersistentPostRunE when RunE succeeded, so this is success-only.
+// The hint is onboarding advice for a person at a terminal, so it is
+// suppressed in JSON mode (stderr there carries only the error envelope,
+// progress, and notices that change what the result means), for runs without
+// a terminal, and in CI.
 func maybeShowNextStep(cmd *cobra.Command) {
 	if jsonOutput || !isInteractiveTerminal() || env.IsCI() {
 		return

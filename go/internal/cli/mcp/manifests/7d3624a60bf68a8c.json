@@ -1,0 +1,2011 @@
+{
+  "version": "2026.10.13-212424+7d3624a60bf68a8c",
+  "tools": [
+    {
+      "annotations": {
+        "title": "Inspect App",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Inspect app and service states, recorded exit, resource usage, and recent warning/error logs. Optional project_path checks declared TCP readiness; missing or unsupported checks stay unknown.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "App ID from container_list",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "JSON response budget; logs are dropped before app state",
+            "maximum": 1000000,
+            "minimum": 1024,
+            "type": "integer"
+          },
+          "max_logs": {
+            "default": 20,
+            "description": "Recent warning/error records; zero skips logs",
+            "maximum": 200,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "Local directory containing this app's wendy.json readiness declarations",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 3,
+            "description": "Total inspection and probe deadline",
+            "maximum": 15,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "app_name"
+        ],
+        "type": "object"
+      },
+      "name": "app_inspect",
+      "title": "Inspect App"
+    },
+    {
+      "annotations": {
+        "title": "Sign In to Wendy Cloud",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Sign in to Wendy Cloud; devices need a signed-in session. Returns a link to show the user (opened in their browser when possible) and finishes in the background; wendy_status then reports auth: logged_in.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "auth_login",
+      "title": "Sign In to Wendy Cloud"
+    },
+    {
+      "annotations": {
+        "title": "Connect Bluetooth Device",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Connect to a Bluetooth peripheral by address",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "description": "Bluetooth peripheral address, e.g. AA:BB:CC:DD:EE:FF",
+            "type": "string"
+          },
+          "pair": {
+            "description": "Pair the peripheral during connection",
+            "type": "boolean"
+          },
+          "trust": {
+            "description": "Trust the peripheral after connecting",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "type": "object"
+      },
+      "name": "bluetooth_connect",
+      "title": "Connect Bluetooth Device"
+    },
+    {
+      "annotations": {
+        "title": "Disconnect Bluetooth Device",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Disconnect from a Bluetooth peripheral by address",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "description": "Bluetooth peripheral address, e.g. AA:BB:CC:DD:EE:FF",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "type": "object"
+      },
+      "name": "bluetooth_disconnect",
+      "title": "Disconnect Bluetooth Device"
+    },
+    {
+      "annotations": {
+        "title": "Scan for Bluetooth Devices",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Scan for Bluetooth peripherals near the connected device",
+      "inputSchema": {
+        "properties": {
+          "max_bytes": {
+            "description": "Maximum output size in bytes before the result is truncated (default 100000)",
+            "type": "number"
+          },
+          "timeout_seconds": {
+            "description": "Scan duration in seconds (default 5)",
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "bluetooth_scan",
+      "title": "Scan for Bluetooth Devices"
+    },
+    {
+      "annotations": {
+        "title": "List Camera Controls",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Show a local camera's tunable controls (exposure, gain, zoom, focus, ...) with the current value, range and driver default. The list comes from the camera, so it is whatever that hardware supports.",
+      "inputSchema": {
+        "properties": {
+          "device_id": {
+            "description": "Camera id from camera_list (the N in /dev/videoN)",
+            "type": "number"
+          }
+        },
+        "required": [
+          "device_id"
+        ],
+        "type": "object"
+      },
+      "name": "camera_controls",
+      "title": "List Camera Controls"
+    },
+    {
+      "annotations": {
+        "title": "List Cameras",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List the cameras attached to the connected device, with the id each control tool takes. Online means detected or reachable; a camera may still be in use by another application or fail to stream.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "camera_list",
+      "title": "List Cameras"
+    },
+    {
+      "annotations": {
+        "title": "Set Camera Control",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Set tunable controls on a local camera. Values persist across stream reconnects and reboots unless persist=false. Call camera_controls first for the names and ranges this camera accepts.",
+      "inputSchema": {
+        "properties": {
+          "controls": {
+            "description": "Comma-separated name=value pairs, e.g. \"auto_exposure=1,exposure_time_absolute=20\". A mode control is applied before the control it gates.",
+            "type": "string"
+          },
+          "device_id": {
+            "description": "Camera id from camera_list",
+            "type": "number"
+          },
+          "persist": {
+            "description": "Re-apply on stream reconnect and reboot (default true)",
+            "type": "boolean"
+          },
+          "reset": {
+            "description": "Comma-separated control names to put back to the driver's default and stop persisting",
+            "type": "string"
+          },
+          "reset_all": {
+            "description": "Put every control back to the driver's default and forget them all",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "device_id"
+        ],
+        "type": "object"
+      },
+      "name": "camera_set_control",
+      "title": "Set Camera Control"
+    },
+    {
+      "annotations": {
+        "title": "Take Camera Snapshot",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Capture one still image from a camera on the connected Wendy device and return it for visual inspection. Requires approval because it activates a physical camera. Use camera_list to select device_id. This is a finite snapshot, not a live view: the temporary stream closes after capture. Supports direct and cloud device connections. Local GStreamer with H.264/VP8 decoders and JPEG encoding is required.",
+      "inputSchema": {
+        "properties": {
+          "device_id": {
+            "description": "Camera id returned by camera_list",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "description": "Maximum time to obtain an image, default 15 seconds",
+            "maximum": 30,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_id"
+        ],
+        "type": "object"
+      },
+      "name": "camera_snapshot",
+      "title": "Take Camera Snapshot"
+    },
+    {
+      "annotations": {
+        "title": "Connect to Cloud Device",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Connect the MCP session to a cloud-enrolled device through the Wendy Cloud tunnel",
+      "inputSchema": {
+        "properties": {
+          "broker_url": {
+            "description": "Tunnel broker host:port (default: cloud :443 endpoint, otherwise \u003ccloud-host\u003e:50052)",
+            "type": "string"
+          },
+          "cloud_grpc": {
+            "description": "Cloud gRPC endpoint to use, e.g. cloud.wendy.dev:443 (optional when a default session is set via 'wendy auth use')",
+            "type": "string"
+          },
+          "device_name": {
+            "description": "Device name; optional only when exactly one cloud device is available",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "cloud_connect",
+      "title": "Connect to Cloud Device"
+    },
+    {
+      "annotations": {
+        "title": "Discover Cloud Devices",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List enrolled cloud devices for the selected Wendy Cloud auth session",
+      "inputSchema": {
+        "properties": {
+          "cloud_grpc": {
+            "description": "Cloud gRPC endpoint to use, e.g. cloud.wendy.dev:443 (optional when a default session is set via 'wendy auth use')",
+            "type": "string"
+          },
+          "filter": {
+            "description": "Optional cloud-side asset filter",
+            "type": "string"
+          },
+          "max_bytes": {
+            "description": "Maximum output size in bytes before the result is truncated (default 100000)",
+            "type": "number"
+          },
+          "online_only": {
+            "description": "Only list devices with active tunnel broker presence (default true)",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "cloud_discover",
+      "title": "Discover Cloud Devices"
+    },
+    {
+      "annotations": {
+        "title": "Enroll Device in Wendy Cloud",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Enroll the connected device using your current cloud login. Use provisioning_start only with an externally supplied enrollment token.",
+      "inputSchema": {
+        "properties": {
+          "cloud_grpc": {
+            "description": "Cloud gRPC endpoint to use, e.g. cloud.wendy.dev:443 (optional when a default session is set via 'wendy auth use')",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name to assign to the device in Wendy Cloud",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "cloud_enroll_device",
+      "title": "Enroll Device in Wendy Cloud"
+    },
+    {
+      "annotations": {
+        "title": "Ping Cloud Device",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Ping a cloud-enrolled device through the Wendy Cloud tunnel broker using an echo request/reply over the datagram session (no ICMP sockets or privileges required)",
+      "inputSchema": {
+        "properties": {
+          "broker_url": {
+            "description": "Tunnel broker host:port (default: cloud :443 endpoint, otherwise \u003ccloud-host\u003e:50052)",
+            "type": "string"
+          },
+          "cloud_grpc": {
+            "description": "Cloud gRPC endpoint to use, e.g. cloud.wendy.dev:443 (optional when a default session is set via 'wendy auth use')",
+            "type": "string"
+          },
+          "count": {
+            "description": "Number of echoes to send (default 4, max 20)",
+            "type": "number"
+          },
+          "device_name": {
+            "description": "Device name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_name"
+        ],
+        "type": "object"
+      },
+      "name": "cloud_ping",
+      "title": "Ping Cloud Device"
+    },
+    {
+      "annotations": {
+        "title": "Open Cloud Tunnel",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Forward a local TCP or UDP port to a port on a cloud-enrolled device",
+      "inputSchema": {
+        "properties": {
+          "broker_url": {
+            "description": "Tunnel broker host:port (default: cloud :443 endpoint, otherwise \u003ccloud-host\u003e:50052)",
+            "type": "string"
+          },
+          "cloud_grpc": {
+            "description": "Cloud gRPC endpoint to use, e.g. cloud.wendy.dev:443 (optional when a default session is set via 'wendy auth use')",
+            "type": "string"
+          },
+          "device_name": {
+            "description": "Device name; optional only when exactly one cloud device is available",
+            "type": "string"
+          },
+          "local_port": {
+            "description": "Local loopback port to listen on",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol": {
+            "description": "Transport protocol to forward: tcp or udp (default tcp)",
+            "enum": [
+              "tcp",
+              "udp"
+            ],
+            "type": "string"
+          },
+          "remote_port": {
+            "description": "Remote device port; defaults to local_port",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "local_port"
+        ],
+        "type": "object"
+      },
+      "name": "cloud_tunnel",
+      "title": "Open Cloud Tunnel"
+    },
+    {
+      "annotations": {
+        "title": "Close Cloud Tunnel",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Close one port forward owned by this MCP server, including active connections. Repeating a close is safe.",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "description": "Tunnel ID from cloud_tunnel or cloud_tunnel_list",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "cloud_tunnel_close",
+      "title": "Close Cloud Tunnel"
+    },
+    {
+      "annotations": {
+        "title": "List Cloud Tunnels",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "List port forwards owned by this MCP server. Includes tunnel IDs, ports and canonical device selectors; excludes other CLI processes.",
+      "inputSchema": {
+        "properties": {
+          "max_bytes": {
+            "default": 16384,
+            "maximum": 1000000,
+            "minimum": 1024,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "cloud_tunnel_list",
+      "title": "List Cloud Tunnels"
+    },
+    {
+      "annotations": {
+        "title": "Delete Container",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Delete a container, optionally removing its image and volumes",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "App name of the container to delete",
+            "type": "string"
+          },
+          "delete_image": {
+            "description": "Also delete the container image (frees disk space)",
+            "type": "boolean"
+          },
+          "delete_volumes": {
+            "description": "Also delete persistent volumes",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_name"
+        ],
+        "type": "object"
+      },
+      "name": "container_delete",
+      "title": "Delete Container"
+    },
+    {
+      "annotations": {
+        "title": "Run Command in Container",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Execute argv in a running container through the current connection. No shell expansion, TTY, or stdin. Returns bounded output and exit code; nonzero exits fail. Can modify device state.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "App/container name from container_list",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "command": {
+            "description": "Executable followed by its arguments, e.g. [\"python3\", \"-c\", \"print('hello')\"]. At most 65536 total argument bytes.",
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Maximum combined stdout/stderr bytes retained, default 100000; excess output is drained until exit or timeout",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "description": "Maximum time to wait for completion, default 30 seconds",
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "app_name",
+          "command"
+        ],
+        "type": "object"
+      },
+      "name": "container_exec",
+      "title": "Run Command in Container"
+    },
+    {
+      "annotations": {
+        "title": "List Containers",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List all containers on the connected device",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "container_list",
+      "title": "List Containers"
+    },
+    {
+      "annotations": {
+        "title": "Start Container",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Start or restart a container and collect bounded output. May interrupt a running task. Uses declared entitlements; inspect container_list for failures. For passive logs use telemetry_logs.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "App name of the container to start",
+            "type": "string"
+          },
+          "max_bytes": {
+            "description": "Maximum output size in bytes before the result is truncated (default 100000)",
+            "type": "number"
+          },
+          "max_chunks": {
+            "description": "Maximum output chunks to collect (default 200)",
+            "type": "number"
+          }
+        },
+        "required": [
+          "app_name"
+        ],
+        "type": "object"
+      },
+      "name": "container_start",
+      "title": "Start Container"
+    },
+    {
+      "annotations": {
+        "title": "Show Container Stats",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Get memory and storage stats for all containers",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "container_stats",
+      "title": "Show Container Stats"
+    },
+    {
+      "annotations": {
+        "title": "Stop Container",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Stop a running container. Interrupts whatever task it is running.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "App name of the container to stop",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_name"
+        ],
+        "type": "object"
+      },
+      "name": "container_stop",
+      "title": "Stop Container"
+    },
+    {
+      "annotations": {
+        "title": "Connect to Device",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Connect to a LAN, simulator, or cloud device using its discovery selector.",
+      "inputSchema": {
+        "properties": {
+          "device": {
+            "description": "device from device_list, a host:port, or vm:name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "name": "device_connect",
+      "title": "Connect to Device"
+    },
+    {
+      "annotations": {
+        "title": "Disconnect from Device",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Disconnect from the currently connected device",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "device_disconnect",
+      "title": "Disconnect from Device"
+    },
+    {
+      "annotations": {
+        "title": "Show Device Info",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Get device versions, hardware, storage, and battery percentage/charge state. Missing battery fields mean unavailable readings or estimates. No ROS app required.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "device_info",
+      "title": "Show Device Info"
+    },
+    {
+      "annotations": {
+        "title": "List Devices",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List configured and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user.",
+      "inputSchema": {
+        "properties": {
+          "cloud_grpc": {
+            "description": "Cloud gRPC endpoint to use (optional when a default auth session is selected via 'wendy auth use')",
+            "type": "string"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "JSON byte limit; complete devices retained with omitted count",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scan": {
+            "description": "If true, run a live mDNS scan (3 s) in addition to returning configured devices",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "device_list",
+      "title": "List Devices"
+    },
+    {
+      "annotations": {
+        "title": "Read Device OS Logs",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Read a bounded tail of the connected device's kernel ring buffer (dmesg). Timestamps are microseconds since boot. Does not follow or restart anything.",
+      "inputSchema": {
+        "properties": {
+          "max_bytes": {
+            "default": 16384,
+            "maximum": 1000000,
+            "minimum": 1024,
+            "type": "integer"
+          },
+          "max_records": {
+            "default": 100,
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "default": 10,
+            "maximum": 30,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "device_os_logs",
+      "title": "Read Device OS Logs"
+    },
+    {
+      "annotations": {
+        "title": "Set Default Device",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Save an address as the default device in ~/.wendy/config.json, replacing the current default",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "description": "Device address to save as default, e.g. mydevice.local:50051",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "type": "object"
+      },
+      "name": "device_set_default",
+      "title": "Set Default Device"
+    },
+    {
+      "annotations": {
+        "title": "Update Device Agent",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Update only the connected device's agent, then verify its running version or hash and reconnect. May interrupt the agent connection. OS updates are separate.",
+      "inputSchema": {
+        "properties": {
+          "binary_path": {
+            "description": "Optional local agent binary or macOS agent bundle; otherwise download the release",
+            "type": "string"
+          },
+          "nightly": {
+            "default": false,
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 300,
+            "maximum": 3600,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "device_update_agent",
+      "title": "Update Device Agent"
+    },
+    {
+      "annotations": {
+        "title": "List Hardware Capabilities",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List hardware capabilities (GPUs, cameras, I2C buses, USB devices, etc.) on the connected device",
+      "inputSchema": {
+        "properties": {
+          "category": {
+            "description": "Filter by category, e.g. gpu, usb, i2c, gpio, camera (optional)",
+            "type": "string"
+          },
+          "max_bytes": {
+            "description": "Maximum output size in bytes before the result is truncated (default 100000)",
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "hardware_capabilities",
+      "title": "List Hardware Capabilities"
+    },
+    {
+      "annotations": {
+        "title": "Plan OS Install",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Plan initial WendyOS or agent installation: artifact, erase scope, prerequisites and CLI arguments. No disk writes. For supported image installs, os_install_start creates a resumable job.",
+      "inputSchema": {
+        "properties": {
+          "carrier": {
+            "description": "Required for Jetson: developer-kit. Custom robot carriers need vendor instructions, not generic Jetson images.",
+            "type": "string"
+          },
+          "device_type": {
+            "description": "Exact board: raspberry-pi-3/4/5, jetson-orin-nano, jetson-agx-orin, jetson-agx-thor, unitree-g1, or linux-desktop",
+            "type": "string"
+          },
+          "drive": {
+            "description": "Exact host disk path from os_list_drives; only for raw-media writes",
+            "type": "string"
+          },
+          "rootfs_only": {
+            "description": "Orin raw-media write only; leaves QSPI firmware unchanged",
+            "type": "boolean"
+          },
+          "storage": {
+            "enum": [
+              "sd",
+              "nvme",
+              "emmc"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "description": "Exact WendyOS version; omitted resolves latest stable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_type"
+        ],
+        "type": "object"
+      },
+      "name": "os_install_plan",
+      "title": "Plan OS Install"
+    },
+    {
+      "annotations": {
+        "title": "Resume OS Install",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Resume a saved install after a physical step. Probes hardware before asking for erase authorization; confirm only the returned target with the user's approval. Repeated calls cannot repeat a completed write. After flashing, supply an explicit address to verify boot.",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "description": "Explicit first-boot address, used only after writing",
+            "type": "string"
+          },
+          "confirm_erase": {
+            "description": "User approved erasing this exact target and the recorded erase scope",
+            "type": "boolean"
+          },
+          "confirm_internal": {
+            "description": "User additionally approved a non-removable drive when required",
+            "type": "boolean"
+          },
+          "expected_public_key": {
+            "description": "Optional expected first-boot identity",
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "description": "Exact target fingerprint from this job's latest readiness probe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "type": "object"
+      },
+      "name": "os_install_resume",
+      "title": "Resume OS Install"
+    },
+    {
+      "annotations": {
+        "title": "Start OS Install",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Create a persistent installation job and return physical setup instructions. Does not erase anything. Resume after the user completes the step; only supported image installs can execute.",
+      "inputSchema": {
+        "properties": {
+          "carrier": {
+            "description": "Required for Jetson: developer-kit. Custom robot carriers need vendor instructions, not generic Jetson images.",
+            "type": "string"
+          },
+          "device_type": {
+            "description": "Exact board: raspberry-pi-3/4/5, jetson-orin-nano, jetson-agx-orin, jetson-agx-thor, unitree-g1, or linux-desktop",
+            "type": "string"
+          },
+          "drive": {
+            "description": "Exact host disk path from os_list_drives; only for raw-media writes",
+            "type": "string"
+          },
+          "rootfs_only": {
+            "description": "Orin raw-media write only; leaves QSPI firmware unchanged",
+            "type": "boolean"
+          },
+          "storage": {
+            "enum": [
+              "sd",
+              "nvme",
+              "emmc"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "description": "Exact WendyOS version; omitted resolves latest stable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_type"
+        ],
+        "type": "object"
+      },
+      "name": "os_install_start",
+      "title": "Start OS Install"
+    },
+    {
+      "annotations": {
+        "title": "Show OS Install Status",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Read a saved installation job, including its phase, progress, instructions and first-boot verification. Works after MCP restarts.",
+      "inputSchema": {
+        "properties": {
+          "job_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "type": "object"
+      },
+      "name": "os_install_status",
+      "title": "Show OS Install Status"
+    },
+    {
+      "annotations": {
+        "title": "Verify OS Install",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Verify first boot at an explicit target without changing the active connection. Checks agent, optional OS/board/public key and enrollment. Application readiness remains unchecked.",
+      "inputSchema": {
+        "properties": {
+          "address": {
+            "description": "Explicit hostname, IP:port, or cloud selector; never chooses a default device",
+            "type": "string"
+          },
+          "expected_device_type": {
+            "type": "string"
+          },
+          "expected_os_version": {
+            "type": "string"
+          },
+          "expected_public_key": {
+            "type": "string"
+          },
+          "require_enrollment": {
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 15,
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "type": "object"
+      },
+      "name": "os_install_verify",
+      "title": "Verify OS Install"
+    },
+    {
+      "annotations": {
+        "title": "List Drives",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "List host installation drives, excluding the system drive. Match path, model and capacity before planning a write; removable status is not authorization to erase.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "os_list_drives",
+      "title": "List Drives"
+    },
+    {
+      "annotations": {
+        "title": "Update Device OS",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Trigger an OS update on the connected device and stream progress",
+      "inputSchema": {
+        "properties": {
+          "artifact_url": {
+            "description": "URL of the OS update artifact (leave empty to use the device's configured update channel)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "os_update",
+      "title": "Update Device OS"
+    },
+    {
+      "annotations": {
+        "title": "Show OS Update Status",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Report the outcome of the device's most recent OS update: committed after post-reboot healthchecks, or rolled back with the services that failed",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "os_update_status",
+      "title": "Show OS Update Status"
+    },
+    {
+      "annotations": {
+        "title": "Validate Project",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Validate local project configuration and build inputs without building or running hooks. Reports actionable errors, warnings, and known or unknown device compatibility; works offline.",
+      "inputSchema": {
+        "properties": {
+          "build_type": {
+            "description": "Optional build system override, matching run",
+            "enum": [
+              "docker",
+              "compose",
+              "swift",
+              "python"
+            ],
+            "type": "string"
+          },
+          "check_device": {
+            "default": true,
+            "description": "Use the current connection for reported platform/hardware checks when available",
+            "type": "boolean"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "JSON response budget with omitted detail counts",
+            "maximum": 1000000,
+            "minimum": 1024,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "Project directory containing wendy.json or a Compose file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_path"
+        ],
+        "type": "object"
+      },
+      "name": "project_validate",
+      "title": "Validate Project"
+    },
+    {
+      "annotations": {
+        "title": "Show Provisioning Status",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Check whether the connected device is provisioned with Wendy Cloud",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "provisioning_status",
+      "title": "Show Provisioning Status"
+    },
+    {
+      "annotations": {
+        "title": "Summarize ROS 2 Lidar",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Summarize discovered LiDAR topics with sensor-compatible QoS. Keep discovery scope/domain; app inherits app DDS configuration. Prefer over raw YAML. First sample in its original frame; use only verified target frames. Check outcome, timestamps, filters, and coverage: empty sectors remain unknown and reception does not prove source freshness or motion readiness.",
+      "inputSchema": {
+        "properties": {
+          "count": {
+            "default": 1,
+            "description": "Maximum independently summarized messages",
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "domain_id": {
+            "description": "ROS_DOMAIN_ID; required for host scope",
+            "maximum": 232,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration_seconds": {
+            "default": 10,
+            "description": "Total time including discovery/setup",
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 32000,
+            "description": "Result byte limit; oversized summaries omitted whole",
+            "maximum": 100000,
+            "minimum": 2048,
+            "type": "integer"
+          },
+          "max_points": {
+            "default": 200000,
+            "description": "Decode budget; oversized clouds fail rather than skip points",
+            "maximum": 1000000,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "max_range": {
+            "default": 20,
+            "description": "Maximum horizontal distance in meters; must exceed min_range",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "number"
+          },
+          "max_z": {
+            "default": 2,
+            "description": "Maximum output-frame height in meters; must exceed min_z",
+            "maximum": 100,
+            "minimum": -100,
+            "type": "number"
+          },
+          "message_type": {
+            "description": "Discovered topic type; default sensor_msgs/msg/PointCloud2",
+            "enum": [
+              "sensor_msgs/msg/PointCloud2",
+              "sensor_msgs/msg/LaserScan"
+            ],
+            "type": "string"
+          },
+          "min_range": {
+            "default": 0.05,
+            "description": "Minimum horizontal distance from output-frame origin in meters",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "number"
+          },
+          "min_z": {
+            "default": -1,
+            "description": "Minimum output-frame height in meters; affects all distances",
+            "maximum": 100,
+            "minimum": -100,
+            "type": "number"
+          },
+          "sample_points": {
+            "default": 32,
+            "description": "Representative XYZ points; sector minima use all included points",
+            "maximum": 128,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scope": {
+            "description": "app inherits app DDS configuration; host uses an independent inspector and requires domain_id. Match discovery scope.",
+            "enum": [
+              "app",
+              "host"
+            ],
+            "type": "string"
+          },
+          "target_frame": {
+            "description": "Optional verified TF frame, e.g. base_link. Transform at the source timestamp; missing TF returns unknown. Default: original sensor/cloud frame.",
+            "type": "string"
+          },
+          "topic": {
+            "description": "Absolute topic discovered with ros2_topics, such as /utlidar/cloud_deskewed or /scan",
+            "type": "string"
+          },
+          "use_sim_time": {
+            "description": "Use ROS /clock for timestamp diagnostics and TF; only enable for a graph using simulated time (default false)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "name": "ros2_lidar_summary",
+      "title": "Summarize ROS 2 Lidar"
+    },
+    {
+      "annotations": {
+        "title": "Measure ROS 2 Topic Rate",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Observe a bounded set of ROS 2 topic rate reports measured by the device-side subscription, not cloud arrival timing. No reports mean unknown, not zero Hz. Rate does not establish source freshness or navigation readiness. Uses the agent's default subscription QoS.",
+      "inputSchema": {
+        "properties": {
+          "count": {
+            "default": 3,
+            "description": "Maximum samples or rate reports",
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "domain_id": {
+            "description": "ROS_DOMAIN_ID; required for host scope",
+            "maximum": 232,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration_seconds": {
+            "default": 10,
+            "description": "Total time including discovery",
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 32000,
+            "description": "Result byte limit; oversized samples omitted whole",
+            "maximum": 100000,
+            "minimum": 2048,
+            "type": "integer"
+          },
+          "scope": {
+            "default": "app",
+            "description": "app uses the running app DDS configuration; host inspects independently and requires domain_id. First host use may download an inspector image.",
+            "enum": [
+              "app",
+              "host"
+            ],
+            "type": "string"
+          },
+          "topic": {
+            "description": "Absolute ROS topic name from ros2_topics, at most 255 bytes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "name": "ros2_topic_hz",
+      "title": "Measure ROS 2 Topic Rate"
+    },
+    {
+      "annotations": {
+        "title": "Inspect ROS 2 Topic",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Inspect a ROS 2 topic's publisher/subscriber counts and verbose endpoint QoS. Counts do not prove sensor health or fresh readings.",
+      "inputSchema": {
+        "properties": {
+          "domain_id": {
+            "description": "ROS_DOMAIN_ID; required for host scope",
+            "maximum": 232,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration_seconds": {
+            "default": 45,
+            "description": "Total time including discovery",
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 32000,
+            "description": "Result byte limit; oversized samples omitted whole",
+            "maximum": 100000,
+            "minimum": 2048,
+            "type": "integer"
+          },
+          "scope": {
+            "default": "app",
+            "description": "app uses the running app DDS configuration; host inspects independently and requires domain_id. First host use may download an inspector image.",
+            "enum": [
+              "app",
+              "host"
+            ],
+            "type": "string"
+          },
+          "topic": {
+            "description": "Absolute ROS topic name from ros2_topics, at most 255 bytes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "name": "ros2_topic_info",
+      "title": "Inspect ROS 2 Topic"
+    },
+    {
+      "annotations": {
+        "title": "Sample ROS 2 Topic",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Collect a bounded YAML sample of a ROS 2 topic. Missing readings mean unknown, never clear or safe. Receive timestamps are local CLI times, not source freshness. Uses the agent's default echo QoS; custom message types must be available in its sidecar.",
+      "inputSchema": {
+        "properties": {
+          "count": {
+            "default": 3,
+            "description": "Maximum samples or rate reports",
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "domain_id": {
+            "description": "ROS_DOMAIN_ID; required for host scope",
+            "maximum": 232,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration_seconds": {
+            "default": 10,
+            "description": "Total time including discovery",
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 32000,
+            "description": "Result byte limit; oversized samples omitted whole",
+            "maximum": 100000,
+            "minimum": 2048,
+            "type": "integer"
+          },
+          "scope": {
+            "default": "app",
+            "description": "app uses the running app DDS configuration; host inspects independently and requires domain_id. First host use may download an inspector image.",
+            "enum": [
+              "app",
+              "host"
+            ],
+            "type": "string"
+          },
+          "topic": {
+            "description": "Absolute ROS topic name from ros2_topics, at most 255 bytes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "name": "ros2_topic_sample",
+      "title": "Sample ROS 2 Topic"
+    },
+    {
+      "annotations": {
+        "title": "List ROS 2 Topics",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Discover ROS 2 topic names, types and RMW on the connected device. Discovery does not prove readings are arriving. Use ros2_topic_info for publisher counts and QoS.",
+      "inputSchema": {
+        "properties": {
+          "domain_id": {
+            "description": "ROS_DOMAIN_ID; required for host scope",
+            "maximum": 232,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration_seconds": {
+            "default": 45,
+            "description": "Total time including discovery",
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 32000,
+            "description": "Result byte limit; oversized samples omitted whole",
+            "maximum": 100000,
+            "minimum": 2048,
+            "type": "integer"
+          },
+          "scope": {
+            "default": "app",
+            "description": "app uses the running app DDS configuration; host inspects independently and requires domain_id. First host use may download an inspector image.",
+            "enum": [
+              "app",
+              "host"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "ros2_topics",
+      "title": "List ROS 2 Topics"
+    },
+    {
+      "annotations": {
+        "title": "Build and Run App",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Build and deploy a local project to device or the connected target, replacing a running app of the same name. Returns status and build-log tail. Check container_list and telemetry_logs for application readiness.",
+      "inputSchema": {
+        "properties": {
+          "build_type": {
+            "description": "Build system; omit for automatic detection",
+            "enum": [
+              "docker",
+              "compose",
+              "swift",
+              "python"
+            ],
+            "type": "string"
+          },
+          "debug": {
+            "description": "Start under a debugger",
+            "type": "boolean"
+          },
+          "device": {
+            "description": "device selector from device_list (host:port, vm:NAME, or a cloud:// selector); omit to reuse the connection",
+            "type": "string"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "Build-log tail byte limit",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "product": {
+            "description": "Swift package product",
+            "type": "string"
+          },
+          "project_path": {
+            "description": "Project directory to build and deploy",
+            "type": "string"
+          },
+          "start": {
+            "default": true,
+            "description": "Start after deployment; false only creates the container",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "default": 300,
+            "description": "Command timeout",
+            "maximum": 3600,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_path"
+        ],
+        "type": "object"
+      },
+      "name": "run",
+      "title": "Build and Run App"
+    },
+    {
+      "annotations": {
+        "title": "Create Simulator",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "description": "Create a stopped local simulator from a published or local image. Downloads may take several minutes. Connect to its vm:name selector to boot it and provision its robot profile.",
+      "inputSchema": {
+        "properties": {
+          "disk_gib": {
+            "default": 16,
+            "maximum": 1024,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "image": {
+            "description": "Local raw, ZIP, gzip or zstd image path; mutually exclusive with version",
+            "type": "string"
+          },
+          "name": {
+            "description": "1–32 lowercase letters, digits or dashes; starts and ends with a letter or digit",
+            "type": "string"
+          },
+          "profile": {
+            "default": "generic",
+            "enum": [
+              "generic",
+              "go2",
+              "g1",
+              "rosmaster-r2"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "description": "Published version; omitted downloads latest stable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "simulator_create",
+      "title": "Create Simulator"
+    },
+    {
+      "annotations": {
+        "title": "Delete Simulator",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "description": "Permanently delete a stopped local simulator, including its disk and robot profile. Refuses running simulators; stop explicitly first.",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "simulator_delete",
+      "title": "Delete Simulator"
+    },
+    {
+      "annotations": {
+        "title": "List Simulators",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "List local simulators and their vm:name device selectors. Running state does not establish agent or robot readiness.",
+      "inputSchema": {
+        "properties": {
+          "max_bytes": {
+            "default": 16384,
+            "maximum": 100000,
+            "minimum": 1024,
+            "type": "integer"
+          },
+          "max_results": {
+            "default": 100,
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "simulator_list",
+      "title": "List Simulators"
+    },
+    {
+      "annotations": {
+        "title": "Stop Simulator",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Shut down a local simulator. Timeout leaves it running; force explicitly cuts power and can lose guest data.",
+      "inputSchema": {
+        "properties": {
+          "force": {
+            "default": false,
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 60,
+            "maximum": 120,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "simulator_stop",
+      "title": "Stop Simulator"
+    },
+    {
+      "annotations": {
+        "title": "Read Device Logs",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Collect compact log events from the connected device. format=otlp returns raw batches. Omitted counts cover collected records only.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "Filter by app/container name (optional)",
+            "type": "string"
+          },
+          "format": {
+            "default": "compact",
+            "description": "Compact records or original OTLP batches",
+            "enum": [
+              "compact",
+              "otlp"
+            ],
+            "type": "string"
+          },
+          "max_batches": {
+            "default": 10,
+            "description": "Collection batch limit; collection also stops after 10 seconds",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "JSON byte limit; complete records retained with omitted count",
+            "maximum": 1000000,
+            "minimum": 256,
+            "type": "integer"
+          },
+          "max_records": {
+            "default": 100,
+            "description": "Compact record limit",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_severity": {
+            "description": "Minimum severity (TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17, FATAL=21)",
+            "type": "number"
+          },
+          "service_name": {
+            "description": "Filter by service name (optional)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "telemetry_logs",
+      "title": "Read Device Logs"
+    },
+    {
+      "annotations": {
+        "title": "Read Device Metrics",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Collect compact metric points; format=otlp returns raw batches. Use device_info for battery readings.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "Filter by app/container name (optional)",
+            "type": "string"
+          },
+          "format": {
+            "default": "compact",
+            "description": "Compact records or original OTLP batches",
+            "enum": [
+              "compact",
+              "otlp"
+            ],
+            "type": "string"
+          },
+          "last_n": {
+            "description": "Read up to this many recent metric batches, bounded by max_batches. Returns after replay or a short idle gap; compact points retain newest timestamps first when limited.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_batches": {
+            "default": 10,
+            "description": "Collection batch limit; collection also stops after 10 seconds",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "JSON byte limit; complete records retained with omitted count",
+            "maximum": 1000000,
+            "minimum": 256,
+            "type": "integer"
+          },
+          "max_records": {
+            "default": 100,
+            "description": "Compact record limit",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "metric_name_prefix": {
+            "description": "Filter by metric name prefix (optional)",
+            "type": "string"
+          },
+          "service_name": {
+            "description": "Filter by service name (optional)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "telemetry_metrics",
+      "title": "Read Device Metrics"
+    },
+    {
+      "annotations": {
+        "title": "Read Device Traces",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Collect compact trace spans; format=otlp returns raw batches.",
+      "inputSchema": {
+        "properties": {
+          "app_name": {
+            "description": "Filter by app/container name (optional)",
+            "type": "string"
+          },
+          "format": {
+            "default": "compact",
+            "description": "Compact records or original OTLP batches",
+            "enum": [
+              "compact",
+              "otlp"
+            ],
+            "type": "string"
+          },
+          "max_batches": {
+            "default": 10,
+            "description": "Collection batch limit; collection also stops after 10 seconds",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 16384,
+            "description": "JSON byte limit; complete records retained with omitted count",
+            "maximum": 1000000,
+            "minimum": 256,
+            "type": "integer"
+          },
+          "max_records": {
+            "default": 100,
+            "description": "Compact record limit",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "service_name": {
+            "description": "Filter by service name (optional)",
+            "type": "string"
+          },
+          "span_name_prefix": {
+            "description": "Filter by span name prefix (optional)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "telemetry_traces",
+      "title": "Read Device Traces"
+    },
+    {
+      "annotations": {
+        "title": "Show Wendy Status",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "description": "Return the current connection state and a plain-English suggested next step. Call this first to orient yourself.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "wendy_status",
+      "title": "Show Wendy Status"
+    },
+    {
+      "annotations": {
+        "title": "Disconnect Device from Wi-Fi",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Disconnect the device from its current WiFi network",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "wifi_disconnect",
+      "title": "Disconnect Device from Wi-Fi"
+    },
+    {
+      "annotations": {
+        "title": "List Known Wi-Fi Networks",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List WiFi networks with saved profiles on the connected device",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "wifi_known_networks",
+      "title": "List Known Wi-Fi Networks"
+    },
+    {
+      "annotations": {
+        "title": "Scan Wi-Fi Networks",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "List available WiFi networks visible to the connected device",
+      "inputSchema": {
+        "properties": {
+          "max_bytes": {
+            "description": "Maximum output size in bytes before the result is truncated (default 100000)",
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "wifi_list",
+      "title": "Scan Wi-Fi Networks"
+    },
+    {
+      "annotations": {
+        "title": "Show Wi-Fi Status",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "description": "Get the current WiFi connection status of the connected device",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "wifi_status",
+      "title": "Show Wi-Fi Status"
+    }
+  ]
+}

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"crypto/mldsa"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -26,7 +27,7 @@ func TestCertNeedsRenewal(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := certNeedsRenewal(tc.notAfter, now); got != tc.want {
+			if got := certNeedsRenewal(tc.notAfter, now, renewLeadTime); got != tc.want {
 				t.Errorf("certNeedsRenewal() = %v, want %v", got, tc.want)
 			}
 		})
@@ -280,13 +281,15 @@ func TestRenewStatusMapping(t *testing.T) {
 			}
 			t.Cleanup(func() { renewHTTPClientForFn = origClient })
 
+			csrPEM, _ := proofTestCSR(t)
 			origCSR := renewCSRForFn
-			renewCSRForFn = func(config.CertificateInfo) (csrPEM, keyPEM string, err error) {
-				return "csr-pem", "key-pem", nil
+			renewCSRForFn = func(config.CertificateInfo) (string, string, error) {
+				return csrPEM, "key-pem", nil
 			}
 			t.Cleanup(func() { renewCSRForFn = origCSR })
 
-			auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PemCertificate: "stored"}}}
+			key, _ := mldsa.GenerateKey(mldsa.MLDSA65())
+			auth := &config.AuthConfig{Certificates: []config.CertificateInfo{proofTestCert(t, key)}}
 			certPEM, _, keyPEM, err := renewViaPKICoreImpl(context.Background(), srv.URL+"/v1/renew", auth)
 			if tc.wantErr {
 				if err == nil {
@@ -396,5 +399,46 @@ func TestPersistRenewedCertificateSelectsExactSession(t *testing.T) {
 				t.Fatalf("session %d: got %q, want %q", i, auth.Certificates[0].PemCertificate, want)
 			}
 		}
+	}
+}
+
+func TestCertificateRenewalMarginScalesWithLifetime(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, tc := range []struct{ lifetime, margin time.Duration }{
+		{time.Second, time.Second / 3}, {10 * time.Minute, 200 * time.Second},
+		{15 * time.Minute, 5 * time.Minute}, {45 * time.Minute, 15 * time.Minute}, {24 * time.Hour, 15 * time.Minute},
+	} {
+		t.Run(tc.lifetime.String(), func(t *testing.T) {
+			keyPEM, key := newP256KeyPEM(t)
+			_ = keyPEM
+			leaf := reissueTestLeaf(t, key, testOperatorTenant, testOperatorSubject, now, now.Add(tc.lifetime))
+			margin := certificateRenewalMargin(leaf)
+			if margin != tc.margin {
+				t.Fatalf("margin=%s want %s", margin, tc.margin)
+			}
+			expiry := now.Add(tc.lifetime)
+			if certNeedsRenewal(expiry, expiry.Add(-margin), margin) {
+				t.Fatal("renewed at the margin boundary")
+			}
+			if !certNeedsRenewal(expiry, expiry.Add(-margin).Add(time.Nanosecond), margin) {
+				t.Fatal("did not renew inside margin")
+			}
+			if certNeedsRenewal(expiry, now, margin) {
+				t.Fatal("fresh short-lived certificate needs renewal")
+			}
+		})
+	}
+}
+
+func TestCertificateRenewalMarginClampsInvalidLifetime(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, lifetime := range []time.Duration{0, -time.Second, -time.Hour} {
+		t.Run(lifetime.String(), func(t *testing.T) {
+			_, key := newP256KeyPEM(t)
+			leaf := reissueTestLeaf(t, key, testOperatorTenant, testOperatorSubject, now, now.Add(lifetime))
+			if margin := certificateRenewalMargin(leaf); margin != 0 {
+				t.Fatalf("invalid signed lifetime produced margin %s, want zero", margin)
+			}
+		})
 	}
 }

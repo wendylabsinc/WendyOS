@@ -46,7 +46,7 @@ Use the actual discovered body frame for robot-relative observations.
 
 These summaries are for inspection. A SLAM node should subscribe to the complete
 PointCloud2 stream, plus the appropriate IMU, odometry and TF, on the same DDS
-domain. Configure its Wendy app with `discoveryScope: "host"` and host networking.
+domain. Configure its Wendy app with `scope: "peripherals"` (or `"network"`) and host networking.
 Do not relabel a cloud's frame or substitute a small XYZ sample for a full scan.
 For offline SLAM, record the selected cloud, IMU and transforms with
 `wendy device ros2 bag record`, then download the bag. The existing bag recorder

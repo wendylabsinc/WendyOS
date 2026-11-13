@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "top"
+  ],
+  "stdout": "{\"host\": {\"containerStorage\": {\"mountpoint\": \"/data\", \"usedBytes\": 187702915072, \"totalBytes\": 978918752256}, \"cpuPercent\": 2.010050251256279, \"cpuCount\": 14, \"memUsedBytes\": 3974696960, \"memTotalBytes\": 131857190912, \"gpus\": [{\"index\": 0, \"name\": \"NVIDIA Thor\", \"utilPercent\": 2, \"tempC\": 33, \"powerW\": 1.97}], \"thermalZones\": [{\"name\": \"gpu-thermal\", \"tempC\": 33.843}, {\"name\": \"tj-thermal\", \"tempC\": 33.843}, {\"name\": \"cpu-thermal\", \"tempC\": 33.468}, {\"name\": \"soc012-thermal\", \"tempC\": 32.625}, {\"name\": \"soc345-thermal\", \"tempC\": 31.312}], \"maximumTemperature\": {\"name\": \"gpu-thermal\", \"tempC\": 33.843}}, \"containers\": [{\"name\": \"sh.wendy.evals.model-tool-report\", \"state\": \"running\", \"cpuPercent\": 0.07215569798816872, \"memBytes\": 256163840}, {\"name\": \"sensor-dashboard\", \"state\": \"running\", \"cpuPercent\": 0, \"memBytes\": 0}]}",
+  "stderr": "",
+  "exit_code": 0
+}

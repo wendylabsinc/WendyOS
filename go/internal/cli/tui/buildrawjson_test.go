@@ -197,6 +197,117 @@ func TestRawJSONParserMarksCachedAndFailedVertices(t *testing.T) {
 	}
 }
 
+// TestRawJSONParserReopensLazilyPulledBaseImage replays a lazily pulled 6.5 GB
+// base image in BuildKit's own rawjson frames, shaped on buildkit v0.32.2: the
+// FROM's records come from the puller's progress controller, which reports a
+// fresh run each time it picks up work, so the vertex finishes after its 2s
+// resolve, runs again for the layer downloads, finishes between two unpacks,
+// and runs once more. testdata/buildkit-lazy-pull-plain.txt is the same stream
+// through BuildKit's plain printer.
+func TestRawJSONParserReopensLazilyPulledBaseImage(t *testing.T) {
+	got := collectFile(t, "testdata/buildkit-lazy-pull.jsonl")
+	from := eventsFor(got, "[base-nvidia-jetson 1/5] FROM")
+
+	var statuses []BuildStepStatus
+	var details []string
+	var maxBytes ByteProgress
+	for _, e := range from {
+		if len(statuses) == 0 || statuses[len(statuses)-1] != e.Status {
+			statuses = append(statuses, e.Status)
+		}
+		if e.Detail != "" && (len(details) == 0 || details[len(details)-1] != e.Detail) {
+			details = append(details, e.Detail)
+		}
+		if e.Bytes.Current > maxBytes.Current {
+			maxBytes = e.Bytes
+		}
+	}
+	want := []BuildStepStatus{
+		BuildStepRunning, BuildStepDone, // cache check; stays done through the resolve
+		BuildStepRunning, BuildStepDone, // layer downloads and the first unpack
+		BuildStepRunning, BuildStepDone, // the remaining unpacks
+	}
+	if fmt.Sprint(statuses) != fmt.Sprint(want) {
+		t.Fatalf("FROM statuses = %v, want %v", statuses, want)
+	}
+	wantDetails := []string{
+		"unpacking layer 1", "unpacked 1 layer",
+		"unpacking layer 2", "unpacked 2 layers",
+		"unpacking layer 3", "unpacked 3 layers",
+	}
+	if strings.Join(details, "|") != strings.Join(wantDetails, "|") {
+		t.Errorf("unpack details = %q, want %q", details, wantDetails)
+	}
+	// Every layer of the pull sums into one figure.
+	if maxBytes.Current != 6_500_007_400 || maxBytes.Total != 6_500_007_400 {
+		t.Errorf("peak bytes = %+v, want the whole 6.5 GB pull", maxBytes)
+	}
+
+	// The final duration covers every run, overlaps once, and agrees with the
+	// "DONE 533.6s" BuildKit's plain printer gives the same stream.
+	last := from[len(from)-1]
+	if got := last.Dur.Round(100 * time.Millisecond); got != 533600*time.Millisecond {
+		t.Errorf("final duration = %v, want 533.6s", last.Dur)
+	}
+}
+
+// TestRawJSONParserReopensRealBuildxBaseImagePull: in the real recording the
+// alpine FROM finishes before its 4 MB layer is fetched and unpacked. Setup
+// steps that send unsized bookkeeping after their first finish stay finished.
+func TestRawJSONParserReopensRealBuildxBaseImagePull(t *testing.T) {
+	got := collectFile(t, "testdata/buildx-rawjson.jsonl")
+	from := eventsFor(got, "[1/2] FROM")
+	if len(from) < 3 || from[1].Status != BuildStepDone || from[2].Status != BuildStepRunning {
+		t.Fatalf("want DONE then a reopen, got %+v", from)
+	}
+	var unpacking bool
+	for _, e := range from {
+		if e.Detail == "unpacking layer 1" && e.Bytes.Total == 4_103_199 {
+			unpacking = true
+		}
+	}
+	if !unpacking {
+		t.Errorf("want an unpacking detail beside the summed pull, got %+v", from)
+	}
+	// BuildKit's plain printer says "DONE 0.5s" for this vertex.
+	last := from[len(from)-1]
+	if last.Status != BuildStepDone || last.Dur.Round(100*time.Millisecond) != 500*time.Millisecond {
+		t.Fatalf("final DONE wrong: %+v (dur=%v)", last, last.Dur)
+	}
+
+	def := eventsFor(got, "load build definition")
+	if len(def) != 2 || def[0].Status != BuildStepRunning || def[1].Status != BuildStepDone {
+		t.Fatalf("setup step should not reopen, got %+v", def)
+	}
+}
+
+// A status can land in the same frame as, or after, the vertex's completion
+// while belonging to the run that just ended. Only an open status written after
+// the vertex finished is new work, and a failed vertex never reopens.
+func TestRawJSONParserDoesNotReopenOnStaleOrFailedStatus(t *testing.T) {
+	cases := map[string]string{
+		"finished in the same frame": `{"vertexes":[{"digest":"sha256:f1","name":"[1/2] FROM docker.io/library/alpine:3.20","started":"2026-10-27T09:00:00Z"}]}
+{"vertexes":[{"digest":"sha256:f1","name":"[1/2] FROM docker.io/library/alpine:3.20","started":"2026-10-27T09:00:00Z","completed":"2026-10-27T09:00:02Z"}],"statuses":[{"id":"sha256:aa","vertex":"sha256:f1","current":4090000,"total":4090000,"timestamp":"2026-10-27T09:00:02Z","started":"2026-10-27T09:00:00Z","completed":"2026-10-27T09:00:02Z"},{"id":"extracting sha256:aa","vertex":"sha256:f1","name":"extracting","current":0,"timestamp":"2026-10-27T09:00:02Z","started":"2026-10-27T09:00:01Z","completed":"2026-10-27T09:00:02Z"}]}
+`,
+		"open but written before the finish": `{"vertexes":[{"digest":"sha256:f1","name":"[1/2] FROM docker.io/library/alpine:3.20","started":"2026-10-27T09:00:00Z","completed":"2026-10-27T09:00:02Z"}]}
+{"statuses":[{"id":"sha256:aa","vertex":"sha256:f1","current":1000000,"total":4090000,"timestamp":"2026-10-27T09:00:01Z","started":"2026-10-27T09:00:00Z"}]}
+`,
+		"failed": `{"vertexes":[{"digest":"sha256:e1","name":"[2/2] RUN make","started":"2026-10-27T09:00:00Z","completed":"2026-10-27T09:00:02Z","error":"exit code 1"}]}
+{"statuses":[{"id":"sha256:aa","vertex":"sha256:e1","current":1000000,"total":4090000,"timestamp":"2026-10-27T09:00:05Z","started":"2026-10-27T09:00:04Z"}]}
+`,
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := collectRaw(t, text)
+			for i, e := range got {
+				if i > 0 && e.Status == BuildStepRunning {
+					t.Fatalf("unexpected reopen: %+v", got)
+				}
+			}
+		})
+	}
+}
+
 // TestRawJSONParserAgainstRealPipAndAptOutput replays a recording of a real
 // build that runs `apt-get install`, `pip install numpy`, and a compiler-style
 // counter. It is the guard against the sniffers being written from a

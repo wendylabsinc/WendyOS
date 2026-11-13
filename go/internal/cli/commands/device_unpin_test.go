@@ -93,18 +93,11 @@ func TestDeviceUnpinClearsBothStores(t *testing.T) {
 	}
 }
 
-// TestDeviceUnpinClearsAPinFoundUnderAnAlias is the dead end this closes.
-//
-// `wendy cloud discover` seeds pins under the name the cloud roster carries
-// (the asset name, which is the discovery cache's display name), while dials
-// name the device by its mDNS hostname. lookupPin already reconciles the two —
-// so a dial to "wendyos-calm-zinnia" is governed, and refused, by the pin filed
-// under "calm-zinnia" — but unpin cleared only the key it was handed. The
-// refusal named a key nothing was filed under, unpinning it removed nothing,
-// and the very next dial refused identically. Forever.
-func TestDeviceUnpinClearsAPinFoundUnderAnAlias(t *testing.T) {
+// Verified bindings for the same device may be removed together.
+func TestDeviceUnpinClearsVerifiedAliases(t *testing.T) {
 	readPins := writePinTestConfig(t, map[string]config.DevicePin{
-		"calm-zinnia": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceCloud},
+		"wendyos-calm-zinnia": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceLAN},
+		"calm-zinnia":         {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceCloud},
 	})
 	setPinCache(t, discoverycache.Entry{
 		ID:          "dev-1",

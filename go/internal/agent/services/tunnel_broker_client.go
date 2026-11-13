@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -17,10 +18,12 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	"github.com/wendylabsinc/wendy/go/internal/shared/legacycertproof"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 const (
@@ -35,23 +38,34 @@ const (
 	defaultMTLSPort = 50052
 )
 
+// brokerRunOnceFn, brokerNowFn and brokerAfterFn are seams for tests.
+var (
+	brokerRunOnceFn = (*TunnelBrokerClient).runOnce
+	brokerNowFn     = time.Now
+	brokerAfterFn   = time.After
+)
+
 type TunnelBrokerClient struct {
 	logger   *zap.Logger
 	url      string
-	orgID    int32
-	assetID  int32
 	certPEM  string
 	keyPEM   string
 	chainPEM string
 	mtlsPort int
+
+	// sessions counts live tunnel sessions; they ride the presence connection.
+	sessions atomic.Int32
 }
 
-func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32, certPEM, keyPEM, chainPEM string, mtlsPort int) *TunnelBrokerClient {
+// NewTunnelBrokerClient serves the Cloud relay's presence leg for this device.
+// The identity the broker authenticates is read off the provisioned leaf
+// certificate at each connection — the SPIFFE device principal pki-core
+// stamps on it — so enrollment while the agent runs is picked up on the next
+// reconnect without rebuilding the client.
+func NewTunnelBrokerClient(logger *zap.Logger, url, certPEM, keyPEM, chainPEM string, mtlsPort int) *TunnelBrokerClient {
 	return &TunnelBrokerClient{
 		logger:   logger,
 		url:      url,
-		orgID:    orgID,
-		assetID:  assetID,
 		certPEM:  certPEM,
 		keyPEM:   keyPEM,
 		chainPEM: chainPEM,
@@ -59,21 +73,51 @@ func NewTunnelBrokerClient(logger *zap.Logger, url string, orgID, assetID int32,
 	}
 }
 
+// brokerIdentityFromCert reads the principal URI the broker must authenticate
+// this agent as: the SPIFFE device principal on a v2 leaf, or the legacy URN
+// on an old-chain certificate. Empty means no provisioned identity — presence
+// cannot authenticate, so runOnce refuses to dial rather than connecting
+// anonymously.
+func brokerIdentityFromCert(logger *zap.Logger, certPEM string) string {
+	if certPEM == "" {
+		return ""
+	}
+	leaves, err := certs.ParseCertsFromPEM([]byte(certPEM))
+	if err != nil || len(leaves) == 0 {
+		logger.Warn("broker presence: device certificate could not be read", zap.Error(err))
+		return ""
+	}
+	identity, found, err := certs.IdentityFromCert(leaves[0])
+	if err != nil || !found {
+		return ""
+	}
+	return identity.IdentityKey()
+}
+
 func (c *TunnelBrokerClient) Run(ctx context.Context) {
 	attempt := 0
 	for {
-		if err := c.runOnce(ctx); err != nil {
+		started := brokerNowFn()
+		if err := brokerRunOnceFn(c, ctx); err != nil {
 			if ctx.Err() != nil {
 				return
+			}
+			moved := errors.Is(err, errBrokerPathMoved)
+			// A path move or a session that outlived the longest backoff is not a
+			// failure, but still pause: the broker must drop the old stream first.
+			if moved || brokerNowFn().Sub(started) >= brokerMaxBackoff {
+				attempt = 0
 			}
 			backoff := time.Duration(math.Min(
 				float64(time.Second)*math.Pow(2, float64(attempt)),
 				float64(brokerMaxBackoff),
 			))
-			c.logger.Warn("broker connection failed, reconnecting",
-				zap.Error(err), zap.Duration("backoff", backoff))
+			if !moved {
+				c.logger.Warn("broker connection failed, reconnecting",
+					zap.Error(err), zap.Duration("backoff", backoff))
+			}
 			select {
-			case <-time.After(backoff):
+			case <-brokerAfterFn(backoff):
 			case <-ctx.Done():
 				return
 			}
@@ -88,10 +132,10 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 	defer func() {
 		if status.Code(retErr) == codes.Unimplemented {
 			retErr = fmt.Errorf("cloud endpoint %s does not implement %s; agent and cloud presence protocols are incompatible: %w",
-				c.url, cloudpb.TunnelBrokerService_RegisterPresence_FullMethodName, retErr)
+				c.url, cloudpbv2.TunnelBrokerService_RegisterPresence_FullMethodName, retErr)
 		}
 	}()
-	dialOpts, devMD, err := c.buildDialOpts()
+	dialOpts, requestMetadata, err := c.buildDialOpts()
 	if err != nil {
 		return err
 	}
@@ -101,13 +145,13 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 	}
 	defer conn.Close()
 
-	client := cloudpb.NewTunnelBrokerServiceClient(conn)
+	client := cloudpbv2.NewTunnelBrokerServiceClient(conn)
 
-	callCtx := ctx
-	if devMD != nil {
-		callCtx = metadata.NewOutgoingContext(ctx, devMD)
+	devMD, err := requestMetadata(cloudpbv2.TunnelBrokerService_RegisterPresence_FullMethodName)
+	if err != nil {
+		return err
 	}
-
+	callCtx := metadata.NewOutgoingContext(ctx, devMD)
 	stream, err := client.RegisterPresence(callCtx)
 	if err != nil {
 		return err
@@ -120,8 +164,12 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 
 	hbTicker := time.NewTicker(brokerHeartbeatInterval)
 	defer hbTicker.Stop()
+	pathTicker := time.NewTicker(brokerPathCheckInterval)
+	defer pathTicker.Stop()
+	var pathWatch brokerPathWatch
+	var lastHeartbeat time.Time
 
-	recvCh := make(chan *cloudpb.DialRequest, 8)
+	recvCh := make(chan *cloudpbv2.DialRequest, 8)
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -144,39 +192,68 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 	for {
 		select {
 		case req := <-recvCh:
-			go c.handleDialRequest(ctx, client, req, devMD)
+			c.sessions.Add(1)
+			go func() {
+				defer c.sessions.Add(-1)
+				c.handleDialRequest(ctx, client, req, requestMetadata)
+			}()
 		case err := <-recvErr:
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		case <-hbTicker.C:
-			if err := stream.Send(&cloudpb.AgentHeartbeat{}); err != nil {
+			if err := stream.Send(&cloudpbv2.AgentHeartbeat{}); err != nil {
 				return err
 			}
+			lastHeartbeat = time.Now()
+		case <-pathTicker.C:
+			p, _ := peer.FromContext(stream.Context())
+			preferred, moved := brokerPathMoved(p)
+			busy := func() bool {
+				return brokerBusy(c.sessions.Load(), len(recvCh), time.Since(lastHeartbeat))
+			}
+			if !pathWatch.shouldRedial(moved, busy()) {
+				continue
+			}
+			if !brokerPathReachableFn(ctx, c.url, dialOpts) {
+				if ctx.Err() != nil {
+					return nil
+				}
+				c.logger.Info("preferred network path does not reach the broker; keeping the current one",
+					zap.Stringer("current", p.LocalAddr), zap.Stringer("preferred", preferred))
+				pathWatch.unreachable()
+				continue
+			}
+			// The probe took time; a session may have arrived meanwhile.
+			if busy() {
+				continue
+			}
+			c.logger.Info("moving the broker connection to the preferred network path",
+				zap.Stringer("from", p.LocalAddr), zap.Stringer("to", preferred))
+			return errBrokerPathMoved
 		case <-ctx.Done():
 			return nil
 		}
 	}
 }
 
-func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, metadata.MD, error) {
-	return brokerDialOpts(c.logger, c.orgID, c.assetID, c.certPEM, c.keyPEM, c.chainPEM)
+func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, brokerRequestMetadata, error) {
+	identityURI := brokerIdentityFromCert(c.logger, c.certPEM)
+	if identityURI == "" {
+		return nil, nil, errors.New("no provisioned device identity; broker presence requires an enrolled certificate to authenticate with")
+	}
+	return brokerIdentityDialOpts(c.logger, identityURI, c.certPEM, c.keyPEM, c.chainPEM)
 }
 
-// brokerDialOpts returns gRPC dial options and identity metadata for any
-// brokerTLSConfig builds the TLS config for a broker connection: it validates
-// the broker's chain against the Wendy CA (hostname verification is skipped —
-// the broker cert CN is localhost, not the cloud host) and presents the
-// device's ECDSA leaf for mTLS.
+// brokerTLSConfig validates the broker certificate chain against system and
+// provisioned Wendy roots. gRPC supplies the endpoint name for DNS/IP SAN
+// verification. The device leaf is presented for direct endpoint mTLS.
 //
-// Loading the client cert is non-fatal: today's broker runs NoClientCert and
-// authenticates on the XFCC header, so a failed load still yields a working
-// certless connection. The failure is logged with a stable, greppable
-// event key and an explicit client_cert_presented=false field so the rollout
-// to a cert-requiring broker (phase 2) — where a load failure WILL break
-// authentication — can be alerted on from logs. Extracted from brokerDialOpts
-// so the cert-load / fallback behavior is unit-testable without a live dial.
+// Loading the TLS client cert remains non-fatal because Cloud Run terminates
+// TLS before the broker. Request authentication separately proves possession
+// of this key; retaining the TLS presentation supports direct broker endpoints.
+// Extracted so the cert-load fallback is unit-testable without a live dial.
 func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls.Config, error) {
 	caPool, err := x509.SystemCertPool()
 	if err != nil {
@@ -185,39 +262,23 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 	if chainPEM != "" && certs.AppendChainToPool(caPool, chainPEM) == 0 {
 		return nil, fmt.Errorf("no valid CA certificates in chainPEM")
 	}
+	// gRPC sets ServerName from the configured endpoint (including IP
+	// literals). Standard verification checks both the trusted chain and its
+	// DNS/IP SAN; trusting a public or Wendy CA alone is not broker identity.
 	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("broker presented no TLS certificate")
-			}
-			intermediates := x509.NewCertPool()
-			for _, cert := range cs.PeerCertificates[1:] {
-				intermediates.AddCert(cert)
-			}
-			_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
-				Roots:         caPool,
-				Intermediates: intermediates,
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			})
-			if err != nil {
-				logger.Warn("broker TLS chain verification failed",
-					zap.String("subject", cs.PeerCertificates[0].Subject.String()),
-					zap.Error(err),
-				)
-			}
-			return err
-		},
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    caPool,
 	}
 
-	// Present the device's ECDSA leaf certificate so the broker can authenticate
+	// Present the device's leaf certificate (P-256 or ML-DSA-65) so the broker can authenticate
 	// this connection via mTLS once it starts requesting client certs. Loading
 	// only the leaf (not the ML-DSA CA chain) keeps Go's TLS stack from tripping
 	// over ML-DSA parse failures.
 	if certPEM != "" && keyPEM != "" {
 		if clientCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
-			logger.Warn("failed to load device client certificate for broker mTLS; presenting none (XFCC header identity still applies)",
+			logger.Warn("failed to load device client certificate for broker mTLS; presenting none",
 				zap.String("event", "broker_mtls_client_cert_load_failed"),
+				zap.String("auth_downgrade", "mtls_client_cert->none"),
 				zap.Bool("client_cert_presented", false),
 				zap.Error(err))
 		} else {
@@ -227,34 +288,51 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 	return tlsCfg, nil
 }
 
-// agent-originated connection to the tunnel broker. Shared by the presence
-// client (serving side) and the mesh dialer (dialing side).
-func brokerDialOpts(logger *zap.Logger, orgID, assetID int32, certPEM, keyPEM, chainPEM string) ([]grpc.DialOption, metadata.MD, error) {
-	// Identity is asserted two ways during the mTLS rollout:
+// brokerRequestMetadata signs identity metadata for an agent-originated RPC.
+type brokerRequestMetadata func(fullMethod string) (metadata.MD, error)
+
+// brokerIdentityDialOpts returns gRPC options and certificate-bound identity
+// metadata for a broker caller authenticating as a principal URI — the SPIFFE
+// device principal on a v2 leaf, the legacy URN on an old-chain certificate.
+func brokerIdentityDialOpts(logger *zap.Logger, identityURI, certPEM, keyPEM, chainPEM string) ([]grpc.DialOption, brokerRequestMetadata, error) {
+	// Cloud Run cannot forward the TLS client certificate to the broker, so each
+	// RPC carries a fresh method-bound signature from the enrolled certificate
+	// key. Legacy XFCC headers remain during the additive rollout only. Direct
+	// broker endpoints also receive the certificate at the TLS layer.
 	//
-	//   1. The device's client certificate (mTLS). We present the ECDSA leaf +
-	//      key below so the broker can authenticate us cryptographically once it
-	//      starts requesting client certs (rollout phase 2). Only the leaf is
-	//      presented, never the ML-DSA CA chain — Go's TLS stack rejects ML-DSA
-	//      certs at parse time, but the leaf itself is ECDSA and parses fine.
-	//   2. The XFCC header (below). Today the broker still runs NoClientCert and
-	//      authenticates on the header, so presenting the cert is a no-op on the
-	//      wire (the server never sends a CertificateRequest). Presenting it now
-	//      makes the deployed fleet ready for the broker to require client certs
-	//      without a flag-day cutover.
-	//
-	// Broker cert CN is localhost and won't match the cloud host — skip hostname
-	// verification but still validate the chain against the Wendy CA.
+	// Standard TLS binds the broker certificate to the configured endpoint.
+	// Local development broker certificates carry localhost/LAN-IP SANs.
 	tlsCfg, err := brokerTLSConfig(logger, certPEM, keyPEM, chainPEM)
 	if err != nil {
-		return nil, metadata.MD{}, err
+		return nil, nil, err
 	}
 
-	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", orgID, assetID)
-	md := metadata.Pairs(
+	certHeader := "URI=" + identityURI
+	legacyMD := metadata.Pairs(
 		"x-wendy-client-cert", certHeader,
 		"x-forwarded-client-cert", certHeader,
 	)
+	var proofSigner *legacycertproof.Signer
+	if certPEM != "" && keyPEM != "" {
+		proofSigner, err = legacycertproof.New(identityURI, certPEM, keyPEM)
+		if err != nil {
+			logger.Warn("failed to initialize certificate-bound broker authentication; legacy headers still apply",
+				zap.String("event", "broker_certificate_proof_unavailable"),
+				zap.String("auth_downgrade", "signed_proof->unsigned_headers"),
+				zap.Error(err))
+		}
+	}
+	requestMetadata := func(fullMethod string) (metadata.MD, error) {
+		md := legacyMD.Copy()
+		if proofSigner == nil {
+			return md, nil
+		}
+		proofMD, err := proofSigner.Metadata(fullMethod)
+		if err != nil {
+			return nil, fmt.Errorf("create certificate-bound broker authentication: %w", err)
+		}
+		return metadata.Join(md, proofMD), nil
+	}
 	return []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -266,11 +344,11 @@ func brokerDialOpts(logger *zap.Logger, orgID, assetID int32, certPEM, keyPEM, c
 		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
 		grpc.WithReadBufferSize(256 * 1024),
 		grpc.WithWriteBufferSize(256 * 1024),
-	}, md, nil
+	}, requestMetadata, nil
 }
 
-func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
-	req *cloudpb.DialRequest, devMD metadata.MD) {
+func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpbv2.TunnelBrokerServiceClient,
+	req *cloudpbv2.DialRequest, requestMetadata brokerRequestMetadata) {
 	// Only allow loopback connections to prevent broker-directed SSRF.
 	ip := net.ParseIP(req.Host)
 	if req.Host != "localhost" && (ip == nil || !ip.IsLoopback()) {
@@ -279,8 +357,8 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 		return
 	}
 
-	if req.GetProtocol() == cloudpb.TunnelProtocol_TUNNEL_PROTOCOL_DATAGRAM {
-		c.handleDatagramDial(ctx, client, req, devMD)
+	if req.GetProtocol() == cloudpbv2.TunnelProtocol_TUNNEL_PROTOCOL_DATAGRAM {
+		c.handleDatagramDial(ctx, client, req, requestMetadata)
 		return
 	}
 
@@ -302,17 +380,19 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if devMD != nil {
-		callCtx = metadata.NewOutgoingContext(callCtx, devMD)
+	devMD, err := requestMetadata(cloudpbv2.TunnelBrokerService_AgentTunnel_FullMethodName)
+	if err != nil {
+		c.logger.Error("failed to authenticate AgentTunnel stream", zap.Error(err))
+		return
 	}
-
+	callCtx = metadata.NewOutgoingContext(callCtx, devMD)
 	agentStream, err := client.AgentTunnel(callCtx)
 	if err != nil {
 		c.logger.Error("failed to open AgentTunnel stream", zap.Error(err))
 		return
 	}
 
-	if err := agentStream.Send(&cloudpb.TunnelData{SessionId: req.SessionId}); err != nil {
+	if err := agentStream.Send(&cloudpbv2.TunnelData{SessionId: req.SessionId}); err != nil {
 		c.logger.Error("failed to send join message", zap.Error(err))
 		return
 	}
@@ -323,19 +403,22 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 // handleDatagramDial claims the session and serves a multiplexed datagram
 // relay (UDP flows + ICMP echo). Nothing is dialed upfront; UDP sockets are
 // created per flow on first sight, restricted to loopback like TCP dials.
-func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
-	req *cloudpb.DialRequest, devMD metadata.MD) {
+func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client cloudpbv2.TunnelBrokerServiceClient,
+	req *cloudpbv2.DialRequest, requestMetadata brokerRequestMetadata) {
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if devMD != nil {
-		callCtx = metadata.NewOutgoingContext(callCtx, devMD)
+	devMD, err := requestMetadata(cloudpbv2.TunnelBrokerService_AgentTunnel_FullMethodName)
+	if err != nil {
+		c.logger.Error("failed to authenticate datagram AgentTunnel stream", zap.Error(err))
+		return
 	}
+	callCtx = metadata.NewOutgoingContext(callCtx, devMD)
 	agentStream, err := client.AgentTunnel(callCtx)
 	if err != nil {
 		c.logger.Error("failed to open AgentTunnel stream", zap.Error(err))
 		return
 	}
-	if err := agentStream.Send(&cloudpb.TunnelData{SessionId: req.SessionId}); err != nil {
+	if err := agentStream.Send(&cloudpbv2.TunnelData{SessionId: req.SessionId}); err != nil {
 		c.logger.Error("failed to send join message", zap.Error(err))
 		return
 	}
@@ -344,8 +427,8 @@ func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client clou
 }
 
 type agentTunnelStream interface {
-	Send(*cloudpb.TunnelData) error
-	Recv() (*cloudpb.TunnelData, error)
+	Send(*cloudpbv2.TunnelData) error
+	Recv() (*cloudpbv2.TunnelData, error)
 	CloseSend() error
 }
 
@@ -405,14 +488,14 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
-				if sendErr := stream.Send(&cloudpb.TunnelData{Payload: payload}); sendErr != nil {
+				if sendErr := stream.Send(&cloudpbv2.TunnelData{Payload: payload}); sendErr != nil {
 					abort()
 					break
 				}
 			}
 			if readErr != nil {
 				if errors.Is(readErr, io.EOF) {
-					if sendErr := stream.Send(&cloudpb.TunnelData{HalfClose: true}); sendErr != nil {
+					if sendErr := stream.Send(&cloudpbv2.TunnelData{HalfClose: true}); sendErr != nil {
 						abort()
 					}
 				} else {

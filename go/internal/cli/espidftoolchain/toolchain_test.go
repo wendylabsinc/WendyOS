@@ -2,10 +2,12 @@ package espidftoolchain
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -376,8 +378,25 @@ func TestEnsureVersion_EimNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("EnsureVersion() expected error when eim is not installed, got nil")
 	}
-	if !strings.Contains(err.Error(), "eim (ESP-IDF Installation Manager) is not installed") {
+	// The CLI recognizes this to offer the install.
+	if !errors.Is(err, ErrEIMNotInstalled) {
+		t.Errorf("EnsureVersion() = %v, want ErrEIMNotInstalled", err)
+	}
+	if !strings.Contains(err.Error(), "eim (ESP-IDF Installation Manager) is not installed") ||
+		!strings.Contains(err.Error(), eimInstallHint(runtime.GOOS)) {
 		t.Errorf("expected actionable error message, got: %v", err)
+	}
+}
+
+func TestEIMInstallHint(t *testing.T) {
+	for goos, want := range map[string]string{
+		"darwin":  "brew install espressif/eim/eim",
+		"linux":   "brew install espressif/eim/eim",
+		"windows": "winget install --id Espressif.EIM-CLI --exact --source winget",
+	} {
+		if got := eimInstallHint(goos); !strings.Contains(got, want) {
+			t.Errorf("eimInstallHint(%q) = %q, want it to name %q", goos, got, want)
+		}
 	}
 }
 

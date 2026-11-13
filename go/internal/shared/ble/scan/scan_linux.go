@@ -29,16 +29,20 @@ func RunBLECheck() int { return 0 }
 // linuxScanner holds a BlueZ discovery session. The D-Bus plumbing lives in
 // the sibling bluez package, which the central's GATT client shares.
 type linuxScanner struct {
-	mu          sync.Mutex
-	conn        *dbus.Conn
-	adapterPath string
-	closed      bool
+	mu           sync.Mutex
+	conn         *dbus.Conn
+	adapterPath  string
+	closed       bool
+	limit        int
+	observations linuxObservations
 }
 
 // newScanner powers on an adapter and starts LE discovery, filtered to the
 // requested services where BlueZ can do it natively.
 func newScanner(ctx context.Context, services []string) (scanner, error) {
-	conn, err := dbus.ConnectSystemBus()
+	s := &linuxScanner{}
+	observer := &linuxAdvertisementHandler{observations: &s.observations}
+	conn, err := dbus.ConnectSystemBus(dbus.WithSignalHandler(observer))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to system bus: %w", err)
 	}
@@ -60,6 +64,13 @@ func newScanner(ctx context.Context, services []string) (scanner, error) {
 		return nil, fmt.Errorf("powering on adapter %s: %w", adapterPath, err)
 	}
 
+	s.conn = conn
+	s.adapterPath = adapterPath
+	observer.setAdapter(adapterPath)
+	if err := conn.AddMatchSignalContext(ctx, dbus.WithMatchSender(bluez.Service), dbus.WithMatchInterface(bluez.PropsIface), dbus.WithMatchMember("PropertiesChanged"), dbus.WithMatchPathNamespace(dbus.ObjectPath(adapterPath))); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("subscribing to advertisement observations: %w", err)
+	}
 	adapter := conn.Object(bluez.Service, dbus.ObjectPath(adapterPath))
 
 	// Ask BlueZ to filter for us. Transport "le" keeps classic Bluetooth out,
@@ -83,12 +94,12 @@ func newScanner(ctx context.Context, services []string) (scanner, error) {
 		return nil, fmt.Errorf("starting discovery on %s: %w", adapterPath, call.Err)
 	}
 
-	return &linuxScanner{conn: conn, adapterPath: adapterPath}, nil
+	return s, nil
 }
 
-// Snapshot re-reads the object tree. Device properties are read as typed D-Bus
-// values rather than parsed out of bluetoothctl's text output, which is what
-// makes service UUIDs and RSSI available at all.
+// Snapshot returns genuine advertisement observations for bounded background
+// scans. Interactive scans additionally read the cached object tree for display
+// names and RSSI; cached properties never acquire advertisement timestamps.
 //
 // ctx is wrapped with snapshotTimeout rather than passed straight through: that
 // way both a caller cancellation and a bluetoothd that simply stops replying
@@ -98,6 +109,12 @@ func (s *linuxScanner) Snapshot(ctx context.Context) ([]BLEDeviceInfo, error) {
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil, fmt.Errorf("BLE scan session is closed")
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if s.limit > 0 {
+		return s.observations.snapshot(s.limit), nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
@@ -120,12 +137,12 @@ func (s *linuxScanner) Snapshot(ctx context.Context) ([]BLEDeviceInfo, error) {
 		if !ok || address == "" {
 			continue
 		}
-		devices = append(devices, BLEDeviceInfo{
-			Address:      address,
-			Name:         deviceName(props, address),
-			ServiceUUIDs: bluez.StringsProp(props, "UUIDs"),
-			RSSI:         bluez.RSSIProp(props),
-		})
+		device := s.observations.device(path)
+		device.Address = address
+		device.Name = deviceName(props, address)
+		device.RSSI = bluez.RSSIProp(props)
+		device.ServiceUUIDs = canonicalUUIDs(append(bluez.StringsProp(props, "UUIDs"), device.ServiceUUIDs...))
+		devices = append(devices, device)
 	}
 	return devices, nil
 }
@@ -141,8 +158,10 @@ func (s *linuxScanner) Close() {
 
 	adapter := s.conn.Object(bluez.Service, dbus.ObjectPath(s.adapterPath))
 	// Best-effort: the adapter may already have gone away.
-	_ = adapter.Call(bluez.AdapterIface+".StopDiscovery", 0).Err
-	s.conn.Close() //nolint:errcheck
+	stop, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
+	_ = adapter.CallWithContext(stop, bluez.AdapterIface+".StopDiscovery", 0).Err
+	cancel()
+	s.conn.Close()
 }
 
 // deviceName resolves the display name. Alias is the user-facing value and
@@ -158,3 +177,8 @@ func deviceName(props map[string]dbus.Variant, address string) string {
 	}
 	return ""
 }
+
+// A bounded background scan uses genuine signal observations directly instead
+// of copying BlueZ's potentially long-lived cache into a fresh-looking roster.
+// Existing unbounded picker scans keep their established cached display view.
+func (s *linuxScanner) setDeviceLimit(limit int) { s.mu.Lock(); s.limit = limit; s.mu.Unlock() }

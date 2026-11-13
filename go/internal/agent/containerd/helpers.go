@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
+	"github.com/google/uuid"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -96,6 +97,15 @@ const labelKeyAppID = "sh.wendy/app.id"
 // labelKeyServiceName is the service name for a multi-service container.
 // Set whenever appCfg.ServiceName is non-empty.
 const labelKeyServiceName = "sh.wendy/service"
+
+// Release identity (apps spec section 2): the manifest digest of the image the
+// container was created from, always set, and the cloud AppRelease id the
+// deploy was recorded as, set only for a recorded deploy. The reported-state
+// client reports both.
+const (
+	labelKeyImageDigest = "sh.wendy/image.digest"
+	labelKeyReleaseID   = "sh.wendy/release.id"
+)
 
 // labelKeyIsolation persists the app's isolation mode (e.g. "isolated",
 // "shared-network", "shared-ipc") on the container. appconfig.AppConfig.Isolation
@@ -213,6 +223,17 @@ func ParseContainerName(name string) (appID, serviceName string, err error) {
 		}
 	}
 	return "", "", fmt.Errorf("invalid container name %q: does not match appID or appID_serviceName format", sanitizeForLog(name, 300))
+}
+
+// containerOwnerFromLabels resolves the ambiguous underscore name boundary
+// using persisted app/service labels, then proves they reconstruct this exact
+// container. Neither a guessed split nor unvalidated labels authorize cleanup.
+func containerOwnerFromLabels(name string, labels map[string]string) (appID, serviceName string, err error) {
+	appID, serviceName = labels[labelKeyAppID], labels[labelKeyServiceName]
+	if appconfig.ValidateAppID(appID) != nil || (serviceName != "" && appconfig.ValidateServiceName(serviceName) != nil) || ContainerName(appID, serviceName) != name {
+		return "", "", fmt.Errorf("invalid app ownership for container %q", sanitizeForLog(name, 300))
+	}
+	return appID, serviceName, nil
 }
 
 // computeChainID computes the chain ID for a layer given its parent chain ID
@@ -488,5 +509,20 @@ func restartPolicyToLabel(rp *agentpb.RestartPolicy) string {
 		return "unless-stopped"
 	default:
 		return ""
+	}
+}
+
+// isCanonicalUUID reports whether s is a UUID in its canonical lowercase form.
+func isCanonicalUUID(s string) bool {
+	u, err := uuid.Parse(s)
+	return err == nil && u.String() == s
+}
+
+// addReleaseIdentity labels a container with the image digest it runs and,
+// for a recorded deploy, the release id (validated by createContainer).
+func addReleaseIdentity(labels map[string]string, imageDigest string, releaseID *string) {
+	labels[labelKeyImageDigest] = imageDigest
+	if releaseID != nil {
+		labels[labelKeyReleaseID] = *releaseID
 	}
 }

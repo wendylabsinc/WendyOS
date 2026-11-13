@@ -126,6 +126,49 @@ make e2e-test-mac-mini DEVICE=my-mac.local
 make e2e-analyze
 ```
 
+## USB camera controls on macOS
+
+The existing `camera controls` and `camera set-control` commands (including
+`--reset` and `--reset-all`) use the same RPCs and control names as Linux. Get the numeric camera ID from `camera list`; IDs are discovery positions,
+not durable USB identities. Built-in/network cameras and ambiguous USB identities
+are rejected. Only standard scalar controls advertised by the device's UVC
+camera-terminal/processing-unit descriptor are exposed; vendor extension units
+and compound pan/tilt/white-balance controls are not inferred.
+
+Use a CLI containing the matching preflight update: older CLIs refuse Mac
+controls before sending an RPC. New CLIs still let an older Agent return its
+honest unsupported-operation error. Like Linux, the camera does not require
+enrollment; older CLIs still ask for it on an unenrolled Mac.
+
+The backend uses public, non-seizing IOKit USB control requests. It never resets,
+detaches or reconfigures the camera, and does not open an AVFoundation capture
+session to enumerate controls. Custom AVFoundation exposure-duration/ISO setters
+are unavailable on macOS. USB requests are serialized on a dedicated executor,
+with one-second transfer timeouts and range/step/inactive/readback validation.
+
+`exposure_time_absolute` is in UVC/V4L2 units of **100 microseconds**, not ISO.
+`auto_exposure` uses V4L2 values: 0 automatic, 1 manual, 2 shutter priority,
+3 aperture priority. A camera may support only some of those modes; unsupported
+menu values are rejected even when inside the reported minimum/maximum.
+Auto-mode changes are applied before dependent controls in a batch.
+
+Successful `persist=true` changes are stored by exact AVFoundation USB UID in
+`~/Library/Application Support/sh.wendy.WendyAgentMac/camera-controls/controls.json`
+and reapplied after Agent startup and once its capture session produces a first
+frame on every reopen. `persist=false` applies once and does not remove a prior
+persisted setting, matching Linux; use Reset to forget it. Reset with no names
+forgets every persisted control for that UID. Forgetting precedes restoring
+camera-reported defaults, even if a now-inactive control cannot be restored;
+per-control results state the outcome. Persistence failure is reported rather
+than silently claiming a durable change.
+
+USB topology changes produce a different UID and do not inherit old settings.
+Restoration for capture sessions opened by **other applications** is not owned
+by the Agent: another application/firmware may reset controls independently.
+The first Agent frame can precede restoration; subsequent frames use the
+reapplied settings. Hardware behavior, reboot and visible exposure changes must
+be qualified per camera; backend support does not establish detection accuracy.
+
 ## Project structure
 
 ```text

@@ -14,7 +14,7 @@ Headless Mac turns any Apple Silicon Mac into a Wendy target: install Wendy Agen
 ## Requirements
 
 - An Apple Silicon Mac target running macOS 15 or later
-- Wendy CLI on a Mac development machine ([install it](/docs/#1-install-the-wendy-cli)) — it builds the app locally before syncing to the target
+- Wendy CLI on a Mac development machine ([install it](/docs/installation/cli)) — it builds the app locally before syncing to the target
 - A Swift toolchain on the development Mac
 
 If one Mac is both development machine and target, install both the CLI and Wendy Agent on it.
@@ -53,7 +53,44 @@ open /Applications/WendyAgentMac.app
 
 Wendy Agent appears in the macOS menu bar. Open the menu to confirm the agent is running.
 
-## Headless Mac Setup
+macOS opens Wendy Agent when you log in and restarts it if it stops unexpectedly. Choosing **Quit** from the menu keeps it stopped until you open it again or log in. To turn this off, open **Welcome & Permissions…** from the menu and clear **Open Wendy Agent at login and restart it if it stops**, or turn Wendy Agent off in **System Settings → General → Login Items & Extensions**.
+
+## Network access
+
+On first launch, Wendy Agent asks **Who should be able to connect to Wendy Agent?**
+Choose **Only This Mac** (the default) or **Allow Other Devices**. The agent starts
+locally before asking, so an unattended launch is not blocked. It remembers your
+choice for future launches. Upgrades with existing agent state but no saved choice
+preserve network access without a prompt.
+
+In **Only this Mac** mode, the management API and image
+registry listen only on localhost. The agent does not advertise through Bonjour
+or open a cloud relay in this mode.
+
+For a laptop connected directly to a robot over USB, keep this default. Use
+`--device 127.0.0.1:50051` when building and deploying from the same Mac.
+
+To manage the Mac from another computer, open the Wendy Agent menu and turn on
+**Allow Access from Other Devices**. This enables network listeners and Bonjour
+discovery, plus authenticated cloud relay connections when the agent is enrolled.
+Before enrollment, reachable network peers can deploy apps; enable access only
+on a trusted network. Enrollment enables certificate authentication.
+
+The preference is saved across restarts and updates. Turning it off immediately
+disconnects remote clients, withdraws discovery, and returns listeners to
+localhost without stopping deployed apps. Apps can still expose their own
+network services independently of the agent.
+
+`WENDY_AGENT_HOST=127.0.0.1` (also `localhost` or `::1`) enforces local-only access
+for that launch and disables the menu toggle. `WENDY_AGENT_PORT` still selects
+the management port. For example:
+
+```bash
+open --env WENDY_AGENT_HOST=127.0.0.1 --env WENDY_AGENT_PORT=50061 /Applications/WendyAgentMac.app
+wendy --device 127.0.0.1:50061 device info --json
+```
+
+## Headless Mac setup
 
 For any Mac that will run without a monitor, set it up once with a keyboard, mouse, and display attached before putting it on the shelf. Use a virtual display dongle or HDMI dummy plug for the final headless setup.
 
@@ -69,21 +106,23 @@ For any Mac that will run without a monitor, set it up once with a keyboard, mou
    ssh {user}@{hostname}
    ```
 
-7. When Wendy Agent first opens, leave **Open Wendy Agent automatically when you log in** enabled.
+7. When Wendy Agent first opens, leave **Open Wendy Agent at login and restart it if it stops** enabled.
 
-## Verify the Installation
+## Verify the installation
 
-From your development Mac, check that the CLI can reach the Mac target:
+On the Mac running Wendy Agent, check that the CLI can reach the local target:
 
 ```bash
-wendy --device {hostname}:50051 device info --json
+wendy --device 127.0.0.1:50051 device info --json
 ```
 
 The response should report `"os": "darwin"` and `"cpuArchitecture": "arm64"`.
 
 ## Discovery
 
-Headless Mac advertises over Bonjour/mDNS as `_wendyos._udp`. Use `wendy discover` to find it on the local network.
+After you enable **Allow Access from Other Devices**, Headless Mac advertises
+over Bonjour/mDNS as `_wendyos._udp`. Use `wendy discover` from another computer
+to find it on the local network. Local-only mode does not advertise the Mac.
 
 ## Deploy your first Mac app
 
@@ -92,7 +131,7 @@ Create a native Swift app and run it on the Mac target:
 ```bash
 wendy init hello-mac --target darwin --language swift --no-extra-entitlements --assistant skip --git-init no
 cd hello-mac
-wendy run --device {hostname}:50051
+wendy run --device 127.0.0.1:50051
 ```
 
 <CliShot flow="run" step="deploy" alt="The wendy run command building a native macOS app and deploying it to a Mac target" />
@@ -108,6 +147,25 @@ If you set the Mac as your default device, omit `--device`:
 ```bash
 wendy run
 ```
+
+## Local build service (optional)
+
+Wendy Agent for Mac includes an optional **Local Build Service** that runs
+BuildKit in a lightweight Linux VM using Virtualization.framework. It is off by
+default and starts only when you choose **Start Local Build Service** from the
+menu bar. The menu shows its starting, running, stopping, or failed state and
+lets you stop it explicitly. Quitting Wendy Agent also requests a clean stop.
+
+The VM exposes BuildKit through a user-owned Unix socket with `0600`
+permissions. A bounded 32 GB sparse disk preserves its build cache across
+restarts. The embedded arm64 kernel and initramfs add approximately 132 MB
+uncompressed to the app bundle.
+
+This service only solves and caches Linux image builds. It does not run Wendy
+applications: native Mac apps continue to run as macOS processes, and Apple
+`container` remains the Mac application runtime. Starting the service alone
+does not change CLI builder selection; choose the BuildKit builder explicitly
+when using CLI versions that support it.
 
 ### Homebrew dependencies with Brewfile
 
@@ -131,29 +189,78 @@ installed on the target Mac;
 Wendy reports a clear error if `brew` is missing or if `brew bundle` fails. This
 only applies to native Mac deployments.
 
-## What Works
+## Wendy Mesh VPN (beta)
+
+Wendy Agent for Mac includes an opt-in Mesh VPN for private DNS, TCP, UDP, and
+ICMP traffic to enrolled devices. Wendy does not install the System Extension
+or start a VPN connection until you explicitly enable **Wendy Mesh** from the
+menu bar.
+
+Before enabling Mesh, run `wendy auth login` on this Mac and select the intended
+CLI context. On first use, macOS asks you to approve the Wendy Network
+Extension. The menu shows when approval is required, links to the relevant
+System Settings pane, and lets you cancel the pending request. Canceling or
+turning Mesh off prevents an automatic connection later.
+
+<Callout type="warn">
+  Cloud v2 UUID contexts are not supported by the current Mac Mesh relay. Wendy
+  preserves UUID identities but refuses the connection explicitly rather than
+  truncating them or routing them through the legacy integer broker. A current
+  identity-blind Cloud v2 relay client is required before this limitation can
+  be removed.
+</Callout>
+
+Mesh credentials are passed to the Network Extension only when a tunnel starts
+and are not written to the persistent VPN profile. The one-shot handoff still
+uses Swift string storage, which cannot be reliably zeroed after use.
+
+<Callout type="info">
+  Developer ID signing, notarization, and the required Network/System Extension
+  entitlements are necessary for release builds to load the extension on an
+  end-user Mac. Local development builds use monotonically increasing bundle
+  versions so macOS can replace an older installed extension.
+</Callout>
+
+## What works
 
 - Apple Silicon Mac targets running macOS 15 or later
+- Enrolling the Mac in Wendy Cloud on **macOS 26 or later**. Sign in with `wendy cloud login`, then run `wendy device enroll`. On macOS 15 you can run local apps, but must update macOS before enrolling.
 - Installing Headless Mac with Homebrew or the release zip
 - Deploying native SwiftPM macOS apps with `wendy run`
 - Discovering Mac targets over Bonjour/mDNS
 - Setting the Mac as your default Wendy device
+- Listing and viewing the Mac's cameras with `wendy device camera`, before or after enrollment
+- Starting the optional BuildKit-based Local Build Service from the menu bar
+- Opt-in Wendy Mesh VPN for legacy numeric Cloud contexts (beta)
 
-## Not Supported
+## Not supported
 
 - Intel Macs
-- Linux container deployment (Dockerfile, Compose)
+- Linux containers as the Mac application runtime — the Local Build Service builds images but does not run Wendy apps
 - Wi-Fi remote provisioning — configure Wi-Fi through macOS network settings
 - Bluetooth, audio, and GPU hardware APIs via Wendy
-- Wendy camera APIs — use native hardware SDKs (AVFoundation, etc.) directly in your app
+- Wendy camera APIs inside your app — use native hardware SDKs (AVFoundation, etc.) directly
 - WendyOS OTA updates — update macOS and Wendy Agent through their normal install paths
+- Wendy Mesh VPN with Cloud v2 UUID contexts
 
 ## Troubleshooting
 
 If the CLI cannot connect:
 
 1. Confirm Wendy Agent is open in the menu bar.
-2. Run with an explicit device address: `wendy --device {hostname}:50051 device info --json`
+2. On the same Mac, run with an explicit local address: `wendy --device 127.0.0.1:50051 device info --json`. For access from another computer, enable **Allow Access from Other Devices** first and use `{hostname}:50051`.
 3. If `wendy discover` doesn't show the Mac, check macOS Local Network permission for the CLI process.
 4. Quit and reopen Wendy Agent from the menu bar.
 5. If you installed both stable and nightly builds, quit both and open only the one you want.
+
+If Wendy Mesh cannot connect:
+
+1. Confirm `wendy auth login` has an active context on this Mac.
+2. If the error reports a UUID organization or tenant, the active context is Cloud v2 and is not supported by the current Mac Mesh relay.
+3. If approval is pending, use the menu link to open System Settings and approve the Wendy Network Extension, or cancel the request from the menu.
+4. Use a signed and notarized build when validating extension installation on an end-user Mac.
+
+## Next steps
+
+- [Managing apps](/docs/device/managing-apps) covers listing, stopping and removing the apps you deploy.
+- [App configuration](/docs/reference/app-configuration) describes the `wendy.json` settings for Mac targets.

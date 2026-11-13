@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,7 @@ func testSpec() Spec {
 }
 
 func TestBinaryIsTheAArch64SystemEmulator(t *testing.T) {
-	if got := testSpec().Binary(); got != "qemu-system-aarch64" {
+	if got := strings.TrimSuffix(filepath.Base(testSpec().Binary()), ".exe"); got != "qemu-system-aarch64" {
 		t.Errorf("Binary() = %q, want qemu-system-aarch64", got)
 	}
 }

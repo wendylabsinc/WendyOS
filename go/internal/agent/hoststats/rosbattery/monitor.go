@@ -44,8 +44,11 @@ type Monitor struct {
 // Automatic host discovery policy is shared with camera discovery.
 type candidateIface = rtps.InterfaceCandidate
 
+// candidateInterfaces are the device's peripheral interfaces: a robot whose
+// battery is on DDS is attached hardware, so the monitor does not look for one
+// on the device's uplink network (see rtps.PeripheralInterfaces).
 func candidateInterfaces() []string {
-	ifaces, _ := rtps.HostInterfaces()
+	ifaces, _ := rtps.PeripheralInterfaces()
 	return ifaces
 }
 func eligibleInterfaces(ifaces []candidateIface) []string {
@@ -71,13 +74,14 @@ func moveToFront(names []string, want string) []string {
 }
 
 // Config parameterises a Monitor. The zero value is usable: it discovers
-// automatically on domain 0 across every multicast-capable interface.
+// automatically on domain 0 across the device's peripheral interfaces.
 type Config struct {
 	// Enabled false disables the monitor entirely.
 	Enabled bool
 	// Interfaces pins discovery to named network interfaces, tried in order
-	// until one yields a battery topic. Empty means auto-select, which skips
-	// virtual and wireless interfaces; naming one here bypasses that filter and
+	// until one yields a battery topic. Empty means the device's peripheral
+	// interfaces: physical, wired, and not the uplink carrying the default
+	// route. Naming one here bypasses that filter and
 	// is how a host whose robot link is WiFi opts back in.
 	Interfaces []string
 	// DomainID is the DDS domain. Zero is the ROS 2 default.

@@ -25,8 +25,9 @@ type fileConfig struct {
 }
 
 // DefaultConfig is the behaviour with no config file present: discover
-// automatically on the ROS 2 default domain across every wired candidate
-// interface. Setting "interfaces" is what opts a wireless link back in.
+// automatically on the ROS 2 default domain across the device's peripheral
+// interfaces. Setting "interfaces" is what opts another link, such as a
+// wireless one, back in.
 func DefaultConfig() Config {
 	return Config{Enabled: true}
 }

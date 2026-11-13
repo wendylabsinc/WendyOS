@@ -24,10 +24,13 @@ import (
 type fastPathContainerClient struct {
 	agentpb.WendyContainerServiceClient // embedded nil — satisfies interface
 
-	appName    string
-	state      agentpb.AppRunningState
-	startCtx   context.Context
-	startCalls int
+	appName     string
+	state       agentpb.AppRunningState
+	startCtx    context.Context
+	startCalls  int
+	startStream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse]
+	startErr    error
+	appVersion  string
 	// presentLayers is the set of diff IDs the device reports holding via
 	// QueryLayers. The fast path only skips when every recorded layer is present
 	// (WDY-1824), so tests that expect a skip must list the fingerprint's layers
@@ -37,7 +40,7 @@ type fastPathContainerClient struct {
 
 func (f *fastPathContainerClient) ListContainers(_ context.Context, _ *agentpb.ListContainersRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
 	return &fakeListContainersStream{resp: &agentpb.ListContainersResponse{
-		Container: &agentpb.AppContainer{AppName: f.appName, RunningState: f.state},
+		Container: &agentpb.AppContainer{AppName: f.appName, AppVersion: f.appVersion, RunningState: f.state},
 	}}, nil
 }
 
@@ -54,6 +57,12 @@ func (f *fastPathContainerClient) QueryLayers(_ context.Context, in *agentpb.Que
 func (f *fastPathContainerClient) StartContainer(ctx context.Context, _ *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
 	f.startCalls++
 	f.startCtx = ctx
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
+	if f.startStream != nil {
+		return f.startStream, nil
+	}
 	return &fakeRunContainerStream{}, nil
 }
 
@@ -73,6 +82,15 @@ func (s *fakeListContainersStream) Recv() (*agentpb.ListContainersResponse, erro
 
 type fakeRunContainerStream struct {
 	grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse] // embedded nil
+	started                                                        bool
+}
+
+func (s *fakeRunContainerStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
+	if s.started {
+		return nil, io.EOF
+	}
+	s.started = true
+	return detachedStarted(), nil
 }
 
 // attachedRunStream drives streamRunContainer's attached path: it sends a

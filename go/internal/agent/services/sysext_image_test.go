@@ -117,3 +117,25 @@ func TestImageModules(t *testing.T) {
 		t.Errorf("missing image = %v, want nil", got)
 	}
 }
+
+// The real SquashFS fixture's source files and regeneration command are
+// documented beside it.
+func privateDriverFixture(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile("testdata/install-private.raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestImageModulesPrivatePayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install-private.raw")
+	if err := os.WriteFile(path, privateDriverFixture(t), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := imageModules(path, "wendyos-hello")
+	if len(got) != 1 || got[0] != "wendyos_hello" {
+		t.Fatalf("private modules = %v", got)
+	}
+}

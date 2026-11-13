@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
@@ -474,17 +475,16 @@ func resolveOCIExportBuilder(builder string) (string, error) {
 }
 
 // chunkExportPlan decides how the chunk-diff deploy exports the built image:
-// "dir" — persistent OCI layout directory (buildx tar=false, blob-deduped) —
-// for the docker backend, "tar" for backends that can only emit a tar
-// (apple-container, on-device buildctl), for the WENDY_CHUNK_EXPORT=tar
-// escape hatch, and for unknown builders (whose normalize error then surfaces
-// on the tar path exactly as before).
+// "dir" — persistent OCI layout directory (tar=false, blob-deduped) — for the
+// Docker and BuildKit backends, "tar" for Apple Container, for the
+// WENDY_CHUNK_EXPORT=tar escape hatch, and for unknown builders (whose
+// normalize error then surfaces on the tar path exactly as before).
 func chunkExportPlan(builder string) string {
 	if os.Getenv(chunkExportModeEnv) == "tar" {
 		return "tar"
 	}
 	normalized, err := resolveOCIExportBuilder(builder)
-	if err != nil || normalized != imageBuilderDocker {
+	if err != nil || (normalized != imageBuilderDocker && normalized != imageBuilderBuildkit) {
 		return "tar"
 	}
 	return "dir"
@@ -671,8 +671,15 @@ func pruneOCILayoutDirIndex(dir, platform string) error {
 // lockOCILayoutDir serializes use of a persistent layout directory across
 // wendy processes (build → read → push → GC). The lock file sits NEXT TO the
 // directory (dir+".lock") so a self-heal RemoveAll(dir) never deletes a held
-// lock. Returns a release func that must be called exactly once.
+// lock. Returns a release func; calling it more than once is harmless.
 func lockOCILayoutDir(ctx context.Context, dir string) (func(), error) {
+	return lockOCILayoutDirNotify(ctx, dir, nil)
+}
+
+// lockOCILayoutDirNotify is lockOCILayoutDir with onWait, which runs once —
+// before blocking — when another process already holds the lock, so the
+// caller can say why it stalled instead of waiting silently. nil is allowed.
+func lockOCILayoutDirNotify(ctx context.Context, dir string, onWait func()) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return nil, fmt.Errorf("creating OCI layout parent: %w", err)
 	}
@@ -686,15 +693,71 @@ func lockOCILayoutDir(ctx context.Context, dir string) (func(), error) {
 		return nil, fmt.Errorf("acquiring OCI layout lock: %w", err)
 	}
 	if !locked {
+		if onWait != nil {
+			onWait()
+		}
 		if err := blockLockFile(ctx, f); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("acquiring OCI layout lock: %w", err)
 		}
 	}
-	return func() {
+	return sync.OnceFunc(func() {
 		_ = flock.Unlock(f)
 		_ = f.Close()
-	}, nil
+	}), nil
+}
+
+// ociLayoutLease is one deploy's claim on a persistent OCI layout directory.
+// The layout lock covers everything that reads or rewrites the directory: the
+// buildx export, the layer read-back and native rebuild/adoption, the chunk
+// push (which streams layer blobs straight from the blob files —
+// localLayer.compressedReader opens them lazily), the GC run on release, and
+// the registry-fallback reuse push (tryPushExistingOCILayout, which re-takes
+// it). Nothing after the chunk push reads the directory — RunContainer sends
+// only the pushed layer headers — so deployByChunkDiff releases the lease as
+// soon as the push returns instead of holding it for as long as an attached
+// run streams logs, which blocked a second `wendy run` of the same app.
+// Cross-app cache maintenance is NOT part of the lease: it is unrelated to
+// this directory's own lock and deliberately stays on deployByChunkDiff's
+// original schedule (see the call site).
+type ociLayoutLease struct {
+	dir    string
+	unlock func()
+	built  bool
+	once   sync.Once
+}
+
+func acquireOCILayoutLease(ctx context.Context, dir string, onWait func()) (*ociLayoutLease, error) {
+	unlock, err := lockOCILayoutDirNotify(ctx, dir, onWait)
+	if err != nil {
+		return nil, err
+	}
+	return &ociLayoutLease{dir: dir, unlock: unlock}, nil
+}
+
+// markBuilt records that the directory now holds this deploy's freshly built
+// image, which makes release's GC safe.
+func (l *ociLayoutLease) markBuilt() {
+	l.built = true
+}
+
+// release GCs blobs superseded by this build (only once one succeeded), then
+// unlocks. Idempotent: deployByChunkDiff calls it right after the push and
+// defers it for every earlier return.
+func (l *ociLayoutLease) release() {
+	l.once.Do(func() {
+		if l.built {
+			_ = gcOCILayoutDir(l.dir)
+		}
+		l.unlock()
+	})
+}
+
+// ociConfigDigest identifies a built image by its config blob, which records
+// every layer's diff ID: a rebuild with different content changes it.
+func ociConfigDigest(config []byte) string {
+	sum := sha256.Sum256(config)
+	return hex.EncodeToString(sum[:])
 }
 
 // blobLoc is a blob's byte range within an OCI-layout tar.
@@ -880,10 +943,12 @@ func isImageBuildFailure(err error) bool {
 	return errors.As(err, &bErr)
 }
 
-// buildkitOCIArgs builds the buildctl argument vector (excluding the leading
-// "buildctl") for a Dockerfile build that exports an OCI-layout tar to dest.
-// Build-arg keys are sorted for a reproducible command line.
-func buildkitOCIArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string, dest string) []string {
+// buildkitFrontendArgs builds the common buildctl argument vector (excluding
+// the leading "buildctl") for a Dockerfile solve. The caller appends the
+// exporter it needs: an OCI layout for device delivery, or the containerd
+// image store for a local Wendy runtime. Build-arg keys are sorted for a
+// reproducible command line.
+func buildkitFrontendArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string) []string {
 	args := []string{
 		"build",
 		"--frontend", "dockerfile.v0",
@@ -904,7 +969,23 @@ func buildkitOCIArgs(contextDir, dockerfileDir, dockerfileName, platform string,
 	for _, k := range keys {
 		args = append(args, "--opt", "build-arg:"+k+"="+buildArgs[k])
 	}
+	return args
+}
+
+// buildkitOCIArgs builds the buildctl argument vector (excluding the leading
+// "buildctl") for a Dockerfile build that exports an OCI-layout tar to dest.
+func buildkitOCIArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string, dest string) []string {
+	args := buildkitFrontendArgs(contextDir, dockerfileDir, dockerfileName, platform, buildArgs)
 	args = append(args, "--output", "type=oci,dest="+dest)
+	return args
+}
+
+// buildkitOCIDirArgs exports an uncompressed OCI layout directory. Reusing the
+// same directory lets BuildKit avoid retransmitting unchanged blobs and enables
+// Wendy's native app-layer fast path on subsequent watch iterations.
+func buildkitOCIDirArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string, dest string) []string {
+	args := buildkitFrontendArgs(contextDir, dockerfileDir, dockerfileName, platform, buildArgs)
+	args = append(args, "--output", "type=oci,dest="+dest+",compression=uncompressed,tar=false")
 	return args
 }
 
@@ -924,12 +1005,15 @@ func redactBuildctlArgsForLog(args []string) []string {
 	return out
 }
 
-// buildImageToOCILayoutWithBuildkit builds the image with buildctl against the
-// in-container buildkitd (its address comes from BUILDKIT_HOST in the container
-// env) and exports it as an OCI-layout tar at dest for the chunk-diff deploy
-// path. This is the no-Docker on-device builder; it mirrors the Apple-Container
-// backend's contract (produce the tar, no registry push).
+// buildImageToOCILayoutWithBuildkit builds the image with buildctl against an
+// explicit or auto-discovered Wendy BuildKit endpoint and exports it as an
+// OCI-layout tar at dest for the chunk-diff deploy path. This mirrors the
+// Apple-Container backend's contract (produce the tar, no registry push).
 func buildImageToOCILayoutWithBuildkit(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, dest string, stdout, stderr io.Writer) error {
+	return runBuildkitOCIExport(ctx, cwd, dockerfile, platform, buildArgs, dest, false, stdout, stderr)
+}
+
+func runBuildkitOCIExport(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, dest string, directory bool, stdout, stderr io.Writer) error {
 	dfDir := cwd
 	dfName := ""
 	if dockerfile != "" {
@@ -944,13 +1028,20 @@ func buildImageToOCILayoutWithBuildkit(ctx context.Context, cwd, dockerfile, pla
 		return err
 	}
 	args := buildkitOCIArgs(cwd, dfDir, dfName, platform, buildArgs, dest)
+	if directory {
+		args = buildkitOCIDirArgs(cwd, dfDir, dfName, platform, buildArgs, dest)
+	}
+	args, err := buildkitCommandArgs(args)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(stderr, "[buildkit] starting OCI export: buildctl %s\n", strings.Join(redactBuildctlArgsForLog(args), " "))
 	// NOTE: redactBuildctlArgsForLog only masks values in the log line above.
 	// The unredacted `--opt build-arg:KEY=VALUE` tokens are still placed in
 	// buildctl's argv (below) and are visible in the host process table
 	// (/proc/<pid>/cmdline). Build args are NOT a secret channel — never pass
 	// credentials via --build-arg; use buildctl's `--secret` for those.
-	cmd := exec.CommandContext(ctx, "buildctl", args...)
+	cmd := localBuildkitCommandContext(ctx, "buildctl", args...)
 	cmd.Dir = cwd
 	// BuildKit writes its build progress to stderr, not stdout (see
 	// tui/buildrawjson.go); only stdout feeds the build parser (stream). Point
@@ -1030,6 +1121,36 @@ func buildImageToOCILayoutDirWithDocker(ctx context.Context, cwd, dockerfile, pl
 		fmt.Fprintf(stderr, "warning: could not prune OCI layout index (continuing; superseded entries accumulate until a successful prune): %v\n", err)
 	}
 	return nil
+}
+
+// buildImageToOCILayoutDirWithBuildkit gives managed BuildKit the same
+// persistent-layout contract as Docker buildx. The host-side filesync exporter
+// merges only changed blobs into destDir; the VM keeps its own solve cache.
+func buildImageToOCILayoutDirWithBuildkit(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, destDir string, stdout, stderr io.Writer) error {
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
+		return fmt.Errorf("creating OCI layout directory: %w", err)
+	}
+	if err := runBuildkitOCIExport(ctx, cwd, dockerfile, platform, buildArgs, destDir, true, stdout, stderr); err != nil {
+		return err
+	}
+	if err := pruneOCILayoutDirIndex(destDir, platform); err != nil {
+		fmt.Fprintf(stderr, "warning: could not prune OCI layout index (continuing; superseded entries accumulate until a successful prune): %v\n", err)
+	}
+	return nil
+}
+
+func buildImageToOCILayoutDir(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, builder, destDir string, stdout, stderr io.Writer) error {
+	normalized, err := resolveOCIExportBuilder(builder)
+	if err != nil {
+		return err
+	}
+	if normalized == imageBuilderBuildkit {
+		return buildImageToOCILayoutDirWithBuildkit(ctx, cwd, dockerfile, platform, buildArgs, destDir, stdout, stderr)
+	}
+	if normalized != imageBuilderDocker {
+		return fmt.Errorf("builder %q does not support persistent OCI layout export", normalized)
+	}
+	return buildImageToOCILayoutDirWithDocker(ctx, cwd, dockerfile, platform, buildArgs, destDir, stdout, stderr)
 }
 
 // chunkLayoutDir is the persistent per-app OCI layout directory used by the

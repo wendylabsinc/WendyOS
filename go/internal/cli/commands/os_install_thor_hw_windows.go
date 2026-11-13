@@ -72,6 +72,9 @@ func pickThorRecoveryDevice() (thorDevice, error) {
 		case 1:
 			chosen = recovery[0]
 		default:
+			if err := requireRecoveryChoice(len(recovery), thorRecoveryHints().label); err != nil {
+				return thorDevice{}, err
+			}
 			var items []tui.PickerItem
 			byKey := map[string]winusb.Device{}
 			for _, d := range recovery {
@@ -138,6 +141,7 @@ func thorStageOne(fp *flashpack.Flashpack, dev thorDevice, out io.Writer) error 
 		Location:        dev.PathKey,
 		Instance:        dev.Instance,
 		ExpectedProduct: winusb.ProductThor,
+		ExpectedECID:    dev.ExpectedECID,
 		Out:             out,
 	})
 }

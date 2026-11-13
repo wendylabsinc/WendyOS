@@ -1,0 +1,253 @@
+---
+title: Wendy Data
+description: Record sensor data, application events, and model results on your device with event-triggered campaigns.
+---
+
+Wendy Data records what happened on a device around an event. A campaign defines
+the sources to record, the events that start recording, and how long to keep
+recording. Each recording becomes an episode with timestamped files, source
+details, model versions, and checksums.
+
+Use campaigns to investigate an emergency stop, collect uncertain model
+predictions, or save examples of an object detected by a camera. For a single
+recording, use `wendy data record` without deploying a campaign.
+
+For robotics evaluation, record raw observations alongside model outputs and actions. Retain capture time, frame identity, units, and validity. These let you distinguish a bad policy decision from [biased, delayed, or missing sensor input](/docs/integrations/sensor-fidelity). Recording alone does not align a training dataset or verify labels.
+
+## Local capture, Cloud, and BI
+
+Start with a local episode and verify its manifest before adding remote
+services. Local capture and download do not require Cloud enrollment. On an
+enrolled device, campaign registration and upload have separate requirements;
+use `upload.when: manual` when you want to control when data leaves the device.
+See [current limits](#current-limits) for upload and privacy behavior.
+
+[Wendy Cloud](/docs/cloud) provides remote device access. [Wendy BI](https://wendy.dev/products/wendy-bi)
+provides analysis and dashboards with its own access and data-connection setup.
+Recording an episode does not automatically make it queryable in BI or configure
+model training. Confirm the intended storage and BI integration before building
+a workflow around it. For an existing v1 deployment, check the
+[Cloud v2 migration guide](/docs/cloud-migration), including app-port version
+requirements and service-account limits.
+
+## What you can record
+
+| Data | How Wendy captures it |
+|---|---|
+| Camera footage | Video from USB, CSI, and registered IP cameras. Compatible camera streams also support periodic snapshots. |
+| Audio | Microphone audio throughout an episode, or fragments triggered by an audio-level threshold during the episode. |
+| ROS 2 topics | Published messages such as LiDAR point clouds, odometry, GPS, IMU readings, joint states, and control commands. |
+| Device health | Uptime, system load, and total/free RAM, sampled once per second on Linux. |
+| Application events | Named events such as `emergency_stop`, faults, and task completion, with values and attributes supplied by your app. |
+| Model results | Predictions, detections, uncertainty, model versions, and references to recorded input samples when supplied. |
+| Custom measurements | App-provided time series such as temperature, vibration, motor current, or production counts. Streams accept structured data, images, and custom binary payloads. |
+
+Campaigns select camera, audio, ROS 2, and telemetry sources. They include
+application records automatically. Other sensors need to publish ROS 2 topics
+or write through an [application recording stream](#record-data-from-your-app).
+The built-in telemetry source does not collect every metric shown by
+`wendy device telemetry`.
+
+## Record your first episode
+
+Start with a device running Wendy Agent and select it explicitly with
+`--device`. Use `wendy discover` to find its selector.
+
+```sh
+wendy data sources --device workshop.local
+wendy data record --device workshop.local --name commissioning --source telemetry
+```
+
+`sources` lists each camera, microphone and ROS 2 graph with the ID to pass to
+`--source` and a status that says what the agent checked. A `*` marks the
+sources `record` captures when you pass no `--source`.
+
+The recording runs on the device after the command returns.
+`wendy data status --device workshop.local` shows how long it has been running
+and how much it has written. Stop it when you have captured enough data, then
+inspect and download the episode ID from the output:
+
+```sh
+wendy data stop --device workshop.local
+wendy data episodes --device workshop.local
+wendy data inspect <episode-id> --device workshop.local
+wendy data download <episode-id> --device workshop.local --output ./commissioning-episode
+```
+
+`inspect` verifies the sealed files' checksums. `download` resumes interrupted
+transfers, verifies each file, and saves the episode locally. In a terminal,
+leave out the episode ID to choose from the device's episodes instead. Camera
+episodes include a browser-playable MP4 when the captured stream can be
+remuxed; the manifest explains when that file could not be created.
+
+Use the source IDs returned by `sources` to add a camera or microphone. Repeat
+`--source` for multiple sources. With no source flags, `record` selects every
+healthy discovered source, which can include cameras and microphones.
+
+## Deploy a campaign
+
+Save this as `campaign.yaml`. It records device health for ten seconds after
+an app emits `machine_fault`. You can also trigger it manually to try the
+workflow before connecting an app.
+
+```yaml
+version: 1
+name: machine-faults
+
+sources:
+  - telemetry: true
+
+capture:
+  buffer: 0s
+  after_trigger: 10s
+  triggers:
+    - event: machine_fault
+
+upload:
+  when: manual
+
+export:
+  annotation: none
+```
+
+`manual` keeps this example out of automatic cloud upload. The required
+`export.annotation` field records labeling intent. Here, `none` is descriptive
+metadata; this release does not create annotation tasks.
+
+```sh
+wendy data campaign deploy campaign.yaml --device workshop.local
+wendy data campaign inspect machine-faults --device workshop.local
+wendy data campaign trigger machine-faults --device workshop.local --reason commissioning
+```
+
+After ten seconds of capture and the default two-second wait for late app
+records, use `episodes`, `inspect`, and `download` as above. Check the manifest
+for the sources that actually recorded and any errors. A successful deployment
+means the campaign is armed, not that a recording has already succeeded.
+
+To switch the campaign off without losing its plan or episodes, run
+`wendy data campaign disarm machine-faults`; it stays off across restarts and
+redeploys until `wendy data campaign arm machine-faults`. To delete the plan,
+run `wendy data campaign remove machine-faults`. Every episode it recorded is
+kept. To delete episodes from the device, run
+`wendy data delete <episode-id>`, or `wendy data delete --all` for every
+finalized episode. It asks before deleting, and it cannot be undone.
+
+On a cloud-enrolled device, deployment also registers `campaign:<name>` in Cloud
+Apps. For an intentionally offline deployment, pass `--skip-cloud-registration`.
+Unenrolled devices skip registration automatically.
+
+### Add sensors and triggers
+
+Replace `sources` with selectors from `wendy data sources`. For example:
+
+```yaml
+sources:
+  - camera: v4l2:/dev/video0
+  - audio: audio:alsa_input.usb-046d_HD_Pro_Webcam_C920_C2DD0F9F-02.analog-stereo
+  - ros2: /lidar/points
+  - ros2: /vehicle/odometry
+  - telemetry: true
+```
+
+The camera and audio IDs above are examples; use your device's IDs. An audio
+selector must resolve to a healthy capture source at deployment. Camera and
+ROS 2 sources can be absent when you deploy. Cameras must resolve when recording
+starts; a missing ROS 2 topic is reported in the manifest while other sources
+record. `camera: "*"` selects all healthy agent cameras, including cameras added
+later, and needs at least one camera when recording starts.
+
+Add `model.uncertainty: "> 0.65"` as another trigger to capture uncertain
+predictions. The app must supply the prediction's uncertainty. Any matching
+trigger starts an episode; manual triggering remains available.
+
+Set `capture.buffer: 10s` for history before the trigger and
+`capture.after_trigger: 20s` for capture afterward. Application records and
+continuous camera streams support pre-trigger history. Audio, ROS 2, and
+telemetry begin at the trigger; snapshot cameras do not keep a video pre-buffer.
+The manifest reports the history each source actually retained.
+
+See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
+for selectors, capture policies, and all fields.
+
+## Record data from your app
+
+Add the [`episode-write` entitlement](/docs/reference/app-configuration#episode-write)
+to your app to submit events and predictions. The agent supplies an app-private
+socket and attributes records to that app. Its events can trigger deployed
+campaigns; the entitlement does not grant access to sensors.
+
+Declare named `streams` inside the entitlement for custom data. Lightweight
+streams accept raw payloads over Unix sockets. Durable streams use Protobuf
+envelopes and acknowledge after syncing the record to local storage, even when
+no episode is recording. Time-series streams can declare channels, units, and
+sample timestamps separately from the agent's receipt time.
+
+An opaque JSON or binary payload does not trigger a campaign by itself. Declare
+the stream's `event` or `model` metadata; durable model records can supply
+uncertainty and input references.
+
+Export retained durable records with:
+
+```sh
+wendy data export-stream <app-id> <stream> --device workshop.local --output records.wdr
+```
+
+Plain export keeps the device's retained records. Use `--follow --reclaim` with
+an output directory for ongoing collection that reclaims each saved chunk.
+The producer must handle a full journal by buffering and retrying; the agent
+does not overwrite retained records to make room.
+
+The [recording stream reference](/docs/advanced/clients/wendy-cli/commands/data#application-recording-streams)
+and [WendyRecording examples](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyRecording)
+include configuration, senders, and an export reader.
+
+## Detect objects without a model app
+
+A campaign's optional `inference` block runs object detection on its selected
+cameras. Choose a Hugging Face model pinned to a 40-character commit SHA,
+labels, a confidence threshold, and an inference rate. The agent supports
+Transformers models and compatible YOLO ONNX exports through `backend: yolo_onnx`.
+
+Set an event such as `person_detected` and include the same event in
+`capture.triggers`. On first use, the agent installs its managed Python runtime
+and downloads the pinned model. This needs network access and storage outside
+the episode quota. Check `inference_status` in `campaign inspect` to verify
+the runtime and each camera.
+
+`notify.on: event` can deliver a named event immediately; `notify.on: detection`
+requires inference. Delivery can use a configured webhook or Wendy Cloud.
+Cloud delivery requires a separately enabled notification grant for the campaign.
+`notify.on: episode_committed` records cloud-side notification intent instead
+of sending an immediate device notification.
+
+Use the [inference reference](/docs/advanced/clients/wendy-cli/commands/data#inference)
+and [all-camera people example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataPeople)
+when you are ready to enable model downloads and automatic capture.
+
+## Current limits
+
+- Camera snapshots and capture-rate caps require a transport that supplies
+  complete encoded frames, currently local V4L2 cameras with native H.264.
+  Other camera transports record continuously and report unapplied policies
+  in the manifest. Audio supports continuous and level-threshold capture;
+  ROS 2 and telemetry support continuous capture only.
+- Buffered continuous cameras use their producer's current parameters.
+  Explicit `max_resolution` or `rate` settings on those sources are reported
+  as requested but not achieved. Available history also depends on how long
+  the campaign has been armed and the buffer's byte limit.
+- `upload.when: wifi` currently behaves as `always`. Use `manual` when
+  automatic upload is not wanted. Local inspection and download work without
+  cloud upload.
+- `retention.local_quota` is stored but not enforced per campaign. The agent
+  enforces a device-wide episode quota. `export.annotation: cvat` records
+  intent but does not create CVAT tasks; declared privacy transforms are
+  metadata and do not redact captured data.
+- A campaign records one active episode at a time and drops matching triggers
+  while it is capturing. Different campaigns can record concurrently.
+
+Episodes use a device-local monotonic timeline and carry separate UTC confidence
+and clock evidence. Inspect the manifest before assuming that recordings from
+different devices are synchronized. See the
+[full `wendy data` reference](/docs/advanced/clients/wendy-cli/commands/data)
+for clock evidence, storage, playback, and command details.

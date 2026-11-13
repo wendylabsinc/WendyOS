@@ -15,9 +15,6 @@ import (
 // StartACMEProvisioning is separate from the legacy Cloud RPC so older agents
 // reject an unsupported method before spending any EAB credentials.
 func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *agentpbv2.StartACMEProvisioningRequest) (*agentpbv2.StartACMEProvisioningResponse, error) {
-	if os.Getenv("WENDY_EXPERIMENTAL_ACME_ENROLLMENT") != "1" {
-		return nil, status.Error(codes.FailedPrecondition, "direct ACME enrollment is experimental: notifications and mesh still require legacy enrollment; set WENDY_EXPERIMENTAL_ACME_ENROLLMENT=1 on the agent to opt in")
-	}
 	cfg := acmeenroll.Config{
 		DirectoryURL: req.GetDirectoryUrl(), DeviceID: req.GetDeviceId(),
 		EABKeyID: req.GetEabKeyId(), EABHMACKey: req.GetEabHmacKey(),
@@ -36,10 +33,21 @@ func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *
 			svc.mu.Unlock()
 		}
 	}()
+	if svc.resetRecoveryErr != nil {
+		return nil, status.Error(codes.FailedPrecondition, "explicit local recovery required before enrollment")
+	}
+	if svc.resetCleanupErr != nil {
+		return nil, status.Error(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment")
+	}
+	if svc.resetRestartPending {
+		return nil, status.Error(codes.FailedPrecondition, "agent must restart after reset before enrollment")
+	}
 	if svc.enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "agent is already provisioned")
 	}
-	keyPEM, err := svc.loadOrGenerateKey()
+	// pki-core accepts ML-DSA-65 for tier A/B and refuses it for tier C by the
+	// token's profile; the agent never chooses by tier (sem 2026-10-20 21:29).
+	keyPEM, err := svc.loadOrGenerateKey(true)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "loading device key: %v", err)
 	}

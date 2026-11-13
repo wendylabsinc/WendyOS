@@ -8,7 +8,7 @@ The build command is mainly used to verify your app can build/compile.
 |---|---|---|
 | `--build-type` | auto-detected | Build type to use when multiple project markers are present: `docker`, `swift`, or `python`. |
 | `--dockerfile` | auto-detected | Build file to build from: a `Dockerfile`, `Containerfile`, a dot/hyphen variant of either (`Dockerfile.prod`), or a Stagefile (`prod.stagefile.yaml`). A bare filename in the project directory, not a path. Shows a selection menu when multiple build files exist — see [Selecting a build file](#selecting-a-build-file). |
-| `--builder` | auto | Image builder to force for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. |
+| `--builder` | auto | Image builder to force for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. `buildkit` runs the verification build in a containerd-backed BuildKit worker. |
 | `--stagefile-backend` | `dockerfile` | Stagefile compiler backend: `dockerfile` or experimental direct `llb`. |
 | `--gpu-arch` | from the device | GPU architecture a Stagefile `cuda:` stage targets; taken from the device when one is selected. |
 | `--debug` | `false` | Build compiled languages unoptimized instead of the release default — see below. |
@@ -23,9 +23,9 @@ The build command is mainly used to verify your app can build/compile.
 - **Compose projects** — applies to services built from a Stagefile.
 - **Swift packages without a build file** — the host cross-compile runs `swift build -c debug`.
 
-Hand-written Dockerfiles are not rewritten, and `wendy build` passes no build-args, so `--debug` has no effect on them here. To gate a hand-written Dockerfile on it, branch on the `WENDY_DEBUG` build-arg that [`wendy run`](run.md) passes (see the build-arg table below).
+Hand-written Dockerfiles are not rewritten, and `wendy build` passes no build-args, so `--debug` has no effect on them here. To gate a hand-written Dockerfile on it, branch on the `WENDY_DEBUG` build-arg that [`wendy run`](./run.md) passes (see the build-arg table below).
 
-The same flag on [`wendy run`](run.md) and `wendy fleet run` additionally enables debug logging, and on `fleet run` host networking. On `wendy build` it only selects the build configuration.
+The same flag on [`wendy run`](./run.md) and `wendy fleet run` additionally enables debug logging, and on `fleet run` host networking. On `wendy build` it only selects the build configuration.
 
 ## Manifest detection
 
@@ -55,7 +55,7 @@ also remain Dockerfile-only.
 
 ## Multi-service manifests
 
-A `wendy.json` with a non-empty `services` map builds one **local** image per service instead of a single image — the same manifest [`wendy run`](run.md) detects and orchestrates, but building only. Nothing is pushed to a registry and nothing is created or started; no device is required.
+A `wendy.json` with a non-empty `services` map builds one **local** image per service instead of a single image — the same manifest [`wendy run`](./run.md) detects and orchestrates, but building only. Nothing is pushed to a registry and nothing is created or started; no device is required.
 
 Each image is tagged `<lowercase-appId>-<lowercase-service>:latest`. For example, an app with `appId: "sh.wendy.examples.isolatedservices"` and services `api` and `worker` produces:
 
@@ -76,7 +76,7 @@ wendy build --service api
 
 Up to 4 service images build in parallel by default. Override with `--max-concurrency <n>`; `0` restores the default limit of 4.
 
-`--builder`, `--gpu-arch`, and `--debug` behave exactly as in a single-image build, applied per service — with one exception: `--builder buildkit` is not supported for multi-service builds, only `docker` and `apple-container`. As with single-image builds, `wendy build` passes no build-args, so a hand-written Dockerfile's `ARG WENDY_PLATFORM` / `ARG WENDY_DEBUG` take their declared defaults here.
+`--builder`, `--gpu-arch`, and `--debug` behave exactly as in a single-image build and are applied per service. Docker loads each result into its local image store, Apple Container uses its implicit store, and BuildKit stores each verification result in its private worker. As with single-image builds, `wendy build` passes no build-args, so a hand-written Dockerfile's `ARG WENDY_PLATFORM` / `ARG WENDY_DEBUG` take their declared defaults here.
 
 With no device selected, the target platform defaults to `linux/arm64`; selecting a device uses that device's own platform instead, same as single-image builds.
 
@@ -113,7 +113,7 @@ Everything in the `Dockerfile.generated*` namespace is a build artifact: it is e
 
 | Manifest | Required host | Notes |
 |---|---|---|
-| `wendy.json` `services` map | Docker Desktop or Apple `container` on Apple silicon macOS | Local build only — no push, no device required; each service resolves and builds independently with `--builder docker` or `--builder apple-container` (`buildkit` is not supported here). See [Multi-service manifests](#multi-service-manifests) |
+| `wendy.json` `services` map | Docker Desktop, Apple `container` on Apple silicon macOS, or a containerd-backed BuildKit daemon | Local build only — no push, no device required; each service resolves and builds independently with `--builder docker`, `--builder apple-container`, or `--builder buildkit`. See [Multi-service manifests](#multi-service-manifests) |
 | `<name>.stagefile.yaml` | Same as `Dockerfile` | Compiled to `Dockerfile.generated[.<variant>]` and built through the Dockerfile path by default, so every builder below applies unchanged; `--stagefile-backend=llb` solves the same graph directly with Docker/BuildKit. |
 | `Dockerfile` / `Containerfile` | Docker Desktop, Apple `container` on Apple silicon macOS, or WendyOS | Local Docker builds use `docker buildx`; `--device apple-container` uses `container build`; WendyOS device builds can select `--builder docker` or `--builder apple-container` |
 | `Package.swift` | macOS or Linux | Requires a host Swift toolchain |
@@ -123,7 +123,7 @@ Everything in the `Dockerfile.generated*` namespace is a build artifact: it is e
 
 ### Dockerfile and Containerfile projects
 
-`wendy build` invokes an image builder targeting the device's CPU architecture. [`wendy run`](run.md) passes the following build-args so the Dockerfile or Containerfile can adapt to the target hardware — declare them with `ARG` to use them. `wendy build` compiles the same image but passes no build-args, so a Dockerfile that branches on them takes its `ARG` defaults here:
+`wendy build` invokes an image builder targeting the device's CPU architecture. [`wendy run`](./run.md) passes the following build-args so the Dockerfile or Containerfile can adapt to the target hardware — declare them with `ARG` to use them. `wendy build` compiles the same image but passes no build-args, so a Dockerfile that branches on them takes its `ARG` defaults here:
 
 On Apple silicon Macs with [Apple `container`](https://github.com/apple/container)
 installed, Wendy tries Apple Container first for Dockerfile and
@@ -138,6 +138,22 @@ wendy --device my-wendy.local build
 
 Wendy automatically checks for the `container` CLI and offers to install it via Homebrew if missing, and starts the `system` and `builder` services if they are not running.
 
+To bypass both Docker and Apple Container explicitly, select the `buildkit`
+backend. If the optional Local Build Service is running from the Wendy menu-bar
+app, Wendy uses its socket at `<Wendy cache>/runtime/buildkitd.sock`. You can
+target another BuildKit daemon by setting the endpoint explicitly:
+
+```sh
+WENDY_BUILDKIT_HOST=unix:///path/to/buildkitd.sock \
+  wendy build --builder buildkit
+```
+
+The verification result is committed to that worker's private containerd
+store; it is not used to run Mac applications. Apple `container` remains the
+primary Mac application runtime. `BUILDKIT_HOST` and buildctl's normal local
+daemon default are also honored; the Wendy-prefixed variable takes precedence.
+The host must have `buildctl` installed.
+
 If Apple Container reports an empty build context for a project under `/tmp` or
 `/private/tmp`, Wendy returns an error with the known workaround: move the
 project to a non-`/tmp` directory and retry.
@@ -149,7 +165,7 @@ Docker for local provider runs.
 | Build-arg | Values | Notes |
 |---|---|---|
 | `WENDY_PLATFORM` | `nvidia-jetson` \| `generic` | Platform tier derived from the device type |
-| `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed. [`wendy project optimize`](project/optimize.md) flags it when it's declared (`ARG`/`ENV`) but no `RUN` step branches on it — gate your optimization level on it so debug builds aren't shipped to release. |
+| `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed. [`wendy project optimize`](./project/optimize.md) flags it when it's declared (`ARG`/`ENV`) but no `RUN` step branches on it — gate your optimization level on it so debug builds aren't shipped to release. |
 | `WENDY_DEVICE_TYPE` | e.g. `jetson-agx-orin` | Raw device type; absent when unknown |
 | `WENDY_HAS_GPU` | `true` \| `false` (hardware presence) | Absent on older agents |
 | `WENDY_HAS_CUDA` | `true` \| `false` (host CUDA support) | Falls back only to an explicit NVIDIA vendor on older agents |
@@ -158,6 +174,8 @@ Docker for local provider runs.
 | `WENDY_JETPACK_MAJOR` | e.g. `6`, `7` | Jetson only; JetPack major for per-generation base-image selection |
 | `WENDY_CUDA_VERSION` | e.g. `12.6` | Jetson only |
 | `WENDY_GPU_ARCH` | e.g. `sm_87` | GPU architecture identifier; absent when no GPU is reported |
+
+Explicit `wendy run --build-arg KEY=VALUE` flags override the matching defaults above and Compose `build.args`; repeated keys use the last value. See [Image build-args](./run.md#image-build-args) for usage and restrictions. `wendy build` does not accept `--build-arg`.
 
 Example — selecting a base image by platform:
 
@@ -191,7 +209,7 @@ Progress detail for Docker builds comes from `docker buildx --progress=rawjson`,
 
 ## Post-build optimization hint
 
-After a **slow incremental build** — one that reused cached layers but still took longer than ~50 seconds — `wendy build` runs a quick static [`wendy project optimize`](project/optimize.md) scan and, if it finds fixable build-config issues, prints them and offers to apply the safe fixes:
+After a **slow incremental build** — one that reused cached layers but still took longer than ~50 seconds — `wendy build` runs a quick static [`wendy project optimize`](./project/optimize.md) scan and, if it finds fixable build-config issues, prints them and offers to apply the safe fixes:
 
 ```
 This incremental build took 1m4s. A quick scan found 2 build-config issue(s):
@@ -207,11 +225,11 @@ The fixes take effect on your **next** build; the build that just completed is u
 
 ## Remote build host
 
-Delegating a build to another device is a [`wendy run`](run.md#remote-build-host) feature, not a `wendy build` one, and `wendy build --build-host` returns an error saying so.
+Delegating a build to another device is a [`wendy run`](./run.md#remote-build-host) feature, not a `wendy build` one, and `wendy build --build-host` returns an error saying so.
 
 The reason is that the two commands mean different things by "build". `wendy run --build-host` has a target device: the build host builds the image and pushes it straight into *that* device's registry over the mesh. `wendy build` has no target — it leaves an image behind on the machine that built it — so a remote build would deposit the image on the build host and nowhere useful, which is worse than not offering the flag.
 
-Use `wendy run --build-host <device>` instead. To make a device willing to accept builds in the first place, see [`wendy device build-host`](device/build-host.md).
+Use `wendy run --build-host <device>` instead. To make a device willing to accept builds in the first place, see [`wendy device build-host`](./device/build-host.md).
 
 CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
 reports hardware presence, including Broadcom and other GPUs without CUDA.

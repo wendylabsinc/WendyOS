@@ -1,7 +1,7 @@
 # Go2 browser teleoperation
 
 This app uses the [shared native Go2 interfaces](../README.md) on hardware and
-in the simulator. The source manifest uses host discovery; managed VM deployment
+in the simulator. The source manifest uses scope `peripherals`; managed VM deployment
 normalizes it to guest loopback. Use a CLI built from this checkout.
 
 

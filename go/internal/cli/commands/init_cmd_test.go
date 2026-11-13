@@ -19,6 +19,7 @@ func TestNewInitCmd_Flags(t *testing.T) {
 	expectedFlags := []string{
 		"app-id",
 		"here",
+		"force",
 		"target",
 		"language",
 		"entitlement",
@@ -33,6 +34,7 @@ func TestNewInitCmd_Flags(t *testing.T) {
 		"ros2-domain-id",
 		"ros2-rmw",
 		"ros2-distro",
+		"ros2-scope",
 		"ros2-discovery-scope",
 	}
 
@@ -400,7 +402,7 @@ func TestRunTemplateFlow_HereGuardsExistingWendyJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected runTemplateFlow to fail when wendy.json already exists in the current directory")
 	}
-	if got, want := err.Error(), "wendy.json already exists here; run from an empty directory or remove it first"; got != want {
+	if got, want := err.Error(), "wendy.json already exists here; choose a new or empty directory, or use --force to overwrite template files"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
@@ -784,6 +786,49 @@ func TestInitCommand_NoExtraEntitlementsFalseStillPrompts(t *testing.T) {
 	}
 	if !cfg.HasEntitlement(appconfig.EntitlementGPU) {
 		t.Fatalf("expected interactive prompts to run and include %q entitlement, got %+v", appconfig.EntitlementGPU, cfg.Entitlements)
+	}
+}
+
+func TestInitCommand_ValidatesInteractiveROS2Choices(t *testing.T) {
+	tempDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	origAskEntitlements := askEntitlementQuestions
+	askEntitlementQuestions = func(target, language string) ([]appconfig.Entitlement, error) {
+		return []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork}}, nil
+	}
+	t.Cleanup(func() { askEntitlementQuestions = origAskEntitlements })
+
+	origAskFrameworks := askFrameworkQuestions
+	askFrameworkQuestions = func() (*appconfig.FrameworksConfig, error) {
+		return &appconfig.FrameworksConfig{ROS2: &appconfig.ROS2Config{
+			RMW:   "fastrtps",
+			Scope: appconfig.ROS2ScopePeripherals,
+		}}, nil
+	}
+	t.Cleanup(func() { askFrameworkQuestions = origAskFrameworks })
+
+	cmd := newInitCmd()
+	cmd.SetArgs([]string{
+		"--app-id", "robot-app",
+		"--target", "wendyos",
+		"--language", "swift",
+		"--assistant", "skip",
+	})
+
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "requires rmw") {
+		t.Fatalf("Execute() error = %v, want the invalid interactive scope/RMW combination rejected", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(tempDir, "wendy.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("wendy.json should not be written after validation failure; stat error = %v", statErr)
 	}
 }
 
@@ -1301,7 +1346,7 @@ func TestBuildInitFrameworksFromFlags_FrameworkROS2CreatesDefaultConfig(t *testi
 	if frameworks == nil || frameworks.ROS2 == nil {
 		t.Fatalf("frameworks = %+v, want a ros2 config", frameworks)
 	}
-	if frameworks.ROS2.DomainID != nil || frameworks.ROS2.RMW != "" || frameworks.ROS2.Distro != "" || frameworks.ROS2.DiscoveryScope != "" {
+	if frameworks.ROS2.DomainID != nil || frameworks.ROS2.RMW != "" || frameworks.ROS2.Distro != "" || frameworks.ROS2.Scope != "" || frameworks.ROS2.DiscoveryScope != "" {
 		t.Fatalf("ros2 config = %+v, want all fields left at their zero value (defaults apply)", frameworks.ROS2)
 	}
 }
@@ -1359,8 +1404,41 @@ func TestBuildInitFrameworksFromFlags_ROS2FlagsImplyFramework(t *testing.T) {
 	if ros2.Distro != "jazzy" {
 		t.Fatalf("Distro = %q, want jazzy", ros2.Distro)
 	}
-	if ros2.DiscoveryScope != "host" {
-		t.Fatalf("DiscoveryScope = %q, want host", ros2.DiscoveryScope)
+	// The deprecated flag writes the scope that behaves the same.
+	if ros2.Scope != "network" || ros2.DiscoveryScope != "" {
+		t.Fatalf("Scope = %q, DiscoveryScope = %q; want scope network only", ros2.Scope, ros2.DiscoveryScope)
+	}
+}
+
+func TestBuildInitFrameworksFromFlags_Scope(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		opts    initOptions
+		want    string
+		wantErr string
+	}{
+		{"peripherals", initOptions{ros2ScopeSet: true, ros2Scope: "Peripherals"}, "peripherals", ""},
+		{"deprecated app is device", initOptions{ros2DiscoveryScopeSet: true, ros2DiscoveryScope: "app"}, "device", ""},
+		{"unknown", initOptions{ros2ScopeSet: true, ros2Scope: "host"}, "", "invalid --ros2-scope"},
+		{"both flags", initOptions{ros2ScopeSet: true, ros2Scope: "device", ros2DiscoveryScopeSet: true, ros2DiscoveryScope: "app"}, "", "--ros2-scope only"},
+		{"app with a domain", initOptions{ros2ScopeSet: true, ros2Scope: "app", ros2DomainIDSet: true, ros2DomainID: 3}, "", "own domain"},
+		{"peripherals on FastDDS", initOptions{ros2ScopeSet: true, ros2Scope: "peripherals", ros2RMWSet: true, ros2RMW: "fastrtps"}, "", "requires --ros2-rmw cyclonedds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frameworks, err := buildInitFrameworksFromFlags("wendyos", tc.opts)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := frameworks.ROS2.Scope; got != tc.want {
+				t.Fatalf("Scope = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1671,8 +1749,8 @@ func TestInitCommand_FrameworkFlagsCreateROS2Config(t *testing.T) {
 	if ros2.RMW != "fastrtps" {
 		t.Fatalf("RMW = %q, want fastrtps", ros2.RMW)
 	}
-	if ros2.DiscoveryScope != "host" {
-		t.Fatalf("DiscoveryScope = %q, want host", ros2.DiscoveryScope)
+	if ros2.Scope != "network" {
+		t.Fatalf("Scope = %q, want network", ros2.Scope)
 	}
 	if ros2.DomainID == nil || *ros2.DomainID != 17 {
 		t.Fatalf("DomainID = %v, want 17", ros2.DomainID)
@@ -1913,5 +1991,120 @@ func TestResolveTemplateLanguage_DarwinMojo(t *testing.T) {
 	language, err := resolveTemplateLanguage(targetDarwin, "mac-llm", meta, initOptions{language: langMojo, languageSet: true})
 	if err != nil || language != langMojo {
 		t.Fatalf("language=%q error=%v", language, err)
+	}
+}
+
+// Populated destinations are rejected before language resolution or downloading,
+// including directories with only hidden files or subdirectories.
+func TestRunTemplateFlow_RejectsPopulatedDestination(t *testing.T) {
+	for _, here := range []bool{false, true} {
+		for _, entry := range []string{"Package.swift", ".gitignore", "Sources"} {
+			t.Run(fmt.Sprintf("here=%t/%s", here, entry), func(t *testing.T) {
+				cwd := t.TempDir()
+				dest := filepath.Join(cwd, "sapi")
+				if here {
+					dest = cwd
+				}
+				if err := os.MkdirAll(dest, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dest, entry)
+				original := []byte("valuable original bytes\n")
+				if entry == "Sources" {
+					if err := os.Mkdir(path, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, original, 0o644); err != nil {
+					t.Fatal(err)
+				}
+
+				err := runTemplateFlow(cwd, dest, "sapi", "simple-api", targetWendyOS, nil, initOptions{here: here})
+				if err == nil || !strings.Contains(err.Error(), "not empty") || !strings.Contains(err.Error(), dest) {
+					t.Fatalf("want destination-specific refusal, got %v", err)
+				}
+				entries, err := os.ReadDir(dest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 || entries[0].Name() != entry {
+					t.Fatalf("destination changed: %v", entries)
+				}
+				if entry != "Sources" {
+					got, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(got, original) {
+						t.Fatalf("existing bytes changed: %q", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunTemplateFlow_ReportsDestinationReadError(t *testing.T) {
+	cwd := t.TempDir()
+	dest := filepath.Join(cwd, "sapi")
+	original := []byte("valuable file\n")
+	if err := os.WriteFile(dest, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runTemplateFlow(cwd, dest, "sapi", "simple-api", targetWendyOS, nil, initOptions{})
+	if err == nil || !strings.Contains(err.Error(), "reading project directory") || !strings.Contains(err.Error(), dest) {
+		t.Fatalf("want wrapped destination read error, got %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing bytes changed: %q", got)
+	}
+}
+
+func TestInitCommand_RejectsPopulatedTemplateDestinationBeforeRegistry(t *testing.T) {
+	cwd := chdirTemp(t)
+	dest := filepath.Join(cwd, "sapi")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dest, "Package.swift")
+	original := []byte("valuable package\n")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubFetchRepoMeta(t, nil, fmt.Errorf("registry must not be contacted"))
+	cmd := newInitCmd()
+	cmd.SetArgs([]string{"--app-id", "sapi", "--target", "wendyos", "--language", "swift", "--template", "simple-api", "--assistant", "skip", "--git-init", "no"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("want destination refusal before registry access, got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing bytes changed: %q", got)
+	}
+}
+
+func TestValidateTemplateDestination_AcceptsNewAndEmptyDirectories(t *testing.T) {
+	cwd := t.TempDir()
+	dest := filepath.Join(cwd, "sapi")
+	if err := validateTemplateDestination(cwd, dest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("validation mutated destination: %v", err)
+	}
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTemplateDestination(cwd, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTemplateDestination(dest, dest); err != nil {
+		t.Fatal(err)
 	}
 }

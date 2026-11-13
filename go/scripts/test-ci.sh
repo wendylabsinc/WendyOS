@@ -46,6 +46,7 @@ Tests:
   compose-hello             docker-compose multi-service deployment with build: Dockerfiles
   compose-images            docker-compose multi-service deployment using public images
   otel-localhost-only       Verify OTEL receivers (4317/4318) are not reachable from the network
+  host-sensor-loopback      Verify host loopback modules and device nodes on supported WendyOS boards
 
 Device Selection:
   If --hostname is not provided, the script auto-discovers a device on the
@@ -140,7 +141,10 @@ prepare_ci_oci_retry() {
         return 0
     fi
 
-    grep -qF 'docker buildx build (OCI export) failed' <<<"$output" || return 1
+    # `wendy run` prints the builder's error in its build failure details
+    # ("Error: docker buildx build (OCI export) failed: ...") and, when it found
+    # the failing step, ends with "build failed at [<stage n/m>] ..." instead.
+    grep -qE 'docker buildx build \(OCI export\) failed|build failed at \[' <<<"$output" || return 1
     echo "    OCI export failed on the disposable CI builder; retrying once"
 }
 
@@ -418,6 +422,7 @@ ALL_TESTS=(
     compose-images
     compose-companion
     otel-localhost-only
+    host-sensor-loopback
     python-device-top
 )
 
@@ -451,6 +456,37 @@ echo ""
 
 for test_name in "${TESTS[@]}"; do
     test_dir="$TESTS_DIR/$test_name"
+
+    # This checks the device host through authenticated mTLS, not a container's
+    # /lib/modules or device mounts. Missing required image support is a failure.
+    if [[ "$test_name" == "host-sensor-loopback" ]]; then
+        device_os=$(device_field os '')
+        loopback_scope=""
+        if [[ "$device_os" == "wendyos" ]]; then
+            case "$DEVICE_TYPE" in
+                dragonwing-iq-8275|dragonwing-iq-9075|arduino-uno-q) loopback_scope="video-audio" ;;
+                jetson-orin-nano|jetson-agx-orin|jetson-agx-orin-emmc|jetson-agx-thor) loopback_scope="video" ;;
+                raspberry-pi-3|raspberry-pi-4|raspberry-pi-5|generic-x86-64|vm-arm64|vm-x86-64|qemu-arm64)
+                    skip_test "$test_name" "no loopback image contract for $DEVICE_TYPE"
+                    continue
+                    ;;
+                *)
+                    unknown_loopback_board() { echo "Cannot verify loopback image contract for unknown WendyOS device type '${DEVICE_TYPE:-missing}'"; return 1; }
+                    run_test "$test_name" unknown_loopback_board
+                    continue
+                    ;;
+            esac
+        elif [[ -n "$device_os" ]]; then
+            skip_test "$test_name" "requires a supported WendyOS image; device reports $device_os"
+            continue
+        else
+            unknown_loopback_os() { echo "Cannot identify device OS for host loopback verification"; return 1; }
+            run_test "$test_name" unknown_loopback_os
+            continue
+        fi
+        run_test "$test_name" python3 "$test_dir/run_host_check.py" "$WENDY" "$HOSTNAME" "$loopback_scope"
+        continue
+    fi
 
     if [[ "$test_name" == swift-* ]] && [[ "$HOST_HAS_SWIFT" != "true" ]]; then
         skip_test "$test_name" "no Swift toolchain (swiftly) on this host"
@@ -584,11 +620,15 @@ for test_name in "${TESTS[@]}"; do
             "$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --detach
 
         device_top_snapshot() {
-            local out rc
-            out=$("$WENDY" device top --device "$HOSTNAME" --json 2>&1)
+            # stderr stays out of the jq input: in JSON mode it can carry
+            # notices, progress, or the error envelope.
+            local out err rc errf
+            errf=$(mktemp)
+            out=$("$WENDY" device top --device "$HOSTNAME" --json 2>"$errf")
             rc=$?
+            err=$(cat "$errf"); rm -f "$errf"
             if [[ $rc -ne 0 ]]; then
-                echo "wendy device top --json failed (rc=$rc): $out"
+                echo "wendy device top --json failed (rc=$rc): $err $out"
                 return 1
             fi
             if ! echo "$out" | jq -e '.host.cpuCount > 0 and .host.memTotalBytes > 0' >/dev/null 2>&1; then
@@ -625,16 +665,21 @@ for test_name in "${TESTS[@]}"; do
                 echo "apps start --detach returned non-zero"
                 return 1
             fi
-            local out
+            local out err errf
+            errf=$(mktemp)
             for _ in 1 2 3 4 5; do
-                out=$("$WENDY" device apps list --device "$HOSTNAME" --json 2>&1)
+                # stderr stays out of the jq input (notices, error envelope),
+                # but is kept for the failure message.
+                out=$("$WENDY" device apps list --device "$HOSTNAME" --json 2>"$errf")
                 if echo "$out" | jq -e --arg a "$app_id" \
                     '(.[] | select(.name==$a) | .runningState) == "RUNNING"' >/dev/null 2>&1; then
+                    rm -f "$errf"
                     return 0
                 fi
                 sleep 1
             done
-            echo "app '$app_id' never reached RUNNING after detached start: $out"
+            err=$(cat "$errf"); rm -f "$errf"
+            echo "app '$app_id' never reached RUNNING after detached start: $out $err"
             return 1
         }
         run_test "swift-start-detach (detached start reaches RUNNING)" detach_start_reaches_running

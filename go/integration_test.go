@@ -197,6 +197,10 @@ func (m *statefulContainerdClient) CreateContainerWithProgress(ctx context.Conte
 	return m.CreateContainer(ctx, req, appCfg)
 }
 
+func (m *statefulContainerdClient) ValidateContainer(context.Context, *agentpb.CreateContainerRequest, *appconfig.AppConfig) error {
+	return nil
+}
+
 func (m *statefulContainerdClient) StartContainer(_ context.Context, appName, _ string, _ *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

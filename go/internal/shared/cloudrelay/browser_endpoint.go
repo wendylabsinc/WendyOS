@@ -32,8 +32,9 @@ func BrowserBrokerTarget(endpoint string) (string, error) {
 
 func browserBrokerHostAllowed(host string) bool {
 	// Other Wendy services must never receive broker authorization traffic.
+	// tunnel.<env>.wendy.dev is the tunnel broker MIG (cloud infra tunnelMigHostname).
 	switch host {
-	case "relay.dev.wendy.sh", "relay.wendy.sh", "eu.relay.wendy.sh", DevelopmentBrowserBroker:
+	case "relay.dev.wendy.sh", "relay.wendy.sh", "eu.relay.wendy.sh", "tunnel.dev.wendy.dev", "tunnel.wendy.dev", DevelopmentBrowserBroker:
 		return true
 	default:
 		return false

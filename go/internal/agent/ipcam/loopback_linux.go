@@ -195,9 +195,11 @@ func addLoopbackNode(nr int, label string) error {
 	return nil
 }
 
-// removeLoopbackNode issues V4L2LOOPBACK_CTL_REMOVE. Per the ABI record, this
-// is the one control ioctl that takes a bare __u32 device number rather than
-// the v4l2_loopback_config struct, so the argument is a pointer to just that.
+// removeLoopbackNode issues V4L2LOOPBACK_CTL_REMOVE. Unlike ADD, it takes the
+// device number itself as the ioctl argument, not a pointer to it: the
+// module's control handler reads the argument as the number. A pointer is
+// read as a device number too, which matches nothing, so the kernel answers
+// ENODEV and the node stays (seen on v4l2loopback 0.15.4 on a Jetson).
 // A target that no longer exists (ENODEV) is treated as success: RemoveCamera
 // is best-effort, and a node already gone is the desired end state, not a
 // failure.
@@ -208,8 +210,7 @@ func removeLoopbackNode(nr int) error {
 	}
 	defer f.Close() //nolint:errcheck
 
-	n := uint32(nr)
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), uintptr(v4l2LoopbackCtlRemove), uintptr(unsafe.Pointer(&n)))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), uintptr(v4l2LoopbackCtlRemove), uintptr(uint32(nr)))
 	if errno != 0 {
 		if errno == unix.ENODEV {
 			return nil

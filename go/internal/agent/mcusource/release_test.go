@@ -102,3 +102,44 @@ func TestUnpairReleasesCameraIDsOnlyAfterNodeRemoval(t *testing.T) {
 		}
 	}
 }
+
+func TestPrincipalSourcesHaveIndependentStatusAndCameraSlots(t *testing.T) {
+	const base = "spiffe://wendy.sh/tenant/11111111-2222-4333-8444-555555555555/device/"
+	a := SensorPairing{SourcePrincipalURI: base + "a", Transport: "wendycom"}
+	b := SensorPairing{SourcePrincipalURI: base + "b", Transport: "wendycom"}
+	lb := &removableLoopback{nodes: make(map[uint32]bool)}
+	s := NewSupervisor(zap.NewNop(), lb, nil, nil, nil)
+	aID, err := s.nodeIDForKey(a.Key(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bID, err := s.nodeIDForKey(b.Key(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aID == bID {
+		t.Fatal("PKI sources share a camera slot")
+	}
+	_ = lb.EnsureNode(context.Background(), aID, "a")
+	_ = lb.EnsureNode(context.Background(), bID, "b")
+	s.setConnected(a, true)
+	if !s.IsPairingConnected(a) || s.IsPairingConnected(b) {
+		t.Fatal("connection status collides")
+	}
+	s.setConnected(b, true)
+	s.setConnected(a, false)
+	s.releasePairing(a)
+	if _, exists := lb.NodePath(aID); exists {
+		t.Fatal("forgotten source still mounted")
+	}
+	if _, exists := lb.NodePath(bID); !exists {
+		t.Fatal("unpair removed the other source")
+	}
+	if !s.IsPairingConnected(b) {
+		t.Fatal("unpair cleared the other source status")
+	}
+	again, err := s.nodeIDForKey(b.Key(), 1)
+	if err != nil || again != bID {
+		t.Fatalf("retained source lost stable slot: %d %v", again, err)
+	}
+}

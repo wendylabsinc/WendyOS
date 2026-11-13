@@ -53,3 +53,25 @@ func TestHasSupportedESP32SerialUSBIDRejectsUnsupportedAndEscapedPaths(t *testin
 		t.Fatal("path outside the configured sysfs root was accepted")
 	}
 }
+
+func TestDualCDCSysfsFiltersDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	device := filepath.Join(root, "usb1", "1-2")
+	for _, iface := range []string{"00", "02"} {
+		node := filepath.Join(device, iface)
+		if err := os.MkdirAll(node, 0755); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]string{"idVendor": "303a", "idProduct": "4002"} {
+			if err := os.WriteFile(filepath.Join(device, name), []byte(value), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(node, "bInterfaceNumber"), []byte(iface), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := findSupportedESP32SerialUSBID(node, root); ok != (iface == "00") {
+			t.Fatalf("interface %s accepted=%v", iface, ok)
+		}
+	}
+}

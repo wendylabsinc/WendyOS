@@ -1,0 +1,168 @@
+Subject: Plugin portal requires a missing OAuth client ID with both explicit and discovered client configuration
+
+The OpenAI plugin submission portal blocks our Wendy MCP connection with:
+
+"MCP details save failed: OAuth client ID is required when using pre-defined
+OAuth client credentials."
+
+With package 0.5.4, captured validation received client_id=undefined even though
+the connection drawer's JSON displayed the client ID. A subsequent package
+candidate omitted the optional auth.client object; the user supplied a screenshot
+showing that configuration loaded and the same missing-client-ID error.
+This blocks OAuth connection and tool discovery for our existing Wendy draft,
+leaving MCP setup incomplete and preventing submission.
+Please route this to the team responsible for the plugin submission portal's
+MCP connection form.
+
+Latest result: omitted-client candidate, 2026-10-17
+
+We prepared wendyos-0.5.5-oauth-discovery.zip, removing only auth.client and
+updating the package version and release notes. The user then reported the same
+failure and supplied a screenshot of the Wendy connection drawer showing:
+
+{
+  "type": "oauth",
+  "baseScopes": ["mcp:relay"],
+  "defaultScopes": [],
+  "oidcEnabled": false
+}
+
+The screenshot displays the unchanged missing-client-ID error, MCP key
+wendy-relay, endpoint https://mcp.wendy.dev, domain verified, and authorization
+required. The optional-client omission is visibly present, so this package
+experiment did not resolve the failure. The screenshot does not show the package
+version or internal saved state. We did not capture new network or breakpoint
+evidence for this attempt; the detailed runtime observations below apply to 0.5.4.
+
+OpenAI's documented schema permits omitting auth.client:
+https://developers.openai.com/plugins/build/plugins#oauth-configuration-reference
+
+Please repair or provide a supported way to reset the existing draft's OAuth
+configuration while preserving its plugin identity and review materials. Please
+check why the connection form requires predefined-client credentials when the
+displayed package no longer selects a predefined client. A successful OAuth
+connection and tool scan remain unverified.
+
+Affected draft and version IDs captured on 2026-10-16
+
+Organization: Wendy Labs Inc
+Plugin: Wendy, package wendyos 0.5.4
+Plugin ID: plugin_asdk_app_6ad2746433a48191bbd68bc55abf0ad4
+Associated MCP app ID: asdk_app_6ad2746433a48191bbd68bc55abf0ad4
+Submission version: appsub_6ad2746433d48191a236945a1f58f3ea
+App version: asdk_app_v_176aa02bcb948191a3953141aa438046
+MCP key: wendy-relay
+MCP URL: https://mcp.wendy.dev
+Status: Draft, domain verified, authorization required
+Browser: Dia on macOS 27.0.1; exact browser version was not captured
+Reload reproduction: 2026-10-16 at approximately 19:13 UTC
+
+Portal URL:
+https://platform.openai.com/plugins/manage/plugin_asdk_app_6ad2746433a48191bbd68bc55abf0ad4?tab=mcp&version=appsub_6ad2746433d48191a236945a1f58f3ea&mcp=server%3Awendy-relay
+
+Steps to reproduce on this existing draft
+
+1. Reload the portal page and open MCPs.
+2. Select wendy-relay and open its connection drawer.
+3. Confirm the displayed JSON contains the following auth configuration under
+   extensions.com.openai.auth.
+4. Click Connect in the drawer.
+
+{
+  "type": "oauth",
+  "client": {
+    "mode": "provided",
+    "clientId": "https://chatgpt.com/oauth/client.json",
+    "tokenEndpointAuthMethod": "none"
+  },
+  "baseScopes": ["mcp:relay"],
+  "defaultScopes": [],
+  "oidcEnabled": false
+}
+
+Actual result
+
+The missing-client-ID error appears. After clearing the browser Network log and
+reproducing, we observed the app GET returning HTTP 200 and telemetry requests.
+We observed no save POST/PATCH or navigation to the OAuth authorization endpoint.
+The error persists after a full browser reload.
+
+Expected result
+
+The connection form should receive the client ID and authentication settings
+shown in the uploaded manifest, then proceed with saving and authorization.
+Please investigate the inconsistent saved authentication state and form
+initialization for this draft, and provide a supported way to repair the
+connection while preserving its plugin identity.
+
+Network evidence
+
+GET https://api.openai.com/v1/dashapi/apps/asdk_app_6ad2746433a48191bbd68bc55abf0ad4
+returned HTTP 200. Relevant fields in pending_version.supported_auth[0] were:
+
+{
+  "client_id": null,
+  "use_cimd": true,
+  "token_endpoint_auth_method": null,
+  "default_scopes": null,
+  "oidc_enabled": null,
+  "base_scopes": ["mcp:relay"]
+}
+
+pending_version.oauth_client was also null. This differs from the provided-client
+configuration displayed in the drawer.
+
+OAuth metadata discovery succeeded separately:
+GET https://api.openai.com/v1/dashapi/apps/mcp/oauth_config?mcp_url=https%3A%2F%2Fmcp.wendy.dev&app_id=asdk_app_6ad2746433a48191bbd68bc55abf0ad4
+
+It returned HTTP 200 with:
+
+{
+  "authorization_url": "https://auth.wendy.dev/authorize",
+  "token_url": "https://auth.wendy.dev/relay/token",
+  "authorization_server_base": "https://auth.wendy.dev/relay",
+  "resource": "https://mcp.wendy.dev",
+  "scopes_supported": ["mcp:relay"],
+  "pkce_required": true,
+  "pkce_methods": ["S256"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "client_id_metadata_document_supported": true
+}
+
+Browser validation evidence
+
+A later temporary DevTools breakpoint in validation function pa, in
+https://platform.openai.com/static/DnsM_XypBn.js, showed:
+
+- Effective validation mode, p: "PREDEFINED"
+- Client ID, C: undefined
+- Normalized client ID, T: null
+- hasConfiguredOauthClient, n: false
+- Locked OAuth client mode, m: null
+- isCimdSupported, u: true
+- Token endpoint auth method, v: "none"
+- Runtime scope arrays, k and z: ["mcp:relay"]
+
+The form's client parameters were:
+{client_secret: null, token_endpoint_auth_method: "none", client_id: undefined, scopes: []}
+
+PREDEFINED is consistent with the manifest's provided mode. The defect is the
+missing client ID in validation despite a populated clientId in the displayed
+configuration. No variables or source were modified. The breakpoint was removed.
+
+Possible area to investigate
+
+The public portal code displays settingsJson separately from form values loaded
+from app/version data. It also contains a mode-resolution effect and a discovery
+refresh guard conditioned on saved use_cimd/client_id values. These may explain
+the inconsistent state, but their execution order was not traced. This is a
+hypothesis, not a confirmed initialization race.
+
+Related bundles inspected:
+https://platform.openai.com/static/CrqmAPzKjH.js
+https://platform.openai.com/static/BUjpziJBso.js
+
+The reproduction is established for this existing draft. We have not established
+that a fresh plugin import reproduces it, or completed an OAuth token exchange
+through the affected portal flow. No HAR or request IDs were captured for this
+report. The included response excerpts contain no cookies, tokens, or secrets.

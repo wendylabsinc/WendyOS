@@ -25,6 +25,62 @@ fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobu
   typealias Version = _2
 }
 
+/// Internet reachability of one interface, as NetworkManager's connectivity
+/// check reports it.
+public nonisolated enum Wendy_Agent_Services_V1_NetworkConnectivity: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unknown // = 0
+
+  /// No connectivity: the check fails or the interface is not connected.
+  case none // = 1
+
+  /// A captive portal intercepts traffic.
+  case portal // = 2
+
+  /// Connected to a network that does not reach the internet.
+  case limited // = 3
+
+  /// The check endpoint answered: the interface reaches the internet.
+  case full // = 4
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unknown
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unknown
+    case 1: self = .none
+    case 2: self = .portal
+    case 3: self = .limited
+    case 4: self = .full
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unknown: return 0
+    case .none: return 1
+    case .portal: return 2
+    case .limited: return 3
+    case .full: return 4
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_NetworkConnectivity] = [
+    .unknown,
+    .none,
+    .portal,
+    .limited,
+    .full,
+  ]
+
+}
+
 /// Security type advertised by or used for a WiFi network.
 public nonisolated enum Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
@@ -76,6 +132,104 @@ public nonisolated enum Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf.
     .wpa2Psk,
     .wpa3Sae,
     .wpa2Enterprise,
+  ]
+
+}
+
+public nonisolated enum Wendy_Agent_Services_V1_AgentRole: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unspecified // = 0
+
+  /// The agent in the OS image.
+  case image // = 1
+
+  /// An update that passed its checks, run from /data.
+  case approved // = 2
+
+  /// A new update still being checked.
+  case trial // = 3
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unspecified
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .image
+    case 2: self = .approved
+    case 3: self = .trial
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .image: return 1
+    case .approved: return 2
+    case .trial: return 3
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_AgentRole] = [
+    .unspecified,
+    .image,
+    .approved,
+    .trial,
+  ]
+
+}
+
+public nonisolated enum Wendy_Agent_Services_V1_AgentUpdateState: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+
+  /// No agent update yet.
+  case unspecified // = 0
+
+  /// No verdict yet: the update is staged or running its trial.
+  case trial // = 1
+
+  /// It passed its checks.
+  case approved // = 2
+
+  /// It failed its checks, and the device went back to the agent before it.
+  case rejected // = 3
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unspecified
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .trial
+    case 2: self = .approved
+    case 3: self = .rejected
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .trial: return 1
+    case .approved: return 2
+    case .rejected: return 3
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_AgentUpdateState] = [
+    .unspecified,
+    .trial,
+    .approved,
+    .rejected,
   ]
 
 }
@@ -201,8 +355,8 @@ public nonisolated struct Wendy_Agent_Services_V1_ControlCommand: Sendable {
     public var debug: Bool = false
 
     /// Optional restart policy override for Docker runtime.
-    public var restartPolicy: RestartPolicy {
-      get {_restartPolicy ?? RestartPolicy()}
+    public var restartPolicy: Wendy_Agent_Services_V1_RestartPolicy {
+      get {_restartPolicy ?? Wendy_Agent_Services_V1_RestartPolicy()}
       set {_restartPolicy = newValue}
     }
     /// Returns true if `restartPolicy` has been explicitly set.
@@ -214,7 +368,7 @@ public nonisolated struct Wendy_Agent_Services_V1_ControlCommand: Sendable {
 
     public init() {}
 
-    fileprivate var _restartPolicy: RestartPolicy? = nil
+    fileprivate var _restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
   }
 
   /// No fields needed; acts on the current container in this stream
@@ -548,7 +702,8 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   /// Clears the value of `cudaVersion`. Subsequent reads from it will return its default value.
   public mutating func clearCudaVersion() {_uniqueStorage()._cudaVersion = nil}
 
-  /// STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+  /// Medium of the disk backing / ("nvme", "emmc", "sd", "ufs", "usb"); when not recognised, the
+  /// STORAGE value from /etc/wendyos/device-type (e.g. "disk"). Only present on WendyOS.
   public var storageMedium: String {
     get {_storage._storageMedium ?? String()}
     set {_uniqueStorage()._storageMedium = newValue}
@@ -649,8 +804,8 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   /// Aggregate system-battery state, from /sys/class/power_supply. Absent on
   /// mains-powered devices and on agents predating this field, so `wendy
   /// device info` shows no battery line for either.
-  public var battery: BatteryStats {
-    get {_storage._battery ?? BatteryStats()}
+  public var battery: Wendy_Agent_Services_V1_BatteryStats {
+    get {_storage._battery ?? Wendy_Agent_Services_V1_BatteryStats()}
     set {_uniqueStorage()._battery = newValue}
   }
   /// Returns true if `battery` has been explicitly set.
@@ -697,6 +852,46 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
     set {_uniqueStorage()._gpuCapabilities = newValue}
   }
 
+  /// Runtimes an app can use on the NPU (e.g. "qnn" for the Qualcomm Hexagon
+  /// reached over FastRPC). Only populated when has_npu is true; empty when the
+  /// vendor's runtime is unrecognized, or on agents predating this field.
+  public var npuBackends: [String] {
+    get {_storage._npuBackends}
+    set {_uniqueStorage()._npuBackends = newValue}
+  }
+
+  /// Current Jetson power mode (nvpmodel). Absent on devices that are not a
+  /// Jetson, when the mode cannot be read, and on agents predating this field.
+  public var powerMode: Wendy_Agent_Services_V1_PowerMode {
+    get {_storage._powerMode ?? Wendy_Agent_Services_V1_PowerMode()}
+    set {_uniqueStorage()._powerMode = newValue}
+  }
+  /// Returns true if `powerMode` has been explicitly set.
+  public var hasPowerMode: Bool {_storage._powerMode != nil}
+  /// Clears the value of `powerMode`. Subsequent reads from it will return its default value.
+  public mutating func clearPowerMode() {_uniqueStorage()._powerMode = nil}
+
+  /// Entitlement types (wendy.json "entitlements[].type") this agent
+  /// understands. An agent ignores a type it does not know and starts the app
+  /// without that access, so a CLI can refuse such a project before building
+  /// it. Empty on agents predating this field, which are not checked.
+  public var entitlementTypes: [String] {
+    get {_storage._entitlementTypes}
+    set {_uniqueStorage()._entitlementTypes = newValue}
+  }
+
+  /// Which agent runs and how the last agent update went, from the WendyOS
+  /// agent supervisor. Absent when no supervisor started this agent (older
+  /// images, generic Linux, macOS).
+  public var supervision: Wendy_Agent_Services_V1_AgentSupervision {
+    get {_storage._supervision ?? Wendy_Agent_Services_V1_AgentSupervision()}
+    set {_uniqueStorage()._supervision = newValue}
+  }
+  /// Returns true if `supervision` has been explicitly set.
+  public var hasSupervision: Bool {_storage._supervision != nil}
+  /// Clears the value of `supervision`. Subsequent reads from it will return its default value.
+  public mutating func clearSupervision() {_uniqueStorage()._supervision = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -717,9 +912,32 @@ public nonisolated struct Wendy_Agent_Services_V1_NetworkInterface: Sendable {
   /// CIDR prefix suffix (e.g. "192.168.1.42").
   public var ipAddresses: [String] = []
 
+  /// True on the one interface the kernel routes traffic for a public
+  /// address through: the interface carrying internet traffic now. False on
+  /// every interface for agents predating this field.
+  public var isDefaultRoute: Bool = false
+
+  /// Lowest metric among the interface's IPv4 and IPv6 default routes.
+  /// Absent when the interface has no default route, and on older agents.
+  public var routeMetric: UInt32 {
+    get {_routeMetric ?? 0}
+    set {_routeMetric = newValue}
+  }
+  /// Returns true if `routeMetric` has been explicitly set.
+  public var hasRouteMetric: Bool {self._routeMetric != nil}
+  /// Clears the value of `routeMetric`. Subsequent reads from it will return its default value.
+  public mutating func clearRouteMetric() {self._routeMetric = nil}
+
+  /// NetworkManager's per-interface connectivity check result (best of IPv4
+  /// and IPv6). UNKNOWN when NetworkManager runs no check (no check URI, or
+  /// built without one), is absent, or the agent predates this field.
+  public var connectivity: Wendy_Agent_Services_V1_NetworkConnectivity = .unknown
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _routeMetric: UInt32? = nil
 }
 
 /// Usage information for a single mounted filesystem.
@@ -1233,9 +1451,34 @@ public nonisolated struct Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral:
 
   public var trusted: Bool = false
 
+  /// Effective BLE link supervision timeout, for a connected LE peripheral
+  /// the agent tracks. Absent when not connected, Classic, or an older agent.
+  public var supervisionTimeoutMs: UInt32 {
+    get {_supervisionTimeoutMs ?? 0}
+    set {_supervisionTimeoutMs = newValue}
+  }
+  /// Returns true if `supervisionTimeoutMs` has been explicitly set.
+  public var hasSupervisionTimeoutMs: Bool {self._supervisionTimeoutMs != nil}
+  /// Clears the value of `supervisionTimeoutMs`. Subsequent reads from it will return its default value.
+  public mutating func clearSupervisionTimeoutMs() {self._supervisionTimeoutMs = nil}
+
+  /// What the peripheral asked for when that was above the agent's target.
+  /// Equal to supervision_timeout_ms once the agent stopped overriding it.
+  public var requestedSupervisionTimeoutMs: UInt32 {
+    get {_requestedSupervisionTimeoutMs ?? 0}
+    set {_requestedSupervisionTimeoutMs = newValue}
+  }
+  /// Returns true if `requestedSupervisionTimeoutMs` has been explicitly set.
+  public var hasRequestedSupervisionTimeoutMs: Bool {self._requestedSupervisionTimeoutMs != nil}
+  /// Clears the value of `requestedSupervisionTimeoutMs`. Subsequent reads from it will return its default value.
+  public mutating func clearRequestedSupervisionTimeoutMs() {self._requestedSupervisionTimeoutMs = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _supervisionTimeoutMs: UInt32? = nil
+  fileprivate var _requestedSupervisionTimeoutMs: UInt32? = nil
 }
 
 public nonisolated struct Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse: Sendable {
@@ -1853,15 +2096,124 @@ public nonisolated struct Wendy_Agent_Services_V1_SetHostnameResponse: Sendable 
   public init() {}
 }
 
+/// A Jetson power mode as nvpmodel names it.
+public nonisolated struct Wendy_Agent_Services_V1_PowerMode: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// nvpmodel mode ID (e.g. 0).
+  public var id: Int32 = 0
+
+  /// nvpmodel mode name (e.g. "MAXN"), exactly as in /etc/nvpmodel.conf.
+  public var name: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_GetPowerModeRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_GetPowerModeResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// The mode the device is currently in.
+  public var current: Wendy_Agent_Services_V1_PowerMode {
+    get {_current ?? Wendy_Agent_Services_V1_PowerMode()}
+    set {_current = newValue}
+  }
+  /// Returns true if `current` has been explicitly set.
+  public var hasCurrent: Bool {self._current != nil}
+  /// Clears the value of `current`. Subsequent reads from it will return its default value.
+  public mutating func clearCurrent() {self._current = nil}
+
+  /// Every mode the device's nvpmodel configuration offers, in file order.
+  public var available: [Wendy_Agent_Services_V1_PowerMode] = []
+
+  /// The mode nvpmodel applies at boot (PM_CONFIG DEFAULT). Absent when the
+  /// configuration does not declare one.
+  public var bootDefault: Wendy_Agent_Services_V1_PowerMode {
+    get {_bootDefault ?? Wendy_Agent_Services_V1_PowerMode()}
+    set {_bootDefault = newValue}
+  }
+  /// Returns true if `bootDefault` has been explicitly set.
+  public var hasBootDefault: Bool {self._bootDefault != nil}
+  /// Clears the value of `bootDefault`. Subsequent reads from it will return its default value.
+  public mutating func clearBootDefault() {self._bootDefault = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _current: Wendy_Agent_Services_V1_PowerMode? = nil
+  fileprivate var _bootDefault: Wendy_Agent_Services_V1_PowerMode? = nil
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_SetPowerModeRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// A mode name (e.g. "MAXN") or numeric ID (e.g. "0") from GetPowerMode.
+  public var mode: String = String()
+
+  /// Reboot the device after the response when the new mode needs one to take
+  /// effect. Ignored when no reboot is needed.
+  public var reboot: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_SetPowerModeResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// The mode that was requested.
+  public var mode: Wendy_Agent_Services_V1_PowerMode {
+    get {_mode ?? Wendy_Agent_Services_V1_PowerMode()}
+    set {_mode = newValue}
+  }
+  /// Returns true if `mode` has been explicitly set.
+  public var hasMode: Bool {self._mode != nil}
+  /// Clears the value of `mode`. Subsequent reads from it will return its default value.
+  public mutating func clearMode() {self._mode = nil}
+
+  /// The mode only takes full effect after the device reboots.
+  public var rebootRequired: Bool = false
+
+  /// The agent will reboot the device shortly after this response.
+  public var rebootScheduled: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _mode: Wendy_Agent_Services_V1_PowerMode? = nil
+}
+
 /// A detected GPU and the host compute backends an app can use on it.
 public nonisolated struct Wendy_Agent_Services_V1_GpuCapabilities: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Host compute backends usable on this GPU: cuda, rocm, metal, or qnn (the
-  /// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing). Empty when
-  /// the GPU is present but no supported backend was detected.
+  /// Host compute backends usable on this GPU: cuda, rocm, or metal. Empty when
+  /// the GPU is present but no supported backend was detected. An on-SoC neural
+  /// accelerator is not a GPU backend; see npu_backends.
   public var computeBackends: [String] = []
 
   /// GPU vendor (nvidia, amd, intel, apple, broadcom, arm, qualcomm, vivante,
@@ -1877,12 +2229,50 @@ public nonisolated struct Wendy_Agent_Services_V1_GpuCapabilities: Sendable {
   public init() {}
 }
 
+public nonisolated struct Wendy_Agent_Services_V1_AgentSupervision: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Which agent runs.
+  public var role: Wendy_Agent_Services_V1_AgentRole = .unspecified
+
+  /// Version of the agent in the OS image, the one the device falls back to.
+  public var imageVersion: String = String()
+
+  /// How the last agent update went.
+  public var updateState: Wendy_Agent_Services_V1_AgentUpdateState = .unspecified
+
+  /// Why the last update was rejected, or why the image agent runs.
+  public var reason: String = String()
+
+  /// sha256 of the agent update_state and reason are about, so a client can
+  /// tell its own upload's verdict from an earlier one.
+  public var updateSha256: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
 
+nonisolated extension Wendy_Agent_Services_V1_NetworkConnectivity: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0NETWORK_CONNECTIVITY_UNKNOWN\0\u{1}NETWORK_CONNECTIVITY_NONE\0\u{1}NETWORK_CONNECTIVITY_PORTAL\0\u{1}NETWORK_CONNECTIVITY_LIMITED\0\u{1}NETWORK_CONNECTIVITY_FULL\0")
+}
+
 nonisolated extension Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0WIFI_SECURITY_TYPE_UNSPECIFIED\0\u{1}WIFI_SECURITY_TYPE_OPEN\0\u{1}WIFI_SECURITY_TYPE_WEP\0\u{1}WIFI_SECURITY_TYPE_WPA_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA2_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA3_SAE\0\u{1}WIFI_SECURITY_TYPE_WPA2_ENTERPRISE\0")
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentRole: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0AGENT_ROLE_UNSPECIFIED\0\u{1}AGENT_ROLE_IMAGE\0\u{1}AGENT_ROLE_APPROVED\0\u{1}AGENT_ROLE_TRIAL\0")
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentUpdateState: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0AGENT_UPDATE_STATE_UNSPECIFIED\0\u{1}AGENT_UPDATE_STATE_TRIAL\0\u{1}AGENT_UPDATE_STATE_APPROVED\0\u{1}AGENT_UPDATE_STATE_REJECTED\0")
 }
 
 nonisolated extension Wendy_Agent_Services_V1_RunContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -2608,7 +2998,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0\u{3}entitlement_types\0\u{1}supervision\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -2632,11 +3022,15 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
     var _cpuCount: UInt32 = 0
     var _binarySha256: String = String()
     var _hostname: String = String()
-    var _battery: BatteryStats? = nil
+    var _battery: Wendy_Agent_Services_V1_BatteryStats? = nil
     var _hasNpu_p: Bool? = nil
     var _npuVendor: String? = nil
     var _containerStorage: Wendy_Agent_Services_V1_DiskPartition? = nil
     var _gpuCapabilities: [Wendy_Agent_Services_V1_GpuCapabilities] = []
+    var _npuBackends: [String] = []
+    var _powerMode: Wendy_Agent_Services_V1_PowerMode? = nil
+    var _entitlementTypes: [String] = []
+    var _supervision: Wendy_Agent_Services_V1_AgentSupervision? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2673,6 +3067,10 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       _npuVendor = source._npuVendor
       _containerStorage = source._containerStorage
       _gpuCapabilities = source._gpuCapabilities
+      _npuBackends = source._npuBackends
+      _powerMode = source._powerMode
+      _entitlementTypes = source._entitlementTypes
+      _supervision = source._supervision
     }
   }
 
@@ -2717,6 +3115,10 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 24: try { try decoder.decodeSingularStringField(value: &_storage._npuVendor) }()
         case 25: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
         case 26: try { try decoder.decodeRepeatedMessageField(value: &_storage._gpuCapabilities) }()
+        case 27: try { try decoder.decodeRepeatedStringField(value: &_storage._npuBackends) }()
+        case 28: try { try decoder.decodeSingularMessageField(value: &_storage._powerMode) }()
+        case 29: try { try decoder.decodeRepeatedStringField(value: &_storage._entitlementTypes) }()
+        case 30: try { try decoder.decodeSingularMessageField(value: &_storage._supervision) }()
         default: break
         }
       }
@@ -2807,6 +3209,18 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       if !_storage._gpuCapabilities.isEmpty {
         try visitor.visitRepeatedMessageField(value: _storage._gpuCapabilities, fieldNumber: 26)
       }
+      if !_storage._npuBackends.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._npuBackends, fieldNumber: 27)
+      }
+      try { if let v = _storage._powerMode {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 28)
+      } }()
+      if !_storage._entitlementTypes.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._entitlementTypes, fieldNumber: 29)
+      }
+      try { if let v = _storage._supervision {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 30)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2842,6 +3256,10 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         if _storage._npuVendor != rhs_storage._npuVendor {return false}
         if _storage._containerStorage != rhs_storage._containerStorage {return false}
         if _storage._gpuCapabilities != rhs_storage._gpuCapabilities {return false}
+        if _storage._npuBackends != rhs_storage._npuBackends {return false}
+        if _storage._powerMode != rhs_storage._powerMode {return false}
+        if _storage._entitlementTypes != rhs_storage._entitlementTypes {return false}
+        if _storage._supervision != rhs_storage._supervision {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -2853,7 +3271,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
 
 nonisolated extension Wendy_Agent_Services_V1_NetworkInterface: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".NetworkInterface"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{3}ip_addresses\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{3}ip_addresses\0\u{3}is_default_route\0\u{3}route_metric\0\u{1}connectivity\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2863,17 +3281,33 @@ nonisolated extension Wendy_Agent_Services_V1_NetworkInterface: SwiftProtobuf.Me
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.name) }()
       case 2: try { try decoder.decodeRepeatedStringField(value: &self.ipAddresses) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.isDefaultRoute) }()
+      case 4: try { try decoder.decodeSingularUInt32Field(value: &self._routeMetric) }()
+      case 5: try { try decoder.decodeSingularEnumField(value: &self.connectivity) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.name.isEmpty {
       try visitor.visitSingularStringField(value: self.name, fieldNumber: 1)
     }
     if !self.ipAddresses.isEmpty {
       try visitor.visitRepeatedStringField(value: self.ipAddresses, fieldNumber: 2)
+    }
+    if self.isDefaultRoute != false {
+      try visitor.visitSingularBoolField(value: self.isDefaultRoute, fieldNumber: 3)
+    }
+    try { if let v = self._routeMetric {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 4)
+    } }()
+    if self.connectivity != .unknown {
+      try visitor.visitSingularEnumField(value: self.connectivity, fieldNumber: 5)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2881,6 +3315,9 @@ nonisolated extension Wendy_Agent_Services_V1_NetworkInterface: SwiftProtobuf.Me
   public static func ==(lhs: Wendy_Agent_Services_V1_NetworkInterface, rhs: Wendy_Agent_Services_V1_NetworkInterface) -> Bool {
     if lhs.name != rhs.name {return false}
     if lhs.ipAddresses != rhs.ipAddresses {return false}
+    if lhs.isDefaultRoute != rhs.isDefaultRoute {return false}
+    if lhs._routeMetric != rhs._routeMetric {return false}
+    if lhs.connectivity != rhs.connectivity {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -3694,7 +4131,7 @@ nonisolated extension Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest: S
 
 nonisolated extension Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".DiscoveredBluetoothPeripheral"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{1}address\0\u{1}rssi\0\u{1}deviceType\0\u{1}paired\0\u{1}connected\0\u{1}trusted\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{1}address\0\u{1}rssi\0\u{1}deviceType\0\u{1}paired\0\u{1}connected\0\u{1}trusted\0\u{3}supervision_timeout_ms\0\u{3}requested_supervision_timeout_ms\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -3709,12 +4146,18 @@ nonisolated extension Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral: Swi
       case 5: try { try decoder.decodeSingularBoolField(value: &self.paired) }()
       case 6: try { try decoder.decodeSingularBoolField(value: &self.connected) }()
       case 7: try { try decoder.decodeSingularBoolField(value: &self.trusted) }()
+      case 8: try { try decoder.decodeSingularUInt32Field(value: &self._supervisionTimeoutMs) }()
+      case 9: try { try decoder.decodeSingularUInt32Field(value: &self._requestedSupervisionTimeoutMs) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.name.isEmpty {
       try visitor.visitSingularStringField(value: self.name, fieldNumber: 1)
     }
@@ -3736,6 +4179,12 @@ nonisolated extension Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral: Swi
     if self.trusted != false {
       try visitor.visitSingularBoolField(value: self.trusted, fieldNumber: 7)
     }
+    try { if let v = self._supervisionTimeoutMs {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 8)
+    } }()
+    try { if let v = self._requestedSupervisionTimeoutMs {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 9)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -3747,6 +4196,8 @@ nonisolated extension Wendy_Agent_Services_V1_DiscoveredBluetoothPeripheral: Swi
     if lhs.paired != rhs.paired {return false}
     if lhs.connected != rhs.connected {return false}
     if lhs.trusted != rhs.trusted {return false}
+    if lhs._supervisionTimeoutMs != rhs._supervisionTimeoutMs {return false}
+    if lhs._requestedSupervisionTimeoutMs != rhs._requestedSupervisionTimeoutMs {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -4747,6 +5198,183 @@ nonisolated extension Wendy_Agent_Services_V1_SetHostnameResponse: SwiftProtobuf
   }
 }
 
+nonisolated extension Wendy_Agent_Services_V1_PowerMode: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".PowerMode"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}name\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt32Field(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.id != 0 {
+      try visitor.visitSingularInt32Field(value: self.id, fieldNumber: 1)
+    }
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_PowerMode, rhs: Wendy_Agent_Services_V1_PowerMode) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.name != rhs.name {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_GetPowerModeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetPowerModeRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_GetPowerModeRequest, rhs: Wendy_Agent_Services_V1_GetPowerModeRequest) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_GetPowerModeResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetPowerModeResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}current\0\u{1}available\0\u{3}boot_default\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._current) }()
+      case 2: try { try decoder.decodeRepeatedMessageField(value: &self.available) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._bootDefault) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._current {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    if !self.available.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.available, fieldNumber: 2)
+    }
+    try { if let v = self._bootDefault {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_GetPowerModeResponse, rhs: Wendy_Agent_Services_V1_GetPowerModeResponse) -> Bool {
+    if lhs._current != rhs._current {return false}
+    if lhs.available != rhs.available {return false}
+    if lhs._bootDefault != rhs._bootDefault {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetPowerModeRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetPowerModeRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}mode\0\u{1}reboot\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.mode) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.reboot) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.mode.isEmpty {
+      try visitor.visitSingularStringField(value: self.mode, fieldNumber: 1)
+    }
+    if self.reboot != false {
+      try visitor.visitSingularBoolField(value: self.reboot, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetPowerModeRequest, rhs: Wendy_Agent_Services_V1_SetPowerModeRequest) -> Bool {
+    if lhs.mode != rhs.mode {return false}
+    if lhs.reboot != rhs.reboot {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetPowerModeResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetPowerModeResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}mode\0\u{3}reboot_required\0\u{3}reboot_scheduled\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._mode) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.rebootRequired) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.rebootScheduled) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._mode {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    if self.rebootRequired != false {
+      try visitor.visitSingularBoolField(value: self.rebootRequired, fieldNumber: 2)
+    }
+    if self.rebootScheduled != false {
+      try visitor.visitSingularBoolField(value: self.rebootScheduled, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetPowerModeResponse, rhs: Wendy_Agent_Services_V1_SetPowerModeResponse) -> Bool {
+    if lhs._mode != rhs._mode {return false}
+    if lhs.rebootRequired != rhs.rebootRequired {return false}
+    if lhs.rebootScheduled != rhs.rebootScheduled {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension Wendy_Agent_Services_V1_GpuCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GpuCapabilities"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}compute_backends\0\u{1}vendor\0\u{1}path\0")
@@ -4782,6 +5410,56 @@ nonisolated extension Wendy_Agent_Services_V1_GpuCapabilities: SwiftProtobuf.Mes
     if lhs.computeBackends != rhs.computeBackends {return false}
     if lhs.vendor != rhs.vendor {return false}
     if lhs.path != rhs.path {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentSupervision: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AgentSupervision"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}role\0\u{3}image_version\0\u{3}update_state\0\u{1}reason\0\u{3}update_sha256\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.role) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.imageVersion) }()
+      case 3: try { try decoder.decodeSingularEnumField(value: &self.updateState) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.reason) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.updateSha256) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.role != .unspecified {
+      try visitor.visitSingularEnumField(value: self.role, fieldNumber: 1)
+    }
+    if !self.imageVersion.isEmpty {
+      try visitor.visitSingularStringField(value: self.imageVersion, fieldNumber: 2)
+    }
+    if self.updateState != .unspecified {
+      try visitor.visitSingularEnumField(value: self.updateState, fieldNumber: 3)
+    }
+    if !self.reason.isEmpty {
+      try visitor.visitSingularStringField(value: self.reason, fieldNumber: 4)
+    }
+    if !self.updateSha256.isEmpty {
+      try visitor.visitSingularStringField(value: self.updateSha256, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_AgentSupervision, rhs: Wendy_Agent_Services_V1_AgentSupervision) -> Bool {
+    if lhs.role != rhs.role {return false}
+    if lhs.imageVersion != rhs.imageVersion {return false}
+    if lhs.updateState != rhs.updateState {return false}
+    if lhs.reason != rhs.reason {return false}
+    if lhs.updateSha256 != rhs.updateSha256 {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

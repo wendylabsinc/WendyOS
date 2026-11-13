@@ -6,6 +6,7 @@ self-hosted-runner:
     - X64
     - macOS
     - wendy-macos-26
+    - runs-on,runner=2cpu-linux-x64
 
 config-variables: null
 

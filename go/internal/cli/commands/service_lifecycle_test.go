@@ -289,6 +289,7 @@ func TestServiceHookRunner_CloudSwapsHostForReadinessAndHook(t *testing.T) {
 	}
 	defer ln.Close()
 	port := testPort(t, ln)
+	stubLANAddressReachable(t, true) // no agent listens on 127.0.0.1 here
 
 	calls := swapBrowserOpen(t)
 	containerFake := &lifecycleFakeContainerClient{}
@@ -332,6 +333,62 @@ func TestServiceHookRunner_CloudSwapsHostForReadinessAndHook(t *testing.T) {
 	}
 	if containerFake.listContainersCalls != 0 {
 		t.Errorf("ListContainers called despite readiness succeeding (unexpected warning path)")
+	}
+}
+
+// TestServiceHookRunner_CloudUnreachableLANSkipsReadinessAndHook verifies that
+// a cloud connection (conn.Reconnect != nil) whose agent-reported LAN address
+// does not answer from this machine skips the per-service readiness probe and
+// postStart hook entirely, like run.go's single-container path: its Host is
+// the unresolvable asset name, and the reported IP is out of reach, so
+// probing, announcing, or opening it would mislead.
+func TestServiceHookRunner_CloudUnreachableLANSkipsReadinessAndHook(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener: %v", err)
+	}
+	defer ln.Close()
+	port := testPort(t, ln)
+
+	calls := swapBrowserOpen(t)
+	stubLANAddressReachable(t, false)
+	containerFake := &lifecycleFakeContainerClient{}
+	conn := &grpcclient.AgentConnection{
+		Host:             "cloud-asset-does-not-resolve.invalid",
+		Reconnect:        neverReconnect,
+		ContainerService: containerFake,
+		AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+			NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"127.0.0.1"}}},
+		}},
+	}
+	r := &serviceHookRunner{conn: conn}
+
+	cfg := &appconfig.AppConfig{
+		AppID:       "app",
+		ServiceName: "worker",
+		Readiness: &appconfig.ReadinessConfig{
+			TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
+			TimeoutSeconds: 5,
+		},
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:9/${WENDY_SERVICE_NAME}"},
+		},
+	}
+
+	out := captureStderr(t, func() {
+		r.runOne(context.Background(), context.Background(), cfg)
+	})
+	if len(*calls) != 0 {
+		t.Errorf("browserOpen calls = %v, want none from a cloud-tunnel run", *calls)
+	}
+	if !strings.Contains(out, "Wendy Cloud") {
+		t.Errorf("missing the cloud skip notice:\n%s", out)
+	}
+	if strings.Contains(out, "App reachable at") {
+		t.Errorf("announced the unreachable LAN address:\n%s", out)
+	}
+	if containerFake.listContainersCalls != 0 {
+		t.Errorf("ListContainers called %d times; readiness must be skipped entirely", containerFake.listContainersCalls)
 	}
 }
 
@@ -564,8 +621,21 @@ func TestServiceHookRunner_ReapWaitsCliHook(t *testing.T) {
 
 	runCtx, runCancel := context.WithCancel(context.Background())
 	r.startAsync(runCtx, cfg)
+	done := make(chan struct{})
+	go func() {
+		<-runCtx.Done()
+		r.reap()
+		close(done)
+	}()
+	defer func() {
+		runCancel()
+		<-done
+	}()
 
 	waitForFile(t, sentinel, 3*time.Second)
+	// The child can touch the file before Start returns and runOne registers
+	// its command. Wait for registration before inspecting the tracked list.
+	r.wg.Wait()
 	r.mu.Lock()
 	tracked := len(r.cmds)
 	r.mu.Unlock()
@@ -574,12 +644,6 @@ func TestServiceHookRunner_ReapWaitsCliHook(t *testing.T) {
 	}
 
 	runCancel()
-
-	done := make(chan struct{})
-	go func() {
-		r.reap()
-		close(done)
-	}()
 
 	select {
 	case <-done:

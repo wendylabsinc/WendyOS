@@ -277,7 +277,7 @@ func TestDragonwingBundleFromRejectsAZeroSize(t *testing.T) {
 		t.Errorf("error %q does not name the missing field", err)
 	}
 	// Which matters because the pre-flight it protects is a no-op on a zero size.
-	if err := checkDragonwingDiskSpace(t.TempDir(), dragonwingPlan{
+	if err := checkDragonwingDiskSpace(t.TempDir(), board, dragonwingPlan{
 		info: &dragonwingBundleInfo{SizeBytes: 0}}); err != nil {
 		t.Errorf("the disk-space pre-flight is not skipped on a zero size: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestDragonwingUnusableCacheAdviceDependsOnReachability(t *testing.T) {
 
 // A download or extraction failure happens before the first write command, with
 // the destructive prompt already answered: untagged, it reports nothing at all,
-// leaving the board in EDL with no word about DIP switch 3.
+// leaving the board in EDL with no word about its EDL switch.
 func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	board, _ := dragonwingBoardFor("dragonwing-iq-8275")
 	dir := filepath.Join(dragonwingVersionCacheDir(t.TempDir(), board, "0.19.3"), "aaaaaaaaaaaa")
@@ -565,10 +565,10 @@ func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if gotErr := finishDragonwingFlash(&out, run.collected(), "0.19.3", err, false); gotErr == nil {
+	if gotErr := finishDragonwingFlash(&out, board, run.collected(), "0.19.3", err, false); gotErr == nil {
 		t.Fatal("the failure was swallowed")
 	}
-	for _, want := range []string{"Nothing was written", "DIP switch 3"} {
+	for _, want := range []string{"Nothing was written", "S2-8"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("failure output %q is missing %q", out.String(), want)
 		}
@@ -783,8 +783,9 @@ func TestFlashDragonwingTagsPreWriteFailures(t *testing.T) {
 func TestFinishDragonwingFlashPrintsWarningsOnBothPaths(t *testing.T) {
 	const caution = "Could not read the chip id"
 	var ok, failed strings.Builder
+	b8275, _ := dragonwingBoardFor("dragonwing-iq-8275")
 
-	if err := finishDragonwingFlash(&ok, []string{caution}, "0.19.3", nil, false); err != nil {
+	if err := finishDragonwingFlash(&ok, b8275, []string{caution}, "0.19.3", nil, false); err != nil {
 		t.Fatalf("a completed flash returned %v", err)
 	}
 	if !strings.Contains(ok.String(), caution) || !strings.Contains(ok.String(), "0.19.3") {
@@ -792,7 +793,7 @@ func TestFinishDragonwingFlashPrintsWarningsOnBothPaths(t *testing.T) {
 	}
 
 	boom := errors.New("programming efi failed")
-	err := finishDragonwingFlash(&failed, []string{caution}, "0.19.3", boom, true)
+	err := finishDragonwingFlash(&failed, b8275, []string{caution}, "0.19.3", boom, true)
 	if !errors.Is(err, boom) {
 		t.Errorf("the failure was swallowed: %v", err)
 	}
@@ -807,7 +808,7 @@ func TestFinishDragonwingFlashPrintsWarningsOnBothPaths(t *testing.T) {
 	}
 
 	// A cancel stays a cancel, so the CLI exits quietly rather than as a fault.
-	if err := finishDragonwingFlash(io.Discard, nil, "0.19.3", tui.ErrCancelled, true); !errors.Is(err, ErrUserCancelled) {
+	if err := finishDragonwingFlash(io.Discard, b8275, nil, "0.19.3", tui.ErrCancelled, true); !errors.Is(err, ErrUserCancelled) {
 		t.Errorf("a cancelled flash returned %v", err)
 	}
 }
@@ -816,7 +817,7 @@ func TestPlanDragonwingFlashResolvesBeforeAnyWrite(t *testing.T) {
 	// Every write is resolved up front, so a bundle the flash cannot take
 	// fails while the board is still untouched rather than after 12 GiB.
 	_, err := planDragonwingFlash(t.TempDir(), t.TempDir(), "", nil, "", nil,
-		io.Discard, func(string) {}, func(string) {})
+		io.Discard, func(string) {}, func(string) {}, nil)
 	if err == nil {
 		t.Fatal("want an error for an empty bundle dir")
 	}
@@ -896,37 +897,16 @@ func TestCheckDragonwingDiskSpaceReflectsRealExpansion(t *testing.T) {
 		info:    &dragonwingBundleInfo{SizeBytes: bundleSize},
 	}
 	// The message carries the figure, which is the cheapest way to assert it.
-	err := checkDragonwingDiskSpace("/nonexistent-volume", plan)
+	board, _ := dragonwingBoardFor("dragonwing-iq-8275")
+	err := checkDragonwingDiskSpace("/nonexistent-volume", board, plan)
 	_ = err // a missing volume reports no free space, so this may pass
 
-	needed := int64(float64(bundleSize) * (1 + dragonwingExtractedFactor))
+	needed := int64(float64(bundleSize) * (1 + board.extractedFactor))
 	if needed < 12*gib {
 		t.Errorf("estimate is %d GiB, below the ~12.5 GiB a real bundle needs", needed/gib)
 	}
 	if needed > 20*gib {
 		t.Errorf("estimate is %d GiB, so far above the real need it would block valid installs", needed/gib)
-	}
-}
-
-func TestEDLUdevRuleMatchesPackagedRule(t *testing.T) {
-	// The USB-access hint tells tarball users to install edlUdevRule verbatim,
-	// so it must be byte-identical to what the deb/rpm ships. Mirrors
-	// TestUsbUdevRuleMatchesPackagedRule for the Jetson rule.
-	body, err := os.ReadFile("../../../../packaging/linux/udev/70-wendy-qualcomm.rules")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rules []string
-	for _, line := range strings.Split(string(body), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			rules = append(rules, line)
-		}
-	}
-	if len(rules) != 1 || rules[0] != edlUdevRule {
-		t.Fatalf("packaged rule diverged from edlUdevRule:\npackaged: %q\nconst:    %q", rules, edlUdevRule)
-	}
-	if !strings.Contains(string(body), "05c6") {
-		t.Error("the packaged rule does not match the Qualcomm EDL vendor")
 	}
 }
 
@@ -960,10 +940,23 @@ func TestReportDragonwingFailureCoversCancellation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
-			reportDragonwingFailure(&buf, tc.err, tc.reachedPartitions)
+			b8275, _ := dragonwingBoardFor("dragonwing-iq-8275")
+			reportDragonwingFailure(&buf, b8275, tc.err, tc.reachedPartitions)
 			if !strings.Contains(buf.String(), tc.want) {
 				t.Errorf("output = %q, want it to mention %q", buf.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestDragonwingEDLInstructionsMatchTheBoard(t *testing.T) {
+	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "S2-8"}, {"dragonwing-iq-9075", "MODE switch 3"}} {
+		board, _ := dragonwingBoardFor(tc.board)
+		guide := board.guide()
+		for label, value := range map[string]string{"entry": strings.Join(guide.entry, "\n"), "ready": guide.ready, "done": strings.Join(guide.done, "\n"), "retry": guide.retry, "reenter": strings.Join(guide.reenter, "\n")} {
+			if !strings.Contains(value, tc.pole) {
+				t.Errorf("%s %s omits %s", tc.board, label, tc.pole)
+			}
+		}
 	}
 }

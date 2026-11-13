@@ -11,6 +11,9 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -27,6 +30,41 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
+	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(now, nb time.Time) (time.Time, time.Time) {
+		return now, effectiveVerificationTime(now, notBeforeFloor, nb)
+	}, time.Now, false)
+}
+
+// NewTLSConfigWithTimePolicy selects an explicit local boot-clock policy.
+// It never uses an announcement timestamp to establish certificate trust.
+func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	cfg, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(wall, nb time.Time) (time.Time, time.Time) {
+		base := policy.BaseTime(wall)
+		return base, policy.LeafTimeAtBase(base, nb)
+	}, policy.WallTime, true)
+	if err != nil {
+		return nil, err
+	}
+	previous := cfg.VerifyConnection
+	cfg.VerifyConnection = func(state tls.ConnectionState) error {
+		if previous != nil {
+			if err := previous(state); err != nil {
+				return err
+			}
+		}
+		if !state.DidResume {
+			return nil
+		}
+		raw := make([][]byte, len(state.PeerCertificates))
+		for i, c := range state.PeerCertificates {
+			raw[i] = c.Raw
+		}
+		return cfg.VerifyPeerCertificate(raw, nil)
+	}
+	return cfg, nil
+}
+
+func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly bool) (*tls.Config, error) {
 	if chainPEM == "" {
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
@@ -36,16 +74,29 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 		return nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
 
-	caPool := x509.NewCertPool()
-	certs.AppendChainToPool(caPool, chainPEM)
-	caCerts, err := parseCertsFromPEM([]byte(chainPEM))
-	if err != nil {
-		return nil, fmt.Errorf("parsing chain PEM: %w", err)
+	var caPool *x509.CertPool
+	var caCerts []*x509.Certificate
+	if leafOnly {
+		// Explicit mesh policy requires a complete selected issuer path even
+		// for our own leaf. A duplicated leaf in either PEM input must not
+		// become an independent anchor and hide its issuer's expiry.
+		caPool, caCerts, err = peerCertificateTrust(chainPEM)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Preserve the general mTLS loopback policy for legacy callers.
+		caPool = x509.NewCertPool()
+		certs.AppendChainToPool(caPool, chainPEM)
+		caCerts, err = parseCertsFromPEM([]byte(chainPEM))
+		if err != nil {
+			return nil, fmt.Errorf("parsing chain PEM: %w", err)
+		}
+		if len(caCerts) == 0 {
+			return nil, fmt.Errorf("parsing chain PEM: no certificates found")
+		}
+		caPool.AppendCertsFromPEM([]byte(certPEM))
 	}
-	if len(caCerts) == 0 {
-		return nil, fmt.Errorf("parsing chain PEM: no certificates found")
-	}
-	caPool.AppendCertsFromPEM([]byte(certPEM))
 
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
@@ -59,13 +110,15 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 		// list it sends nothing and the handshake fails with "certificate required".
 		// An empty ClientCAs list signals "accept any CA" — VerifyPeerCertificate
 		// performs the actual ML-DSA-aware chain verification instead.
-		ClientCAs:             nil,
-		MinVersion:            tls.VersionTLS12,
-		VerifyPeerCertificate: buildVerifyPeerCertificate(caPool, caCerts, logger, notBeforeFloor),
+		ClientCAs:  nil,
+		MinVersion: tls.VersionTLS12,
 	}
+	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, nil, leafOnly)
+	cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error { _, err := verify(raw, now()); return err }
+	cfg.Time = func() time.Time { base, _ := clockTimes(now(), time.Time{}); return base }
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
-	wireSessionTicketChecks(cfg, notBeforeFloor, time.Now)
+	wireSessionTicketChecksWithClock(cfg, now, clockTimes)
 	// Direct PKI device certificates carry a tenant SPIFFE identity instead
 	// of a legacy numeric org. Keep tenant enforcement active even when the
 	// legacy org interceptor has no numeric identity to compare. VerifyConnection
@@ -102,8 +155,9 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 // NewServer creates a gRPC server with mTLS credentials.
 // The mTLS interceptors are always applied — they cannot be omitted via extraOpts.
 // This ensures no handler can accidentally receive an unauthenticated call regardless
-// of how the caller configures the server. Callers may add further interceptors via
-// extraOpts; those run after the mandatory mTLS check.
+// of how the caller configures the server. Device callers are restricted to the
+// exact RPC allowlist; unknown roles are refused. Callers may append further
+// chained interceptors via extraOpts; those run after authentication and authorization.
 // logger may be nil; when provided, rejected client certificates are logged at WARN level.
 // notBeforeFloor is forwarded to NewTLSConfig; see its documentation for details.
 // expected and orgMode are forwarded to the mandatory mTLS interceptors, which
@@ -114,13 +168,37 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
 
-	creds := credentials.NewTLS(tlsConfig)
+	return newServerWithTLSConfig(tlsConfig, chainPEM, logger, expected, orgMode, extraOpts...)
+}
+
+func NewServerWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+	cfg, err := NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, fmt.Errorf("creating TLS config: %w", err)
+	}
+	return newServerWithTLSConfig(cfg, chainPEM, logger, expected, orgMode, extraOpts...)
+}
+
+func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+
+	known, err := parseCertsFromPEM([]byte(chainPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
+	}
+	tlsConfig.NextProtos = []string{"h2"}
+	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
+
+	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
-		// mTLS interceptors are mandatory: they run before any caller-provided interceptors
+		// mTLS interceptors are mandatory: they run before caller-provided chained interceptors
 		// so that no handler can be reached without a verified client certificate.
-		grpc.ChainUnaryInterceptor(interceptor.UnaryMTLSInterceptor(logger, expected, orgMode)),
-		grpc.ChainStreamInterceptor(interceptor.StreamMTLSInterceptor(logger, expected, orgMode)),
+		grpc.ChainUnaryInterceptor(
+			interceptor.UnaryMTLSInterceptor(logger, expected, orgMode),
+			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode)),
+		grpc.ChainStreamInterceptor(
+			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
+			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -153,6 +231,18 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 	if err != nil {
 		return nil, err
 	}
+	return newClientTLSConfig(base)
+}
+
+func NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	base, err := NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, err
+	}
+	return newClientTLSConfig(base)
+}
+
+func newClientTLSConfig(base *tls.Config) (*tls.Config, error) {
 	if base.VerifyPeerCertificate == nil {
 		// InsecureSkipVerify below is only safe because the custom verifier
 		// replaces Go's built-in one; never hand out a config without it.
@@ -161,6 +251,7 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 	chainVerify := base.VerifyPeerCertificate
 	cfg := &tls.Config{
 		Certificates:          base.Certificates,
+		Time:                  base.Time,
 		MinVersion:            base.MinVersion,
 		InsecureSkipVerify:    true, // verification is NOT disabled: VerifyPeerCertificate below performs the full (ML-DSA-aware) chain check
 		VerifyPeerCertificate: chainVerify,
@@ -187,31 +278,39 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 	return cfg, nil
 }
 
-// NewClientTLSConfigExpectingPeer is like NewClientTLSConfig but additionally
+// NewClientTLSConfigExpectingDevice is like NewClientTLSConfig but additionally
 // pins the expected peer identity, closing the mesh LAN-dial spoofing gap:
-// mDNS advertises a device's cloud asset ID over an unauthenticated TXT
+// mDNS advertises a device's SPIFFE principal over an unauthenticated TXT
 // record (discoverOnLAN), so chain validity alone — what NewClientTLSConfig
 // checks — only proves the peer holds a cert signed by a trusted CA, not that
 // it is the specific device the caller intended to reach. Any other
-// same-CA-issued cert (a different asset in the same org, or a user cert)
-// could otherwise impersonate the mDNS-advertised target and MITM the
-// connection. The returned config's VerifyPeerCertificate runs the normal
-// chain check first, then requires the peer leaf to parse as a wendy asset
-// identity with id wantAssetID, in this device's own tenant.
+// same-CA-issued cert could otherwise impersonate the mDNS-advertised target
+// and MITM the connection. The returned config's VerifyPeerCertificate runs
+// the normal chain check first, then requires the peer leaf to carry a tenant
+// SPIFFE device principal equal to want.
 //
-// The tenant is read off certPEM — this device's own leaf — rather than passed
-// in: the invariant a mesh dial enforces is "the same tenant I am in", and both
-// callers were already passing their own org. Deriving it here means a device
-// whose certificate has moved from a urn:wendy org to a pki-core tenant SPIFFE
-// principal compares like with like without either caller learning about it.
-// A device that cannot determine its own tenant skips the tenant half of the
-// check (the asset id still pins), mirroring the interceptor's grace behaviour
-// rather than bricking mesh on an unidentifiable leaf.
-func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, wantAssetID string) (*tls.Config, error) {
+// The caller's tenant is read off certPEM rather than passed in. The
+// invariant is "a device in the tenant I am in", so a
+// want naming a foreign tenant is rejected even if some CA-signed leaf
+// somewhere matches it. A caller without a tenant identity is refused;
+// a valid operator credential can establish the same tenant boundary.
+func NewClientTLSConfigExpectingDevice(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want meshid.Device) (*tls.Config, error) {
 	base, err := NewClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
 	if err != nil {
 		return nil, err
 	}
+	return pinClientDevice(base, certPEM, want), nil
+}
+
+func NewClientTLSConfigExpectingDeviceWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want meshid.Device, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	base, err := NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, err
+	}
+	return pinClientDevice(base, certPEM, want), nil
+}
+
+func pinClientDevice(base *tls.Config, certPEM string, want meshid.Device) *tls.Config {
 	ownScope, haveOwnScope := certs.ScopeFromCertPEM(certPEM)
 	chainVerify := base.VerifyPeerCertificate
 	pinnedVerify := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
@@ -225,54 +324,101 @@ func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *z
 		if err != nil {
 			return fmt.Errorf("mtls: parsing peer certificate: %w", err)
 		}
-		ident, found, err := certs.IdentityFromCert(leaf)
+		if !haveOwnScope || ownScope.TenantUUID == "" {
+			return errors.New("mtls: caller has no tenant identity")
+		}
+		if want.Tenant().String() != ownScope.TenantUUID {
+			return fmt.Errorf("mtls: expected peer %s outside own tenant %s", want.Principal(), ownScope.TenantUUID)
+		}
+		if err := VerifyPeerDevice(leaf, ownScope.TenantUUID, want.UUID().String()); err != nil {
+			return err
+		}
+		return nil
+	}
+	applyPeerPin(base, pinnedVerify)
+	return base
+}
+
+// NewClientTLSConfigExpectingIdentity is the non-mesh sibling of
+// NewClientTLSConfigExpectingDevice for dials whose identity contract is a
+// certs.WendyIdentity rather than a mesh device principal — sensor pairing
+// reaches source agents and Wendy Lite boards, which may still carry legacy
+// urn:wendy asset identities or transitional dual-SAN leaves. The peer leaf
+// must name exactly `want` (SameEntity: principals compared when both sides
+// have one, legacy scope+type+id otherwise) and live in this device's own
+// tenant when that tenant is knowable.
+func NewClientTLSConfigExpectingIdentity(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want certs.WendyIdentity) (*tls.Config, error) {
+	base, err := NewClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
+	if err != nil {
+		return nil, err
+	}
+	return pinClientIdentity(base, certPEM, want), nil
+}
+
+func NewClientTLSConfigExpectingIdentityWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want certs.WendyIdentity, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	base, err := NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, err
+	}
+	return pinClientIdentity(base, certPEM, want), nil
+}
+
+func pinClientIdentity(base *tls.Config, certPEM string, want certs.WendyIdentity) *tls.Config {
+	ownScope, haveOwnScope := certs.ScopeFromCertPEM(certPEM)
+	chainVerify := base.VerifyPeerCertificate
+	pinnedVerify := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		if err := chainVerify(rawCerts, verifiedChains); err != nil {
+			return err
+		}
+		if len(rawCerts) == 0 {
+			return errors.New("mtls: no peer certificate presented")
+		}
+		leaf, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("mtls: parsing peer certificate: %w", err)
+		}
+		peer, found, err := certs.IdentityFromCert(leaf)
 		if err != nil {
 			return fmt.Errorf("mtls: parsing peer wendy identity: %w", err)
 		}
 		if !found {
 			return errors.New("mtls: peer certificate carries no wendy identity")
 		}
-		if ident.EntityType != certs.EntityAsset {
-			return fmt.Errorf("mtls: expected peer asset %s in %s, got entity type %q", wantAssetID, ownScope, ident.EntityType)
+		if !peer.SameEntity(want) {
+			return fmt.Errorf("mtls: expected peer %s, got %s (%s)", want.IdentityKey(), peer.IdentityKey(), peer.Scope())
 		}
-		// wantAssetID is the int32 cloud asset id the mesh addresses peers by
-		// (mDNS TXT "assetid" → meshDialLAN). A device enrolled directly against
-		// pki-core over ACME is named "device/<deviceID>" instead and has no
-		// such id, so it cannot be reached over the mesh LAN path at all — the
-		// gap is in mesh addressing, not here, and closing it means teaching
-		// discovery to advertise the principal (WDY-2968 follow-up).
-		if ident.EntityID != wantAssetID {
-			return fmt.Errorf("mtls: expected peer asset %s in %s, got asset %s in %s",
-				wantAssetID, ownScope, ident.EntityID, ident.Scope())
-		}
-		if haveOwnScope && !ident.Scope().Matches(ownScope) {
-			return fmt.Errorf("mtls: expected peer asset %s in %s, got asset %s in %s",
-				wantAssetID, ownScope, ident.EntityID, ident.Scope())
+		if haveOwnScope && !peer.Scope().Matches(ownScope) {
+			return fmt.Errorf("mtls: peer %s is outside own tenant %s", peer.IdentityKey(), ownScope)
 		}
 		return nil
 	}
+	applyPeerPin(base, pinnedVerify)
+	return base
+}
+
+// applyPeerPin installs pinnedVerify on both handshake paths of a client
+// config. CRITICAL: a resumed TLS 1.3 handshake skips VerifyPeerCertificate
+// entirely — Go only calls VerifyConnection, with ConnectionState.
+// PeerCertificates restored from the cached session ticket. All mesh dials
+// share one process-wide meshSessionCache AND one constant gRPC authority
+// (passthrough:///mesh-peer), so without the VerifyConnection hook a ticket
+// cached while dialing device A could be resumed while "expecting" device B,
+// silently bypassing the anti-MITM pin (see meshDialLAN's doc in
+// mesh_dialer.go). The hook re-runs the SAME pinned verify closure against
+// the resumed connection's restored peer certs; on a full handshake
+// VerifyPeerCertificate already ran it, so there is nothing to redo. A pin
+// mismatch hard-fails rather than silently declining to resume: a full
+// handshake to the wrong peer would fail this same pin check, so there is no
+// decline-vs-fail asymmetry to preserve.
+//
+// With this in place, every resumed connection re-verifies the full chain +
+// identity pin, so a client that let session tickets chain indefinitely
+// across resumptions (extending trust well past a single handshake's ML-DSA
+// verification — see tlscache.Cache.SetResumed's doc for why the CLI↔agent
+// path guards against exactly that) is harmless here: the in-memory
+// meshSessionCache needs no equivalent guard.
+func applyPeerPin(base *tls.Config, pinnedVerify func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error) {
 	base.VerifyPeerCertificate = pinnedVerify
-	// CRITICAL: a resumed TLS 1.3 handshake skips VerifyPeerCertificate
-	// entirely — Go only calls VerifyConnection, with
-	// ConnectionState.PeerCertificates restored from the cached session
-	// ticket. All mesh dials share one process-wide meshSessionCache AND one
-	// constant gRPC authority (passthrough:///mesh-peer), so without this,
-	// a ticket cached while dialing asset A could be resumed while
-	// "expecting" asset B, silently bypassing the anti-MITM pin above (see
-	// meshDialLAN's doc in mesh_dialer.go). Re-run the SAME pinned verify
-	// closure against the resumed connection's restored peer certs; on a
-	// full handshake (DidResume false) VerifyPeerCertificate already ran
-	// this check, so there is nothing to redo. A pin mismatch here hard-fails
-	// the connection rather than silently declining to resume: a full
-	// handshake to the wrong peer would fail this same pin check, so there
-	// is no decline-vs-fail asymmetry to preserve.
-	//
-	// With this fix in place, every resumed mesh connection re-verifies the
-	// full chain + identity pin, so a client that let session tickets chain
-	// indefinitely across resumptions (extending trust well past a single
-	// handshake's ML-DSA verification — see tlscache.Cache.SetResumed's doc
-	// for why the CLI↔agent path guards against exactly that) is harmless
-	// here: the in-memory meshSessionCache needs no equivalent guard.
 	base.VerifyConnection = func(cs tls.ConnectionState) error {
 		if !cs.DidResume {
 			return nil
@@ -283,5 +429,23 @@ func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *z
 		}
 		return pinnedVerify(rawCerts, nil)
 	}
-	return base, nil
+}
+
+// VerifyPeerDevice is the device-to-device rule, applied after the chain check
+// (tenant Device CA or its Lite sibling, up to the platform Root): the peer leaf
+// carries exactly one tenant SPIFFE device principal, its tenant is ownTenant,
+// and its device UUID is wantDevice, the roster entry for the dialed name. The
+// address the dial went to is only a routing hint and proves nothing.
+func VerifyPeerDevice(leaf *x509.Certificate, ownTenant, wantDevice string) error {
+	if ownTenant == "" {
+		return fmt.Errorf("mtls: expected peer device %s, but this device has no tenant identity", wantDevice)
+	}
+	peer, err := meshid.DeviceFromCert(leaf)
+	if err != nil {
+		return fmt.Errorf("mtls: expected peer device %s: %w", wantDevice, err)
+	}
+	if peer.Tenant().String() != ownTenant || peer.UUID().String() != wantDevice {
+		return fmt.Errorf("mtls: expected peer device %s in tenant %s, got %s", wantDevice, ownTenant, peer.Principal())
+	}
+	return nil
 }

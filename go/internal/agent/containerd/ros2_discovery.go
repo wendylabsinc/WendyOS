@@ -34,7 +34,7 @@ func (c *Client) ros2SidecarDiscoveryEnv(ctx context.Context, labels map[string]
 }
 
 func ros2AppDiscoveryEnv(env []string) []string {
-	var localhost, discoveryRange string
+	var localhost, discoveryRange, cycloneURI string
 	for _, entry := range env {
 		key, value, _ := strings.Cut(entry, "=")
 		switch key {
@@ -42,20 +42,28 @@ func ros2AppDiscoveryEnv(env []string) []string {
 			localhost = value
 		case "ROS_AUTOMATIC_DISCOVERY_RANGE":
 			discoveryRange = value
+		case "CYCLONEDDS_URI":
+			cycloneURI = value
 		}
 	}
 	// Only an explicit subnet configuration broadens discovery. Missing or
 	// inconsistent settings retain the existing app-local default. The empty
 	// range supports older ROS configurations using only ROS_LOCALHOST_ONLY.
 	host := localhost == "0" && (discoveryRange == "SUBNET" || discoveryRange == "")
-	return ros2ExecDiscoveryEnv(host)
+	discovery := ros2ExecDiscoveryEnv(host)
+	// Scope peripherals limits CycloneDDS to loopback and the peripheral
+	// interfaces; the sidecar uses the same limit so it sees the app's graph.
+	if host && cycloneURI != "" {
+		discovery = append(discovery, "CYCLONEDDS_URI="+cycloneURI)
+	}
+	return discovery
 }
 
 func ros2WithDiscoveryEnv(env, discovery []string) []string {
 	out := make([]string, 0, len(env)+len(discovery))
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
-		if key != "ROS_LOCALHOST_ONLY" && key != "ROS_AUTOMATIC_DISCOVERY_RANGE" {
+		if key != "ROS_LOCALHOST_ONLY" && key != "ROS_AUTOMATIC_DISCOVERY_RANGE" && key != "CYCLONEDDS_URI" {
 			out = append(out, entry)
 		}
 	}

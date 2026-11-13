@@ -2,6 +2,7 @@
   "$schema": "https://wendy.sh/schemas/wendy.json",
   "appId": "sh.wendy.examples.g1-locomotion",
   "version": "1.0.0",
+  "restartPolicy": "no",
   "platform": "linux",
   "entitlements": [
     { "type": "network", "mode": "host" }

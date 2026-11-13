@@ -1,0 +1,45 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 180B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/golang:1.27
+#2 DONE 0.1s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 transferring context: 630B done
+#4 DONE 0.0s
+
+#5 [build 1/4] FROM docker.io/library/golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244
+#5 resolve docker.io/library/golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 0.0s done
+#5 DONE 0.1s
+
+#6 [build 2/4] WORKDIR /src
+#6 DONE 0.0s
+
+#7 [build 3/4] COPY . .
+#7 DONE 0.0s
+
+#8 [build 4/4] RUN go build -o /out/app .
+#8 1.313 # example.com/gofail
+#8 1.313 ./main.go:6:14: undefined: foo
+#8 ERROR: process "/bin/sh -c go build -o /out/app ." did not complete successfully: exit code: 1
+------
+ > [build 4/4] RUN go build -o /out/app .:
+1.313 # example.com/gofail
+1.313 ./main.go:6:14: undefined: foo
+------
+Dockerfile:4
+--------------------
+   2 |     WORKDIR /src
+   3 |     COPY . .
+   4 | >>> RUN go build -o /out/app .
+   5 |     
+   6 |     FROM scratch
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c go build -o /out/app ." did not complete successfully: exit code: 1

@@ -57,7 +57,7 @@ that the HTTP server is reachable. Lidar is optional, and the epoch is latched.
 `/camera.jpg` returns 503 when the camera data is stale. All observations come
 from ROS subscriptions; the simulator HTTP endpoint supplies identity and mode.
 
-The app uses host networking with `discoveryScope: app`. Wendy configures
+The app uses host networking with `scope: device`. Wendy configures
 CycloneDDS on the VM's loopback interface and domain 0, matching this simulator's
 DDS isolation. It has no command
 publishers. The training commands below run separately on a GPU workstation with

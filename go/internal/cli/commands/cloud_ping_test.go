@@ -102,6 +102,50 @@ func TestRunPingLoopCountsReplies(t *testing.T) {
 	}
 }
 
+// The response arrives while sendEcho still holds the loop. Time spent waiting
+// to process that response must not be included in its network RTT.
+type delayedReturnPingSession struct {
+	*fakePingSession
+	received chan struct{}
+	once     sync.Once
+}
+
+func (s *delayedReturnPingSession) sendEcho(req *cloudpb.IcmpEchoRequest) error {
+	if err := s.fakePingSession.sendEcho(req); err != nil {
+		return err
+	}
+	select {
+	case <-s.received:
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+	select {
+	case <-time.After(300 * time.Millisecond):
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+func (s *delayedReturnPingSession) recv() (*cloudpb.TunnelData, error) {
+	reply, err := s.fakePingSession.recv()
+	if err == nil {
+		s.once.Do(func() { close(s.received) })
+	}
+	return reply, err
+}
+
+func TestPingRTTExcludesReplyQueueDelay(t *testing.T) {
+	session := &delayedReturnPingSession{fakePingSession: newFakePingSession(t.Context()), received: make(chan struct{})}
+	stats := runPingLoop(t.Context(), session, "device", 1, time.Second, io.Discard)
+	if stats.Sent != 1 || stats.Received != 1 || stats.Err != nil {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	if stats.Max >= 150*time.Millisecond {
+		t.Fatalf("RTT includes time waiting to process an arrived reply: %v", stats.Max)
+	}
+}
+
 // TestRunPingLoopCountsLoss exercises the real "no replies" exit path: a
 // finite count against a session that swallows every echo must return on its
 // own once the grace window after the last send elapses — no ctx cancel
@@ -171,5 +215,39 @@ func TestPingFirstRequestFailureIsReported(t *testing.T) {
 	stats := runPingLoop(ctx, &sendErrorPing{newFakePingSession(ctx), expected}, "device", 1, time.Millisecond, io.Discard)
 	if !errors.Is(stats.Err, expected) || stats.Sent != 0 || stats.Received != 0 {
 		t.Fatalf("first request failure lost: %+v", stats)
+	}
+}
+
+// TestCloudPingFollowsWENDY_DEVICE covers I2: unlike its siblings `cloud
+// tunnel` and `cloud run`, `cloud ping`'s RunE used to pass its local
+// --device flag straight through without effectiveDeviceName's fallback, so
+// WENDY_DEVICE was silently dropped and the interactive picker opened
+// instead. cloudPingCommand itself reaches pickAuthEntry and
+// pickCloudDiscoveryDevice, which need real config and network access, so
+// this stubs cloudPingCommandFn — the lowest seam that still exercises the
+// actual RunE closure's argument-building, which is exactly what the bug was
+// in — rather than reaching further into cloud discovery machinery that has
+// nothing to do with this regression.
+func TestCloudPingFollowsWENDY_DEVICE(t *testing.T) {
+	restoreDeviceGlobals(t)
+	deviceFlag = ""
+	t.Setenv(deviceEnvVar, "thor.local")
+	applyDeviceEnv()
+
+	orig := cloudPingCommandFn
+	var gotDevice string
+	cloudPingCommandFn = func(_ context.Context, _, device, _ string, _ int, _ time.Duration) error {
+		gotDevice = device
+		return nil
+	}
+	t.Cleanup(func() { cloudPingCommandFn = orig })
+
+	cmd := newCloudPingCmd()
+	cmd.SetContext(context.Background())
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+	if gotDevice != "thor.local" {
+		t.Fatalf("cloud ping resolved device %q, want thor.local from WENDY_DEVICE", gotDevice)
 	}
 }

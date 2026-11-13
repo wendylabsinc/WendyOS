@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +22,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
+	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
+	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -40,6 +45,18 @@ type AgentService struct {
 	installer                *AgentInstaller
 	isWendyOSHost            func() bool
 	osUpdateStateDir         string
+
+	// powerModes, isJetson and rebootFn back GetPowerMode/SetPowerMode;
+	// settable within-package so tests need neither nvpmodel nor a reboot.
+	powerModes powerModeController
+	isJetson   func() bool
+	rebootFn   func() error
+
+	// selectOSUpdater, osUpdateReboot and osUpdateAckWait back UpdateOS;
+	// settable within-package so tests need neither an updater nor a reboot.
+	selectOSUpdater func(requested, artifactURL string) (osUpdater, error)
+	osUpdateReboot  func(osVersion string) error
+	osUpdateAckWait time.Duration
 
 	// verifier checks the update binary's signature before install. Defaults
 	// to sigverify.DefaultVerifier (disabled until a real pinned key is
@@ -61,6 +78,12 @@ type AgentService struct {
 	// process was started from; see binarySHA256.
 	binaryHashOnce sync.Once
 	binaryHash     string
+
+	// Settable within-package so tests need neither a WendyOS image nor its disks.
+	deviceTypePath string
+	rootMedium     func() (medium, disk string, err error)
+	rootMediumOnce sync.Once
+	rootMediumName string
 }
 
 func NewAgentService(
@@ -77,19 +100,31 @@ func NewAgentService(
 		bluetoothManager:   bm,
 		installer:          installer,
 		isWendyOSHost:      defaultIsWendyOSHost,
+		powerModes:         powermode.New(),
+		isJetson:           defaultIsJetson,
+		rebootFn:           defaultReboot,
 		osUpdateStateDir:   oshealth.DefaultStateDir,
 		verifier:           sigverify.DefaultVerifier,
 		restartFn:          scheduleAgentRestartExit,
+		osUpdateAckWait:    osUpdateAckWait,
+		selectOSUpdater: func(requested, artifactURL string) (osUpdater, error) {
+			return selectUpdater(logger, requested, artifactURL)
+		},
+		osUpdateReboot: func(osVersion string) error {
+			return rebootAfterOSUpdate(newRebooter(logger), osVersion)
+		},
 	}
 }
 
-func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
+func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
 	resp := &agentpb.GetAgentVersionResponse{
 		Version:         version.Version,
 		Os:              detectOS(),
 		CpuArchitecture: runtime.GOARCH,
 		Featureset:      detectFeatureset(),
 		BinarySha256:    s.binarySHA256(),
+		// The CLI refuses a project that uses any other type before it deploys.
+		EntitlementTypes: advertisedEntitlementTypes(),
 	}
 
 	if hn, err := os.Hostname(); err == nil {
@@ -102,12 +137,12 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 		resp.OsVersion = &distroVer
 	}
 
-	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		deviceType, storageMedium := parseDeviceType(string(data))
+	if data, err := os.ReadFile(s.deviceTypeFile()); err == nil {
+		deviceType, imageMedium := parseDeviceType(string(data))
 		if deviceType != "" {
 			resp.DeviceType = &deviceType
 		}
-		if storageMedium != "" {
+		if storageMedium := pickStorageMedium(s.bootMedium(), imageMedium); storageMedium != "" {
 			resp.StorageMedium = &storageMedium
 		}
 	}
@@ -166,12 +201,16 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	}
 
 	resp.NetworkInterfaces = listNetworkInterfaces()
+	addUplinkInfo(ctx, resp.NetworkInterfaces)
 
 	// sysfs when the host has its own pack, else a registered fallback (a
 	// robot's BMS read over DDS). nil on the mains-powered devices that make up
 	// most of the fleet, which leaves the field absent so `wendy device info`
 	// prints no battery line.
 	resp.Battery = batteryToProto(hoststats.ResolveBattery())
+
+	// Jetson only; absent elsewhere and whenever nvpmodel cannot be read.
+	resp.PowerMode = s.currentPowerMode(ctx)
 
 	return resp, nil
 }
@@ -257,8 +296,9 @@ type gpuInfo struct {
 // that question, see hardware.ProbeGPUDriver, which is reported through the gpu
 // capability's driver_status.
 //
-// For NVIDIA, gpuArch comes from an nvidia-smi query. A blank value can mean the
-// tool or query is unavailable; it is not by itself evidence of a driver failure.
+// For NVIDIA, gpuArch comes from an nvidia-smi query, else from the Jetson SoC
+// in the device tree. A blank value can mean neither source is available; it is
+// not by itself evidence of a driver failure.
 //
 // Probe on every call rather than caching. /dev/dri and the DRM sysfs tree are
 // live state: the first RPC can land before udev has settled,
@@ -284,7 +324,8 @@ func detectGPUInfoFrom(devices []gpudiscovery.Device) gpuInfo {
 }
 
 // FastRPC transport nodes; the "-secure" ones are the root-only signed-PD path.
-// Kept in step with the npu entitlement in agent/oci, which grants the same set.
+// The npu entitlement in agent/oci grants every non-secure node, while detection
+// counts only a compute DSP's (isComputeDSPNode).
 // Behind vars so tests can point them at a fixture tree.
 var (
 	fastrpcDeviceGlob   = "/dev/fastrpc-*"
@@ -311,13 +352,20 @@ func detectNPUInfo() npuInfo {
 		return npuInfo{}
 	}
 	for _, node := range nodes {
-		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) || !isComputeDSPNode(node) {
 			continue
 		}
 		vendor := dspVendor()
 		return npuInfo{hasNPU: true, vendor: vendor, backends: npuBackends(vendor)}
 	}
 	return npuInfo{}
+}
+
+// isComputeDSPNode reports whether a FastRPC node belongs to a compute DSP. The
+// audio, modem and sensor DSPs expose FastRPC too, but run no app offload.
+func isComputeDSPNode(node string) bool {
+	name := filepath.Base(node)
+	return strings.HasPrefix(name, "fastrpc-cdsp") || strings.HasPrefix(name, "fastrpc-gdsp")
 }
 
 // npuBackends names the runtime an app can use on a reachable NPU. The vendor
@@ -393,17 +441,31 @@ func detectJetPackVersion() string {
 	return jetPackVersionFromTegraRelease(data)
 }
 
-func jetPackVersionFromTegraRelease(data []byte) string {
+// detectL4TVersion returns the raw L4T version ("36.4.4"), or "" off Jetson.
+func detectL4TVersion() string {
+	data, err := os.ReadFile("/etc/nv_tegra_release")
+	if err != nil {
+		return ""
+	}
+	return l4tVersionFromTegraRelease(data)
+}
+
+func l4tVersionFromTegraRelease(data []byte) string {
 	m := tegraReleaseRe.FindSubmatch(data)
 	if len(m) < 3 {
 		return ""
 	}
-	major := string(m[1])
-	revision := string(m[2]) // e.g. "4.4"
+	return string(m[1]) + "." + string(m[2])
+}
 
+func jetPackVersionFromTegraRelease(data []byte) string {
 	// Some JetPack releases share an L4T major.minor family, so prefer the
 	// complete L4T version before falling back to the family mapping.
-	l4tVersion := major + "." + revision
+	l4tVersion := l4tVersionFromTegraRelease(data)
+	if l4tVersion == "" {
+		return ""
+	}
+	major, revision, _ := strings.Cut(l4tVersion, ".") // revision e.g. "4.4"
 	jetpackExact := map[string]string{
 		"36.4.4": "6.2.1",
 		"36.4.3": "6.2",
@@ -517,11 +579,22 @@ func detectNvidiaGPUArch() string {
 			}
 		}
 	}
-	return ""
+	// L4T ships no nvidia-smi, so on a Jetson the SoC named in the device tree
+	// is the only source.
+	return board.Detect().NvidiaGPUArch()
+}
+
+// advertisedEntitlementTypes lists the types this agent knows and this device can honour.
+func advertisedEntitlementTypes() []string {
+	types := slices.Clone(appconfig.ValidEntitlementTypes)
+	if !oci.ArduinoBridgeAvailable() {
+		types = slices.DeleteFunc(types, func(t string) bool { return t == appconfig.EntitlementArduinoBridge })
+	}
+	return types
 }
 
 func detectFeatureset() []string {
-	var features []string
+	features := []string{"data-inference-classification"}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")
@@ -563,6 +636,9 @@ func detectFeatureset() []string {
 		// the outcome). See oshealth.Gate.
 		features = append(features, "os-healthcheck")
 	}
+
+	features = append(features, mcuFeatureEntries(loadMCULayouts())...)
+	features = append(features, mcuOwnerFeature()...)
 
 	return features
 }
@@ -989,6 +1065,10 @@ func readWendyOSVersionFrom(paths ...string) (string, bool) {
 	return "", false
 }
 
+// Older clients never cancel on Completed and always wait this out, so it must
+// end well before they start polling for the rebooted device.
+const osUpdateAckWait = 3 * time.Second
+
 func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
@@ -1014,7 +1094,7 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	restoreUpdater := inhibitAutoUpdater(s.logger)
 	defer restoreUpdater()
 
-	updater, err := selectUpdater(s.logger, req.GetUpdaterBackend(), req.GetArtifactUrl())
+	updater, err := s.selectOSUpdater(req.GetUpdaterBackend(), req.GetArtifactUrl())
 	if err != nil {
 		s.logger.Warn("UpdateOS rejected: no usable updater backend", zap.Error(err))
 		return sendOSUpdateFailure(stream, err.Error())
@@ -1047,14 +1127,23 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 			},
 		},
 	}); err != nil {
-		return err
+		// The update is installed either way, and one left unbooted blocks
+		// every later update until someone reboots the device by hand.
+		s.logger.Warn("Could not send OS update completion; rebooting anyway", zap.Error(err))
+	} else {
+		// Send only queues the frame and reboot(2) drops whatever is still
+		// unsent; a client that has Completed cancels the stream, ending this early.
+		select {
+		case <-stream.Context().Done():
+		case <-time.After(s.osUpdateAckWait):
+		}
 	}
 
 	// The running OS decides how to reboot: an image whose wendyos-update leaves
 	// the staged capsule non-durable needs the flush-and-unmount path, or the
 	// update just installed is lost on restart (WDY-2200).
 	osVersion, _ := wendyOSVersion()
-	if err := rebootAfterOSUpdate(newRebooter(s.logger), osVersion); err != nil {
+	if err := s.osUpdateReboot(osVersion); err != nil {
 		s.logger.Error("Failed to reboot after OS update", zap.Error(err))
 	}
 

@@ -87,6 +87,66 @@ func TestBackgroundArgsKeepExactDeviceAndOptions(t *testing.T) {
 	}
 }
 
+// A cloud:// selector (device_connect to a selector, a selector default, or a
+// cloud_connect session pinned to its org/tenant and asset) must be replayed
+// through the direct device command: `cloud device` resolves only names and
+// asset IDs and never matches a selector.
+func TestBackgroundArgsReplayCloudSelectorsThroughDeviceCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, status string
+		want               []string
+	}{
+		{
+			name: "device_connect_selector", kind: "camera_view",
+			status: `{"device":"cloud://shared.example:443/org/7/asset/42","selector":"cloud://shared.example:443/org/7/asset/42","transport":"cloud","cloud_grpc":"shared.example:443","broker_url":"relay.example:443"}`,
+			want:   []string{"--device=cloud://shared.example:443/org/7/asset/42", "device", "camera", "view", "--non-interactive"},
+		},
+		{
+			name: "cloud_connect_pinned_identity", kind: "audio_listen",
+			status: `{"device":"robot","selector":"cloud://shared.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/22222222-2222-4222-8222-222222222222","transport":"cloud","cloud_grpc":"shared.example:443"}`,
+			want:   []string{"--device=cloud://shared.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/22222222-2222-4222-8222-222222222222", "device", "audio", "listen", "--non-interactive"},
+		},
+		{
+			name: "selector_device_without_selector_field", kind: "camera_view",
+			status: `{"device":"CLOUD://shared.example:443/org/7/asset/42","transport":"cloud","cloud_grpc":"shared.example:443"}`,
+			want:   []string{"--device=CLOUD://shared.example:443/org/7/asset/42", "device", "camera", "view", "--non-interactive"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var target backgroundTarget
+			if err := json.Unmarshal([]byte(tc.status), &target); err != nil {
+				t.Fatal(err)
+			}
+			args, err := backgroundArgs(tc.kind, target, json.RawMessage(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(args, tc.want) {
+				t.Fatalf("arguments = %#v, want %#v", args, tc.want)
+			}
+		})
+	}
+}
+
+// The selector form has no --broker-url flag, so the session's broker (or an
+// explicit empty value for the default) travels in the environment instead.
+func TestBackgroundEnvironmentCarriesSelectorBroker(t *testing.T) {
+	base := []string{"PATH=/bin", "WENDY_BROKER_URL=inherited:443", "WENDY_AGENT_SOCKET=/tmp/other.sock"}
+	selector := backgroundTarget{Device: "cloud://shared.example:443/org/7/asset/42", Transport: "cloud", CloudGRPC: "shared.example:443", BrokerURL: "relay.example:443"}
+	if got := backgroundEnvironment(base, selector); !reflect.DeepEqual(got[len(got)-4:], []string{"NO_COLOR=1", "TERM=dumb", "WENDY_AGENT_SOCKET=", "WENDY_BROKER_URL=relay.example:443"}) {
+		t.Fatalf("selector environment = %v", got)
+	}
+	named := backgroundTarget{Device: "robot", Transport: "cloud", CloudGRPC: "shared.example:443"}
+	for _, target := range []backgroundTarget{named, backgroundTestDirectTarget} {
+		got := backgroundEnvironment(base, target)
+		if !reflect.DeepEqual(got[len(got)-3:], []string{"NO_COLOR=1", "TERM=dumb", "WENDY_AGENT_SOCKET="}) || got[1] != "WENDY_BROKER_URL=inherited:443" {
+			t.Fatalf("%+v environment = %v", target, got)
+		}
+	}
+}
+
+var backgroundTestDirectTarget = backgroundTarget{Device: "woof.local:51234", Transport: "direct"}
+
 func TestBackgroundArgsRejectInvalidIdentifiersAndNumbers(t *testing.T) {
 	target := backgroundTarget{Device: "woof.local:51234", Transport: "direct"}
 	for _, arguments := range []string{
@@ -115,6 +175,9 @@ func TestBackgroundTargetValidation(t *testing.T) {
 		{Device: "woof", Transport: "cloud"},
 		{Device: "woof", Transport: "cloud", CloudGRPC: "cloud.example:443\u0000"},
 		{Device: "woof", Transport: "cloud", CloudGRPC: "cloud.example:443", BrokerURL: " broker.example:443"},
+		{Device: "woof", Transport: "cloud", CloudGRPC: "cloud.example:443", Selector: "woof"},
+		{Device: "woof", Transport: "cloud", CloudGRPC: "cloud.example:443", Selector: "cloud://cloud.example:443/org/1/asset/2\n"},
+		{Device: "woof", Transport: "direct", Selector: "cloud://cloud.example:443/org/1/asset/2"},
 	} {
 		if _, err := backgroundArgs("camera_view", target, json.RawMessage(`{}`)); err == nil {
 			t.Errorf("accepted invalid target %+v", target)

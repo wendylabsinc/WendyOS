@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build (!darwin && !linux) || ios
 
 package adb
 
@@ -14,6 +14,8 @@ func Open() (*Device, error) {
 	return nil, fmt.Errorf("ADB over USB is not supported on this platform")
 }
 
+func OpenAt(string) (*Device, error) { return Open() }
+
 func (d *Device) Close() {}
 
 func (d *Device) Shell(string) (string, error) {
@@ -23,3 +25,5 @@ func (d *Device) Shell(string) (string, error) {
 func (d *Device) Push(io.Reader, string, int) error {
 	return fmt.Errorf("ADB over USB is not supported on this platform")
 }
+
+var ErrUSBAccess = fmt.Errorf("USB access is unavailable on this platform")

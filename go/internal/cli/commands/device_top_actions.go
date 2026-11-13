@@ -97,8 +97,10 @@ func (m topModel) pruneCacheCmd(seq uint64) tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, 2*time.Minute)
 		defer cancel()
 		var out strings.Builder
-		err := runDeviceCachePrune(ctx, m.conn, &out, false, false)
-		// The command's second line explains background GC. Keep the interactive
+		// No --min-age, so the agent applies its default grace period and the
+		// stale-agent warning (the only stderr output) can never fire.
+		err := runDeviceCachePrune(ctx, m.conn, &out, io.Discard, devicePruneOptions{})
+		// The command's later lines explain reclamation. Keep the interactive
 		// status to one line so the meters and table retain their screen space.
 		text, _, _ := strings.Cut(strings.TrimSpace(out.String()), "\n")
 		return topPruneResultMsg{seq: seq, text: text, err: err}

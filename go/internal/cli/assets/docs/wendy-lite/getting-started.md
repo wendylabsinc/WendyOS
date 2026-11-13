@@ -8,26 +8,23 @@ Wendy CLI.
 This guide takes the shortest path from nothing to a running application: three
 steps, ending with an existing example built and deployed on your device.
 
-## Step 1 — Install the tools
+## Step 1 — Install the Wendy CLI
 
-You need two tools.
-
-**Wendy CLI** — your entry point to the device: installs Wendy Lite, configures
-it, builds and deploys applications. Run this command to install Wendy CLI:
+The Wendy CLI is your entry point to the device: it installs Wendy Lite,
+configures it, and builds and deploys applications. Run this command to install
+it:
 
 ```sh
 curl -fsSL https://install.wendy.dev/cli.sh | bash
 ```
 
 or follow the
-[CLI installation guide](https://docs.wendy.dev/latest/#1-install-the-wendy-cli).
+[CLI installation guide](https://docs.wendy.dev/latest/#install-the-wendy-cli).
 
-**EIM**, the ESP-IDF Installation Manager — Espressif's tool for managing the
-ESP-IDF development environment. Follow Espressif's
+Wendy builds applications with EIM, the ESP-IDF Installation Manager, and picks
+the right ESP-IDF version for you. If EIM is missing, `wendy run` offers to
+install it with Homebrew. Without Homebrew, install EIM by following Espressif's
 [installation instructions](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/index.html#installation).
-
-You never have to select a toolchain by hand: the Wendy CLI picks the right
-one for you via EIM.
 
 ## Step 2 — Install Wendy Lite on your device
 
@@ -85,6 +82,10 @@ You now have a working setup and a project you can edit. Change something in
 `blink-rgb-led/main/main.c`, run `wendy run` again, and watch it land on the device.
 
 When you want to write your own application, see
-[Native Apps for Wendy Lite](native-apps.md) — it covers how a Wendy
+[Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) — it covers how a Wendy
 Lite project is put together, how to integrate the `wendy_core` component, and
 which parts of the hardware the system owns.
+
+To manage the board remotely, follow
+[enroll Wendy Lite in Wendy Cloud](/docs/advanced/cli/lite-enrollment).
+USB is required for enrollment; afterward, the board uses Wi-Fi for Cloud access.

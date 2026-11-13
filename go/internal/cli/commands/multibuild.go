@@ -130,14 +130,16 @@ var planResolveDockerfile = resolveDockerfile
 
 // maxConcurrentPlans bounds how many services are planned at once. Planning is
 // local work — a build-file resolve (a Stagefile compile, for a Stagefile
-// project) plus a full walk-and-hash of the build context. Its higher limit
-// keeps planning fast without letting a very large group open every context at
-// once.
+// project) plus, for a service with digest-pinned bases, a full walk-and-hash
+// of the build context. Its higher limit keeps planning fast without letting a
+// very large group open every context at once.
 const maxConcurrentPlans = 8
 
 // servicePlan is the per-service work that has to happen before we can decide
 // whether a service's build+push can be skipped: which build file it builds
-// from, and the hash of everything that could change its image.
+// from, and the hash of everything that could change its image. inputHash is
+// empty when contentPinned is false: such a service is never skipped, so its
+// context is not hashed.
 type servicePlan struct {
 	dockerfile    string
 	inputHash     string
@@ -151,7 +153,8 @@ type servicePlan struct {
 // digest resolution, codegen, two file writes) and hashing the build context
 // walks and reads every file in it. Running them one service at a time put that
 // cost on the critical path before the first build even started, and it scaled
-// with the size of the group.
+// with the size of the group. Only a service whose bases are digest-pinned is
+// hashed (see pinnedBuildInputHash).
 //
 // A service whose resolve or hash fails is simply absent from the result — the
 // same outcome the serial loop produced by `continue`ing. Callers read a missing
@@ -174,11 +177,9 @@ func computeServicePlans(cwd, platform, backend, gpuArch string, serviceEnvs map
 			if err != nil {
 				return
 			}
-			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, backend, buildArgs, serviceEnvs[name])
-			if err != nil {
-				return
-			}
-			contentPinned, err := dockerfileBasesContentPinned(contextDir, dockerfile)
+			// An unpinned service keeps its plan (the build reuses its resolved
+			// build file) but is never hashed: it can never be skipped.
+			hash, contentPinned, err := pinnedBuildInputHash(contextDir, dockerfile, platform, backend, buildArgs, serviceEnvs[name])
 			if err != nil {
 				return
 			}
@@ -190,6 +191,19 @@ func computeServicePlans(cwd, platform, backend, gpuArch string, serviceEnvs map
 	}
 	wg.Wait()
 	return plans
+}
+
+// serviceImageRepo is the repository one service's image is built into and
+// deployed from: <app>-<service>, lowercased because a repository name must be.
+//
+// It is one function because the name has to be identical in three places that
+// never compare notes — the local build+push, the remote build's push target,
+// and the reference createService starts the container from. A divergence there
+// is silent: the build succeeds, the image lands under a name nothing reads,
+// and the container comes up on whatever older image still holds the expected
+// one.
+func serviceImageRepo(appID, service string) string {
+	return fmt.Sprintf("%s-%s", strings.ToLower(appID), strings.ToLower(service))
 }
 
 // serviceFingerprintKey namespaces a deploy fingerprint per service within an
@@ -391,6 +405,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := checkAgentEntitlements(versionResp, networkConfigs...); err != nil {
+		return err
+	}
 	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
 	if architecture == "" {
@@ -418,6 +435,10 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		buildArgs["WENDY_DEBUG"] = "true"
 	}
 	applyDeviceBuildArgHints(buildArgs, versionResp)
+	buildArgs, err = mergeBuildArgFlags(buildArgs, opts.buildArgs)
+	if err != nil {
+		return err
+	}
 
 	// Ensure the Apple Container system is up once, before the parallel builds,
 	// so an explicit --builder apple-container prompts/starts a single time
@@ -439,6 +460,12 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	sfOpts := debugStagefileOptions(opts.debug)
 	serviceEnvs := effectiveServiceEnvs(appCfg, services, opts.env)
 	skip, hashes, dockerfiles := planServicePushSkips(ctx, conn, cwd, appCfg.AppID, deviceKey, platform, serviceEnvs, services, buildArgs, sfOpts...)
+	// A remote build cannot report the layer identities required to create or
+	// refresh these persistent skip decisions. Do not let a fingerprint from an
+	// earlier local build silently bypass --build-host. Watch-mode preservation
+	// is added below and remains valid because it describes the current watch
+	// session rather than an image identity from a different build path.
+	skip = serviceBuildSkips(opts.buildHost, skip)
 
 	// Build the full per-service create configs before selecting watch work: a
 	// service is unchanged only when both its image inputs and its effective
@@ -485,13 +512,46 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 	}
 
+	// Images that will be sent need room on the device, whichever machine
+	// builds them.
+	if len(skip) < len(services) {
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
+		ctx = withDeviceStorage(ctx, versionResp)
+	}
+
 	// Build all service images in parallel, then create and start containers.
-	failed, preparedContent, buildErr := buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
+	// With --build-host the builds happen on that device instead and it
+	// delivers each image here; everything from this point on is identical,
+	// because both paths land the same localhost:<port>/<app>-<service>:latest
+	// reference on this device (WDY-3120).
+	var (
+		failed          map[string]error
+		preparedContent map[string][]string
+		buildErr        error
+	)
+	if opts.buildHost != "" {
+		failed, buildErr = buildServicesRemote(ctx, conn, opts.buildHost, cwd, appCfg, services, platform, buildArgs, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
+		// Cancellation can follow a successful delivery, so invalidate old
+		// local fingerprints even when the remote build returns an error.
+		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
+	} else {
+		if len(skip) < len(services) {
+			if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+				return err
+			}
+			noteEmulatedBuild(platform, true)
+		}
+		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
+	}
 	if buildErr != nil {
 		return buildErr
 	}
 
-	recordServiceDeployFingerprints(appCfg.AppID, appCfg.Version, deviceKey, services, skip, failed, hashes, preparedContent)
+	if opts.buildHost == "" {
+		recordServiceDeployFingerprints(appCfg.AppID, appCfg.Version, deviceKey, services, skip, failed, hashes, preparedContent)
+	}
 
 	// Default (all-or-nothing): any build/push failure aborts the whole group so
 	// no half-deployed group is left behind. --keep-going deploys what built and
@@ -549,23 +609,28 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		appLevelCfg = nil
 	}
 
-	createService := func(name string) error {
-		deviceImage := fmt.Sprintf("localhost:%d/%s-%s:latest", regPort,
-			strings.ToLower(appCfg.AppID), strings.ToLower(name))
+	serviceCreateRequest := func(name string) (*agentpb.CreateContainerRequest, error) {
+		deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, serviceImageRepo(appCfg.AppID, name))
 
 		serviceCfg := svcCfgs[name]
 		appConfigData, err := json.Marshal(serviceCfg)
 		if err != nil {
-			return fmt.Errorf("marshaling config for service %s: %w", name, err)
+			return nil, fmt.Errorf("marshaling config for service %s: %w", name, err)
 		}
 
-		restartPolicy := resolveRestartPolicy(opts)
-		createReq := &agentpb.CreateContainerRequest{
+		return &agentpb.CreateContainerRequest{
 			ImageName:     deviceImage,
 			AppName:       serviceCfg.ContainerName(),
 			AppConfig:     appConfigData,
-			RestartPolicy: restartPolicy,
+			RestartPolicy: resolveRestartPolicy(opts),
 			Env:           serviceEnvs[name],
+		}, nil
+	}
+
+	createService := func(name string) error {
+		createReq, err := serviceCreateRequest(name)
+		if err != nil {
+			return err
 		}
 
 		cliLogln("Creating container for service %s...", name)
@@ -574,6 +639,10 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 		cliLogln("Service %s container created.", name)
 		return nil
+	}
+
+	if err := validateServicesBeforeReplace(ctx, conn.ContainerService, ordered, serviceCreateRequest); err != nil {
+		return err
 	}
 
 	if opts.deploy {
@@ -598,6 +667,11 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// namespace join is resolved at container create time against the
 	// primary's running task, so the primary must be started before the
 	// next service is created.
+	// A partial deployment returns non-zero. Do not emit a complete detached
+	// success result for the group after starting only its healthy subset.
+	if partialErr != nil {
+		opts.detachedOutput = false
+	}
 	if err := startAndStreamServices(ctx, conn, appCfg.AppID, ordered, preservedLifecycle, opts, createService, svcCfgs, svcLifecycleCfgs, appLevelCfg); err != nil {
 		return err
 	}
@@ -611,6 +685,31 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// In --keep-going mode, exit non-zero after deploying the healthy subset so
 	// callers/CI still see that some services failed.
 	return partialErr
+}
+
+// serviceBuildSkips keeps persistent content-verified skips for local builds,
+// but remote builds start from an empty set. buildServicesRemote cannot report
+// the layer identities needed to prove that a previous fingerprint still
+// describes the image now registered on the device.
+func serviceBuildSkips(buildHost string, persistent map[string]bool) map[string]bool {
+	if strings.TrimSpace(buildHost) == "" {
+		return persistent
+	}
+	return map[string]bool{}
+}
+
+// invalidateRemoteServiceDeployFingerprints removes the old locally-verifiable
+// identity after a remote service build is attempted. It runs even when the
+// build reports an error because the remote RPC may have delivered content
+// before failing; retaining the old identity would not fail closed. Services
+// preserved by watch did not invoke the remote build and keep their fingerprint.
+func invalidateRemoteServiceDeployFingerprints(appID, deviceKey string, services map[string]*appconfig.ServiceConfig, skip map[string]bool) {
+	for name := range services {
+		if skip[name] {
+			continue
+		}
+		removeDeployFingerprint(serviceFingerprintKey(appID, name), deviceKey)
+	}
 }
 
 // recordServiceDeployFingerprints persists only successful build/preparations.
@@ -705,9 +804,12 @@ func buildServicesParallelCore(
 	sem := make(chan struct{}, concurrency)
 
 	var prog *tea.Program
-	if !quietBuild && isInteractiveTerminal() {
+	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		title := fmt.Sprintf("Building %d service(s)...", len(names))
 		m := tui.NewMultiSpinner(title, names)
+		if progressHintsOff(ctx) {
+			m = m.WithoutHints()
+		}
 		prog = tui.NewProgressProgram(m)
 	}
 
@@ -749,7 +851,7 @@ func buildServicesParallelCore(
 
 			start := time.Now()
 			contextDir := filepath.Join(cwd, svc.Context)
-			repo := fmt.Sprintf("%s-%s", strings.ToLower(appID), strings.ToLower(name))
+			repo := serviceImageRepo(appID, name)
 			dockerfile, planned := dockerfiles[name]
 			var dockerfileErr error
 			if !planned {
@@ -770,7 +872,7 @@ func buildServicesParallelCore(
 			} else if quietBuild {
 				buildOut = &logBuf
 			} else {
-				buildOut = os.Stdout
+				buildOut = runProgressWriter(ctx)
 			}
 			var logOutW io.Writer = &logBuf
 			if prog == nil && !quietBuild {
@@ -831,7 +933,8 @@ func buildServicesParallelCore(
 
 	// Collect per-service failures. For failed services, summarize their buffered
 	// output now that the spinner has exited and the terminal is clean, retaining
-	// the full raw log in a temporary file for deeper inspection. The caller
+	// the full raw log in a temporary file for deeper inspection, and name the
+	// failing step and its cause in the service's error. The caller
 	// decides whether any failure aborts the group (default) or only its own
 	// service is dropped (--keep-going, WDY-1691).
 	failed := map[string]error{}
@@ -842,7 +945,7 @@ func buildServicesParallelCore(
 			// "no registry on the Mac agent" error, where retried-push spam would
 			// bury the actionable message.
 			if progressErr == nil && buildCtx.Err() == nil && r.log != "" && !isRegistryUnavailable(r.err) {
-				renderBuildFailure(os.Stderr, r.name, r.log, r.err)
+				failed[r.name] = renderBuildFailure(os.Stderr, r.name, r.log, r.err)
 			}
 		}
 	}
@@ -900,6 +1003,12 @@ func buildServicesParallelWithContent(
 	quietBuild bool,
 	sfOpts ...stagefile.Option,
 ) (map[string]error, map[string][]string, error) {
+	// Tag the context so ociLayoutBuildWaitNotice knows quietBuild routes every
+	// worker's logOutput into a failure-only buffer below, regardless of
+	// terminal interactivity (see quietBuildLogKey). Set once here rather than
+	// per worker: buildServicesParallelCore derives buildCtx from this ctx via
+	// context.WithCancel, which preserves values.
+	ctx = contextWithQuietBuildLog(ctx, quietBuild)
 	// Resolved once for the group: every service deploys to this one device,
 	// so they share its GPU architecture.
 	gpuArch := serviceGPUArch(ctx, cwd, services, conn)
@@ -933,7 +1042,7 @@ func buildServicesParallelWithContent(
 		if failed[name] != nil || skip[name] {
 			continue
 		}
-		repo := fmt.Sprintf("%s-%s", strings.ToLower(appID), strings.ToLower(name))
+		repo := serviceImageRepo(appID, name)
 		if ids := content[repo]; len(ids) > 0 {
 			byService[name] = append([]string(nil), ids...)
 		}
@@ -1036,7 +1145,7 @@ var serviceLogStyle = lipgloss.NewStyle().Foreground(tui.ColorInfo)
 // forwards the active step as a MultiSpinner detail line and accumulates the
 // cached/rebuilt tally for the service's done row.
 func newServiceProgressEmitter(prog *tea.Program, name string) (func(tui.BuildStepEvent), func() tui.BuildTally) {
-	var t tui.BuildTally
+	var t tui.BuildTallyCounter
 	emit := func(e tui.BuildStepEvent) {
 		switch e.Status {
 		case tui.BuildStepRunning:
@@ -1048,17 +1157,11 @@ func newServiceProgressEmitter(prog *tea.Program, name string) (func(tui.BuildSt
 				detail = e.Display + " · " + p
 			}
 			prog.Send(tui.MultiSpinnerDetailMsg{Name: name, Detail: detail})
-		case tui.BuildStepCached:
-			if e.Kind == tui.BuildVertexStep {
-				t.Cached++
-			}
-		case tui.BuildStepDone:
-			if e.Kind == tui.BuildVertexStep {
-				t.Rebuilt++
-			}
+		case tui.BuildStepCached, tui.BuildStepDone:
+			t.Observe(e)
 		}
 	}
-	return emit, func() tui.BuildTally { return t }
+	return emit, func() tui.BuildTally { return t.Tally() }
 }
 
 // multiServiceCreateConfig builds the per-service AppConfig transmitted to
@@ -1081,6 +1184,8 @@ func multiServiceCreateConfig(appCfg *appconfig.AppConfig, name string, svc *app
 		Frameworks:  appCfg.Frameworks,
 		Readiness:   svc.Readiness,
 		Hooks:       svc.Hooks,
+		// Tells the device whether the app still has a sketch.
+		MCU: appCfg.MCU,
 	}
 	cfg.Entitlements = append(append([]appconfig.Entitlement{}, appCfg.Entitlements...), svc.Entitlements...)
 	cfg.Entitlements = deduplicateEntitlements(cfg.Entitlements)
@@ -1181,18 +1286,22 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 				AppName: containerName,
 			})
 			if err != nil {
-				return fmt.Errorf("starting service %s: %w", name, err)
+				return deviceRefusalOr(err, "starting service "+name)
 			}
-			if _, err := stream.Recv(); err != nil && err != io.EOF {
-				return fmt.Errorf("waiting for service %s to start: %w", name, err)
+			if err := awaitStarted(stream); err != nil {
+				return deviceRefusalOr(err, "waiting for service "+name+" to start")
 			}
 		}
 		cliLogln("App group %s running in detached mode.", appID)
-		// No host-side lifecycle work: detached runs do not wait for readiness,
-		// announce the app URL, or fire host postStart hooks — see
+		// Detached runs report endpoints without waiting for readiness
+		// or firing host postStart hooks — see
 		// runPostStartIfReady's doc comment (WDY-2041). The agent-side hooks
 		// attached to the start RPCs above still run on the device.
-		return nil
+		configs := []*appconfig.AppConfig{appLevelCfg}
+		for _, name := range ordered {
+			configs = append(configs, svcLifecycleCfgs[name])
+		}
+		return opts.reportDetachedRun(ctx, conn, appID, configs...)
 	}
 
 	if opts.isWatch() {
@@ -1209,11 +1318,11 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			})
 			if err != nil {
 				startCancel()
-				return fmt.Errorf("starting service %s: %w", name, err)
+				return deviceRefusalOr(err, "starting service "+name)
 			}
 			if err := awaitStarted(stream); err != nil {
 				startCancel()
-				return fmt.Errorf("waiting for service %s to start: %w", name, err)
+				return deviceRefusalOr(err, "waiting for service "+name+" to start")
 			}
 			startCancel()
 			runner.startAsync(runCtx, svcLifecycleCfgs[name])
@@ -1259,13 +1368,13 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			runCancel()
 			wg.Wait()
 			runner.reap()
-			return fmt.Errorf("starting service %s: %w", name, err)
+			return deviceRefusalOr(err, "starting service "+name)
 		}
 		if _, err := stream.Recv(); err != nil && err != io.EOF {
 			runCancel()
 			wg.Wait()
 			runner.reap()
-			return fmt.Errorf("waiting for service %s to start: %w", name, err)
+			return deviceRefusalOr(err, "waiting for service "+name+" to start")
 		}
 		// This service's task is running (Started ack received). Fire its
 		// readiness→announce→postStart sequence on a goroutine so a slow or

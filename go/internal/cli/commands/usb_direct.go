@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,11 +64,17 @@ func usbDirectPreDial(ctx context.Context, cand discovery.USBDirectCandidate) bo
 }
 
 // anyAgentPortAnswers reports whether a TCP connect succeeds on either agent
-// port at the addresses addrForPort builds. Both are dialed concurrently so a
-// dead peer costs one timeout rather than two.
+// port at the addresses addrForPort builds, within usbDirectPreDialTimeout.
 func anyAgentPortAnswers(ctx context.Context, addrForPort func(port int) string) bool {
-	ports := [...]int{defaultAgentPort, defaultAgentPort + agentMTLSPortOffset}
-	dialCtx, cancel := context.WithTimeout(ctx, usbDirectPreDialTimeout)
+	return anyPortAnswers(ctx, addrForPort, []int{defaultAgentPort, defaultAgentPort + agentMTLSPortOffset}, usbDirectPreDialTimeout)
+}
+
+// anyPortAnswers reports whether a TCP connect completes within timeout on
+// any of ports at the addresses addrForPort builds. A refused or failed dial
+// does not count. All are dialed concurrently so a dead peer costs one
+// timeout rather than one per port.
+func anyPortAnswers(ctx context.Context, addrForPort func(port int) string, ports []int, timeout time.Duration) bool {
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	answered := make(chan bool, len(ports))
@@ -254,9 +261,13 @@ var usbDirectConnectFn = connectWithAutoTLS
 // empty hostname (agent predating the field) never matches — connecting to
 // whichever device happens to be plugged in would silently target the wrong
 // machine.
+//
+// Never for a VM's vm:<name> key: a VM is never on USB, and a USB agent that
+// merely reports that name would be judged under a key that consults no
+// loopback pin — the forwarded port the key is trusted for was never touched.
 func usbDirectFallback(ctx context.Context, wantHost string) (*grpcclient.AgentConnection, bool) {
 	want := normalizeMDNSHost(wantHost)
-	if want == "" {
+	if want == "" || strings.HasPrefix(want, vmDeviceIDPrefix) {
 		return nil, false
 	}
 	for _, cand := range usbDirectCandidatesFn() {

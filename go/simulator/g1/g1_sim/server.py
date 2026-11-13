@@ -1,5 +1,6 @@
 """Small local sandbox endpoint; the physics runtime outlives browser clients."""
 
+import faulthandler
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,11 @@ STATIC_ASSETS = {"/viewer.js": "viewer.js", "/vendor/three.module.js": "vendor/t
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Published ports on Apple Container need persistent HTTP connections to
+    # drain large scene responses. Every response has an explicit length.
+    protocol_version = "HTTP/1.1"
+    timeout = 15
+
     def log_message(self, *_):
         pass
 
@@ -30,6 +36,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(payload)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         for key, value in (headers or {}).items():
             self.send_header(key, value)
@@ -42,6 +50,8 @@ class Handler(BaseHTTPRequestHandler):
             if path in {"/api/status", "/api/health"}:
                 status = self.runtime.status()
                 self.send(200 if path == "/api/status" or status["ready"] else 503, status)
+            elif path == "/api/project":
+                self.send(200, self.runtime.project_status.copy())
             elif path == "/api/profile":
                 profile = Path(__file__).resolve().parents[1] / "compatibility.json"
                 self.send(200, json.loads(profile.read_text()))
@@ -64,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/frame.jpg":
                 self.send(410, {"error": "observer images were replaced by /api/scene and /api/scene/state"})
             elif path == "/camera.jpg":
+                self.runtime.camera_demand = time.monotonic()
                 jpeg = self.runtime.camera_jpeg
                 if jpeg is None:
                     self.send(503, {"error": "waiting for first frame"})
@@ -85,14 +96,42 @@ class Handler(BaseHTTPRequestHandler):
             # The client disconnected; there is no response left to send.
             pass
 
+    def project_update(self):
+        from .project import MAX_REQUEST, apply_project
+        if not self.runtime.project_lock.acquire(blocking=False):
+            self.close_connection = True
+            self.send(503, {"error": "project update busy; retry"})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if size <= 0 or size > MAX_REQUEST:
+                self.close_connection = True
+                self.send(413, {"error": "project request exceeds 12 MiB"})
+                return
+            body = json.loads(self.rfile.read(size))
+            if not isinstance(body, dict):
+                raise ValueError("project request must be an object")
+            self.send(200, apply_project(self.runtime, body, "g1"))
+        finally:
+            self.runtime.project_lock.release()
+
     def do_POST(self):
         try:
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc != self.headers.get("Host"):
+                self.close_connection = True
                 self.send(403, {"error": "cross-origin control is disabled"})
+                return
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                self.send(400, {"error": "use Content-Length for control requests"})
+                return
+            if urlsplit(self.path).path == "/api/project":
+                self.project_update()
                 return
             size = int(self.headers.get("Content-Length", "0"))
             if size < 0 or size > 4096:
+                self.close_connection = True
                 self.send(413, {"error": "request too large"})
                 return
             body = json.loads(self.rfile.read(size) or b"{}")
@@ -151,6 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         except PermissionError as exc:
             self.send(403, {"error": str(exc)})
         except (ValueError, TypeError) as exc:
+            self.close_connection = True
             self.send(400, {"error": str(exc)})
         except RuntimeError as exc:
             self.send(503, {"error": str(exc)})
@@ -160,6 +200,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    faulthandler.enable()
     runtime = Runtime(render=os.environ.get("G1_RENDER", "1") != "0",
                       ros=os.environ.get("G1_ROS", "0") == "1")
     server = ThreadingHTTPServer((os.environ.get("G1_HOST", "127.0.0.1"),

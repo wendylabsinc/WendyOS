@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "wendy-agentic-coding",
-  "description": "Reusable Wendy CLI, wendy-agent, WendyOS, project setup, wendy.json, entitlement, device ops, MCP, app lifecycle, and device debugging workflows for Claude Code.",
-  "version": "0.5.3",
+  "description": "Build, deploy, and debug apps on robots and edge devices running WendyOS (NVIDIA Jetson, Raspberry Pi, and more). Claude can set up the Wendy CLI, install a device, create an app from a template, deploy it, read its logs, and capture sensor data with Wendy Data.",
+  "version": "0.6.3",
   "author": {
     "name": "Wendy Labs",
     "url": "https://github.com/wendylabsinc"
@@ -14,6 +14,8 @@
     "wendy",
     "wendyos",
     "wendy-json",
+    "wendy-data",
+    "data-campaigns",
     "entitlements",
     "build-run",
     "device-ops",
@@ -24,12 +26,23 @@
   ],
   "skills": "./skills/",
   "commands": "./commands/",
-  "agents": ["./agents/wendy-runtime-debugger.md"],
+  "mcpServers": {
+    "wendy": {
+      "command": "wendy",
+      "args": ["mcp", "serve"]
+    }
+  },
   "hooks": {
-    "Setup": [
+    "SessionStart": [
       {
-        "type": "command",
-        "command": "command -v wendy >/dev/null 2>&1 && printf 'Wendy CLI ready: %s\\n' \"$(wendy --version)\" || printf 'Wendy CLI not found. Ask the assistant to run /wendy-install or say \"install wendy\" to set it up.\\n'"
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f \"${CLAUDE_PROJECT_DIR:-.}/wendy.json\" ] || exit 0; if command -v wendy >/dev/null 2>&1; then printf 'Wendy project. Wendy CLI: %s\\n' \"$(WENDY_ANALYTICS=false wendy --version 2>/dev/null)\"; else printf 'Wendy project, but the Wendy CLI is not installed. Offer /wendy-install to set it up.\\n'; fi",
+            "timeout": 5
+          }
+        ]
       }
     ]
   }

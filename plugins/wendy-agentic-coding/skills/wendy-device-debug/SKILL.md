@@ -1,63 +1,77 @@
 ---
 name: wendy-device-debug
-description: Use when debugging WendyOS, Jetson, Raspberry Pi, USB-C host mode, containerd, GPU/audio/video entitlements, or a `wendy run` issue that only appears on a live device.
+description: Diagnose an end-user's unreachable WendyOS or Wendy Lite device, failed app deployment, ESP32 camera/SensorLink failure, missing camera or GPU, or unhealthy app using CLI and MCP observations, device state, and app logs. For a never-installed board use wendy-device-install.
 ---
 
 # Wendy Device Debug Workflow
 
-Use this for live-device and cross-layer runtime bugs. Static code reading is not enough when the failure depends on device state.
+Use this for deployment and device problems in an end-user's app. Work with the
+installed CLI, live MCP tools, and app project. A Wendy source checkout is not
+required.
 
 ## Triage sequence
 
-1. Capture the exact failing command and whether it was run with installed `wendy` or source `wendy-dev`.
-2. Discover or confirm the target device with `wendy discover --json` unless the user already supplied a hostname.
-3. Separate layers:
-   - CLI behavior: command parsing, target selection, build provider, gRPC request.
-   - Agent behavior: service implementation, containerd adapter, OCI spec, logs.
-   - WendyOS behavior: image version, device type, mounts, CDI, system services.
-   - App behavior: Dockerfile/Containerfile, `wendy.json`, entitlements, environment, startup logs.
-4. Use `wendy-device-ops` for CLI-native inspection before SSH when the agent and CLI can still answer the question.
-5. If SSH access is available from local instructions or the user, inspect the live device early. Use containerd and `nerdctl`, not Docker.
+1. Capture the exact failing command, CLI version, MCP status and error output.
+2. Confirm the target with `device_list` or `wendy discover --json`. An empty
+   scan on new hardware routes to `wendy-device-install`. While the device is
+   unreachable, a simulator can show whether the app builds, starts and serves
+   correctly, separating app defects from device faults; it cannot diagnose the
+   device itself. Choose one as the [wendy](../wendy/SKILL.md) skill's
+   *No device available* section describes.
+3. Follow [wendy-device-ops](../wendy-device-ops/SKILL.md) for device access and
+   inspection of versions, connectivity, hardware and WiFi. Keep an explicit
+   device selector throughout diagnosis. For Wendy Lite, check the reported
+   board/target, firmware version, WASM/native app support and SensorLink manifest.
+4. Validate the app's `wendy.json`. Check its Dockerfile/Containerfile,
+   dependencies, architecture, entitlements, environment and startup logs.
+5. Use `wendy-app-lifecycle` to inspect app state and logs. A successful deploy
+   or running container is not a health check. Probe the app's actual output.
+   With MCP, `container_list` shows `termination_reason` (for example
+   `ENTITLEMENT_DENIED`) and `telemetry_logs` returns app logs. Enable
+   `observability` for `app_inspect` (service states, recorded exit, recent
+   errors) and `device_os_logs` (kernel messages such as driver, USB or
+   out-of-memory events). The `diagnose_container` prompt follows these steps.
+   Read `wendy://diagnostics` when an expected MCP tool is missing.
+6. For robot sensor, DDS or stop behavior, follow `wendy-robot-deploy` and keep
+   physical motion stopped during diagnosis.
 
-## Temporary root SSH
+Prefer fixes in the app container or `wendy.json`. Use documented CLI operations
+for device repair. Do not patch Wendy's agent or OS implementation as part of
+ordinary app debugging, and do not publish credentials or device-specific secrets.
 
-For now, WendyOS devices may allow passwordless SSH as `root@<hostname>`. Treat this as break-glass diagnostic access for gathering evidence and filing issues in `wendylabsinc/wendyos`, not as the default way to mutate bare-metal settings.
+## Mesh connectivity and clock errors
 
-Prefer fixes in the app container, `wendy.json`, CLI flow, agent service, or image repo. If you must change device state directly, keep the change minimal, explain why CLI/container paths were insufficient, and do not publish hostnames, credentials, tokens, or device-specific secrets in reusable output.
+Check device participation with `wendy net status --device <target>` and this
+computer's router with `wendy --json net topology --local-cli`. Verify the route
+with a command to the returned `mesh://...` destination. Respect an explicit
+local-router disconnect; first-hop discovery is automatic.
 
-## Device facts worth checking
+A stale clock may need an Internet-sharing mesh gateway for normal time sync.
+Keep that path available and verify time recovery. Do not bypass certificate
+checks, delete mesh identity/history, or re-enroll to work around clock errors.
 
-On the device, prefer read-only checks first:
+## Jetson GPU checks
 
-```bash
-hostname
-cat /etc/wendyos/device-type 2>/dev/null || true
-cat /etc/os-release 2>/dev/null || true
-systemctl status wendy-agent --no-pager
-journalctl -u wendy-agent -n 200 --no-pager
-sudo nerdctl -n default ps -a
-sudo nerdctl -n default logs <container>
-test -f /etc/cdi/nvidia.yaml && sed -n '1,160p' /etc/cdi/nvidia.yaml
-```
+Use device info, hardware capabilities, and app logs to check:
 
-For Jetson GPU issues, verify all of:
-
-- `/etc/wendyos/device-type` exists and identifies a Jetson variant.
+- The reported device type identifies the expected Jetson variant.
 - The agent maps the device type to the expected Wendy platform.
-- GPU provisioning is in place: on JetPack 6 this means `/etc/cdi/nvidia.yaml` exists; on JetPack 5 (L4T r35, where nvidia-ctk predates CDI) the L4T CSV fallback (`/etc/nvidia-container-runtime/host-files-for-container.d/*.csv`) is used instead.
 - The application handles CUDA absence gracefully and exposes enough debug state.
 
-## Repo files to inspect
+If evidence points to GPU provisioning, record the device's JetPack version.
+JetPack 6 uses `/etc/cdi/nvidia.yaml`; JetPack 5 uses the L4T CSV fallback at
+`/etc/nvidia-container-runtime/host-files-for-container.d/*.csv`. If CLI/MCP
+cannot confirm this state, report the missing check with the platform issue.
 
-- CLI/device connection: `wendy-agent/go/internal/cli/commands/helpers.go`.
-- Run/deploy path: `wendy-agent/go/internal/cli/commands/run.go`.
-- App config: `wendy-agent/go/internal/shared/appconfig/`.
-- Agent service entry: `wendy-agent/go/cmd/wendy-agent/main.go`.
-- Container service: `wendy-agent/go/internal/agent/services/container_service.go`.
-- Containerd runtime: `wendy-agent/go/internal/agent/containerd/`.
-- OCI and entitlements: `wendy-agent/go/internal/agent/oci/entitlements.go`.
-- WendyOS image recipes and services: `wendyos/`.
+## Escalate a platform bug
+
+If evidence points to the CLI, agent or OS, prepare a minimal reproduction with
+versions, board type, sanitized logs, expected behavior and observed behavior.
+Explain any documented upgrade or workaround. Leave implementation changes to
+a separate Wendy engineering task; do not require the user to clone Wendy's
+repositories to finish app setup.
 
 ## Output discipline
 
-Give the root cause by layer. Distinguish what can be fixed in the repo now from what depends on device image state or host compatibility.
+State what the evidence establishes, what remains uncertain, the app or device
+fix applied, and the verification result.

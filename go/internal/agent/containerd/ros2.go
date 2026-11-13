@@ -361,7 +361,7 @@ func (c *Client) ensureOneROS2Sidecar(ctx context.Context, anchor *services.ROS2
 				return services.ROS2Sidecar{}, fmt.Errorf("pulling ROS 2 sidecar image %q: %w", imageName, err)
 			}
 		}
-		if unpacked, uerr := image.IsUnpacked(ctx, ""); uerr == nil && !unpacked {
+		if unpacked, uerr := c.imageUnpacked(ctx, image); uerr == nil && !unpacked {
 			if uerr := c.UnpackImage(ctx, image, nil); uerr != nil {
 				return services.ROS2Sidecar{}, fmt.Errorf("unpacking ROS 2 sidecar image: %w", uerr)
 			}
@@ -1059,7 +1059,7 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 	// into the environment as defense-in-depth (SOC2-CC6, NIST-SI-10).
 	if rmw := labels[labelKeyROS2RMW]; appconfig.IsValidRMWImplementation(rmw) {
 		pspec.Env = append(pspec.Env, "RMW_IMPLEMENTATION="+rmw)
-		if rmw == appconfig.ROS2DefaultRMW {
+		if rmw == appconfig.ROS2DefaultRMW && !hasEnv(pspec.Env, "CYCLONEDDS_URI") {
 			pspec.Env = append(pspec.Env, "CYCLONEDDS_URI="+cycloneDDSInlineConfig)
 		}
 	}
@@ -1134,4 +1134,14 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 			}
 		}
 	}
+}
+
+// hasEnv reports whether env sets key.
+func hasEnv(env []string, key string) bool {
+	for _, entry := range env {
+		if k, _, _ := strings.Cut(entry, "="); k == key {
+			return true
+		}
+	}
+	return false
 }

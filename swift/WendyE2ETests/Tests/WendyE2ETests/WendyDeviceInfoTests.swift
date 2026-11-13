@@ -75,7 +75,9 @@ struct `'wendy device info'` {
                 #expect(stdout.contains("\"os\""))
                 #expect(stdout.contains("\"cpuArchitecture\""))
                 #expect(stdout.contains("\"cliVersion\""))
-                #expect(result.stderr == "")
+                // The implicit target is never invisible: JSON mode names it in
+                // one plain stderr line, keeping stdout pure JSON.
+                #expect(result.normalizedStderr == "Using default device \(agentAddress).\n")
                 #expect(!stdout.contains("Select a device"))
                 #expect(!result.stderr.contains("Select a device"))
             }
@@ -184,7 +186,7 @@ struct `'wendy device info'` {
     }
 
     /**
-     When the CLI is not attached to an interactive terminal, `device info` behaves like `--json`: it avoids prompts and emits machine-readable output.
+     When the CLI is not attached to an interactive terminal, `device info` behaves like `--json`: it avoids prompts and emits machine-readable output. Stderr carries one plain line naming the default device it used.
      */
     @Test
     func `non-interactive mode prints JSON device information`() async throws {
@@ -197,7 +199,9 @@ struct `'wendy device info'` {
             try await cli.sh("wendy device info") { result in
 
                 #expect(result.status.isSuccess)
-                #expect(result.stderr == "")
+                // JSON mode keeps stdout pure JSON; the only stderr line is the
+                // notice naming the default device the command acted on.
+                #expect(result.normalizedStderr == "Using default device \(agentAddress).\n")
                 #expect(!result.stdout.contains("Select a device"))
 
                 let json = try #require(
@@ -285,8 +289,14 @@ struct `'wendy device info'` {
 
                 #expect(!result.status.isSuccess)
                 #expect(result.stdout == "")
-                #expect(stderr.contains("name resolver error"))
-                #expect(stderr.contains("produced zero addresses"))
+                // A name that does not resolve is its own failure class (exit 5),
+                // named for the device rather than in the resolver's words.
+                #expect(stderr.contains("\"code\":\"device_not_resolved\""))
+                #expect(
+                    result.readableStderr.contains(
+                        "Could not resolve device host definitely-not-a-wendy-device.invalid."
+                    )
+                )
                 #expect(!stderr.contains("Select a device"))
             }
         }

@@ -26,8 +26,8 @@ The 64 GB minimum applies to removable NVME and SD card installations. On Jetson
 | Jetson AGX Thor | Flashpack-managed internal partitions | N/A | Flashed over USB recovery; no external SD/NVME target |
 
 See the device-specific pages for full partition layouts:
-- [WendyOS on Raspberry Pi](pi/README.md)
-- [WendyOS on Jetson](jetson/README.md)
+- [WendyOS on Raspberry Pi](/docs/advanced/wendyos/pi)
+- [WendyOS on Jetson](/docs/advanced/wendyos/jetson)
 
 ## Supported devices
 
@@ -36,8 +36,10 @@ See the device-specific pages for full partition layouts:
 | Device | Boot media |
 |--------|-----------|
 | Raspberry Pi 5 | SD card, NVME |
-| Raspberry Pi 4 | SD card |
-| Raspberry Pi 3 | SD card |
+| Raspberry Pi 4 | SD card, USB |
+| Raspberry Pi 3 | SD card, USB |
+
+A Pi 3B boots from USB only after USB boot mode has been enabled once; a Pi 3B+ does so out of the box.
 
 ### NVIDIA Jetson
 
@@ -66,4 +68,4 @@ See [Install wendy-agent on Linux](/docs/installation/linux).
 | NVIDIA (CUDA) | Supported — Jetson and x86 systems with NVIDIA GPUs, via the `gpu` entitlement |
 | AMD (ROCm) | Supported on compatible x86 Linux hosts with `amdgpu`, via the `gpu` entitlement |
 
-See [GPU Access](/docs/hardware/gpu).
+See [GPU access](/docs/hardware/gpu).

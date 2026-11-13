@@ -56,7 +56,7 @@ func TestSerialDiscoveryAddsUnresponsivePort(t *testing.T) {
 	}
 	probeIdentityFn = func(port string) (*liteclient.DeviceIdentity, bool, error) {
 		if port == "/dev/responsive" {
-			return &liteclient.DeviceIdentity{ID: "esp", Name: "esp", DisplayName: "esp"}, true, nil
+			return &liteclient.DeviceIdentity{ID: "esp", Name: "esp", DisplayName: "esp", EnrolledDeviceID: "enrolled-esp"}, true, nil
 		}
 		return nil, true, errProbeTimeout
 	}
@@ -76,7 +76,7 @@ func TestSerialDiscoveryAddsUnresponsivePort(t *testing.T) {
 	if blank.Responsive {
 		t.Errorf("expected /dev/blank to be unresponsive, got Responsive=true")
 	}
-	if blank.ID != "" || blank.Name != "" || blank.DisplayName != "" {
+	if blank.ID != "" || blank.Name != "" || blank.DisplayName != "" || blank.EnrolledDeviceID != "" {
 		t.Errorf("expected empty identity fields for an unresponsive port, got %+v", blank)
 	}
 
@@ -87,7 +87,7 @@ func TestSerialDiscoveryAddsUnresponsivePort(t *testing.T) {
 	if !responsive.Responsive {
 		t.Errorf("expected /dev/responsive to be responsive")
 	}
-	if responsive.ID != "esp" || responsive.DisplayName != "esp" {
+	if responsive.ID != "esp" || responsive.DisplayName != "esp" || responsive.EnrolledDeviceID != "enrolled-esp" {
 		t.Errorf("expected identity to be populated for a responsive port, got %+v", responsive)
 	}
 }

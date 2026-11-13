@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -69,7 +70,7 @@ func probeLocalVMDevices(ctx context.Context) []models.LANDevice {
 	}
 	var candidates []candidate
 	for _, st := range statuses {
-		if st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
+		if !vm.IsLiteProfile(st.Meta.Profile) && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
 			candidates = append(candidates, candidate{st.Name, st.State.AgentPort})
 		}
 	}
@@ -151,7 +152,12 @@ var (
 
 func discoverLocalTargets(ctx context.Context, opts discovery.DiscoveryOptions) (*models.DevicesCollection, error) {
 	var vms []models.LANDevice
+	var mesh sessionbroker.OperatorDirectory
 	var wg sync.WaitGroup
+	if includeMeshDiscovery(opts) {
+		wg.Add(1)
+		go func() { defer wg.Done(); mesh = readMeshDiscovery(ctx) }()
+	}
 	// Same filter as the USB-direct probe: both synthesise LAN-type rows, so
 	// both run exactly when LAN discovery would.
 	if shouldProbeUSBDirect(opts) {
@@ -170,6 +176,14 @@ func discoverLocalTargets(ctx context.Context, opts discovery.DiscoveryOptions) 
 	// caller that renders a partial result. Both of today's callers surface
 	// the error instead, which is why the error is still returned.
 	attachSimulators(collection, vms)
+	if includeMeshDiscovery(opts) {
+		// A deliberately long physical scan must not publish an old mesh view
+		// as current. Refresh just this cheap observation when it aged out.
+		if mesh.State == "ready" && time.Now().UnixMilli()-mesh.Captured > 10000 && ctx.Err() == nil {
+			mesh = readMeshDiscovery(ctx)
+		}
+		collection.MeshDevices, collection.MeshDiscovery = meshCollection(mesh)
+	}
 	return collection, err
 }
 
@@ -228,7 +242,7 @@ func newSimulatorFilter(ctx context.Context) *simulatorFilter {
 			f.hostnames[vmHostKey(st.Meta.Hostname)] = true
 			continue
 		}
-		if st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
+		if !vm.IsLiteProfile(st.Meta.Profile) && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
 			learners = append(learners, st)
 		}
 	}

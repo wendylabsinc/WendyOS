@@ -327,6 +327,189 @@ func TestDeviceList_ScanTrue_IncludesScanResults(t *testing.T) {
 	}
 }
 
+// On Linux a USB-C-tethered device stays invisible until the host's link to
+// it is configured, and only `wendy discover` in a terminal can do that (it
+// needs sudo). An agent must be told why the device is missing and what to ask
+// the user to do.
+func TestDeviceList_WarnsAboutUnconfiguredUSBLink(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	srv.SetUSBSetupNotice(func() string { return "configure the USB-C link" })
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+	warnings := listPayload(t, result, "warnings")
+	if len(warnings) != 1 || warnings[0]["source"] != "usb" || warnings[0]["message"] != "configure the USB-C link" {
+		t.Fatalf("expected one usb warning, got %v", warnings)
+	}
+}
+
+func TestDeviceList_NoUSBWarningWhenLinkNeedsNoSetup(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	srv.SetUSBSetupNotice(func() string { return "" })
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if warnings := structuredMap(t, result)["warnings"]; warnings != nil {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+}
+
+// An agent that finds no hardware must still see the simulators the user
+// already has, or it concludes that on-device checks need a device. Their
+// vm:NAME selector boots a stopped VM on connect; the forwarded loopback
+// address would bypass that.
+func TestDeviceList_IncludesLocalSimulators(t *testing.T) {
+	srv := New(&config.Config{DefaultDevice: "pi.local:50051"}, nil)
+	srv.SetSimulatorBackend(SimulatorBackend{List: func(context.Context) ([]SimulatorInfo, error) {
+		return []SimulatorInfo{
+			{Name: "dev", Device: "vm:dev", State: "stopped", Profile: "generic"},
+			{Name: "go2", Device: "vm:go2", State: "running", Profile: "go2", Address: "127.0.0.1:50052"},
+		}, nil
+	}})
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+	devices := listPayload(t, result, "devices")
+	if len(devices) != 3 || devices[0]["device"] != "pi.local:50051" {
+		t.Fatalf("expected the configured device then two simulators, got %v", devices)
+	}
+	for i, want := range []map[string]any{
+		{"device": "vm:dev", "address": "vm:dev", "name": "dev", "type": "simulator", "source": "simulator", "state": "stopped", "profile": "generic"},
+		{"device": "vm:go2", "address": "vm:go2", "name": "go2", "type": "simulator", "source": "simulator", "state": "running", "profile": "go2"},
+	} {
+		got := devices[i+1]
+		for key, value := range want {
+			if got[key] != value {
+				t.Errorf("simulator row %d: %s = %v, want %v (row %v)", i, key, got[key], value, got)
+			}
+		}
+	}
+}
+
+func TestDeviceList_SimulatorListFailureIsAWarning(t *testing.T) {
+	srv := New(&config.Config{DefaultDevice: "pi.local:50051"}, nil)
+	srv.SetSimulatorBackend(SimulatorBackend{List: func(context.Context) ([]SimulatorInfo, error) {
+		return nil, fmt.Errorf("vm store unreadable")
+	}})
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("a simulator failure must not hide other devices: %v", result.Content)
+	}
+	if devices := listPayload(t, result, "devices"); len(devices) != 1 {
+		t.Fatalf("expected the configured device only, got %v", devices)
+	}
+	warnings := listPayload(t, result, "warnings")
+	if len(warnings) != 1 || warnings[0]["source"] != "simulator" || !strings.Contains(fmt.Sprint(warnings[0]["message"]), "vm store unreadable") {
+		t.Fatalf("expected one simulator warning, got %v", warnings)
+	}
+}
+
+// Inside an admin-entitled device container there are no host VMs to offer,
+// and the hosted relay serves the device_list its stores reviewed.
+func TestDeviceList_OmitsSimulatorsWithoutAHostServer(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*mcpServer)
+		local bool
+	}{
+		{"agent socket", func(*mcpServer) { t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock") }, true},
+		{"relay", func(s *mcpServer) { s.relay = true }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(&config.Config{}, nil)
+			srv.SetSimulatorBackend(SimulatorBackend{List: func(context.Context) ([]SimulatorInfo, error) {
+				t.Error("simulators were listed")
+				return nil, nil
+			}})
+			tc.setup(srv)
+			result, err := srv.handleDeviceList(context.Background(), callToolReq("device_list", nil))
+			if err != nil || result.IsError {
+				t.Fatalf("device_list: %v %v", result, err)
+			}
+			devices := listPayload(t, result, "devices")
+			if !tc.local {
+				if len(devices) != 0 {
+					t.Fatalf("expected no devices, got %v", devices)
+				}
+				return
+			}
+			if len(devices) != 1 || devices[0]["device"] != "local" || devices[0]["type"] != "local" || devices[0]["source"] != "agent-socket" {
+				t.Fatalf("expected only the local device, got %v", devices)
+			}
+		})
+	}
+}
+
+func TestDeviceConnectInsideContainerRejectsOtherDevice(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+	srv := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Fatal("connectFn must not be called for a non-local device")
+		return nil, nil
+	})
+	r, err := srv.handleDeviceConnect(context.Background(), callToolReq("device_connect", map[string]any{"device": "other"}))
+	if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != string(errCodeUnsupported) {
+		t.Fatalf("got %v %v", r, err)
+	}
+}
+
+func TestDeviceConnectInsideContainerAcceptsLocal(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+	srv := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		return &grpcclient.AgentConnection{Host: "unix:/run/wendy/agent.sock"}, nil
+	})
+	r, err := srv.handleDeviceConnect(context.Background(), callToolReq("device_connect", map[string]any{"device": "local"}))
+	if err != nil || r.IsError || !strings.Contains(fmt.Sprint(r.Content), "connected to local") {
+		t.Fatalf("got %v %v", r, err)
+	}
+}
+
+// The description is how an agent learns that a listed VM can stand in for
+// missing hardware. The relay keeps the description its stores reviewed.
+func TestDeviceListDescribesSimulatorsOnlyLocally(t *testing.T) {
+	local := startedProtocolServer(t).ListTools()["device_list"]
+	if local == nil || !strings.Contains(local.Tool.Description, "vm:NAME") {
+		t.Errorf("local device_list description does not mention vm:NAME simulators: %v", local)
+	}
+	manifest, err := Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range manifest.Tools {
+		if tool.Name == "device_list" && strings.Contains(tool.Description, "simulator") {
+			t.Errorf("relay device_list description changed: %q", tool.Description)
+		}
+	}
+}
+
+// A device tool called before connecting must lead to device_list, which also
+// lists local simulators, not to a device_connect the agent has no selector for.
+func TestNotConnectedPointsToDeviceList(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	result, err := srv.callTool(context.Background(), "container_list", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := toolResultText(t, result); !result.IsError || !strings.HasPrefix(text, "[NOT_CONNECTED]") || !strings.Contains(text, "device_list") {
+		t.Fatalf("container_list without a connection = %q, want NOT_CONNECTED naming device_list", text)
+	}
+}
+
 func TestDeviceList_MaxBytesTruncates(t *testing.T) {
 	srv := New(&config.Config{DefaultDevice: "some-long-device-hostname-for-padding.local:50051"}, nil)
 

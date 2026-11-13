@@ -1,0 +1,14 @@
+{
+  "name": "wendy-engineering",
+  "version": "0.1.0",
+  "description": "Internal Wendy engineering workflows for repository changes, runtime implementation debugging, and pull requests.",
+  "author": {
+    "name": "Wendy Labs"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "agents": [
+    "./agents/wendy-runtime-debugger.md"
+  ]
+}

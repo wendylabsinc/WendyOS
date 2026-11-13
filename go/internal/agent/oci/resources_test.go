@@ -22,6 +22,9 @@ func TestApplyResourceLimits_AllFields(t *testing.T) {
 	if res.Memory == nil || res.Memory.Limit == nil || *res.Memory.Limit != 512*1024*1024 {
 		t.Errorf("memory limit not applied: %+v", res.Memory)
 	}
+	if res.Memory.Swap == nil || *res.Memory.Swap != *res.Memory.Limit {
+		t.Fatalf("explicit memory limit permits unbounded swap: %+v", res.Memory)
+	}
 	if res.CPU == nil || res.CPU.Quota == nil || *res.CPU.Quota != 150000 {
 		t.Errorf("cpu quota not applied: %+v", res.CPU)
 	}

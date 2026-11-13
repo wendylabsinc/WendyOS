@@ -5,6 +5,33 @@ import WendyAgentGRPC
 
 @testable import WendyAgentCore
 
+actor BrewBundleGate {
+    private var continuations: [CheckedContinuation<BrewBundleResult, Never>] = []
+    private(set) var enteredCount = 0
+
+    func run() async -> BrewBundleResult {
+        self.enteredCount += 1
+        return await withCheckedContinuation { continuation in
+            self.continuations.append(continuation)
+        }
+    }
+
+    func releaseNext(
+        with result: BrewBundleResult = (status: 0, output: "", outputTruncated: false)
+    ) {
+        guard !self.continuations.isEmpty else { return }
+        self.continuations.removeFirst().resume(returning: result)
+    }
+}
+
+actor CompletionCounter {
+    private(set) var count = 0
+
+    func increment() {
+        self.count += 1
+    }
+}
+
 /// A Linux backend stub with a scriptable `listContainers()` result, so tests
 /// can drive adoption/restart decisions without a real container runtime.
 actor StubLinuxBackend: LinuxContainerBackend {
@@ -207,7 +234,7 @@ struct ContainerServiceSupervisorTests {
         try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
 
         let service = makeService(appsBase: appsBase)
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         try await createNativeApp(
             service: service,
@@ -472,6 +499,196 @@ struct ContainerServiceSupervisorTests {
         await backend.terminateAll()
     }
 
+    @Test("replacement blocks automatic and explicit starts during Brewfile preparation")
+    func replacementBlocksStartsDuringBrewfilePreparation() async throws {
+        let appsBase = try makeSupervisorTempDir()
+        defer { cleanupSupervisorPath(appsBase) }
+
+        let appID = "sh.wendy.tests.ReplaceBrewfile"
+        try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
+        try "brew \"test-package\"\n".write(
+            to: URL(fileURLWithPath: appsBase)
+                .appendingPathComponent(appID)
+                .appendingPathComponent("Brewfile"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let gate = BrewBundleGate()
+        let service = makeService(
+            appsBase: appsBase,
+            restartFloor: .zero,
+            brewExecutableLookup: { "/fake/brew" },
+            brewBundleRunner: { _, _, _ in await gate.run() }
+        )
+        try await createNativeApp(service: service, appID: appID, cmd: "sleep.sh")
+        try await startNativeApp(service: service, appID: appID)
+
+        let replacement = Task {
+            try await createNativeApp(
+                service: service,
+                appID: appID,
+                cmd: "sleep.sh",
+                brewfile: "Brewfile"
+            )
+        }
+        try await waitForSupervisor("replacement to enter brew bundle") {
+            await gate.enteredCount == 1
+        }
+        #expect(await service.appInfo(forAppID: appID)?.status == .stopped)
+
+        await service.superviseApps()
+        await service.reconcileApps()
+        #expect(await service.appInfo(forAppID: appID)?.status == .stopped)
+
+        await #expect(throws: (any Error).self) {
+            try await startNativeApp(service: service, appID: appID)
+        }
+        #expect(await service.appInfo(forAppID: appID)?.status == .stopped)
+
+        await gate.releaseNext()
+        try await replacement.value
+        try await startNativeApp(service: service, appID: appID)
+        #expect(await service.appInfo(forAppID: appID)?.status == .running)
+        await service.stopAllApps()
+    }
+
+    @Test("replacement suppression is released when Brewfile preparation fails")
+    func replacementSuppressionIsReleasedAfterBrewfileFailure() async throws {
+        let appsBase = try makeSupervisorTempDir()
+        defer { cleanupSupervisorPath(appsBase) }
+
+        let appID = "sh.wendy.tests.ReplaceBrewfileFailure"
+        try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
+        try "brew \"test-package\"\n".write(
+            to: URL(fileURLWithPath: appsBase)
+                .appendingPathComponent(appID)
+                .appendingPathComponent("Brewfile"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let gate = BrewBundleGate()
+        let service = makeService(
+            appsBase: appsBase,
+            restartFloor: .zero,
+            brewExecutableLookup: { "/fake/brew" },
+            brewBundleRunner: { _, _, _ in await gate.run() }
+        )
+        try await createNativeApp(service: service, appID: appID, cmd: "sleep.sh")
+        try await startNativeApp(service: service, appID: appID)
+
+        let replacement = Task {
+            try await createNativeApp(
+                service: service,
+                appID: appID,
+                cmd: "sleep.sh",
+                brewfile: "Brewfile"
+            )
+        }
+        try await waitForSupervisor("replacement to enter brew bundle") {
+            await gate.enteredCount == 1
+        }
+        await gate.releaseNext(
+            with: (status: 1, output: "expected failure", outputTruncated: false)
+        )
+        await #expect(throws: (any Error).self) {
+            try await replacement.value
+        }
+
+        await service.superviseApps()
+        #expect(await service.appInfo(forAppID: appID)?.status == .running)
+        await service.stopAllApps()
+    }
+
+    @Test("overlapping replacements keep automatic starts suppressed until both finish")
+    func overlappingReplacementsKeepStartsSuppressed() async throws {
+        let appsBase = try makeSupervisorTempDir()
+        defer { cleanupSupervisorPath(appsBase) }
+
+        let appID = "sh.wendy.tests.OverlappingReplace"
+        try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
+        try "brew \"test-package\"\n".write(
+            to: URL(fileURLWithPath: appsBase)
+                .appendingPathComponent(appID)
+                .appendingPathComponent("Brewfile"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let gate = BrewBundleGate()
+        let completions = CompletionCounter()
+        let service = makeService(
+            appsBase: appsBase,
+            restartFloor: .zero,
+            brewExecutableLookup: { "/fake/brew" },
+            brewBundleRunner: { _, _, _ in await gate.run() }
+        )
+        try await createNativeApp(service: service, appID: appID, cmd: "sleep.sh")
+
+        let first = Task {
+            try await createNativeApp(
+                service: service,
+                appID: appID,
+                cmd: "sleep.sh",
+                brewfile: "Brewfile"
+            )
+            await completions.increment()
+        }
+        let second = Task {
+            try await createNativeApp(
+                service: service,
+                appID: appID,
+                cmd: "sleep.sh",
+                brewfile: "Brewfile"
+            )
+            await completions.increment()
+        }
+        try await waitForSupervisor("both replacements to enter brew bundle") {
+            await gate.enteredCount == 2
+        }
+
+        await gate.releaseNext()
+        try await waitForSupervisor("one replacement to finish") {
+            await completions.count == 1
+        }
+        await service.superviseApps()
+        #expect(await service.appInfo(forAppID: appID)?.status == .stopped)
+
+        await gate.releaseNext()
+        try await first.value
+        try await second.value
+    }
+
+    @Test("replacement never overwrites an in-flight launch")
+    func replacementRefusesToOverwriteInFlightLaunch() async throws {
+        let appsBase = try makeSupervisorTempDir()
+        defer { cleanupSupervisorPath(appsBase) }
+
+        let appID = "svc-replace-in-flight"
+        let backend = StubLinuxBackend()
+        await backend.blockPull(number: 1)
+        let service = makeService(appsBase: appsBase, backend: backend)
+        try await createLinuxApp(service: service, appID: appID)
+
+        let starter = Task { try await startNativeApp(service: service, appID: appID) }
+        try await waitForSupervisor("the original launch to enter its pull") {
+            await backend.pullCount() == 1
+        }
+
+        await #expect(throws: (any Error).self) {
+            try await createLinuxApp(service: service, appID: appID)
+        }
+
+        await backend.releaseBlockedPull()
+        try await starter.value
+        #expect(await backend.startedApps() == [appID])
+        #expect(await service.appInfo(forAppID: appID)?.status == .running)
+
+        await service.stopAllApps()
+        await backend.terminateAll()
+    }
+
     @Test(
         "beginStopping during an in-flight tick's pull stops that tick from launching the next app"
     )
@@ -684,7 +901,7 @@ struct ContainerServiceSupervisorTests {
         // `.no` policy isolates the adoption decision: the restart loop can't
         // relaunch the app, so the status afterwards reflects only whether it
         // was adopted.
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         let service = makeService(appsBase: appsBase)
         try await createNativeApp(
@@ -713,7 +930,7 @@ struct ContainerServiceSupervisorTests {
         let appID = "sh.wendy.tests.OnFailureCleanExit"
         try writeSupervisorCrashScript(appsBase: appsBase, appID: appID, name: "exit.sh", code: 0)
 
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .onFailure
         let service = makeService(appsBase: appsBase, restartFloor: .zero)
         try await createNativeApp(
@@ -743,7 +960,7 @@ struct ContainerServiceSupervisorTests {
         let appID = "sh.wendy.tests.OnFailureRetries"
         try writeSupervisorCrashScript(appsBase: appsBase, appID: appID, name: "crash.sh", code: 9)
 
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .onFailure
         policy.onFailureMaxRetries = 2
         let service = makeService(appsBase: appsBase, restartFloor: .zero)
@@ -960,7 +1177,7 @@ struct ContainerServiceSupervisorTests {
         let appID = "sh.wendy.tests.SurvivorNoRestart"
         try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
 
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         let service = makeService(appsBase: appsBase)
         try await createNativeApp(
@@ -1015,7 +1232,9 @@ private func makeService(
     backend: (any LinuxContainerBackend)? = nil,
     supervisorInterval: Duration = .seconds(15),
     restartFloor: Duration = .seconds(10),
-    pids: PIDStub? = nil
+    pids: PIDStub? = nil,
+    brewExecutableLookup: BrewExecutableLookup? = nil,
+    brewBundleRunner: BrewBundleRunner? = nil
 ) -> ContainerService {
     let lookup: PIDExecutablePathLookup
     let send: PIDSignalSender
@@ -1035,6 +1254,22 @@ private func makeService(
         birthLookup = { NativeProcessConfiguration.birthTime(forPID: $0) }
         lookup = { ContainerService.executablePath(forPID: $0) }
         send = { pid, signal in _ = Darwin.kill(pid, signal) }
+    }
+
+    if let brewExecutableLookup, let brewBundleRunner {
+        return ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase),
+            linuxBackend: backend,
+            supervisorInterval: supervisorInterval,
+            restartFloor: restartFloor,
+            pidExecutablePath: lookup,
+            pidBirthTime: birthLookup,
+            sendSignal: send,
+            brewExecutableLookup: brewExecutableLookup,
+            brewBundleRunner: brewBundleRunner
+        )
     }
 
     return ContainerService(
@@ -1064,7 +1299,8 @@ private func createNativeApp(
     service: ContainerService,
     appID: String,
     cmd: String,
-    restartPolicy: RestartPolicy? = nil
+    restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil,
+    brewfile: String? = nil
 ) async throws {
     var request = Wendy_Agent_Services_V1_CreateContainerRequest()
     request.appName = appID
@@ -1072,6 +1308,16 @@ private func createNativeApp(
     request.cmd = cmd
     if let restartPolicy {
         request.restartPolicy = restartPolicy
+    }
+    if let brewfile {
+        request.appConfig = try JSONEncoder().encode(
+            WendyAppConfig(
+                appId: appID,
+                platform: "darwin",
+                entitlements: nil,
+                brewfile: brewfile
+            )
+        )
     }
 
     _ = try await service.createContainer(
@@ -1083,7 +1329,7 @@ private func createNativeApp(
 private func createLinuxApp(
     service: ContainerService,
     appID: String,
-    restartPolicy: RestartPolicy? = nil
+    restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
 ) async throws {
     let config = WendyAppConfig(
         appId: appID,
@@ -1142,7 +1388,9 @@ private func stopNativeApp(service: ContainerService, appID: String) async throw
     )
 }
 
-private func listSupervisorContainers(service: ContainerService) async throws -> [AppContainer] {
+private func listSupervisorContainers(
+    service: ContainerService
+) async throws -> [Wendy_Agent_Services_V1_AppContainer] {
     let response = try await service.listContainers(
         request: ServerRequest(
             metadata: [:],

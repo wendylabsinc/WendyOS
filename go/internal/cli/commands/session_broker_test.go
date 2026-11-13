@@ -5,11 +5,13 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 func TestConnectPinnedSessionKeysBrokerByRequestedEndpoint(t *testing.T) {
@@ -119,11 +121,18 @@ func TestConnectToAgentConsultsAndSeedsSessionBroker(t *testing.T) {
 		deviceFlag = "10.0.0.9:50051"
 		origConnect, origStart := connectSessionBrokerFn, startSessionBrokerFn
 		origLadder, origUpdate := dialAgentLadderFn, checkAndOfferUpdateFn
+		origDiscover := discoverLANDevices
 		t.Cleanup(func() {
 			deviceFlag = origFlag
 			connectSessionBrokerFn, startSessionBrokerFn = origConnect, origStart
 			dialAgentLadderFn, checkAndOfferUpdateFn = origLadder, origUpdate
+			discoverLANDevices = origDiscover
 		})
+		// These connections are mocked. A real background browse can outlive
+		// the test and call another test's dial hook with a LAN device.
+		discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) {
+			return nil, nil
+		}
 		checkAndOfferUpdateFn = func(_ context.Context, conn *grpcclient.AgentConnection) (*grpcclient.AgentConnection, error) {
 			return conn, nil
 		}

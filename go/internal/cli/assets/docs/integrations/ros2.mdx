@@ -19,6 +19,14 @@ CycloneDDS (default), Fast DDS, RTI Connext, or GurumDDS.
 
 For ROS 2 inside a robot VM, use the [Unitree simulator templates](/docs/installation/unitree-simulators) and [sim-to-real walkthrough](/docs/integrations/sim-to-real).
 
+## What stays standard
+
+ROS 2 connects robot software components. A node performs a task, such as reading a camera. A topic is a named stream of typed messages: publishers send samples and subscribers receive them through ROS middleware. QoS specifies delivery policies such as reliability and queue depth. A service answers a request; an action tracks a longer task with feedback and cancellation.
+
+Keep your existing packages, nodes, message types, launch files, Dockerfiles, and ROS tools. Remote inspection runs standard ROS commands beside the app; it does not replace ROS messaging or require a new application API. The CLI does not create sensor publishers or install a navigation stack for you.
+
+Deployment does configure discovery and isolation. Match the DDS domain, middleware, and network scope to the robot you intend to join; the defaults below can intentionally hide unrelated peers.
+
 ## How it works
 
 The agent discovers running ROS 2 app containers (those deployed with a
@@ -33,11 +41,15 @@ discovery, and pinned `unitree_go` and `unitree_api` message types. The device d
 later commands. It uses domain 0 by default; pass `--domain` to select another
 domain.
 
-ROS 2 app discovery is app-local by default: Wendy injects `ROS_LOCALHOST_ONLY=1`
-so unrelated apps and robots do not discover each other. A bridge or inspection
-tool that intentionally needs the device's wider ROS 2 graph can opt in with
-`"discoveryScope": "host"` in `frameworks.ros2`; pair it with a host-network
-entitlement so DDS can reach the device interfaces.
+ROS 2 discovery stays on the device by default: Wendy injects
+`ROS_LOCALHOST_ONLY=1`, and without an explicit `domainId` each app gets its own
+domain, so unrelated apps and robots do not discover each other. `scope` in
+`frameworks.ros2` widens or narrows that: `"peripherals"` for an app that talks
+to a robot or sensor attached to the device, `"network"` for a bridge or tool
+that needs the device's wider ROS 2 graph, `"app"` for an app that must stay to
+itself. `device`, `peripherals` and `network` apps that share a bus set the
+same `domainId`; all three scopes need the host network. See
+[`frameworks.ros2`](/docs/reference/app-configuration#frameworksros2).
 
 <Callout type="info">
 No SSH, no `source /opt/ros/<distro>/setup.bash`, and no extra ports. If a device
@@ -57,19 +69,19 @@ wendy init \
   --language swift \
   --framework ros2 \
   --ros2-rmw cyclonedds \
-  --ros2-discovery-scope host \
+  --ros2-scope network \
   --assistant skip
 ```
 
 Any `--ros2-*` flag on its own implies `--framework ros2`, and values are
 validated up front, so a mistyped RMW or distro fails at `init` rather than at
 deploy time. Run `wendy init` interactively on a WendyOS target and it asks
-whether the app uses ROS 2, then walks through middleware, discovery scope, and
-domain ID.
+whether the app uses ROS 2, then walks through middleware, scope, and domain ID
+(unless scope is `app`, which uses the app's own domain).
 
 Existing projects need no scaffolding — add the `frameworks.ros2` key to
 `wendy.json` by hand and `wendy run` picks it up on the next deploy. See
-[`wendy.json`](/docs/apps/wendy.json#frameworks) for every field.
+[`wendy.json`](/docs/reference/app-configuration#frameworks) for every field.
 
 ## Prerequisites
 
@@ -77,8 +89,7 @@ Existing projects need no scaffolding — add the `frameworks.ros2` key to
   A running app with `frameworks.ros2` is optional. See
   [Multi-app deployments](/docs/guides/multi-app-deployments) for an app-based
   talker/listener stack.
-- A device selected as your default (or pass `--device`). See
-  [Discovering devices](/docs/device/discovering-devices).
+- An interactive terminal to select your target when prompted. A configured default may select it automatically. Use `--device` for scripts or an explicit target. See [device selection](/docs/advanced/clients/wendy-cli/device-selection).
 
 Use `wendy device ros2 topics` to inspect a Unitree robot's system graph directly.
 The system sidecar's first use requires internet access to download its image.
@@ -137,14 +148,18 @@ wendy device ros2 hz /chatter
 ```
 
 `echo` and `hz` need the topic's generated message packages inside the CLI
-sidecar. The stock system image includes standard ROS 2 messages, but custom
-types such as `unitree_go/msg/LowState` require additional packages. A topic can
+sidecar. The stock system inspector includes standard ROS 2 messages and the
+`unitree_go` and `unitree_api` packages, including `unitree_go/msg/LowState`.
+Other custom types need their generated message packages installed in the image
+doing the inspection. App sidecars use that app's image, so they only have the
+packages installed there. A topic can
 appear in `topics` and `topic info` even when its message package is unavailable
 for decoding.
 
 ## Inspect LiDAR in Wendy Chat
 
-Wendy Chat and MCP clients can use the read-only `ros2_lidar_summary` tool for
+Wendy Chat and MCP clients can use the read-only `ros2_lidar_summary` tool
+(MCP clients enable it with `wendy_tools` and `{"groups":["robotics"]}`) for
 `sensor_msgs/msg/PointCloud2` and `sensor_msgs/msg/LaserScan`. It subscribes with
 sensor-compatible QoS and decodes data on the device, returning nearest returns
 by angular sector, bounded XYZ samples, and frame, timestamp, freshness, and
@@ -180,9 +195,10 @@ graph in domain 0, pass these arguments to `ros2_lidar_summary`:
 }
 ```
 
-Keep the scope and domain consistent with discovery. The default `scope: "app"`
-preserves the app's ROS 2 environment; host inspection requires an explicit
-`domain_id`. Topic names are examples: a robot may publish a different cloud or
+The inspection tool's `scope` parameter is separate from
+`frameworks.ros2.scope`: its default `"app"` preserves the running app's ROS 2
+environment, while `"host"` inspects the device's host DDS graph and requires an
+explicit `domain_id`. Topic names are examples: a robot may publish a different cloud or
 a laser scan. For a discovered scan topic, set `message_type` to
 `sensor_msgs/msg/LaserScan`.
 

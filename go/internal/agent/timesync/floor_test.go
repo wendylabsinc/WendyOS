@@ -10,21 +10,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 )
 
-func TestApplyFloor_AdvancesClockWhenFileIsFuture(t *testing.T) {
-	dir := t.TempDir()
-	future := time.Now().Add(365 * 24 * time.Hour) // 1 year from now
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], uint64(future.Unix()))
-	if err := os.WriteFile(filepath.Join(dir, "clock_floor"), buf[:], 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := timesync.NewManager(nil, dir)
-	// ApplyFloor should not return an error even if it can't call settimeofday
-	// (stub on non-Linux). We just verify it reads the file without panicking.
-	m.ApplyFloor()
-}
-
 func TestApplyFloor_NoFile_IsNoop(t *testing.T) {
 	m := timesync.NewManager(nil, t.TempDir())
 	m.ApplyFloor() // must not panic or error

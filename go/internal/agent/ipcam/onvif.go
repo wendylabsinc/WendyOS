@@ -4,7 +4,10 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ONVIF WS-Discovery constants. Cameras join this multicast group and answer a
@@ -55,6 +58,7 @@ type probeMatchEnvelope struct {
 	Body    struct {
 		ProbeMatches struct {
 			ProbeMatch []struct {
+				Types  string `xml:"Types"`
 				XAddrs string `xml:"XAddrs"`
 				Scopes string `xml:"Scopes"`
 			} `xml:"ProbeMatch"`
@@ -66,27 +70,76 @@ type probeMatchEnvelope struct {
 // ProbeMatch, which happens for unrelated multicast traffic on port 3702.
 var ErrNoProbeMatch = errors.New("payload contains no ProbeMatch")
 
-// ParseProbeMatch extracts the first ProbeMatch from a discovery response.
+// ErrProbeMatchTypeMismatch is returned when no ProbeMatch identifies itself as
+// a video transmitter: typed matches lack the exact NetworkVideoTransmitter
+// local name, and untyped ones carry no ONVIF scope.
+var ErrProbeMatchTypeMismatch = errors.New("ProbeMatch types do not include NetworkVideoTransmitter")
+
+// onvifScopePrefix starts every scope the ONVIF Core specification defines.
+const onvifScopePrefix = "onvif://www.onvif.org/"
+
+// ParseProbeMatch extracts the first usable video-transmitter match from a
+// discovery response. Explicit non-camera types are rejected. Omitted or empty
+// Types are accepted only alongside an ONVIF scope: WS-Discovery allows a target
+// to omit types even when answering our NetworkVideoTransmitter-filtered probe,
+// and every ONVIF device publishes those scopes, while a printer or computer
+// that answers any probe without types does not.
 func ParseProbeMatch(payload []byte) (ProbeMatch, error) {
 	var env probeMatchEnvelope
 	if err := xml.Unmarshal(payload, &env); err != nil {
 		return ProbeMatch{}, fmt.Errorf("parsing probe response: %w", err)
 	}
 	matches := env.Body.ProbeMatches.ProbeMatch
-	if len(matches) == 0 {
-		return ProbeMatch{}, ErrNoProbeMatch
+	hasCompatibleType := false
+	for _, match := range matches {
+		scopes := strings.Fields(match.Scopes)
+		if strings.TrimSpace(match.Types) == "" {
+			if !hasONVIFScope(scopes) {
+				continue
+			}
+		} else if !hasVideoTransmitterType(match.Types) {
+			continue
+		}
+		hasCompatibleType = true
+		out := ProbeMatch{
+			XAddrs: strings.Fields(match.XAddrs),
+			Scopes: scopes,
+		}
+		// A match with no service address tells us nothing we can act on.
+		if len(out.XAddrs) == 0 {
+			continue
+		}
+		out.Model = modelFromScopes(out.Scopes)
+		return out, nil
 	}
-	first := matches[0]
-	out := ProbeMatch{
-		XAddrs: strings.Fields(first.XAddrs),
-		Scopes: strings.Fields(first.Scopes),
+	if len(matches) > 0 && !hasCompatibleType {
+		return ProbeMatch{}, ErrProbeMatchTypeMismatch
 	}
-	// A match with no service address tells us nothing we can act on.
-	if len(out.XAddrs) == 0 {
-		return ProbeMatch{}, ErrNoProbeMatch
+	return ProbeMatch{}, ErrNoProbeMatch
+}
+
+func hasVideoTransmitterType(types string) bool {
+	for _, typ := range strings.Fields(types) {
+		// Like element names above, QName prefixes vary by vendor. Match
+		// the complete local name, never a substring or a fixed prefix.
+		_, local, prefixed := strings.Cut(typ, ":")
+		if !prefixed {
+			local = typ
+		}
+		if local == "NetworkVideoTransmitter" {
+			return true
+		}
 	}
-	out.Model = modelFromScopes(out.Scopes)
-	return out, nil
+	return false
+}
+
+func hasONVIFScope(scopes []string) bool {
+	for _, scope := range scopes {
+		if strings.HasPrefix(scope, onvifScopePrefix) && len(scope) > len(onvifScopePrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // modelFromScopes prefers the ONVIF name scope, falling back to hardware so a
@@ -97,13 +150,31 @@ func modelFromScopes(scopes []string) string {
 		switch {
 		case strings.HasPrefix(scope, scopeNamePrefix):
 			if name := strings.TrimPrefix(scope, scopeNamePrefix); name != "" {
-				return name
+				return decodeScopeValue(name)
 			}
 		case strings.HasPrefix(scope, scopeHardwarePrefix):
 			if hardware == "" {
-				hardware = strings.TrimPrefix(scope, scopeHardwarePrefix)
+				hardware = decodeScopeValue(strings.TrimPrefix(scope, scopeHardwarePrefix))
 			}
 		}
 	}
 	return hardware
+}
+
+// decodeScopeValue undoes the percent-encoding a scope URI needs for spaces and
+// other reserved characters, so "Tapo%20C200" lists as "Tapo C200". A value that
+// is not valid percent-encoding, or that decodes to invalid UTF-8 or a control
+// character, is returned as sent: `camera list` prints names verbatim, and a
+// decoded escape sequence would reach the user's terminal.
+func decodeScopeValue(raw string) string {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil || !utf8.ValidString(decoded) {
+		return raw
+	}
+	for _, r := range decoded {
+		if unicode.IsControl(r) {
+			return raw
+		}
+	}
+	return decoded
 }

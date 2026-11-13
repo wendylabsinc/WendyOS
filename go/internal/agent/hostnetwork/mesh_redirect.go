@@ -2,10 +2,12 @@ package hostnetwork
 
 import (
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+var meshRedirectMu sync.Mutex
 
 // InitMeshNATChain ensures the WENDY-MESH chain exists in the nat table and
 // that PREROUTING jumps into it. Idempotent, safe on every agent startup, and
@@ -21,7 +23,7 @@ func InitMeshNATChain() error {
 }
 
 func ensureNATChain(chain string) error {
-	out, err := exec.Command("iptables", "-t", "nat", "-N", chain).CombinedOutput()
+	out, err := meshIPTables("-t", "nat", "-N", chain)
 	if err == nil {
 		return nil
 	}
@@ -32,15 +34,14 @@ func ensureNATChain(chain string) error {
 }
 
 func ensurePreroutingJump(chain string) error {
-	cmd := exec.Command("iptables", "-t", "nat", "-C", "PREROUTING", "-j", chain)
-	out, err := cmd.CombinedOutput()
+	out, err := meshIPTables("-t", "nat", "-C", "PREROUTING", "-j", chain)
 	if err == nil {
 		return nil
 	}
 	if exitCode(err) != 1 {
 		return fmt.Errorf("iptables -t nat -C PREROUTING -j %s: %w (%s)", chain, err, strings.TrimSpace(string(out)))
 	}
-	out, err = exec.Command("iptables", "-t", "nat", "-A", "PREROUTING", "-j", chain).CombinedOutput()
+	out, err = meshIPTables("-t", "nat", "-A", "PREROUTING", "-j", chain)
 	if err != nil {
 		return fmt.Errorf("iptables -t nat -A PREROUTING -j %s: %w (%s)", chain, err, strings.TrimSpace(string(out)))
 	}
@@ -63,6 +64,8 @@ func meshRedirectArgs(containerIP, serviceCIDR string, proxyPort int) []string {
 
 // AddMeshRedirect idempotently installs the REDIRECT rule for one container.
 func AddMeshRedirect(containerIP, serviceCIDR string, proxyPort int) error {
+	meshRedirectMu.Lock()
+	defer meshRedirectMu.Unlock()
 	exists, err := meshRedirectExists(containerIP, serviceCIDR, proxyPort)
 	if err != nil {
 		return err
@@ -71,7 +74,7 @@ func AddMeshRedirect(containerIP, serviceCIDR string, proxyPort int) error {
 		return nil
 	}
 	args := append([]string{"-A", MeshChainName}, meshRedirectArgs(containerIP, serviceCIDR, proxyPort)...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := meshIPTables(args...)
 	if err != nil {
 		return fmt.Errorf("iptables -t nat -A %s: %w (%s)", MeshChainName, err, strings.TrimSpace(string(out)))
 	}
@@ -80,6 +83,8 @@ func AddMeshRedirect(containerIP, serviceCIDR string, proxyPort int) error {
 
 // RemoveMeshRedirect idempotently removes the REDIRECT rule for one container.
 func RemoveMeshRedirect(containerIP, serviceCIDR string, proxyPort int) error {
+	meshRedirectMu.Lock()
+	defer meshRedirectMu.Unlock()
 	exists, err := meshRedirectExists(containerIP, serviceCIDR, proxyPort)
 	if err != nil {
 		return err
@@ -88,7 +93,7 @@ func RemoveMeshRedirect(containerIP, serviceCIDR string, proxyPort int) error {
 		return nil
 	}
 	args := append([]string{"-D", MeshChainName}, meshRedirectArgs(containerIP, serviceCIDR, proxyPort)...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := meshIPTables(args...)
 	if err != nil {
 		return fmt.Errorf("iptables -t nat -D %s: %w (%s)", MeshChainName, err, strings.TrimSpace(string(out)))
 	}
@@ -97,7 +102,7 @@ func RemoveMeshRedirect(containerIP, serviceCIDR string, proxyPort int) error {
 
 func meshRedirectExists(containerIP, serviceCIDR string, proxyPort int) (bool, error) {
 	args := append([]string{"-C", MeshChainName}, meshRedirectArgs(containerIP, serviceCIDR, proxyPort)...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := meshIPTables(args...)
 	if err == nil {
 		return true, nil
 	}

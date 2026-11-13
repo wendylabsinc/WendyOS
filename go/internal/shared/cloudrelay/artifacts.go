@@ -115,43 +115,101 @@ type Verifier struct {
 	mu        sync.Mutex
 	keys      map[string]jwk
 	fetched   time.Time
+	refresh   *grantKeyRefresh
+}
+
+// A lookup failure says nothing about a saved artifact's validity. Keep its
+// original message and cause while allowing cache owners to defer eviction.
+type grantKeyLookupError struct{ error }
+
+func (e *grantKeyLookupError) Unwrap() error { return e.error }
+
+// One caller owns each refresh. Other callers can wait with their own
+// cancellation budget, while valid cached keys never wait for network I/O.
+// A single owner also serializes cache publication without stale generations.
+type grantKeyRefresh struct {
+	done chan struct{}
+	err  error
 }
 
 func (v *Verifier) key(ctx context.Context, kid string) (jwk, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if k, ok := v.keys[kid]; ok && time.Since(v.fetched) < 5*time.Minute {
-		return k, nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return jwk{}, err
+		}
+		v.mu.Lock()
+		if k, ok := v.keys[kid]; ok && time.Since(v.fetched) < 5*time.Minute {
+			v.mu.Unlock()
+			return k, nil
+		}
+		// Preserve the refresh-frequency and freshness policy, including
+		// unknown kids after a successful refresh. Never serve expired keys.
+		if time.Since(v.fetched) < 5*time.Second {
+			v.mu.Unlock()
+			return jwk{}, fmt.Errorf("unknown Cloud grant signing key")
+		}
+		if running := v.refresh; running != nil {
+			v.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return jwk{}, ctx.Err()
+			case <-running.done:
+				if running.err != nil {
+					return jwk{}, running.err
+				}
+				continue
+			}
+		}
+		running := &grantKeyRefresh{done: make(chan struct{})}
+		v.refresh = running
+		v.mu.Unlock()
+
+		keys, err := v.fetchKeys(ctx)
+		if err == nil {
+			err = ctx.Err()
+		}
+		v.mu.Lock()
+		if err == nil {
+			v.keys = keys
+			v.fetched = time.Now()
+		}
+		running.err = err
+		v.refresh = nil
+		close(running.done)
+		v.mu.Unlock()
+		if err != nil {
+			return jwk{}, err
+		}
 	}
-	// Bound refresh frequency, including unknown-kid failures from the broker.
-	if time.Since(v.fetched) < 5*time.Second {
-		return jwk{}, fmt.Errorf("unknown Cloud grant signing key")
-	}
+}
+
+// fetchKeys does no cache reads or writes and never holds the verifier mutex.
+func (v *Verifier) fetchKeys(ctx context.Context) (map[string]jwk, error) {
 	client := v.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client = &http.Client{Transport: grantKeyTransport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimSuffix(v.Issuer, "/")+"/.well-known/wendy-cloud-grants/jwks.json", nil)
 	if err != nil {
-		return jwk{}, err
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return jwk{}, fmt.Errorf("fetching Cloud grant keys: %w", err)
+		return nil, fmt.Errorf("fetching Cloud grant keys: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return jwk{}, fmt.Errorf("Cloud grant JWKS returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("Cloud grant JWKS returned HTTP %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024+1))
 	if err != nil || len(raw) > 128*1024 {
-		return jwk{}, fmt.Errorf("invalid Cloud grant JWKS")
+		return nil, fmt.Errorf("invalid Cloud grant JWKS")
 	}
 	var doc struct {
 		Keys []jwk `json:"keys"`
 	}
 	if json.Unmarshal(raw, &doc) != nil || len(doc.Keys) > 32 {
-		return jwk{}, fmt.Errorf("invalid Cloud grant JWKS")
+		return nil, fmt.Errorf("invalid Cloud grant JWKS")
 	}
 	keys := map[string]jwk{}
 	for _, k := range doc.Keys {
@@ -159,18 +217,13 @@ func (v *Verifier) key(ctx context.Context, kid string) (jwk, error) {
 			continue
 		}
 		if _, ok := keys[k.Kid]; ok {
-			return jwk{}, fmt.Errorf("duplicate Cloud grant key ID")
+			return nil, fmt.Errorf("duplicate Cloud grant key ID")
 		}
 		keys[k.Kid] = k
 	}
-	v.keys = keys
-	v.fetched = time.Now()
-	k, ok := keys[kid]
-	if !ok {
-		return jwk{}, fmt.Errorf("unknown Cloud grant signing key")
-	}
-	return k, nil
+	return keys, nil
 }
+
 func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, now time.Time) (claims, error) {
 	var c claims
 	max := 16384
@@ -206,7 +259,7 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	}
 	k, err := v.key(ctx, hdr["kid"])
 	if err != nil {
-		return c, err
+		return c, &grantKeyLookupError{err}
 	}
 	input := []byte(p[0] + "." + p[1])
 	valid := false
@@ -273,7 +326,9 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	if c.Iss != v.Issuer || c.Aud != audience || !bounded(audience, 512) {
 		return c, fmt.Errorf("Cloud artifact issuer or audience mismatch")
 	}
-	if c.Iat < 0 || c.Exp <= c.Iat || c.Exp-c.Iat > ttl || c.Iat > now.Unix() || c.Exp <= now.Unix() {
+	// iat is Cloud's clock and now is ours, so iat gets cloudClockSkew. exp
+	// stays strict, and exp-iat <= ttl still bounds what the skew can extend.
+	if c.Iat < 0 || c.Exp <= c.Iat || c.Exp-c.Iat > ttl || c.Iat > now.Add(cloudClockSkew).Unix() || c.Exp <= now.Unix() {
 		return c, fmt.Errorf("Cloud artifact outside validity window")
 	}
 	if !bounded(c.JTI, 128) || !bounded(c.Route, 128) || !bounded(c.Correlation, 128) {
@@ -295,7 +350,7 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	return c, nil
 }
 
-// brokerChallengeSkew is the clock-skew allowance applied to both ends of the
+// cloudClockSkew is the clock-skew allowance applied to both ends of the
 // challenge-expiry window. The broker mints expires_at at most 30s after issue
 // (tunnel/v2 BrokerChallenge), so with a zero-tolerance window any positive
 // broker-ahead skew trips the upper bound and any dialer-ahead skew near expiry
@@ -304,7 +359,11 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 // purpose -- reject genuinely stale or absurd-TTL challenges -- while surviving
 // ordinary skew. Comparison is on absolute instants (google.protobuf.Timestamp
 // -> AsTime()), so it is time-zone independent by construction.
-const brokerChallengeSkew = 5 * time.Second
+//
+// The same allowance covers the iat of Cloud leases and grants (WDY-3939 #11):
+// Cloud stamps iat from its own clock, so a device or CLI running a second
+// behind it would otherwise reject every fresh artifact.
+const cloudClockSkew = 5 * time.Second
 
 func proof(key *ecdsa.PrivateKey, domain, audience, id, jti, artifact, role string, ch *pb.BrokerChallenge) ([]byte, error) {
 	if ch == nil || len(ch.ChallengeId) != 16 || len(ch.Nonce) != 32 || ch.ExpiresAt == nil || ch.ExpiresAt.CheckValid() != nil {
@@ -312,7 +371,7 @@ func proof(key *ecdsa.PrivateKey, domain, audience, id, jti, artifact, role stri
 	}
 	now := time.Now()
 	expiry := ch.ExpiresAt.AsTime()
-	if !expiry.After(now.Add(-brokerChallengeSkew)) || expiry.After(now.Add(30*time.Second+brokerChallengeSkew)) {
+	if !expiry.After(now.Add(-cloudClockSkew)) || expiry.After(now.Add(30*time.Second+cloudClockSkew)) {
 		return nil, fmt.Errorf("expired or excessive broker challenge")
 	}
 	input := canonical([]byte("wendycloud.tunnel.v1/"+domain+"-proof/1"), []byte(audience), []byte(id), []byte(jti), digest([]byte(artifact)), []byte(role), ch.ChallengeId, ch.Nonce)

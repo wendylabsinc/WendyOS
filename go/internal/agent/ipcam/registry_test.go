@@ -3,8 +3,11 @@ package ipcam
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func newTestRegistry(t *testing.T) *Registry {
@@ -177,5 +180,164 @@ func TestForgetUnknownID(t *testing.T) {
 	r := newTestRegistry(t)
 	if r.Forget(IDBandStart) {
 		t.Fatal("Forget returned true for an unknown ID")
+	}
+}
+
+func TestPruneUnconfirmed(t *testing.T) {
+	cases := []struct {
+		name       string
+		camera     Camera
+		credential bool
+		keep       bool
+	}{
+		{name: "legacy phone", camera: Camera{Link: "eth0", Model: "iPhone"}},
+		{name: "legacy laptop", camera: Camera{Link: "eth0", Model: "MacBooks-Air"}},
+		{name: "stored login", camera: Camera{Link: "eth0"}, credential: true, keep: true},
+		{name: "served client", camera: Camera{Link: "eth0", DHCPServed: true}, keep: true},
+		{name: "leased camera", camera: Camera{Link: "eth0", Address: "10.98.0.50"}, keep: true},
+		{name: "ambiguous LAN address", camera: Camera{Link: "eth0", Address: "192.168.1.50"}, keep: true},
+		{name: "ONVIF", camera: Camera{Link: "eth0", ONVIFAddr: "http://camera/onvif"}, keep: true},
+		{name: "sub stream", camera: Camera{Link: "eth0", StreamSub: "/sub"}, keep: true},
+		{name: "main stream", camera: Camera{Link: "eth0", StreamMain: "/main"}, keep: true},
+		// WS-Discovery records carry no link. Before 2026-10-21 any WS-Discovery
+		// responder was recorded, printers and computers included, and a camera
+		// on the shared LAN is someone else's until a login is stored for it. A
+		// real camera answers the next probe and is recorded again.
+		{name: "discovered printer", camera: Camera{Address: "192.168.0.77", ONVIFAddr: "http://192.168.0.77:5357/wsd"}},
+		{name: "discovered camera without login", camera: Camera{
+			Address: "192.168.0.42", Model: "Tapo C200", ONVIFAddr: "http://192.168.0.42:2020/onvif/device_service",
+			StreamSub: "/stream2", StreamMain: "/stream1",
+		}},
+		{name: "discovered camera with login", camera: Camera{
+			Address: "192.168.0.42", ONVIFAddr: "http://192.168.0.42:2020/onvif/device_service",
+		}, credential: true, keep: true},
+		{name: "discovered served camera", camera: Camera{Address: "10.98.0.50", DHCPServed: true}, keep: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			r.now = func() time.Time { return time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC) }
+			tc.camera.MAC = "aa:bb:cc:dd:ee:ff"
+			cam, err := r.Upsert(tc.camera)
+			if err != nil {
+				t.Fatal(err)
+			}
+			creds := NewCredentialStore(filepath.Join(t.TempDir(), "credentials.json"))
+			if tc.credential {
+				// Even empty stored credentials protect the record.
+				if err := creds.Set(cam.MAC, Credential{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			loaded := NewRegistry(r.path)
+			if err := loaded.Load(); err != nil {
+				t.Fatal(err)
+			}
+			removed, err := loaded.PruneUnconfirmed(creds.Has)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wantRemoved []uint32
+			if !tc.keep {
+				wantRemoved = []uint32{cam.ID}
+			}
+			if !reflect.DeepEqual(removed, wantRemoved) {
+				t.Fatalf("removed = %v, want %v", removed, wantRemoved)
+			}
+			for range 2 {
+				got, ok := loaded.Get(cam.ID)
+				if ok != tc.keep {
+					t.Fatalf("kept = %v, want %v", ok, tc.keep)
+				}
+				if ok {
+					cam.Online = false
+					if !reflect.DeepEqual(got, cam) {
+						t.Fatalf("changed saved camera: %+v, want %+v", got, cam)
+					}
+				}
+				loaded = NewRegistry(r.path)
+				if err := loaded.Load(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestPruneUnconfirmedRollsBackFailedSave(t *testing.T) {
+	r := newTestRegistry(t)
+	cam, err := r.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Link: "eth0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(r.path+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := r.PruneUnconfirmed(func(string) bool { return false }); err == nil || len(removed) != 0 {
+		t.Fatalf("failed save: removed = %d, error = %v, want zero and an error", removed, err)
+	}
+	if got, ok := r.Get(cam.ID); !ok || !reflect.DeepEqual(got, cam) {
+		t.Fatal("failed save changed registry")
+	}
+}
+
+func TestPruneUnconfirmedRequiresCredentialLookup(t *testing.T) {
+	r := newTestRegistry(t)
+	cam, err := r.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Link: "eth0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := r.PruneUnconfirmed(nil); err != nil || len(removed) != 0 {
+		t.Fatalf("no credential lookup: removed = %d, error = %v", removed, err)
+	}
+	if _, ok := r.Get(cam.ID); !ok {
+		t.Fatal("pruned without credential protection")
+	}
+}
+
+func TestDHCPServedSurvivesPartialUpsert(t *testing.T) {
+	r := newTestRegistry(t)
+	cam, err := r.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Link: "eth0", DHCPServed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Upsert(Camera{MAC: cam.MAC, Model: "camera"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded := NewRegistry(r.path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := loaded.PruneUnconfirmed(func(string) bool { return false }); err != nil || len(removed) != 0 {
+		t.Fatalf("served camera: removed = %d, error = %v", removed, err)
+	}
+	if got, ok := loaded.Get(cam.ID); !ok || !got.DHCPServed {
+		t.Fatal("lost served-link evidence")
+	}
+}
+
+func TestPruneUnconfirmedCountsOnlyRemovedRecords(t *testing.T) {
+	r := newTestRegistry(t)
+	for _, cam := range []Camera{
+		{MAC: "aa:bb:cc:dd:ee:01", Link: "eth0"},
+		{MAC: "aa:bb:cc:dd:ee:02", Link: "eth0"},
+		{MAC: "aa:bb:cc:dd:ee:03", Link: "eth0", Address: "10.98.0.50"},
+	} {
+		if _, err := r.Upsert(cam); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range [][]uint32{{IDBandStart, IDBandStart + 1}, nil} {
+		removed, err := r.PruneUnconfirmed(func(string) bool { return false })
+		if err != nil || !reflect.DeepEqual(removed, want) {
+			t.Fatalf("removed = %v, error = %v, want %v", removed, err, want)
+		}
+	}
+	loaded := NewRegistry(r.path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.List(); len(got) != 1 || got[0].MAC != "aa:bb:cc:dd:ee:03" {
+		t.Fatalf("persisted cameras = %+v, want only the addressed camera", got)
 	}
 }

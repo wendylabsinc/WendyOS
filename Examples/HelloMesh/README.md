@@ -1,5 +1,11 @@
 # HelloMesh
 
+This example uses the legacy numeric asset-ID mesh naming scheme. For current
+Wendy Net applications with mDNS discovery, start with
+[NvidiaPAIR](../NvidiaPAIR/README.md) and the
+[Wendy Net service guide](../../docs/guides/wendy-net-services.mdx). Current
+service addresses are observer-local; do not derive them from asset IDs.
+
 A **fleet** of WendyOS devices that all reach each other over the mesh.
 
 Every device runs this same app. Each node both **serves** an HTTP endpoint and
@@ -89,7 +95,7 @@ app's built-in defaults.)
 
 ```bash
 wendy cloud discover --json   # the "id" field per device
-# or the cloud dashboard (dashboard.wendy.dev)
+# or the cloud dashboard (https://cloud.wendy.dev)
 ```
 
 Logs on each node look like:

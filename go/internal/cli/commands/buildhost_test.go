@@ -2,18 +2,91 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
+
+type enablingBuildHostClient struct {
+	agentpbv2.WendyBuildServiceClient
+	enabled       bool
+	sets, queries int
+	setErr        error
+	noBuildkit    bool
+}
+
+func (c *enablingBuildHostClient) GetBuildCapabilities(context.Context, *agentpbv2.GetBuildCapabilitiesRequest, ...grpc.CallOption) (*agentpbv2.GetBuildCapabilitiesResponse, error) {
+	c.queries++
+	return &agentpbv2.GetBuildCapabilitiesResponse{BuilderEnabled: c.enabled, BuildkitAvailable: !c.noBuildkit, NativePlatforms: []string{"linux/arm64"}}, nil
+}
+
+func (c *enablingBuildHostClient) SetBuildHostEnabled(_ context.Context, req *agentpbv2.SetBuildHostEnabledRequest, _ ...grpc.CallOption) (*agentpbv2.SetBuildHostEnabledResponse, error) {
+	c.sets++
+	if c.setErr != nil {
+		return nil, c.setErr
+	}
+	c.enabled = req.GetEnabled()
+	return &agentpbv2.SetBuildHostEnabledResponse{Enabled: c.enabled}, nil
+}
+
+func TestPrepareBuildHost(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                            string
+		enabled, accept, nonInteractive, cancel, failEnable, noBuildkit bool
+		wantPrompts, wantSets, wantQueries                              int
+		wantError                                                       string
+	}{
+		{name: "accept", accept: true, wantPrompts: 1, wantSets: 1, wantQueries: 2},
+		{name: "already enabled", enabled: true, wantQueries: 1},
+		{name: "decline", wantPrompts: 1, wantQueries: 1, wantError: "not configured"},
+		{name: "noninteractive", nonInteractive: true, wantQueries: 1, wantError: "wendy device build-host enable"},
+		{name: "cancel", cancel: true, wantPrompts: 1, wantQueries: 1, wantError: "canceled"},
+		{name: "enable failure", accept: true, failEnable: true, wantPrompts: 1, wantSets: 1, wantQueries: 1, wantError: "permission denied"},
+		{name: "validate after enabling", accept: true, noBuildkit: true, wantPrompts: 1, wantSets: 1, wantQueries: 2, wantError: "no BuildKit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &enablingBuildHostClient{enabled: tc.enabled, noBuildkit: tc.noBuildkit}
+			if tc.failEnable {
+				client.setErr = errors.New("permission denied")
+			}
+			prompts := 0
+			var confirm func(string) (bool, error)
+			if !tc.nonInteractive {
+				confirm = func(question string) (bool, error) {
+					prompts++
+					if !strings.Contains(question, "spark-office") {
+						t.Fatalf("prompt lacks host: %s", question)
+					}
+					if tc.cancel {
+						return false, context.Canceled
+					}
+					return tc.accept, nil
+				}
+			}
+			caps, err := prepareBuildHost(context.Background(), client, "spark-office", "linux/arm64", confirm)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("got %v, want %q", err, tc.wantError)
+				}
+			} else if err != nil || !caps.GetBuilderEnabled() {
+				t.Fatalf("caps=%v, err=%v", caps, err)
+			}
+			if prompts != tc.wantPrompts || client.sets != tc.wantSets || client.queries != tc.wantQueries {
+				t.Fatalf("prompts/sets/queries = %d/%d/%d, want %d/%d/%d", prompts, client.sets, client.queries, tc.wantPrompts, tc.wantSets, tc.wantQueries)
+			}
+		})
+	}
+}
 
 // `wendy build` never reaches runRemoteBuild, so accepting --build-host there
 // would build locally while the developer believed the Spark was doing it.
@@ -235,6 +308,40 @@ func TestClassifyRemoteBuildError_SeparatesDeliveryFromBuild(t *testing.T) {
 	}
 }
 
+// runRemoteBuild classifies the error runBuildWithProgress returns, which
+// names the failing step and cause when the build log shows them. A delivery
+// failure (here a --chunking=off registry push that fails after every step
+// succeeded) must still read as one, reported with the host's own message.
+func TestClassifyRemoteBuildError_JudgesTheHostsErrorNotTheBuildSummary(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+	var out strings.Builder
+	defer setBuildProgressOut(&out)()
+	originalPersist := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = originalPersist }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-test.log", nil }
+	remoteBuild := func(log string, hostErr error) error {
+		return classifyRemoteBuildError("spark-office", runBuildWithProgress(context.Background(), "Building on spark-office...", dumpRawAlways, func(_ context.Context, stream, _ io.Writer) error {
+			_, _ = io.WriteString(stream, log)
+			return hostErr
+		}))
+	}
+
+	pushLog := "#8 [build 4/4] RUN go build -o /out/app .\n#8 DONE 3.1s\n\n#12 exporting to image\n#12 ERROR: failed to push localhost:5000/app:latest: connection reset by peer\n"
+	deliveryErr := remoteBuild(pushLog, status.Error(codes.Unavailable, "pushing the built image to the target device failed: connection reset by peer"))
+	if isImageBuildFailure(deliveryErr) || !strings.HasPrefix(deliveryErr.Error(), "image built on spark-office but could not be delivered to the device: ") ||
+		!strings.Contains(deliveryErr.Error(), "pushing the built image to the target device failed") || strings.Contains(deliveryErr.Error(), "build failed") {
+		t.Fatalf("delivery failure = %q (image build failure: %v), want the host's delivery error", deliveryErr, isImageBuildFailure(deliveryErr))
+	}
+
+	// The host's error is not an image-build failure until classified here,
+	// so runBuildWithProgress leaves its message alone.
+	buildErr := remoteBuild(readBuildFailureFixture(t, "go-compile.log"), status.Error(codes.Internal, "build failed: exit status 1"))
+	if want := "build on spark-office failed or did not complete: rpc error: code = Internal desc = build failed: exit status 1"; !isImageBuildFailure(buildErr) || buildErr.Error() != want {
+		t.Fatalf("build failure = %q, want %q", buildErr, want)
+	}
+}
+
 func TestClassifyRemoteBuildError_DoesNotAssumeGenericTransportErrorIsDelivery(t *testing.T) {
 	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded} {
 		err := classifyRemoteBuildError("spark-office", status.Error(code, "connection closed"))
@@ -302,24 +409,24 @@ func TestConsumeBuildProgress_StopsAtEOF(t *testing.T) {
 
 func TestReportedDeliveryError_PreventsStartingFailedOrUnreportedTarget(t *testing.T) {
 	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
-		{AssetId: 1, Delivered: true},
-		{AssetId: 2, Error: "mesh link dropped"},
+		{AssetUuid: "00000000-0000-4000-8000-000000000001", Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000002", Error: "mesh link dropped"},
 	}}
 
-	if err := reportedDeliveryError(result, 1); err != nil {
+	if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000001"); err != nil {
 		t.Fatalf("delivered target rejected: %v", err)
 	}
-	if err := reportedDeliveryError(result, 2); err == nil || !strings.Contains(err.Error(), "mesh link dropped") {
+	if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000002"); err == nil || !strings.Contains(err.Error(), "mesh link dropped") {
 		t.Fatalf("failed target error = %v, want delivery reason", err)
 	}
-	if err := reportedDeliveryError(result, 3); err == nil || !strings.Contains(err.Error(), "no delivery result") {
+	if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000003"); err == nil || !strings.Contains(err.Error(), "no delivery result") {
 		t.Fatalf("unreported target error = %v, want fail-closed error", err)
 	}
 }
 
 func TestReportedDeliveryError_PreservesLegacySingleTargetContract(t *testing.T) {
 	for _, result := range []*agentpbv2.BuildImageResult{nil, {ImageDigest: "sha256:legacy"}} {
-		if err := reportedDeliveryError(result, 7); err != nil {
+		if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000007"); err != nil {
 			t.Fatalf("legacy result %#v rejected: %v", result, err)
 		}
 	}
@@ -328,9 +435,9 @@ func TestReportedDeliveryError_PreservesLegacySingleTargetContract(t *testing.T)
 func TestStartAfterReportedDelivery_DoesNotStartAStaleImage(t *testing.T) {
 	started := false
 	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
-		{AssetId: 7, Error: "target delivery failed"},
+		{AssetUuid: "00000000-0000-4000-8000-000000000007", Error: "target delivery failed"},
 	}}
-	err := startAfterReportedDelivery(result, 7, func() error {
+	err := startAfterReportedDelivery(result, "00000000-0000-4000-8000-000000000007", func() error {
 		started = true
 		return nil
 	})
@@ -345,9 +452,9 @@ func TestStartAfterReportedDelivery_DoesNotStartAStaleImage(t *testing.T) {
 func TestStartAfterReportedDelivery_StartsDeliveredTarget(t *testing.T) {
 	started := false
 	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
-		{AssetId: 7, Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000007", Delivered: true},
 	}}
-	if err := startAfterReportedDelivery(result, 7, func() error {
+	if err := startAfterReportedDelivery(result, "00000000-0000-4000-8000-000000000007", func() error {
 		started = true
 		return nil
 	}); err != nil {
@@ -422,8 +529,14 @@ func TestRejectUnsupportedBuildHostProject(t *testing.T) {
 		t.Fatalf("local builds remain supported: %v", err)
 	}
 	err := rejectUnsupportedBuildHostProject("spark-office", "Compose projects")
-	if err == nil || !strings.Contains(err.Error(), "single-service container image projects") {
+	if err == nil || !strings.Contains(err.Error(), "container image projects only") {
 		t.Fatalf("got %v, want a clear remote-build support boundary", err)
+	}
+	// The boundary must no longer be described as single-service: a service
+	// group builds remotely since WDY-3120, and a message saying otherwise
+	// sends a developer back to splitting one app into three.
+	if strings.Contains(err.Error(), "single-service") {
+		t.Fatalf("got %v, want a boundary that does not exclude multi-service projects", err)
 	}
 }
 
@@ -477,17 +590,17 @@ func TestCheckFleetDeliverySupported_RefusesOldAgent(t *testing.T) {
 // TestFleetDeliveryReport_CountsFailures is the rule that keeps a partial fleet
 // deploy from reading as a success.
 func TestFleetDeliveryReport_CountsFailures(t *testing.T) {
-	names := map[int32]string{1: "ccr1", 2: "ccr2", 3: "theta"}
+	names := map[string]string{"00000000-0000-4000-8000-000000000001": "ccr1", "00000000-0000-4000-8000-000000000002": "ccr2", "00000000-0000-4000-8000-000000000003": "theta"}
 	lines, failed := fleetDeliveryReport([]*agentpbv2.DeliveryResult{
-		{AssetId: 1, Delivered: true},
-		{AssetId: 2, Delivered: false, Error: "mesh dial failed"},
-		{AssetId: 3, Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000001", Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000002", Delivered: false, Error: "wendy net dial failed"},
+		{AssetUuid: "00000000-0000-4000-8000-000000000003", Delivered: true},
 	}, names)
 	if failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
 	}
 	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"ccr1", "ccr2", "theta", "mesh dial failed", "FAILED"} {
+	for _, want := range []string{"ccr1", "ccr2", "theta", "wendy net dial failed", "FAILED"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("report missing %q; got:\n%s", want, joined)
 		}
@@ -498,12 +611,12 @@ func TestFleetDeliveryReport_CountsFailures(t *testing.T) {
 // as fine.
 func TestFleetDeliveryReport_FailureWithoutReasonStillFails(t *testing.T) {
 	lines, failed := fleetDeliveryReport([]*agentpbv2.DeliveryResult{
-		{AssetId: 9, Delivered: false},
+		{AssetUuid: "00000000-0000-4000-8000-000000000009", Delivered: false},
 	}, nil)
 	if failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
 	}
-	if !strings.Contains(strings.Join(lines, "\n"), "asset 9") {
+	if !strings.Contains(strings.Join(lines, "\n"), "asset 00000000-0000-4000-8000-000000000009") {
 		t.Errorf("an unnamed device must still be identifiable; got %v", lines)
 	}
 }
@@ -571,11 +684,11 @@ func TestValidateFleetRun_RequiresBuildHostAndDetach(t *testing.T) {
 }
 
 func TestDeliveryOutcome_RecordsFailureReason(t *testing.T) {
-	ok := deliveryOutcome(7, nil)
+	ok := deliveryOutcome("00000000-0000-4000-8000-000000000007", nil)
 	if !ok.GetDelivered() || ok.GetError() != "" {
 		t.Errorf("got %v, want a clean success", ok)
 	}
-	bad := deliveryOutcome(8, errors.New("container create refused"))
+	bad := deliveryOutcome("00000000-0000-4000-8000-000000000008", errors.New("container create refused"))
 	if bad.GetDelivered() {
 		t.Error("a failed create must not be recorded as delivered")
 	}
@@ -746,19 +859,28 @@ func TestAssessBuildkitRootSpace_ExactPolicyBoundaries(t *testing.T) {
 	}
 }
 
-// --chunking=force must fail loudly against a build host whose agent would
-// discard the mode and push through the registry; auto and off still work
-// there, because a registry push is what off asks for and what auto accepts.
-func TestCheckChunkDeliverySupported_ForceNeedsACapableHost(t *testing.T) {
+// force and auto must fail loudly against a build host whose agent predates
+// chunked delivery: force would be discarded, and auto's registry fallback
+// cannot reach the device over the mesh, so it builds and then fails to
+// deliver (WDY-3093). Both refusals must name the host and the fix. Only off
+// still passes, as the explicit request for the registry route.
+func TestCheckChunkDeliverySupported_RefusesAnIncapableHost(t *testing.T) {
 	old := &agentpbv2.GetBuildCapabilitiesResponse{}
 	err := checkChunkDeliverySupported("spark-office", old, chunkingForce)
 	if err == nil || !strings.Contains(err.Error(), "spark-office") || !strings.Contains(err.Error(), "force") {
 		t.Fatalf("force against an old build host must be refused, naming the host and the flag; got %v", err)
 	}
-	for _, mode := range []string{"", chunkingAuto, chunkingOff} {
-		if err := checkChunkDeliverySupported("spark-office", old, mode); err != nil {
-			t.Fatalf("--chunking=%q must still work against an older build host: %v", mode, err)
+	for _, mode := range []string{"", chunkingAuto} {
+		err := checkChunkDeliverySupported("spark-office", old, mode)
+		if err == nil || !strings.Contains(err.Error(), "spark-office") || !strings.Contains(err.Error(), "wendy device update") {
+			t.Fatalf("--chunking=%q against an old build host must be refused, naming the host and the update command; got %v", mode, err)
 		}
+		if !strings.Contains(err.Error(), "--chunking=off") {
+			t.Fatalf("--chunking=%q refusal must offer the explicit registry escape hatch; got %v", mode, err)
+		}
+	}
+	if err := checkChunkDeliverySupported("spark-office", old, chunkingOff); err != nil {
+		t.Fatalf("--chunking=off is an explicit request for the registry route and must still pass: %v", err)
 	}
 	newer := &agentpbv2.GetBuildCapabilitiesResponse{ChunkDelivery: true}
 	for _, mode := range []string{"", chunkingAuto, chunkingForce, chunkingOff} {

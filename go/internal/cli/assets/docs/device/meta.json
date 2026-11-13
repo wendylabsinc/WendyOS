@@ -7,6 +7,8 @@
     "discovering-devices",
     "managing-apps",
     "managing-drivers",
-    "entitlements"
+    "unenrollment",
+    "entitlements",
+    "../installation/simulator-management"
   ]
 }

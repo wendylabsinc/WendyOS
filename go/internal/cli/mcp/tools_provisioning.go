@@ -14,11 +14,11 @@ func (s *mcpServer) registerProvisioningTools(srv *server.MCPServer) {
 		mcpgo.WithDescription("Check whether the connected device is provisioned with Wendy Cloud"),
 	}
 	statusOpts = append(statusOpts, readOnly()...)
-	statusOpts = append(statusOpts, localOnly()...)
+	statusOpts = append(statusOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("provisioning_status", statusOpts...), s.handleProvisioningStatus)
 
 	startOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Provision the device with Wendy Cloud and wait for completion (up to 2 minutes)"),
+		mcpgo.WithDescription("Enroll with an externally supplied cloud enrollment token; waits up to 2 minutes. Prefer cloud_enroll_device when using your current cloud login."),
 		mcpgo.WithString("enrollment_token",
 			mcpgo.Required(),
 			mcpgo.Description("Enrollment token obtained from Wendy Cloud"),
@@ -35,7 +35,8 @@ func (s *mcpServer) registerProvisioningTools(srv *server.MCPServer) {
 			mcpgo.Description("Asset ID to assign to this device (optional)"),
 		),
 	}
-	startOpts = append(startOpts, mutating()...)
+	// Destructive: enrolling replaces the device's existing cloud identity.
+	startOpts = append(startOpts, destructive()...)
 	startOpts = append(startOpts, openWorld()...)
 	startOpts = append(startOpts, idempotent()...)
 	srv.AddTool(mcpgo.NewTool("provisioning_start", startOpts...), s.handleProvisioningStart)

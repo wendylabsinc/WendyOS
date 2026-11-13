@@ -1,0 +1,29 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wendy-get-started",
+  "version": "0.1.0",
+  "description": "Get your first robot or edge device running, or try a simulator on your computer. No Wendy installation or Cloud account is needed to begin.",
+  "author": { "name": "Wendy Labs", "url": "https://wendy.dev" },
+  "homepage": "https://wendy.dev",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/wendy/references/skills/wendy-onboarding/SKILL.md",
+      "interface": {
+        "displayName": "Get started with Wendy",
+        "shortDescription": "Start with a device or demo",
+        "longDescription": "Build an app for a robot or edge device, or try a local simulator before your hardware arrives. ChatGPT helps you choose a starting point, install local tools when needed, and verify your first connection. Already have devices online? Use a hosted Wendy connection without installing a CLI.",
+        "developerName": "Wendy Labs",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://wendy.dev",
+        "logo": "./assets/wendy-icon.png",
+        "composerIcon": "./assets/wendy-icon.png",
+        "defaultPrompt": [
+          "Help me get started. I have not used Wendy before.",
+          "I want to try a robot simulator on my computer.",
+          "Help me build my first app for an edge device."
+        ]
+      }
+    }
+  }
+}

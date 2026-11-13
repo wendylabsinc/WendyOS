@@ -1,4 +1,4 @@
-Wendy Labs is the infrastructure for Physical AI, targetting Edge (AI) devices such as robotics, IoT and sattelites.
+Wendy Labs is the infrastructure for Physical AI, targeting Edge (AI) devices such as robotics, IoT and satellites.
 
 ### Problem
 
@@ -17,16 +17,29 @@ Wendy Labs has three main components to achieve this mission:
 - Wendy-Agent
 - Cloud
 
-[WendyOS](../wendyos/) is a pre-built OS for specific hardware (NVIDIA Jetson — Orin Nano, AGX Orin, AGX Thor —, Raspberry Pi, ...) that packages all the tools you need to build & run apps.
+[WendyOS](/docs/installation) is a pre-built OS for specific hardware (NVIDIA Jetson — Orin Nano, AGX Orin, AGX Thor —, Raspberry Pi, ...) that packages all the tools you need to build & run apps.
 
 Wendy-Agent is a daemon, akin to Docker, that manages and runs your apps. It also exposes a way to remotely control the machine and upload apps.
 
-[Wendy Cloud](../cloud/) is a tool for managing your Wendy devices, viewing (crash) logs, provisioning updates and more.
+[Wendy Cloud](https://cloud.wendy.dev/login) is a tool for managing your Wendy devices, viewing (crash) logs, provisioning updates and more.
 
 ### Agent & CLI
 
 The Agent comes in two flavours, Linux and macOS, for running apps on these platforms respectively.
 
-The [Wendy CLI](../clients/wendy-cli/) enables your developers to manage these devices, locally through LAN, BLE or over USB.
+The [Wendy CLI](/docs/reference/cli) enables your developers to manage these devices, locally through LAN, BLE or over USB.
 
-> **TODO**: We want the Clients to also be able to talk to the cloud, and manage your Wendy devices through that.
+The CLI also manages enrolled devices through Wendy Cloud, including deployment
+and remote access.
+
+## Wendy Net routing
+
+Wendy Net can carry traffic through intermediate devices when the destination is
+not a direct neighbor. Its routing engine selects paths independently of whether
+the links use Ethernet, Wi-Fi, or Bluetooth.
+
+For contributors, the engine is a separate Go library in `go/babel`. It uses the
+Babel routing protocol; carrier integration and application services belong to
+the agent. See the [library guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/babel/README.md)
+for its API and the [testing guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/internal/cli/assets/docs/development/testing.md#routing-engine-tests)
+for the separate module checks.

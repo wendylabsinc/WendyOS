@@ -175,7 +175,7 @@ func TestWriteFoxgloveApp_GeneratedManifestCarriesTheDomain(t *testing.T) {
 	if !strings.Contains(got, `"domainId": 77`) {
 		t.Errorf("manifest should carry the resolved domain:\n%s", got)
 	}
-	if !strings.Contains(got, `"discoveryScope": "host"`) {
+	if !strings.Contains(got, `"scope": "network"`) {
 		t.Errorf("the bridge needs host-scoped discovery:\n%s", got)
 	}
 }

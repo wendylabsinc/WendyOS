@@ -21,6 +21,23 @@ func TestAllocateStableAndUnique(t *testing.T) {
 	}
 }
 
+func TestPrincipalAudioAllocationDoesNotCollide(t *testing.T) {
+	m := NewManager(nil)
+	a, _ := m.AllocatePrincipal("principal-a", 1, "mic")
+	b, _ := m.AllocatePrincipal("principal-b", 1, "mic")
+	legacy, _ := m.Allocate(7, 1, "mic")
+	if a == b || a == legacy || b == legacy {
+		t.Fatal("principal audio allocations collided")
+	}
+	if same, _ := m.AllocatePrincipal("principal-a", 1, "mic"); same != a {
+		t.Fatal("reconnect changed audio allocation")
+	}
+	m.ReleasePrincipal("principal-a")
+	if mounts := m.Mounts(); len(mounts) != 2 {
+		t.Fatalf("removal lost other identities: %+v", mounts)
+	}
+}
+
 func TestAllocateExhaustion(t *testing.T) {
 	m := NewManager(nil)
 	for i := 0; i < MaxSubdevices; i++ {

@@ -110,6 +110,11 @@ func taskOOMKilled(ctx context.Context, task containerd.Task) bool {
 // or a label-write failure is logged, never fatal — recording diagnostics must
 // not perturb the lifecycle it observes.
 func (c *Client) recordContainerExit(ctx context.Context, containerID string, code int32, reason string, at time.Time) {
+	// Both newly started and recovered output watchers report exits here.
+	// An intentional host shutdown must not turn either run into a crash.
+	if c.hostShutdown.Load() {
+		return
+	}
 	ctx = c.withNamespace(ctx)
 	ctr, err := c.client.LoadContainer(ctx, containerID)
 	if err != nil {

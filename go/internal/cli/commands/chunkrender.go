@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -18,6 +19,10 @@ import (
 // goroutines only mutate shared counters — so a ticker is the render loop.
 const chunkPushInteractiveTickInterval = 200 * time.Millisecond
 
+// chunkPushPlainHeartbeatInterval is the non-interactive heartbeat cadence. It
+// is a variable so tests need not wait out tui.PlainHeartbeatInterval.
+var chunkPushPlainHeartbeatInterval = tui.PlainHeartbeatInterval
+
 // pushLayersWithProgress wraps the chunk push with live progress: a
 // periodic heartbeat line on non-interactive terminals (CI/piped output,
 // same shape as tui.NewBuildPlainRenderer's heartbeat), or an interactive
@@ -27,19 +32,40 @@ const chunkPushInteractiveTickInterval = 200 * time.Millisecond
 // prepare, when non-nil, runs device-side image preparation concurrently
 // with the upload (see pushLayersByChunksWithPrepare).
 //
-// Detach needs no branch here: it only diverges after Started, downstream
-// of this call.
-func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc) ([]*agentpb.RunContainerLayerHeader, error) {
+// A detached --json run keeps stdout for its single final result, so the
+// plain heartbeat goes to stderr there; the interactive bar always renders
+// to stderr.
+//
+// observe, when non-nil, receives the push's final snapshot — on failure too
+// — so the caller can record upload and device timings (WDY-3215).
+func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) ([]*agentpb.RunContainerLayerHeader, error) {
 	prog := newChunkPushProgress()
+	if observe != nil {
+		defer func() {
+			snap := prog.Snapshot()
+			snap.Compressor = cfg.compressor
+			observe(snap)
+		}()
+	}
 
-	if !buildProgressInteractive() {
-		stop := startChunkPushHeartbeat(prog, buildProgressOut, tui.PlainHeartbeatInterval)
-		headers, err := pushLayersByChunksWithPrepareMode(ctx, cs, layers, prepare, nil, false, prog)
+	if !buildProgressInteractive() || detachedJSONRun(ctx) {
+		out := buildProgressOut
+		if detachedJSONRun(ctx) {
+			out = os.Stderr
+		}
+		if isRobotTour(ctx) {
+			fmt.Fprintln(out, "Preparing your robot app...")
+		}
+		stop := startChunkPushHeartbeatForTour(prog, out, chunkPushPlainHeartbeatInterval, isRobotTour(ctx))
+		headers, err := pushLayersByChunksWithPrepareMode(ctx, cs, layers, prepare, nil, false, prog, cfg)
 		stop()
+		printChunkPushWarning(prog)
 		if err != nil {
 			return nil, err
 		}
-		cliLogln("%s", prog.Snapshot().Summary())
+		if !isRobotTour(ctx) {
+			cliLogln("%s", prog.Snapshot().Summary())
+		}
 		return headers, nil
 	}
 
@@ -50,7 +76,15 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	pushCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	tp := tui.NewProgressProgram(tui.NewProgress("Sending changed layers to device...").WithoutErrorView())
+	title := "Sending changed layers to device..."
+	if isRobotTour(ctx) {
+		title = "Preparing your robot app..."
+	}
+	bar := tui.NewProgress(title).WithoutErrorView()
+	if progressHintsOff(ctx) {
+		bar = bar.WithoutHints()
+	}
+	tp := tui.NewProgressProgram(bar)
 
 	var (
 		headers []*agentpb.RunContainerLayerHeader
@@ -59,7 +93,7 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	)
 	go func() {
 		defer close(done)
-		h, err := pushLayersByChunksWithPrepareMode(pushCtx, cs, layers, prepare, nil, false, prog)
+		h, err := pushLayersByChunksWithPrepareMode(pushCtx, cs, layers, prepare, nil, false, prog, cfg)
 		headers, pushErr = h, err
 		tp.Send(tui.ProgressDoneMsg{Err: err})
 	}()
@@ -72,12 +106,17 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 			case <-done:
 				return
 			case <-ticker.C:
-				tp.Send(chunkPushUpdateMsg(prog.Snapshot()))
+				snap := prog.Snapshot()
+				msg := chunkPushUpdateMsg(snap)
+				if isRobotTour(ctx) {
+					msg = tourChunkPushUpdateMsg(snap)
+				}
+				tp.Send(msg)
 			}
 		}
 	}()
 
-	finalModel, err := tp.Run()
+	finalModel, err := tui.RunProgram(tp)
 	if err != nil {
 		cancel()
 		<-done
@@ -90,11 +129,22 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	}
 
 	<-done
+	printChunkPushWarning(prog)
 	if pushErr != nil {
 		return nil, pushErr
 	}
-	cliLogln("%s", prog.Snapshot().Summary())
+	if !isRobotTour(ctx) {
+		cliLogln("%s", prog.Snapshot().Summary())
+	}
 	return headers, nil
+}
+
+// printChunkPushWarning prints the note the push recorded (chunkPushProgress.Warn)
+// after it, on success or failure: a failure may be the one it warned about.
+func printChunkPushWarning(prog *chunkPushProgress) {
+	if warning := prog.Snapshot().Warning; warning != "" {
+		cliNotice("Warning: %s", warning)
+	}
 }
 
 // startChunkPushHeartbeat starts a background goroutine that writes a
@@ -113,6 +163,10 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 // stop is then an immediate no-op), matching newBuildPlainRenderer's
 // heartbeat<=0 case.
 func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time.Duration) (stop func()) {
+	return startChunkPushHeartbeatForTour(prog, w, interval, false)
+}
+
+func startChunkPushHeartbeatForTour(prog *chunkPushProgress, w io.Writer, interval time.Duration, tour bool) (stop func()) {
 	done := make(chan struct{})
 	var stopOnce sync.Once
 
@@ -131,7 +185,16 @@ func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time
 				return
 			case <-ticker.C:
 				snap := prog.Snapshot()
-				fmt.Fprintf(w, "  ...     sending chunks  %s  (%s)\n", snap.Line(), formatChunkPushElapsed(snap.Elapsed))
+				if tour {
+					msg := tourChunkPushUpdateMsg(snap)
+					detail := ""
+					if !snap.Preparing && !snap.Prepared {
+						detail = snap.Bytes().String()
+					}
+					fmt.Fprintf(w, "  %s %s (%s)\n", msg.Title, detail, formatChunkPushElapsed(snap.Elapsed))
+				} else {
+					fmt.Fprintf(w, "  ...     %s  %s  (%s)\n", snap.Activity(), snap.Line(), formatChunkPushElapsed(snap.Elapsed))
+				}
 			}
 		}
 	}()
@@ -142,13 +205,29 @@ func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time
 	}
 }
 
+func tourChunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
+	msg := chunkPushUpdateMsg(s)
+	msg.Detail = ""
+	msg.Title = "Preparing your robot app..."
+	if s.Preparing || s.Prepared {
+		msg.Title = "Starting your robot app..."
+	} else if s.PlannedBytes > 0 {
+		msg.Title = "Transferring your robot app..."
+		msg.Written, msg.Total = s.SentBytes, s.PlannedBytes
+	}
+	return msg
+}
+
 // chunkPushUpdateMsg renders a chunkPushSnapshot as a tui.ProgressUpdateMsg
 // for the interactive progress bar. Percent is bytes sent over bytes
 // planned, clamped to 1 so a snapshot taken between "last chunk sent" and
 // "goroutine notices totals settled" never overshoots the bar; it is 0 (not
 // NaN or a divide-by-zero panic) when nothing has been planned yet — the
 // state of a fresh push before any layer's chunk-diff plan is known. Detail
-// is the same live progress line the non-interactive heartbeat prints.
+// is the same live progress line the non-interactive heartbeat prints. Title
+// switches to the device phase while the device prepares the image, since the
+// bar is full by then; otherwise it stays empty, which keeps the program's
+// own title.
 func chunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
 	var percent float64
 	if s.PlannedBytes > 0 {
@@ -157,8 +236,12 @@ func chunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
 			percent = 1
 		}
 	}
-	return tui.ProgressUpdateMsg{
+	msg := tui.ProgressUpdateMsg{
 		Percent: percent,
 		Detail:  s.Line(),
 	}
+	if s.Preparing {
+		msg.Title = "Device preparing image..."
+	}
+	return msg
 }

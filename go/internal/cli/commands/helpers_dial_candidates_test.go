@@ -3,10 +3,13 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"google.golang.org/grpc"
 )
 
 // TestLanDialCandidatesIncludesEverySightedAddress proves the picker connect
@@ -32,7 +36,7 @@ func TestLanDialCandidatesIncludesEverySightedAddress(t *testing.T) {
 		Port:      50051,
 	}
 
-	cands := lanDialCandidates(dev)
+	cands := lanDialCandidates(context.Background(), dev)
 
 	wantAddrs := []string{"192.168.1.69", "169.254.1.2"}
 	for _, want := range wantAddrs {
@@ -49,7 +53,7 @@ func TestLanDialCandidatesIncludesEverySightedAddress(t *testing.T) {
 		}
 	}
 	// A single-address device must still work (fall back to the primary path).
-	single := lanDialCandidates(models.LANDevice{Hostname: "n.local", IPAddress: "10.0.0.5", Port: 50051})
+	single := lanDialCandidates(context.Background(), models.LANDevice{Hostname: "n.local", IPAddress: "10.0.0.5", Port: 50051})
 	if len(single) == 0 {
 		t.Fatal("single-address device produced no dial candidates")
 	}
@@ -112,6 +116,176 @@ func TestPinnedUnreachableDoesNotBlameThePin(t *testing.T) {
 	}
 }
 
+// TestPinnedUnprovisionedDeviceIsToldHowToUnpin is WDY-3974 end to end. The
+// device was reset to unprovisioned (unenrolled, reflashed, factory reset): its
+// plaintext port answers and its mTLS port is closed. The ladder's TLS probe of
+// the plaintext port is answered in plaintext, which is the one piece of
+// evidence that separates this from an unreachable device.
+//
+// The old refusal folded that address's two ports into the mTLS port's
+// "connection refused" and told the user unpinning was not the fix — when an
+// intentional reset is exactly what unpinning is for. The refusal must still
+// refuse, still never dial plaintext, and only change what it says.
+func TestPinnedUnprovisionedDeviceIsToldHowToUnpin(t *testing.T) {
+	setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{
+		"orin": {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443", AssetID: "42", Source: config.PinSourceLAN},
+	}})
+	setPinCache(t)
+	origPlaintext := plaintextConnectFn
+	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Error("a pinned host was dialled in plaintext")
+		return nil, errors.New("plaintext forbidden")
+	}
+	t.Cleanup(func() { plaintextConnectFn = origPlaintext })
+
+	// An unprovisioned agent: plaintext gRPC on the port, nothing on port+1.
+	addr := deadAgentAddr(t)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", addr, err)
+	}
+	server := grpc.NewServer()
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	host, portText, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portText)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, _, err := dialAgentLadderWithCerts(ctx, newDialTarget("orin.local", addr), []config.CertificateInfo{selfSignedCLICert(t, 7)})
+	if conn != nil {
+		conn.Close()
+		t.Fatal("a pinned device that answered unprovisioned was connected to")
+	}
+	var failure *noAuthenticatedEndpointError
+	if !errors.As(err, &failure) {
+		t.Fatalf("err = %v, want the pinned-host refusal", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"answers unprovisioned",
+		"wendy device unpin orin",
+		"If you intentionally unenrolled, reset, reflashed",
+		"keep the pin and verify the device first",
+		addr + " answered without TLS",
+		fmt.Sprintf("%s (port %d: answered without TLS; port %d: connection refused)", host, port, port+1),
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal is missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "not the fix") {
+		t.Errorf("the device answered, unprovisioned; telling the user unpinning is not the fix sends them away from the recovery:\n%s", msg)
+	}
+	if strings.Contains(msg, "no agent answered") {
+		t.Errorf("its only address answered; there is no silent address to warn about:\n%s", msg)
+	}
+	var styled interface {
+		error
+		CLIMessage() string
+	}
+	if !errors.As(err, &styled) || !strings.Contains(styled.CLIMessage(), "wendy device unpin orin") {
+		t.Errorf("styled rendering lost the recovery command:\n%v", err)
+	}
+	// Still the same refusal to every caller that branches on it: enrollment's
+	// explicit trust prompt, the BLE gate and error classification.
+	if !errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, errDeviceIdentityRefused) || !blocksUnauthenticatedFallback(err) {
+		t.Errorf("err = %v changed type; only its wording may change", err)
+	}
+	if failure.certSeen || failure.pinnedKey != "orin.local" {
+		t.Errorf("certSeen = %v, pinnedKey = %q; enrollment trust recovery depends on both", failure.certSeen, failure.pinnedKey)
+	}
+}
+
+// The unpin guidance rests on one piece of evidence — an address answered the
+// TLS probe in plaintext — and every other outcome keeps the reachability
+// wording that tells the user not to unpin.
+func TestPinnedRefusalOffersUnpinOnlyWhenTheDeviceAnsweredWithoutTLS(t *testing.T) {
+	const notTLS = `rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: tls: first record does not look like a TLS handshake"`
+	refused := func(addr string) error {
+		return fmt.Errorf(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp %s: connect: connection refused"`, addr)
+	}
+	candidates := []string{"169.254.213.32:50051", "[fe80::5741:1%en17]:50051"}
+	// The report's shape: two certificates tried against the plaintext port,
+	// then the mTLS port refuses; the link-local IPv6 address refuses on both.
+	answered := []mtlsAttemptError{
+		{addr: "169.254.213.32:50051", err: errors.New(notTLS)},
+		{addr: "169.254.213.32:50051", err: errors.New(notTLS)},
+		{addr: "169.254.213.32:50052", err: refused("169.254.213.32:50052")},
+		{addr: "[fe80::5741:1%en17]:50051", err: refused("[fe80::5741:1%en17]:50051")},
+		{addr: "[fe80::5741:1%en17]:50052", err: refused("[fe80::5741:1%en17]:50052")},
+	}
+	silent := []mtlsAttemptError{
+		{addr: "169.254.213.32:50051", err: refused("169.254.213.32:50051")},
+		{addr: "169.254.213.32:50052", err: refused("169.254.213.32:50052")},
+	}
+	answeredEverywhere := []mtlsAttemptError{
+		{addr: "169.254.213.32:50051", err: errors.New(notTLS)},
+		{addr: "169.254.213.32:50052", err: refused("169.254.213.32:50052")},
+		{addr: "[fe80::5741:1%en17]:50051", err: errors.New(notTLS)},
+		{addr: "[fe80::5741:1%en17]:50052", err: refused("[fe80::5741:1%en17]:50052")},
+	}
+	for _, tc := range []struct {
+		name      string
+		attempts  []mtlsAttemptError
+		certSeen  bool
+		wantUnpin bool
+		want      []string
+		notWant   []string
+	}{
+		{
+			name: "plaintext port answered", attempts: answered, wantUnpin: true,
+			want: []string{
+				"169.254.213.32:50051 answered without TLS",
+				"169.254.213.32 (port 50051: answered without TLS; port 50052: connection refused)",
+				"fe80::5741:1%en17 (connection refused)",
+				// The other address was silent, so the answering one may be a
+				// stale record pointing at another machine.
+				"no agent answered at fe80::5741:1%en17. If 169.254.213.32 is no longer this device's address (a stale DNS or mDNS record)",
+			},
+		},
+		{
+			name: "every address answered without TLS", attempts: answeredEverywhere, wantUnpin: true,
+			want:    []string{"169.254.213.32:50051, [fe80::5741:1%en17]:50051 answered without TLS"},
+			notWant: []string{"no agent answered", "stale DNS"},
+		},
+		{name: "nothing answered", attempts: silent, want: []string{"not the fix", "169.254.213.32 (connection refused)"}},
+		{name: "a certificate was refused too", attempts: answered, certSeen: true, want: []string{"not the fix", "present a certificate"}},
+		{name: "no certificate to try", want: []string{"not the fix", "no usable client certificate"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := pinnedHostNoAuthenticatedEndpointError("wendyos-hack-device-7.local", candidates, tc.attempts, tc.certSeen)
+			msg := failure.Error()
+			if got := strings.Contains(msg, "wendy device unpin wendyos-hack-device-7.local"); got != tc.wantUnpin {
+				t.Errorf("offers unpin = %v, want %v:\n%s", got, tc.wantUnpin, msg)
+			}
+			// Only the unprovisioned refusal carries a styled rendering: the CLI
+			// entry point restyles anything in the chain that has one, and a
+			// reachability refusal must keep the plain rendering.
+			var styled interface {
+				error
+				CLIMessage() string
+			}
+			if got := errors.As(error(failure), &styled); got != tc.wantUnpin {
+				t.Errorf("styled rendering = %v, want %v", got, tc.wantUnpin)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message is missing %q:\n%s", want, msg)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(msg, notWant) {
+					t.Errorf("message has %q:\n%s", notWant, msg)
+				}
+			}
+			if !errors.Is(failure, errNoAuthenticatedEndpoint) || failure.certSeen != tc.certSeen || !reflect.DeepEqual(failure.candidates, candidates) {
+				t.Errorf("refusal lost its type or recovery state: %+v", failure)
+			}
+		})
+	}
+}
+
 // TestLadderWalksEveryCandidateAddress is the other half of the bug: resolution
 // legitimately returns several addresses and the ladder used to try exactly one.
 //
@@ -170,11 +344,13 @@ func TestLadderWalksEveryCandidateAddress(t *testing.T) {
 // which is a same-CA-host redirect with extra steps. The refusal must outrank
 // the walk.
 func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
-	setTempConfig(t, &config.Config{}) // unpinned, so only the abort can refuse
+	setTempConfig(t, &config.Config{}) // expected identity is supplied by the caller
 	setPinCache(t)
 
+	var identityChecks atomic.Int32
 	origMismatch := identityMismatchFn
 	identityMismatchFn = func(*grpcclient.AgentConnection) (*certs.IdentityMismatchError, bool) {
+		identityChecks.Add(1)
 		return &certs.IdentityMismatchError{WantOrg: 7, WantAsset: "42", GotOrg: 7, GotAsset: "43"}, true
 	}
 	plaintextCalls := 0
@@ -193,16 +369,16 @@ func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
 	// followed by two more the walk must never reach.
 	candidates := []string{
 		live,
-		unroutableAddr(t, "fdc5:7daa::1", 50051),
-		unroutableAddr(t, "fdc5:7daa::2", 50051),
+		deadLoopbackAddr(t, "127.0.0.1"),
+		deadLoopbackAddr(t, "127.0.0.1"),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	conn, _, err := dialAgentLadderWithCerts(ctx,
-		newDialTargetCandidates("orin.local", candidates),
-		[]config.CertificateInfo{selfSignedCLICert(t, 7)})
+	target := newDialTargetCandidates("orin.local", candidates)
+	target.Expected = &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}
+	conn, _, err := dialAgentLadderWithCerts(ctx, target, []config.CertificateInfo{selfSignedCLICert(t, 7)})
 	if conn != nil {
 		conn.Close()
 	}
@@ -213,15 +389,17 @@ func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
 	if !errors.Is(err, errDeviceIdentityRefused) {
 		t.Fatalf("err = %v, want an identity refusal", err)
 	}
+	if got := identityChecks.Load(); got != 1 {
+		t.Errorf("identity checked %d times, want only the first candidate", got)
+	}
 	if plaintextCalls != 0 {
 		t.Errorf("plaintext rung attempted %d times after a wrong-device abort", plaintextCalls)
 	}
 	// The abort happened at the first address, so the later ones must be absent
 	// from the diagnosis entirely.
 	for _, cand := range candidates[1:] {
-		host, _, _ := net.SplitHostPort(cand)
-		if strings.Contains(err.Error(), host) {
-			t.Errorf("the walk continued to %s after a wrong-device abort:\n  %s", host, err.Error())
+		if strings.Contains(err.Error(), cand) {
+			t.Errorf("the walk continued to %s after a wrong-device abort:\n  %s", cand, err.Error())
 		}
 	}
 	// A genuine mismatch keeps the unpin escape hatch — here the identity really
@@ -239,8 +417,13 @@ func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
 // discarded the rest, which is what made one stale record fatal — ordered so the
 // most likely to work is dialled first.
 func TestResolveAddrCandidates_ReturnsEveryAddressIPv4First(t *testing.T) {
-	orig := osLookupHostFn
-	t.Cleanup(func() { osLookupHostFn = orig })
+	orig, origBrowse := osLookupHostFn, lanBrowseFn
+	t.Cleanup(func() { osLookupHostFn, lanBrowseFn = orig, origBrowse })
+	// The user's discovery cache can request an interface browse even after a
+	// successful OS lookup. Keep this unit test independent of live LAN devices.
+	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) {
+		return nil, nil
+	}
 	osLookupHostFn = func(context.Context, string) ([]string, error) {
 		return []string{"fdc5:7daa::1", "fdc5:7daa::2", "192.168.0.107"}, nil
 	}
@@ -338,7 +521,7 @@ func TestOrderRoutedDialCandidatesPrefersEthernetBeforeCandidateCap(t *testing.T
 	}
 	t.Cleanup(func() { dialCandidateRoutePreferenceFn = original })
 
-	got := orderRoutedDialCandidates([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"})
+	got := orderRoutedDialCandidates([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"}, nil)
 	want := []string{"10.0.0.4", "10.0.0.1", "10.0.0.2"}
 	if len(got) != len(want) {
 		t.Fatalf("orderRoutedDialCandidates = %v, want %v", got, want)
@@ -490,7 +673,7 @@ func TestDialAddrScopesBucketsToThePrimary(t *testing.T) {
 	dead := deadLoopbackAddr(t, "127.0.0.1")
 	newWalk := func() *mtlsWalk {
 		return &mtlsWalk{
-			target:     newDialTarget("orin.local", dead),
+			target:     dialTarget{Addr: dead, Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}},
 			allCerts:   []config.CertificateInfo{selfSignedCLICert(t, 7)},
 			probeOrder: []int{0},
 		}
@@ -531,16 +714,11 @@ func TestDialAddrScopesBucketsToThePrimary(t *testing.T) {
 	}
 }
 
-// An extra unreachable candidate must not change what happens at the primary.
-//
-// The primary here is a live plaintext-only agent, which legitimately earns the
-// plaintext rung: its mTLS probes fail as plain unreachability, not as cert
-// rejections. Appending a black-holed address must leave that untouched. When
-// the suppression buckets were walk-wide, the black-holed candidate's own-port
-// TLS handshake timed out, isCertRejectionError counted that as a rejection, and
-// the rung was suppressed — breaking a connect that worked before.
-func TestExtraDeadCandidateDoesNotSuppressThePlaintextRung(t *testing.T) {
-	setTempConfig(t, &config.Config{}) // unpinned: the rung is allowed
+// A reachable plaintext agent and an extra dead candidate cannot authorize a
+// downgrade: missing identity fails before TLS, and an expected identity still
+// forbids plaintext when no candidate authenticates it.
+func TestExtraDeadCandidateDoesNotEnablePlaintextFallback(t *testing.T) {
+	setTempConfig(t, &config.Config{})
 	setPinCache(t)
 
 	live := startPlaintextVersionAgent(t)
@@ -553,25 +731,33 @@ func TestExtraDeadCandidateDoesNotSuppressThePlaintextRung(t *testing.T) {
 	}
 	t.Cleanup(func() { plaintextConnectFn = origPlaintext })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	candidates := []string{live, unroutableAddr(t, "fdc5:7daa::1", 50051)}
-	conn, _, err := dialAgentLadderWithCerts(ctx,
-		newDialTargetCandidates("orin.local", candidates),
-		[]config.CertificateInfo{selfSignedCLICert(t, 7)})
-	if conn != nil {
-		conn.Close()
-	}
-	if err != nil {
-		t.Fatalf("err = %v, want the plaintext rung to be reached for an unpinned host", err)
-	}
-	if len(plaintextAddrs) != 1 {
-		t.Fatalf("plaintext rung dialled %v, want exactly one attempt", plaintextAddrs)
-	}
-	// And it must dial the PRIMARY, not whichever candidate happened to be last.
-	if plaintextAddrs[0] != live {
-		t.Errorf("plaintext rung dialled %q, want the primary address %q", plaintextAddrs[0], live)
+	candidates := []string{live, deadLoopbackAddr(t, "127.0.0.1")}
+	clientCerts := []config.CertificateInfo{selfSignedCLICert(t, 7)}
+	for _, tc := range []struct {
+		name     string
+		expected *certs.WendyIdentity
+		wantErr  error
+	}{
+		{"missing identity", nil, certs.ErrExpectedDeviceIdentity},
+		{"expected identity", &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, errNoAuthenticatedEndpoint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			target := newDialTargetCandidates("orin.local", candidates)
+			target.Expected = tc.expected
+			conn, _, err := dialAgentLadderWithCerts(ctx, target, clientCerts)
+			if conn != nil {
+				conn.Close()
+				t.Fatal("connected without an authenticated device identity")
+			}
+			if !errors.Is(err, tc.wantErr) || !blocksUnauthenticatedFallback(err) {
+				t.Fatalf("err = %v, want %v blocking unauthenticated fallback", err, tc.wantErr)
+			}
+			if len(plaintextAddrs) != 0 {
+				t.Fatalf("plaintext rung dialled %v, want no attempts", plaintextAddrs)
+			}
+		})
 	}
 }
 
@@ -652,6 +838,27 @@ func TestDescribeDialAttemptsFoldsPortsByAddress(t *testing.T) {
 	}
 	if !strings.Contains(got[1], "no route to host") {
 		t.Fatalf("describeDialAttempts = %v, want the last reason for each address", got)
+	}
+}
+
+// Folding by address must not fold the ports' outcomes into one: an address
+// whose plaintext port answered and whose mTLS port refused is not an address
+// that refused (WDY-3974). Within one port, the last failure still wins.
+func TestDescribeDialAttemptsKeepsEachPortsOutcome(t *testing.T) {
+	notTLS := errors.New(`transport: authentication handshake failed: tls: first record does not look like a TLS handshake`)
+	got := describeDialAttempts([]mtlsAttemptError{
+		{addr: "10.0.0.5:50051", err: errors.New("no route to host")},
+		{addr: "10.0.0.5:50051", err: notTLS},
+		{addr: "10.0.0.5:50052", err: errors.New("connection refused")},
+		{addr: "[fe80::1%en0]:50051", err: errors.New("connection refused")},
+		{addr: "[fe80::1%en0]:50052", err: errors.New("connection refused")},
+	})
+	want := []string{
+		"10.0.0.5 (port 50051: answered without TLS; port 50052: connection refused)",
+		"fe80::1%en0 (connection refused)",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("describeDialAttempts = %q, want %q", got, want)
 	}
 }
 

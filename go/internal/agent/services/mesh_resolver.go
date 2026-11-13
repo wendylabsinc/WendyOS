@@ -2,79 +2,87 @@ package services
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 // MeshResolver implements mesh.Resolver with the hybrid strategy: an mDNS
-// browse (filtered to our own org id) resolves LAN peers cloud-free; anything
-// not found on the LAN falls back to the cloud-synced roster cache. OrgSlug is
-// always the roster's (cloud-learned) value.
+// browse (filtered to our own tenant) resolves LAN peers cloud-free; anything
+// not found on the LAN falls back to the cloud-synced roster cache. OrgSlug
+// and the tenant filter both come from the roster's provisioned identity, so
+// roster.UpdateIdentity alone re-scopes every resolution path.
 type MeshResolver struct {
-	logger   *zap.Logger
-	ownOrgID atomic.Int32
-	roster   *MeshRoster
-	browse   func(context.Context) ([]models.LANDevice, error)
+	logger *zap.Logger
+	roster *MeshRoster
+	browse func(context.Context) ([]models.LANDevice, error)
 }
 
 var _ mesh.Resolver = (*MeshResolver)(nil)
 
-func NewMeshResolver(logger *zap.Logger, ownOrgID int32, roster *MeshRoster, browse func(context.Context) ([]models.LANDevice, error)) *MeshResolver {
-	r := &MeshResolver{logger: logger, roster: roster, browse: browse}
-	r.ownOrgID.Store(ownOrgID)
-	return r
-}
-
-// UpdateOwnOrgID updates the org id used to filter LAN peers. Called when
-// BLE first-boot enrollment provisions the device while the agent is
-// already running, so the boot-time snapshot (org=0) needs to be replaced
-// with the freshly issued org id — otherwise resolveLAN rejects every peer.
-func (r *MeshResolver) UpdateOwnOrgID(orgID int32) {
-	r.ownOrgID.Store(orgID)
+func NewMeshResolver(logger *zap.Logger, roster *MeshRoster, browse func(context.Context) ([]models.LANDevice, error)) *MeshResolver {
+	return &MeshResolver{logger: logger, roster: roster, browse: browse}
 }
 
 func (r *MeshResolver) OrgSlug() string { return r.roster.OrgSlug() }
 
-// Resolve returns the asset id for a normalized device name, mDNS first.
-func (r *MeshResolver) Resolve(name string) (int32, bool) {
-	if id, ok := r.resolveLAN(name); ok {
-		return id, true
+// Resolve returns the device a normalized name names: mDNS first, roster
+// second. A LAN sighting is only a discovery hint — the advertised principal
+// must parse as a device under our own tenant, and TLS verifies it at dial
+// time. A roster row with no device UUID is not dialable and resolves to
+// nothing rather than an invented identity.
+func (r *MeshResolver) Resolve(name string) (meshid.Device, bool) {
+	if device, ok := r.resolveLAN(name); ok {
+		return device, true
 	}
-	return r.roster.Lookup(name)
+	entry, ok := r.roster.Lookup(name)
+	if !ok {
+		return meshid.Device{}, false
+	}
+	return entry.Device()
 }
 
-func (r *MeshResolver) resolveLAN(name string) (int32, bool) {
+func (r *MeshResolver) resolveLAN(name string) (meshid.Device, bool) {
+	own, ok := r.roster.OwnTenant()
+	if !ok {
+		return meshid.Device{}, false // unenrolled: no tenant to filter by
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	devices, err := r.browse(ctx)
 	if err != nil {
-		r.logger.Warn("mesh: LAN browse failed for friendly-name resolution", zap.Error(err))
-		return 0, false
+		r.logger.Warn("wendy net: LAN browse failed for friendly-name resolution", zap.Error(err))
+		return meshid.Device{}, false
 	}
-	var found int32
+	var found meshid.Device
 	matches := 0
 	for _, d := range devices {
-		if d.OrgID != r.ownOrgID.Load() || d.AssetID == 0 {
+		if d.PrincipalURI == "" {
+			continue
+		}
+		device, err := meshid.DeviceFromPrincipal(d.PrincipalURI)
+		if err != nil || device.Tenant() != own {
 			continue
 		}
 		if mesh.Normalize(d.MeshName) != name {
 			continue
 		}
 		if matches == 0 {
-			found = d.AssetID
-		} else if d.AssetID != found {
-			// Two different LAN devices share the name -> ambiguous.
-			return 0, false
+			found = device
+		} else if device != found {
+			// Two different LAN devices share the name -> ambiguous. The same
+			// device sighted on several interfaces repeats one principal and
+			// stays unambiguous.
+			return meshid.Device{}, false
 		}
 		matches++
 	}
 	if matches == 0 {
-		return 0, false
+		return meshid.Device{}, false
 	}
 	return found, true
 }

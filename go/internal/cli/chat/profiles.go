@@ -24,8 +24,8 @@ type Profile struct {
 	groups       []string
 }
 
-// Startup skills live with chat, separate from assets/skills which is synced
-// from the external language-skill repository. Missing files fail the build.
+// Startup skills live with chat, separate from assets/skills which includes
+// the synced plugins/wendy-agentic-coding skills. Missing files fail the build.
 //
 //go:embed skills/general/SKILL.md
 var generalSkill string
@@ -53,12 +53,12 @@ var deviceControlSkill string
 
 var profiles = []Profile{
 	{Name: "general", Description: "Build, deploy, diagnose, and delegate to specialists", Skills: []string{"*"}, groups: []string{"*"}, Instructions: generalSkill, StartupSkill: "profiles/general/SKILL.md"},
-	{Name: "developer", Description: "Build, test, and deploy applications", Skills: []string{"wendy", "swift", "swift-concurrency", "swift-nio", "hummingbird", "postgres-nio", "swift-valkey"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: developerSkill, StartupSkill: "profiles/developer/SKILL.md"},
-	{Name: "simulation", Description: "Build and deploy simulations to VMs and other targets", Skills: []string{"wendy", "swift", "swift-concurrency"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: simulationSkill, StartupSkill: "profiles/simulation/SKILL.md"},
-	{Name: "debugger", Description: "Diagnose software, ROS 2, LiDAR, cameras, and hardware", Skills: []string{"wendy", "swift", "swift-concurrency", "swift-nio"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "network", "app"}, Instructions: debuggerSkill, StartupSkill: "profiles/debugger/SKILL.md"},
+	{Name: "developer", Description: "Build, test, and deploy applications", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency", "swift-nio", "hummingbird", "postgres-nio", "swift-valkey"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: developerSkill, StartupSkill: "profiles/developer/SKILL.md"},
+	{Name: "simulation", Description: "Build and deploy simulations to VMs and other targets", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: simulationSkill, StartupSkill: "profiles/simulation/SKILL.md"},
+	{Name: "debugger", Description: "Diagnose software, ROS 2, LiDAR, cameras, and hardware", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency", "swift-nio"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "network", "app"}, Instructions: debuggerSkill, StartupSkill: "profiles/debugger/SKILL.md"},
 	{Name: "fleet", Description: "Coordinate work across devices over cloud or LAN", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "network", "os"}, Instructions: fleetSkill, StartupSkill: "profiles/fleet/SKILL.md"},
 	{Name: "device-reasoning", Description: "Reason about device goals, observations, and events", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceReasoningSkill, StartupSkill: "profiles/device-reasoning/SKILL.md"},
-	{Name: "device-sensors", Description: "Configure perception models and interpret sensor observations", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceSensorsSkill, StartupSkill: "profiles/device-sensors/SKILL.md"},
+	{Name: "device-sensors", Description: "Configure perception models and interpret sensor observations", Skills: []string{"wendy", "wendy-data"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceSensorsSkill, StartupSkill: "profiles/device-sensors/SKILL.md"},
 	{Name: "device-control", Description: "Supervise motion models and execute bounded device goals", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceControlSkill, StartupSkill: "profiles/device-control/SKILL.md"},
 }
 
@@ -102,6 +102,8 @@ func (p Profile) allows(name string) bool {
 
 func toolGroup(name string) string {
 	switch name {
+	case "os_install_plan", "os_list_drives", "os_install_verify":
+		return "workspace"
 	case "cloud_tunnel":
 		return "network"
 	case "wendy_status", "device_list", "device_connect", "device_disconnect", "device_info", "cloud_discover", "cloud_connect", "cloud_ping":

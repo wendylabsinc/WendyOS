@@ -7,7 +7,8 @@ import (
 	"os"
 )
 
-const cniNetnsBindDir = "/run/wendy/netns"
+// cniNetnsBindDir is private runtime state; tests redirect it to a temporary directory.
+var cniNetnsBindDir = "/run/wendy/netns"
 
 // bindNetnsForCNI falls back to the /proc/self/fd/<n> form on non-Linux
 // platforms. The bind-mount approach requires Linux mount namespaces; on

@@ -34,8 +34,8 @@ import (
 )
 
 // SupportedSchema is the newest tagged flashpack schema this wendy understands.
-// The existing untagged Thor schema remains version 1; T234 is accepted only as
-// tagged schema 2 because v1 has no target-identity contract.
+// The existing untagged Thor schema remains version 1. T234 retains schema 2;
+// its recovery initrd negotiates optional single-enumeration support.
 const SupportedSchema = 2
 
 const (
@@ -344,11 +344,14 @@ func isT234RecoveryPIDString(s string) bool {
 
 func validateManifest(m *Manifest) error {
 	if m.Family == FamilyT234 {
+		if m.Schema > T234Schema {
+			return fmt.Errorf("flashpack schema %d is newer than this wendy supports (%d); update wendy", m.Schema, T234Schema)
+		}
 		if m.Schema != T234Schema {
-			return fmt.Errorf("T234 flashpack schema %d is unsafe/unsupported (want %d); obtain a schema-v2 recovery artifact", m.Schema, T234Schema)
+			return fmt.Errorf("T234 flashpack schema %d is unsupported (want %d)", m.Schema, T234Schema)
 		}
 		if m.Protocol != T234ProtocolMassStorage {
-			return fmt.Errorf("T234 flashpack protocol %q is unsupported", m.Protocol)
+			return fmt.Errorf("T234 flashpack protocol %q is unsupported; update wendy", m.Protocol)
 		}
 		if !isT234RecoveryPIDString(m.USBProductID) {
 			return fmt.Errorf("T234 flashpack has unexpected USB product %q", m.USBProductID)

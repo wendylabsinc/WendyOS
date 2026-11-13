@@ -11,10 +11,11 @@
   "devDependencies": {
     "@fontsource-variable/geist": "5.3.0",
     "@fontsource-variable/geist-mono": "5.3.0",
-    "@slidev/cli": "53.0.0",
+    "@slidev/cli": "53.1.0",
     "@slidev/theme-default": "0.25.0"
   },
   "overrides": {
-    "dompurify": "3.4.12"
+    "dompurify": "3.4.17",
+    "image-size": "2.1.0"
   }
 }

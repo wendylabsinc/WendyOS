@@ -85,3 +85,23 @@ func TestApplyFloor_LogsTheRefusedValue(t *testing.T) {
 		t.Errorf("logged floor = %v, want the refused value %v", got, bad)
 	}
 }
+
+// ApplyFloor steps the clock through the manager's apply hook, so tests can
+// check it without calling settimeofday, which as root on Linux really moves
+// the host clock (WDY-3852).
+func TestApplyFloor_AdvancesToAFutureFloor(t *testing.T) {
+	dir := t.TempDir()
+	future := time.Now().Add(365 * 24 * time.Hour).Truncate(time.Second)
+	if err := os.WriteFile(filepath.Join(dir, clockFloorFile), FloorBytes(future), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(nil, dir)
+	var applied []time.Time
+	m.apply = func(t time.Time) { applied = append(applied, t) }
+
+	m.ApplyFloor()
+
+	if len(applied) != 1 || !applied[0].Equal(future) {
+		t.Fatalf("applied %v, want the floor %v once", applied, future)
+	}
+}

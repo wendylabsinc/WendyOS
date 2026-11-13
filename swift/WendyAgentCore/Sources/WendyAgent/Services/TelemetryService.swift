@@ -35,6 +35,7 @@ actor TelemetryService: Wendy_Agent_Services_V1_WendyTelemetryService.SimpleServ
 
         let (subscriptionId, recent, stream) = await broadcaster.subscribeLogs()
         do {
+            var filteredRecent: [TelemetryBroadcaster.LogsRequest] = []
             for logsRequest in recent {
                 let filteredRequest = filterLogs(
                     logsRequest,
@@ -43,13 +44,24 @@ actor TelemetryService: Wendy_Agent_Services_V1_WendyTelemetryService.SimpleServ
                     appName: request.hasAppName ? request.appName : nil
                 )
                 if !filteredRequest.resourceLogs.isEmpty {
-                    try await response.write(
-                        Wendy_Agent_Services_V1_StreamLogsResponse.with {
-                            $0.logs = filteredRequest
-                            $0.isHistory = true
-                        }
-                    )
+                    filteredRecent.append(filteredRequest)
                 }
+            }
+
+            let replay =
+                request.hasLastN && request.lastN > 0
+                ? Array(filteredRecent.suffix(Int(request.lastN))) : filteredRecent
+            for filteredRequest in replay {
+                try await response.write(
+                    Wendy_Agent_Services_V1_StreamLogsResponse.with {
+                        $0.logs = filteredRequest
+                        $0.isHistory = true
+                    }
+                )
+            }
+            if request.noFollow {
+                await broadcaster.unsubscribeLogs(id: subscriptionId)
+                return
             }
 
             try await withLogHeartbeatStream(stream, interval: self.logHeartbeatInterval) {

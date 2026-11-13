@@ -1,0 +1,279 @@
+{
+  "comment": "Third-party files fetched at build time by `python -m drone_formation.assets`. Each is pinned by an immutable commit URL and checked against its SHA-256.",
+  "sources": {
+    "bitcraze_crazyflie_2": "MuJoCo Menagerie commit 71f066ad0be9cd271f7ed58c030243ef157af9f4 (MIT)",
+    "three.js": "three.js r180, commit 0af9729d0c143a86a1d725d6e2c3ad83301f3f34 (MIT)"
+  },
+  "files": [
+    {
+      "path": "models/bitcraze_crazyflie_2/cf2.xml",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/cf2.xml",
+      "sha256": "c1260dd47cded49edd5c1c02226529a5452a73f70000515f83bf223814037933",
+      "bytes": 5712
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/LICENSE",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/LICENSE",
+      "sha256": "fc2e3286b47f415c0724d1f82047501d738ef60cff3779b2f3998ea75d8aae99",
+      "bytes": 1082
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_0.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_0.obj",
+      "sha256": "b6e1424d8752f110324c22d06c40fb83cedf0de4cec3423560a7c411e1c2a8d4",
+      "bytes": 352369
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_1.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_1.obj",
+      "sha256": "d28a2c6ebca05dc62f39334669c014a8ceb1a73ea1072d22d208a5f4fe5f0bc9",
+      "bytes": 6424
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_2.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_2.obj",
+      "sha256": "712bee75469773c0d34bb09d3ae5af405617c1f0992be2ff2e80b0f436c323f2",
+      "bytes": 335694
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_3.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_3.obj",
+      "sha256": "b8af754045ad9d4652072584b4fdfa127527c3de9d34c64614995c462b69fdc8",
+      "bytes": 2000
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_4.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_4.obj",
+      "sha256": "c60f8c2b3c74bf7b9d300ed71ba983cedc79da817bafe2baba56e2daa5003d78",
+      "bytes": 61396
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_5.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_5.obj",
+      "sha256": "88bd391a4c7fce1a07950799291123a952756903d4b648f5b6163ec94990e36f",
+      "bytes": 133367
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_6.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_6.obj",
+      "sha256": "99063e076f297125c67ab49f86bac648f338667518b2f824005349d0ef2ab673",
+      "bytes": 168508
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_0.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_0.obj",
+      "sha256": "2715202cd2c831ae6b99a5b0fb35648e2a0e0218d73553c3eaf0689a18119cfc",
+      "bytes": 1494
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_1.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_1.obj",
+      "sha256": "e1c99d02815a006fe5c362fa0d28b8db4c2424c22774ec3eba2670cb78b29914",
+      "bytes": 1637
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_2.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_2.obj",
+      "sha256": "86c18490088f823d2d0233d7be7a88bb1871a4093f48f429ce586892899f7e20",
+      "bytes": 1296
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_3.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_3.obj",
+      "sha256": "01a3484e552fbe40d6813b425c76e51b2112ec92272d471895c62b270d4a2e8f",
+      "bytes": 1190
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_4.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_4.obj",
+      "sha256": "7d06b50d215fb704a80b2488a4dc0cbeaca442c7ef1a09fbc1b53bbe182f7e46",
+      "bytes": 1213
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_5.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_5.obj",
+      "sha256": "d0ebb7fe50429cb7e80cbf3a6716c6a3984face949c60e6c9fa00dbb87682fa1",
+      "bytes": 829
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_6.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_6.obj",
+      "sha256": "e874be08ff9957735759f1dcb71d86633e9b82f3f0ab904be2147b1df15a34de",
+      "bytes": 1184
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_7.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_7.obj",
+      "sha256": "92c6c4d56b0437cc9fb13feaef345a3a5565b06628e1a8f431b6b4c44df74ee8",
+      "bytes": 766
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_8.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_8.obj",
+      "sha256": "d5497b2c1bec62802320932f03985cb56c6928e576206324ffd543a8161790da",
+      "bytes": 948
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_9.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_9.obj",
+      "sha256": "914364e62252bf21f920861be13abf2e1e6c7a1814542095c25ff243ccf968a3",
+      "bytes": 529
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_10.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_10.obj",
+      "sha256": "fd49af478603928f08d50d60b4fadbb17a4455241ba8879e24287c7ac623ea94",
+      "bytes": 1203
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_11.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_11.obj",
+      "sha256": "d01b42d54389e2cdd20c1b3b0837dffb966617b74d35d2575ba1aa7907b3dfdf",
+      "bytes": 527
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_12.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_12.obj",
+      "sha256": "ee5c880102440ad8fa574b9921a53dc97cca237b8e1610c2a195fdbe7cbe6494",
+      "bytes": 522
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_13.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_13.obj",
+      "sha256": "1fc029cdb38637252963983a54590fc560fa2c79fc9890c63d60f6e1f63342c7",
+      "bytes": 708
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_14.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_14.obj",
+      "sha256": "d04ca1e3f96f625b3c7a8455e19541dc3a3e925cfa6f4a8a2dd252eaa81c08f5",
+      "bytes": 681
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_15.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_15.obj",
+      "sha256": "5d6787aa1ca17e48d43fa1e9875027bb36038015a0827e1488336487c337167b",
+      "bytes": 707
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_16.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_16.obj",
+      "sha256": "f2cc9bfe84e09eef87790440096c7580f33ad7cd805fc5cdc7b2f7549302e854",
+      "bytes": 842
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_17.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_17.obj",
+      "sha256": "eedadc86582d4f654e80d9913eef414012ed4b597fc975546003a8756308cb1f",
+      "bytes": 638
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_18.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_18.obj",
+      "sha256": "fddcebffa7e4ce1f22239fec38a0912edf0e9e8836eba50cfe34f1a508075b17",
+      "bytes": 1389
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_19.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_19.obj",
+      "sha256": "23bfdbfd15d57b11b0b26306854a66a5faffaf10d63a59896f14e25a1f7bf565",
+      "bytes": 1062
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_20.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_20.obj",
+      "sha256": "07793f71fad9248e44361fa56e9d5105229a171a220a63c78baf0219dd4d38e6",
+      "bytes": 992
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_21.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_21.obj",
+      "sha256": "673b7779025d0839c246bb75a6bc4a76ad0a09f4aa2ea812818589722c4bcbf4",
+      "bytes": 1003
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_22.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_22.obj",
+      "sha256": "af15e2f7908c692a12155e8e69b3b33ef2d5d97c5dddde31e6d428788024beb4",
+      "bytes": 782
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_23.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_23.obj",
+      "sha256": "8fd369711d523faf77904bfbf6a5f2a48714be9ade0aa26007ca3c2c9a90ab3d",
+      "bytes": 1242
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_24.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_24.obj",
+      "sha256": "1608b7173ab5655a00949d2c2a839c7a4043674ba2b53e2d479efaeffd0150da",
+      "bytes": 1606
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_25.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_25.obj",
+      "sha256": "db849bb0a87cf2b33fa6fd731f4a73b0730e2766caae5bde802c8979058e06dc",
+      "bytes": 708
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_26.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_26.obj",
+      "sha256": "4a026f1d2c670d8a2357578efc18339e57ceba5fd72ac02e49572af148dc0af2",
+      "bytes": 1064
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_27.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_27.obj",
+      "sha256": "5ecec9966aa5a7d4c86fa96e2ced9065a1dc627cdd305af8bf154bd5087c3456",
+      "bytes": 1075
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_28.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_28.obj",
+      "sha256": "00229becda358865dc960e79c2a5a79de6b7fe771f65642ea3eae31357c72062",
+      "bytes": 404
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_29.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_29.obj",
+      "sha256": "38f50fcc582c222a77b5b0f8a7667818f25b12a9b9e245af91aa1cd1e7d5b98c",
+      "bytes": 404
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_30.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_30.obj",
+      "sha256": "e44b805232a0a2acc79abf7a7f2d54d58fc32350219fa41acb1e528881460f15",
+      "bytes": 653
+    },
+    {
+      "path": "models/bitcraze_crazyflie_2/assets/cf2_collision_31.obj",
+      "url": "https://raw.githubusercontent.com/google-deepmind/mujoco_menagerie/71f066ad0be9cd271f7ed58c030243ef157af9f4/bitcraze_crazyflie_2/assets/cf2_collision_31.obj",
+      "sha256": "c60a0fb12811b6251cf217f6e4258141055c0f735c98aa720fe888ae96ab30fb",
+      "bytes": 408
+    },
+    {
+      "path": "drone_formation/static/three/three.module.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/build/three.module.js",
+      "sha256": "c8211c69345d2e9949dc7a8ac969380497aa0600a5a8ac6a459c8cd02dd9cb8a",
+      "bytes": 603113
+    },
+    {
+      "path": "drone_formation/static/three/three.core.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/build/three.core.js",
+      "sha256": "eb077d2417f61d3e6d9264c317cabc4ea35769ed6b0ab533067292a550784c20",
+      "bytes": 1403455
+    },
+    {
+      "path": "drone_formation/static/three/addons/controls/OrbitControls.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/examples/jsm/controls/OrbitControls.js",
+      "sha256": "b97879c748170baadeb3fb84cea1ffdf4674e283dc06042f34e2acb95a76042c",
+      "bytes": 38703
+    },
+    {
+      "path": "drone_formation/static/three/LICENSE",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/LICENSE",
+      "sha256": "bfe119ea4fd413f5f7ca3fcd63adb0c4a073ed39daa2fe7d3e6b769e21272601",
+      "bytes": 1081
+    }
+  ]
+}

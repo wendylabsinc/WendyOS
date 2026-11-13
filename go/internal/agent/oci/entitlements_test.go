@@ -1085,6 +1085,63 @@ func TestApplyEntitlements_Multiple(t *testing.T) {
 	}
 }
 
+func TestApplyEntitlements_USB(t *testing.T) {
+	originalDir := usbDeviceDir
+	t.Cleanup(func() { usbDeviceDir = originalDir })
+
+	dir := t.TempDir()
+	regularFile := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(regularFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		hostPath  string
+		wantMount bool
+	}{
+		{name: "present", hostPath: dir, wantMount: true},
+		{name: "absent", hostPath: filepath.Join(dir, "absent")},
+		{name: "not a directory", hostPath: regularFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usbDeviceDir = tc.hostPath
+			for _, camera := range []bool{false, true} {
+				t.Run(fmt.Sprintf("camera=%t", camera), func(t *testing.T) {
+					spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+					cfg := &appconfig.AppConfig{AppID: "test-app"}
+					if camera {
+						cfg.Entitlements = append(cfg.Entitlements, appconfig.Entitlement{Type: appconfig.EntitlementCamera})
+					}
+					cfg.Entitlements = append(cfg.Entitlements, appconfig.Entitlement{Type: appconfig.EntitlementUSB})
+					if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+						t.Fatalf("ApplyEntitlements() error = %v", err)
+					}
+
+					mount, mounted := mountForDest(spec, "/dev/bus/usb")
+					if mounted != tc.wantMount {
+						t.Fatalf("USB mount present = %t, want %t for host path %q", mounted, tc.wantMount, tc.hostPath)
+					}
+					if mounted {
+						if mount.Source != tc.hostPath || mount.Type != "bind" {
+							t.Errorf("USB mount = %+v, want bind from %q", mount, tc.hostPath)
+						}
+						if !slices.Contains(mount.Options, "rbind") || !slices.Contains(mount.Options, "rw") {
+							t.Errorf("USB mount options = %v, want rbind and rw", mount.Options)
+						}
+					}
+					if access, ok := majorRuleAccess(spec, 189); !ok || access != "rw" {
+						t.Errorf("USB cgroup access = %q, present = %t, want rw", access, ok)
+					}
+					if hasAllowAllDeviceRule(spec) {
+						t.Error("USB entitlement must not grant access to all devices")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestApplyEntitlements_Input(t *testing.T) {
 	originalLookup := lookupInputGID
 	t.Cleanup(func() { lookupInputGID = originalLookup })
@@ -2077,6 +2134,64 @@ func TestApplyAdmin_NonAdminAppUnchanged(t *testing.T) {
 	}
 	if hasMount(spec, "/run/wendy/agent") || hasEnv(spec, "WENDY_AGENT_SOCKET=/run/wendy/agent/agent.sock") {
 		t.Error("non-admin app must not get the agent socket")
+	}
+}
+
+func TestApplyNAN_MountsOnlyNANControlSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "nan-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "nan0")
+	listener, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: sock, Net: "unixgram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	oldPath := NANControlSocketHostPath
+	NANControlSocketHostPath = sock
+	t.Cleanup(func() { NANControlSocketHostPath = oldPath })
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{AppID: "nan-test", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNAN}}}
+	clientDir := filepath.Join(dir, "client")
+	if err := os.Mkdir(clientDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{NANDataInterface: "wa0123456789ab", NANClientDirectory: clientDir}); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := mountForDest(spec, ctrNANControlSocketPath)
+	if !ok || m.Source != sock || m.Type != "bind" {
+		t.Fatalf("NAN socket mount = %+v, present=%t", m, ok)
+	}
+	if hasMountDest(spec, filepath.Dir(ctrNANControlSocketPath)) || hasMountDest(spec, "/run/wpa_supplicant") {
+		t.Fatal("NAN entitlement exposed sibling wpa_supplicant sockets")
+	}
+	clientMount, ok := mountForDest(spec, clientDir)
+	if !ok || clientMount.Source != clientDir {
+		t.Fatalf("NAN client directory not visible at the same host/container path: %+v", clientMount)
+	}
+	if !hasGID(spec, NANControlGroupGID) || !hasEnv(spec, "WENDY_NAN_SOCKET="+ctrNANControlSocketPath) || !hasEnv(spec, "WENDY_NAN_NDI=wa0123456789ab") || !hasEnv(spec, "WENDY_NAN_CLIENT_DIR="+clientDir) {
+		t.Fatal("NAN socket access or NDI environment missing")
+	}
+	if !hasNamespace(spec, "network") {
+		t.Fatal("NAN entitlement implicitly granted host networking")
+	}
+}
+
+func TestApplyNAN_FailsClosedWithoutProvisionedSocketAndNDI(t *testing.T) {
+	oldPath := NANControlSocketHostPath
+	NANControlSocketHostPath = filepath.Join(t.TempDir(), "missing")
+	t.Cleanup(func() { NANControlSocketHostPath = oldPath })
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{AppID: "nan-test", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNAN}}}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{NANDataInterface: "wa0123456789ab"}); err == nil {
+		t.Fatal("missing NAN control socket accepted")
+	}
+	if hasMountDest(spec, ctrNANControlSocketPath) || hasGID(spec, NANControlGroupGID) {
+		t.Fatal("partial NAN grant on failure")
 	}
 }
 
@@ -3084,5 +3199,46 @@ func TestApplyRecordingStreamEnvironment(t *testing.T) {
 	mount, ok := mountForDest(spec, "/run/wendy/data")
 	if !ok || !slices.Contains(mount.Options, "ro") {
 		t.Fatal("recording mount must remain read-only")
+	}
+}
+
+func TestApplyEntitlementsAvahiRequiresPrivateProxy(t *testing.T) {
+	cfg := &appconfig.AppConfig{AppID: "avahi-test", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementAvahi}}}
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err == nil {
+		t.Fatal("Avahi accepted without its prepared proxy")
+	}
+	spec = DefaultSpec("/rootfs", []string{"/bin/sh"})
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{AvahiProxySocketDir: "/run/private/proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range spec.Mounts {
+		if m.Destination != "/var/run/dbus" {
+			continue
+		}
+		if m.Source != "/run/private/proxy" {
+			t.Fatalf("unexpected source: %q", m.Source)
+		}
+		for _, option := range []string{"ro", "nodev", "nosuid", "noexec"} {
+			found := false
+			for _, got := range m.Options {
+				if got == option {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("missing mount option %s", option)
+			}
+		}
+		return
+	}
+	t.Fatal("missing private D-Bus mount")
+}
+
+func TestApplyEntitlementsAvahiBluetoothConflict(t *testing.T) {
+	cfg := &appconfig.AppConfig{AppID: "avahi-test", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementAvahi}, {Type: appconfig.EntitlementBluetooth}}}
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{AvahiProxySocketDir: "/run/private/proxy", DBusProxySocketDir: "/run/bluetooth/proxy"}); err == nil {
+		t.Fatal("conflicting bus entitlements accepted")
 	}
 }

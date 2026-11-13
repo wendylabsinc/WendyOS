@@ -1,0 +1,22 @@
+{
+  "tool": "simulator_delete",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"deleted\": \"{{args.name}}\", \"disconnected\": false}"
+        }
+      ],
+      "structuredContent": {
+        "deleted": "{{args.name}}",
+        "disconnected": false
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -274,6 +275,20 @@ func TestDiscoverModel_DKeySetsDefaultAndMarksSelectedDevice(t *testing.T) {
 	if !strings.Contains(um.table.View(), "✦") {
 		t.Fatalf("expected selected default device to show marker, got %q", um.table.View())
 	}
+
+	// 'd' toggles: on the default row it clears the default, as on the
+	// Simulator and Cloud tabs. There is no separate 'x' any more.
+	updated, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	um = updated.(discoverModel)
+	if got := defaultKey(t); got != "" {
+		t.Fatalf("second d left default %q, want it cleared", got)
+	}
+	if um.flashMessage != "Default device cleared." || strings.Contains(um.table.View(), "✦") {
+		t.Fatalf("second d: flash=%q table=%q", um.flashMessage, um.table.View())
+	}
+	if view := um.View(); !strings.Contains(view, "d toggle default") || strings.Contains(view, "x unset default") {
+		t.Fatalf("hint does not describe the toggle: %q", view)
+	}
 }
 
 func TestDiscoverTableItemsHidesAddressForDockerAndLocal(t *testing.T) {
@@ -413,11 +428,11 @@ func TestDiscoverTableItemsAnnotatesLANUSBFromEthernetInterface(t *testing.T) {
 	}
 }
 
-func TestDiscoverTableItemsProvisionedStateAndNoAccessHint(t *testing.T) {
+func TestDiscoverTableItemsProvisionedStateAndProbeHint(t *testing.T) {
 	collection := &models.DevicesCollection{
 		LANDevices: []models.LANDevice{
 			// Provisioned device the CLI cannot read (metadata probe failed).
-			{DisplayName: "wendy-locked", IPAddress: "192.168.1.30", IsMTLS: true},
+			{DisplayName: "wendy-locked", IPAddress: "192.168.1.30", IsMTLS: true, ProbeFailure: missingLANCredentials()},
 			// Provisioned device the CLI can read.
 			{DisplayName: "wendy-mine", IPAddress: "192.168.1.31", IsMTLS: true, AgentVersion: "1.2.3"},
 			// Unprovisioned device.
@@ -438,7 +453,7 @@ func TestDiscoverTableItemsProvisionedStateAndNoAccessHint(t *testing.T) {
 	if locked.picker.Provisioned != "Provisioned" {
 		t.Fatalf("locked Provisioned = %q, want \"Provisioned\"", locked.picker.Provisioned)
 	}
-	if locked.picker.Hint != discoverNoAccessHint {
+	if locked.picker.Hint != lanProbeHint(&collection.LANDevices[0]) {
 		t.Fatalf("locked Hint = %q, want no-access hint", locked.picker.Hint)
 	}
 	if locked.info.Provisioned != "Provisioned" {
@@ -468,67 +483,20 @@ func TestDiscoverTableItemsProvisionedStateAndNoAccessHint(t *testing.T) {
 	}
 }
 
-func TestMergePickerItemClearsNoAccessHintWhenVersionKnown(t *testing.T) {
-	lanItem := func(dev models.LANDevice) tui.PickerItem {
-		return tui.PickerItem{
-			Name:         dev.DisplayName,
-			Type:         "LAN",
-			AgentVersion: dev.AgentVersion,
-			Provisioned:  lanProvisionedDisplay(&dev),
-			Hint:         lanNoAccessHint(&dev, dev.AgentVersion),
-			DedupKey:     dev.DisplayName,
-			Value:        &pickerEntry{mergedDevice: &models.DiscoveredDevice{DisplayName: dev.DisplayName, AgentVersion: dev.AgentVersion, LAN: &dev}},
-		}
-	}
-
-	// A successful probe followed by a failed re-probe: the carried-over
-	// version must not coexist with a hint claiming details are unreadable.
-	existing := lanItem(models.LANDevice{DisplayName: "wendy-mine", IsMTLS: true, AgentVersion: "1.2.3"})
-	mergePickerItem(&existing, lanItem(models.LANDevice{DisplayName: "wendy-mine", IsMTLS: true}))
-	if existing.Hint != "" {
-		t.Fatalf("Hint = %q, want empty when AgentVersion is already known", existing.Hint)
-	}
-	if existing.AgentVersion != "1.2.3" {
-		t.Fatalf("AgentVersion = %q, want carried-over version", existing.AgentVersion)
-	}
-
-	// A failed probe followed by a successful one clears the hint.
-	existing = lanItem(models.LANDevice{DisplayName: "wendy-locked", IsMTLS: true})
+func TestMergePickerItemPreservesLANFailureUntilLANRecovery(t *testing.T) {
+	dev := models.LANDevice{DisplayName: "board", Hostname: "board.local", IsMTLS: true, ProbeFailure: missingLANCredentials()}
+	existing := lanPickerItem(dev, false, tui.ProbeFailed)
+	// BLE metadata does not establish that the LAN connection recovered.
+	bleDev := models.BluetoothDevice{DisplayName: "board", AgentVersion: "1.2.3"}
+	mergePickerItem(&existing, tui.PickerItem{AgentVersion: bleDev.AgentVersion, Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{Bluetooth: &bleDev}}})
 	if existing.Hint == "" {
-		t.Fatal("expected no-access hint on inaccessible provisioned device")
+		t.Fatal("BLE version incorrectly erased LAN failure")
 	}
-	mergePickerItem(&existing, lanItem(models.LANDevice{DisplayName: "wendy-locked", IsMTLS: true, AgentVersion: "1.2.3"}))
+	dev.ProbeFailure = nil
+	dev.AgentVersion = "1.2.3"
+	mergePickerItem(&existing, lanPickerItem(dev, false, tui.ProbeOK))
 	if existing.Hint != "" {
-		t.Fatalf("Hint = %q, want cleared after successful probe", existing.Hint)
-	}
-
-	// Still-failing probes keep the hint while no version is known.
-	existing = lanItem(models.LANDevice{DisplayName: "wendy-locked", IsMTLS: true})
-	mergePickerItem(&existing, lanItem(models.LANDevice{DisplayName: "wendy-locked", IsMTLS: true}))
-	if existing.Hint != discoverNoAccessHint {
-		t.Fatalf("Hint = %q, want no-access hint to persist", existing.Hint)
-	}
-
-	// A BLE backfill that supplies the version must also clear the hint,
-	// not just LAN merges.
-	existing = lanItem(models.LANDevice{DisplayName: "wendy-locked", IsMTLS: true})
-	bleDev := models.BluetoothDevice{DisplayName: "wendy-locked", AgentVersion: "1.2.3"}
-	mergePickerItem(&existing, tui.PickerItem{
-		Name:         bleDev.DisplayName,
-		Type:         "Bluetooth",
-		AgentVersion: bleDev.AgentVersion,
-		DedupKey:     bleDev.DisplayName,
-		Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
-			DisplayName:  bleDev.DisplayName,
-			AgentVersion: bleDev.AgentVersion,
-			Bluetooth:    &bleDev,
-		}},
-	})
-	if existing.AgentVersion != "1.2.3" {
-		t.Fatalf("AgentVersion = %q, want BLE-backfilled version", existing.AgentVersion)
-	}
-	if existing.Hint != "" {
-		t.Fatalf("Hint = %q, want cleared after BLE version backfill", existing.Hint)
+		t.Fatalf("successful LAN probe retained hint: %s", existing.Hint)
 	}
 }
 
@@ -594,7 +562,7 @@ func TestMergePickerItemMergesBLEIntoLANByHostname(t *testing.T) {
 	})
 }
 
-func TestDiscoverModelViewShowsNoAccessHintForHighlightedDevice(t *testing.T) {
+func TestDiscoverModelViewShowsMissingCredentialsHintForHighlightedDevice(t *testing.T) {
 	m := newDiscoverModel(context.Background(), discovery.DiscoveryOptions{}, true)
 	dev := models.LANDevice{
 		DisplayName: "wendy-locked",
@@ -606,16 +574,17 @@ func TestDiscoverModelViewShowsNoAccessHintForHighlightedDevice(t *testing.T) {
 
 	// While the probe is still in flight the row is "connecting" (spinner), so
 	// the no-access hint is suppressed.
-	if view := ansi.Strip(dm.View()); strings.Contains(view, "does not have access") {
+	if view := ansi.Strip(dm.View()); strings.Contains(view, "no client certificates") {
 		t.Fatalf("no-access hint should be suppressed while connecting, got %q", view)
 	}
 
-	// A resolved mDNS service remains visible when the agent rejects access.
+	// The failed probe provides evidence that credentials are missing.
+	dev.ProbeFailure = missingLANCredentials()
 	updated, _ = dm.Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, ProbeFailed: true}})
 	dm = updated.(discoverModel)
 
 	view := ansi.Strip(dm.View())
-	if !strings.Contains(view, "does not have access") {
+	if !strings.Contains(view, "no client certificates") {
 		t.Fatalf("expected no-access hint in view, got %q", view)
 	}
 	if !strings.Contains(view, "wendy auth login") {
@@ -634,7 +603,7 @@ func TestDiscoverModelViewOmitsHintForAccessibleDevice(t *testing.T) {
 	dm := updated.(discoverModel)
 
 	view := ansi.Strip(dm.View())
-	if strings.Contains(view, "does not have access") {
+	if strings.Contains(view, "no client certificates") {
 		t.Fatalf("unexpected no-access hint for accessible device: %q", view)
 	}
 }
@@ -951,5 +920,33 @@ func TestDiscoverCmdHasNoAllFlag(t *testing.T) {
 	cmd := newDiscoverCmd()
 	if flag := cmd.Flags().Lookup("all"); flag != nil {
 		t.Fatal("discover should no longer define an --all flag")
+	}
+}
+
+// The first event for a row may come from the cache; a later live one carries
+// the device's current cable record.
+func TestMergePickerItemRefreshesTheCableRecord(t *testing.T) {
+	cached := models.LANDevice{ID: "pi", Hostname: "pi.local", IPAddress: "192.168.2.216"}
+	existing := lanPickerItem(cached, false, tui.ProbeOK)
+	live := cached
+	live.WiredAddresses = []string{"192.168.2.50"}
+
+	mergePickerItem(&existing, lanPickerItem(live, false, tui.ProbeOK))
+
+	if got := existing.Value.(*pickerEntry).mergedDevice.LAN.WiredAddresses; !slices.Equal(got, []string{"192.168.2.50"}) {
+		t.Errorf("WiredAddresses = %v after a live event, want [192.168.2.50]", got)
+	}
+}
+
+// Rows merge by hostname, so a second device using the same name must not lend
+// this row its cable.
+func TestMergePickerItemTakesNoCableFromAnotherDevice(t *testing.T) {
+	existing := lanPickerItem(models.LANDevice{ID: "pi-a", Hostname: "pi.local", IPAddress: "192.168.2.216"}, false, tui.ProbeOK)
+	other := models.LANDevice{ID: "pi-b", Hostname: "pi.local", IPAddress: "10.0.0.50", WiredAddresses: []string{"10.0.0.50"}}
+
+	mergePickerItem(&existing, lanPickerItem(other, false, tui.ProbeOK))
+
+	if got := existing.Value.(*pickerEntry).mergedDevice.LAN.WiredAddresses; got != nil {
+		t.Errorf("WiredAddresses = %v from another device, want nil", got)
 	}
 }

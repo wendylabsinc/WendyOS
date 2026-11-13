@@ -137,6 +137,56 @@ struct AgentImageRegistryListenerTests {
             }
         }
     }
+
+    @Test("run() serves until its task is cancelled, then stops listening")
+    func runServesUntilCancelled() async throws {
+        let (bound, boundContinuation) = AsyncStream.makeStream(of: Int.self)
+        let registry = Self.listener(.pullOnly, store: Self.makeStore())
+        let task = Task {
+            try await registry.run { channel in
+                boundContinuation.yield(channel.localAddress?.port ?? 0)
+            }
+        }
+        var ports = bound.makeAsyncIterator()
+        let port = try #require(await ports.next())
+        let url = try #require(URL(string: "http://127.0.0.1:\(port)/v2"))
+
+        let (_, response) = try await URLSession.shared.data(from: url)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+
+        task.cancel()
+        // How run() ends is racy: when Hummingbird's date-cache timer sees the
+        // cancellation first, its service group reports it as an unexpected
+        // finish. The agent only relies on the listener going away.
+        _ = try? await task.value
+        await #expect(throws: (any Error).self) {
+            _ = try await URLSession.shared.data(from: url)
+        }
+    }
+
+    /// The listener is one part of the agent process. If it trapped SIGTERM,
+    /// `killall` would stop only the registry and leave the agent running
+    /// (WDY-3784). Runs in a child process: HummingbirdTesting's servers trap
+    /// SIGTERM in this one.
+    @Test("SIGTERM still ends the process while a listener runs")
+    func sigtermEndsTheProcessWhileListening() async {
+        await #expect(processExitsWith: .signal(SIGTERM)) {
+            let (bound, boundContinuation) = AsyncStream.makeStream(of: Void.self)
+            let registry = AgentImageRegistryListenerTests.listener(
+                .pullOnly,
+                store: AgentImageRegistryListenerTests.makeStore()
+            )
+            let task = Task {
+                try await registry.run { _ in boundContinuation.yield() }
+            }
+            for await _ in bound { break }
+
+            kill(getpid(), SIGTERM)
+            // Reached only if the signal was trapped; exiting normally fails the test.
+            try? await Task.sleep(for: .seconds(5))
+            task.cancel()
+        }
+    }
 }
 
 extension ByteBuffer {

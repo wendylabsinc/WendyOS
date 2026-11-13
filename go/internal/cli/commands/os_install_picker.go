@@ -4,129 +4,65 @@ package commands
 
 import (
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
-type installPickerTab struct {
-	label  string
-	picker tui.PickerModel
-}
-
-type installPickerModel struct {
-	tabs      []installPickerTab
-	active    int
-	width     int
-	selected  *tui.PickerItem
-	cancelled bool
-}
-
-func newInstallPickerModel(items []tui.PickerItem) installPickerModel {
-	groups := []struct {
-		label string
-		items []tui.PickerItem
-	}{
+func newInstallPickerModel(items []tui.PickerItem, detected ...tui.PickerItem) tabbedPickerModel {
+	groups := []pickerGroup{
+		{label: "Detected USB", items: detected},
 		{label: "Linux"},
 		{label: "Mac"},
 		{label: "Microcontrollers"},
 	}
 	for _, item := range items {
 		value, _ := item.Value.(string)
-		group := 0
+		group := 1
 		switch {
 		case value == headlessMacValue:
-			group = 1
-		case strings.HasPrefix(value, "wlite_"):
 			group = 2
+		case strings.HasPrefix(value, "wlite_"):
+			group = 3
 		}
 		groups[group].items = append(groups[group].items, item)
 	}
 
-	var m installPickerModel
-	for _, group := range groups {
-		// PR builds only offer Linux devices. Catalog failures can also leave
-		// a category empty, so only offer tabs with installable options.
-		if len(group.items) == 0 {
-			continue
-		}
-		picker := tui.NewPickerWithTitle("Select a device")
-		updated, _ := picker.Update(tui.PickerAddMsg{Items: group.items})
-		updated, _ = updated.Update(tui.PickerDoneMsg{})
-		m.tabs = append(m.tabs, installPickerTab{label: group.label, picker: updated.(tui.PickerModel)})
-	}
-	return m
-}
-
-// All install options are loaded before opening the picker.
-func (m installPickerModel) Init() tea.Cmd { return nil }
-
-func (m installPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if len(m.tabs) == 0 || m.selected != nil || m.cancelled {
-		return m, nil
-	}
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		msg.Height = max(1, msg.Height-2) // tab strip and blank line
-		var cmds []tea.Cmd
-		for i := range m.tabs {
-			updated, cmd := m.tabs[i].picker.Update(msg)
-			m.tabs[i].picker = updated.(tui.PickerModel)
-			cmds = append(cmds, cmd)
-		}
-		return m, tea.Batch(cmds...)
-	case tea.KeyMsg:
-		if key := msg.String(); key == "tab" || key == "shift+tab" {
-			m.active = (m.active + tabCycleDelta(key) + len(m.tabs)) % len(m.tabs)
-			return m, nil
-		}
-	}
-	updated, cmd := m.tabs[m.active].picker.Update(msg)
-	picker := updated.(tui.PickerModel)
-	m.tabs[m.active].picker = picker
-	m.selected = picker.Selected()
-	m.cancelled = picker.Cancelled()
-	return m, cmd
-}
-
-func (m installPickerModel) View() string {
-	if len(m.tabs) == 0 || m.selected != nil || m.cancelled {
-		return ""
-	}
-	var labels []string
-	for i, tab := range m.tabs {
-		style := devicePickerTabInactive
-		if i == m.active {
-			style = devicePickerTabActive
-		}
-		labels = append(labels, style.Render(tab.label))
-	}
-	header := strings.Join(labels, devicePickerTabInactive.Render(" | "))
-	if len(m.tabs) > 1 {
-		header += devicePickerTabInactive.Render("  (tab/shift+tab switch)")
-	}
-	if m.width > 0 {
-		header = tui.CropANSIView(header, 0, m.width)
-	}
-	return header + "\n\n" + m.tabs[m.active].picker.View()
+	return newTabbedPickerModel("Select a device", groups)
 }
 
 func pickInstallDevice(items []tui.PickerItem) (string, error) {
 	if len(items) == 0 {
 		return "", fmt.Errorf("no devices available")
 	}
-	finalModel, err := tea.NewProgram(newInstallPickerModel(items)).Run()
+	if err := requireInstallChoice("choosing a device", "pass --device-type ("+strings.Join(installDeviceTypeChoices(items), ", ")+")"); err != nil {
+		return "", err
+	}
+	devices, err := scanInstallUSBDevices()
 	if err != nil {
-		return "", fmt.Errorf("picker: %w", err)
+		log.Printf("WARNING: could not scan USB flashing devices: %v", err)
 	}
-	m := finalModel.(installPickerModel)
-	if m.cancelled {
-		return "", ErrUserCancelled
+	selected, err := runTabbedPicker(newInstallPickerModel(items, detectedInstallItems(items, devices)...))
+	if err != nil {
+		return "", err
 	}
-	if m.selected == nil {
-		return "", fmt.Errorf("no selection")
+	if selected == detectedEDLValue {
+		return pickFromItems("Select the board connected in EDL mode", edlInstallItems(items))
 	}
-	return m.selected.Value.(string), nil
+	return selected, nil
+}
+
+// installDeviceTypeChoices lists the --device-type values among items; Wendy
+// Lite boards have none, since only the picker installs them.
+func installDeviceTypeChoices(items []tui.PickerItem) []string {
+	var types []string
+	for _, item := range items {
+		if v, ok := item.Value.(string); ok && v != "" && !strings.HasPrefix(v, "wlite_") {
+			types = append(types, v)
+		}
+	}
+	sort.Strings(types)
+	return types
 }

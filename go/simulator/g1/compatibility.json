@@ -387,7 +387,7 @@
     "physical_robot_used_for_validation": false,
     "mounts": "virtual pelvis IMU, waist-level navigation lidar, and head-height camera; not factory extrinsics"
   },
-  "reset": "revokes owners, rejects old publishers, clears controller history and pending observations; command publishers must restart and be explicitly granted again",
+  "reset": "revokes owners, rejects old publishers, clears controller history and pending observations; command publishers must restart; managed VMs automatically grant a fresh driving publisher control on its first valid velocity request, while standalone runtimes require an explicit grant",
   "unsupported": [
     "factory gait parity",
     "stock low-level example's motion-switcher mutations",

@@ -1,9 +1,11 @@
 package liteclient
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble"
@@ -31,13 +33,89 @@ const DefaultL2CAPPSM uint16 = 128
 // tlsCfg carries the client's side of the trust decision; nil selects the
 // insecure configuration an unprovisioned device needs.
 func (c *WendyLiteClient) ConnectViaBLE(address string, psm uint16, tlsCfg *tls.Config) error {
+	return c.ConnectViaBLEContext(context.Background(), address, psm, tlsCfg)
+}
+
+// ConnectViaBLEContext cancels connection setup and both protocol handshakes.
+func (c *WendyLiteClient) ConnectViaBLEContext(ctx context.Context, address string, psm uint16, tlsCfg *tls.Config) error {
+	stream, err := dialBLEStream(ctx, address, psm)
+	if err != nil {
+		return err
+	}
+	stopCancel := context.AfterFunc(ctx, func() { stream.Close() })
+	defer stopCancel()
+	if tlsCfg == nil {
+		tlsCfg = &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec -- unprovisioned devices serve a self-signed cert
+			MinVersion:         tls.VersionTLS12,
+		}
+	}
+	// Certificate flights have the same finite radio budget as a mesh TCP
+	// endpoint; GAP/GATT/L2CAP setup retain their shorter independent limits.
+	_ = stream.SetDeadline(time.Now().Add(60 * time.Second))
+	tlsConn := tls.Client(stream, tlsCfg)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		stream.Close() //nolint:errcheck,gosec -- teardown on an already-failed path
+		return fmt.Errorf("BLE TLS handshake: %w", err)
+	}
+	_ = stream.SetDeadline(time.Time{})
+	c.link = newDirectLink(tlsConn)
+	if err := c.handshakeWithin(60 * time.Second); err != nil {
+		c.link.close()
+		c.link = nil
+		return fmt.Errorf("handshake: %w", err)
+	}
+	if tlsCfg.VerifyConnection != nil {
+		c.peerCert = tlsConn.ConnectionState().PeerCertificates[0]
+	}
+	c.startReadLoop()
+	return nil
+}
+
+// The native BLE API has bounded blocking calls but no context support. Keep
+// its connection local until setup finishes, and close it if cancellation wins.
+func dialBLEStream(ctx context.Context, address string, psm uint16) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	type result struct {
+		stream net.Conn
+		err    error
+	}
+	completed := make(chan result)
+	open := openBLEStreamFn
+	go func() {
+		stream, err := open(ctx, address, psm)
+		select {
+		case completed <- result{stream: stream, err: err}:
+		case <-ctx.Done():
+			if stream != nil {
+				stream.Close()
+			}
+		}
+	}()
+	select {
+	case result := <-completed:
+		return result.stream, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+var openBLEStreamFn = openBLEStream
+
+func openBLEStream(ctx context.Context, address string, psm uint16) (net.Conn, error) {
 	// The BLE client takes whole seconds, not a Duration; bleDialTimeout is a
 	// whole number of them.
 	timeoutSecs := int(bleDialTimeout / time.Second)
 
 	conn, err := central.Connect(address, timeoutSecs)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		conn.Close()
+		return nil, err
 	}
 
 	if psm == 0 {
@@ -52,43 +130,30 @@ func (c *WendyLiteClient) ConnectViaBLE(address string, psm uint16, tlsCfg *tls.
 			psm = DefaultL2CAPPSM
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	if err := conn.OpenL2CAP(psm, timeoutSecs); err != nil {
 		conn.Close()
-		return fmt.Errorf("opening L2CAP channel (PSM %d): %w", psm, err)
+		return nil, fmt.Errorf("opening L2CAP channel (PSM %d): %w", psm, err)
 	}
+	return central.NewL2CAPStream(conn), nil
+}
 
-	if tlsCfg == nil {
-		tlsCfg = &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec — unprovisioned devices serve a self-signed cert
-			MinVersion:         tls.VersionTLS12,
-		}
-	}
+// ConnectViaBLEWithPKIAuthentication verifies the Wendy-issued chain and the
+// selected device identity with the same verifier used by LAN and Cloud.
+func (c *WendyLiteClient) ConnectViaBLEWithPKIAuthentication(address string, psm uint16, cert tls.Certificate, chain, deviceID string, lite LiteDeviceCAChain) error {
+	return c.ConnectViaBLEWithPKIAuthenticationContext(context.Background(), address, psm, cert, chain, deviceID, lite)
+}
 
-	stream := central.NewL2CAPStream(conn)
-	// Bound the handshake explicitly. A BLE read with no deadline blocks
-	// indefinitely by design, because that is what the read loop below needs,
-	// so a device that opens the channel and then says nothing would hang here
-	// forever.
-	_ = stream.SetDeadline(time.Now().Add(bleDialTimeout))
-	tlsConn := tls.Client(stream, tlsCfg)
-	if err := tlsConn.Handshake(); err != nil {
-		// Through the stream, not the connection: the stream is what tracks
-		// whether the underlying connection has already been closed.
-		stream.Close() //nolint:errcheck,gosec — teardown on an already-failed path
-		return fmt.Errorf("BLE TLS handshake: %w", err)
+func (c *WendyLiteClient) ConnectViaBLEWithPKIAuthenticationContext(ctx context.Context, address string, psm uint16, cert tls.Certificate, chain, deviceID string, lite LiteDeviceCAChain) error {
+	cfg, err := deviceTLSConfig(ctx, cert, chain, deviceID, lite)
+	if err != nil {
+		return err
 	}
-	// Clear it before the read loop can inherit an expired deadline.
-	_ = stream.SetDeadline(time.Time{})
-
-	c.link = newDirectLink(tlsConn)
-	if err := c.handshake(); err != nil {
-		c.link.close()
-		c.link = nil
-		return fmt.Errorf("handshake: %w", err)
-	}
-	c.startReadLoop()
-	return nil
+	return c.ConnectViaBLEContext(ctx, address, psm, cfg)
 }
 
 // ConnectViaBLEInsecure reaches a device over BLE without verifying its

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -10,17 +11,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
 )
 
+var dialerTestTarget = DeliveryTarget{Device: testMeshDevice, AssetUUID: testAssetUUID}
+var dialerOtherTarget = DeliveryTarget{Device: mustTestDevice(testAssetUUIDB), AssetUUID: testAssetUUIDB}
+
 func testDialer() (*MeshDialer, *dialerProbes) {
 	p := &dialerProbes{}
-	d := NewMeshDialer(zap.NewNop(), "broker.example:443", 7, 100, "", "", "", nil)
-	d.lanLookup = func(ctx context.Context, assetID int32) (string, bool) {
+	d := NewMeshDialer(zap.NewNop(), "", "", "", nil)
+	d.lanLookup = func(ctx context.Context, device meshid.Device) (string, bool) {
 		p.lookups++
 		return p.lanAddr, p.lanAddr != ""
 	}
-	d.dialLAN = func(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error) {
+	d.dialLAN = func(ctx context.Context, hostport string, device meshid.Device, port uint16) (net.Conn, error) {
 		p.lanDials++
 		if p.lanErr != nil {
 			return nil, p.lanErr
@@ -28,7 +33,7 @@ func testDialer() (*MeshDialer, *dialerProbes) {
 		a, _ := net.Pipe()
 		return a, nil
 	}
-	d.dialBroker = func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error) {
+	d.serviceDial = func(ctx context.Context, device meshid.Device, port uint16) (net.Conn, error) {
 		p.brokerDials++
 		if p.brokerErr != nil {
 			return nil, p.brokerErr
@@ -48,7 +53,7 @@ type dialerProbes struct {
 func TestDialDeviceUsesLANWhenAvailable(t *testing.T) {
 	d, p := testDialer()
 	p.lanAddr = "192.168.1.50:50052"
-	conn, mode, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, mode, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +70,7 @@ func TestDialDeviceFallsBackToBroker(t *testing.T) {
 	d, p := testDialer()
 	p.lanAddr = "192.168.1.50:50052"
 	p.lanErr = errors.New("connection refused")
-	conn, mode, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, mode, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,15 +78,15 @@ func TestDialDeviceFallsBackToBroker(t *testing.T) {
 	if p.lanDials != 1 || p.brokerDials != 1 {
 		t.Fatalf("lan=%d broker=%d, want 1/1", p.lanDials, p.brokerDials)
 	}
-	if mode != "relay" {
-		t.Fatalf("mode = %q, want relay", mode)
+	if mode != "local-mesh" {
+		t.Fatalf("mode = %q, want local-mesh", mode)
 	}
 }
 
 func TestDialDeviceBrokerOnlyWhenNoLANPeer(t *testing.T) {
 	d, p := testDialer()
 	p.lanAddr = "" // not found on LAN
-	conn, mode, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, mode, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,20 +94,20 @@ func TestDialDeviceBrokerOnlyWhenNoLANPeer(t *testing.T) {
 	if p.lanDials != 0 || p.brokerDials != 1 {
 		t.Fatalf("lan=%d broker=%d, want 0/1", p.lanDials, p.brokerDials)
 	}
-	if mode != "relay" {
-		t.Fatalf("mode = %q, want relay", mode)
+	if mode != "local-mesh" {
+		t.Fatalf("mode = %q, want local-mesh", mode)
 	}
 }
 
 // TestDialDeviceErrorModeIsEmpty proves that on total dial failure (both LAN
 // and broker fail, or broker fails when LAN was never tried) the mode return
 // is the zero value, matching the mesh.PeerDialer contract Proxy relies on
-// when labeling its "mesh connection failed" log.
+// when labeling its "wendy net connection failed" log.
 func TestDialDeviceErrorModeIsEmpty(t *testing.T) {
 	d, p := testDialer()
 	p.lanAddr = ""
 	p.brokerErr = errors.New("broker unreachable")
-	conn, mode, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, mode, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err == nil {
 		conn.Close()
 		t.Fatal("expected error")
@@ -128,7 +133,7 @@ func TestDialDeviceRecordsMeshMetrics(t *testing.T) {
 
 	// Leg 1: LAN succeeds outright.
 	p.lanAddr = "192.168.1.50:50052"
-	conn, _, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, _, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +142,7 @@ func TestDialDeviceRecordsMeshMetrics(t *testing.T) {
 	// Leg 2 (different device, so it isn't served by the leg-1 LAN cache
 	// entry): LAN fails, falls back to broker which succeeds.
 	p.lanErr = errors.New("refused")
-	conn, _, err = d.DialDevice(context.Background(), 216, 8080)
+	conn, _, err = d.DialTarget(context.Background(), dialerOtherTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +165,7 @@ func TestDialDeviceRecordsMeshMetrics(t *testing.T) {
 			sawLANOk = true
 		case mode == "lan-direct" && result == "error":
 			sawLANErr = true
-		case mode == "relay" && result == "ok":
+		case mode == "local-mesh" && result == "ok":
 			sawRelayOk = true
 		}
 	}
@@ -179,7 +184,7 @@ func TestDialDeviceCachesLANOutcome(t *testing.T) {
 	d.now = func() time.Time { return now }
 
 	for i := 0; i < 3; i++ {
-		conn, _, err := d.DialDevice(context.Background(), 215, 8080)
+		conn, _, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +195,7 @@ func TestDialDeviceCachesLANOutcome(t *testing.T) {
 	}
 
 	now = now.Add(2 * lanCacheTTL) // expire
-	conn, _, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, _, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +209,7 @@ func TestDialDeviceCachesNegativeOutcome(t *testing.T) {
 	d, p := testDialer()
 	p.lanAddr = ""
 	for i := 0; i < 3; i++ {
-		conn, _, err := d.DialDevice(context.Background(), 215, 8080)
+		conn, _, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,12 +228,12 @@ func TestDialDeviceCachesNegativeOutcome(t *testing.T) {
 // could dial peers the new identity cannot authenticate against.
 func TestUpdateIdentitySwapsSnapshotAndClearsLANCache(t *testing.T) {
 	p := &dialerProbes{}
-	d := NewMeshDialer(zap.NewNop(), "", 0, 0, "", "", "", nil)
-	d.lanLookup = func(ctx context.Context, assetID int32) (string, bool) {
+	d := NewMeshDialer(zap.NewNop(), "", "", "", nil)
+	d.lanLookup = func(ctx context.Context, device meshid.Device) (string, bool) {
 		p.lookups++
 		return p.lanAddr, p.lanAddr != ""
 	}
-	d.dialLAN = func(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error) {
+	d.dialLAN = func(ctx context.Context, hostport string, device meshid.Device, port uint16) (net.Conn, error) {
 		p.lanDials++
 		a, _ := net.Pipe()
 		return a, nil
@@ -241,7 +246,7 @@ func TestUpdateIdentitySwapsSnapshotAndClearsLANCache(t *testing.T) {
 
 	// Prime the LAN cache with a positive entry.
 	p.lanAddr = "192.168.1.50:50052"
-	conn, _, err := d.DialDevice(context.Background(), 215, 8080)
+	conn, _, err := d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,11 +255,9 @@ func TestUpdateIdentitySwapsSnapshotAndClearsLANCache(t *testing.T) {
 		t.Fatalf("lookups = %d, want 1", p.lookups)
 	}
 
-	d.UpdateIdentity("broker.example:443", 7, 100, "CERT", "KEY", "CHAIN")
+	d.UpdateIdentity("CERT", "KEY", "CHAIN")
 
 	want := meshIdentity{
-		brokerURL: "broker.example:443",
-		orgID:     7, assetID: 100,
 		certPEM: "CERT", keyPEM: "KEY", chainPEM: "CHAIN",
 	}
 	if got := d.identity(); got != want {
@@ -262,7 +265,7 @@ func TestUpdateIdentitySwapsSnapshotAndClearsLANCache(t *testing.T) {
 	}
 
 	// The cached LAN outcome must be gone: the next dial re-runs discovery.
-	conn, _, err = d.DialDevice(context.Background(), 215, 8080)
+	conn, _, err = d.DialTarget(context.Background(), dialerTestTarget, 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,14 +281,14 @@ func TestUpdateIdentitySwapsSnapshotAndClearsLANCache(t *testing.T) {
 func TestDialDeviceReturnsWhenCtxExpires(t *testing.T) {
 	d, p := testDialer()
 	p.lanAddr = "" // force the broker path
-	d.dialBroker = func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error) {
+	d.serviceDial = func(ctx context.Context, device meshid.Device, port uint16) (net.Conn, error) {
 		<-ctx.Done() // a well-behaved dial blocks until the caller's ctx expires
 		return nil, ctx.Err()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, _, err := d.DialDevice(ctx, 215, 8080); err == nil {
+	if _, _, err := d.DialTarget(ctx, dialerTestTarget, 8080); err == nil {
 		t.Fatal("expected error from expired ctx")
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
@@ -328,45 +331,12 @@ func TestDialBoundContext(t *testing.T) {
 	})
 }
 
-// TestMeshDialBrokerHonorsDialContext runs the REAL broker dial path against
-// a listener that accepts TCP but never speaks, proving the connect/open
-// phase is bounded by the caller's ctx instead of hanging forever.
-func TestMeshDialBrokerHonorsDialContext(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	var mu sync.Mutex
-	var held []net.Conn
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			held = append(held, c) // hold open, never complete a handshake
-			mu.Unlock()
-		}
-	}()
-	defer func() {
-		mu.Lock()
-		for _, c := range held {
-			c.Close()
-		}
-		mu.Unlock()
-	}()
-
-	d := NewMeshDialer(zap.NewNop(), ln.Addr().String(), 7, 100, "", "", "", nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	if _, err := d.dialBroker(ctx, 215, 8080); err == nil {
-		t.Fatal("expected error dialing a silent broker")
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("broker dial took %v, want it bounded by the 100ms ctx", elapsed)
+func TestAdministrativeDialDoesNotInventCloudAuthorization(t *testing.T) {
+	d := NewMeshDialer(zap.NewNop(), "", "", "", nil)
+	d.lanLookup = func(context.Context, meshid.Device) (string, bool) { return "", false }
+	if conn, _, err := d.DialTarget(context.Background(), dialerTestTarget, 50052); err == nil {
+		conn.Close()
+		t.Fatal("unreachable administrative target unexpectedly connected")
 	}
 }
 
@@ -572,5 +542,37 @@ func TestMeshDialContextDialerDialsVerbatim(t *testing.T) {
 		}
 		conn.Close()
 		ln.Close()
+	}
+}
+
+func TestDialTargetRejectsMismatchedCloudUUIDBeforeDiscovery(t *testing.T) {
+	for _, routed := range []bool{false, true} {
+		t.Run(fmt.Sprint("routed=", routed), func(t *testing.T) {
+			d, probes := testDialer()
+			target := dialerTestTarget
+			target.AssetUUID = testAssetUUIDB
+			dial := d.DialTarget
+			if routed {
+				dial = d.DialRoutedTarget
+			}
+			if conn, _, err := dial(context.Background(), target, 8080); err == nil {
+				conn.Close()
+				t.Fatal("accepted a Cloud UUID that differs from the device principal")
+			}
+			if probes.lookups != 0 || probes.lanDials != 0 || probes.brokerDials != 0 {
+				t.Fatalf("mismatched identity reached a transport: %+v", probes)
+			}
+		})
+	}
+}
+
+func TestDialTargetRejectsAbsentDeviceBeforeDialing(t *testing.T) {
+	d, probes := testDialer()
+	_, _, err := d.DialTarget(context.Background(), DeliveryTarget{}, 50052)
+	if err == nil || !strings.Contains(err.Error(), "invalid wendy net service target") {
+		t.Fatalf("absent target was not rejected at the identity boundary: %v", err)
+	}
+	if probes.lookups != 0 || probes.lanDials != 0 || probes.brokerDials != 0 {
+		t.Fatal("absent target triggered network discovery or dialing")
 	}
 }

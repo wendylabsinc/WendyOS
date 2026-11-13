@@ -90,16 +90,21 @@ func withStubbedReloginDeps(t *testing.T, interactive, json, confirm bool, login
 	origJSON := jsonOutput
 	origConfirm := confirmFn
 	origLogin := performLoginFn
+	origOIDCLogin := performOIDCLoginFn
 	t.Cleanup(func() {
 		isInteractiveTerminalFn = origInteractive
 		jsonOutput = origJSON
 		confirmFn = origConfirm
 		performLoginFn = origLogin
+		performOIDCLoginFn = origOIDCLogin
 	})
 	isInteractiveTerminalFn = func() bool { return interactive }
 	jsonOutput = json
 	confirmFn = func(string) bool { return confirm }
 	performLoginFn = login
+	performOIDCLoginFn = func(ctx context.Context, opts oidcLoginOptions) error {
+		return login(ctx, opts.CloudURL, opts.CloudGRPC)
+	}
 }
 
 func TestOfferReloginOnUnauthenticated(t *testing.T) {

@@ -126,12 +126,14 @@ struct `'wendy cache clear'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             let cacheDirectory = cli.wendyCacheDirectory
 
+            // The CLI makes the cache tree writable itself, so block the removal from the parent.
             try await cli.sh(
                 posix: """
-                    mkdir -p "\(cacheDirectory)/locked"
-                    printf 'cached\n' > "\(cacheDirectory)/locked/entry.bin"
-                    chmod 000 "\(cacheDirectory)/locked"
-                    trap 'chmod 700 "\(cacheDirectory)/locked" 2>/dev/null || true' EXIT
+                    mkdir -p "\(cacheDirectory)"
+                    printf 'cached\n' > "\(cacheDirectory)/entry.bin"
+                    parent=$(dirname "\(cacheDirectory)")
+                    chmod a-w "$parent"
+                    trap 'chmod u+w "$parent" 2>/dev/null || true' EXIT
                     wendy cache clear
                     """,
                 power: """

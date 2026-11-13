@@ -74,7 +74,7 @@ struct BonjourAdvertiser {
 }
 
 final class BonjourRegistration: @unchecked Sendable {
-    private let port: Int
+    let port: Int
     private let txtData: Data
     private let queue = DispatchQueue(label: "sh.wendy.agent.bonjour.registration")
 

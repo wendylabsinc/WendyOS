@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
@@ -30,8 +31,9 @@ func wholeFrame(channelID, seq uint32) *sensorlinkpb.SensorData {
 // send plays the client's read loop: it hands a chunk to every listener
 // synchronously, so a listener that blocks would hang the test.
 type fakeWendycomClient struct {
-	manifest *sensorlinkpb.SensorManifest
-	peerCert *x509.Certificate
+	manifest   *sensorlinkpb.SensorManifest
+	manifestFn func(time.Duration) (*sensorlinkpb.SensorManifest, error)
+	peerCert   *x509.Certificate
 
 	mu           sync.Mutex
 	listeners    map[int]func(*sensorlinkpb.SensorData)
@@ -58,7 +60,10 @@ func newFakeWendycomClient() *fakeWendycomClient {
 	}
 }
 
-func (c *fakeWendycomClient) GetSensorManifest(time.Duration) (*sensorlinkpb.SensorManifest, error) {
+func (c *fakeWendycomClient) GetSensorManifest(timeout time.Duration) (*sensorlinkpb.SensorManifest, error) {
+	if c.manifestFn != nil {
+		return c.manifestFn(timeout)
+	}
 	return c.manifest, nil
 }
 
@@ -175,7 +180,7 @@ func TestWendyComTransportReportsBadClientCertificate(t *testing.T) {
 
 func newTestWendycomTransport(logger *zap.Logger, c *fakeWendycomClient) (*wendycomTransport, *atomic.Int32) {
 	var connects atomic.Int32
-	return &wendycomTransport{logger: logger, sourceAssetID: 7, connect: func() (wendycomClient, error) {
+	return &wendycomTransport{logger: logger, sourceAssetID: 7, connect: func(context.Context) (wendycomClient, error) {
 		connects.Add(1)
 		return c, nil
 	}}, &connects
@@ -412,11 +417,11 @@ func TestWendycomTransportCloseClosesClientOnce(t *testing.T) {
 
 func TestWendycomTransportConnectBoundedByContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c := newFakeWendycomClient()
-		release := make(chan struct{})
-		tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func() (wendycomClient, error) {
-			<-release // a TCP dial to an address that never answers
-			return c, nil
+		finished := false
+		tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func(ctx context.Context) (wendycomClient, error) {
+			<-ctx.Done() // a TCP dial to an address that never answers
+			finished = true
+			return nil, ctx.Err()
 		}}
 		defer tr.Close()
 
@@ -426,11 +431,93 @@ func TestWendycomTransportConnectBoundedByContext(t *testing.T) {
 			t.Fatalf("FetchManifest: got %v, want a deadline error", err)
 		}
 
-		// A connect that completes after the caller gave up is not leaked.
-		close(release)
-		synctest.Wait()
-		if n := c.closeCount(); n != 1 {
-			t.Fatalf("late connection closed %d times, want 1", n)
+		if !finished {
+			t.Fatal("connection attempt outlived FetchManifest and could overlap a retry")
+		}
+	})
+}
+
+func TestWendycomTransportConnectHasDefaultDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, principal string
+		budget          time.Duration
+	}{{"legacy", "", 15 * time.Second}, {"principal", meshSourcePrincipal, liteclient.SensorSourceSetupTimeout}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, sourcePrincipalURI: tc.principal, connect: func(ctx context.Context) (wendycomClient, error) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}}
+				defer tr.Close()
+				start := time.Now()
+				if err := tr.Connect(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("Connect: got %v, want a deadline error", err)
+				}
+				if elapsed := time.Since(start); elapsed != tc.budget {
+					t.Fatalf("Connect took %s, want %s", elapsed, tc.budget)
+				}
+			})
+		})
+	}
+}
+
+func TestNormalPrincipalSourceCanCompleteRoutedCertificateFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := newFakeWendycomClient()
+		client.peerCert = certWithURI(meshSourcePrincipal)
+		tr := &wendycomTransport{logger: zap.NewNop(), sourcePrincipalURI: meshSourcePrincipal, connect: func(ctx context.Context) (wendycomClient, error) {
+			select {
+			case <-time.After(33 * time.Second):
+				return client, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}}
+		defer tr.Close()
+		if err := tr.Connect(context.Background()); err != nil {
+			t.Fatalf("normal routed native certificate flight: %v", err)
+		}
+	})
+}
+
+func TestWendycomTransportCancellationClosesConnection(t *testing.T) {
+	c := newFakeWendycomClient()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func(context.Context) (wendycomClient, error) {
+		cancel() // the connection finishes as the caller cancels
+		return c, nil
+	}}
+	defer tr.Close()
+	if err := tr.Connect(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Connect: got %v, want cancellation", err)
+	}
+	if n := c.closeCount(); n != 1 {
+		t.Fatalf("cancelled connection closed %d times, want 1", n)
+	}
+}
+
+func TestSupervisorWendycomConnectionHasSeparateManifestDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newFakeWendycomClient()
+		c.manifestFn = func(timeout time.Duration) (*sensorlinkpb.SensorManifest, error) {
+			if timeout != 3*time.Second {
+				t.Fatalf("manifest timeout = %s, want a fresh 3s after connection", timeout)
+			}
+			time.Sleep(2 * time.Second)
+			return &sensorlinkpb.SensorManifest{}, nil
+		}
+		tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func(ctx context.Context) (wendycomClient, error) {
+			select {
+			case <-time.After(4 * time.Second):
+				return c, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}}
+		sup := NewSupervisor(zap.NewNop(), nil, func(SensorPairing, string) (SensorTransport, error) { return tr, nil }, nil, nil)
+		if _, err := sup.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "board:5054"); err != nil {
+			t.Fatalf("valid slow connection failed before fetching its manifest: %v", err)
 		}
 	})
 }

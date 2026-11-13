@@ -56,7 +56,10 @@ func ApplyResourceLimits(spec *Spec, limits *appconfig.ResourceLimits) error {
 	res := spec.Linux.Resources
 
 	if memBytes != nil {
-		res.Memory = &LinuxMemory{Limit: memBytes}
+		// OCI defines Swap as RAM + swap. Equal ceilings disable swap on
+		// cgroup v2 (memory.swap.max=0), so an explicit memory budget cannot
+		// silently consume unbounded host swap after hitting memory.max.
+		res.Memory = &LinuxMemory{Limit: memBytes, Swap: memBytes}
 	}
 	if quota != nil {
 		res.CPU = &LinuxCPU{Quota: quota, Period: period}

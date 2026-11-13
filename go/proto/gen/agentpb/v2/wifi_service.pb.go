@@ -9,6 +9,7 @@ package agentpbv2
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -466,6 +467,170 @@ func (x *DisconnectWiFiResponse) GetErrorMessage() string {
 	return ""
 }
 
+type DisconnectWiFiControl struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Control:
+	//
+	//	*DisconnectWiFiControl_Begin
+	//	*DisconnectWiFiControl_Confirm
+	Control       isDisconnectWiFiControl_Control `protobuf_oneof:"control"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisconnectWiFiControl) Reset() {
+	*x = DisconnectWiFiControl{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisconnectWiFiControl) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisconnectWiFiControl) ProtoMessage() {}
+
+func (x *DisconnectWiFiControl) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisconnectWiFiControl.ProtoReflect.Descriptor instead.
+func (*DisconnectWiFiControl) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DisconnectWiFiControl) GetControl() isDisconnectWiFiControl_Control {
+	if x != nil {
+		return x.Control
+	}
+	return nil
+}
+
+func (x *DisconnectWiFiControl) GetBegin() *emptypb.Empty {
+	if x != nil {
+		if x, ok := x.Control.(*DisconnectWiFiControl_Begin); ok {
+			return x.Begin
+		}
+	}
+	return nil
+}
+
+func (x *DisconnectWiFiControl) GetConfirm() *emptypb.Empty {
+	if x != nil {
+		if x, ok := x.Control.(*DisconnectWiFiControl_Confirm); ok {
+			return x.Confirm
+		}
+	}
+	return nil
+}
+
+type isDisconnectWiFiControl_Control interface {
+	isDisconnectWiFiControl_Control()
+}
+
+type DisconnectWiFiControl_Begin struct {
+	Begin *emptypb.Empty `protobuf:"bytes,1,opt,name=begin,proto3,oneof"`
+}
+
+type DisconnectWiFiControl_Confirm struct {
+	Confirm *emptypb.Empty `protobuf:"bytes,2,opt,name=confirm,proto3,oneof"`
+}
+
+func (*DisconnectWiFiControl_Begin) isDisconnectWiFiControl_Control() {}
+
+func (*DisconnectWiFiControl_Confirm) isDisconnectWiFiControl_Control() {}
+
+type DisconnectWiFiEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*DisconnectWiFiEvent_Ready
+	//	*DisconnectWiFiEvent_Completed
+	Event         isDisconnectWiFiEvent_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisconnectWiFiEvent) Reset() {
+	*x = DisconnectWiFiEvent{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisconnectWiFiEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisconnectWiFiEvent) ProtoMessage() {}
+
+func (x *DisconnectWiFiEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisconnectWiFiEvent.ProtoReflect.Descriptor instead.
+func (*DisconnectWiFiEvent) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DisconnectWiFiEvent) GetEvent() isDisconnectWiFiEvent_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *DisconnectWiFiEvent) GetReady() *emptypb.Empty {
+	if x != nil {
+		if x, ok := x.Event.(*DisconnectWiFiEvent_Ready); ok {
+			return x.Ready
+		}
+	}
+	return nil
+}
+
+func (x *DisconnectWiFiEvent) GetCompleted() *DisconnectWiFiResponse {
+	if x != nil {
+		if x, ok := x.Event.(*DisconnectWiFiEvent_Completed); ok {
+			return x.Completed
+		}
+	}
+	return nil
+}
+
+type isDisconnectWiFiEvent_Event interface {
+	isDisconnectWiFiEvent_Event()
+}
+
+type DisconnectWiFiEvent_Ready struct {
+	Ready *emptypb.Empty `protobuf:"bytes,1,opt,name=ready,proto3,oneof"`
+}
+
+type DisconnectWiFiEvent_Completed struct {
+	Completed *DisconnectWiFiResponse `protobuf:"bytes,2,opt,name=completed,proto3,oneof"`
+}
+
+func (*DisconnectWiFiEvent_Ready) isDisconnectWiFiEvent_Event() {}
+
+func (*DisconnectWiFiEvent_Completed) isDisconnectWiFiEvent_Event() {}
+
 type ListKnownWiFiNetworksRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -474,7 +639,7 @@ type ListKnownWiFiNetworksRequest struct {
 
 func (x *ListKnownWiFiNetworksRequest) Reset() {
 	*x = ListKnownWiFiNetworksRequest{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[8]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -486,7 +651,7 @@ func (x *ListKnownWiFiNetworksRequest) String() string {
 func (*ListKnownWiFiNetworksRequest) ProtoMessage() {}
 
 func (x *ListKnownWiFiNetworksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[8]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -499,7 +664,7 @@ func (x *ListKnownWiFiNetworksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKnownWiFiNetworksRequest.ProtoReflect.Descriptor instead.
 func (*ListKnownWiFiNetworksRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{8}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{10}
 }
 
 type ListKnownWiFiNetworksResponse struct {
@@ -511,7 +676,7 @@ type ListKnownWiFiNetworksResponse struct {
 
 func (x *ListKnownWiFiNetworksResponse) Reset() {
 	*x = ListKnownWiFiNetworksResponse{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[9]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +688,7 @@ func (x *ListKnownWiFiNetworksResponse) String() string {
 func (*ListKnownWiFiNetworksResponse) ProtoMessage() {}
 
 func (x *ListKnownWiFiNetworksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[9]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +701,7 @@ func (x *ListKnownWiFiNetworksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKnownWiFiNetworksResponse.ProtoReflect.Descriptor instead.
 func (*ListKnownWiFiNetworksResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{9}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListKnownWiFiNetworksResponse) GetNetworks() []*ListKnownWiFiNetworksResponse_KnownWiFiNetwork {
@@ -556,7 +721,7 @@ type SetWiFiNetworkPriorityRequest struct {
 
 func (x *SetWiFiNetworkPriorityRequest) Reset() {
 	*x = SetWiFiNetworkPriorityRequest{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[10]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -568,7 +733,7 @@ func (x *SetWiFiNetworkPriorityRequest) String() string {
 func (*SetWiFiNetworkPriorityRequest) ProtoMessage() {}
 
 func (x *SetWiFiNetworkPriorityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[10]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -581,7 +746,7 @@ func (x *SetWiFiNetworkPriorityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetWiFiNetworkPriorityRequest.ProtoReflect.Descriptor instead.
 func (*SetWiFiNetworkPriorityRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{10}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SetWiFiNetworkPriorityRequest) GetSsid() string {
@@ -608,7 +773,7 @@ type SetWiFiNetworkPriorityResponse struct {
 
 func (x *SetWiFiNetworkPriorityResponse) Reset() {
 	*x = SetWiFiNetworkPriorityResponse{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[11]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -620,7 +785,7 @@ func (x *SetWiFiNetworkPriorityResponse) String() string {
 func (*SetWiFiNetworkPriorityResponse) ProtoMessage() {}
 
 func (x *SetWiFiNetworkPriorityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[11]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -633,7 +798,7 @@ func (x *SetWiFiNetworkPriorityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetWiFiNetworkPriorityResponse.ProtoReflect.Descriptor instead.
 func (*SetWiFiNetworkPriorityResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{11}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SetWiFiNetworkPriorityResponse) GetSuccess() bool {
@@ -659,7 +824,7 @@ type ReorderKnownWiFiNetworksRequest struct {
 
 func (x *ReorderKnownWiFiNetworksRequest) Reset() {
 	*x = ReorderKnownWiFiNetworksRequest{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[12]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -671,7 +836,7 @@ func (x *ReorderKnownWiFiNetworksRequest) String() string {
 func (*ReorderKnownWiFiNetworksRequest) ProtoMessage() {}
 
 func (x *ReorderKnownWiFiNetworksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[12]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -684,7 +849,7 @@ func (x *ReorderKnownWiFiNetworksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderKnownWiFiNetworksRequest.ProtoReflect.Descriptor instead.
 func (*ReorderKnownWiFiNetworksRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{12}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ReorderKnownWiFiNetworksRequest) GetOrderSsids() []string {
@@ -704,7 +869,7 @@ type ReorderKnownWiFiNetworksResponse struct {
 
 func (x *ReorderKnownWiFiNetworksResponse) Reset() {
 	*x = ReorderKnownWiFiNetworksResponse{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[13]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -716,7 +881,7 @@ func (x *ReorderKnownWiFiNetworksResponse) String() string {
 func (*ReorderKnownWiFiNetworksResponse) ProtoMessage() {}
 
 func (x *ReorderKnownWiFiNetworksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[13]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -729,7 +894,7 @@ func (x *ReorderKnownWiFiNetworksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderKnownWiFiNetworksResponse.ProtoReflect.Descriptor instead.
 func (*ReorderKnownWiFiNetworksResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{13}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ReorderKnownWiFiNetworksResponse) GetSuccess() bool {
@@ -755,7 +920,7 @@ type ForgetWiFiNetworkRequest struct {
 
 func (x *ForgetWiFiNetworkRequest) Reset() {
 	*x = ForgetWiFiNetworkRequest{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[14]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -767,7 +932,7 @@ func (x *ForgetWiFiNetworkRequest) String() string {
 func (*ForgetWiFiNetworkRequest) ProtoMessage() {}
 
 func (x *ForgetWiFiNetworkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[14]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -780,7 +945,7 @@ func (x *ForgetWiFiNetworkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgetWiFiNetworkRequest.ProtoReflect.Descriptor instead.
 func (*ForgetWiFiNetworkRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{14}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ForgetWiFiNetworkRequest) GetSsid() string {
@@ -800,7 +965,7 @@ type ForgetWiFiNetworkResponse struct {
 
 func (x *ForgetWiFiNetworkResponse) Reset() {
 	*x = ForgetWiFiNetworkResponse{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[15]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -812,7 +977,7 @@ func (x *ForgetWiFiNetworkResponse) String() string {
 func (*ForgetWiFiNetworkResponse) ProtoMessage() {}
 
 func (x *ForgetWiFiNetworkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[15]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -825,7 +990,7 @@ func (x *ForgetWiFiNetworkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgetWiFiNetworkResponse.ProtoReflect.Descriptor instead.
 func (*ForgetWiFiNetworkResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{15}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ForgetWiFiNetworkResponse) GetSuccess() bool {
@@ -838,6 +1003,312 @@ func (x *ForgetWiFiNetworkResponse) GetSuccess() bool {
 func (x *ForgetWiFiNetworkResponse) GetErrorMessage() string {
 	if x != nil && x.ErrorMessage != nil {
 		return *x.ErrorMessage
+	}
+	return ""
+}
+
+// Read-only kernel regulatory snapshot, independent of NetworkManager.
+type GetWiFiRegulatoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetWiFiRegulatoryRequest) Reset() {
+	*x = GetWiFiRegulatoryRequest{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetWiFiRegulatoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetWiFiRegulatoryRequest) ProtoMessage() {}
+
+func (x *GetWiFiRegulatoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetWiFiRegulatoryRequest.ProtoReflect.Descriptor instead.
+func (*GetWiFiRegulatoryRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{18}
+}
+
+// An explicit operator request to the kernel global regulatory domain. This is
+// a hint, not a persistent setting or an override of self-managed PHY domains.
+type RequestWiFiCountryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CountryCode   string                 `protobuf:"bytes,1,opt,name=country_code,json=countryCode,proto3" json:"country_code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestWiFiCountryRequest) Reset() {
+	*x = RequestWiFiCountryRequest{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestWiFiCountryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestWiFiCountryRequest) ProtoMessage() {}
+
+func (x *RequestWiFiCountryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestWiFiCountryRequest.ProtoReflect.Descriptor instead.
+func (*RequestWiFiCountryRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RequestWiFiCountryRequest) GetCountryCode() string {
+	if x != nil {
+		return x.CountryCode
+	}
+	return ""
+}
+
+type WiFiRegulatoryStatus struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	GlobalCountry    string                 `protobuf:"bytes,1,opt,name=global_country,json=globalCountry,proto3" json:"global_country,omitempty"`
+	Phys             []*WiFiRegulatoryPhy   `protobuf:"bytes,2,rep,name=phys,proto3" json:"phys,omitempty"`
+	RawRegulatory    string                 `protobuf:"bytes,3,opt,name=raw_regulatory,json=rawRegulatory,proto3" json:"raw_regulatory,omitempty"`
+	RequestedCountry string                 `protobuf:"bytes,4,opt,name=requested_country,json=requestedCountry,proto3" json:"requested_country,omitempty"`
+	Detail           string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *WiFiRegulatoryStatus) Reset() {
+	*x = WiFiRegulatoryStatus{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WiFiRegulatoryStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WiFiRegulatoryStatus) ProtoMessage() {}
+
+func (x *WiFiRegulatoryStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WiFiRegulatoryStatus.ProtoReflect.Descriptor instead.
+func (*WiFiRegulatoryStatus) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *WiFiRegulatoryStatus) GetGlobalCountry() string {
+	if x != nil {
+		return x.GlobalCountry
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryStatus) GetPhys() []*WiFiRegulatoryPhy {
+	if x != nil {
+		return x.Phys
+	}
+	return nil
+}
+
+func (x *WiFiRegulatoryStatus) GetRawRegulatory() string {
+	if x != nil {
+		return x.RawRegulatory
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryStatus) GetRequestedCountry() string {
+	if x != nil {
+		return x.RequestedCountry
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryStatus) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+type WiFiRegulatoryPhy struct {
+	state            protoimpl.MessageState   `protogen:"open.v1"`
+	Name             string                   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Country          string                   `protobuf:"bytes,2,opt,name=country,proto3" json:"country,omitempty"`
+	SelfManaged      bool                     `protobuf:"varint,3,opt,name=self_managed,json=selfManaged,proto3" json:"self_managed,omitempty"`
+	RegulatorySource string                   `protobuf:"bytes,4,opt,name=regulatory_source,json=regulatorySource,proto3" json:"regulatory_source,omitempty"`
+	Channels         []*WiFiRegulatoryChannel `protobuf:"bytes,5,rep,name=channels,proto3" json:"channels,omitempty"`
+	// Full iw phy inventory for this radio.
+	RawPhy string `protobuf:"bytes,6,opt,name=raw_phy,json=rawPhy,proto3" json:"raw_phy,omitempty"`
+	// Full iw phy <name> channels output, including channel widths and DFS state.
+	RawChannels   string `protobuf:"bytes,7,opt,name=raw_channels,json=rawChannels,proto3" json:"raw_channels,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WiFiRegulatoryPhy) Reset() {
+	*x = WiFiRegulatoryPhy{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WiFiRegulatoryPhy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WiFiRegulatoryPhy) ProtoMessage() {}
+
+func (x *WiFiRegulatoryPhy) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WiFiRegulatoryPhy.ProtoReflect.Descriptor instead.
+func (*WiFiRegulatoryPhy) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *WiFiRegulatoryPhy) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryPhy) GetCountry() string {
+	if x != nil {
+		return x.Country
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryPhy) GetSelfManaged() bool {
+	if x != nil {
+		return x.SelfManaged
+	}
+	return false
+}
+
+func (x *WiFiRegulatoryPhy) GetRegulatorySource() string {
+	if x != nil {
+		return x.RegulatorySource
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryPhy) GetChannels() []*WiFiRegulatoryChannel {
+	if x != nil {
+		return x.Channels
+	}
+	return nil
+}
+
+func (x *WiFiRegulatoryPhy) GetRawPhy() string {
+	if x != nil {
+		return x.RawPhy
+	}
+	return ""
+}
+
+func (x *WiFiRegulatoryPhy) GetRawChannels() string {
+	if x != nil {
+		return x.RawChannels
+	}
+	return ""
+}
+
+type WiFiRegulatoryChannel struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	FrequencyMhz float64                `protobuf:"fixed64,1,opt,name=frequency_mhz,json=frequencyMhz,proto3" json:"frequency_mhz,omitempty"`
+	// Newline-separated restrictions and details reported by iw channels.
+	Constraints   string `protobuf:"bytes,2,opt,name=constraints,proto3" json:"constraints,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WiFiRegulatoryChannel) Reset() {
+	*x = WiFiRegulatoryChannel{}
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WiFiRegulatoryChannel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WiFiRegulatoryChannel) ProtoMessage() {}
+
+func (x *WiFiRegulatoryChannel) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WiFiRegulatoryChannel.ProtoReflect.Descriptor instead.
+func (*WiFiRegulatoryChannel) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *WiFiRegulatoryChannel) GetFrequencyMhz() float64 {
+	if x != nil {
+		return x.FrequencyMhz
+	}
+	return 0
+}
+
+func (x *WiFiRegulatoryChannel) GetConstraints() string {
+	if x != nil {
+		return x.Constraints
 	}
 	return ""
 }
@@ -857,7 +1328,7 @@ type ListWiFiNetworksResponse_WiFiNetwork struct {
 
 func (x *ListWiFiNetworksResponse_WiFiNetwork) Reset() {
 	*x = ListWiFiNetworksResponse_WiFiNetwork{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[16]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -869,7 +1340,7 @@ func (x *ListWiFiNetworksResponse_WiFiNetwork) String() string {
 func (*ListWiFiNetworksResponse_WiFiNetwork) ProtoMessage() {}
 
 func (x *ListWiFiNetworksResponse_WiFiNetwork) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[16]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -946,7 +1417,7 @@ type ListKnownWiFiNetworksResponse_KnownWiFiNetwork struct {
 
 func (x *ListKnownWiFiNetworksResponse_KnownWiFiNetwork) Reset() {
 	*x = ListKnownWiFiNetworksResponse_KnownWiFiNetwork{}
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[17]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -958,7 +1429,7 @@ func (x *ListKnownWiFiNetworksResponse_KnownWiFiNetwork) String() string {
 func (*ListKnownWiFiNetworksResponse_KnownWiFiNetwork) ProtoMessage() {}
 
 func (x *ListKnownWiFiNetworksResponse_KnownWiFiNetwork) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[17]
+	mi := &file_wendy_agent_services_v2_wifi_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -971,7 +1442,7 @@ func (x *ListKnownWiFiNetworksResponse_KnownWiFiNetwork) ProtoReflect() protoref
 
 // Deprecated: Use ListKnownWiFiNetworksResponse_KnownWiFiNetwork.ProtoReflect.Descriptor instead.
 func (*ListKnownWiFiNetworksResponse_KnownWiFiNetwork) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{9, 0}
+	return file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP(), []int{11, 0}
 }
 
 func (x *ListKnownWiFiNetworksResponse_KnownWiFiNetwork) GetSsid() string {
@@ -1006,7 +1477,7 @@ var File_wendy_agent_services_v2_wifi_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_wifi_service_proto_rawDesc = "" +
 	"\n" +
-	"*wendy/agent/services/v2/wifi_service.proto\x12\x17wendy.agent.services.v2\"\x19\n" +
+	"*wendy/agent/services/v2/wifi_service.proto\x12\x17wendy.agent.services.v2\x1a\x1bgoogle/protobuf/empty.proto\"\x19\n" +
 	"\x17ListWiFiNetworksRequest\"\xbb\x03\n" +
 	"\x18ListWiFiNetworksResponse\x12Y\n" +
 	"\bnetworks\x18\x01 \x03(\v2=.wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetworkR\bnetworks\x1a\xc3\x02\n" +
@@ -1043,7 +1514,15 @@ const file_wendy_agent_services_v2_wifi_service_proto_rawDesc = "" +
 	"\x16DisconnectWiFiResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
 	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message\"\x1e\n" +
+	"\x0e_error_message\"\x86\x01\n" +
+	"\x15DisconnectWiFiControl\x12.\n" +
+	"\x05begin\x18\x01 \x01(\v2\x16.google.protobuf.EmptyH\x00R\x05begin\x122\n" +
+	"\aconfirm\x18\x02 \x01(\v2\x16.google.protobuf.EmptyH\x00R\aconfirmB\t\n" +
+	"\acontrol\"\x9f\x01\n" +
+	"\x13DisconnectWiFiEvent\x12.\n" +
+	"\x05ready\x18\x01 \x01(\v2\x16.google.protobuf.EmptyH\x00R\x05ready\x12O\n" +
+	"\tcompleted\x18\x02 \x01(\v2/.wendy.agent.services.v2.DisconnectWiFiResponseH\x00R\tcompletedB\a\n" +
+	"\x05event\"\x1e\n" +
 	"\x1cListKnownWiFiNetworksRequest\"\xa4\x02\n" +
 	"\x1dListKnownWiFiNetworksResponse\x12c\n" +
 	"\bnetworks\x18\x01 \x03(\v2G.wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetworkR\bnetworks\x1a\x9d\x01\n" +
@@ -1071,7 +1550,27 @@ const file_wendy_agent_services_v2_wifi_service_proto_rawDesc = "" +
 	"\x19ForgetWiFiNetworkResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12(\n" +
 	"\rerror_message\x18\x02 \x01(\tH\x00R\ferrorMessage\x88\x01\x01B\x10\n" +
-	"\x0e_error_message*\xf9\x01\n" +
+	"\x0e_error_message\"\x1a\n" +
+	"\x18GetWiFiRegulatoryRequest\">\n" +
+	"\x19RequestWiFiCountryRequest\x12!\n" +
+	"\fcountry_code\x18\x01 \x01(\tR\vcountryCode\"\xe9\x01\n" +
+	"\x14WiFiRegulatoryStatus\x12%\n" +
+	"\x0eglobal_country\x18\x01 \x01(\tR\rglobalCountry\x12>\n" +
+	"\x04phys\x18\x02 \x03(\v2*.wendy.agent.services.v2.WiFiRegulatoryPhyR\x04phys\x12%\n" +
+	"\x0eraw_regulatory\x18\x03 \x01(\tR\rrawRegulatory\x12+\n" +
+	"\x11requested_country\x18\x04 \x01(\tR\x10requestedCountry\x12\x16\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\"\x99\x02\n" +
+	"\x11WiFiRegulatoryPhy\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\acountry\x18\x02 \x01(\tR\acountry\x12!\n" +
+	"\fself_managed\x18\x03 \x01(\bR\vselfManaged\x12+\n" +
+	"\x11regulatory_source\x18\x04 \x01(\tR\x10regulatorySource\x12J\n" +
+	"\bchannels\x18\x05 \x03(\v2..wendy.agent.services.v2.WiFiRegulatoryChannelR\bchannels\x12\x17\n" +
+	"\araw_phy\x18\x06 \x01(\tR\x06rawPhy\x12!\n" +
+	"\fraw_channels\x18\a \x01(\tR\vrawChannels\"^\n" +
+	"\x15WiFiRegulatoryChannel\x12#\n" +
+	"\rfrequency_mhz\x18\x01 \x01(\x01R\ffrequencyMhz\x12 \n" +
+	"\vconstraints\x18\x02 \x01(\tR\vconstraints*\xf9\x01\n" +
 	"\x10WiFiSecurityType\x12\"\n" +
 	"\x1eWIFI_SECURITY_TYPE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17WIFI_SECURITY_TYPE_OPEN\x10\x01\x12\x1a\n" +
@@ -1079,15 +1578,19 @@ const file_wendy_agent_services_v2_wifi_service_proto_rawDesc = "" +
 	"\x1aWIFI_SECURITY_TYPE_WPA_PSK\x10\x03\x12\x1f\n" +
 	"\x1bWIFI_SECURITY_TYPE_WPA2_PSK\x10\x04\x12\x1f\n" +
 	"\x1bWIFI_SECURITY_TYPE_WPA3_SAE\x10\x05\x12&\n" +
-	"\"WIFI_SECURITY_TYPE_WPA2_ENTERPRISE\x10\x062\x81\b\n" +
+	"\"WIFI_SECURITY_TYPE_WPA2_ENTERPRISE\x10\x062\xf1\n" +
+	"\n" +
 	"\x10WendyWiFiService\x12w\n" +
 	"\x10ListWiFiNetworks\x120.wendy.agent.services.v2.ListWiFiNetworksRequest\x1a1.wendy.agent.services.v2.ListWiFiNetworksResponse\x12n\n" +
 	"\rConnectToWiFi\x12-.wendy.agent.services.v2.ConnectToWiFiRequest\x1a..wendy.agent.services.v2.ConnectToWiFiResponse\x12n\n" +
 	"\rGetWiFiStatus\x12-.wendy.agent.services.v2.GetWiFiStatusRequest\x1a..wendy.agent.services.v2.GetWiFiStatusResponse\x12q\n" +
-	"\x0eDisconnectWiFi\x12..wendy.agent.services.v2.DisconnectWiFiRequest\x1a/.wendy.agent.services.v2.DisconnectWiFiResponse\x12\x86\x01\n" +
+	"\x0eDisconnectWiFi\x12..wendy.agent.services.v2.DisconnectWiFiRequest\x1a/.wendy.agent.services.v2.DisconnectWiFiResponse\x12~\n" +
+	"\x1aDisconnectWiFiAcknowledged\x12..wendy.agent.services.v2.DisconnectWiFiControl\x1a,.wendy.agent.services.v2.DisconnectWiFiEvent(\x010\x01\x12\x86\x01\n" +
 	"\x15ListKnownWiFiNetworks\x125.wendy.agent.services.v2.ListKnownWiFiNetworksRequest\x1a6.wendy.agent.services.v2.ListKnownWiFiNetworksResponse\x12\x89\x01\n" +
 	"\x16SetWiFiNetworkPriority\x126.wendy.agent.services.v2.SetWiFiNetworkPriorityRequest\x1a7.wendy.agent.services.v2.SetWiFiNetworkPriorityResponse\x12\x8f\x01\n" +
-	"\x18ReorderKnownWiFiNetworks\x128.wendy.agent.services.v2.ReorderKnownWiFiNetworksRequest\x1a9.wendy.agent.services.v2.ReorderKnownWiFiNetworksResponse\x12z\n" +
+	"\x18ReorderKnownWiFiNetworks\x128.wendy.agent.services.v2.ReorderKnownWiFiNetworksRequest\x1a9.wendy.agent.services.v2.ReorderKnownWiFiNetworksResponse\x12u\n" +
+	"\x11GetWiFiRegulatory\x121.wendy.agent.services.v2.GetWiFiRegulatoryRequest\x1a-.wendy.agent.services.v2.WiFiRegulatoryStatus\x12w\n" +
+	"\x12RequestWiFiCountry\x122.wendy.agent.services.v2.RequestWiFiCountryRequest\x1a-.wendy.agent.services.v2.WiFiRegulatoryStatus\x12z\n" +
 	"\x11ForgetWiFiNetwork\x121.wendy.agent.services.v2.ForgetWiFiNetworkRequest\x1a2.wendy.agent.services.v2.ForgetWiFiNetworkResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
@@ -1103,7 +1606,7 @@ func file_wendy_agent_services_v2_wifi_service_proto_rawDescGZIP() []byte {
 }
 
 var file_wendy_agent_services_v2_wifi_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendy_agent_services_v2_wifi_service_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_wendy_agent_services_v2_wifi_service_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_wendy_agent_services_v2_wifi_service_proto_goTypes = []any{
 	(WiFiSecurityType)(0),                                  // 0: wendy.agent.services.v2.WiFiSecurityType
 	(*ListWiFiNetworksRequest)(nil),                        // 1: wendy.agent.services.v2.ListWiFiNetworksRequest
@@ -1114,44 +1617,64 @@ var file_wendy_agent_services_v2_wifi_service_proto_goTypes = []any{
 	(*GetWiFiStatusResponse)(nil),                          // 6: wendy.agent.services.v2.GetWiFiStatusResponse
 	(*DisconnectWiFiRequest)(nil),                          // 7: wendy.agent.services.v2.DisconnectWiFiRequest
 	(*DisconnectWiFiResponse)(nil),                         // 8: wendy.agent.services.v2.DisconnectWiFiResponse
-	(*ListKnownWiFiNetworksRequest)(nil),                   // 9: wendy.agent.services.v2.ListKnownWiFiNetworksRequest
-	(*ListKnownWiFiNetworksResponse)(nil),                  // 10: wendy.agent.services.v2.ListKnownWiFiNetworksResponse
-	(*SetWiFiNetworkPriorityRequest)(nil),                  // 11: wendy.agent.services.v2.SetWiFiNetworkPriorityRequest
-	(*SetWiFiNetworkPriorityResponse)(nil),                 // 12: wendy.agent.services.v2.SetWiFiNetworkPriorityResponse
-	(*ReorderKnownWiFiNetworksRequest)(nil),                // 13: wendy.agent.services.v2.ReorderKnownWiFiNetworksRequest
-	(*ReorderKnownWiFiNetworksResponse)(nil),               // 14: wendy.agent.services.v2.ReorderKnownWiFiNetworksResponse
-	(*ForgetWiFiNetworkRequest)(nil),                       // 15: wendy.agent.services.v2.ForgetWiFiNetworkRequest
-	(*ForgetWiFiNetworkResponse)(nil),                      // 16: wendy.agent.services.v2.ForgetWiFiNetworkResponse
-	(*ListWiFiNetworksResponse_WiFiNetwork)(nil),           // 17: wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetwork
-	(*ListKnownWiFiNetworksResponse_KnownWiFiNetwork)(nil), // 18: wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetwork
+	(*DisconnectWiFiControl)(nil),                          // 9: wendy.agent.services.v2.DisconnectWiFiControl
+	(*DisconnectWiFiEvent)(nil),                            // 10: wendy.agent.services.v2.DisconnectWiFiEvent
+	(*ListKnownWiFiNetworksRequest)(nil),                   // 11: wendy.agent.services.v2.ListKnownWiFiNetworksRequest
+	(*ListKnownWiFiNetworksResponse)(nil),                  // 12: wendy.agent.services.v2.ListKnownWiFiNetworksResponse
+	(*SetWiFiNetworkPriorityRequest)(nil),                  // 13: wendy.agent.services.v2.SetWiFiNetworkPriorityRequest
+	(*SetWiFiNetworkPriorityResponse)(nil),                 // 14: wendy.agent.services.v2.SetWiFiNetworkPriorityResponse
+	(*ReorderKnownWiFiNetworksRequest)(nil),                // 15: wendy.agent.services.v2.ReorderKnownWiFiNetworksRequest
+	(*ReorderKnownWiFiNetworksResponse)(nil),               // 16: wendy.agent.services.v2.ReorderKnownWiFiNetworksResponse
+	(*ForgetWiFiNetworkRequest)(nil),                       // 17: wendy.agent.services.v2.ForgetWiFiNetworkRequest
+	(*ForgetWiFiNetworkResponse)(nil),                      // 18: wendy.agent.services.v2.ForgetWiFiNetworkResponse
+	(*GetWiFiRegulatoryRequest)(nil),                       // 19: wendy.agent.services.v2.GetWiFiRegulatoryRequest
+	(*RequestWiFiCountryRequest)(nil),                      // 20: wendy.agent.services.v2.RequestWiFiCountryRequest
+	(*WiFiRegulatoryStatus)(nil),                           // 21: wendy.agent.services.v2.WiFiRegulatoryStatus
+	(*WiFiRegulatoryPhy)(nil),                              // 22: wendy.agent.services.v2.WiFiRegulatoryPhy
+	(*WiFiRegulatoryChannel)(nil),                          // 23: wendy.agent.services.v2.WiFiRegulatoryChannel
+	(*ListWiFiNetworksResponse_WiFiNetwork)(nil),           // 24: wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetwork
+	(*ListKnownWiFiNetworksResponse_KnownWiFiNetwork)(nil), // 25: wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetwork
+	(*emptypb.Empty)(nil),                                  // 26: google.protobuf.Empty
 }
 var file_wendy_agent_services_v2_wifi_service_proto_depIdxs = []int32{
-	17, // 0: wendy.agent.services.v2.ListWiFiNetworksResponse.networks:type_name -> wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetwork
+	24, // 0: wendy.agent.services.v2.ListWiFiNetworksResponse.networks:type_name -> wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetwork
 	0,  // 1: wendy.agent.services.v2.ConnectToWiFiRequest.security:type_name -> wendy.agent.services.v2.WiFiSecurityType
-	18, // 2: wendy.agent.services.v2.ListKnownWiFiNetworksResponse.networks:type_name -> wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetwork
-	0,  // 3: wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetwork.security:type_name -> wendy.agent.services.v2.WiFiSecurityType
-	0,  // 4: wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetwork.security:type_name -> wendy.agent.services.v2.WiFiSecurityType
-	1,  // 5: wendy.agent.services.v2.WendyWiFiService.ListWiFiNetworks:input_type -> wendy.agent.services.v2.ListWiFiNetworksRequest
-	3,  // 6: wendy.agent.services.v2.WendyWiFiService.ConnectToWiFi:input_type -> wendy.agent.services.v2.ConnectToWiFiRequest
-	5,  // 7: wendy.agent.services.v2.WendyWiFiService.GetWiFiStatus:input_type -> wendy.agent.services.v2.GetWiFiStatusRequest
-	7,  // 8: wendy.agent.services.v2.WendyWiFiService.DisconnectWiFi:input_type -> wendy.agent.services.v2.DisconnectWiFiRequest
-	9,  // 9: wendy.agent.services.v2.WendyWiFiService.ListKnownWiFiNetworks:input_type -> wendy.agent.services.v2.ListKnownWiFiNetworksRequest
-	11, // 10: wendy.agent.services.v2.WendyWiFiService.SetWiFiNetworkPriority:input_type -> wendy.agent.services.v2.SetWiFiNetworkPriorityRequest
-	13, // 11: wendy.agent.services.v2.WendyWiFiService.ReorderKnownWiFiNetworks:input_type -> wendy.agent.services.v2.ReorderKnownWiFiNetworksRequest
-	15, // 12: wendy.agent.services.v2.WendyWiFiService.ForgetWiFiNetwork:input_type -> wendy.agent.services.v2.ForgetWiFiNetworkRequest
-	2,  // 13: wendy.agent.services.v2.WendyWiFiService.ListWiFiNetworks:output_type -> wendy.agent.services.v2.ListWiFiNetworksResponse
-	4,  // 14: wendy.agent.services.v2.WendyWiFiService.ConnectToWiFi:output_type -> wendy.agent.services.v2.ConnectToWiFiResponse
-	6,  // 15: wendy.agent.services.v2.WendyWiFiService.GetWiFiStatus:output_type -> wendy.agent.services.v2.GetWiFiStatusResponse
-	8,  // 16: wendy.agent.services.v2.WendyWiFiService.DisconnectWiFi:output_type -> wendy.agent.services.v2.DisconnectWiFiResponse
-	10, // 17: wendy.agent.services.v2.WendyWiFiService.ListKnownWiFiNetworks:output_type -> wendy.agent.services.v2.ListKnownWiFiNetworksResponse
-	12, // 18: wendy.agent.services.v2.WendyWiFiService.SetWiFiNetworkPriority:output_type -> wendy.agent.services.v2.SetWiFiNetworkPriorityResponse
-	14, // 19: wendy.agent.services.v2.WendyWiFiService.ReorderKnownWiFiNetworks:output_type -> wendy.agent.services.v2.ReorderKnownWiFiNetworksResponse
-	16, // 20: wendy.agent.services.v2.WendyWiFiService.ForgetWiFiNetwork:output_type -> wendy.agent.services.v2.ForgetWiFiNetworkResponse
-	13, // [13:21] is the sub-list for method output_type
-	5,  // [5:13] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	26, // 2: wendy.agent.services.v2.DisconnectWiFiControl.begin:type_name -> google.protobuf.Empty
+	26, // 3: wendy.agent.services.v2.DisconnectWiFiControl.confirm:type_name -> google.protobuf.Empty
+	26, // 4: wendy.agent.services.v2.DisconnectWiFiEvent.ready:type_name -> google.protobuf.Empty
+	8,  // 5: wendy.agent.services.v2.DisconnectWiFiEvent.completed:type_name -> wendy.agent.services.v2.DisconnectWiFiResponse
+	25, // 6: wendy.agent.services.v2.ListKnownWiFiNetworksResponse.networks:type_name -> wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetwork
+	22, // 7: wendy.agent.services.v2.WiFiRegulatoryStatus.phys:type_name -> wendy.agent.services.v2.WiFiRegulatoryPhy
+	23, // 8: wendy.agent.services.v2.WiFiRegulatoryPhy.channels:type_name -> wendy.agent.services.v2.WiFiRegulatoryChannel
+	0,  // 9: wendy.agent.services.v2.ListWiFiNetworksResponse.WiFiNetwork.security:type_name -> wendy.agent.services.v2.WiFiSecurityType
+	0,  // 10: wendy.agent.services.v2.ListKnownWiFiNetworksResponse.KnownWiFiNetwork.security:type_name -> wendy.agent.services.v2.WiFiSecurityType
+	1,  // 11: wendy.agent.services.v2.WendyWiFiService.ListWiFiNetworks:input_type -> wendy.agent.services.v2.ListWiFiNetworksRequest
+	3,  // 12: wendy.agent.services.v2.WendyWiFiService.ConnectToWiFi:input_type -> wendy.agent.services.v2.ConnectToWiFiRequest
+	5,  // 13: wendy.agent.services.v2.WendyWiFiService.GetWiFiStatus:input_type -> wendy.agent.services.v2.GetWiFiStatusRequest
+	7,  // 14: wendy.agent.services.v2.WendyWiFiService.DisconnectWiFi:input_type -> wendy.agent.services.v2.DisconnectWiFiRequest
+	9,  // 15: wendy.agent.services.v2.WendyWiFiService.DisconnectWiFiAcknowledged:input_type -> wendy.agent.services.v2.DisconnectWiFiControl
+	11, // 16: wendy.agent.services.v2.WendyWiFiService.ListKnownWiFiNetworks:input_type -> wendy.agent.services.v2.ListKnownWiFiNetworksRequest
+	13, // 17: wendy.agent.services.v2.WendyWiFiService.SetWiFiNetworkPriority:input_type -> wendy.agent.services.v2.SetWiFiNetworkPriorityRequest
+	15, // 18: wendy.agent.services.v2.WendyWiFiService.ReorderKnownWiFiNetworks:input_type -> wendy.agent.services.v2.ReorderKnownWiFiNetworksRequest
+	19, // 19: wendy.agent.services.v2.WendyWiFiService.GetWiFiRegulatory:input_type -> wendy.agent.services.v2.GetWiFiRegulatoryRequest
+	20, // 20: wendy.agent.services.v2.WendyWiFiService.RequestWiFiCountry:input_type -> wendy.agent.services.v2.RequestWiFiCountryRequest
+	17, // 21: wendy.agent.services.v2.WendyWiFiService.ForgetWiFiNetwork:input_type -> wendy.agent.services.v2.ForgetWiFiNetworkRequest
+	2,  // 22: wendy.agent.services.v2.WendyWiFiService.ListWiFiNetworks:output_type -> wendy.agent.services.v2.ListWiFiNetworksResponse
+	4,  // 23: wendy.agent.services.v2.WendyWiFiService.ConnectToWiFi:output_type -> wendy.agent.services.v2.ConnectToWiFiResponse
+	6,  // 24: wendy.agent.services.v2.WendyWiFiService.GetWiFiStatus:output_type -> wendy.agent.services.v2.GetWiFiStatusResponse
+	8,  // 25: wendy.agent.services.v2.WendyWiFiService.DisconnectWiFi:output_type -> wendy.agent.services.v2.DisconnectWiFiResponse
+	10, // 26: wendy.agent.services.v2.WendyWiFiService.DisconnectWiFiAcknowledged:output_type -> wendy.agent.services.v2.DisconnectWiFiEvent
+	12, // 27: wendy.agent.services.v2.WendyWiFiService.ListKnownWiFiNetworks:output_type -> wendy.agent.services.v2.ListKnownWiFiNetworksResponse
+	14, // 28: wendy.agent.services.v2.WendyWiFiService.SetWiFiNetworkPriority:output_type -> wendy.agent.services.v2.SetWiFiNetworkPriorityResponse
+	16, // 29: wendy.agent.services.v2.WendyWiFiService.ReorderKnownWiFiNetworks:output_type -> wendy.agent.services.v2.ReorderKnownWiFiNetworksResponse
+	21, // 30: wendy.agent.services.v2.WendyWiFiService.GetWiFiRegulatory:output_type -> wendy.agent.services.v2.WiFiRegulatoryStatus
+	21, // 31: wendy.agent.services.v2.WendyWiFiService.RequestWiFiCountry:output_type -> wendy.agent.services.v2.WiFiRegulatoryStatus
+	18, // 32: wendy.agent.services.v2.WendyWiFiService.ForgetWiFiNetwork:output_type -> wendy.agent.services.v2.ForgetWiFiNetworkResponse
+	22, // [22:33] is the sub-list for method output_type
+	11, // [11:22] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_wifi_service_proto_init() }
@@ -1163,17 +1686,25 @@ func file_wendy_agent_services_v2_wifi_service_proto_init() {
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[3].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[5].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[7].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[11].OneofWrappers = []any{}
+	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[8].OneofWrappers = []any{
+		(*DisconnectWiFiControl_Begin)(nil),
+		(*DisconnectWiFiControl_Confirm)(nil),
+	}
+	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[9].OneofWrappers = []any{
+		(*DisconnectWiFiEvent_Ready)(nil),
+		(*DisconnectWiFiEvent_Completed)(nil),
+	}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[13].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[15].OneofWrappers = []any{}
-	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[16].OneofWrappers = []any{}
+	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[17].OneofWrappers = []any{}
+	file_wendy_agent_services_v2_wifi_service_proto_msgTypes[23].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_wifi_service_proto_rawDesc), len(file_wendy_agent_services_v2_wifi_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   18,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

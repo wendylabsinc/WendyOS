@@ -58,6 +58,18 @@ Hosts that are not WendyOS OTA targets — including macOS, Windows, unknown pla
 
 ---
 
+## Jetson A/B preparation
+
+Before starting `wendyos-update install`, the agent checks Jetson rootfs A/B
+configuration and the alternate `APP_b` partition. It repairs missing or disabled
+persistent EFI settings, preserves valid retry counts, and verifies each write
+by reading the variable back. This preparation applies to both agent API versions.
+
+If firmware rejects a write, the agent stops before downloading or staging the
+OS update. It also refuses to change a disabled volatile setting: that change
+would be lost at reboot. Such devices need an A/B-enabled firmware configuration
+or image. Preparation does not repair an incompatible bootloader capsule.
+
 ## How the agent reboots
 
 The agent always flushes filesystems before restarting. Without that, an
@@ -142,9 +154,24 @@ wendy os update-status --json
 
 ## Artifact auto-selection
 
-When no artifact path or `--artifact-url` is given, the CLI uses the device's `device_type` field to look up the latest OTA artifact from the WendyOS release manifest. If the device type is missing or not recognized in the update catalog, the CLI shows a warning and falls back to an interactive device-type picker. The latest version (stable or nightly) is then chosen automatically.
+When no artifact path or `--artifact-url` is given, the CLI uses the device's `device_type` field to look up the latest OTA artifact from the WendyOS release manifest. A device that reports `nvme` as its storage medium (see [`wendy device info`](../device/info.md)) gets the NVMe artifact when the release publishes one; every other device gets the default artifact. If the device type is missing or not recognized in the update catalog, the CLI shows a warning and falls back to an interactive device-type picker. The latest version (stable or nightly) is then chosen automatically.
 
 Use `--nightly` to select nightly (pre-release) artifacts instead of stable ones.
+
+Cloud-connected devices download the artifact directly from its URL. Ethernet
+devices with a routable address and NAT-connected simulators also use the URL;
+disconnected WiFi alone does not trigger a download on your computer. For an
+isolated local connection with no reported routable address or active WiFi,
+the CLI downloads and serves the artifact locally after checking the local route.
+
+If a bare device name such as `--device ci-mesh-2` does not resolve locally,
+the CLI looks for that exact device in your Cloud account. Explicit IP addresses,
+hostnames with a domain, and host:port endpoints retain their direct connection.
+
+Local artifact files require a direct LAN or USB connection. With a cloud tunnel,
+use an artifact URL the device can reach. Reboot and update-result checks retain
+the selected cloud device's identity instead of resolving its display name as a
+LAN hostname.
 
 After the artifact is resolved, the CLI checks its format against the device's advertised backend featureset. A `.wendy` artifact requires the `wendyos-update` engine; if the device does not advertise it, the update errors out with a reflash explanation rather than being applied.
 
@@ -181,4 +208,4 @@ Thor or ESP32 targets. `--pr` is mutually exclusive with `--nightly`,
 
 A positional argument (a local `.wendy` file path, or a directory containing one) can be used instead of `--artifact-url`.
 
-> **Tip:** After an update, `wendy device info` shows a compact summary of the A/B slot state and the last update outcome. For the full record — including which healthchecks ran and the live engine diagnostics — run `wendy os update-status`.
+> **Tip:** After an update, `wendy device info` shows the last recorded update outcome. For live A/B slot state, pending updates, healthcheck results, and engine diagnostics, run `wendy os update-status`.

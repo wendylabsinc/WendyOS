@@ -37,7 +37,7 @@ const (
 )
 
 // CloudFlusher reads buffered OTLP frames from TelemetryBuffer via ReadFromCursor
-// and re-exports them to the cloud's standard OTLP collector routes
+// and re-exports them to an explicitly configured OTLP collector's routes
 // (Logs/Metrics/Trace Service Export) over mTLS gRPC. PII/size guards are
 // applied per frame before export. Identity is derived server-side from the
 // client certificate.
@@ -68,21 +68,28 @@ func NewCloudFlusherWithProvisioning(logger *zap.Logger, buffer *TelemetryBuffer
 	}
 }
 
-// Run waits until the agent is provisioned, then continuously flushes buffered
-// logs to the cloud with exponential backoff (1s → 2s → 4s … capped at 60s).
+// Run requires WENDY_TELEMETRY_URL, then waits until the agent is provisioned
+// and continuously flushes buffered telemetry with exponential backoff
+// (1s → 2s → 4s … capped at 60s). Without a collector, telemetry stays local.
 // The backoff resets on each successful flush pass. Blocks until ctx is done.
 func (f *CloudFlusher) Run(ctx context.Context) {
+	endpoint, err := telemetryCloudEndpoint(os.Getenv("WENDY_TELEMETRY_URL"))
+	if err != nil {
+		f.logger.Warn("cloud flusher: invalid WENDY_TELEMETRY_URL", zap.Error(err))
+		return
+	}
+	if endpoint == "" {
+		f.logger.Info("cloud flusher: WENDY_TELEMETRY_URL is not set; telemetry uploads are disabled and telemetry remains available locally")
+		return
+	}
 	if f.provisioningSvc == nil {
 		// Test mode: no provisioning; nothing to do.
 		return
 	}
 
-	var cloudHost string
-
 	// Poll until provisioned.
 	for {
-		var enrolled bool
-		cloudHost, _, _, enrolled = f.provisioningSvc.ProvisioningInfo()
+		_, _, _, enrolled := f.provisioningSvc.ProvisioningInfo()
 		if enrolled {
 			break
 		}
@@ -105,11 +112,6 @@ func (f *CloudFlusher) Run(ctx context.Context) {
 			return
 		}
 
-		endpoint, err := telemetryCloudEndpoint(cloudHost, f.provisioningSvc.ProvisioningPrincipal(), os.Getenv("WENDY_TELEMETRY_URL"), os.Getenv("WENDY_DEVICE_CLOUD_URL"))
-		if err != nil {
-			f.logger.Warn("cloud flusher: invalid endpoint", zap.Error(err))
-			return
-		}
 		certPEM, chainPEM, keyData := f.provisioningSvc.ProvisioningCerts()
 		conn, err := f.dial(ctx, endpoint, certPEM, chainPEM, keyData)
 		if err != nil {
@@ -229,18 +231,18 @@ func (f *CloudFlusher) flushSignal(sig SignalType, export func(proto.Message) er
 	return nil
 }
 
-func telemetryCloudEndpoint(cloudHost, principal, override, deviceOverride string) (string, error) {
-	if override != "" {
-		return cloudrelay.DeviceEndpoint(cloudHost, override)
+func telemetryCloudEndpoint(endpoint string) (string, error) {
+	// Cloud retired OTLP ingest. Enrollment and relay addresses do not imply a
+	// telemetry destination; only an explicit collector enables uploads.
+	if endpoint == "" {
+		return "", nil
 	}
-	if principal != "" {
-		return cloudrelay.DeviceEndpoint(cloudHost, deviceOverride)
-	}
-	return normalizeCloudHost(cloudHost), nil
+	return cloudrelay.DeviceEndpoint("", endpoint)
 }
+
 func telemetryExportError(err error, signal string) error {
 	if status.Code(err) == codes.Unimplemented {
-		return fmt.Errorf("Cloud endpoint does not expose the OpenTelemetry %s Export service; verify the Cloud collector deployment or WENDY_TELEMETRY_URL: %w", signal, err)
+		return fmt.Errorf("Telemetry endpoint does not expose the OpenTelemetry %s Export service; verify the collector deployment or WENDY_TELEMETRY_URL: %w", signal, err)
 	}
 	return err
 }

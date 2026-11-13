@@ -17,7 +17,7 @@ struct CameraFrame: Equatable, Sendable {
 /// with a fake that yields canned frames instead of touching real hardware.
 protocol CameraCapturing: Sendable {
     func frames() -> AsyncThrowingStream<CameraFrame, any Error>
-    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor?
+    func descriptor() -> Wendylite_V1_SensorDescriptor?
 }
 
 /// A camera as `WendyVideoService` presents it: a small numeric ID (position
@@ -84,12 +84,53 @@ func annexBFromAVCC(
     return out
 }
 
+/// How capture should pick the camera's format.
+enum CaptureFormatChoice: Equatable {
+    /// Every advertised format is a picture: let `AVCaptureSession` choose.
+    case automatic
+    /// Pin `formats[index]` and keep it through `startRunning()`.
+    case pinned(Int)
+    /// No advertised format is a picture.
+    case unusable
+}
+
+/// Some UVC cameras advertise vendor data channels as video formats; the
+/// TOPDON thermal camera lists 4×12305, 16×15505 and 60×3299 beside its real
+/// 512×384 picture. The session's automatic choice can land on one, and the
+/// macOS video-effects graph then aborts the whole process creating a
+/// zero-width Metal texture (`PTSpillCorrection`), even with effects off.
+///
+/// Cameras without such formats keep the automatic choice. Otherwise pin the
+/// largest 4:3 or 16:9 picture: on that camera the larger 512×484 and 644×384
+/// modes carry a metadata band or garbage rather than a clean image.
+func captureFormatChoice(_ formats: [CMVideoDimensions]) -> CaptureFormatChoice {
+    func isPicture(_ size: CMVideoDimensions) -> Bool {
+        let short = Int(min(size.width, size.height))
+        let long = Int(max(size.width, size.height))
+        return short >= 64 && long <= 4 * short
+    }
+    func isStandard(_ size: CMVideoDimensions) -> Bool {
+        let width = Int(size.width)
+        let height = Int(size.height)
+        return width * 3 == height * 4 || width * 9 == height * 16
+    }
+    guard !formats.allSatisfy(isPicture) else { return .automatic }
+    let pictures = formats.indices.filter { isPicture(formats[$0]) }
+    let standard = pictures.filter { isStandard(formats[$0]) }
+    let best = (standard.isEmpty ? pictures : standard).max { left, right in
+        Int(formats[left].width) * Int(formats[left].height)
+            < Int(formats[right].width) * Int(formats[right].height)
+    }
+    return best.map(CaptureFormatChoice.pinned) ?? .unusable
+}
+
 enum CameraError: Error, CustomStringConvertible {
     case accessDenied
     case noDevice
     case deviceNotFound
     case cannotAddInput
     case cannotAddOutput
+    case noUsableFormat
     case vtStatus(String, OSStatus)
 
     var description: String {
@@ -97,6 +138,7 @@ enum CameraError: Error, CustomStringConvertible {
         case .accessDenied: return "Camera access is not allowed for Wendy Agent."
         case .noDevice: return "No default video capture device available."
         case .deviceNotFound: return "The selected camera is no longer available."
+        case .noUsableFormat: return "The selected camera offers no usable video format."
         case .cannotAddInput:
             return "The selected camera could not be added to the capture session."
         case .cannotAddOutput:
@@ -190,15 +232,15 @@ struct CameraCapture: CameraCapturing {
         }
     }
 
-    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor? {
+    func descriptor() -> Wendylite_V1_SensorDescriptor? {
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return nil }
         guard let device = AVCaptureDevice.default(for: .video) else { return nil }
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
 
-        var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
+        var descriptor = Wendylite_V1_SensorDescriptor()
         descriptor.channelID = Self.channel
         descriptor.name = device.localizedName
-        var video = Wendy_Lite_Sensorlink_VideoFormat()
+        var video = Wendylite_V1_VideoFormat()
         video.codec = .h264
         video.width = UInt32(max(0, dims.width))
         video.height = UInt32(max(0, dims.height))
@@ -266,7 +308,16 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             }
             device = fallback
         }
+        let formatChoice = captureFormatChoice(
+            device.formats.map { CMVideoFormatDescriptionGetDimensions($0.formatDescription) }
+        )
+        if formatChoice == .unusable { throw CameraError.noUsableFormat }
         let input = try AVCaptureDeviceInput(device: device)
+
+        // macOS has no input-priority preset: the session re-chooses the format
+        // in startRunning() unless the device stays locked until it returns.
+        var holdsFormatLock = false
+        defer { if holdsFormatLock { device.unlockForConfiguration() } }
 
         // Keep configuration in its own scope so the deferred commit runs
         // before startRunning(). AVFoundation raises an uncaught Objective-C
@@ -278,6 +329,11 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
                 throw CameraError.cannotAddInput
             }
             captureSession.addInput(input)
+            if case .pinned(let index) = formatChoice {
+                try device.lockForConfiguration()
+                holdsFormatLock = true
+                device.activeFormat = device.formats[index]
+            }
             videoOutput.videoSettings = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ]

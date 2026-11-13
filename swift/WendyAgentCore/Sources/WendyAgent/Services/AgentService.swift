@@ -371,6 +371,27 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         return ServerResponse(message: response)
     }
 
+    // Power modes are an NVIDIA Jetson (nvpmodel) concept; macOS has none.
+    func getPowerMode(
+        request: ServerRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_GetPowerModeResponse> {
+        throw RPCError(
+            code: .unavailable,
+            message: "power modes are only supported on NVIDIA Jetson devices"
+        )
+    }
+
+    func setPowerMode(
+        request: ServerRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_SetPowerModeResponse> {
+        throw RPCError(
+            code: .unavailable,
+            message: "power modes are only supported on NVIDIA Jetson devices"
+        )
+    }
+
     // MARK: - Wi-Fi security mapping
 
     static func protoSecurity(_ security: WiFiSecurity) -> Wendy_Agent_Services_V1_WiFiSecurityType

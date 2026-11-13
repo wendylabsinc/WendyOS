@@ -17,10 +17,13 @@ import (
 )
 
 func startWiFiServer(t *testing.T, nm NetworkManager) (agentpbv2.WendyWiFiServiceClient, func()) {
+	return startWiFiServerWithService(t, NewWiFiService(zap.NewNop(), nm))
+}
+
+func startWiFiServerWithService(t *testing.T, svc *WiFiService) (agentpbv2.WendyWiFiServiceClient, func()) {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
-	svc := NewWiFiService(zap.NewNop(), nm)
 	agentpbv2.RegisterWendyWiFiServiceServer(srv, svc)
 	go func() { _ = srv.Serve(lis) }()
 	conn, err := grpc.NewClient("passthrough:///bufnet",

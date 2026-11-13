@@ -21,9 +21,7 @@ const (
 )
 
 // wcomLink transports whole WendyComMessages; implementations own framing.
-// directLink frames messages itself over TCP-TLS or serial; tunnelLink
-// exchanges bare message bodies through a cloud gRPC tunnel, where the
-// broker owns framing and channels.
+// directLink frames messages over direct or relayed end-to-end TLS, or serial.
 type wcomLink interface {
 	// linkHandshake performs any transport-level handshake needed before
 	// WendyCom messages can flow. Called once, before the protocol handshake.

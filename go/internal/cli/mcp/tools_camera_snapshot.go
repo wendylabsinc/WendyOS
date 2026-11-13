@@ -37,7 +37,7 @@ func cameraSnapshotTool() mcpgo.Tool {
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(30), mcpgo.Description("Maximum time to obtain an image, default 15 seconds")),
 	}
 	opts = append(opts, mutating()...)
-	opts = append(opts, localOnly()...)
+	opts = append(opts, openWorld()...)
 	return mcpgo.NewTool("camera_snapshot", opts...)
 }
 

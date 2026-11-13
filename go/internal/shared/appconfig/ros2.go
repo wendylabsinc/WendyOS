@@ -22,8 +22,25 @@ const ROS2DefaultDistro = "humble"
 // specify one.
 const ROS2DefaultRMW = "rmw_cyclonedds_cpp"
 
-// ROS2 discovery scopes control whether DDS can discover participants only
-// inside an app group or across the device's host network.
+// ROS 2 scopes say who can see an app's topics. Each includes the one before:
+//   - app: only this app. The agent assigns the app its own domain.
+//   - device: every app on the device (loopback discovery).
+//   - peripherals: the device plus hardware attached to it, i.e. loopback and
+//     the device's wired interfaces other than its uplink (CycloneDDS only).
+//   - network: anything on the device's networks (subnet discovery).
+const (
+	ROS2ScopeApp         = "app"
+	ROS2ScopeDevice      = "device"
+	ROS2ScopePeripherals = "peripherals"
+	ROS2ScopeNetwork     = "network"
+)
+
+// ROS2Scopes lists the valid scope values, narrowest first.
+var ROS2Scopes = []string{ROS2ScopeApp, ROS2ScopeDevice, ROS2ScopePeripherals, ROS2ScopeNetwork}
+
+// Deprecated discoveryScope values. "app" has always meant loopback discovery,
+// shared by apps that pick the same domain, so it maps to scope "device", not
+// to the stricter scope "app"; "host" means subnet discovery, i.e. "network".
 const (
 	ROS2DiscoveryScopeApp  = "app"
 	ROS2DiscoveryScopeHost = "host"
@@ -80,7 +97,7 @@ func IsKnownROS2Distro(s string) bool { return ros2KnownDistros[strings.ToLower(
 // instead of silently launching a container with no ROS_DOMAIN_ID/
 // RMW_IMPLEMENTATION isolation (WDY-1701). prefix labels the source, e.g.
 // "frameworks.ros2" or `services["talker"].frameworks.ros2`.
-func validateROS2Config(prefix string, r *ROS2Config) error {
+func validateROS2Config(prefix string, r *ROS2Config, entitlements []Entitlement) error {
 	if r == nil {
 		return nil
 	}
@@ -101,7 +118,54 @@ func validateROS2Config(prefix string, r *ROS2Config) error {
 	if r.DiscoveryScope != "" && r.ResolvedDiscoveryScope() == "" {
 		return fmt.Errorf("%s.discoveryScope %q must be %q or %q", prefix, r.DiscoveryScope, ROS2DiscoveryScopeApp, ROS2DiscoveryScopeHost)
 	}
+	if r.Scope == "" {
+		return nil
+	}
+	scope := r.ResolvedScope()
+	if scope == "" {
+		return fmt.Errorf("%s.scope %q must be one of %s", prefix, r.Scope, strings.Join(ROS2Scopes, ", "))
+	}
+	// scope wins on agents that know it; older agents only read discoveryScope.
+	// Both may be set so one manifest serves both, but only when the older
+	// agent's reading can never be wider than what scope asks for.
+	if r.DiscoveryScope != "" && strings.ToLower(r.DiscoveryScope) != ros2LegacyFallback(scope) {
+		return fmt.Errorf("%s: discoveryScope %q conflicts with scope %q; agents that ignore scope would use it, so with scope %q set discoveryScope to %q or remove it",
+			prefix, r.DiscoveryScope, r.Scope, scope, ros2LegacyFallback(scope))
+	}
+	if scope == ROS2ScopeApp && r.DomainID != nil {
+		return fmt.Errorf("%s.scope %q gives the app its own domain; remove domainId, or use scope %q to share a domain with other apps on the device",
+			prefix, ROS2ScopeApp, ROS2ScopeDevice)
+	}
+	if scope == ROS2ScopePeripherals && r.ResolvedRMW() != ROS2DefaultRMW {
+		return fmt.Errorf("%s.scope %q currently requires rmw %q", prefix, ROS2ScopePeripherals, ROS2DefaultRMW)
+	}
+	if (scope == ROS2ScopeDevice || scope == ROS2ScopePeripherals) && !sharesHostNetwork(entitlements) {
+		return fmt.Errorf("%s.scope %q needs the host network to reach other apps and hardware; use {\"type\": \"network\", \"mode\": \"host\"}",
+			prefix, scope)
+	}
 	return nil
+}
+
+// ros2LegacyFallback is the discoveryScope an agent that predates scope may
+// safely read next to the given scope. It is never wider: scope peripherals
+// falls back to loopback discovery, like device.
+func ros2LegacyFallback(scope string) string {
+	if scope == ROS2ScopeNetwork {
+		return ROS2DiscoveryScopeHost
+	}
+	return ROS2DiscoveryScopeApp
+}
+
+// sharesHostNetwork reports whether the entitlements leave the app on the
+// device's host network: no network entitlement (the current default) or mode
+// host / host-admin.
+func sharesHostNetwork(entitlements []Entitlement) bool {
+	for _, ent := range entitlements {
+		if ent.Type == EntitlementNetwork && ent.Mode != "" && ent.Mode != "host" && ent.Mode != "host-admin" {
+			return false
+		}
+	}
+	return true
 }
 
 // IsValidRMWImplementation reports whether s is a full RMW implementation
@@ -129,10 +193,11 @@ func ROS2AutoDomainID(appID string) int {
 }
 
 // ResolvedDomainID returns the effective ROS_DOMAIN_ID: the explicit
-// domainId when set, otherwise a stable hash of appID. It returns -1 when an
+// domainId when set (except with scope "app", which always gets its own),
+// otherwise a stable hash of appID. It returns -1 when an
 // explicit domainId is outside the valid 0–232 range.
 func (r *ROS2Config) ResolvedDomainID(appID string) int {
-	if r.DomainID == nil {
+	if r.DomainID == nil || r.ResolvedScope() == ROS2ScopeApp {
 		return ROS2AutoDomainID(appID)
 	}
 	id := *r.DomainID
@@ -161,9 +226,40 @@ func (r *ROS2Config) ResolvedDistro() string {
 	return strings.ToLower(r.Distro)
 }
 
-// ResolvedDiscoveryScope returns the configured DDS discovery scope,
-// defaulting to app-local isolation. It returns "" for unknown values so
-// callers never accidentally widen discovery due to a typo.
+// ResolvedScope returns the effective scope: scope when set (it takes
+// precedence over discoveryScope), otherwise the deprecated discoveryScope translated to the scope that behaves the same,
+// otherwise "device". It returns "" for unknown values so callers never widen
+// discovery because of a typo.
+func (r *ROS2Config) ResolvedScope() string {
+	if r.Scope != "" {
+		scope := strings.ToLower(r.Scope)
+		for _, valid := range ROS2Scopes {
+			if scope == valid {
+				return scope
+			}
+		}
+		return ""
+	}
+	return ros2DiscoveryScopeReplacement(r.DiscoveryScope)
+}
+
+// ros2DiscoveryScopeReplacement maps a deprecated discoveryScope value to the
+// scope that behaves the same; "" (absent) maps to the default "device".
+func ros2DiscoveryScopeReplacement(discoveryScope string) string {
+	switch strings.ToLower(discoveryScope) {
+	case "", ROS2DiscoveryScopeApp:
+		return ROS2ScopeDevice
+	case ROS2DiscoveryScopeHost:
+		return ROS2ScopeNetwork
+	default:
+		return ""
+	}
+}
+
+// ResolvedDiscoveryScope returns the configured deprecated discovery scope,
+// defaulting to "app". It returns "" for unknown values.
+//
+// Deprecated: use ResolvedScope.
 func (r *ROS2Config) ResolvedDiscoveryScope() string {
 	if r.DiscoveryScope == "" {
 		return ROS2DiscoveryScopeApp

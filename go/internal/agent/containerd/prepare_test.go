@@ -10,12 +10,7 @@ import (
 )
 
 func TestWaitForChunksUnblocksWhenChunkIsStaged(t *testing.T) {
-	dir := t.TempDir()
-	index, err := NewChunkIndex(filepath.Join(dir, "index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := &Client{chunkIndex: index, staging: newStaging(filepath.Join(dir, "staging"))}
+	c := &Client{chunkIndex: newTestChunkIndex(t), staging: newStaging(filepath.Join(t.TempDir(), "staging"))}
 	data := []byte("arrives while preparation is waiting")
 	hash := sha256.Sum256(data)
 
@@ -42,16 +37,11 @@ func TestWaitForChunksUnblocksWhenChunkIsStaged(t *testing.T) {
 }
 
 func TestWaitForChunksHonorsCancellation(t *testing.T) {
-	dir := t.TempDir()
-	index, err := NewChunkIndex(filepath.Join(dir, "index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := &Client{chunkIndex: index, staging: newStaging(filepath.Join(dir, "staging"))}
+	c := &Client{chunkIndex: newTestChunkIndex(t), staging: newStaging(filepath.Join(t.TempDir(), "staging"))}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = c.waitForChunks(ctx, [][32]byte{{1}})
+	err := c.waitForChunks(ctx, [][32]byte{{1}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitForChunks error = %v, want context.Canceled", err)
 	}

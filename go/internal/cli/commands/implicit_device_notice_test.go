@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -73,15 +74,29 @@ func TestImplicitDeviceLinesAlwaysIncludesIdentityLine(t *testing.T) {
 	}
 }
 
-func TestNoteImplicitDeviceSuppressedInJSONMode(t *testing.T) {
+// JSON mode keeps stdout pure JSON, but the device a command acted on must
+// still be visible to whoever reads stderr.
+func TestNoteImplicitDeviceInJSONModeWritesOnePlainStderrLine(t *testing.T) {
 	origJSON, origNoticed := jsonOutput, noticedImplicitDevice
 	t.Cleanup(func() { jsonOutput, noticedImplicitDevice = origJSON, origNoticed })
+	var out strings.Builder
+	swapNoticeOut(t, &out)
 
 	jsonOutput = true
 	noticedImplicitDevice = false
 	noteImplicitDevice("thor.local", implicitDefaultDevice)
-	if noticedImplicitDevice {
-		t.Error("notice was emitted in JSON mode; machine-readable output must stay clean")
+	if got, want := out.String(), "Using default device thor.local.\n"; got != want {
+		t.Errorf("JSON-mode notice = %q, want %q", got, want)
+	}
+	if !noticedImplicitDevice {
+		t.Error("JSON-mode notice did not set the once-per-invocation guard")
+	}
+
+	out.Reset()
+	noticedImplicitDevice = false
+	noteImplicitDevice("thor.local", implicitSoleCloudDevice)
+	if got, want := out.String(), "Using thor.local, the only device currently online in this organisation.\n"; got != want {
+		t.Errorf("JSON-mode cloud notice = %q, want %q", got, want)
 	}
 }
 
@@ -92,6 +107,7 @@ func TestNoteImplicitDeviceOnlyFiresOncePerInvocation(t *testing.T) {
 	t.Cleanup(func() { jsonOutput, noticedImplicitDevice = origJSON, origNoticed })
 
 	jsonOutput = true // keep the test quiet; the guard is what is under test
+	swapNoticeOut(t, io.Discard)
 	noticedImplicitDevice = false
 	noteImplicitDevice("thor.local", implicitDefaultDevice)
 	noticedImplicitDevice = true
@@ -136,5 +152,21 @@ func TestResolveCloudGRPCFlagFallsBackWhenUnset(t *testing.T) {
 	}
 	if got := resolveCloudGRPCFlag(nil, "persistent.example:443"); got != "persistent.example:443" {
 		t.Errorf("resolveCloudGRPCFlag(nil) = %q, want the fallback", got)
+	}
+}
+
+func TestImplicitDeviceLinesSayTheTargetCameFromWENDY_DEVICE(t *testing.T) {
+	lines := implicitDeviceLines("thor.local", implicitEnvDevice, true)
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want the device line plus a hint: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "thor.local") || !strings.Contains(lines[0], "WENDY_DEVICE") {
+		t.Errorf("line = %q, want it to name the device and WENDY_DEVICE", lines[0])
+	}
+	if strings.Contains(lines[0], "default") {
+		t.Errorf("line = %q: a WENDY_DEVICE target is not the default device", lines[0])
+	}
+	if !strings.Contains(lines[1], "--device") || !strings.Contains(lines[1], "unset WENDY_DEVICE") {
+		t.Errorf("hint = %q, want --device and 'unset WENDY_DEVICE'", lines[1])
 	}
 }

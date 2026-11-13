@@ -135,9 +135,8 @@ INGEST_URL=ingest.data.wendy.sh
 
 ssh root@<device-hostname> "cat >> /etc/default/wendy-agent <<EOF
 WENDY_DATA_INGEST_URL=$INGEST_URL
-WENDY_DATA_DIR=/data/wendy-agent/episodes
 EOF
-mkdir -p /data/wendy-agent/episodes && systemctl restart wendyos-agent"
+systemctl restart wendyos-agent"
 ```
 
 - `WENDY_DATA_INGEST_URL` is the DataIngestService endpoint the transfer worker
@@ -148,9 +147,13 @@ mkdir -p /data/wendy-agent/episodes && systemctl restart wendyos-agent"
   presented in the mutual Transport Layer Security (mTLS) handshake and read by
   the service from the validated certificate; the worker attaches no identity
   header and holds no certificate of its own.
-- `WENDY_DATA_DIR` moves the episode store off the root partition (default
-  `/var/lib/wendy-agent/data/episodes`) onto the larger data partition. Worth
-  doing on any device whose root partition is a few gigabytes.
+- The episode store needs no setting. On WendyOS the agent keeps it in
+  `/var/lib/wendy/wendy-data/episodes`, on the data partition, and logs
+  `Wendy Data episode store` with the path and the reason at startup. It stays
+  on the root partition (`/var/lib/wendy-agent/data/episodes`) only where
+  `/var/lib/wendy` is not a separate, larger filesystem. Set `WENDY_DATA_DIR`
+  only for a custom location. Older agents kept the store on the root partition
+  by default; on one of those, set `WENDY_DATA_DIR=/data/wendy-data/episodes`.
 - `WENDY_DATA_MAX_BYTES` and `WENDY_DATA_RESERVE_BYTES` bound that store. The
   enforced quota is the smaller of a fifth of the store's filesystem and
   `WENDY_DATA_MAX_BYTES` (default 50 GiB), and eviction preserves

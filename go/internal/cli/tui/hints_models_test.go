@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const hintMarker = "💡"
@@ -52,6 +56,53 @@ func TestMultiSpinnerHidesHintWhenDone(t *testing.T) {
 	}
 }
 
+func TestWithoutHintsShowsNoTipAndStopsRotating(t *testing.T) {
+	// Simulator setup showed "Tip: Scaffold a new project ... wendy init",
+	// which has nothing to do with booting a VM.
+	models := map[string]interface {
+		View() string
+		Update(tea.Msg) (tea.Model, tea.Cmd)
+	}{
+		"spinner":      NewSpinner("Booting...").WithoutHints(),
+		"progress":     NewProgress("Sending...").WithoutHints(),
+		"build steps":  NewBuildStepsModel("Building...").WithoutHints(),
+		"multispinner": NewMultiSpinner("Building 2...", []string{"api", "web"}).WithoutHints(),
+	}
+	for name, m := range models {
+		if strings.Contains(m.View(), hintMarker) {
+			t.Errorf("%s: WithoutHints still renders a tip: %q", name, m.View())
+		}
+		updated, cmd := m.Update(hintTickMsg{})
+		if cmd != nil {
+			t.Errorf("%s: a hint tick rescheduled rotation with nothing to rotate", name)
+		}
+		if strings.Contains(updated.View(), hintMarker) {
+			t.Errorf("%s: a tick brought a tip back", name)
+		}
+	}
+}
+
+func TestHintsNeverNameTheRunningCommand(t *testing.T) {
+	t.Cleanup(func() { SetRunningCommand("") })
+	const deviceInfoTip = "'wendy device info'"
+	SetRunningCommand("wendy device info")
+	for range 50 {
+		for _, hint := range newHintRotator().hints {
+			if strings.Contains(hint, deviceInfoTip) {
+				t.Fatalf("tip %q recommends the running command", hint)
+			}
+		}
+	}
+	// Only the whole command: a variant is still worth knowing.
+	kept := hintsBesides(ProgressHints, "wendy run")
+	if !slices.ContainsFunc(kept, func(h string) bool { return strings.Contains(h, "'wendy run --watch'") }) {
+		t.Error("the 'wendy run --watch' tip was dropped during a plain 'wendy run'")
+	}
+	if got := hintsBesides(ProgressHints, ""); len(got) != len(ProgressHints) {
+		t.Errorf("no running command dropped %d tips", len(ProgressHints)-len(got))
+	}
+}
+
 func TestHintTickRotatesAndReschedules(t *testing.T) {
 	m := NewSpinner("Building...")
 	updated, cmd := m.Update(hintTickMsg{})
@@ -62,5 +113,49 @@ func TestHintTickRotatesAndReschedules(t *testing.T) {
 	}
 	if !strings.Contains(updated.View(), hintMarker) {
 		t.Fatal("expected spinner to still show a hint after a tick")
+	}
+}
+
+func TestSuppressedHintsKeepProgressAcrossModels(t *testing.T) {
+	t.Setenv("WENDY_NO_PROGRESS_HINTS", "1")
+	for _, tc := range []struct {
+		name   string
+		model  tea.Model
+		update tea.Msg
+		want   string
+	}{
+		{"spinner", NewSpinner("Starting simulator"), SpinnerUpdateMsg{Label: "Waiting for simulator"}, "Waiting for simulator"},
+		{"progress", NewProgress("Downloading image"), ProgressUpdateMsg{Percent: .5, Detail: "Receiving image data"}, "Receiving image data"},
+		{"multispinner", NewMultiSpinner("Building runtime", []string{"robot"}), MultiSpinnerStartMsg{Name: "robot"}, "building..."},
+		{"build steps", NewBuildStepsModel("Building runtime"), BuildStepMsg{ID: "1", Display: "Downloading dependencies", Status: BuildStepRunning}, "Downloading dependencies"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model, _ := tc.model.Update(tc.update)
+			model, tick := model.Update(hintTickMsg{})
+			if tick != nil {
+				t.Fatal("suppressed hints scheduled a rotation tick")
+			}
+			view := model.View()
+			if strings.Contains(view, hintMarker) || strings.Contains(view, "Tip:") || !strings.Contains(view, tc.want) {
+				t.Fatalf("view should preserve progress %q without a hint: %q", tc.want, view)
+			}
+		})
+	}
+}
+
+func TestSuppressedHintsKeepErrors(t *testing.T) {
+	t.Setenv("WENDY_NO_PROGRESS_HINTS", "1")
+	want := errors.New("download failed")
+	for _, tc := range []struct {
+		model tea.Model
+		done  tea.Msg
+	}{
+		{NewSpinner("Starting simulator"), SpinnerDoneMsg{Err: want}},
+		{NewProgress("Downloading image"), ProgressDoneMsg{Err: want}},
+	} {
+		model, _ := tc.model.Update(tc.done)
+		if view := model.View(); !strings.Contains(view, want.Error()) {
+			t.Fatalf("suppressed hints hid error: %q", view)
+		}
 	}
 }

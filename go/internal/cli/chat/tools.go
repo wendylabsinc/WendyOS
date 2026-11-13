@@ -24,6 +24,7 @@ import (
 // Tools combines project development tools with the Wendy MCP server. Only the
 // trusted, bundled MCP server is launched; workspace files cannot add servers.
 type Tools struct {
+	mcpOnly               bool
 	workspace             string
 	root                  *os.Root
 	mcp                   mcpToolClient

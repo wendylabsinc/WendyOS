@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
@@ -6,18 +7,22 @@ struct `'wendy tour'` {
     let scenario = CLIAndAgentScenario()
 
     /**
-     Displays usage for `wendy tour`. The output includes the command synopsis,
-     local flags, inherited global flags, and concise descriptions. Help exits
-     successfully, writes to stdout, emits no stderr, and leaves configuration,
-     cache, project, cloud, and device state untouched.
+     Displays simulator-first and physical-device routes for `wendy tour`. The
+     output includes the command synopsis, local flags, inherited global flags,
+     and concise descriptions. Help exits successfully, writes to stdout, emits
+     no stderr, and leaves configuration, cache, project, cloud, and device state
+     untouched.
      */
     @Test
     func `prints command help`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy tour --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Walk through device setup"))
+                #expect(result.stdout.contains("Watch a simulated Go2 walk"))
                 #expect(result.stdout.contains("wendy tour [flags]"))
+                #expect(result.stdout.contains("--simulator"))
+                #expect(result.stdout.contains("--hardware"))
+                #expect(result.stdout.contains("--project"))
                 #expect(result.stdout.contains("--help"))
                 #expect(result.stdout.contains("--json"))
                 #expect(result.stderr == "")
@@ -66,8 +71,9 @@ struct `'wendy tour'` {
     }
 
     /**
-     Without an interactive terminal, reports that the tour requires a
-     terminal and exits with guidance instead of blocking for input.
+     Without an explicit route in a non-interactive terminal, exits instead of
+     blocking for input and directs the user to the simulator or interactive
+     hardware setup.
      */
     @Test
     func `runs safely in non-interactive contexts`() async throws {
@@ -75,7 +81,20 @@ struct `'wendy tour'` {
             try await cli.sh("wendy tour") { result in
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
-                #expect(result.stderr.contains("wendy tour requires an interactive terminal"))
+
+                let envelope = try #require(
+                    try JSONSerialization.jsonObject(with: Data(result.stderr.utf8))
+                        as? [String: Any]
+                )
+                let error = try #require(envelope["error"] as? [String: Any])
+                #expect(error["code"] as? String == "error")
+                #expect(error["exit"] as? Int == 1)
+                #expect(
+                    error["message"] as? String
+                        == "choose 'wendy tour --simulator' or run 'wendy tour --hardware' in an interactive terminal"
+                )
+                #expect(error["retryable"] as? Bool == false)
+                #expect(error["next_steps"] as? [String] == [])
             }
         }
     }

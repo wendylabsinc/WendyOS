@@ -1,0 +1,15 @@
+[project]
+name = "review-helper"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+review_helper = "review_helper:main"
+
+# A build system makes uv install the package, and with it the script above
+# that the Dockerfile's CMD runs. Without one, uv treats the project as
+# "virtual" and 'uv run review_helper' fails with "Failed to spawn".
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

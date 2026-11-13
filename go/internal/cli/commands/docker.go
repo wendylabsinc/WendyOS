@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -25,16 +26,20 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/optimize"
 	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/buildargs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -183,7 +188,8 @@ func normalizeImageBuilder(builder string) (string, error) {
 	case imageBuilderBuildkit:
 		return imageBuilderBuildkit, nil
 	default:
-		return "", commandErrorf(errConfigInvalid, "invalid value %q for --builder: must be one of docker, apple-container, or buildkit", builder)
+		// The value comes from the --builder flag: the command line is wrong.
+		return "", markUsage(commandErrorf(errConfigInvalid, "invalid value %q for --builder: must be one of docker, apple-container, or buildkit", builder))
 	}
 }
 
@@ -288,6 +294,13 @@ func appleContainerPushScheme(registryImage string) (string, error) {
 // authentication and verifies the CLI has the necessary certs.
 // Returns an error if the device is provisioned but no CLI certs are available.
 func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if strings.HasPrefix(conn.Host, "unix:") {
+		// A container with the admin entitlement reaches the agent over its
+		// socket with no client certificates; the socket is its credential.
+		// If a registry push is ever really needed over the socket, it fails
+		// with its own error.
+		return nil
+	}
 	resp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
 	if err != nil {
 		return nil // can't determine provisioning status; let the push fail naturally
@@ -978,6 +991,10 @@ func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform st
 
 func generatePythonDockerfile(dir string, debug bool) (string, error) {
 	dockerfilePath := filepath.Join(dir, "Dockerfile")
+	base, err := pythonDockerBase(dir)
+	if err != nil {
+		return "", err
+	}
 
 	// Determine if requirements.txt exists.
 	hasRequirements := false
@@ -995,7 +1012,7 @@ func generatePythonDockerfile(dir string, debug bool) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("FROM python:3.11-slim\n")
+	fmt.Fprintf(&sb, "FROM python:%s-slim\n", base)
 	sb.WriteString("WORKDIR /app\n")
 	if hasRequirements {
 		sb.WriteString("COPY requirements.txt .\n")
@@ -1164,19 +1181,110 @@ var (
 		installCmd.Stderr = os.Stderr
 		return installCmd.Run()
 	}
+	dockerConfirmFn = func(ctx context.Context, question string) (bool, error) {
+		return tui.ConfirmDefaultYes(question, tea.WithContext(ctx), tea.WithOutput(os.Stderr))
+	}
 )
 
-// ensureDockerDaemon verifies the Docker daemon is running. On macOS, when
-// running interactively it prompts the user before launching the installed
-// Docker runtime; in non-interactive mode it launches it automatically.
-// Waits up to 60 s for the daemon to become ready before returning an error.
+func confirmDockerRuntime(ctx context.Context, question string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	accepted, err := dockerConfirmFn(ctx, question)
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	return mapConfirmCancel(accepted, err)
+}
+
+// dockerVersionProbeTimeout bounds each `docker version` probe that
+// ensureDockerDaemon runs on the `wendy run` / `wendy build` path. The probe
+// round-trips to the daemon, and a wedged one — the socket accepts the
+// connection but nothing answers (Docker Desktop mid-update, its VM stuck
+// after sleep) — used to stall a deploy indefinitely. A healthy daemon answers
+// in well under a second, and even a busy one (a large build in flight, the VM
+// just resumed) within a few, so 10 s leaves ample headroom before calling it
+// unresponsive. A var so tests can shrink it.
+var dockerVersionProbeTimeout = 10 * time.Second
+
+// dockerDaemonPollInterval is how often ensureDockerDaemon re-probes a daemon
+// it is waiting for, and dockerDaemonReadyWait how long it waits at most.
+// Vars so tests can shrink them.
+var (
+	dockerDaemonPollInterval = 2 * time.Second
+	dockerDaemonReadyWait    = 60 * time.Second
+)
+
+// waitForDockerDaemon polls until the daemon answers, for up to
+// dockerDaemonReadyWait: (true, nil) once it does, (false, nil) when the wait
+// ran out, ctx's error when the caller stopped. A probe that times out only
+// means the daemon is still starting, so polling goes on.
+func waitForDockerDaemon(ctx context.Context, name string) (bool, error) {
+	deadline := time.Now().Add(dockerDaemonReadyWait)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(dockerDaemonPollInterval):
+		}
+		if ready, _ := dockerDaemonReady(ctx); ready {
+			fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", name)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// dockerDaemonAnswering is dockerDaemonReady for ensureDockerDaemon's checks
+// of a daemon it has not launched. A daemon that is there but does not answer
+// in time is usually starting (Docker Desktop just opened, resuming from
+// sleep, Resource Saver): with a person at the terminal it is waited for, as
+// before the probe was bounded — without launching anything; with no one
+// there (an agent, CI) that is an error at once.
+func dockerDaemonAnswering(ctx context.Context) (bool, error) {
+	ready, err := dockerDaemonReady(ctx)
+	if ready || err == nil || ctx.Err() != nil || !humanPresent() {
+		return ready, err
+	}
+	fmt.Fprintf(os.Stderr, "[docker] Docker is not responding yet; waiting up to %s for it to start...\n", dockerDaemonReadyWait)
+	if ok, waitErr := waitForDockerDaemon(ctx, "Docker"); ok || waitErr != nil {
+		return ok, waitErr
+	}
+	return false, commandErrorf(errBuilderUnavailable, "docker daemon is not responding (no answer to `docker version` after waiting %s) — restart Docker and try again", dockerDaemonReadyWait)
+}
+
+// dockerDaemonReady probes the daemon once, bounded by
+// dockerVersionProbeTimeout: (true, nil) when it answers, (false, nil) when it
+// is not running (a stopped daemon refuses the connection and fails fast),
+// ctx's error when the caller stopped (Ctrl-C), and a "not responding" error
+// when the probe ran out of time, i.e. a daemon that is there but hung.
+func dockerDaemonReady(ctx context.Context) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, dockerVersionProbeTimeout)
+	defer cancel()
+	if dockerVersionOKFn(probeCtx) {
+		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+		return false, commandErrorf(errBuilderUnavailable, "docker daemon is not responding (no answer to `docker version` within %s) — restart Docker and try again", dockerVersionProbeTimeout)
+	}
+	return false, nil
+}
+
+// ensureDockerDaemon verifies the Docker daemon is running. On macOS, with a
+// person at the terminal (humanPresent) it launches the installed Docker
+// runtime — after a prompt when one can be drawn — and then waits up to 60 s
+// for the daemon to become ready; with no one there (an agent, CI) it never
+// launches the app and returns an error asking the user to start it.
 func ensureDockerDaemon(ctx context.Context) error {
 	return ensureDockerDaemonForHostOS(ctx, dockerHostOS(runtime.GOOS))
 }
 
 func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error {
-	if dockerVersionOKFn(ctx) {
-		return nil
+	if ready, err := dockerDaemonAnswering(ctx); ready || err != nil {
+		return err
 	}
 
 	_, cliErr := dockerLookPathFn("docker")
@@ -1187,7 +1295,11 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 		if !cliOnPath {
 			if !hasRuntime {
 				if isInteractiveTerminalFn() {
-					if !confirmFn("Docker runtime app and docker CLI were not found. Install Docker Desktop now with 'brew install --cask docker'?") {
+					accepted, err := confirmDockerRuntime(ctx, "Docker runtime app and docker CLI were not found. Install Docker Desktop now with 'brew install --cask docker'?")
+					if err != nil {
+						return err
+					}
+					if !accepted {
 						return commandErrorf(errBuilderUnavailable, "Docker runtime app is not installed — install Docker Desktop, OrbStack, or Rancher Desktop")
 					}
 					fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
@@ -1205,8 +1317,8 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
-					if dockerVersionOKFn(ctx) {
-						return nil
+					if ready, err := dockerDaemonAnswering(ctx); ready || err != nil {
+						return err
 					}
 				} else {
 					return dockerCLIMissingError(rt)
@@ -1221,29 +1333,34 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 			return dockerCLIMissingError(rt)
 		}
 
+		if !humanPresent() {
+			// No one is there to see a GUI app open, and waiting up to a
+			// minute for it would stall an agent or script. Say what to do.
+			return commandErrorf(errBuilderUnavailable, "docker daemon is not running — start %s and try again (wendy does not open it without an interactive terminal)", rt.name)
+		}
+		// Ask first when a prompt can be drawn; with output piped (e.g.
+		// `wendy run | tee`), open it without asking, as before.
 		if isInteractiveTerminalFn() {
-			if !confirmFn(fmt.Sprintf("Docker daemon is not running or is still starting for %s. Open it now?", rt.name)) {
+			accepted, err := confirmDockerRuntime(ctx, fmt.Sprintf("Docker daemon is not running or is still starting for %s. Open it now?", rt.name))
+			if err != nil {
+				return err
+			}
+			if !accepted {
 				return commandErrorf(errBuilderUnavailable, "docker daemon is not running — please start %s and try again", rt.name)
 			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fmt.Fprintf(os.Stderr, "[docker] Opening %s...\n", rt.name)
 		if err := dockerOpenRuntimeFn(ctx, rt.app); err != nil {
 			return commandErrorf(errBuilderUnavailable, "docker daemon is not running: could not open %s: %w", rt.name, err)
 		}
-		deadline := time.Now().Add(60 * time.Second)
-		for time.Now().Before(deadline) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(2 * time.Second):
-			}
-			if dockerVersionOKFn(ctx) {
-				fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", rt.name)
-				return nil
-			}
+		if ok, err := waitForDockerDaemon(ctx, rt.name); ok || err != nil {
+			return err
 		}
-		return commandErrorf(errBuilderUnavailable, "docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
+		return commandErrorf(errBuilderUnavailable, "docker daemon did not become ready within %s — %s may still be starting; please wait or start it manually", dockerDaemonReadyWait, rt.name)
 	}
 
 	if hostOS == dockerHostOSWindows {
@@ -1254,8 +1371,8 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
-					if dockerVersionOKFn(ctx) {
-						return nil
+					if ready, err := dockerDaemonAnswering(ctx); ready || err != nil {
+						return err
 					}
 				} else {
 					return dockerCLIMissingError(rt)
@@ -1412,6 +1529,10 @@ func ociBuilderName() string {
 	base := os.Getenv("WENDY_BUILDX_BUILDER")
 	if base == "" {
 		base = "wendy"
+		if _, selection := dockerSelection(); selection != "" {
+			sum := sha256.Sum256([]byte(selection))
+			base += "-" + hex.EncodeToString(sum[:6])
+		}
 	}
 	return base + "-oci"
 }
@@ -1438,8 +1559,7 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 	// `docker inspect` is far cheaper than `docker buildx inspect` (no buildx
 	// plugin load, no buildkit gRPC handshake). On any miss we fall through to the
 	// full robust path below.
-	containerName := "buildx_buildkit_" + builderName + "0"
-	if out, err := imageBuilderCommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", containerName).Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
+	if ociBuilderRunningForUser(ctx, builderName) {
 		return builderName, nil
 	}
 
@@ -1456,6 +1576,9 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 			"--driver-opt", "network=host",
 		)
 		if out, err := cmd.CombinedOutput(); err != nil {
+			if missing := buildxMissingError(ctx); missing != nil {
+				return "", missing
+			}
 			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 		}
 	}
@@ -1468,6 +1591,41 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 		return "", err
 	}
 	return builderName, nil
+}
+
+// ociBuilderRunningForUser is ensureOCIExportBuilder's fast-path test: the
+// builder's buildkit container is running AND this user's buildx store has the
+// builder. The container lives on the Docker daemon, shared by every account
+// that uses it, but builder registrations are per user, so another account's
+// running container proves nothing here: building with `--builder` would fail
+// with `no builder "<name>" found`. A file check keeps the fast path cheap.
+func ociBuilderRunningForUser(ctx context.Context, builderName string) bool {
+	if !buildxBuilderRegistered(builderName) {
+		return false
+	}
+	containerName := "buildx_buildkit_" + builderName + "0"
+	out, err := imageBuilderCommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", containerName).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// buildxBuilderRegistered reports whether builderName is in the buildx store
+// the CLI's own buildx commands use: $BUILDX_CONFIG, else $DOCKER_CONFIG/buildx,
+// else ~/.docker/buildx.
+func buildxBuilderRegistered(builderName string) bool {
+	store := os.Getenv("BUILDX_CONFIG")
+	if store == "" {
+		dockerConfig := os.Getenv("DOCKER_CONFIG")
+		if dockerConfig == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return false
+			}
+			dockerConfig = filepath.Join(home, ".docker")
+		}
+		store = filepath.Join(dockerConfig, "buildx")
+	}
+	_, err := os.Stat(filepath.Join(store, "instances", builderName))
+	return err == nil
 }
 
 // ociBuilderBootstrapTimeout bounds `docker buildx inspect --bootstrap`: a cold
@@ -1536,18 +1694,33 @@ func buildkitRegistryConfig(registryAddr string, plainHTTP bool, keypair *[2]str
 // here: callers update the existing container in place so its BuildKit state
 // volume survives dynamic proxy-port and certificate changes.
 func ensureRegistryBuilderInstance(ctx context.Context, builderName string) (created bool, err error) {
-	if exec.CommandContext(ctx, "docker", "buildx", "inspect", builderName).Run() == nil {
+	if imageBuilderCommandContext(ctx, "docker", "buildx", "inspect", builderName).Run() == nil {
 		return false, nil
 	}
-	cmd := exec.CommandContext(ctx, "docker", "buildx", "create",
+	cmd := imageBuilderCommandContext(ctx, "docker", "buildx", "create",
 		"--name", builderName,
 		"--driver", "docker-container",
 		"--driver-opt", "network=host",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if missing := buildxMissingError(ctx); missing != nil {
+			return false, missing
+		}
 		return false, fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 	}
 	return true, nil
+}
+
+// buildxMissingError explains a failed buildx command whose cause is that
+// Docker has no Buildx plugin, and returns nil for any other cause. It runs
+// only after a buildx command failed, so a working install never pays for it.
+func buildxMissingError(ctx context.Context) error {
+	if imageBuilderCommandContext(ctx, "docker", "buildx", "version").Run() == nil {
+		return nil
+	}
+	return withNextSteps(commandErrorf(errBuilderUnavailable, "%w; wendy builds images with it", errBuildxMissing),
+		"Install the Docker Buildx plugin: https://docs.docker.com/go/buildx/ (Docker Desktop, OrbStack and Rancher Desktop include it).",
+		"Check it with `docker buildx version`, then run again.")
 }
 
 // ensurePlaintextBuilder ensures the "wendy" buildx builder exists with plain
@@ -1632,20 +1805,23 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 	keyPath := filepath.Join(hostCertDir, "client-key.pem")
 	caPath := filepath.Join(hostCertDir, "ca.pem")
 
-	// BuildKit and the agent registry both use Go's TLS stack, which parses
-	// every certificate exchanged during the handshake even when verification
-	// is disabled or custom. Wendy cloud chains can contain ML-DSA certificates
-	// that Go cannot parse, so only present the parseable leaf certificate.
-	leafCertPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
-	if err != nil {
-		return "", fmt.Errorf("extracting client leaf certificate: %w", err)
-	}
-	if err := os.WriteFile(certPath, []byte(leafCertPEM), 0o644); err != nil {
-		return "", fmt.Errorf("writing client cert: %w", err)
-	}
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
 		return "", fmt.Errorf("loading client key: %w", err)
+	}
+	// Preserve the issuer chain, using the same normalization and root omission
+	// as the CLI's TLS connections. Cloud v2 peers need the intermediate to
+	// verify the operator identity against their trusted root.
+	clientCert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
+	if err != nil {
+		return "", fmt.Errorf("loading client certificate: %w", err)
+	}
+	var clientCertPEM []byte
+	for _, der := range clientCert.Certificate {
+		clientCertPEM = append(clientCertPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	}
+	if err := os.WriteFile(certPath, clientCertPEM, 0o644); err != nil {
+		return "", fmt.Errorf("writing client cert: %w", err)
 	}
 	if err := os.WriteFile(keyPath, []byte(keyPEM), 0o600); err != nil {
 		return "", fmt.Errorf("writing client key: %w", err)
@@ -1660,11 +1836,11 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 	fullConfig := buildkitRegistryConfig(registryAddr, false, keypair)
 
 	// appliedState uses the buildkitd config plus a SHA-256 digest of the
-	// public leaf certificate. The certificate is public material; no private
+	// public certificate chain. The certificates are public material; no private
 	// key material or derivative is persisted (SOC2-C1, NIST-SC-28, ISO27001-A.8).
 	// When the cert changes (rotation, new device), the digest changes and the
 	// builder is reconfigured and restarted in place.
-	certDigest := sha256.Sum256([]byte(leafCertPEM))
+	certDigest := sha256.Sum256(clientCertPEM)
 	appliedState := fullConfig +
 		"\n---CERTHASH---\n" + hex.EncodeToString(certDigest[:])
 
@@ -1830,6 +2006,10 @@ func buildxCacheSubdir(cacheKey string) string {
 // build paths point DOCKER_CONFIG at.
 const cleanDockerConfigContents = `{"auths":{}}`
 
+// cleanDockerConfigLinkSeq names ensureCleanDockerConfig's temporary links, so
+// concurrent builds in one process never pick the same name.
+var cleanDockerConfigLinkSeq atomic.Uint64
+
 // ensureCleanDockerConfig materializes a Docker config directory without a
 // credsStore credential helper and returns its path. It returns "" on Windows,
 // where the host's own config is used unchanged.
@@ -1894,10 +2074,36 @@ func ensureCleanDockerConfig() (string, error) {
 		origDockerConfig = filepath.Join(home, ".docker")
 	}
 	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+		src := filepath.Join(origDockerConfig, subdir)
 		dst := filepath.Join(dir, subdir)
-		if _, err := os.Lstat(dst); err != nil {
-			// best-effort: ignore if source doesn't exist or symlink fails
-			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+		// Create the source as docker itself would on first use. A link to a
+		// missing directory is worse than no link: buildx's first write through
+		// it fails with "mkdir …/buildx: file exists" (an account with no
+		// ~/.docker yet, such as root on a device). Creating it also repairs a
+		// link an earlier run left dangling. Best-effort, like the links.
+		_ = os.MkdirAll(src, 0o700)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		if _, err := os.Stat(src); err != nil {
+			// src could not be created: drop a dangling link so docker can
+			// make a real directory. Only a link is removed, never what a
+			// concurrent build's buildx made here.
+			if info, err := os.Lstat(dst); err == nil && info.Mode()&os.ModeSymlink != 0 {
+				_ = os.Remove(dst)
+			}
+			continue
+		}
+		// dst is missing or a dangling link. Make the link at a temporary name
+		// and rename it over dst: the rename swaps a dangling link atomically
+		// and fails on a directory, so a good link that a concurrent build
+		// just made is never removed, and buildx can't create a real
+		// directory in a gap between a remove and a symlink.
+		tmp := fmt.Sprintf("%s.link-%d-%d", dst, os.Getpid(), cleanDockerConfigLinkSeq.Add(1))
+		if err := os.Symlink(src, tmp); err == nil {
+			if err := os.Rename(tmp, dst); err != nil {
+				_ = os.Remove(tmp)
+			}
 		}
 	}
 
@@ -1916,6 +2122,12 @@ func dockerConfigEnv(configDir string) []string {
 		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
 			baseEnv = append(baseEnv, e)
 		}
+	}
+	// The credential-free config intentionally omits the user's config.json.
+	// Carry its active context explicitly, otherwise buildx silently switches
+	// back to default while docker version/inspect used the selected daemon.
+	if context, _ := dockerSelection(); context != "" && os.Getenv("DOCKER_CONTEXT") == "" {
+		baseEnv = append(baseEnv, "DOCKER_CONTEXT="+context)
 	}
 	return append(baseEnv, "DOCKER_CONFIG="+configDir)
 }
@@ -2195,6 +2407,57 @@ func buildAndPushImageForAgentWithBuilder(ctx context.Context, conn *grpcclient.
 	return nil
 }
 
+// quietBuildLogKey marks a context whose build routed logOutput into a
+// failure-only buffer instead of a live-rendered destination. Compose and
+// multi-service builds do this for two unrelated reasons — an explicit quiet
+// build (wendy watch's non-verbose mode), or an interactive per-service
+// spinner that doesn't render logOutput at all (see ociLayoutBuildWaitNotice)
+// — and buildProgressInteractive() alone can only see the second one. The
+// callers that know which applies (buildComposeServicesParallel,
+// buildServicesParallelWithContent) tag ctx with it; everything downstream —
+// buildAndPrepareComposeImage AND buildAndPushImageViaOCILayout, since
+// --chunking=off routes Compose/multi-service through the latter too — reads
+// it back via ctx rather than needing a new parameter threaded through every
+// function in between (and through every test fake of buildComposeServiceImage/
+// buildServiceImage, which share those functions' signature).
+type quietBuildLogKey struct{}
+
+func contextWithQuietBuildLog(ctx context.Context, quiet bool) context.Context {
+	return context.WithValue(ctx, quietBuildLogKey{}, quiet)
+}
+
+func quietBuildLogFromContext(ctx context.Context) bool {
+	quiet, _ := ctx.Value(quietBuildLogKey{}).(bool)
+	return quiet
+}
+
+// ociLayoutBuildWaitNotice returns the onWait callback for a layout lock taken
+// during a build. Interactive single-app builds render logOutput's lines live
+// as the synthetic "preparing buildx builder" step (newBuildSetupStepWriter),
+// so the notice belongs there, same as any other setup-log line. Everything
+// else goes straight to stderr instead: non-interactive builds only flush
+// logOutput through the 15s plain-progress heartbeat
+// (tui.PlainHeartbeatInterval), and a quiet build's logOutput (see
+// quietBuildLogKey) is a failure-only buffer regardless of interactivity —
+// unlike plain non-interactivity, buildProgressInteractive() can't see that
+// on its own, hence reading it from ctx.
+//
+// Interactive Compose/multi-service builds that are NOT quiet still route
+// logOutput into their own failure-only buffer (compose.go/multibuild.go's
+// per-service &logBuf), not the live per-service detail line — no existing
+// mechanism threads logOutput into that line, and adding one is out of scope
+// here, so that specific case is a known, accepted gap: the notice is
+// silently lost unless the build later fails.
+func ociLayoutBuildWaitNotice(ctx context.Context, repo string, logOutput io.Writer) func() {
+	return func() {
+		if !quietBuildLogFromContext(ctx) && buildProgressInteractive() {
+			fmt.Fprintf(logOutput, "Waiting for another wendy run of %s to release the build cache…\n", repo)
+			return
+		}
+		cliNotice("Waiting for another wendy run of %s to release the build cache…", repo)
+	}
+}
+
 // buildAndPushImageViaOCILayout is the concurrency-safe Docker deployment
 // path. A stable, registry-agnostic BuildKit builder writes a persistent OCI
 // layout; the host then pushes that image to the device. Per-app/service locks
@@ -2207,7 +2470,7 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 
 	repo = strings.ToLower(repo)
 	layoutDir := chunkLayoutDir(userCache, repo, platform)
-	releaseLayout, err := lockOCILayoutDir(ctx, layoutDir)
+	releaseLayout, err := lockOCILayoutDirNotify(ctx, layoutDir, ociLayoutBuildWaitNotice(ctx, repo, logOutput))
 	if err != nil {
 		return err
 	}
@@ -2231,6 +2494,18 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 	return nil
 }
 
+// noteComposeChunkStall remembers a stalled uncompressed compose push, so the
+// device's next deploy uses gzip, and says so in the service's log. Compose
+// has no reconnect-and-retry loop; its existing registry fallback finishes
+// this deploy.
+func noteComposeChunkStall(logOutput io.Writer, chunkErr error, cfg chunkUploadConfig) {
+	if !errors.Is(chunkErr, chunkupload.ErrStalled) {
+		return
+	}
+	_ = rememberChunkUploadStall(cfg.stallKey, time.Now())
+	fmt.Fprintf(logOutput, "[chunks] no upload progress for %s; this device uses gzip for the next %d days\n", cfg.stallTimeout, chunkStallMemoryDays)
+}
+
 // buildAndPrepareComposeImageForAgent is the default Compose image path. It
 // builds into the same persistent OCI layout used by single-service chunk
 // deploys, updates Stagefile app layers natively when dependencies are stable,
@@ -2238,9 +2513,9 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 // prepared image is registered under repo:latest, so Compose's existing
 // CreateContainer orchestration can consume it without a registry round-trip.
 //
-// Agents that predate PrepareImage (or any other non-build chunk-path failure)
-// fall back to pushing this exact already-built layout to the device registry;
-// the image is never rebuilt for the fallback.
+// In auto mode, missing chunk RPCs fall back to pushing this exact already-
+// built layout through the existing registry route. Cloud v2 stops on other
+// chunk failures; LAN and legacy Cloud keep their broader fallback behavior.
 func buildAndPrepareComposeImageForAgent(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, agentOS, builder, dir, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer) error {
 	return buildAndPrepareComposeImage(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput, true)
 }
@@ -2250,11 +2525,11 @@ func buildAndPrepareComposeImageForAgentForce(ctx context.Context, conn *grpccli
 }
 
 func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, agentOS, builder, dir, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer, allowRegistryFallback bool) error {
-	normalized, err := normalizeImageBuilder(builder)
+	normalized, err := resolveOCIExportBuilder(builder)
 	if err != nil {
 		return err
 	}
-	if normalized != imageBuilderDocker {
+	if normalized != imageBuilderDocker && normalized != imageBuilderBuildkit {
 		return buildAndPushImageForAgent(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput)
 	}
 
@@ -2264,7 +2539,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	}
 	repo = strings.ToLower(repo)
 	layoutDir := chunkLayoutDir(userCache, repo, platform)
-	releaseLayout, err := lockOCILayoutDir(ctx, layoutDir)
+	releaseLayout, err := lockOCILayoutDirNotify(ctx, layoutDir, ociLayoutBuildWaitNotice(ctx, repo, logOutput))
 	if err != nil {
 		return err
 	}
@@ -2272,7 +2547,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	defer func() { _ = gcOCILayoutDir(layoutDir) }()
 
 	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, layoutDir, func() error {
-		return buildImageToOCILayoutDirWithDocker(ctx, dir, dockerfile, platform, buildArgs, layoutDir, streamOutput, logOutput)
+		return buildImageToOCILayoutDir(ctx, dir, dockerfile, platform, buildArgs, normalized, layoutDir, streamOutput, logOutput)
 	})
 	if err != nil {
 		return err
@@ -2320,18 +2595,34 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 			ImageConfig:    imageConfig,
 			ImageSignature: imageSignature,
 		})
+		if prepareErr != nil && conn.IsCloudV2 {
+			return &cloudImagePrepareError{prepareErr}
+		}
 		return prepareErr
 	}
-	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput); chunkErr == nil {
+	uploadCfg := chunkUploadConfigFor(ctx, conn)
+	var progress *chunkPushProgress
+	if conn.IsCloudV2 {
+		progress = newChunkPushProgress()
+	}
+	if _, chunkErr := pushLayersByChunksWithPrepareMode(ctx, conn.ContainerService, layers, prepare, streamOutput, true, progress, uploadCfg); chunkErr == nil {
 		fmt.Fprintf(logOutput, "[chunks] prepared %s from missing content\n", imageName)
 		return nil
 	} else if ctx.Err() != nil {
 		return chunkErr
-	} else if blocksChunkPrepareFallback(chunkErr) {
+	} else if conn.IsCloudV2 && (!allowRegistryFallback || !isUnimplementedRPCError(chunkErr)) {
+		fmt.Fprintf(logOutput, "[chunks] image preparation failed: %v\n", chunkErr)
+		if retryableTunnelError(chunkErr) {
+			return cloudChunkTransferError(conn.Host, progress.Snapshot(), chunkErr, nil)
+		}
+		return cloudChunkDeployFailure(chunkErr)
+	} else if blocksChunkPrepareFallback(chunkErr) || chunkFailureRepeatsOnRegistryPush(chunkErr, builder) {
 		return chunkErr
 	} else if !allowRegistryFallback {
+		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
 		return fmt.Errorf("chunk-diff image preparation failed and --chunking=force disables the registry fallback: %w", chunkErr)
 	} else {
+		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
 		fmt.Fprintf(logOutput, "[chunks] prepare unavailable (%v); falling back to registry push of the existing OCI layout\n", chunkErr)
 		if reporter, ok := streamOutput.(interface{ ReportRegistryFallback(error) }); ok {
 			reporter.ReportRegistryFallback(chunkErr)
@@ -2672,6 +2963,22 @@ var ensureBuildxBuilderMu sync.Mutex
 type registryProxyEntry struct {
 	addr    string
 	dialErr func() error
+	ready   chan struct{} // Closed after connection-lifetime registration completes.
+	err     error         // Protected by dockerRegistryProxyCacheMu.
+}
+
+func (e *registryProxyEntry) result(ctx context.Context) (string, func(), func() error, error) {
+	select {
+	case <-e.ready:
+	case <-ctx.Done():
+		return "", nil, nil, ctx.Err()
+	}
+	dockerRegistryProxyCacheMu.Lock()
+	defer dockerRegistryProxyCacheMu.Unlock()
+	if e.err != nil {
+		return "", nil, nil, e.err
+	}
+	return e.addr, func() {}, e.dialErr, nil
 }
 
 // dockerRegistryProxyAddrs caches one proxy entry per AgentConnection. The
@@ -2680,7 +2987,7 @@ type registryProxyEntry struct {
 // builds and no builder teardown races can kill an in-flight push.
 var (
 	dockerRegistryProxyCacheMu sync.Mutex
-	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]registryProxyEntry{}
+	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]*registryProxyEntry{}
 )
 
 // resolveRegistryForAgent determines how Docker buildx should reach the
@@ -2693,14 +3000,14 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if err != nil {
 		return "", nil, nil, err
 	}
-	// Hold the lock for the entire operation so concurrent callers block rather
-	// than each starting their own proxy. Proxy creation is just a local
+	// Hold the lock during cache lookup and proxy creation so concurrent callers
+	// share one proxy. Proxy creation is just a local
 	// net.Listen call, so the lock is held only briefly.
 	dockerRegistryProxyCacheMu.Lock()
-	defer dockerRegistryProxyCacheMu.Unlock()
 
 	if entry, ok := dockerRegistryProxyAddrs[conn]; ok {
-		return entry.addr, func() {}, entry.dialErr, nil
+		dockerRegistryProxyCacheMu.Unlock()
+		return entry.result(ctx)
 	}
 
 	// Start a proxy tied to context.Background so it outlives this push and is
@@ -2711,6 +3018,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if conn.RegistryDialer == nil {
 		addr, stopProxy, dialErr, err = resolveRegistry(context.Background(), conn.Host, port)
 		if err != nil {
+			dockerRegistryProxyCacheMu.Unlock()
 			return "", nil, nil, err
 		}
 	} else {
@@ -2719,6 +3027,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 			return conn.RegistryDialer(ctx, port)
 		})
 		if proxyErr != nil {
+			dockerRegistryProxyCacheMu.Unlock()
 			return "", nil, nil, fmt.Errorf("starting cloud registry proxy: %w", proxyErr)
 		}
 		stopProxy = proxy.Close
@@ -2730,15 +3039,24 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 		}
 	}
 
-	dockerRegistryProxyAddrs[conn] = registryProxyEntry{addr: addr, dialErr: dialErr}
-	conn.ExtraClosers = append(conn.ExtraClosers, closeFunc(func() {
+	entry := &registryProxyEntry{addr: addr, dialErr: dialErr, ready: make(chan struct{})}
+	dockerRegistryProxyAddrs[conn] = entry
+	// AddCloser closes a late helper synchronously if shutdown has begun.
+	// Release the cache lock before registration because cleanup takes it too.
+	// Cache hits wait for registration so they cannot return a rejected proxy.
+	dockerRegistryProxyCacheMu.Unlock()
+	conn.AddCloser(closeFunc(func() {
 		dockerRegistryProxyCacheMu.Lock()
-		delete(dockerRegistryProxyAddrs, conn)
+		entry.err = errors.New("selected device connection has closed")
+		if dockerRegistryProxyAddrs[conn] == entry {
+			delete(dockerRegistryProxyAddrs, conn)
+		}
 		dockerRegistryProxyCacheMu.Unlock()
 		stopProxy()
 	}))
+	close(entry.ready)
 
-	return addr, func() {}, dialErr, nil
+	return entry.result(ctx)
 }
 
 // resolveRegistryForSwift is like resolveRegistry but for the Swift container
@@ -2882,11 +3200,7 @@ func wendyRegistryServerVerifier(caPool *x509.CertPool) func(tls.ConnectionState
 // SAN — but the server chain is fully validated against the Wendy CA via
 // wendyRegistryServerVerifier, matching startMTLSRegistryHTTPProxy.
 func tlsClientDialer(certPEM, keyPEM, caPEM string, dial func(context.Context) (net.Conn, error)) (func(context.Context) (net.Conn, error), error) {
-	leafPEM, err := certs.LeafCertificatePEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
-	}
-	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	tlsCert, err := certs.TLSKeyPair(certPEM, caPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading client certificate: %w", err)
 	}
@@ -3039,11 +3353,7 @@ func (p *mtlsRegistryHTTPProxy) LastDialError() error {
 }
 
 func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsRegistryHTTPProxy, error) {
-	leafPEM, err := certs.LeafCertificatePEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf cert: %w", err)
-	}
-	cert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	cert, err := certs.TLSKeyPair(certPEM, caPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parsing mTLS certificate: %w", err)
 	}
@@ -3061,6 +3371,9 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 			req.Host = target
 		},
 		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+				return deviceLinkDialFn(ctx, addr)
+			},
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
 				// Skip hostname verification: device registry certs are signed by
@@ -3106,15 +3419,11 @@ func startMTLSRegistryProxy(ctx context.Context, target string) (*registryProxy,
 	if certInfo == nil {
 		return nil, fmt.Errorf("no CLI certificates available")
 	}
-	leafPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
-	}
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
 	}
-	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	tlsCert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading client certificate: %w", err)
 	}
@@ -3173,7 +3482,7 @@ type registryProxy struct {
 
 func startRegistryProxy(ctx context.Context, listenAddr string, target string) (*registryProxy, error) {
 	return startRegistryProxyWithDialer(ctx, listenAddr, func(ctx context.Context) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+		return deviceLinkDialFn(ctx, target)
 	}, target)
 }
 

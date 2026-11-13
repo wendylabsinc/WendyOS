@@ -31,8 +31,28 @@ message WendyConfCloudProvisioning {
     bytes  chain      = 7;
 }
 
+// Operator-authorized Tier C bootstrap. Contains no device private key.
+message WendyConfEnrollment {
+    string tenant_id = 1;
+    string device_id = 2;
+    string token = 3;
+    string csr_url = 4; // https://csr.<deployment>/v1/<tenant>
+    string time_url = 5; // https://codesign.<deployment>/v1/time
+    string broker_host = 6;
+    uint32 broker_port = 7;
+    bytes signed_time = 8; // nonce-bound RFC 3161 response, verified on-device
+    // Explicit operator trust provisioning over physical USB/UART only.
+    // Device and HTTPS PEM CA bundles are required when provision_trust is true.
+    // TSA roots are additionally required for RFC 3161, but not Roughtime.
+    bytes device_roots = 9;
+    bytes tsa_roots = 10;
+    bytes https_roots = 11;
+    bool provision_trust = 12;
+}
+
 message WendyConf {
     optional string            device_name  = 1;
     WendyConfWifi              wifi         = 2;
     WendyConfCloudProvisioning provisioning = 3;
+    WendyConfEnrollment enrollment = 4;
 }

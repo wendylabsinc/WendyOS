@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -69,9 +70,36 @@ func (s *Store) CheckCreatable(name string) error {
 //
 // meta records where the image came from. It is written last, inside the same
 // rollback guard, so a VM directory never outlives a failed create.
-func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes int64, meta Meta) (retErr error) {
+func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes int64, meta Meta) error {
+	return s.CreateFromContext(context.Background(), name, image, imageSize, diskBytes, meta)
+}
+
+// CreateFromContext is CreateFrom with cancellation during the image copy.
+// Cancellation removes the partial VM so the same name can be retried.
+func (s *Store) CreateFromContext(ctx context.Context, name string, image io.Reader, imageSize, diskBytes int64, meta Meta) error {
+	return s.CreateFromWithRobotProfileContext(ctx, name, image, imageSize, diskBytes, meta, nil)
+}
+
+// CreateFromWithRobotProfile creates the image and optional robot profile under
+// one lifecycle lock and rollback guard. A failed profile write must not leave
+// a generic VM behind when the caller requested a robot.
+func (s *Store) CreateFromWithRobotProfile(name string, image io.Reader, imageSize, diskBytes int64, meta Meta, profile *RobotProfile) error {
+	return s.CreateFromWithRobotProfileContext(context.Background(), name, image, imageSize, diskBytes, meta, profile)
+}
+
+// CreateFromWithRobotProfileContext adds cancellation to the atomic disk and
+// profile creation. The caller remains responsible for closing the image.
+func (s *Store) CreateFromWithRobotProfileContext(ctx context.Context, name string, image io.Reader, imageSize, diskBytes int64, meta Meta, profile *RobotProfile) (retErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := ValidName(name); err != nil {
 		return err
+	}
+	if profile != nil {
+		if err := profile.Validate(); err != nil {
+			return err
+		}
 	}
 	// A disk truncated below the image loses the last partition and the GPT
 	// backup header that sits at the very end.
@@ -85,6 +113,9 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 		return fmt.Errorf("allocating VM MAC: %w", err)
 	}
 	meta.MAC = mac
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	lifecycle, err := s.acquireLifecycleLock(name)
 	if err != nil {
 		return err
@@ -93,6 +124,9 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 	// cleanup has finished, including cleanup after a close/writeback error.
 	defer lifecycle.Close()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := s.Dir(name)
 	if err := os.MkdirAll(s.Root, 0o700); err != nil {
 		return fmt.Errorf("creating VM store: %w", err)
@@ -114,6 +148,9 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 	// this call created.
 	defer func() {
 		if retErr == nil {
+			retErr = ctx.Err()
+		}
+		if retErr == nil {
 			return
 		}
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
@@ -122,6 +159,9 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 		}
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Defense in depth: never open a VM disk for truncation.
 	disk, err := os.OpenFile(s.DiskPath(name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -138,9 +178,14 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 	// Bounded one byte past the disk: a compressed source reports size 0, so the
 	// up-front guard cannot fire and an over-large image would otherwise be
 	// written in full before the check below rejects it.
-	written, err := io.Copy(disk, io.LimitReader(image, diskBytes+1))
+	// Hide WriterTo and ReaderFrom so optimized copies cannot skip the context
+	// checks between reads, including for local files and decompressed images.
+	written, err := io.Copy(struct{ io.Writer }{disk}, imageContextReader{ctx, io.LimitReader(image, diskBytes+1)})
 	if err != nil {
 		return fmt.Errorf("writing image: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	// The up-front guard cannot fire when imageSize is 0, as a compressed source
 	// reports until its size is known. Without this the Truncate below would
@@ -150,32 +195,63 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 	}
 	// Grow, not preallocate: the image is sparse-extended so /data can be grown
 	// into the space on first boot without writing gigabytes now.
-	if err := disk.Truncate(diskBytes); err != nil {
+	if err := truncateSparse(disk, diskBytes); err != nil {
 		return fmt.Errorf("sizing disk: %w", err)
 	}
 
-	vars, err := os.OpenFile(s.VarsPath(name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating UEFI variable store: %w", err)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	defer func() {
-		if cerr := vars.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("closing UEFI variable store: %w", cerr)
+	if !IsLiteProfile(meta.Profile) {
+		vars, err := os.OpenFile(s.VarsPath(name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return fmt.Errorf("creating UEFI variable store: %w", err)
 		}
-	}()
-	if err := vars.Truncate(pflashBytes); err != nil {
-		return fmt.Errorf("sizing UEFI variable store: %w", err)
+		defer func() {
+			if cerr := vars.Close(); cerr != nil && retErr == nil {
+				retErr = fmt.Errorf("closing UEFI variable store: %w", cerr)
+			}
+		}()
+		if err := truncateSparse(vars, pflashBytes); err != nil {
+			return fmt.Errorf("sizing UEFI variable store: %w", err)
+		}
 	}
-
 	meta.Name = name
 	meta.DiskBytes = diskBytes
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = time.Now().UTC()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if profile != nil {
+		if err := writeJSON(s.RobotProfilePath(name), *profile); err != nil {
+			return fmt.Errorf("recording robot profile: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := s.WriteMeta(meta); err != nil {
 		return fmt.Errorf("recording VM metadata: %w", err)
 	}
 	return nil
+}
+
+type imageContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r imageContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return 0, ctxErr
+	}
+	return n, err
 }
 
 // List returns the names of every VM in the store, sorted.

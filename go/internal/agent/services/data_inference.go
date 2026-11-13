@@ -1,10 +1,12 @@
 package services
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,8 +23,6 @@ type inferenceVideo interface {
 	SubscribeSensor(context.Context, string) (sensorSubscription, error)
 }
 
-const campaignAppPrefix = "sh.wendy.campaign."
-
 type campaignInferenceManager struct {
 	service *DataService
 	factory inference.Factory
@@ -30,6 +30,11 @@ type campaignInferenceManager struct {
 	wake    chan struct{}
 	mu      sync.Mutex
 	jobs    map[string]*campaignInferenceJob
+	ctx     context.Context
+	// reconcileMu runs one pass at a time: a pass that read the plans before
+	// a removal must not restart a job that a later pass, run for that
+	// removal, has just retired.
+	reconcileMu sync.Mutex
 }
 
 type campaignInferenceJob struct {
@@ -49,7 +54,7 @@ type campaignInferenceJob struct {
 // camera subscriptions to exit before the video service is shut down.
 func (s *DataService) StartCampaignInference(ctx context.Context, factory inference.Factory, sender CampaignNotificationSender) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
+	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), ctx: ctx, jobs: map[string]*campaignInferenceJob{}}
 	s.inference = manager // Configured once, before registering the RPC server.
 	done := make(chan struct{})
 	go func() {
@@ -72,18 +77,27 @@ func (s *DataService) StartCampaignInference(ctx context.Context, factory infere
 
 func (m *campaignInferenceManager) stopAll() {
 	m.mu.Lock()
-	jobs := m.jobs
-	m.jobs = map[string]*campaignInferenceJob{}
+	jobs := make([]*campaignInferenceJob, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
 	m.mu.Unlock()
 	for _, job := range jobs {
 		job.cancel()
 	}
 	for _, job := range jobs {
 		<-job.done
+		m.mu.Lock()
+		if m.jobs[job.campaign.Name] == job {
+			delete(m.jobs, job.campaign.Name)
+		}
+		m.mu.Unlock()
 	}
 }
 
 func (m *campaignInferenceManager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
 	campaigns, err := m.service.manager.Campaigns()
 	if err != nil {
 		m.service.manager.Warnf("reading inference campaigns: %v", err)
@@ -104,11 +118,15 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		}
 		job.cancel()
 		retired = append(retired, job)
-		delete(m.jobs, name)
 	}
 	m.mu.Unlock()
 	for _, job := range retired {
 		<-job.done
+		m.mu.Lock()
+		if m.jobs[job.campaign.Name] == job {
+			delete(m.jobs, job.campaign.Name)
+		}
+		m.mu.Unlock()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +138,39 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		job := &campaignInferenceJob{owner: m, campaign: campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
 		m.jobs[name] = job
 		go job.supervise(child)
+	}
+}
+
+// reconcileNow runs one pass in the caller's goroutine; it returns once the
+// jobs it retired have stopped.
+func (m *campaignInferenceManager) reconcileNow() { m.reconcile(m.ctx) }
+
+// wakeNow asks the loop for a pass without waiting for it.
+func (m *campaignInferenceManager) wakeNow() {
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+// campaignJobKey is the jobs key of a campaign's inference. Lookups from
+// outside reconcile go through it, so a change of key reaches all of them.
+func campaignJobKey(name string) string { return name }
+
+// Keep retired jobs visible until their process and camera subscriptions exit.
+// Persisting enabled:false only requests shutdown; it does not complete it.
+func (m *campaignInferenceManager) inferenceActive(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[name]
+	if job == nil || !job.campaign.Inference.IsEnabled() {
+		return false
+	}
+	select {
+	case <-job.done:
+		return false
+	default:
+		return true
 	}
 }
 
@@ -137,6 +188,7 @@ func (m *campaignInferenceManager) snapshot(name, revision string) *data.Inferen
 	for source, state := range job.status.Sources {
 		snapshot.Sources[source] = state
 	}
+	snapshot.Accelerator = acceleratorSnapshot(job.status.Accelerator, time.Now())
 	return &snapshot
 }
 
@@ -166,21 +218,47 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 		<-ctx.Done()
 		return
 	}
+	// The last reason a worker could not start. A worker that cannot start
+	// fails the same way at every retry, such as a tensorrt campaign on a
+	// device without TensorRT, so the reason is logged when it changes.
+	lastStartFailure := ""
 	for ctx.Err() == nil {
 		j.setState("loading", nil)
+		// A new process reports its own accelerator; the last one's is stale.
+		j.mu.Lock()
+		j.status.Accelerator, j.status.Stats = nil, nil
+		j.mu.Unlock()
 		err := j.run(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		j.setState("error", err)
-		j.owner.service.manager.Warnf("campaign %q inference: %v; retrying in 5s", j.campaign.Name, err)
+		var startFailure inferenceStartError
+		switch {
+		case !errors.As(err, &startFailure):
+			lastStartFailure = ""
+			j.owner.service.manager.Warnf("campaign %q inference: %v; retrying in %s", j.campaign.Name, err, inferenceRetryDelay)
+		case err.Error() != lastStartFailure:
+			lastStartFailure = err.Error()
+			j.owner.service.manager.Warnf("campaign %q inference: %v; retrying every %s, logged again when the reason changes", j.campaign.Name, err, inferenceRetryDelay)
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After(inferenceRetryDelay):
 		}
 	}
 }
+
+// inferenceRetryDelay is how long a failed worker waits to be started again.
+// Behind a var for tests.
+var inferenceRetryDelay = 5 * time.Second
+
+// inferenceStartError is a worker that did not start, as opposed to one that
+// started and then failed.
+type inferenceStartError struct{ error }
+
+func (e inferenceStartError) Unwrap() error { return e.error }
 
 type inferenceSource struct {
 	cancel context.CancelFunc
@@ -191,11 +269,11 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if j.owner.factory == nil {
-		return errors.New("model runtime is unavailable")
+		return inferenceStartError{errors.New("model runtime is unavailable")}
 	}
 	session, err := j.owner.factory.Start(ctx, *j.campaign.Inference)
 	if err != nil {
-		return err
+		return inferenceStartError{err}
 	}
 	sources := map[string]inferenceSource{}
 	defer func() {
@@ -275,10 +353,18 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			reconcile()
 		case result, ok := <-session.Results():
 			if !ok {
+				// Why, with the tail of the worker's stderr.
+				if err := session.Err(); err != nil {
+					return err
+				}
 				return errors.New("model process exited")
 			}
 			if result.Type == "error" {
 				return errors.New(result.Error)
+			}
+			if result.Type == "accelerator" {
+				j.acceleratorState(result.Accelerator, result.Stats)
+				continue
 			}
 			j.mu.Lock()
 			generation, active := j.generations[result.SourceID]
@@ -300,8 +386,20 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			j.sourceState(result.SourceID, "detecting")
 			attributes := map[string]any{"campaign": j.campaign.Name, "source_id": result.SourceID, "model_version": j.campaign.Inference.Revision, "detections": detections,
 				"input_reference_status": "encoded_stream_decode_does_not_preserve_sample_ids", "runtime_results_dropped": result.DroppedResults}
+			if j.campaign.Inference.Task == "image-classification" {
+				j.sourceState(result.SourceID, "classifying")
+				classes := make([]map[string]any, 0, len(detections))
+				for _, d := range detections {
+					classes = append(classes, map[string]any{"label": d.Label, "score": d.Score})
+				}
+				attributes["detections"] = classes
+				attributes["task"] = "image-classification"
+			} else {
+				addPicture(attributes, detections, result.Width, result.Height)
+			}
+			j.predictionProvenance(attributes, result)
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
-			if _, err := j.owner.service.manager.RecordCampaignApplication(campaignAppPrefix+j.campaign.Name, record); err != nil {
+			if _, err := j.owner.service.manager.RecordCampaignApplication(data.CampaignAppID(j.campaign.Name), record); err != nil {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
 			}
 			state := presence[result.SourceID]
@@ -317,12 +415,8 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				j.owner.service.manager.Warnf("campaign %q detection could not start an episode: %v", j.campaign.Name, triggerErr)
 			}
 			if j.campaign.Notify != nil && (j.campaign.Notify.On == data.NotifyOnDetection || j.campaign.Notify.On == data.NotifyOnEvent && j.campaign.Notify.Event == record.Name) {
-				request := detectionNotification(j.campaign, result.SourceID, len(detections))
-				select {
-				case j.queue <- request:
-				default:
-					j.notificationError(errors.New("notification queue full; detection notification dropped"))
-				}
+				request := detectionNotification(j.campaign, result.SourceID, detections)
+				j.enqueueNotification(request)
 			}
 		}
 	}
@@ -354,7 +448,7 @@ func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Ses
 				if err != nil {
 					break
 				}
-				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: campaignAppPrefix + j.campaign.Name, Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
+				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: data.CampaignAppID(j.campaign.Name), Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
 					j.owner.service.manager.Warnf("recording campaign model input: %v", err)
 				}
 			}
@@ -430,8 +524,33 @@ func (p *inferencePresence) observe(detected bool, now time.Time, config *data.C
 	return true
 }
 
-func detectionNotification(campaign data.Campaign, source string, count int) DetectionNotification {
-	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: count}
+func detectionNotification(campaign data.Campaign, source string, detections []inference.Detection) DetectionNotification {
+	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: len(detections), Detections: notificationDetections(detections), OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
+// notificationDetections keeps the five highest-scored detections, which keeps
+// a journal entry well under its 4096-byte limit.
+func notificationDetections(detections []inference.Detection) []data.NotificationDetection {
+	sorted := slices.Clone(detections)
+	slices.SortStableFunc(sorted, func(a, b inference.Detection) int { return cmp.Compare(b.Score, a.Score) })
+	sorted = sorted[:min(len(sorted), 5)]
+	out := make([]data.NotificationDetection, 0, len(sorted))
+	for _, detection := range sorted {
+		out = append(out, data.NotificationDetection{Label: detection.Label, Score: detection.Score})
+	}
+	return out
+}
+
+func (j *campaignInferenceJob) enqueueNotification(request DetectionNotification) {
+	if err := j.owner.service.manager.RecordNotification(request); err != nil {
+		j.notificationError(fmt.Errorf("persist notification: %w", err))
+		return
+	}
+	select {
+	case j.queue <- request:
+	default:
+		j.notificationError(errors.New("external notification queue full; notification retained in Wendy Data"))
+	}
 }
 
 func (j *campaignInferenceJob) notificationError(err error) {
@@ -492,7 +611,9 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 	eventNotifications := campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent
 	if campaign.Inference != nil || eventNotifications {
 		campaign.InferenceStatus = &data.InferenceStatus{State: "disabled"}
-		if campaign.Inference.IsEnabled() || eventNotifications {
+		if !campaign.Inference.IsEnabled() && s.inference != nil && s.inference.inferenceActive(campaign.Name) {
+			campaign.InferenceStatus.State = "stopping"
+		} else if campaign.Inference.IsEnabled() || eventNotifications {
 			if s.inference == nil {
 				campaign.InferenceStatus = &data.InferenceStatus{State: "error", Error: "agent campaign runtime is unavailable"}
 			} else {
@@ -501,6 +622,15 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 					campaign.InferenceStatus.State = "pending"
 				}
 			}
+		}
+	}
+	// A disarmed campaign runs nothing, so its inference reports exactly that,
+	// once its worker has stopped, rather than "pending" for a start that is
+	// never coming.
+	if campaign.InferenceStatus != nil && campaign.State == data.CampaignStateDisarmed {
+		campaign.InferenceStatus = &data.InferenceStatus{State: data.CampaignStateDisarmed}
+		if s.inference != nil && s.inference.inferenceActive(campaignJobKey(campaign.Name)) {
+			campaign.InferenceStatus.State = "stopping"
 		}
 	}
 	return campaignMessage(campaign)
@@ -513,7 +643,12 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
 		return false, err
 	}
-	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
+	// A disarmed campaign's worker is being retired; what it saw last is not
+	// a detection anyone asked for any more.
+	if current.State != data.CampaignStateArmed {
+		return false, nil
+	}
+	if _, err := s.manager.RecordCampaignApplication(data.CampaignAppID(campaign.Name), record); err != nil {
 		return true, err
 	}
 	if _, active := s.manager.ActiveSession(campaign.Name); active {
@@ -535,10 +670,6 @@ func (m *campaignInferenceManager) notifyEvent(campaign data.Campaign, record da
 	if job == nil || job.campaign.Revision != campaign.Revision {
 		return
 	}
-	request := DetectionNotification{ID: uuid.NewString(), Event: record.Name, Campaign: campaign.Name, Model: record.Model}
-	select {
-	case job.queue <- request:
-	default:
-		job.notificationError(errors.New("notification queue full; event notification dropped"))
-	}
+	request := DetectionNotification{ID: uuid.NewString(), Event: record.Name, Campaign: campaign.Name, Model: record.Model, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	job.enqueueNotification(request)
 }

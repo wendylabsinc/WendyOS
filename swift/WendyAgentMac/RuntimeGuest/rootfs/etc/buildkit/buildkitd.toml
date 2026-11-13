@@ -1,0 +1,20 @@
+root = "/var/lib/wendy-runtime/buildkit"
+
+[grpc]
+  address = ["unix:///run/buildkit/buildkitd.sock"]
+
+[worker.oci]
+  enabled = false
+
+[worker.containerd]
+  enabled = true
+  address = "/run/containerd/containerd.sock"
+  namespace = "wendy"
+  gc = true
+
+[worker.containerd.runtime]
+  name = "io.containerd.runc.v2"
+  options = { NoPivotRoot = true }
+
+[[worker.containerd.gcpolicy]]
+  keepBytes = 21474836480

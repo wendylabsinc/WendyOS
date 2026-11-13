@@ -10,8 +10,12 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // errSimulatorUnavailable marks a failure to bring up the selected simulator.
@@ -19,6 +23,17 @@ import (
 // named a local VM, and quietly deploying to a cloud device instead would land
 // the app on an entirely different machine.
 var errSimulatorUnavailable = errors.New("simulator unavailable")
+
+var vmDetachSupportedFn = vm.DetachSupported
+
+func simulatorForegroundHint(name string, create bool) string {
+	command := fmt.Sprintf("'wendy vm start %s'", name)
+	if create {
+		command = fmt.Sprintf("'wendy vm create %s --profile generic', then %s", name, command)
+	}
+	return "Run " + command + " in a separate terminal and keep it open. " +
+		"Local app builds, managed robot simulators, and automatic port forwarding require macOS or Linux; on Windows, run Wendy inside WSL2."
+}
 
 // markSimulatorUnavailable tags err so resolveWithCloudFallback will not answer
 // it by deploying to a cloud device -- without stacking a second copy of the
@@ -82,6 +97,9 @@ func ensureSimulatorRunning(ctx context.Context, name string) (addr string, star
 		return "", false, fmt.Errorf("%w: no VM named %q; create it with 'wendy vm create %s'",
 			errSimulatorUnavailable, name, name)
 	}
+	if !vmDetachSupportedFn() {
+		return "", false, fmt.Errorf("%w; %s", vm.ErrDetachUnsupported, simulatorForegroundHint(name, false))
+	}
 
 	// resolveVMSpec re-checks the winner, so this only has to find a candidate.
 	port, err := vm.PickHostPort(st.Meta.AgentPort, simulatorPortSearchTries)
@@ -138,9 +156,9 @@ func waitForSimulatorAgent(ctx context.Context, name, addr string, budget time.D
 			_ = vmRecordHostnameFn(name, resp.GetHostname())
 			return conn, nil
 		}
-		// An unreachable pinned endpoint is expected during boot. Retry the
-		// same authenticated ladder, but stop if a different identity answered.
-		if errors.Is(err, errDeviceIdentityRefused) {
+		// An unreachable pinned endpoint is expected during boot. An explicit
+		// authentication failure needs user action, not another boot retry.
+		if simulatorAuthenticationFailed(err) {
 			return nil, err
 		}
 		// Under emulation the budget is five minutes. Without this, a guest that
@@ -162,9 +180,23 @@ func waitForSimulatorAgent(ctx context.Context, name, addr string, budget time.D
 	}
 }
 
+// simulatorAuthenticationFailed distinguishes a responding peer rejecting
+// authentication from an agent that has not started listening yet.
+func simulatorAuthenticationFailed(err error) bool {
+	var orgMismatch orgMismatchDeviceError
+	return errors.Is(err, errDeviceIdentityRefused) ||
+		errors.Is(err, errTLSHandshakeRejected) ||
+		errors.As(err, &orgMismatch) ||
+		status.Code(err) == codes.Unauthenticated ||
+		status.Code(err) == codes.PermissionDenied
+}
+
 // VM aliases carry identity separately from their current loopback port. Never
 // consult a localhost pin or session cached for an unrelated VM/container.
 func connectSimulatorAgent(ctx context.Context, name, addr string) (*grpcclient.AgentConnection, *agentpb.GetAgentVersionResponse, error) {
+	// A reconnect passes conn.Addr, the mTLS forward; dial the plaintext
+	// forward so the ladder never tries a port QEMU does not forward.
+	addr = vmAgentForwardAddr(name, addr)
 	conn, resp, err := probeSimulatorAgent(ctx, name, addr)
 	if err != nil {
 		return nil, nil, err
@@ -229,9 +261,9 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 	if choice == nil {
 		return nil, fmt.Errorf("no simulator selected")
 	}
-	if err := ensureQEMUFn(ctx); err != nil {
-		return nil, fmt.Errorf("%w: %w", errSimulatorUnavailable, err)
-	}
+	// All of this is simulator setup -- the boot wait, an agent update and the
+	// robot build -- so none of its progress views rotate tips about projects.
+	ctx = withoutProgressHints(ctx)
 
 	if choice.Create {
 		if err := createSimulator(choice.Name); err != nil {
@@ -246,6 +278,9 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 		// unavailable: ...".
 		return nil, markSimulatorUnavailable(err)
 	}
+	if isLiteSimulator(choice.Name) {
+		return connectLiteSimulator(ctx, choice.Name, addr)
+	}
 	conn, err := awaitSimulator(ctx, choice.Name, addr, started)
 	if err != nil {
 		return nil, err
@@ -258,7 +293,8 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 			return nil, err
 		}
 	}
-	if err := reconcileSimulatorRobotFn(ctx, picked.Agent); err != nil {
+	picked.Agent, err = reconcileSimulatorRobotWithAgentUpdate(ctx, picked.Agent)
+	if err != nil {
 		picked.Agent.Close()
 		return nil, markSimulatorUnavailable(err)
 	}
@@ -272,8 +308,8 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 // The caller must not be inside a Bubble Tea program -- the download runs its
 // own, and two cannot share a terminal.
 var createSimulator = func(name string) error {
-	if !vm.DetachSupported() {
-		return fmt.Errorf("%w: %w", errSimulatorUnavailable, vm.ErrDetachUnsupported)
+	if !vmDetachSupportedFn() {
+		return fmt.Errorf("%w: %w; %s", errSimulatorUnavailable, vm.ErrDetachUnsupported, simulatorForegroundHint(name, true))
 	}
 	if !isInteractiveTerminalFn() && !vmAssumeYes {
 		return fmt.Errorf("%w: no simulator yet; create one with 'wendy vm create %s'",
@@ -287,6 +323,14 @@ var createSimulator = func(name string) error {
 			return err
 		}
 	}
+	if vm.IsLiteProfile(profile) {
+		store, err := vm.NewStore()
+		if err != nil {
+			return err
+		}
+		_, err = createLiteSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{Name: name, Profile: profile})
+		return err
+	}
 	if !vmAssumeYes && !confirmFn("Download the WendyOS simulator image and create a VM? This is a one-time download of a few hundred MB.") {
 		return ErrUserCancelled
 	}
@@ -295,6 +339,42 @@ var createSimulator = func(name string) error {
 		return fmt.Errorf("%w: %w", errSimulatorUnavailable, err)
 	}
 	return attachSimulatorProfile(name, profile)
+}
+
+// startSimulatorFn powers 's' on discover's Simulator tab: the same boot, agent
+// wait and first-time robot build as --device vm:<name>, after which the
+// connection is closed -- discover lists devices, it does not hold one.
+//
+// Like createSimulator, the caller must not be inside a Bubble Tea program.
+var startSimulatorFn = func(ctx context.Context, name string) error {
+	cliLogln("Starting simulator %q...", name)
+	picked, err := connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, false)
+	if err != nil {
+		return err
+	}
+	if picked != nil {
+		picked.Agent.Close()
+	}
+	return nil
+}
+
+// simulatorStartOutcome is the status line the Simulator tab shows when it
+// comes back. A failure is printed in full as well: the status line holds one
+// line, and a boot failure carries the guest's last console output, which
+// stays in the terminal once discover exits.
+func simulatorStartOutcome(name string, err error) simulatorFlash {
+	switch {
+	case err == nil:
+		return simulatorFlash{msg: fmt.Sprintf("Started %s.", name)}
+	case errors.Is(err, ErrUserCancelled), errors.Is(err, tui.ErrCancelled), errors.Is(err, context.Canceled):
+		return simulatorFlash{msg: fmt.Sprintf("Start of %s cancelled.", name)}
+	}
+	cliLogln("Could not start %s: %v", name, err)
+	msg, rest, multiline := strings.Cut(err.Error(), "\n")
+	if multiline && strings.TrimSpace(rest) != "" {
+		msg += " (full output is printed when you quit)"
+	}
+	return simulatorFlash{msg: fmt.Sprintf("Could not start %s: %s", name, msg), isErr: true}
 }
 
 // awaitSimulator waits under a spinner for the guest agent to answer. Shared by
@@ -316,11 +396,19 @@ func awaitSimulatorWith(ctx context.Context, name, addr string, booting bool,
 	if booting {
 		label = fmt.Sprintf("Booting simulator %s (first boot under emulation takes a few minutes)...", name)
 	}
+	if isRobotTour(ctx) {
+		label = "Connecting to your robot..."
+		if booting {
+			label = "Starting your robot..."
+		}
+	}
 
 	var conn *grpcclient.AgentConnection
 	var err error
 	if isInteractiveTerminalFn() {
-		conn, err = runAgentConnectionSpinner(ctx, label, wait)
+		// Booting the simulator is setup, like the robot build after it: tips
+		// about scaffolding projects would only distract from the wait.
+		conn, err = runAgentConnectionSpinner(withoutProgressHints(ctx), label, wait)
 	} else {
 		// The spinner needs a TTY it cannot open here, and `--device sim` has
 		// to work from a script. Wait the same way, just without the animation.
@@ -328,12 +416,17 @@ func awaitSimulatorWith(ctx context.Context, name, addr string, booting bool,
 		conn, err = wait(ctx)
 	}
 	if err != nil {
-		if errors.Is(err, ErrUserCancelled) {
+		if errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled) {
 			return nil, err
+		}
+		if simulatorAuthenticationFailed(err) {
+			// Boot output cannot explain a rejected certificate. Preserve the
+			// actionable error and its type without appending the login banner.
+			return nil, markSimulatorUnavailable(err)
 		}
 		// A silent timeout after minutes of waiting is the worst outcome, so
 		// hand back what the guest actually printed.
-		return nil, fmt.Errorf("%w: %v%s", errSimulatorUnavailable, err, vmConsoleTail(name))
+		return nil, fmt.Errorf("%w: %w%s", errSimulatorUnavailable, err, vmConsoleTail(name))
 	}
 	return conn, nil
 }

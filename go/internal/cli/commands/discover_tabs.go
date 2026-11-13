@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -27,8 +29,10 @@ type discoverTabsModel struct {
 	active       devicePickerTab
 	action       devicePickerAction
 	createVMName string
+	startVMName  string
 	cancelled    bool
 	windowWidth  int
+	windowHeight int
 }
 
 // active preserves the tab when returning from a prompt outside the TUI.
@@ -47,8 +51,29 @@ func newDiscoverTabsModel(ctx context.Context, local discoverModel, auth *config
 	if active == devicePickerSimulatorTab {
 		m.simStarted = true
 	}
+	if !vmDetachSupportedFn() {
+		vms := m.sim.vms
+		m.sim.picker.OnCreateItem = func() (string, bool) {
+			return simulatorForegroundHint(nextSimulatorName(*vms), true), false
+		}
+	}
 	if auth != nil {
 		m.cloud = newCloudDiscoverModel(ctx, auth, os.Getenv("WENDY_BROKER_URL"), false, false, nil)
+	}
+	return m
+}
+
+// simulatorFlash is a status line for the Simulator tab, carried across a
+// restart of the view: 's' runs its boot with the TUI gone, so its outcome can
+// only be shown once the view is back.
+type simulatorFlash struct {
+	msg   string
+	isErr bool
+}
+
+func (m discoverTabsModel) withSimulatorFlash(f simulatorFlash) discoverTabsModel {
+	if f.msg != "" {
+		m.sim.picker.SetFlash(f.msg, f.isErr)
 	}
 	return m
 }
@@ -130,8 +155,8 @@ func (m discoverTabsModel) updateLocal(msg tea.Msg) (discoverTabsModel, tea.Cmd)
 
 // updateSimulator forwards to the shared simulator list. A selection is ignored
 // -- discover shows devices, it does not connect to one, and enter copies
-// instead -- but 'c' still has to leave, because the download needs the
-// terminal this view is holding.
+// instead -- but 'c' and 's' still have to leave, because the download, the
+// boot and the robot build need the terminal this view is holding.
 func (m discoverTabsModel) updateSimulator(msg tea.Msg) (discoverTabsModel, tea.Cmd) {
 	updated, cmd := m.sim.Update(msg)
 	m.sim = updated
@@ -140,6 +165,11 @@ func (m discoverTabsModel) updateSimulator(msg tea.Msg) (discoverTabsModel, tea.
 			m.createVMName = choice.Name
 		}
 		m.action = devicePickerCreateVM
+		return m, tea.Quit
+	}
+	if name := m.sim.startRequested(); name != "" {
+		m.startVMName = name
+		m.action = devicePickerStartVM
 		return m, tea.Quit
 	}
 	if m.sim.cancelled() {
@@ -177,15 +207,29 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
+		m.windowHeight = msg.Height
 		var cmds []tea.Cmd
-		local, localCmd := m.updateLocal(msg)
+		localSize := msg
+		if msg.Height > 0 {
+			localSize.Height = max(1, msg.Height-2) // tab header and separator
+		}
+		local, localCmd := m.updateLocal(localSize)
 		m = local
 		cmds = append(cmds, localCmd)
-		sim, simCmd := m.updateSimulator(msg)
+		// The simulator picker shares the terminal with the tab header and footer.
+		simSize := msg
+		if msg.Height > 0 {
+			simSize.Height = max(1, msg.Height-3)
+		}
+		sim, simCmd := m.updateSimulator(simSize)
 		m = sim
 		cmds = append(cmds, simCmd)
 		if m.cloudAuth != nil {
-			cloud, cloudCmd := m.updateCloud(msg)
+			cloudSize := msg
+			if msg.Height > 0 {
+				cloudSize.Height = max(1, msg.Height-4) // tabs and organization label
+			}
+			cloud, cloudCmd := m.updateCloud(cloudSize)
 			m = cloud
 			cmds = append(cmds, cloudCmd)
 		}
@@ -244,6 +288,34 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m discoverTabsModel) View() string {
+	view := strings.TrimRight(m.viewContent(), "\n")
+	if m.windowHeight > 0 {
+		// Status messages, errors, legends and wrapped hints can appear after
+		// the last resize. Measure the complete frame and shrink the table,
+		// preserving the selected row rather than letting the terminal scroll.
+		if excess := lipgloss.Height(view) - m.windowHeight; excess > 0 {
+			switch m.active {
+			case devicePickerLocalTab:
+				m.local.table.SetHeight(max(2, m.local.table.Height()-excess))
+			case devicePickerCloudTab:
+				if m.cloudAuth != nil {
+					m.cloud.table.SetHeight(max(2, m.cloud.table.Height()-excess))
+				}
+			}
+			view = strings.TrimRight(m.viewContent(), "\n")
+		}
+	}
+	// Very small terminals may not even fit the fixed controls. Never emit a
+	// frame larger than the viewport, including a trailing newline at its end.
+	view = tui.CropANSIView(view, 0, m.windowWidth)
+	lines := strings.Split(view, "\n")
+	if m.windowHeight > 0 && len(lines) > m.windowHeight {
+		view = strings.Join(lines[:m.windowHeight], "\n")
+	}
+	return view
+}
+
+func (m discoverTabsModel) viewContent() string {
 	if m.cancelled || m.action != devicePickerNoAction {
 		return ""
 	}
@@ -252,8 +324,8 @@ func (m discoverTabsModel) View() string {
 	case devicePickerLocalTab:
 		return header + "\n\n" + m.local.View()
 	case devicePickerSimulatorTab:
-		return header + "\n\n" + m.sim.View() + "\n" + devicePickerOrgStyle.Render(
-			"  enter copy address, tab switch, q quit — start one with 'wendy vm start <name>'")
+		footer := devicePickerOrgStyle.Render("  enter copies a running simulator's address — press s to start a stopped one")
+		return header + "\n\n" + m.sim.View() + "\n" + tui.CropANSIView(footer, 0, m.windowWidth)
 	}
 
 	var body strings.Builder
@@ -284,7 +356,7 @@ func copySimulatorAddress(choice *simulatorChoice) string {
 	case choice.Create:
 		return "No simulator yet — press c to create one."
 	case choice.Address == "":
-		return fmt.Sprintf("%s is not running — start it with 'wendy vm start %s'.", choice.Name, choice.Name)
+		return fmt.Sprintf("%s is not running — press s to start it.", choice.Name)
 	}
 	if err := clipboardWriter(choice.Address); err != nil {
 		return fmt.Sprintf("Copy failed: %v", err)

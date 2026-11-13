@@ -1,11 +1,14 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -123,6 +126,9 @@ func updateEtcHosts(logger *zap.Logger, hostname string) {
 // avoid an import cycle (configpartition imports this package). Keep the avahi
 // service-file format in sync between them.
 func updateAvahiHostname(logger *zap.Logger, hostname string) {
+	unlock := LockAvahiServiceFile()
+	defer unlock()
+
 	data, err := os.ReadFile(avahiServiceFile)
 	if err != nil {
 		logger.Warn("Could not read avahi service file", zap.String("path", avahiServiceFile), zap.Error(err))
@@ -167,6 +173,9 @@ func ReassertHostnameAdvertisement(logger *zap.Logger) {
 // reassertHostnameAdvertisement is the testable core of
 // ReassertHostnameAdvertisement, with the paths and the avahi restart injected.
 func reassertHostnameAdvertisement(logger *zap.Logger, hostnamePath, serviceFile string, restartAvahi func() bool) {
+	unlock := LockAvahiServiceFile()
+	defer unlock()
+
 	data, err := os.ReadFile(hostnamePath)
 	if err != nil {
 		// A missing file is the normal "never renamed" case, not a problem.
@@ -222,13 +231,31 @@ func avahiContentForHostname(content, hostname string) string {
 // and gethostname(). A full restart is required: --reload (SIGHUP) only
 // refreshes service files, leaving the %h-based records stale.
 func restartAvahiDaemon(logger *zap.Logger) bool {
-	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+	// A stuck service manager must not hold up the service-file lock's other
+	// writers, among them enrollment, or the agent's shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", "avahi-daemon")
 	restart.Env = systemPathEnv()
+	restart.WaitDelay = time.Second
 	if out, err := restart.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
 		return false
 	}
 	return true
+}
+
+// avahiServiceFileMu serializes the agent's read-modify-write edits of the
+// service file, which run from different goroutines at runtime.
+var avahiServiceFileMu sync.Mutex
+
+// LockAvahiServiceFile holds the service-file lock until unlock is called.
+func LockAvahiServiceFile() (unlock func()) {
+	avahiServiceFileMu.Lock()
+	return avahiServiceFileMu.Unlock
 }
 
 // replaceAvahiTXTRecord replaces the value in a <txt-record>key=...</txt-record> line.

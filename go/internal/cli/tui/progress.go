@@ -62,6 +62,13 @@ func (m ProgressModel) WithoutErrorView() ProgressModel {
 	return m
 }
 
+// WithoutHints drops the rotating "Tip:" line, for progress whose context
+// makes the tips noise, such as setting up the simulator.
+func (m ProgressModel) WithoutHints() ProgressModel {
+	m.hints = hintRotator{}
+	return m
+}
+
 // Init implements tea.Model.
 func (m ProgressModel) Init() tea.Cmd {
 	return m.hints.tick()

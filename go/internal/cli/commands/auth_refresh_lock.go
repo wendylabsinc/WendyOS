@@ -10,9 +10,12 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 )
 
-// All OAuth refreshes share a lock because different sessions also write the
-// same config.json. Hold it across reload, token rotation and persistence.
+// OAuth refreshes and the background update-check writer share this lock because
+// they replace the same config.json. Hold it across reload, token rotation and
+// persistence so the update check cannot restore a consumed refresh token.
 // Opening a separate file handle for each acquisition also serializes goroutines.
+// Lock order is auth-refresh.lock, then config.lock inside config.Update.
+// Config update callbacks must not acquire this auth lock.
 func acquireAuthRefreshLock(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -41,7 +44,8 @@ func acquireAuthRefreshLock(ctx context.Context) (func(), error) {
 // overwrites another session on the same Cloud endpoint.
 func sameOAuthSession(a, b *config.AuthConfig) bool {
 	return a.CloudDashboard == b.CloudDashboard && a.CloudGRPC == b.CloudGRPC &&
-		a.OAuthIssuer == b.OAuthIssuer && a.OrganizationKey() == b.OrganizationKey()
+		a.OAuthIssuer == b.OAuthIssuer && a.ServiceAccount == b.ServiceAccount &&
+		a.OrganizationKey() == b.OrganizationKey()
 }
 
 func reloadOAuthSession(auth *config.AuthConfig) error {

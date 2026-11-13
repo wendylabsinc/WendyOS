@@ -44,7 +44,7 @@ const ticketMetaPrefix = "wendy-mtls/1:"
 // still-valid cert's trust can be extended by resumption alone.
 //
 // Mesh dials are exempt from the chaining risk in a different way: with the
-// anti-MITM peer pin fix in server.go's NewClientTLSConfigExpectingPeer
+// anti-MITM peer pin fix in server.go's NewClientTLSConfigExpectingDevice
 // (VerifyConnection re-running the pin+chain check on every resumed mesh
 // connection), a resumed mesh connection re-verifies as much as a full one
 // does, so ticket chaining in the in-memory meshSessionCache is harmless and
@@ -52,6 +52,12 @@ const ticketMetaPrefix = "wendy-mtls/1:"
 //
 // now is injectable for handshake-level tests; production passes time.Now.
 func wireSessionTicketChecks(cfg *tls.Config, notBeforeFloor time.Time, now func() time.Time) {
+	wireSessionTicketChecksWithClock(cfg, now, func(wall, nb time.Time) (time.Time, time.Time) {
+		return wall, effectiveVerificationTime(wall, notBeforeFloor, nb)
+	})
+}
+
+func wireSessionTicketChecksWithClock(cfg *tls.Config, now func() time.Time, clockTimes func(time.Time, time.Time) (time.Time, time.Time)) {
 	cfg.WrapSession = func(cs tls.ConnectionState, ss *tls.SessionState) ([]byte, error) {
 		appendClientCertWindow(ss, cs)
 		return cfg.EncryptTicket(cs, ss)
@@ -62,7 +68,8 @@ func wireSessionTicketChecks(cfg *tls.Config, notBeforeFloor time.Time, now func
 			return nil, nil // undecryptable (e.g. pre-restart ticket) → full handshake
 		}
 		notBefore, notAfter, ok := clientCertWindowFromExtra(ss)
-		if !ok || !resumableClientWindow(notBefore, notAfter, now(), notBeforeFloor) {
+		base, leaf := clockTimes(now(), notBefore)
+		if !ok || base.After(notAfter) || leaf.Before(notBefore) {
 			return nil, nil
 		}
 		return ss, nil

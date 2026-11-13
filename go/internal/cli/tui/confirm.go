@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // ConfirmModel is a Bubble Tea model for styled yes/no prompts.
@@ -21,10 +22,17 @@ type ConfirmModel struct {
 	// danger renders the question in the error (red) style to flag a
 	// security-sensitive decision the user must look at carefully.
 	danger bool
+	// compact uses a single [y/N] hint and ignores option navigation.
+	compact bool
 }
 
 func NewConfirm(question string) ConfirmModel {
 	return ConfirmModel{Question: question}
+}
+
+// NewConfirmDefaultNo builds a compact prompt defaulting to No.
+func NewConfirmDefaultNo(question string) ConfirmModel {
+	return ConfirmModel{Question: question, compact: true}
 }
 
 func NewConfirmDefaultYes(question string) ConfirmModel {
@@ -64,19 +72,19 @@ func (m ConfirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.answered = true
 			return m, tea.Quit
 		case "left", "h":
-			if m.requireExplicit {
+			if m.requireExplicit || m.compact {
 				return m, nil
 			}
 			m.choice = true
 			return m, nil
 		case "right", "l":
-			if m.requireExplicit {
+			if m.requireExplicit || m.compact {
 				return m, nil
 			}
 			m.choice = false
 			return m, nil
 		case "tab":
-			if m.requireExplicit {
+			if m.requireExplicit || m.compact {
 				return m, nil
 			}
 			m.choice = !m.choice
@@ -102,6 +110,10 @@ func (m ConfirmModel) View() string {
 		return ""
 	}
 
+	if m.compact {
+		return fmt.Sprintf("%s %s\n", confirmQuestion.Render(m.Question), confirmHint.Render("[y/N]"))
+	}
+
 	if m.requireExplicit {
 		// No default: render the question with a neutral hint and no
 		// pre-highlighted option. Danger prompts render the question in red.
@@ -116,13 +128,7 @@ func (m ConfirmModel) View() string {
 		)
 	}
 
-	yes := confirmInactive.Render("Yes")
-	no := confirmInactive.Render("No")
-	if m.choice {
-		yes = confirmActive.Render("Yes")
-	} else {
-		no = confirmActive.Render("No")
-	}
+	yes, no := confirmChoice("Yes", m.choice), confirmChoice("No", !m.choice)
 
 	return fmt.Sprintf(
 		"%s  %s %s  %s\n",
@@ -130,6 +136,18 @@ func (m ConfirmModel) View() string {
 		yes, no,
 		confirmHint.Render("(y/n)"),
 	)
+}
+
+// confirmChoice renders one option. Without colour the highlight is plain
+// text, so brackets take the place of its padding.
+func confirmChoice(label string, active bool) string {
+	switch {
+	case !active:
+		return confirmInactive.Render(label)
+	case lipgloss.ColorProfile() == termenv.Ascii:
+		return "[" + label + "]"
+	}
+	return confirmActive.Render(label)
 }
 
 // Confirmed returns true if the user selected Yes.
@@ -143,8 +161,8 @@ func (m ConfirmModel) Cancelled() bool {
 }
 
 func runConfirm(m ConfirmModel, programOpts []tea.ProgramOption) (bool, error) {
-	p := tea.NewProgram(m, programOpts...)
-	result, err := p.Run()
+	p := NewProgram(m, programOpts...)
+	result, err := RunProgram(p)
 	if err != nil {
 		return false, fmt.Errorf("confirm prompt: %w", err)
 	}
@@ -163,6 +181,12 @@ func runConfirm(m ConfirmModel, programOpts []tea.ProgramOption) (bool, error) {
 // tea.WithInput / tea.WithOutput).
 func Confirm(question string, programOpts ...tea.ProgramOption) (bool, error) {
 	return runConfirm(NewConfirm(question), programOpts)
+}
+
+// ConfirmDefaultNo runs a compact [y/N] prompt defaulting to No.
+// Pass the question without the [y/N] suffix. Returns ErrCancelled on Ctrl+C / q.
+func ConfirmDefaultNo(question string, programOpts ...tea.ProgramOption) (bool, error) {
+	return runConfirm(NewConfirmDefaultNo(question), programOpts)
 }
 
 // ConfirmDefaultYes runs a styled yes/no prompt defaulting to Yes.

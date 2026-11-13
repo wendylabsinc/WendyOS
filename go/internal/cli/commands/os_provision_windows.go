@@ -60,8 +60,7 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	}
 
 	// The storage stack needs a moment after Update-Disk before partitions
-	// are reliably enumerable by Get-Volume; mirrors the partprobe sleep on
-	// Linux.
+	// are reliably enumerable by Get-Volume.
 	time.Sleep(500 * time.Millisecond)
 
 	partNum, err := findConfigPartitionNumber(diskNum)
@@ -167,6 +166,85 @@ func findConfigPartitionNumber(diskNum int) (int, error) {
 	return parseConfigPartition(out)
 }
 
+// rescanPartitionTable refreshes Windows' cached view of d: writeImageToDisk
+// cleared the disk before writing, and until Update-Disk runs Get-Disk can
+// still report the cleared disk, without the GUID of the image just written.
+func rescanPartitionTable(d drive) {
+	diskNum, err := parseDiskNumber(d.DevicePath)
+	if err != nil {
+		return
+	}
+	updateDisk(diskNum) //nolint:errcheck
+}
+
+// readDriveIdentity fingerprints d from Get-Disk: its size, GPT disk GUID,
+// serial number and friendly name. writeImageToDisk leaves a fixed disk
+// offline, where volume labels — and with them the config partition — cannot
+// be read, so the config-partition GUID is left out on Windows.
+func readDriveIdentity(d drive) (driveIdentity, error) {
+	diskNum, err := parseDiskNumber(d.DevicePath)
+	if err != nil {
+		return driveIdentity{}, err
+	}
+	ids, err := windowsDiskIdentities(fmt.Sprintf("Get-Disk -Number %d -ErrorAction Stop", diskNum))
+	if err != nil {
+		return driveIdentity{}, err
+	}
+	id, ok := ids[diskNum]
+	if !ok {
+		return driveIdentity{}, fmt.Errorf("Get-Disk did not report disk %d", diskNum)
+	}
+	return id, nil
+}
+
+// listIdentifiedDrives fingerprints every drive the installer would offer as a
+// target, with one Get-Disk query for all of them.
+func listIdentifiedDrives() ([]identifiedDrive, error) {
+	drives, err := listAllDrives()
+	if err != nil {
+		return nil, err
+	}
+	ids, err := windowsDiskIdentities("Get-Disk")
+	if err != nil {
+		return nil, err
+	}
+	var out []identifiedDrive
+	for _, d := range drives {
+		diskNum, err := parseDiskNumber(d.DevicePath)
+		if err != nil {
+			continue
+		}
+		if id, ok := ids[diskNum]; ok {
+			out = append(out, identifiedDrive{drive: d, id: id})
+		}
+	}
+	return out, nil
+}
+
+// windowsDiskIdentities runs the Get-Disk identity query over the disks the
+// selector names.
+func windowsDiskIdentities(selector string) (map[int]driveIdentity, error) {
+	script := selector + " | ForEach-Object { " +
+		"[PSCustomObject]@{ Number=$_.Number; Guid=$_.Guid; Size=$_.Size; " +
+		"SerialNumber=$_.SerialNumber; FriendlyName=$_.FriendlyName } " +
+		"} | ConvertTo-Json -Compress"
+	out, err := exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	if err != nil {
+		return nil, fmt.Errorf("running Get-Disk: %w", err)
+	}
+	return parseWindowsDiskIdentities(out)
+}
+
+// drivePresent reports whether Windows still lists d's disk number.
+func drivePresent(d drive) bool {
+	diskNum, err := parseDiskNumber(d.DevicePath)
+	if err != nil {
+		return false
+	}
+	script := fmt.Sprintf("Get-Disk -Number %d -ErrorAction Stop | Out-Null", diskNum)
+	return exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).Run() == nil
+}
+
 func ensureConfigPartitionMounted(diskNum, partNum int) (string, error) {
 	letter, err := readPartitionDriveLetter(diskNum, partNum)
 	if err != nil {
@@ -224,7 +302,9 @@ func flushVolume(mountPath string) {
 	_ = exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).Run()
 }
 
-func ejectDisk(d drive) {
+// ejectDisk takes a fixed disk offline. A nil error means Windows holds no
+// volume of it any more and the drive is safe to remove.
+func ejectDisk(d drive) error {
 	// Skip the offline call for removable targets — Windows rejects
 	// Set-Disk -IsOffline $true on USB / SD / MMC and on the PCIE card
 	// readers that report as SCSI but are flagged removable by
@@ -237,12 +317,11 @@ func ejectDisk(d drive) {
 	// writeConfigPartition's deferred cleanup already removed the drive
 	// letters, and the user pulls the media to "eject" it physically.
 	if d.IsRemovable {
-		return
+		return nil
 	}
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot eject %s: %v\n", d.DevicePath, err)
-		return
+		return fmt.Errorf("cannot eject %s: %w", d.DevicePath, err)
 	}
 	// Idempotent: writeConfigPartition's deferred cleanup already took the
 	// disk offline. This catches the path where the user invoked something
@@ -266,6 +345,7 @@ func ejectDisk(d drive) {
 	)
 	out, err := exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to take disk %d offline (it may still be online with assigned drive letters): %v: %s\n", diskNum, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("failed to take disk %d offline (it may still be online with assigned drive letters): %s: %w", diskNum, strings.TrimSpace(string(out)), err)
 	}
+	return nil
 }

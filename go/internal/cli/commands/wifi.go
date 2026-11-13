@@ -21,6 +21,70 @@ import (
 	"golang.org/x/term"
 )
 
+var (
+	resolveWifiTargetFn = resolveWifiTarget
+	pickWifiNetworkFn   = pickWifiNetwork
+
+	// allowUnverifiedWiFiDevice is --allow-unverified-device.
+	allowUnverifiedWiFiDevice bool
+	confirmUnverifiedWiFiFn   = func() (bool, error) {
+		return tui.ConfirmDefaultNo("Send Wi-Fi credentials to this device anyway?", tea.WithOutput(os.Stderr))
+	}
+)
+
+// Wi-Fi is needed before first-boot enrollment can reach Cloud. Only this
+// command family and explicit enrollment may connect to an unbound device that
+// reports NotProvisioned; saved identities still require normal authentication.
+func resolveWifiTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
+	return resolveTarget(withWiFiSetupSelection(ctx), opts...)
+}
+
+// errUnverifiedWiFiCredentials refuses to send a Wi-Fi password over an
+// unverified setup connection without the user's consent.
+var errUnverifiedWiFiCredentials = errors.New("Wi-Fi credentials not sent to a device with no verified identity")
+
+// errUnverifiedWiFiDeclined is the user declining that consent.
+var errUnverifiedWiFiDeclined = fmt.Errorf("%w: Wi-Fi credentials not sent", ErrUserCancelled)
+
+// wifiCredentialTargetKey carries the selected target into enrollment's Wi-Fi
+// prompt, which only receives its connection.
+type wifiCredentialTargetKey struct{}
+
+// confirmUnverifiedWiFiCredentials asks before Wi-Fi credentials go to a setup
+// device that only self-reported NotProvisioned. The connection is plaintext
+// and nothing authenticated the peer, so any host answering the selected name
+// would receive the password. Consent lasts for the selected target.
+func confirmUnverifiedWiFiCredentials(target *SelectedDevice) error {
+	if target == nil || !target.unverifiedSetup || target.unverifiedSetupAccepted {
+		return nil
+	}
+	if allowUnverifiedWiFiDevice {
+		target.unverifiedSetupAccepted = true
+		return nil
+	}
+	name := ""
+	if target.Agent != nil {
+		name = target.Agent.DevicePinKey
+	}
+	if jsonOutput || !isInteractiveTerminal() {
+		return fmt.Errorf("%w: %q answered as an unenrolled device, but its identity cannot be verified and the password would be sent unencrypted; pass --allow-unverified-device to send it anyway", errUnverifiedWiFiCredentials, name)
+	}
+	fmt.Fprintf(os.Stderr, "Device %q has no verified identity yet. Wi-Fi credentials are sent to it unencrypted,\n", name)
+	fmt.Fprintln(os.Stderr, "and any host answering that name on this network would receive them.")
+	accepted, err := confirmUnverifiedWiFiFn()
+	if errors.Is(err, tui.ErrCancelled) {
+		return ErrUserCancelled
+	}
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		return errUnverifiedWiFiDeclined
+	}
+	target.unverifiedSetupAccepted = true
+	return nil
+}
+
 func newWifiCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "wifi",
@@ -29,6 +93,8 @@ func newWifiCmd() *cobra.Command {
 			return runWifiInteractive(cmd)
 		},
 	}
+	cmd.PersistentFlags().BoolVar(&allowUnverifiedWiFiDevice, "allow-unverified-device", false,
+		"Send Wi-Fi credentials to an unenrolled device whose identity cannot be verified, without asking")
 
 	cmd.AddCommand(
 		newWifiListCmd(),
@@ -37,6 +103,7 @@ func newWifiCmd() *cobra.Command {
 		newWifiDisconnectCmd(),
 		newWifiRankCmd(),
 		newWifiForgetCmd(),
+		newWifiRegulatoryCmd(),
 	)
 
 	return cmd
@@ -46,19 +113,28 @@ func newWifiCmd() *cobra.Command {
 
 func runWifiInteractive(cmd *cobra.Command) error {
 	ctx := cmd.Context()
-	target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+	target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 	if err != nil {
 		return err
 	}
 	defer target.Close()
 
+	if target.Bluetooth != nil && !target.Bluetooth.IsWendyAgent() {
+		return runWifiConnect(cmd, target, "", "")
+	}
+	if target.Provider != nil && target.External != nil {
+		if _, ok := target.Provider.(providers.WifiManager); ok {
+			return runWifiConnect(cmd, target, "", "")
+		}
+	}
+
+	// The table owns the terminal once it opens, so ask before it does.
+	if err := confirmUnverifiedWiFiCredentials(target); err != nil {
+		return err
+	}
+
 	client, err := newWifiClient(target)
 	if err != nil {
-		if target.Provider != nil && target.External != nil {
-			if _, ok := target.Provider.(providers.WifiManager); ok {
-				return errors.New("selected device does not support full Wi-Fi management; use 'wendy device wifi connect' and 'wendy device wifi disconnect' instead")
-			}
-		}
 		return err
 	}
 	defer client.Close()
@@ -68,7 +144,7 @@ func runWifiInteractive(cmd *cobra.Command) error {
 	// device-side rescan (which can take several seconds) fills its cache.
 	model := wifitable.NewModel(nil).WithHandler(&wifiTUIHandler{ctx: ctx, client: client})
 	p := tea.NewProgram(model)
-	if _, err := p.Run(); err != nil {
+	if _, err := tui.RunProgram(p); err != nil {
 		return fmt.Errorf("wifi TUI: %w", err)
 	}
 	return nil
@@ -201,6 +277,9 @@ func (c *wifiClient) List(ctx context.Context) ([]*agentpb.ListWiFiNetworksRespo
 
 func (c *wifiClient) Connect(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
 	if c.agent != nil {
+		if c.target != nil && c.target.unverifiedSetup && !c.target.unverifiedSetupAccepted && req.GetPassword() != "" {
+			return errUnverifiedWiFiCredentials
+		}
 		resp, err := c.agent.ConnectToWiFi(ctx, req)
 		if err != nil {
 			return fmt.Errorf("connecting to WiFi: %w", err)
@@ -271,7 +350,7 @@ func newWifiListCmd() *cobra.Command {
 		Short: "List available WiFi networks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -370,67 +449,13 @@ func newWifiConnectCmd() *cobra.Command {
 		Short: "Connect to a WiFi network",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
 			defer target.Close()
 
-			if ssid == "" {
-				picked, pickErr := pickWifiNetwork(ctx, target)
-				if pickErr != nil {
-					return pickErr
-				}
-				ssid = picked
-			}
-
-			if !cmd.Flags().Changed("password") && term.IsTerminal(int(os.Stdin.Fd())) {
-				if supportsKeychainLookup {
-					if confirmFn(fmt.Sprintf("Look up password for '%s' from keychain? (macOS will ask for permission)", ssid)) {
-						if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
-							cliLogln("Using saved password from keychain.")
-							password = kp
-						} else {
-							cliNotice("Password not available from keychain.")
-						}
-					}
-				}
-
-				if password == "" {
-					fmt.Print("Password (leave empty for open networks): ")
-					passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-					fmt.Println()
-					if readErr != nil {
-						return fmt.Errorf("reading password: %w", readErr)
-					}
-					password = strings.TrimSpace(string(passwordBytes))
-				}
-			}
-
-			if target.Provider != nil && target.External != nil {
-				if wm, ok := target.Provider.(providers.WifiManager); ok {
-					return wm.WifiConnect(ctx, *target.External, ssid, password)
-				}
-			}
-
-			if target.Bluetooth != nil && !target.Bluetooth.IsWendyAgent() {
-				return wifiConnectViaBLELite(target.Bluetooth, ssid, password)
-			}
-
-			client, err := newWifiClient(target)
-			if err != nil {
-				return err
-			}
-			defer client.Close()
-
-			if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
-				Ssid:     ssid,
-				Password: password,
-			}); err != nil {
-				return err
-			}
-			cliSuccess("Connected to %s", ssid)
-			return nil
+			return runWifiConnect(cmd, target, ssid, password)
 		},
 	}
 
@@ -440,13 +465,80 @@ func newWifiConnectCmd() *cobra.Command {
 	return cmd
 }
 
+// runWifiConnect reuses the selected target for explicit connect commands and
+// the default WiFi command on Wendy Lite.
+func runWifiConnect(cmd *cobra.Command, target *SelectedDevice, ssid, password string) error {
+	ctx := cmd.Context()
+	if ssid == "" {
+		picked, pickErr := pickWifiNetworkFn(ctx, target)
+		if pickErr != nil {
+			return pickErr
+		}
+		ssid = picked
+	}
+
+	if !cmd.Flags().Changed("password") && term.IsTerminal(int(os.Stdin.Fd())) {
+		if supportsKeychainLookup {
+			if confirmFn(fmt.Sprintf("Look up password for '%s' from keychain? (macOS will ask for permission)", ssid)) {
+				if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
+					cliLogln("Using saved password from keychain.")
+					password = kp
+				} else {
+					cliNotice("Password not available from keychain.")
+				}
+			}
+		}
+
+		if password == "" {
+			fmt.Print("Password (leave empty for open networks): ")
+			passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if readErr != nil {
+				return fmt.Errorf("reading password: %w", readErr)
+			}
+			password = strings.TrimSpace(string(passwordBytes))
+		}
+	}
+
+	if target.Provider != nil && target.External != nil {
+		if wm, ok := target.Provider.(providers.WifiManager); ok {
+			return wm.WifiConnect(ctx, *target.External, ssid, password)
+		}
+	}
+
+	if target.Bluetooth != nil && !target.Bluetooth.IsWendyAgent() {
+		return wifiConnectViaBLELite(target.Bluetooth, ssid, password)
+	}
+
+	if password != "" {
+		if err := confirmUnverifiedWiFiCredentials(target); err != nil {
+			return err
+		}
+	}
+
+	client, err := newWifiClient(target)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
+		Ssid:     ssid,
+		Password: password,
+	}); err != nil {
+		return err
+	}
+	cliSuccess("Connected to %s", ssid)
+	return nil
+}
+
 func newWifiStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Get current WiFi connection status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -496,9 +588,10 @@ func newWifiDisconnectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disconnect",
 		Short: "Disconnect from the current WiFi network",
+		Long:  "Disconnect from the current WiFi network and report whether completion was confirmed. If you are connected to the device over that same WiFi network, the command may lose contact before it can confirm the result. Check WiFi status over Bluetooth or another connection to confirm that the device disconnected.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -519,15 +612,24 @@ func newWifiDisconnectCmd() *cobra.Command {
 				return fmt.Errorf("selected device does not support WiFi disconnect")
 			}
 
-			resp, err := target.Agent.AgentService.DisconnectWiFi(ctx, &agentpb.DisconnectWiFiRequest{})
-			if err != nil {
-				return fmt.Errorf("disconnecting WiFi: %w", err)
+			result, err := target.Agent.DisconnectWiFi(ctx)
+			if jsonOutput {
+				if outputErr := writeJSON(cmd.OutOrStdout(), result); outputErr != nil {
+					return outputErr
+				}
+			} else {
+				if result.Warning != "" {
+					cliNotice("%s", result.Warning)
+				}
+				if err == nil {
+					if result.CompletionConfirmed {
+						cliSuccess("%s", result.Message)
+					} else {
+						cliNotice("%s", result.Message)
+					}
+				}
 			}
-			if !resp.GetSuccess() {
-				return fmt.Errorf("failed to disconnect: %s", resp.GetErrorMessage())
-			}
-			cliSuccess("Disconnected from WiFi.")
-			return nil
+			return err
 		},
 	}
 }
@@ -558,7 +660,7 @@ Examples:
 				return errors.New("--priority is required when --ssid is set")
 			}
 
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -612,7 +714,7 @@ func newWifiForgetCmd() *cobra.Command {
 			if ssid == "" {
 				return errors.New("--ssid is required")
 			}
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -746,12 +848,13 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		}()
 
 		// While the rescan runs, poll the device's scan cache so SSIDs stream
-		// into the picker as they are found. Each poll returns quickly: the
-		// in-progress scan rejects new rescan requests and the list call reads
-		// the cache. Only over gRPC — the BLE transport can't multiplex
-		// concurrent calls. The deadline caps RPC traffic if the
-		// authoritative scan wedges; its result still lands whenever it
-		// finishes.
+		// into the picker as they are found. Older agents answer each poll at
+		// once from the cache. Agents that scan at most once per 30 s hold a
+		// poll that arrives during their scan until it ends, so there the
+		// picker fills in when the scan does. Only over gRPC — the BLE
+		// transport can't multiplex concurrent calls. The deadline caps RPC
+		// traffic if the authoritative scan wedges; its result still lands
+		// whenever it finishes.
 		if client.agent != nil {
 			go func() {
 				ticker := time.NewTicker(1500 * time.Millisecond)
@@ -794,7 +897,7 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		return "", fmt.Errorf("selected device does not support WiFi network scanning")
 	}
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	cancelScan()
 	if err != nil {
 		return "", fmt.Errorf("network picker: %w", err)

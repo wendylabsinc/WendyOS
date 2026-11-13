@@ -4,14 +4,83 @@ The `AssetService` gRPC service manages the inventory of assets (devices, periph
 
 ## Proto package
 
-`wendycloud.v1` — defined in `Proto/cloud/assets.proto`. **This page documents
-the v1 service only.** A parallel `wendycloud.v2.AssetService`
+`wendycloud.v1` — defined in `Proto/cloud/assets.proto`. **The method reference
+below documents v1; the separate v2 notes describe device-binding recovery.**
+A parallel `wendycloud.v2.AssetService`
 (`Proto/wendycloud/v2/assets.proto`) exists, identifies assets and organizations
 by **string UUID** rather than `int32`, and adds `ListAssetsByApp` and
 `FilterAssets`. The CLI's OIDC path already calls v2 exclusively; legacy
 sessions still use the v1 service described here.
 
+## v2 device-binding and deletion evidence
+
+The following applies to `wendycloud.v2.AssetService` only; the methods below
+continue to describe numeric v1. Compatible v2 consumers can resolve the exact
+enrollment and recover deletion evidence without a local CLI journal.
+
+### v2 `GetAsset`
+
+| Request field | Type | Meaning |
+|---|---|---|
+| `id` | `string` | Asset UUID; may be empty when both selectors below are supplied. |
+| `organization_id` | `optional string` | Exact tenant UUID; required with `device_id` when `id` is empty. |
+| `device_id` | `optional string` | Exact PKI device UUID; required with `organization_id` when `id` is empty. |
+
+An authorized active binding returns `Asset`. Removed assets return plain
+`NOT_FOUND`; this is not deletion evidence and does not authorize local reset.
+
+### v2 `DeleteAsset`
+
+The optional string `expected_device_id` is a compare-and-delete guard: it must
+match the exact enrolled device binding when supplied. Cloud authorizes
+`device:delete`, revokes the device's certificates, removes the active asset and
+records the deletion audit. A failed revocation does not delete the active asset.
+
+For a local reset, also supply `reset_certificate_sha256` for the installed
+certificate. Cloud returns a short-lived `reset_authorization` signed for that
+exact request and operator. Its embedded `DeletedAsset` records the deletion:
+
+| `DeletedAsset` field | Type | Meaning |
+|---|---|---|
+| `id` | `string` | Deleted asset UUID. |
+| `organization_id` | `string` | Owning tenant UUID. |
+| `device_id` | `string` | Device UUID bound to this asset. |
+| `deleted_at` | `google.protobuf.Timestamp` | Recorded deletion time. |
+
+An authorized exact-asset retry can obtain fresh reset authorization from the
+original audit record. It preserves the deletion identity and time, checks
+current permissions, and refuses if the same device identity has been enrolled
+again. Verify the Cloud signature and exact request bindings before trusting the
+embedded deletion. A successful delete response alone does not prove that the
+device erased its local credentials.
+
+### Device reset
+
+Deleting a Cloud asset revokes its Cloud access; it does not erase credentials
+from an offline device. Use [`wendy device unenroll`](/docs/advanced/clients/wendy-cli/commands/device/unenroll)
+to coordinate Cloud removal and a local reset. The
+[unenrollment guide](/docs/device/unenrollment) explains recovery and supported devices.
+
+For API integrations, the agent advertises `cloud_authenticated_reset_supported`
+when it supports Cloud-authorized reset. The older
+`cloud_unenrollment_supported` flag is not sufficient. After erasure, the agent
+may return `NotProvisionedResponse.unenrollment_completion`, a signed receipt for
+the prior enrollment. It is historical completion evidence, not the identity of
+the device currently answering. See the repository's
+[reset protocol reference](https://github.com/wendylabsinc/WendyOS/blob/main/go/docs/v2-device-unenrollment.md)
+for validation requirements.
+
+### v2 reported hardware facts
+
+Optional `Asset` fields `soc_compatible` (36), `serial_number` (37),
+`kernel_version` (38), `l4t_version` (39), and `gpu_arch` (40) describe reported
+hardware/software facts. Missing reports leave them absent. They are not device
+identity, permissions or authorization evidence. These self-reported facts
+correspond to values displayed by [`wendy device info`](../clients/wendy-cli/commands/device/info.md).
+
 ## Methods
+
+These method descriptions apply to numeric v1.
 
 ### `CreateAsset`
 

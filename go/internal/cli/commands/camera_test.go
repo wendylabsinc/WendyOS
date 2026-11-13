@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -54,6 +55,146 @@ func TestCameraPipelineNoticesPlayerExitWhileWaitingForFrames(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+// glimagesinkClosedReport is what gst-launch-1.0 printed on macOS when the
+// player window was closed (WDY-3627).
+const glimagesinkClosedReport = "ERROR: from element /GstPipeline:pipeline0/GstAutoVideoSink:autovideosink0/GstGLImageSinkBin:autovideosink0-actual-sink-glimage/GstGLImageSink:sink: Quit requested\n" +
+	"Additional debug info:\n" +
+	"../subprojects/gst-plugins-base/ext/gl/gstglimagesink.c(1951): gst_glimage_sink_show_frame (): /GstPipeline:pipeline0/GstAutoVideoSink:autovideosink0/GstGLImageSinkBin:autovideosink0-actual-sink-glimage/GstGLImageSink:sink\n"
+
+func TestPlayerStderrRecognizesClosedWindow(t *testing.T) {
+	const warning = "WARNING: from element /GstPipeline:pipeline0/GstH264Parse:h264parse0: Broken bit stream\n"
+	for _, tc := range []struct {
+		name, output, want string
+		closed             bool
+	}{
+		{"macOS glimagesink", warning + glimagesinkClosedReport, warning, true},
+		{"Linux xvimagesink",
+			"ERROR: from element /GstPipeline:pipeline0/GstAutoVideoSink:autovideosink0/GstXvImageSink:autovideosink0-actual-sink-xvimage: Output window was closed\n" +
+				"Additional debug info:\n../sys/xvimage/xvimagesink.c(587): gst_xv_image_sink_handle_xevents (): /GstPipeline:pipeline0\n",
+			"", true},
+		{"Windows d3d11videosink",
+			"ERROR: from element /GstPipeline:pipeline0/GstAutoVideoSink:autovideosink0/GstD3D11VideoSink:autovideosink0-actual-sink-d3d11video: Output window was closed\r\n" +
+				"Additional debug info:\r\n../sys/d3d11/gstd3d11videosink.cpp(1767): gst_d3d11_video_sink_show_frame (): /GstPipeline:pipeline0\r\n",
+			"", true},
+		{"real failure",
+			"ERROR: from element /GstPipeline:pipeline0/avdec_h264:avdec_h264-0: Internal data stream error.\nAdditional debug info:\nstreaming stopped, reason error (-5)\n",
+			"ERROR: from element /GstPipeline:pipeline0/avdec_h264:avdec_h264-0: Internal data stream error.\nAdditional debug info:\nstreaming stopped, reason error (-5)\n",
+			false},
+		{"unterminated last line", "ERROR: pipeline could not be constructed: no element \"avdec_h264\".",
+			"ERROR: pipeline could not be constructed: no element \"avdec_h264\".", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			p := &playerStderr{out: &out}
+			// The pipe hands output over in arbitrary pieces.
+			for b := []byte(tc.output); len(b) > 0; {
+				n := min(7, len(b))
+				if _, err := p.Write(b[:n]); err != nil {
+					t.Fatal(err)
+				}
+				b = b[n:]
+			}
+			p.flush()
+			if got := out.String(); got != tc.want {
+				t.Errorf("forwarded %q, want %q", got, tc.want)
+			}
+			if p.closedWindow() != tc.closed {
+				t.Errorf("closedWindow = %v, want %v", p.closedWindow(), tc.closed)
+			}
+		})
+	}
+}
+
+// fakePlayer installs a gst-launch-1.0 that runs script, for playCameraPipeline.
+func fakePlayer(t *testing.T, script string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake player uses a shell script")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gst-launch-1.0"), []byte("#!/bin/sh\n"+script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/bin:/usr/bin")
+}
+
+func TestCameraPipelineTreatsClosedWindowAsStop(t *testing.T) {
+	report := strings.ReplaceAll(glimagesinkClosedReport, "\n", "\\n")
+	for _, tc := range []struct {
+		name   string
+		player string
+		// feed writes video until the player is gone, as a live stream does;
+		// otherwise it waits for playback to end.
+		writing bool
+	}{
+		{"waiting for frames", "printf 'warming up\\n" + report + "' >&2\nexit 1\n", false},
+		// The failed write can be noticed before the player's exit is.
+		{"while writing", "printf 'warming up\\n" + report + "' >&2\nexit 1\n", true},
+		// A helper the player started may still hold its stderr.
+		{"helper holds stderr", "sleep 10 &\nprintf 'warming up\\n" + report + "' >&2\nexit 1\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakePlayer(t, tc.player)
+			for range 10 {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				var err error
+				out := captureStderr(t, func() {
+					err = playCameraPipeline(ctx, nil, false, func(w io.Writer) error {
+						if !tc.writing {
+							<-ctx.Done()
+							return nil
+						}
+						for {
+							if _, err := w.Write(make([]byte, 4096)); err != nil {
+								return fmt.Errorf("writing to GStreamer: %w", err)
+							}
+						}
+					})
+				})
+				timedOut := ctx.Err() != nil
+				cancel()
+				if timedOut {
+					t.Fatal("closing the window did not stop playback")
+				}
+				if err != nil {
+					t.Fatalf("error = %v", err)
+				}
+				if !strings.Contains(out, "warming up") || !strings.Contains(out, "Player window closed.") {
+					t.Errorf("stderr = %q, want the player's earlier output and the closed-window note", out)
+				}
+				if strings.Contains(out, "Quit requested") || strings.Contains(out, "Additional debug info") {
+					t.Errorf("stderr = %q, want GStreamer's closed-window report held back", out)
+				}
+				if !tc.writing {
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestCameraPipelineReportsRealPlayerFailure(t *testing.T) {
+	fakePlayer(t, "echo 'ERROR: from element /GstPipeline:pipeline0/avdec_h264:avdec_h264-0: Internal data stream error.' >&2\nexit 1\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var err error
+	out := captureStderr(t, func() {
+		err = playCameraPipeline(ctx, nil, false, func(io.Writer) error {
+			<-ctx.Done()
+			return nil
+		})
+	})
+	if ctx.Err() != nil {
+		t.Fatal("player exit did not stop playback")
+	}
+	if err == nil || !strings.Contains(err.Error(), "GStreamer exited") {
+		t.Fatalf("error = %v, want GStreamer exited", err)
+	}
+	if !strings.Contains(out, "Internal data stream error.") || strings.Contains(out, "Player window closed.") {
+		t.Errorf("stderr = %q, want the player's error and no closed-window note", out)
 	}
 }
 
@@ -216,6 +357,132 @@ func TestPlayVideoWithGStreamer_RemoteStreamErrorPrecedesMissingGStreamer(t *tes
 	}
 }
 
+type emptyCameraService struct {
+	agentpb.UnimplementedWendyVideoServiceServer
+}
+
+func (emptyCameraService) ListVideoDevices(context.Context, *agentpb.ListVideoDevicesRequest) (*agentpb.ListVideoDevicesResponse, error) {
+	return &agentpb.ListVideoDevicesResponse{}, nil
+}
+
+func TestCameraListPlaintextSwiftMacStillWorks(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"}, func(s *grpc.Server) {
+		agentpb.RegisterWendyVideoServiceServer(s, emptyCameraService{})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraListCmd()
+	cmd.SetContext(ctx)
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("camera list on plaintext Wendy Agent for Mac: %v", err)
+	}
+}
+
+func TestCameraListPlaintextWendyOSStillWorks(t *testing.T) {
+	startUDSAgentWithOS(t, "linux", func(s *grpc.Server) {
+		agentpb.RegisterWendyVideoServiceServer(s, emptyCameraService{})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraListCmd()
+	cmd.SetContext(ctx)
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("camera list on plaintext WendyOS: %v", err)
+	}
+}
+
+func TestCameraListPlaintextGoAgentOnDarwinStillWorks(t *testing.T) {
+	startUDSAgentWithOS(t, "darwin", func(s *grpc.Server) {
+		agentpb.RegisterWendyVideoServiceServer(s, emptyCameraService{})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraListCmd()
+	cmd.SetContext(ctx)
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("camera list on plaintext Go agent for Darwin: %v", err)
+	}
+}
+
+func TestCameraTestOnSwiftMacExplainsUnsupportedOperation(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraTestCmd()
+	cmd.SetContext(ctx)
+	err := cmd.RunE(cmd, []string{"1"})
+	if err == nil || !strings.Contains(err.Error(), "not supported") || strings.Contains(err.Error(), "wendy device enroll") {
+		t.Fatalf("camera test error = %v, want unsupported network camera operation", err)
+	}
+}
+
+func TestCameraLoginOnSwiftMacDoesNotPromptForUnsupportedOperation(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	t.Setenv("WENDY_CAMERA_PASSWORD", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraLoginCmd()
+	cmd.SetContext(ctx)
+	err := cmd.RunE(cmd, []string{"1"})
+	if err == nil || !strings.Contains(err.Error(), "not supported") || strings.Contains(err.Error(), "password") {
+		t.Fatalf("camera login error = %v, want unsupported operation before password prompt", err)
+	}
+}
+
+func TestCameraSwiftMacPreflightDefersToAgentEnrolledOrNot(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := connectToAgent(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// The fake server is UDS; only simulate the transport marker here. No
+	// production transport/authentication behavior is changed by this test.
+	for _, mtls := range []bool{false, true} {
+		conn.IsMTLS = mtls
+		for _, action := range []cameraAction{cameraCapture, cameraV4L2Controls} {
+			if err := cameraServicePreflight(ctx, conn, action); err != nil {
+				t.Fatalf("Mac preflight (mTLS=%v, action=%d) must let the Agent answer: %v", mtls, action, err)
+			}
+		}
+	}
+}
+
+func TestCameraPreflightCancellationDoesNotSuggestEnrollment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := cameraServicePreflight(ctx, &grpcclient.AgentConnection{}, cameraCapture)
+	if !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("cancelled camera preflight = %v, want quiet user cancellation", err)
+	}
+}
+
+func TestCameraViewUnsupportedSwiftOptionsDoNotSuggestEnrollment(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"raw", []string{"--raw", "--stdout", "--id", "1", "--non-interactive"}, "H.264"},
+		{"stable id", []string{"--stable-id", "usb-front", "--stdout", "--non-interactive"}, "Stable V4L2"},
+		{"custom dimensions", []string{"--width", "640", "--id", "1", "--stdout", "--non-interactive"}, "Custom camera dimensions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := newCameraViewCmd()
+			cmd.SetArgs(tc.args)
+			err := cmd.ExecuteContext(ctx)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "wendy device enroll") {
+				t.Fatalf("camera view error = %v, want %q without enrollment advice", err, tc.want)
+			}
+		})
+	}
+}
+
 func firmwareMismatchError(t *testing.T) error {
 	t.Helper()
 	st := status.New(codes.FailedPrecondition, "firmware mismatch")
@@ -242,6 +509,22 @@ func TestCameraFirmwareDiagnosticOnFirstRecv(t *testing.T) {
 	_, err := stream.Recv()
 	if err == nil || !strings.Contains(err.Error(), "full USB recovery") {
 		t.Fatalf("first Recv diagnostic = %v", err)
+	}
+}
+
+func TestCameraViewPreservesRemotePipelineDiagnostic(t *testing.T) {
+	message := "GStreamer pipeline failed for camera /dev/video0 using nvv4l2h264enc: exit status 1: ERROR: Could not initialize encoder"
+	for _, stdout := range []bool{false, true} {
+		stream := &cameraDiagnosticStream{videoStream: &mockVideoStream{err: status.Error(codes.Internal, message)}}
+		var err error
+		if stdout {
+			err = pipeVideoToStdout(stream, io.Discard)
+		} else {
+			err = playVideoWithGStreamer(context.Background(), stream, false)
+		}
+		if err == nil || !strings.Contains(userFacingGRPCError(err), message) {
+			t.Fatalf("stdout=%v: remote diagnostic was lost: %v", stdout, err)
+		}
 	}
 }
 

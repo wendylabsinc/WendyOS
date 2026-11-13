@@ -4,6 +4,25 @@ on:
   schedule:
     - cron: '0 2 * * *'  # 02:00 UTC daily
   workflow_dispatch: {}
+  # Retry deferred nightly work after a stable release frees the runner.
+  workflow_run:
+    workflows: [Build products and release]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+# A retry and the scheduled run must not enqueue two device matrices.
+concurrency:
+  # Unrelated build completions skip immediately, outside the device queue.
+  # Sharing the queue with the deferring run means a retry starts only after
+  # that run has recorded which devices it deferred.
+  group: >-
+    nightly-os-update-${{ (github.event_name != 'workflow_run' ||
+    startsWith(github.event.workflow_run.display_title, 'Stable release · ')) && 'devices' || github.run_id }}
+  cancel-in-progress: false
+  queue: max
 
 # All wendy CLI invocations in this workflow run via "ssh localhost" rather than
 # directly. The self-hosted runner runs as a macOS LaunchAgent which does not
@@ -13,28 +32,75 @@ on:
 # See integration-tests.yml for the same pattern with more context.
 
 jobs:
+  release-priority:
+    name: Check for stable releases
+    if: >-
+      github.event_name != 'workflow_run' ||
+      startsWith(github.event.workflow_run.display_title, 'Stable release · ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.priority.outputs.allowed }}
+      devices: ${{ steps.retry.outputs.devices }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check whether this release deferred nightly work
+        id: retry
+        if: github.event_name == 'workflow_run'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { deferredNightly } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/release-priority.cjs`);
+            const { deferred, devices } = await deferredNightly({ github, context, exec, release: context.payload.workflow_run });
+            core.setOutput('deferred', String(deferred));
+            core.setOutput('devices', devices ? JSON.stringify(devices) : '');
+      - uses: ./.github/actions/release-priority
+        id: priority
+        if: github.event_name != 'workflow_run' || steps.retry.outputs.deferred == 'true'
+        with:
+          devices: ${{ steps.retry.outputs.devices }}
+
   discover:
     name: Discover devices
+    needs: release-priority
+    if: needs.release-priority.outputs.allowed == 'true'
     runs-on:
       group: wendy-developer
       labels: [self-hosted, macOS, ARM64, wendy-macos-26]
     outputs:
-      matrix: ${{ steps.scan.outputs.matrix }}
+      matrix: ${{ steps.scan.outputs.matrix || '[]' }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # A release can arrive after the hosted check but before runner assignment.
+      - uses: ./.github/actions/release-priority
+        id: priority
+        with:
+          devices: ${{ needs.release-priority.outputs.devices }}
 
+      - uses: ./.github/actions/check-runner-disk
+        if: steps.priority.outputs.allowed == 'true'
+
+      # The runner keeps ~/go/pkg/mod and the Go build cache on disk, so
+      # restoring setup-go's archive over them every job only rewrites ~1.5 GB.
       - name: Set up Go
+        if: steps.priority.outputs.allowed == 'true'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
 
       - name: Build CLI
+        if: steps.priority.outputs.allowed == 'true'
         working-directory: go
         run: make build-cli
 
       - name: Clear cache and scan for WendyOS devices
         id: scan
+        if: steps.priority.outputs.allowed == 'true'
+        env:
+          # A retry only updates the devices the deferred run had not finished.
+          RETRY_DEVICES: ${{ needs.release-priority.outputs.devices }}
         run: |
           SSH="ssh -o StrictHostKeyChecking=no localhost"
           WORKDIR="$(pwd)"
@@ -47,6 +113,11 @@ jobs:
 
           MATRIX=$(echo "$RESULT" | jq -c \
             '[.lanDevices[] | select(.isWendyDevice and (.hostname // .ipAddress)) | .hostname // .ipAddress]')
+          if [ -n "$RETRY_DEVICES" ]; then
+            echo "Retrying deferred devices: $RETRY_DEVICES"
+            MATRIX=$(echo "$MATRIX" | jq -c --argjson retry "$RETRY_DEVICES" \
+              'map(select(ascii_downcase as $device | any($retry[]; ascii_downcase == $device)))')
+          fi
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
           COUNT=$(echo "$MATRIX" | jq 'length')
@@ -66,30 +137,61 @@ jobs:
       queue: max
     strategy:
       fail-fast: false
+      # Keep background work from filling the runner and per-device queues.
+      max-parallel: 1
       matrix:
         hostname: ${{ fromJson(needs.discover.outputs.matrix) }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write  # Cancel the remaining device jobs after a deferral.
     env:
       DEVICE_HOSTNAME: ${{ matrix.hostname }}
+      # Keep the CLI's build caches well below its 100 GiB default; the runner
+      # also holds Docker Desktop and a Tart VM (WDY-3837).
+      WENDY_BUILD_CACHE_MAX_BYTES: '32212254720' # 30 GiB
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/release-priority
+        id: priority
+        with:
+          devices: ${{ needs.discover.outputs.matrix }}
 
+      # Each later device job would otherwise take the runner only to defer
+      # again. The deferral already recorded those devices for the retry.
+      - name: Cancel remaining device jobs
+        if: steps.priority.outputs.allowed != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: context.runId });
+
+      - uses: ./.github/actions/check-runner-disk
+        if: steps.priority.outputs.allowed == 'true'
+
+      # The runner keeps ~/go/pkg/mod and the Go build cache on disk, so
+      # restoring setup-go's archive over them every job only rewrites ~1.5 GB.
       - name: Set up Go
+        if: steps.priority.outputs.allowed == 'true'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
 
       - name: Build CLI
+        if: steps.priority.outputs.allowed == 'true'
         working-directory: go
         run: make build-cli
 
       - name: Current version
         id: version
+        if: steps.priority.outputs.allowed == 'true'
         run: |
           SSH="ssh -o StrictHostKeyChecking=no localhost"
           WORKDIR="$(pwd)"
-          SSH_ENV="export PATH='$PATH'"
+          SSH_ENV="export PATH='$PATH' WENDY_BUILD_CACHE_MAX_BYTES='$WENDY_BUILD_CACHE_MAX_BYTES'"
+          # The remote shell parses this string, so the cache cap must be a plain number.
+          [[ "$WENDY_BUILD_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]] || { echo "::error::WENDY_BUILD_CACHE_MAX_BYTES must be a whole number of bytes."; exit 1; }
 
           INFO=$($SSH "$SSH_ENV && cd '$WORKDIR' && ./go/bin/wendy device info --json --device '$DEVICE_HOSTNAME'" || true)
           echo "$INFO" | jq '{osVersion, agentVersion: .version, deviceType}' || true
@@ -100,11 +202,13 @@ jobs:
           fi
 
       - name: Flash OS update, confirm online, and run template tests
-        if: steps.version.outputs.device_type != ''
+        if: steps.priority.outputs.allowed == 'true' && steps.version.outputs.device_type != ''
         run: |
           SSH="ssh -o StrictHostKeyChecking=no localhost"
           WORKDIR="$(pwd)"
-          SSH_ENV="export PATH='$PATH'"
+          SSH_ENV="export PATH='$PATH' WENDY_BUILD_CACHE_MAX_BYTES='$WENDY_BUILD_CACHE_MAX_BYTES'"
+          # The remote shell parses this string, so the cache cap must be a plain number.
+          [[ "$WENDY_BUILD_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]] || { echo "::error::WENDY_BUILD_CACHE_MAX_BYTES must be a whole number of bytes."; exit 1; }
 
           # wendy os update blocks until the device reboots and comes back
           # online, with a 5-minute internal timeout.

@@ -18,6 +18,24 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+// clientWithoutDBusProxy builds the client NewClient produces when
+// xdg-dbus-proxy is missing: main.go passes a nil *dbusproxy.Manager, not an
+// untyped nil (WDY-3835).
+func clientWithoutDBusProxy() *Client {
+	return &Client{logger: zap.NewNop(), proxyManager: dbusProxyManagerOrNil(nil)}
+}
+
+func TestOptionalDBusProxyManagerNilDoesNotBecomeNonNilInterface(t *testing.T) {
+	var absent *dbusproxy.Manager
+	if got := dbusProxyManagerOrNil(absent); got != nil {
+		t.Fatal("typed nil proxy manager became a non-nil interface")
+	}
+	manager := dbusproxy.NewManager(zap.NewNop())
+	if got := dbusProxyManagerOrNil(manager); got == nil {
+		t.Fatal("present proxy manager was discarded")
+	}
+}
+
 // TestRequireDBusProxyRefusesBluetoothWithoutProxy is the regression test for
 // WDY-1093: a container that declares the bluetooth (D-Bus) entitlement must be
 // refused when xdg-dbus-proxy is unavailable. Without the proxy there is no way
@@ -25,7 +43,7 @@ import (
 // bluetooth (or, in older builds, expose the unfiltered system bus). The agent
 // must fail loudly instead of degrading silently.
 func TestRequireDBusProxyRefusesBluetoothWithoutProxy(t *testing.T) {
-	client := &Client{logger: zap.NewNop(), proxyManager: nil}
+	client := clientWithoutDBusProxy()
 	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementBluetooth}}}
 	if err := client.requireDBusProxy(cfg, "demo-app"); err == nil {
 		t.Fatal("expected error when bluetooth entitlement is declared but xdg-dbus-proxy is unavailable")
@@ -41,7 +59,7 @@ func TestRequireDBusProxyAllowsBluetoothWithProxy(t *testing.T) {
 }
 
 func TestRequireDBusProxyAllowsNonBluetoothWithoutProxy(t *testing.T) {
-	client := &Client{logger: zap.NewNop(), proxyManager: nil}
+	client := clientWithoutDBusProxy()
 	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork}}}
 	if err := client.requireDBusProxy(cfg, "demo-app"); err != nil {
 		t.Fatalf("expected no error for a non-bluetooth app without the proxy; got %v", err)

@@ -1,0 +1,371 @@
+name: Janitor
+
+# Nightly housekeeping for CI machines that keep their disk between jobs
+# (WDY-3837). Where each CI machine gets cleaned:
+#
+# - wendy-developer-macos-26-01 (self-hosted Mac, WendyOS and
+#   wendy-demo-local-alpha jobs): this workflow.
+# - ci.wendy.sh (wendy-job-<N> runners): its NixOS configuration in
+#   wendylabsinc/ci prunes caches, garbage-collects the Nix store and podman
+#   images, and refuses jobs below a disk floor.
+# - RunsOn and GitHub-hosted runners: a fresh machine per job.
+#
+# Add a job here for any new persistent machine. A job runs on the machine it
+# cleans; a runner executes one job at a time, so nothing it cleans is in use.
+#
+# Each task is its own step and later steps still run when one fails; the last
+# step always checks free space. Add new tasks the same way, appending one line
+# to the findings file.
+#
+# Every scheduled or manual run posts its findings to FEED_JANITOR_SLACK_CHANNEL
+# (#feed-janitor); a scheduled run that is not successful also alarms in
+# CI_SLACK_CHANNEL (#ci). Both post as the Wendy CI Slack app.
+#
+# Only clean what CI creates and can rebuild. Never touch Tart or its VMs,
+# Docker volumes, Xcode or simulators, the Go module cache, or device and
+# authentication state.
+
+on:
+  schedule:
+    - cron: '30 1 * * *'  # 01:30 UTC, before the 02:00 Nightly OS Update
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only report what would be cleaned'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-janitor
+  cancel-in-progress: false
+
+jobs:
+  mac:
+    name: Clean wendy-developer-macos-26-01
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, macOS, ARM64, wendy-macos-26]
+    timeout-minutes: 30
+    outputs:
+      runner: ${{ steps.before.outputs.runner }}
+      free-before: ${{ steps.before.outputs.free_gib }}
+      free-after: ${{ steps.after.outputs.free_gib }}
+      findings: ${{ steps.report.outputs.findings }}
+      failed-steps: ${{ steps.report.outputs.failed }}
+    env:
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+      WENDY_BUILD_CACHE_MAX_BYTES: '32212254720' # 30 GiB, as in the device jobs
+      SHARED_BUILDER_MAX_GB: '10' # per shared builder
+    # Each task appends one line to $RUNNER_TEMP/janitor-findings.txt for the
+    # run summary and the #feed-janitor report.
+    steps:
+      # Before checkout, and the runner first: the alarm and the #feed-janitor
+      # report read a missing runner or free space as "the Mac never picked up
+      # the job", so a failed checkout must not leave them empty.
+      - name: Record free space before
+        id: before
+        run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME" >> "$GITHUB_OUTPUT"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          : > "$RUNNER_TEMP/janitor-findings.txt"
+          df -h "$GITHUB_WORKSPACE"
+          free_gib=$(($(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print $4 }') / 1024 / 1024))
+          echo "free_gib=$free_gib" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        id: checkout
+
+      - name: Remove leaked per-run builders
+        id: builders
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          findings="$RUNNER_TEMP/janitor-findings.txt"
+          if ! docker info >/dev/null 2>&1; then
+            echo "::notice::Docker is not running; skipping Docker cleanup."
+            echo "• Docker not running: builders and images skipped" >> "$findings"
+            exit 0
+          fi
+          out=$(.github/scripts/remove-stale-ci-builders.sh)
+          printf '%s\n' "$out"
+          if grep -q 'Could not list buildx builders' <<<"$out"; then
+            echo "• Leaked builders: could not list builders" >> "$findings"
+            exit 0
+          fi
+          count=$(sed -n -E 's/^Stale CI builders: ([0-9]+)$/\1/p' <<<"$out")
+          verb=removed; [[ "$DRY_RUN" != true ]] || verb="to remove"
+          echo "• Leaked builders: ${count:-?} $verb" >> "$findings"
+
+      - name: Trim shared builder caches
+        id: shared-builders
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          docker info >/dev/null 2>&1 || exit 0
+          # Best effort: a size that cannot be read is reported as "?".
+          size() { docker buildx du --builder "$1" 2>/dev/null | awk '/^Total:/ { print $2 }' || true; }
+          # Builds that do not set WENDY_BUILDX_BUILDER use these builders, and
+          # nothing else bounds their caches. The CLI trims wendy-oci itself.
+          sizes=()
+          for builder in wendy wendy-mtls; do
+            docker buildx inspect "$builder" >/dev/null 2>&1 || continue
+            before=$(size "$builder")
+            if [[ "$DRY_RUN" == true ]]; then
+              sizes+=("$builder ${before:-?}")
+            else
+              docker buildx prune --builder "$builder" \
+                --max-used-space "${SHARED_BUILDER_MAX_GB}gb" --force
+              after=$(size "$builder")
+              sizes+=("$builder ${before:-?} → ${after:-?}")
+            fi
+          done
+          if ((${#sizes[@]})); then
+            joined=$(printf '%s, ' "${sizes[@]}")
+            echo "• Shared builder caches (cap ${SHARED_BUILDER_MAX_GB} GB): ${joined%, }" >> "$RUNNER_TEMP/janitor-findings.txt"
+          fi
+
+      - name: Remove dangling Docker images
+        id: images
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          docker info >/dev/null 2>&1 || exit 0
+          count=$(docker images --filter dangling=true --quiet | wc -l | tr -d ' ')
+          line="• Dangling images: $count"
+          if [[ "$DRY_RUN" == true ]]; then
+            line+=" to remove"
+          else
+            reclaimed=$(docker image prune --force | awk -F': ' '/Total reclaimed space/ { print $2 }')
+            line+=" removed${reclaimed:+ ($reclaimed)}"
+          fi
+          echo "$line" >> "$RUNNER_TEMP/janitor-findings.txt"
+
+      - name: Remove unused Go toolchains
+        id: go-toolchains
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          current=$(awk '$1 == "go" { print $2; exit }' go.mod)
+          shopt -s nullglob
+          old=()
+          for dir in "$RUNNER_TOOL_CACHE"/go/*; do
+            version=$(basename "$dir")
+            [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ && "$version" != "$current" ]] || continue
+            old+=("$version")
+            [[ "$DRY_RUN" == true ]] || rm -rf "$dir"
+          done
+          line="• Old Go toolchains: none"
+          if ((${#old[@]})); then
+            verb=removed; [[ "$DRY_RUN" != true ]] || verb="to remove"
+            joined=$(printf '%s, ' "${old[@]}")
+            line="• Old Go toolchains: ${#old[@]} $verb (${joined%, })"
+          fi
+          echo "$line" | tee -a "$RUNNER_TEMP/janitor-findings.txt"
+
+      # Building the CLI also proves the Go build cache is healthy before the
+      # nightly needs it.
+      - name: Set up Go
+        id: setup-go
+        if: ${{ !cancelled() }}
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build CLI
+        id: cli
+        if: ${{ !cancelled() }}
+        working-directory: go
+        run: make build-cli
+
+      - name: Trim Wendy build caches
+        id: wendy-cache
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          findings="$RUNNER_TEMP/janitor-findings.txt"
+          if [[ ! -x go/bin/wendy ]]; then
+            echo "• Wendy build cache: skipped, the CLI did not build" >> "$findings"
+            exit 0
+          fi
+          list=$(./go/bin/wendy cache list 2>&1 || true)
+          printf '%s\n' "$list"
+          total=$(sed -n -E 's/.*Build cache: ([0-9.]+ [KMGT]?B) on disk.*/\1/p' <<<"$list" | head -n 1)
+          line="• Wendy build cache (cap 30 GiB): ${total:-unknown}"
+          if [[ "$DRY_RUN" != true ]]; then
+            result=$(./go/bin/wendy cache dedup --max "$WENDY_BUILD_CACHE_MAX_BYTES")
+            echo "$result"
+            first=$(tr '[:upper:]' '[:lower:]' <<<"${result:0:1}")
+            line+="; ${first}${result:1}"
+            line="${line%.}"
+          fi
+          echo "$line" >> "$findings"
+
+      - name: Record free space after
+        id: after
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          free_gib=$(($(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print $4 }') / 1024 / 1024))
+          echo "free_gib=$free_gib" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/check-runner-disk
+        id: free-space
+        if: ${{ !cancelled() }}
+
+      - name: Report findings
+        id: report
+        if: ${{ always() }}
+        env:
+          STEPS: ${{ toJSON(steps) }}
+          FREE_BEFORE: ${{ steps.before.outputs.free_gib }}
+          FREE_AFTER: ${{ steps.after.outputs.free_gib }}
+        run: |
+          set -euo pipefail
+          findings="$RUNNER_TEMP/janitor-findings.txt"
+          touch "$findings"
+          failed=$(jq -r '[to_entries[] | select(.value.outcome == "failure") | .key] | join(", ")' <<<"$STEPS")
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          {
+            echo "findings<<JANITOR_FINDINGS"
+            cat "$findings"
+            echo "JANITOR_FINDINGS"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Janitor on $RUNNER_NAME"
+            if [[ "$DRY_RUN" == true ]]; then echo "_Dry run: nothing is deleted._"; fi
+            echo
+            echo "Free: ${FREE_BEFORE:-?} → ${FREE_AFTER:-?} GiB"
+            echo
+            cat "$findings"
+            if [[ -n "$failed" ]]; then echo; echo "Failed steps: $failed"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  alarm:
+    name: Post alarm to Slack
+    needs: mac
+    # Also covers a run the Mac never picked up (offline or stuck runner), but
+    # late: GitHub fails a queued self-hosted job only after 24 hours, and
+    # timeout-minutes does not count while the job waits.
+    if: ${{ always() && github.event_name == 'schedule' && needs.mac.result != 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      # The Wendy CI Slack app's bot token and the channel (ID or #name) from
+      # the organization variable CI_SLACK_CHANNEL.
+      SLACK_READY: ${{ secrets.CI_SLACK_BOT_TOKEN != '' && vars.CI_SLACK_CHANNEL != '' }}
+    steps:
+      - name: Skip without Slack configuration
+        if: env.SLACK_READY != 'true'
+        run: echo "::warning::CI_SLACK_BOT_TOKEN or CI_SLACK_CHANNEL is not configured; skipping the Slack alarm."
+
+      - name: Write alarm
+        id: alarm
+        if: env.SLACK_READY == 'true'
+        env:
+          CHANNEL: ${{ vars.CI_SLACK_CHANNEL }}
+          RESULT: ${{ needs.mac.result }}
+          RUNNER: ${{ needs.mac.outputs.runner }}
+          FREE: ${{ needs.mac.outputs.free-after || needs.mac.outputs.free-before }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RUNNER" ]]; then
+            status="did not run"
+          elif [[ "$RESULT" == failure ]]; then
+            status=failed
+          else
+            status="did not finish ($RESULT)"
+          fi
+          text=":rotating_light: *Janitor $status* on \`${RUNNER:-wendy-macos-26}\`. Free disk: ${FREE:-unknown} GiB. <$RUN_URL|View run>"
+          jq -n --arg channel "$CHANNEL" --arg text "$text" '{channel: $channel, text: $text}' \
+            > "$RUNNER_TEMP/alarm-payload.json"
+          echo "payload=$RUNNER_TEMP/alarm-payload.json" >> "$GITHUB_OUTPUT"
+
+      # Quoted: an unquoted " #" starts a YAML comment and cuts the name short.
+      - name: 'Post to #ci'
+        if: env.SLACK_READY == 'true'
+        # SECURITY: the tag v4.0.0 resolves to exactly this commit (verified with the GitHub API on 2026-10-19).
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          method: chat.postMessage
+          # SECURITY: deliberate - one Wendy CI token (chat:write, chat:write.public; it cannot read channels) serves all CI alarms; this job only runs on scheduled runs of main.
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          errors: true
+          payload-file-path: ${{ steps.alarm.outputs.payload }}
+
+  feed:
+    name: 'Post report to #feed-janitor'
+    needs: mac
+    # Every scheduled or manual run, green or red, for the record.
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      SLACK_READY: ${{ secrets.CI_SLACK_BOT_TOKEN != '' && vars.FEED_JANITOR_SLACK_CHANNEL != '' }}
+    steps:
+      - name: Skip without Slack configuration
+        if: env.SLACK_READY != 'true'
+        run: echo "::warning::CI_SLACK_BOT_TOKEN or FEED_JANITOR_SLACK_CHANNEL is not configured; skipping the report."
+
+      - name: Write report
+        id: report
+        if: env.SLACK_READY == 'true'
+        env:
+          CHANNEL: ${{ vars.FEED_JANITOR_SLACK_CHANNEL }}
+          RESULT: ${{ needs.mac.result }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          RUNNER: ${{ needs.mac.outputs.runner || 'wendy-macos-26' }}
+          FREE_BEFORE: ${{ needs.mac.outputs.free-before }}
+          FREE_AFTER: ${{ needs.mac.outputs.free-after }}
+          FINDINGS: ${{ needs.mac.outputs.findings }}
+          FAILED: ${{ needs.mac.outputs.failed-steps }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$RESULT" in
+            success) icon=":white_check_mark:" ;;
+            failure) icon=":x:" ;;
+            *) icon=":warning:" ;;
+          esac
+          title="$icon *Janitor* · \`$RUNNER\`"
+          if [[ "$DRY_RUN" == true ]]; then title+=" · dry run"; fi
+          if [[ "$RESULT" != success ]]; then title+=" · $RESULT"; fi
+          text="$title"
+          if [[ -n "$FREE_BEFORE" ]]; then
+            text+=$'\n'"Free: $FREE_BEFORE → ${FREE_AFTER:-?} GiB"
+          else
+            text+=$'\n'"The janitor did not run on the Mac."
+          fi
+          if [[ -n "$FINDINGS" ]]; then
+            # Slack treats &, < and > as markup.
+            escaped=$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$FINDINGS")
+            text+=$'\n'"$escaped"
+          fi
+          if [[ -n "$FAILED" ]]; then text+=$'\n'"Failed: $FAILED"; fi
+          text+=$'\n'"<$RUN_URL|View run>"
+          jq -n --arg channel "$CHANNEL" --arg text "$text" '{channel: $channel, text: $text}' \
+            > "$RUNNER_TEMP/feed-payload.json"
+          echo "payload=$RUNNER_TEMP/feed-payload.json" >> "$GITHUB_OUTPUT"
+
+      - name: 'Post to #feed-janitor'
+        if: env.SLACK_READY == 'true'
+        # SECURITY: the tag v4.0.0 resolves to exactly this commit (verified with the GitHub API on 2026-10-19).
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          method: chat.postMessage
+          # SECURITY: deliberate - the Wendy CI token (chat:write, chat:write.public; it cannot read channels) serves all CI reports; this job only runs on scheduled runs and manual dispatches.
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          errors: true
+          payload-file-path: ${{ steps.report.outputs.payload }}

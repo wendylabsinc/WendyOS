@@ -1,0 +1,3 @@
+initramfs-*.img
+rootfs/
+vmlinuz-*

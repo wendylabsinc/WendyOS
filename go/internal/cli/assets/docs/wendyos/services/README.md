@@ -2,6 +2,10 @@
 
 WendyOS is a Yocto-based Linux distribution managed entirely by systemd. This document covers what runs on a WendyOS device, the startup order, and how services depend on one another.
 
+For the Agent's Cloud-owned UUID unenrollment, guarded local erasure and restart
+recovery, see [Cloud-owned unenrollment](/docs/device/unenrollment). This requires
+compatible Cloud and Agent builds; it is not an assertion of deployed acceptance.
+
 ## Service inventory
 
 | Service | Unit file | Purpose |
@@ -36,9 +40,9 @@ The diagram below shows the major ordering relationships. Solid arrows indicate 
 ```
 local-fs.target
    |
-   +-- data.mount
+   +-- wendyos-data.service (first-boot format and grow of /data)
    |      |
-   |      +-- mender-systemd-growfs-data.service (Tegra only)
+   |      +-- data.mount
    |             |
    +-- wendyos-etc-binds.service ────────────────────────────────────+
           |                                                           |
@@ -105,24 +109,69 @@ systemctl status var-lib-containerd.mount home.mount
 `WENDY_DATA_INGEST_URL` is the cloud DataIngestService endpoint sealed episodes are
 uploaded to (`ingest.data.wendy.sh` for the dev data platform). It is required for
 uploads: the enrolled cloud host does not serve this service, so there is no
-fallback. Without it the agent logs once at startup that uploads are disabled and
+fallback. Without it the agent logs once at Info level that uploads are disabled and
 sealed episodes stay queued in the local store, bounded by its quota. The device
 authenticates with the certificate it enrolled with, presented in the TLS
 handshake; no request header carries identity.
 
-`WENDY_TELEMETRY_URL` optionally redirects OpenTelemetry exports to another
-collector, so device telemetry can be landed in the data platform's store.
-Unset, telemetry goes to the enrolled cloud host as before.
+`WENDY_TELEMETRY_URL` enables OpenTelemetry exports to an explicitly configured
+OTLP gRPC collector that accepts the enrolled device's mTLS identity. Cloud's
+enrollment and relay endpoints no longer provide OTLP ingestion. Without this
+setting, the agent logs once at Info level that exports are disabled. Telemetry
+remains available locally within the buffer's retention limits. Set a collector
+host, host:port, or HTTPS URL without a path, then restart the agent.
 
 `WENDY_DATA_DIR` sets the root directory for the device-local Episode store.
-The production default is `/var/lib/wendy-agent/data/episodes`. Set it in the
-agent service environment when Episodes should live on a larger data volume:
+It is only needed for a custom location. Without it, the agent uses
+`/var/lib/wendy/wendy-data/episodes` when `/var/lib/wendy` is on a separate
+filesystem larger than the one holding `/var/lib/wendy-agent`, which on WendyOS
+is the persistent `/data` partition beside the root slot, and
+`/var/lib/wendy-agent/data/episodes` otherwise. It logs `Wendy Data episode store` once at startup with the path, the
+campaign plan directory, the inference folder and why it chose them.
+
+The campaign inference runtime and model files live beside the store, in
+`inference/`, with one exception. On a device where an earlier agent already
+downloaded them to `/var/lib/wendy-agent/data/inference` and the store moved to
+the data partition by default, the agent keeps using them there, so the update
+downloads nothing (about 1.1 GB of Python packages and models on a Jetson).
+To put them on the data partition, stop the agent, move that folder to
+`/var/lib/wendy/wendy-data/inference` and start it again: the first campaign
+inference rebuilds its Python environment from the moved files without
+downloading them. An OS update starts the other root slot without the old
+folder, so the runtime it downloads then goes to the data partition.
+
+Campaign plans live beside the store in `campaigns/`, so on WendyOS they
+survive an OS update together with the episodes they record. When the store
+moves to the data partition, the agent copies the plans an earlier agent
+deployed in `/var/lib/wendy-agent/data/campaigns` there once, so every deployed
+campaign stays armed, and leaves the originals in place. If they cannot be
+copied, that folder stays in use and the startup line says why.
+
+Point `WENDY_DATA_DIR` at a dedicated folder, never at a mount point such as
+`/data` itself:
 
 ```sh
-WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
+WENDY_DATA_DIR=/data/wendy-data/episodes wendy-agent
 ```
 
+An existing `/data/wendy-agent/data/episodes` store from an earlier native-app
+build remains in use, together with its campaign plans and inference cache.
+
+Episodes an earlier agent recorded in `/var/lib/wendy-agent/data/episodes` stay
+there when the default moves to the data partition. They are no longer listed
+or uploaded, and the agent logs at each startup how many there are and how many
+had not been uploaded. Move them into the new store while the agent is stopped
+to list them again and upload the rest, or delete them.
+
 The agent creates the directory on startup. Unprivileged developer agents that
-cannot create the production default fall back to their platform user
-configuration directory. WendyOS services should set an explicit path on the
-persistent `/data` partition when the root filesystem is small.
+cannot create the default fall back to their platform user configuration
+directory.
+An explicit `WENDY_DATA_DIR` is used unchanged and is not migrated automatically.
+
+## Agent shutdown
+
+The agent handles `SIGINT` and `SIGTERM` before starting background workers,
+so termination during startup also requests resource cleanup. Its shutdown
+log entry is `Termination requested, shutting down`; it replaces
+`Received signal, shutting down` and no longer includes a signal-name field.
+Use the current entry when filtering logs or configuring alerts.

@@ -34,7 +34,6 @@ import (
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
 const AuthBase = "https://auth.dev.wendy.sh"
@@ -70,7 +69,12 @@ type Profile struct {
 	Expires        string `json:"expires"`
 }
 type Session struct {
-	Store                                 CredentialStore
+	Settings *Settings
+	Store    CredentialStore
+	Pending  PendingStore
+	// RequireHostedMCPPolicy is set by the hosted gateway, never from saved
+	// credentials. Its verified user tokens must permit both MCP channels.
+	RequireHostedMCPPolicy                bool
 	mu                                    sync.Mutex
 	Client                                HTTPDoer
 	meta                                  metadata
@@ -78,6 +82,10 @@ type Session struct {
 	privatePEM, state, verifier, redirect string
 	started                               time.Time
 	certificate                           config.CertificateInfo
+	liteCertificate                       config.CertificateInfo
+	topologyGate                          chan struct{}
+	topologyFlights                       map[string]*topologyFlight
+	topologyMu                            sync.Mutex
 	tokens                                token
 	profile                               Profile
 }
@@ -90,8 +98,7 @@ func random() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 func validIssuer(raw string) bool {
-	u, e := url.Parse(raw)
-	return e == nil && u.Scheme == "https" && u.Host == "auth.dev.wendy.sh" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && strings.HasPrefix(u.Path, "/realms/") && len(strings.Split(u.Path, "/")) == 3 && len(strings.TrimPrefix(u.Path, "/realms/")) > 0
+	return (&Session{}).validIssuer(raw)
 }
 func (s *Session) request(ctx context.Context, method, target, body string, headers map[string]string) ([]byte, *http.Response, error) {
 	req, e := http.NewRequestWithContext(ctx, method, target, strings.NewReader(body))
@@ -117,7 +124,7 @@ func (s *Session) request(ctx context.Context, method, target, body string, head
 }
 func (s *Session) discover(ctx context.Context, issuer string) (metadata, error) {
 	var m metadata
-	if !validIssuer(issuer) {
+	if !s.validIssuer(issuer) {
 		return m, errors.New("Untrusted authentication issuer")
 	}
 	b, r, e := s.request(ctx, "GET", issuer+"/.well-known/openid-configuration", "", nil)
@@ -135,62 +142,104 @@ func (s *Session) discover(ctx context.Context, issuer string) (metadata, error)
 	}
 	return m, nil
 }
-func (s *Session) Begin(ctx context.Context, email, redirect string) (string, error) {
+func (s *Session) Begin(ctx context.Context, email, issuer, redirect string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	u, e := url.Parse(redirect)
-	if e != nil || u.User != nil || u.Path != "/auth/callback" || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && !(u.Scheme == "http" && u.Host == "localhost:5173")) {
-		return "", errors.New("Invalid browser callback")
+	m, authorize, pending, err := s.prepareLogin(ctx, email, issuer, redirect)
+	if err != nil {
+		return "", err
 	}
-	issuer := AuthBase + "/realms/system"
-	if email != "" {
-		body, _ := json.Marshal(map[string]string{"email": email})
-		b, r, e := s.request(ctx, "POST", AuthBase+"/api/login/realm", string(body), map[string]string{"Content-Type": "application/json"})
-		if e != nil {
-			return "", e
-		}
-		if r.StatusCode != 200 {
-			return "", fmt.Errorf("Email lookup returned %d", r.StatusCode)
-		}
-		var out struct {
-			LoginURL string `json:"loginURL"`
-		}
-		if e = json.Unmarshal(b, &out); e != nil {
-			return "", e
-		}
-		issuer, e = issuerFromRealmLoginURL(out.LoginURL)
-		if e != nil {
-			return "", e
-		}
-	}
-	m, e := s.discover(ctx, issuer)
-	if e != nil {
-		return "", e
-	}
-	private, e := certs.GenerateMLDSAKeyPair()
-	if e != nil {
-		return "", e
-	}
-	key, e := certs.ParseSigningPrivateKeyPEM([]byte(private))
-	if e != nil {
-		return "", e
+	if err := s.generateKey(); err != nil {
+		return "", err
 	}
 	s.meta = m
-	s.key = key
-	s.privatePEM = private
-	s.state = random()
-	s.verifier = random()
-	s.redirect = redirect
-	s.started = time.Now()
+	s.state, s.verifier, s.redirect, s.started = pending.State, pending.Verifier, pending.Redirect, pending.Started
 	s.tokens = token{}
 	s.profile = Profile{}
 	s.certificate = config.CertificateInfo{}
-	challenge := sha256.Sum256([]byte(s.verifier))
-	q := url.Values{"response_type": {"code"}, "client_id": {ClientID}, "redirect_uri": {redirect}, "scope": {"openid email profile groups"}, "resource": {IdentityResource}, "state": {s.state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
-	return m.Authorize + "?" + strings.ReplaceAll(q.Encode(), "+", "%20"), nil
+	s.liteCertificate = config.CertificateInfo{}
+	return authorize, nil
 }
+
+// prepareLogin creates only PKCE material. No operator key is needed until
+// token exchange: this client does not pre-bind authorization with dpop_jkt.
+func (s *Session) prepareLogin(ctx context.Context, email, issuer, redirect string) (metadata, string, redirectTransaction, error) {
+	if err := s.settings().Validate(); err != nil {
+		return metadata{}, "", redirectTransaction{}, err
+	}
+	var e error
+	if !validRedirect(redirect) {
+		return metadata{}, "", redirectTransaction{}, errors.New("Invalid browser callback")
+	}
+	// Like `wendy auth login`: with no pinned realm the browser starts at the
+	// realm-less universal page and the realm arrives as the callback issuer.
+	// The system realm is never a login target. A caller-pinned issuer is held
+	// to the same rules as one from the email lookup.
+	if issuer != "" && !s.orgIssuer(issuer) {
+		return metadata{}, "", redirectTransaction{}, errors.New("Sign-in did not identify a valid organization realm")
+	}
+	pinned := issuer != ""
+	if issuer == "" && email != "" {
+		body, _ := json.Marshal(map[string]string{"email": email})
+		b, r, e := s.request(ctx, "POST", s.settings().AuthBase+"/api/login/realm", string(body), map[string]string{"Content-Type": "application/json"})
+		if e != nil {
+			return metadata{}, "", redirectTransaction{}, e
+		}
+		if r.StatusCode != 200 {
+			return metadata{}, "", redirectTransaction{}, fmt.Errorf("Email lookup returned %d", r.StatusCode)
+		}
+		var out struct {
+			LoginURL string `json:"loginURL"`
+			Realm    string `json:"realm"`
+			State    string `json:"state"`
+		}
+		if e = json.Unmarshal(b, &out); e != nil {
+			return metadata{}, "", redirectTransaction{}, e
+		}
+		if out.Realm != "" {
+			out.LoginURL = "/realms/" + out.Realm
+		}
+		if out.State != "unknown" && out.LoginURL != "" {
+			if issuer, e = s.issuerFromRealmLoginURL(out.LoginURL); e != nil {
+				return metadata{}, "", redirectTransaction{}, e
+			}
+		}
+		if issuer != "" && !s.orgIssuer(issuer) {
+			issuer = ""
+		}
+	}
+	m := metadata{Authorize: s.settings().AuthBase + "/authorize"}
+	if issuer != "" {
+		if m, e = s.discover(ctx, issuer); e != nil {
+			return metadata{}, "", redirectTransaction{}, e
+		}
+	}
+	pending := redirectTransaction{Version: 1, State: random(), Verifier: random(), Redirect: redirect,
+		Issuer: m.Issuer, Started: time.Now(), Settings: s.settings(), RequireHostedMCPPolicy: s.RequireHostedMCPPolicy}
+	challenge := sha256.Sum256([]byte(pending.Verifier))
+	q := url.Values{"response_type": {"code"}, "client_id": {s.settings().ClientID}, "redirect_uri": {redirect}, "scope": {"openid email profile groups"}, "resource": {s.settings().IdentityResource}, "state": {pending.State}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
+	// A caller-pinned realm keeps the hint; a looked-up one, like `wendy auth
+	// login`, does not need it.
+	if email != "" && (issuer == "" || pinned) {
+		q.Set("login_hint", email)
+	}
+	return m, m.Authorize + "?" + strings.ReplaceAll(q.Encode(), "+", "%20"), pending, nil
+}
+func (s *Session) generateKey() error {
+	private, err := certs.GenerateMLDSAKeyPair()
+	if err != nil {
+		return err
+	}
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(private))
+	if err != nil {
+		return err
+	}
+	s.key, s.privatePEM = key, private
+	return nil
+}
+
 func (s *Session) exchange(ctx context.Context, form url.Values) (token, error) {
-	form.Set("client_id", ClientID)
+	form.Set("client_id", s.settings().ClientID)
 	nonce := ""
 	for attempt := 0; attempt < 2; attempt++ {
 		proof, e := cloudrequest.NewDPoPProof(s.key, "POST", s.meta.Token, nonce)
@@ -234,19 +283,31 @@ func (s *Session) Complete(ctx context.Context, code, state, issuer string) (Pro
 		return Profile{}, errors.New("Login expired; start sign-in again")
 	}
 	s.state = "" // Consume before network access, including failed code exchanges.
+	if s.meta.Issuer != "" && issuer != s.meta.Issuer {
+		return Profile{}, errors.New("Authentication issuer changed; start sign-in again")
+	}
+	if s.meta.Issuer == "" && !s.orgIssuer(issuer) {
+		return Profile{}, errors.New("Sign-in did not identify a valid organization realm; start sign-in again")
+	}
 	if code == "" {
 		return Profile{}, errors.New("No authorization code received")
 	}
+	return s.completeLogin(ctx, code, issuer)
+}
+
+// completeLogin is shared by the in-memory and redirect flows, after callback
+// validation and with one operator key for token proofs, CSR and Cloud signing.
+func (s *Session) completeLogin(ctx context.Context, code, issuer string) (Profile, error) {
 	m, e := s.discover(ctx, issuer)
 	if e != nil {
 		return Profile{}, e
 	}
 	s.meta = m
-	t, e := s.exchange(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {s.verifier}, "redirect_uri": {s.redirect}, "resource": {IdentityResource}})
+	t, e := s.exchange(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {s.verifier}, "redirect_uri": {s.redirect}, "resource": {s.settings().IdentityResource}})
 	if e != nil {
 		return Profile{}, e
 	}
-	claims, e := s.verifyAccess(ctx, t.Access, IdentityResource)
+	claims, e := s.verifyAccess(ctx, t.Access, s.settings().IdentityResource)
 	if e != nil {
 		return Profile{}, e
 	}
@@ -255,15 +316,15 @@ func (s *Session) Complete(ctx context.Context, code, state, issuer string) (Pro
 	if subject == "" || !canonicalUUID(tenant) {
 		return Profile{}, errors.New("Token is missing its operator or tenant identity")
 	}
-	certificate, e := requestPKIIdentityCertificate(ctx, s.Client, IdentityEndpoint, s.privatePEM, s.key, t.Access, tenant, subject)
+	certificate, e := requestPKIIdentityCertificate(ctx, s.Client, s.settings().IdentityEndpoint, s.privatePEM, s.key, t.Access, tenant, subject)
 	if e != nil {
 		return Profile{}, e
 	}
-	cloud, e := s.exchange(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {t.Refresh}, "resource": {CloudResource}})
+	cloud, e := s.exchange(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {t.Refresh}, "resource": {s.settings().CloudResource}})
 	if e != nil {
 		return Profile{}, e
 	}
-	cloudClaims, e := s.verifyAccess(ctx, cloud.Access, CloudResource)
+	cloudClaims, e := s.verifyAccess(ctx, cloud.Access, s.settings().CloudResource)
 	if e != nil {
 		return Profile{}, e
 	}
@@ -396,6 +457,13 @@ func (s *Session) verifyAccess(ctx context.Context, raw, audience string) (map[s
 	if cnf["jkt"] != thumb {
 		return nil, errors.New("Access token belongs to a different operator key")
 	}
+	if s.RequireHostedMCPPolicy {
+		allowMCP, _ := claims["allow_mcp"].(bool)
+		allowHostedMCP, _ := claims["allow_hosted_mcp"].(bool)
+		if !allowMCP || !allowHostedMCP {
+			return nil, errors.New("Wendy Cloud organization does not allow hosted MCP access")
+		}
+	}
 	return claims, nil
 }
 
@@ -481,7 +549,11 @@ func requestPKIIdentityCertificate(
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate chain: %w", err)
 	}
-	wantPublicKey, err := x509.MarshalPKIXPublicKey(key.Public())
+	csrKey, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return config.CertificateInfo{}, err
+	}
+	wantPublicKey, err := x509.MarshalPKIXPublicKey(csrKey.Public())
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("encoding generated operator public key: %w", err)
 	}
@@ -539,6 +611,10 @@ func splitCertificateChainPEM(chain []byte) (string, string, *x509.Certificate, 
 // Discover uses the CLI's v2 API and its per-RPC DPoP proof. The supplied dialer
 // must carry HTTP/2 to the fixed Cloud authority over an authenticated TLS relay.
 func (s *Session) Discover(ctx context.Context, dial func(context.Context, string) (net.Conn, error)) ([]*cloudpbv2.Asset, error) {
+	return s.DiscoverFiltered(ctx, dial, true)
+}
+
+func (s *Session) DiscoverFiltered(ctx context.Context, dial func(context.Context, string) (net.Conn, error), onlineOnly bool) ([]*cloudpbv2.Asset, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tokens.Access == "" {
@@ -547,15 +623,14 @@ func (s *Session) Discover(ctx context.Context, dial func(context.Context, strin
 	if err := s.refreshCloudToken(ctx); err != nil {
 		return nil, err
 	}
-	auth := &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{s.certificate}}
-	options := []grpc.DialOption{clouddefaults.TunnelDialer(func(ctx context.Context) (net.Conn, error) { return dial(ctx, "api.dev.wendy.sh:443") }), grpc.WithTransportCredentials(insecure.NewCredentials())}
+	auth := &config.AuthConfig{CloudGRPC: s.settings().CloudGRPC, OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{s.certificate}}
+	options := []grpc.DialOption{clouddefaults.TunnelDialer(func(ctx context.Context) (net.Conn, error) { return dial(ctx, s.settings().CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
 	options = append(options, cloudrequest.DPoPDialOptions(auth, func(context.Context) (string, crypto.Signer, error) { return s.tokens.Access, s.key, nil })...)
-	conn, e := grpc.NewClient("passthrough:///api.dev.wendy.sh:443", options...)
+	conn, e := grpc.NewClient("passthrough:///"+s.settings().CloudGRPC, options...)
 	if e != nil {
 		return nil, e
 	}
 	defer conn.Close()
-	ctx = grpcmetadata.NewOutgoingContext(ctx, grpcmetadata.Pairs("x-wendy-client-cert", "URI="+s.profile.Principal, "x-forwarded-client-cert", "URI="+s.profile.Principal))
 	if s.profile.Email == "" {
 		if err := s.loadUserInfo(ctx); err != nil {
 			s.profile.ProfileWarning = "Email lookup unavailable: " + err.Error()
@@ -582,7 +657,6 @@ func (s *Session) Discover(ctx context.Context, dial func(context.Context, strin
 	client := cloudpbv2.NewAssetServiceClient(conn)
 	assets := make([]*cloudpbv2.Asset, 0)
 	compute := true
-	onlineOnly := true
 	limit := int32(200)
 	for offset := int32(0); ; {
 		stream, e := client.ListAssets(ctx, &cloudpbv2.ListAssetsRequest{OrganizationId: s.profile.Tenant, IsComputeDevice: &compute, OnlineOnly: &onlineOnly, Offset: &offset, Limit: &limit})
@@ -601,6 +675,9 @@ func (s *Session) Discover(ctx context.Context, dial func(context.Context, strin
 			if item.Asset == nil {
 				return nil, errors.New("Cloud returned an empty device record")
 			}
+			if item.Asset.GetOrganizationId() != s.profile.Tenant || !canonicalUUID(item.Asset.GetId()) {
+				return nil, errors.New("Cloud returned a device outside the signed-in tenant or an invalid asset ID")
+			}
 			if len(assets) >= 10000 {
 				return nil, errors.New("Cloud device limit exceeded")
 			}
@@ -618,15 +695,20 @@ func (s *Session) Discover(ctx context.Context, dial func(context.Context, strin
 // Realm discovery returns a root-relative loginURL. Resolve it only against
 // the configured auth host, while also accepting its absolute equivalent.
 func issuerFromRealmLoginURL(raw string) (string, error) {
+	return (&Session{}).issuerFromRealmLoginURL(raw)
+}
+
+func (s *Session) issuerFromRealmLoginURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Fragment != "" {
 		return "", errors.New("Untrusted realm login URL")
 	}
 	if u.Scheme == "" && u.Host == "" && strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//") {
-		base, _ := url.Parse(AuthBase)
+		base, _ := url.Parse(s.settings().AuthBase)
 		u = base.ResolveReference(u)
 	}
-	if u.Scheme != "https" || u.Host != "auth.dev.wendy.sh" {
+	base, _ := url.Parse(s.settings().AuthBase)
+	if base == nil || u.Scheme != "https" || u.Host != base.Host {
 		return "", errors.New("Untrusted realm login URL")
 	}
 	parts := strings.Split(u.Path, "/")
@@ -638,7 +720,7 @@ func issuerFromRealmLoginURL(raw string) (string, error) {
 			return "", errors.New("Realm lookup returned an invalid realm")
 		}
 	}
-	return AuthBase + "/realms/" + parts[2], nil
+	return s.settings().AuthBase + "/realms/" + parts[2], nil
 }
 
 // UserInfo carries scope-gated email claims that access tokens may omit.

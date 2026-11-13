@@ -465,6 +465,31 @@ footer {
 [hidden] {
   display: none !important;
 }
+.audio-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 32px;
+  background: #fafbf5;
+}
+.audio-overview, .audio-channels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin: 22px 0;
+}
+.audio-overview { align-items: center; }
+#conveyor-scene { width: 100%; font: 12px system-ui; fill: #43554b; }
+#belt-motion { animation: belt-travel 1s linear infinite; }
+.stopped #belt-motion { animation-play-state: paused; }
+@keyframes belt-travel { to { transform: translateX(35px); } }
+.audio-channel { min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 18px; }
+.audio-channel h3 { font-size: 15px; font-weight: 550; text-transform: capitalize; margin: 0 0 14px; }
+.audio-channel svg { width: 100%; height: 60px; background: #edf1e7; }
+.audio-event { display: block; width: 100%; text-align: left; margin: 8px 0; padding: 12px; line-height: 1.6; }
+#audio-player { width: min(100%, 480px); margin-bottom: 16px; }
+#audio-error { background: #f3ded1; color: #763918; padding: 15px; }
+@media (prefers-reduced-motion: reduce) { #belt-motion { animation: none; } }
 @media (min-width: 1600px) {
   main {
     padding: 0 60px;
@@ -498,6 +523,8 @@ footer {
   }
 }
 @media (max-width: 700px) {
+  .audio-panel { padding: 16px; }
+  .audio-overview, .audio-channels { grid-template-columns: 1fr; }
   main {
     padding: 0 18px;
   }

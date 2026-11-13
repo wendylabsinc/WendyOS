@@ -245,6 +245,7 @@ type topJSONStorage struct {
 }
 
 type topJSONHost struct {
+	Network            *NetworkTraffic  `json:"network,omitempty"`
 	ContainerStorage   *topJSONStorage  `json:"containerStorage,omitempty"`
 	CPUPercent         float64          `json:"cpuPercent"`
 	CPUCount           uint32           `json:"cpuCount"`
@@ -302,6 +303,7 @@ func buildTopJSON(prev, cur topSample, containers []*agentpb.AppContainer) topJS
 	}
 	if cur.host != nil {
 		out.Host.CPUPercent = hostCPUPercent(prev, cur)
+		out.Host.Network = NetworkTrafficBetween(prev.host.GetNetwork(), cur.host.GetNetwork())
 		out.Host.CPUCount = cur.host.GetCpuCount()
 		out.Host.MemTotalBytes = cur.host.GetMemTotalBytes()
 		out.Host.MemUsedBytes = cur.host.GetMemTotalBytes() - cur.host.GetMemAvailableBytes()
@@ -396,6 +398,7 @@ func runTopSnapshot(ctx context.Context, conn *grpcclient.AgentConnection, asJSO
 }
 
 func writeTopPlainSnapshot(w io.Writer, prev, cur topSample, containers []*agentpb.AppContainer) error {
+	fmt.Fprintln(w, networkSummary(prev, cur))
 	if cur.storage != nil {
 		fmt.Fprintf(w, "DISK %s: %s / %s\n", tui.StripControl(cur.storage.GetMountpoint()), formatBytes(cur.storage.GetUsedBytes()), formatBytes(cur.storage.GetTotalBytes()))
 	}
@@ -441,24 +444,26 @@ func writeTopPlainSnapshot(w io.Writer, prev, cur topSample, containers []*agent
 
 func newTopCmd() *cobra.Command {
 	var interval time.Duration
+	var readOnly bool
 	cmd := &cobra.Command{
 		Use:   "top",
-		Short: "Live CPU, memory, disk, GPU, and temperature for the device and its containers",
+		Short: "Live CPU, memory, disk, GPU, temperature, and network traffic",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
+			conn, err := connectToAgent(ctx, monitoringOptions(readOnly)...)
 			if err != nil {
 				return err
 			}
 			defer conn.Close()
 
-			if jsonOutput || !isInteractiveTerminal() {
+			if readOnly || jsonOutput || !isInteractiveTerminal() {
 				return runTopSnapshot(ctx, conn, jsonOutput)
 			}
 			return runTopDashboard(ctx, conn, interval)
 		},
 	}
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Refresh interval for the live view")
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "Print a snapshot without starting VMs or managing updates")
 	return cmd
 }
 
@@ -1079,6 +1084,9 @@ func (m topModel) View() string {
 		}
 		top = append(top, topMeter("Mem", memRatio,
 			fmt.Sprintf("%s/%s", formatBytes(used), formatBytes(h.GetMemTotalBytes())), meterW))
+		for _, line := range strings.Split(networkSummary(m.prev, m.cur), "\n") {
+			top = append(top, topValDim.Render(padOrCrop(" "+line, width)))
+		}
 
 		// Only devices that actually have a battery get this row; a
 		// mains-powered device shows nothing where it would be.
@@ -1310,7 +1318,7 @@ func runTopDashboard(ctx context.Context, conn *grpcclient.AgentConnection, inte
 	defer cancel()
 	m := newTopModel(cctx, conn, interval)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(cctx))
-	_, err := p.Run()
+	_, err := tui.RunProgram(p)
 	return err
 }
 

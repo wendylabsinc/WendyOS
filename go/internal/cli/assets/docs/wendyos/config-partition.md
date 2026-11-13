@@ -8,6 +8,13 @@ The root filesystem on a WendyOS device is replaced wholesale during OTA updates
 
 The `config` partition is outside the update boundary. Files placed there survive OS updates and are available from the very first boot. This makes it the right place for anything that needs to be pre-staged before a device has ever booted, or preserved across updates.
 
+## Flashing an enrolled device
+
+Valid first-boot provisioning after a flash replaces prior pending or completed
+local unenrollment recovery. Flashing does **not** revoke certificates or delete
+the old Cloud asset. Clean up that old Cloud identity separately; do not use a
+newly provisioned device's identity as proof that the prior one was unenrolled.
+
 ## Accessing it from a host computer
 
 Because the partition is FAT32, your computer mounts it automatically when you plug in the storage.
@@ -24,6 +31,7 @@ This applies to the boards that install from a disk image (Raspberry Pi, x86). T
 | Raspberry Pi, x86 | Mounted on the host after the image is written |
 | Jetson Thor, Orin | The flashpack's `config-partition.fat32.img` is injected, then flashed |
 | Dragonwing IQ-8275, IQ-9075 | The bundle ships no config image, so wendy builds one on the host and programs it over EDL |
+| Arduino UNO Q | As on Dragonwing: wendy builds the image on the host and programs it over EDL |
 
 On Dragonwing the partition is created by a first-boot service rather than by the image build, so it stands down when it already finds a FAT32 filesystem labelled `config` — otherwise it would reformat the seed away.
 
@@ -42,6 +50,32 @@ If a file named `wendy-agent` is present in `/config` on boot, the agent validat
 The install is refused if the target directory sits on a merged systemd-sysext overlay. A binary written there is discarded when the overlay is rebuilt on the next boot, so the seed would appear to succeed, silently do nothing, and retry forever.
 
 `wendy install` writes the latest stable arm64 agent binary to the config partition automatically after flashing. If this write fails, `wendy install` warns rather than aborting (unless WiFi, device-name, or pre-enroll provisioning was explicitly requested — then the install exits non-zero, see [wendy.conf](#wendyconf)) — the device still boots using the agent baked into the image and fetches updates after first boot.
+
+## Pre-provisioning (`provisioning.json`)
+
+Enrollment prepared during installation can be handed to the agent through
+`/config/provisioning.json`. At boot, the agent validates the handoff, then
+persists its private key as `/etc/wendy-agent/device-key.pem` before writing
+`/etc/wendy-agent/provisioning.json` with the enrollment details and certificates.
+Both destination files use mode `0600`; the destination JSON excludes the
+handoff's embedded `keyPem` field. On the same boot, the agent replaces
+`/etc/wendyos/device-uuid` with the device UUID in the handed-off certificate
+and rewrites the mDNS `id=` TXT record to match; see
+[Configuration files](./services/configuration-files.md).
+
+After both writes succeed, the agent removes the handoff file. A persistence
+failure leaves it available for retry on a later boot, and retrying preserves
+destination files whose contents and permissions already match. Malformed or
+incomplete handoffs are logged and removed. See [Credential persistence](/docs/advanced/pki#credential-persistence)
+for the stored file layout and legacy-file handling.
+
+This UUID/mDNS alignment also runs after live re-enrollment. The
+`_wendyos._udp` service's `id=` TXT record is updated before Avahi restarts.
+If neither a non-empty explicit hostname nor a device name
+exists, the agent first saves its current hostname in
+`/etc/wendy-agent/hostname` so changing the UUID does not rename the device
+at the next boot. A legacy asset certificate has no device UUID and leaves
+these records unchanged.
 
 ## Driver add-ons (`extensions.json`)
 

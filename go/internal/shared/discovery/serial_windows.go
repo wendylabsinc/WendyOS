@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,9 @@ func resolveESP32SerialPorts() ([]SerialPortInfo, error) {
 
 	return parseESP32SerialPortsJSON(string(out))
 }
+
+// serialInterfaceRegex identifies the function of a composite USB device.
+var serialInterfaceRegex = regexp.MustCompile(`(?i)&MI_([0-9a-f]{2})(?:\\|&)`)
 
 // serialPortRegex matches a parenthesized COM port suffix such as "(COM5)".
 var serialPortRegex = regexp.MustCompile(`\(COM\d+\)`)
@@ -68,6 +72,15 @@ func parseESP32SerialPortsJSON(jsonOut string) ([]SerialPortInfo, error) {
 		}
 		usbID, ok := supportedESP32SerialUSBID(vendorID, productID)
 		if !ok {
+			continue
+		}
+		iface := -1
+		if match := serialInterfaceRegex.FindStringSubmatch(entry.PNPDeviceID); len(match) == 2 {
+			if n, err := strconv.ParseInt(match[1], 16, 32); err == nil {
+				iface = int(n)
+			}
+		}
+		if !serialUSBInterfaceAllowed(usbID, iface) {
 			continue
 		}
 		for _, field := range []string{entry.Name, entry.Caption} {

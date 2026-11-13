@@ -184,3 +184,25 @@ func wendyLiteSighting(assetID int, ip string, mtls bool) discovery.MDNSService 
 		},
 	}
 }
+
+func TestResolvePrincipalSourceIgnoresOtherDevicesAndTenants(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/fleet/board-a"
+	sighting := func(uri, org, ip string) discovery.MDNSService {
+		return discovery.MDNSService{IPAddress: ip, Port: 5054, TXTRecords: map[string]string{"id": "raw-board-id", "tenant": org, "principal": uri, "mtls": "true"}}
+	}
+	orig := browseContinuousFn
+	t.Cleanup(func() { browseContinuousFn = orig })
+	browse, stopped := scriptedBrowse(t,
+		sighting(principal, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "10.0.0.1"),
+		sighting("spiffe://wendy.sh/tenant/"+tenant+"/device/other", tenant, "10.0.0.2"),
+		sighting(principal, tenant, "10.0.0.3"))
+	browseContinuousFn = browse
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	addrs, ok := resolvePairingLANAddrs(ctx, SensorPairing{SourcePrincipalURI: principal, Transport: "wendycom"})
+	if !ok || len(addrs) != 1 || addrs[0] != "10.0.0.3:5054" {
+		t.Fatalf("wrong principal resolution: %v %v", addrs, ok)
+	}
+	<-stopped
+}

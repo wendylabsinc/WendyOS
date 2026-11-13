@@ -24,6 +24,7 @@ func executeCompletionInHome(t *testing.T, home string, args ...string) (stdout,
 	for _, k := range []string{"HOME", "USERPROFILE"} {
 		t.Setenv(k, home)
 	}
+	t.Setenv("WENDY_CONFIG_DIR", filepath.Join(home, ".wendy"))
 	for _, k := range []string{"HOMEDRIVE", "HOMEPATH", "ZDOTDIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
 		t.Setenv(k, "")
 	}

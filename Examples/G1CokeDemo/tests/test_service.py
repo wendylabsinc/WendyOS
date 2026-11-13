@@ -104,3 +104,32 @@ def test_http_polling_reuses_connection_and_rejects_unread_command_body():
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
+
+
+def test_operator_page_serves_its_complete_viewer_module_chain():
+    runtime = ready()
+    server = make_server(runtime, port=0)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    client = HTTPConnection(*server.server_address, timeout=2)
+    try:
+        for path in (
+            "/", "/style.css", "/app.js", "/viewer.js",
+            "/vendor/three.module.js", "/vendor/three.core.js",
+            "/vendor/OrbitControls.js", "/vendor/three.LICENSE",
+        ):
+            client.request("GET", path)
+            response = client.getresponse()
+            body = response.read()
+            assert response.status == 200, f"Operator asset unavailable: {path}"
+            assert body, f"Operator asset empty: {path}"
+            if path.endswith(".js"):
+                assert response.getheader("Content-Type") in {
+                    "text/javascript", "application/javascript",
+                }, f"Browser cannot import {path}"
+        assert runtime.commands.empty()
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wendy code review"
+  short_description: "Review Wendy code and architecture with evidence"
+  default_prompt: "Use $code-review to review this change for concrete defects and architectural fit, checking each finding against the actual execution path."

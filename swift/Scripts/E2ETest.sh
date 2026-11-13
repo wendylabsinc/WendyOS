@@ -567,7 +567,8 @@ run_cli_command() {
       "$(ssh_target "$CLI_USER" "$CLI_ADDRESS")" \
       "bash -lc $(shell_quote "$command")"
   else
-    bash -lc "$command"
+    # Keep the toolchain PATH selected by the caller.
+    bash -c "$command"
   fi
 }
 

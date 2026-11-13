@@ -10,7 +10,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const cniNetnsBindDir = "/run/wendy/netns"
+// cniNetnsBindDir is private runtime state; tests redirect it to a temporary directory.
+var cniNetnsBindDir = "/run/wendy/netns"
 
 // bindNetnsForCNI bind-mounts the network namespace anchored by netnsRef to a
 // stable, spec-compliant path under /run/wendy/netns/<containerID> and returns

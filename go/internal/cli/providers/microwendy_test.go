@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestEspIdfBinaryPath(t *testing.T) {
@@ -98,6 +102,7 @@ func TestSerialExternalDeviceResponsive(t *testing.T) {
 	dev := p.serialExternalDevice(discovery.SerialDevice{
 		Port: "/dev/cu.usbmodem2101", Responsive: true,
 		ID: "esp", Name: "esp", DisplayName: "esp",
+		EnrolledDeviceID: "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90",
 	})
 
 	if dev.ConnectionInfo["needsInstall"] != "" {
@@ -105,6 +110,14 @@ func TestSerialExternalDeviceResponsive(t *testing.T) {
 	}
 	if dev.DisplayName != "esp" {
 		t.Errorf("expected the resolved identity display name to be used, got %q", dev.DisplayName)
+	}
+	// The hardware id stays deviceId; the enrolled UUID rides alongside so the
+	// row dedups with the board's LAN and BLE rows.
+	if dev.ConnectionInfo["deviceId"] != "esp" {
+		t.Errorf("deviceId = %q, want the hardware id %q", dev.ConnectionInfo["deviceId"], "esp")
+	}
+	if got, want := dev.ConnectionInfo["enrolledDeviceId"], "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90"; got != want {
+		t.Errorf("enrolledDeviceId = %q, want %q", got, want)
 	}
 }
 
@@ -159,7 +172,7 @@ func TestConnectSerialWithRetrySucceedsAfterTransientFailures(t *testing.T) {
 	serialConnectRetryDelay = time.Millisecond
 
 	var attempts int
-	connectSerialFn = func(_ *liteclient.WendyLiteClient, _ string) error {
+	connectSerialFn = func(_ context.Context, _ *liteclient.WendyLiteClient, _ string) error {
 		attempts++
 		if attempts < serialConnectMaxAttempts {
 			return errors.New("reading header: read timeout")
@@ -167,7 +180,7 @@ func TestConnectSerialWithRetrySucceedsAfterTransientFailures(t *testing.T) {
 		return nil
 	}
 
-	if err := connectSerialWithRetry(nil, "/dev/cu.usbmodem2101"); err != nil {
+	if err := connectSerialWithRetry(context.Background(), nil, "/dev/cu.usbmodem2101"); err != nil {
 		t.Fatalf("connectSerialWithRetry() error = %v, want nil after eventual success", err)
 	}
 	if attempts != serialConnectMaxAttempts {
@@ -182,12 +195,12 @@ func TestConnectSerialWithRetryGivesUpAfterMaxAttempts(t *testing.T) {
 
 	wantErr := errors.New("reading header: read timeout")
 	var attempts int
-	connectSerialFn = func(_ *liteclient.WendyLiteClient, _ string) error {
+	connectSerialFn = func(_ context.Context, _ *liteclient.WendyLiteClient, _ string) error {
 		attempts++
 		return wantErr
 	}
 
-	err := connectSerialWithRetry(nil, "/dev/cu.usbmodem2101")
+	err := connectSerialWithRetry(context.Background(), nil, "/dev/cu.usbmodem2101")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("connectSerialWithRetry() error = %v, want it to wrap %v", err, wantErr)
 	}
@@ -458,10 +471,92 @@ func TestStreamDevicesDeduplicatesRepeatedMDNSService(t *testing.T) {
 
 func TestConnectClientRejectsBLEWithoutAddress(t *testing.T) {
 	p := &MicroWendyProvider{}
-	_, err := p.connectClient(models.ExternalDevice{
+	_, err := p.connectClient(context.Background(), models.ExternalDevice{
 		ConnectionInfo: map[string]string{"type": "BLE"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "missing BLE address") {
 		t.Errorf("expected a missing-address error, got %v", err)
+	}
+}
+
+// setCloudRelayDialer swaps the Cloud hook for one test.
+func setCloudRelayDialer(t *testing.T, dial func(context.Context, models.ExternalDevice) (*grpc.ClientConn, context.Context, error)) {
+	t.Helper()
+	old := CloudRelayDialer
+	if dial == nil {
+		CloudRelayDialer = nil
+	} else {
+		CloudRelayDialer = func(ctx context.Context, device models.ExternalDevice, _ bool) (*grpc.ClientConn, context.Context, liteclient.RelayOptions, error) {
+			conn, callCtx, err := dial(ctx, device)
+			return conn, callCtx, liteclient.RelayOptions{}, err
+		}
+	}
+	t.Cleanup(func() { CloudRelayDialer = old })
+}
+
+func TestConnectClientRejectsCloudWithoutAssetID(t *testing.T) {
+	setCloudRelayDialer(t, func(context.Context, models.ExternalDevice) (*grpc.ClientConn, context.Context, error) {
+		t.Error("dialled Wendy Cloud for a device without an asset ID")
+		return nil, nil, errors.New("unreachable")
+	})
+	p := &MicroWendyProvider{}
+	_, err := p.connectClient(context.Background(), models.ExternalDevice{
+		ConnectionInfo: map[string]string{"type": "Cloud"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing Cloud asset ID") {
+		t.Errorf("expected a missing-asset error, got %v", err)
+	}
+}
+
+func TestConnectClientRejectsCloudWithoutDialer(t *testing.T) {
+	setCloudRelayDialer(t, nil)
+	p := &MicroWendyProvider{}
+	_, err := p.connectClient(context.Background(), models.ExternalDevice{
+		ConnectionInfo: map[string]string{"type": "Cloud", "assetId": "0b6f7a52-5d1e-4c3b-9a8e-2f4d6c8b1a3e"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Errorf("expected an unavailable-Cloud error, got %v", err)
+	}
+}
+
+func TestConnectClientReportsCloudDialError(t *testing.T) {
+	failure := errors.New("no login for this tenant")
+	var dialled models.ExternalDevice
+	setCloudRelayDialer(t, func(_ context.Context, device models.ExternalDevice) (*grpc.ClientConn, context.Context, error) {
+		dialled = device
+		return nil, nil, failure
+	})
+	p := &MicroWendyProvider{}
+	device := models.ExternalDevice{
+		ConnectionInfo: map[string]string{"type": "Cloud", "assetId": "0b6f7a52-5d1e-4c3b-9a8e-2f4d6c8b1a3e"},
+	}
+	_, err := p.connectClient(context.Background(), device)
+	if !errors.Is(err, failure) {
+		t.Fatalf("expected the dial error, got %v", err)
+	}
+	if dialled.ConnectionInfo["assetId"] != device.ConnectionInfo["assetId"] {
+		t.Errorf("dialer got %+v, want the selected device", dialled)
+	}
+}
+
+func TestConnectClientRenewsLiteLeafOnceWhenCloudRefusesIt(t *testing.T) {
+	for message, want := range map[string][]bool{
+		"invalid Lite principal request": {false, true},
+		"missing tunnel:connect":         {false},
+	} {
+		var renews []bool
+		old := CloudRelayDialer
+		t.Cleanup(func() { CloudRelayDialer = old })
+		CloudRelayDialer = func(_ context.Context, _ models.ExternalDevice, renew bool) (*grpc.ClientConn, context.Context, liteclient.RelayOptions, error) {
+			renews = append(renews, renew)
+			return nil, nil, liteclient.RelayOptions{}, status.Error(codes.PermissionDenied, message)
+		}
+		p := &MicroWendyProvider{}
+		_, err := p.connectClient(context.Background(), models.ExternalDevice{
+			ConnectionInfo: map[string]string{"type": "Cloud", "assetId": "0b6f7a52-5d1e-4c3b-9a8e-2f4d6c8b1a3e"},
+		})
+		if status.Code(err) != codes.PermissionDenied || !slices.Equal(renews, want) {
+			t.Errorf("%q: renews = %v, err = %v; want %v", message, renews, err, want)
+		}
 	}
 }

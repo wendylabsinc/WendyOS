@@ -496,8 +496,8 @@ func TestChunkExportPlan(t *testing.T) {
 	if got := chunkExportPlan("apple-container"); got != "tar" {
 		t.Fatalf("apple-container builder: got %q, want tar", got)
 	}
-	if got := chunkExportPlan("buildkit"); got != "tar" {
-		t.Fatalf("buildkit builder: got %q, want tar", got)
+	if got := chunkExportPlan("buildkit"); got != "dir" {
+		t.Fatalf("buildkit builder: got %q, want dir", got)
 	}
 	if got := chunkExportPlan("no-such-builder"); got != "tar" {
 		t.Fatalf("invalid builder: got %q, want tar (error surfaces on the tar path)", got)

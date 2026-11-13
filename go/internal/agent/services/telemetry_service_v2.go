@@ -72,6 +72,7 @@ func (s *TelemetryServiceV2) StreamLogs(req *agentpbv2.StreamLogsRequest, stream
 		}
 	}
 
+	filteredRecent := make([]*collogspb.ExportLogsServiceRequest, 0, len(recent))
 	for _, logs := range recent {
 		if req.ServiceName != nil || req.MinSeverity != nil || req.AppName != nil {
 			logs = filterLogsV2(logs, req)
@@ -79,9 +80,18 @@ func (s *TelemetryServiceV2) StreamLogs(req *agentpbv2.StreamLogsRequest, stream
 				continue
 			}
 		}
+		filteredRecent = append(filteredRecent, logs)
+	}
+	if n := int(req.GetLastN()); n > 0 && len(filteredRecent) > n {
+		filteredRecent = filteredRecent[len(filteredRecent)-n:]
+	}
+	for _, logs := range filteredRecent {
 		if err := stream.Send(&agentpbv2.StreamLogsResponse{Logs: logs, IsHistory: true}); err != nil {
 			return err
 		}
+	}
+	if req.GetNoFollow() {
+		return nil
 	}
 
 	// A single sender owns both logs and empty application heartbeats. Reset

@@ -54,7 +54,7 @@ All environment variables are read at startup. Restart the agent after changing 
 | `WENDY_MDNS_DEBUG` | _(unset)_ | Set to any value to log mDNS query failures during discovery |
 | `WENDY_MDNS_TIMEOUT` | `4s` | Timeout for mDNS browse fallback on Linux/Windows hosts (range: 1s–30s) |
 | `WENDY_CONFIG_PATH` | `/etc/wendy-agent` | Directory for provisioning certificates and config |
-| `WENDY_AGENT_HOST` | `::` | Host address for the plaintext gRPC server (Swift agent only; accepted values: `127.0.0.1`, `::1`, `localhost`) |
+| `WENDY_AGENT_HOST` | `::` | Host address for the plaintext gRPC server (Swift macOS agent only; accepted values: `127.0.0.1`, `::1`, `localhost`) |
 | `WENDY_AGENT_PORT` | `50051` | Port for the plaintext gRPC server (pre-provisioning only) |
 | `WENDY_CONTAINERD_ADDR` | _(containerd default)_ | Unix socket path for the containerd client |
 | `WENDY_REGISTRY_ADDR` | _(internal default)_ | Address for the embedded OCI registry |
@@ -172,7 +172,8 @@ The agent continues to work without it, but Bluetooth container isolation is deg
 
 The Go `wendy-agent` drives WiFi through `nmcli` only — it does not auto-detect
 between ConnMan and NetworkManager, and it ignores `WENDY_NETWORK_MANAGER`
-(that variable is a Swift-agent feature). If `nmcli` is not on the agent's
+(only the earlier Swift agent for Linux, which the Go agent replaced, read that
+variable). If `nmcli` is not on the agent's
 `PATH`, every WiFi management RPC fails with `Unavailable: WiFi management is
 not available (nmcli not found)`. Check:
 
@@ -196,7 +197,7 @@ The CLI itself performs an mDNS browse on Linux hosts (shipped binaries are CGO_
 
 ### mTLS handshake fails after re-provisioning
 
-Old mTLS state may be cached. Refresh certificates on the CLI side:
+If the CLI reports expired client certificates, check this computer's clock, then refresh them:
 
 ```sh
 wendy auth refresh-certs
@@ -212,28 +213,17 @@ sudo systemctl restart wendy-agent
 
 If the device's real-time clock (RTC) is not synchronized (common on first boot or after power loss), the device clock may predate the provisioning certificate's `NotBefore` time. This causes all client certificates to appear "not yet valid" from the device's perspective.
 
-Check the device clock:
+From a computer on the same LAN, send a signed time proof and retry the connection:
 
 ```sh
-ssh wendy@<device-ip> 'timedatectl status'
+wendy device sync-time
 ```
 
-If NTP is not synchronized, you can:
-
-1. **Wait for NTP sync** or force it:
-   ```sh
-   sudo systemctl restart systemd-timesyncd
-   ```
-
-2. **Use Roughtime** — The CLI automatically detects clock skew when connecting to a device and relays a verified Roughtime proof to correct it. If the connection succeeds, you'll see a message like:
-   ```
-   Device clock was 56y behind — synchronized via Roughtime.
-   ```
-   If the device is completely unreachable (connection cannot be established), you can broadcast manually:
-   ```sh
-   wendy device sync-time
-   ```
-   This queries public Roughtime servers and multicasts the verified timestamp. Devices on the same network receive it and advance their clocks.
+The CLI also sends this proof automatically after a possible clock-related TLS
+failure, and retries the connection three times over about 10 seconds, sending
+the proof again before each retry. Only a connection the device accepts confirms
+that the proof arrived. Giving the device internet access also allows its own
+time synchronization to recover.
 
 The agent logs a warning at startup if it detects clock skew. For TLS handshake details, run the CLI with:
 

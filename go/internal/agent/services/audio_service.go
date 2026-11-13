@@ -36,6 +36,8 @@ import (
 // falling back means enumerating ALSA cards *instead of* the PipeWire graph,
 // not alongside it, which is what caused a Bluetooth device to appear on some
 // surfaces and not others before this service moved to PipeWire exclusively.
+// The one exception is a sensor-link microphone, which only ALSA can reach on
+// either path (see sensorLinkCaptureNodes).
 type AudioService struct {
 	agentpb.UnimplementedWendyAudioServiceServer
 	logger *zap.Logger
@@ -43,8 +45,9 @@ type AudioService struct {
 	// sensorLinkMounts and pairingName, when set, let the ALSA fallback name a
 	// snd-aloop Loopback capture subdevice after the remote sensor-link source
 	// it carries. Both nil on a device with no sensor pairings wired.
-	sensorLinkMounts func() []audioloop.Mount
-	pairingName      func(sourceAssetID int32) (string, bool)
+	sensorLinkMounts     func() []audioloop.Mount
+	pairingName          func(sourceAssetID int32) (string, bool)
+	pairingPrincipalName func(string) (string, bool)
 }
 
 // NewAudioService creates a new AudioService.
@@ -59,6 +62,10 @@ func NewAudioService(logger *zap.Logger) *AudioService {
 func (s *AudioService) SetSensorLinkNaming(mounts func() []audioloop.Mount, pairingName func(int32) (string, bool)) {
 	s.sensorLinkMounts = mounts
 	s.pairingName = pairingName
+}
+
+func (s *AudioService) SetSensorLinkPrincipalNaming(name func(string) (string, bool)) {
+	s.pairingPrincipalName = name
 }
 
 // pipewireUnavailable reports whether this call must use the ALSA fallback, and
@@ -111,6 +118,7 @@ func (s *AudioService) ListAudioDevices(ctx context.Context, req *agentpb.ListAu
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to enumerate audio devices: %v", err)
 		}
+		nodes = append(nodes, s.sensorLinkCaptureNodes(ctx)...)
 	}
 
 	filter := req.GetTypeFilter()
@@ -157,7 +165,14 @@ func (s *AudioService) nameSensorLinkMounts(nodes []audio.Node) []audio.Node {
 		}
 		for _, m := range mounts {
 			label := fmt.Sprintf("asset-%d", m.SourceAssetID)
-			if s.pairingName != nil {
+			if m.SourcePrincipalURI != "" {
+				label = m.SourcePrincipalURI
+				if s.pairingPrincipalName != nil {
+					if name, ok := s.pairingPrincipalName(m.SourcePrincipalURI); ok {
+						label = name
+					}
+				}
+			} else if s.pairingName != nil {
 				if name, ok := s.pairingName(m.SourceAssetID); ok {
 					label = name
 				}
@@ -167,7 +182,40 @@ func (s *AudioService) nameSensorLinkMounts(nodes []audio.Node) []audio.Node {
 				Name:        fmt.Sprintf("plughw:%d,%d,%d", card, device, m.Sub),
 				Description: fmt.Sprintf("sensor-link: %s · %s", label, m.SensorName),
 				IsSink:      false,
+				// Named for the pairing and the sensor, not the subdevice: the
+				// subdevice is whichever one was free when the mount opened.
+				StableName: "sensor-link:" + stableNamePart(label) + ":" + stableNamePart(m.SensorName),
 			})
+		}
+	}
+	return out
+}
+
+// sensorLinkCaptureNodes returns one capture row per active sensor-link mount
+// for a host with a PipeWire session, named and addressed exactly as the ALSA
+// fallback names them (plughw:<card>,1,<sub>).
+//
+// This is the one place the two enumerations deliberately meet, and it cannot
+// double-list: PipeWire's ALSA monitor exposes the Loopback card as a single
+// "Loopback Analog Stereo" source on front:<card>, which is device 0's capture
+// side. The mount writer plays into device 0, and snd-aloop delivers that on
+// device 1, which PipeWire never opens. MEASURED on a Dragonwing IQ-9075 with an
+// ESP32-S3 microphone paired: 22 s recorded from the PipeWire Loopback source
+// were all zeros while the mount was streaming. Without these rows a paired
+// microphone has no listing and no capture path on any PipeWire host.
+func (s *AudioService) sensorLinkCaptureNodes(ctx context.Context) []audio.Node {
+	if s.sensorLinkMounts == nil || len(s.sensorLinkMounts()) == 0 {
+		return nil
+	}
+	alsaNodes, err := audio.ListAlsaNodes(ctx)
+	if err != nil {
+		s.logger.Warn("Cannot list sensor-link microphones: ALSA enumeration failed", zap.Error(err))
+		return nil
+	}
+	var out []audio.Node
+	for _, n := range s.nameSensorLinkMounts(alsaNodes) {
+		if _, ok := audio.AlsaSubdevice(n.ID); ok {
+			out = append(out, n)
 		}
 	}
 	return out
@@ -371,6 +419,13 @@ type captureSource struct {
 // "unspecified": prefer the default source when one exists (PipeWire only),
 // otherwise take the first input available.
 func captureTarget(ctx context.Context, deviceID uint32) (captureSource, error) {
+	// A sensor-link mount row is captured from ALSA on either path, because
+	// PipeWire has no node for the side of the Loopback card it lives on (see
+	// sensorLinkCaptureNodes). PipeWire object IDs are dense small integers and
+	// never reach the subdevice bits, so this cannot shadow a real node.
+	if src, ok := sensorLinkCaptureSource(deviceID); ok {
+		return src, nil
+	}
 	if !audio.Available() {
 		return alsaCaptureTarget(ctx, deviceID)
 	}
@@ -420,12 +475,8 @@ func alsaCaptureTarget(ctx context.Context, deviceID uint32) (captureSource, err
 	}
 
 	if deviceID != 0 {
-		// A sensor-link mount row's ID encodes a snd-aloop subdevice that
-		// ListAlsaNodes does not enumerate, so resolve it directly to its
-		// plughw:<card>,1,<sub> capture handle rather than failing FindNode.
-		if sub, ok := audio.AlsaSubdevice(deviceID); ok {
-			card, device, _ := audio.DecodeAlsaID(deviceID)
-			return captureSource{alsaDevice: fmt.Sprintf("plughw:%d,%d,%d", card, device, sub)}, nil
+		if src, ok := sensorLinkCaptureSource(deviceID); ok {
+			return src, nil
 		}
 		node, ok := audio.FindNode(nodes, deviceID)
 		if !ok {
@@ -444,6 +495,19 @@ func alsaCaptureTarget(ctx context.Context, deviceID uint32) (captureSource, err
 		}
 	}
 	return captureSource{}, status.Error(codes.FailedPrecondition, "no audio input devices available")
+}
+
+// sensorLinkCaptureSource resolves a sensor-link mount row's ID to its
+// plughw:<card>,1,<sub> capture handle. The ID encodes a snd-aloop subdevice
+// that neither ListAlsaNodes nor PipeWire enumerates, so it is decoded directly
+// rather than looked up.
+func sensorLinkCaptureSource(deviceID uint32) (captureSource, bool) {
+	sub, ok := audio.AlsaSubdevice(deviceID)
+	if !ok {
+		return captureSource{}, false
+	}
+	card, device, _ := audio.DecodeAlsaID(deviceID)
+	return captureSource{alsaDevice: fmt.Sprintf("plughw:%d,%d,%d", card, device, sub)}, true
 }
 
 // targetArg renders a node as a --target value. pw-record takes an object

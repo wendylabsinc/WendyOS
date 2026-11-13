@@ -306,7 +306,17 @@ struct AgentImageRegistry: Sendable {
         )
     }
 
-    func run() async throws {
-        try await self.buildApplication().runService()
+    /// Serves until the calling task is cancelled, which is how the agent
+    /// stops the listener.
+    ///
+    /// Traps no signals. By default `runService()` has swift-service-lifecycle
+    /// ignore SIGTERM and SIGINT for the whole process and shut down only this
+    /// listener on them, so `killall` left the rest of the agent running and
+    /// every later SIGTERM was ignored too (WDY-3784).
+    func run(
+        onServerRunning: @escaping @Sendable (any Channel) async -> Void = { _ in }
+    ) async throws {
+        try await self.buildApplication(onServerRunning: onServerRunning)
+            .runService(gracefulShutdownSignals: [])
     }
 }

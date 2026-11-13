@@ -2,6 +2,25 @@
 
 When your project needs more than one container managed through a `wendy.json` file (rather than a `docker-compose.yml`), declare a `services` map in `wendy.json`. `wendy run` detects the map and automatically orchestrates a parallel multi-service build and deployment. `wendy build` detects the same map and builds the images locally without deploying — see [Building without deploying](#building-without-deploying).
 
+A service is one separately managed container, such as an API or inference worker. Separate services when they need independent lifecycles. Existing `docker-compose.yml` projects are also supported; neither this map nor Stagefiles are mandatory.
+
+Each `context` is a directory relative to the `wendy.json` containing the map. For example, `"context": "api"` means `./api/`, not an image name or URL:
+
+```text
+project/
+├── wendy.json
+├── db/
+│   └── Dockerfile
+├── api/
+│   ├── Dockerfile
+│   └── ... source files
+└── frontend/
+    ├── Dockerfile
+    └── ... source files
+```
+
+Run `wendy run` from `project/`. Each Dockerfile copies sources from its own context; `COPY ../api` cannot reach outside it. Context paths must be relative and cannot contain `..`.
+
 ## `wendy.json` structure
 
 ```json
@@ -36,11 +55,12 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 | `context` | string | **yes** | Build context directory, relative to `wendy.json`. Must be a relative path and must not contain `..` components. |
 | `entitlements` | array | no | [Entitlements](../device/entitlements.md) to apply to this service's container. Same schema as the top-level `entitlements` field. |
 | `dependsOn` | array of strings | no | Names of other services in this `services` map that must be created before this one. All referenced names must exist in the same map. |
-| `env` | object | no | Environment variables for this service's container. Overrides the top-level [`env`](./wendy.json.md#env) per key, so a service can change one variable without dropping the rest. |
+| `env` | object | no | Environment variables for this service's container. Overrides the top-level [`env`](/docs/reference/app-configuration#env) per key, so a service can change one variable without dropping the rest. |
 | `readiness` | object | no | Readiness probe for this service. Same schema as the top-level `readiness` field; see [Readiness and lifecycle hooks](#readiness-and-lifecycle-hooks). |
 | `hooks` | object | no | Lifecycle hooks for this service. Same schema as the top-level `hooks` field. |
-| `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](./wendy.json.md#resources) per field. |
+| `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](/docs/reference/app-configuration#resources) per field. |
 | `frameworks` | object | no | Framework configuration (e.g. ROS 2) for this service, replacing the top-level `frameworks`. |
+| `simulation` | object | no | Explicit environment and entitlement overrides for a matching managed robot VM. See [Simulation backends](#simulation-backends). |
 
 ### Validation rules
 
@@ -48,6 +68,7 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 - A service with an empty or missing `context`.
 - A `context` that is an absolute path.
 - A `context` that contains `..` path components.
+- On Windows, a `context` that is drive-relative (`C:camera`), root-relative (`\camera`), or a reserved device name (`NUL`).
 - A `dependsOn` entry that references a service name not present in the `services` map.
 - A service `entitlements` entry with an unknown or missing type.
 - A service `persist` entitlement missing `name` or `path`, or with a non-absolute or `..`-containing `path`.
@@ -58,6 +79,45 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 - More than one `mcp` entitlement within a single service's `entitlements` array.
 
 `ValidateJSON` additionally warns on deprecated entitlement types and unknown entitlement keys within service-level `entitlements` arrays, using the same rules applied to the top-level `entitlements` field.
+
+## Simulation backends
+
+A service can use hardware drivers on a physical device and an app-authored
+backend on a managed robot VM. Declare the simulator grants explicitly:
+
+```json
+{
+  "appId": "com.example.robot",
+  "services": {
+    "camera": {
+      "context": "camera",
+      "entitlements": [{ "type": "usb" }],
+      "simulation": {
+        "profile": "rosmaster-r2",
+        "entitlements": [{ "type": "network", "mode": "host" }],
+        "env": { "R2_SIMULATOR_URL": "http://127.0.0.1:8890" }
+      }
+    }
+  }
+}
+```
+
+The camera image in this example must implement both its USB driver and the
+HTTP simulator backend selected by `R2_SIMULATOR_URL`. Wendy does not translate
+hardware SDK calls or emulate USB/serial firmware.
+
+`profile` must be `rosmaster-r2`, `go2`, `g1` or `so101`. `entitlements` is required and
+must contain at least one grant. On the matching managed VM, it replaces the
+service's normal entitlements; `env` overlays the service environment per key.
+CLI `--env` values retain precedence. A different managed robot profile is an
+error. Physical devices use the normal configuration. Services without an
+override keep their existing configuration.
+
+Selection happens after resolving the managed VM and before building and
+deploying. It changes the in-memory configuration only. The manifest, build
+context and Dockerfile stay the same. See the
+[R2 exploration tutorial](/docs/guides/tutorials/python/r2-explorer) for a standalone
+app that uses the simulator's lidar, camera and control APIs.
 
 ## Readiness and lifecycle hooks
 
@@ -107,6 +167,12 @@ A top-level `readiness`/`hooks` or `http` entitlement in `wendy.json` acts as an
 ### Attached vs. detached
 
 In attached mode, each service's readiness→postStart sequence fires asynchronously right after that service's start is acknowledged, so a slow or failing probe never delays starting the next service. Ctrl-C cancels any in-flight readiness wait and kills `cli` hook child processes. If the run ends on its own — every service's log stream closes — while a hook (per-service or the app-level fallback) is still waiting on readiness, that hook is suppressed rather than fired, so `wendy run` never opens a browser onto a stack that has already exited. In detached mode none of this runs: no readiness wait, no `App reachable` line, and no host-side `postStart` action. Only the agent-side `postStart.agent` hooks, carried on each start RPC, still run on the device. With `wendy run --watch`, each service's `openURL` and `cli` actions run once per session after its first successful readiness check; later saves do not repeat them, while a failed or canceled check may retry after a later deploy. `--watch --detach` skips these actions. A non-cancellation readiness timeout in attached mode warns but does not fail the command: explicitly configured multi-service `postStart` hooks still run, while `App reachable` and any HTTP-entitlement-synthesized browser open are suppressed. Cancellation suppresses the warning, announcement, and hook.
+
+An ordinary detached agent deployment also reports configured app and service
+HTTP endpoints. With `--json`, it emits one group result with
+`readiness: "not_checked"`; services may have zero or several endpoint entries.
+A partial `--keep-going` deployment returns non-zero without a whole-group
+success result. See [`wendy run` — Detached output](../clients/wendy-cli/commands/run.md#detached-output).
 
 ## How `wendy run` handles multi-service projects
 
@@ -160,6 +226,8 @@ All standard `wendy run` flags apply. The following are particularly relevant fo
 | Flag | Description |
 |------|-------------|
 | `--service <name>` | Build and run only the named service and its transitive `dependsOn` dependencies. |
+| `--build-host <device>` | Build the selected services on another device, which delivers each image to the target. See [Remote build host](#remote-build-host). |
+| `--build-arg KEY=VALUE` | Repeatable. Override device defaults for every built service targeting a WendyOS device, including remote build-host builds; the last occurrence wins. Incompatible with `--stagefile-backend=llb`. See [Image build-args](../clients/wendy-cli/commands/run.md#image-build-args). |
 | `--deploy` | Build and create all containers but do not start them. |
 | `--detach` | Start all containers but do not stream logs. See [Attached vs. detached](#attached-vs-detached). |
 | `--keep-going` | Deploy services that build successfully instead of aborting the whole group on the first build/push failure. |
@@ -196,6 +264,15 @@ and the restart policy is still restarting at least one of them.
 `wendy device logs --app <appId>` surfaces crash output from all service
 members of the group, so a crash-looping service's logs are reachable without
 naming the individual service.
+
+## Remote build host
+
+`wendy run --build-host <device>` builds the selected services on another device instead of on your machine. Each service goes to the build host as its own build context, and the host delivers each image straight to the target as `<appid>-<service>:latest`, the same image a local build produces. `--service`, `--max-concurrency`, and `--keep-going` behave as they do for a local build. See [Remote build host](../clients/wendy-cli/commands/run.md#remote-build-host) for setup and requirements.
+
+Two things differ from a local build:
+
+- **One target per run.** `--device a,b,c` is refused for a multi-service project, because its services are created and started as a group against one device. Run `wendy run` once per device instead.
+- **No push-skip.** A local build skips a service whose inputs are unchanged and whose layers the device already holds. A remote build cannot prove that, so every selected service is sent to the build host on each run; the host's BuildKit cache and chunked delivery keep an unchanged service fast. Under `--watch`, a service already confirmed unchanged and running in the session is still left alone.
 
 ## Limitations
 

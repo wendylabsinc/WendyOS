@@ -11,6 +11,8 @@ import (
 var (
 	errBuildFailed           = errors.New("build failed")
 	errBuilderUnavailable    = errors.New("builder unavailable")
+	errDiskSpaceLow          = errors.New("not enough disk space")
+	errBuildxMissing         = errors.New("Docker Buildx is not installed")
 	errNoDevice              = errors.New("no device")
 	errDeviceOffline         = errors.New("device offline")
 	errDeviceUnreachable     = errors.New("device unreachable")
@@ -21,6 +23,8 @@ var (
 	errTransferFailed        = errors.New("transfer failed")
 	errContainerStartFailed  = errors.New("container start failed")
 	errReadinessTimeout      = errors.New("readiness timed out")
+	errAppCrashed            = errors.New("app crashed")
+	errTerminated            = errors.New("run terminated")
 )
 
 // classifiedCommandError adds a category without changing the message or
@@ -59,14 +63,28 @@ func ErrorClass(err error) string {
 	var agentDown agentNotListeningError
 	var certErr cloudCertError
 	switch {
+	// A SIGTERM outranks whatever the interrupted operation reported: the run
+	// ended because a supervisor stopped it, not because that operation failed.
+	case errors.Is(err, errTerminated):
+		return "terminated"
 	case errors.Is(err, errDeviceIdentityRefused):
 		return "device_identity_mismatch"
 	case errors.As(err, &orgMismatch):
 		return "device_org_mismatch"
+	case expiredLoginFrom(err) != nil:
+		return "auth_login_expired"
 	case errors.Is(err, errTLSHandshakeRejected):
 		return "device_tls_rejected"
 	case errors.Is(err, errProvisionedAgentUnauthorized):
+		if isTLSCertificateError(err) {
+			return "device_tls_rejected"
+		}
+		if isReachabilityTimeoutError(err) {
+			return "device_unreachable"
+		}
 		return "device_auth_required"
+	case errors.Is(err, errDeviceNotResolved):
+		return "device_not_resolved"
 	case errors.Is(err, errNoAuthenticatedEndpoint), errors.Is(err, errDeviceUnreachable), errors.As(err, &agentDown):
 		return "device_unreachable"
 	case errors.Is(err, config.ErrNotLoggedIn):
@@ -91,6 +109,10 @@ func ErrorClass(err error) string {
 		return "registry_unavailable"
 	case errors.Is(err, errBuilderUnavailable):
 		return "builder_unavailable"
+	// Refused before a build for lack of space: the same class as the OS
+	// error the build would otherwise have ended with.
+	case errors.Is(err, errDiskSpaceLow):
+		return "disk_full"
 	// A missing executable during a build is a missing tool, not a failed
 	// compilation. exec.ErrNotFound survives the build failure wrapper.
 	case errors.Is(err, exec.ErrNotFound):
@@ -105,6 +127,8 @@ func ErrorClass(err error) string {
 		return "container_start_failed"
 	case errors.Is(err, errReadinessTimeout):
 		return "readiness_timeout"
+	case errors.Is(err, errAppCrashed):
+		return "app_crashed"
 	default:
 		return ""
 	}

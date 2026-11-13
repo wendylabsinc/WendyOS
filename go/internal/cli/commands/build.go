@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -53,6 +54,11 @@ type buildOptions struct {
 	maxConcurrency int
 }
 
+func mustStopBuildAfterTargetError(err error) bool {
+	var recoveryStopped *defaultDeviceRecoveryStoppedError
+	return errors.As(err, &recoveryStopped) || errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled)
+}
+
 var appleContainerLocalProviderHintSupported = func() bool {
 	return runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
 }
@@ -66,7 +72,7 @@ func newBuildCmd() *cobra.Command {
 		Long:  "Detects the project type and builds a Docker image for the target device architecture. For a wendy.json with a services map, builds one local image per service tagged <appid>-<service>:latest; nothing is pushed or deployed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.dockerfile != "" && opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
-				return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
+				return usageErrorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
 			}
 			normalizedBuilder, err := normalizeImageBuilder(opts.builder)
 			if err != nil {
@@ -77,7 +83,7 @@ func newBuildCmd() *cobra.Command {
 			}
 			cmd.SetContext(withStagefileBackend(cmd.Context(), opts.stagefileBackend))
 			if opts.maxConcurrency < 0 {
-				return fmt.Errorf("--max-concurrency must be >= 0 (0 = default limit of 4)")
+				return usageErrorf("--max-concurrency must be >= 0 (0 = default limit of 4)")
 			}
 			if err := validateBuildHostFlags(opts.buildHost, opts.builder); err != nil {
 				return err
@@ -112,14 +118,26 @@ func newBuildCmd() *cobra.Command {
 			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
 			if cfgErr == nil {
 				if err := appCfg.Validate(); err != nil {
-					return fmt.Errorf("invalid wendy.json: %w", err)
+					return invalidAppConfigError(err)
 				}
 				if err := warnAppConfigFile(cfgPath); err != nil {
 					return fmt.Errorf("reading wendy.json warnings: %w", err)
 				}
 			}
 
-			target, _ := resolveTarget(cmd.Context())
+			target, targetErr := resolveTarget(cmd.Context())
+			// A local build can proceed without a reachable device, but it must
+			// stop when the user declined to choose a replacement target or
+			// cancelled the picker. Otherwise the build silently targets a
+			// different architecture from the one the user expected.
+			if mustStopBuildAfterTargetError(targetErr) {
+				return targetErr
+			}
+			if cfgErr == nil {
+				if err := buildMCU(cmd.Context(), cwd, appCfg); err != nil {
+					return err
+				}
+			}
 
 			// If the target is an external provider device, use the provider build path.
 			if target != nil && target.External != nil && target.Provider != nil {
@@ -217,9 +235,6 @@ func newBuildCmd() *cobra.Command {
 				// the user actually typed.
 				if cmd.Flags().Changed("dockerfile") || cmd.Flags().Changed("build-type") {
 					return fmt.Errorf("--dockerfile and --build-type are not supported for multi-service projects; each service resolves its own build file from its context")
-				}
-				if normalized, _ := normalizeImageBuilder(opts.builder); normalized == imageBuilderBuildkit {
-					return fmt.Errorf("--builder buildkit is not supported for multi-service builds; use docker or apple-container")
 				}
 				return runMultiServiceBuild(cmd.Context(), cwd, appCfg, target, opts)
 			}
@@ -441,7 +456,7 @@ func pickBuildOptionWithTitle(options []BuildOption, title string) (*BuildOption
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("build type picker: %w", err)
 	}
@@ -702,7 +717,7 @@ func buildDockerProject(dir, imageName, platform, dockerfile string) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -744,8 +759,13 @@ func buildDockerProjectWithBuilder(ctx context.Context, builder, dir, imageName,
 			logAppleContainerFallback(os.Stderr, err)
 		}
 	}
-	if normalized == imageBuilderDocker {
+	switch normalized {
+	case imageBuilderDocker:
 		return buildDockerProjectWithDocker(dir, imageName, platform, dockerfile)
+	case imageBuilderBuildkit:
+		return runBuildWithProgress(ctx, "Building image into Wendy runtime...", dumpRawAlways, func(buildCtx context.Context, stream, logw io.Writer) error {
+			return buildDockerProjectWithBuildkit(buildCtx, dir, imageName, platform, dockerfile, nil, stream, logw)
+		})
 	}
 
 	if err := ensureAppleContainerSystem(ctx, false); err != nil {
@@ -758,12 +778,12 @@ func buildDockerProjectWithBuilder(ctx context.Context, builder, dir, imageName,
 // `wendy build`. Package var so tests can substitute a fake builder.
 var buildLocalServiceImage = buildServiceImageLocally
 
-// buildServiceImageLocally builds one service's image into the local image
-// store (docker --load, or the Apple Container CLI's implicit local store) —
-// never a registry. It mirrors buildDockerProjectWithBuilder's builder
-// selection but is writer-driven and context-aware, as buildServicesParallelCore
-// requires: no os.Stdout, no owned spinner, no --builder buildkit (rejected at
-// the command level before this is ever called).
+// buildServiceImageLocally builds one service's image into the selected local
+// image store (Docker --load, Apple Container's implicit store, or the
+// containerd store owned by a BuildKit worker) — never a registry. It mirrors
+// buildDockerProjectWithBuilder's builder selection but is writer-driven and
+// context-aware, as buildServicesParallelCore requires: no os.Stdout and no
+// owned spinner.
 func buildServiceImageLocally(ctx context.Context, builder, contextDir, imageName, platform, dockerfile string, buildOut, logOut io.Writer) error {
 	if dockerfile == "" {
 		return fmt.Errorf("no container build file found in %s; add a Dockerfile, Containerfile, or Stagefile (e.g. build.stagefile.yaml)", contextDir)
@@ -772,7 +792,6 @@ func buildServiceImageLocally(ctx context.Context, builder, contextDir, imageNam
 	if err != nil {
 		return err
 	}
-
 	if !imageBuilderWasExplicit(builder) && shouldAutoAttemptAppleContainerBuilder() {
 		// Same auto-attempt semantics as the single-image path: never prompt or
 		// start services as a side effect, just try and fall back to Docker.
@@ -791,6 +810,9 @@ func buildServiceImageLocally(ctx context.Context, builder, contextDir, imageNam
 		// The Apple Container system itself is ensured once by the caller before
 		// the parallel builds start, not per service.
 		return buildImageWithAppleContainer(ctx, contextDir, imageName, platform, dockerfile, nil, buildOut, logOut)
+	}
+	if normalized == imageBuilderBuildkit {
+		return buildDockerProjectWithBuildkit(ctx, contextDir, imageName, platform, dockerfile, nil, buildOut, logOut)
 	}
 
 	// No OCI-layout export and no per-service cache-dir isolation: a plain

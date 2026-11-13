@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -39,13 +38,59 @@ type oidcCallbackResult struct {
 	Err error
 }
 
-// performOIDCLogin creates and saves a refreshable Cloud API session.
-//
-// The DPoP key is generated first because wendy-auth binds the access and
-// refresh-token family to its thumbprint.
+// performOIDCLogin creates and saves a refreshable Cloud API session for the
+// person at the terminal, printing each step.
 func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
-	if opts.Issuer == "" {
-		return fmt.Errorf("--issuer is required (e.g. https://auth.wendy.sh/realms/acme)")
+	authorize := showOIDCLoginURL
+	if openURL, ok := ctx.Value(desktopLoginURLKey{}).(func(string)); ok && openURL != nil {
+		authorize = openURL
+	}
+	return runOIDCLogin(ctx, opts, oidcLoginHooks{
+		say:       func(line string) { fmt.Println(line) },
+		authorize: authorize,
+	})
+}
+
+// showOIDCLoginURL opens the sign-in URL in the browser, or prints it alone on
+// its line when no one is at the terminal.
+func showOIDCLoginURL(authURL string) {
+	if !humanPresent() {
+		printLoginURLForManualOpen(authURL)
+		return
+	}
+	fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))
+	fmt.Println("  " + authURL)
+	if openErr := openBrowser(authURL); openErr != nil {
+		fmt.Println(tui.WarningMessage("Could not open a browser automatically; open the URL above manually."))
+	}
+}
+
+// oidcLoginHooks is how runOIDCLogin reports progress. performOIDCLogin prints
+// each step; beginOIDCLogin, whose caller's stdout may carry the MCP protocol,
+// prints nothing. Each hook may be nil.
+type oidcLoginHooks struct {
+	// say receives each status line.
+	say func(line string)
+	// authorize receives the sign-in URL once the callback listener is up.
+	authorize func(authURL string)
+	// saving may adjust the config the new session is saved into.
+	saving func(cfg *config.Config, added config.AuthConfig)
+}
+
+func (h oidcLoginHooks) print(line string) {
+	if h.say != nil {
+		h.say(line)
+	}
+}
+
+// runOIDCLogin creates and saves a refreshable Cloud API session.
+//
+// The DPoP key is generated once the realm (or the universal start) is settled
+// and before the browser opens, because wendy-auth binds the access and
+// refresh-token family to its thumbprint.
+func runOIDCLogin(ctx context.Context, opts oidcLoginOptions, hooks oidcLoginHooks) error {
+	if opts.Issuer == "" && opts.AuthorizationBase == "" {
+		return fmt.Errorf("an OIDC issuer or authorization base is required")
 	}
 	if opts.ClientID == "" {
 		return fmt.Errorf("--client-id is required")
@@ -65,7 +110,30 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	cloudResource := opts.CloudResource
 	identityResource := opts.IdentityResource
 
-	// Step 1: the key, before anything else.
+	// Step 1: explicit realms use discovery immediately. Realm-less login starts
+	// only at the configured authority's fixed global endpoint; discovery waits
+	// until the callback identifies the selected realm.
+	var meta *oidcProviderMetadata
+	var err error
+	if opts.Issuer != "" {
+		issuer, err := validateRealmIssuer(opts.Issuer, opts.Issuer)
+		if err != nil {
+			return fmt.Errorf("realm issuer %q is not a canonical non-system realm issuer", opts.Issuer)
+		}
+		opts.Issuer = issuer
+		meta, err = discoverOIDC(ctx, opts.Issuer)
+		if err != nil {
+			return err
+		}
+	} else {
+		opts.AuthorizationBase, err = canonicalAuthorizationBase(opts.AuthorizationBase)
+		if err != nil {
+			return err
+		}
+		meta = &oidcProviderMetadata{AuthorizationEndpoint: opts.AuthorizationBase + "/authorize"}
+	}
+
+	// Step 2: the key, once the authorization target is settled.
 	privateKeyPEM, err := certs.GenerateMLDSAKeyPair()
 	if err != nil {
 		return fmt.Errorf("generating operator key: %w", err)
@@ -78,13 +146,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return fmt.Errorf("computing key thumbprint: %w", err)
 	}
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Generated operator key (jkt %s).", thumbprint)))
-
-	// Step 2: discovery.
-	meta, err := discoverOIDC(ctx, opts.Issuer)
-	if err != nil {
-		return err
-	}
+	hooks.print(tui.SuccessMessage(fmt.Sprintf("Generated operator key (jkt %s).", thumbprint)))
 
 	// Step 3: loopback listener for the redirect.
 	listener, redirectURI, err := startLoopbackListener()
@@ -101,36 +163,18 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return fmt.Errorf("generating state: %w", err)
 	}
+	nonce, err := randomURLSafe(16)
+	if err != nil {
+		return fmt.Errorf("generating nonce: %w", err)
+	}
 
+	authority := opts.Issuer
+	if authority == "" {
+		authority = opts.AuthorizationBase
+	}
 	resultCh := make(chan oidcCallbackResult, 1)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if errCode := q.Get("error"); errCode != "" {
-			desc := q.Get("error_description")
-			http.Error(w, "authorization failed: "+errCode, http.StatusBadRequest)
-			resultCh <- oidcCallbackResult{Err: fmt.Errorf("authorization failed: %s %s", errCode, desc)}
-			return
-		}
-		code := q.Get("code")
-		gotState := q.Get("state")
-		if code == "" {
-			http.Error(w, "missing code", http.StatusBadRequest)
-			resultCh <- oidcCallbackResult{Err: fmt.Errorf("callback received without an authorization code")}
-			return
-		}
-		// Constant-time compare: `state` is a CSRF defence, so treat it like a
-		// secret even though a timing leak here is a stretch.
-		if subtle.ConstantTimeCompare([]byte(gotState), []byte(state)) != 1 {
-			http.Error(w, "state mismatch", http.StatusBadRequest)
-			resultCh <- oidcCallbackResult{Err: fmt.Errorf("state mismatch: the callback did not originate from this login attempt")}
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>Wendy CLI</title>` +
-			`<p style="font-family:system-ui;padding:2rem">Signed in. You can close this tab and return to the terminal.</p>`))
-		resultCh <- oidcCallbackResult{Code: code, State: gotState, Iss: q.Get("iss")}
-	})
+	mux.HandleFunc("/callback", oidcCallbackHandler(state, signedInURL(authority), resultCh))
 
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -145,14 +189,12 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	}()
 
 	// Step 4: send the operator to the realm's authorize endpoint.
-	authURL, err := buildAuthorizeURL(meta, opts.ClientID, redirectURI, challenge, state, identityResource)
+	authURL, err := buildAuthorizeURL(meta, opts.ClientID, redirectURI, challenge, state, nonce, identityResource, opts.LoginHint)
 	if err != nil {
 		return err
 	}
-	fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))
-	fmt.Println("  " + authURL)
-	if openErr := openBrowser(authURL); openErr != nil {
-		fmt.Println(tui.WarningMessage("Could not open a browser automatically; open the URL above manually."))
+	if hooks.authorize != nil {
+		hooks.authorize(authURL)
 	}
 
 	// Step 5: wait for the redirect.
@@ -161,8 +203,8 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	case result = <-resultCh:
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(5 * time.Minute):
-		return fmt.Errorf("timed out waiting for the browser callback")
+	case <-time.After(browserLoginTimeout):
+		return browserLoginTimeoutError()
 	}
 	if result.Err != nil {
 		return result.Err
@@ -172,13 +214,13 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	// realms, the callback names the realm that issued the code; the code must be
 	// exchanged at THAT realm's token endpoint, and the resulting context's org
 	// is derived from the token it returns — never from the realm we requested.
-	effectiveIssuer, err := effectiveLoginIssuer(opts.Issuer, result.Iss)
+	effectiveIssuer, err := effectiveLoginIssuer(opts.Issuer, opts.AuthorizationBase, result.Iss)
 	if err != nil {
 		return err
 	}
-	if effectiveIssuer != strings.TrimSuffix(opts.Issuer, "/") {
-		// A different realm was picked in the browser: re-discover so the token
-		// exchange and refresh hit the picked realm's endpoints.
+	if opts.Issuer == "" || effectiveIssuer != strings.TrimSuffix(opts.Issuer, "/") {
+		// A realm-less start or browser realm switch discovers only after the
+		// callback issuer passed the authority and canonical-path checks.
 		meta, err = discoverOIDC(ctx, effectiveIssuer)
 		if err != nil {
 			return err
@@ -191,48 +233,29 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		return err
 	}
 
-	// Step 7: verify the binding actually happened.
-	//
-	// A token without cnf.jkt, or with someone else's thumbprint, cannot be
-	// refreshed with the local key. Fail now with a useful client-registration
-	// diagnosis instead of saving a broken session.
-	claims, err := decodeJWTClaims(identityToken.AccessToken)
+	// Step 7: verify both signed OIDC identity and sender-constrained access.
+	// The nonce binds the ID token to this browser attempt; the access-token
+	// signature makes cnf, audience, issuer, and subject safe to inspect locally.
+	tokenVerifier, err := loadOIDCTokenVerifier(ctx, meta)
 	if err != nil {
-		return fmt.Errorf("inspecting access token: %w", err)
+		return err
 	}
-	bound := confirmationThumbprint(claims)
-	if bound == "" {
-		return fmt.Errorf("access token carries no cnf.jkt: the client %q is probably not registered as DPoP-bound in this realm", opts.ClientID)
+	subject, err := verifyIDToken(tokenVerifier, identityToken, opts.ClientID, nonce)
+	if err != nil {
+		return err
 	}
-	if bound != thumbprint {
-		return fmt.Errorf("access token is bound to a different key (cnf.jkt %s, ours %s)", bound, thumbprint)
+	claims, err := verifyAccessToken(tokenVerifier, identityToken.AccessToken, identityResource, thumbprint)
+	if err != nil {
+		return fmt.Errorf("verifying pki-core identity access token: %w", err)
 	}
-	fmt.Println(tui.SuccessMessage("Access token is sender-constrained to this key (cnf.jkt matches)."))
-
-	if !audienceContains(claims["aud"], identityResource) {
-		return fmt.Errorf("access token audience does not include pki-core identity resource %s", identityResource)
+	if accessSubject, _ := claims["sub"].(string); accessSubject != subject {
+		return fmt.Errorf("ID token and access token identify different subjects")
 	}
-	if issuer, _ := claims["iss"].(string); issuer != effectiveIssuer {
-		return fmt.Errorf("access token issuer %q does not match %q", issuer, effectiveIssuer)
-	}
+	hooks.print(tui.SuccessMessage("Access token signature and sender constraint verified."))
 
 	if opts.PrintClaims {
 		printClaims(claims, identityToken)
 	}
-
-	subject, _ := claims["sub"].(string)
-	if subject == "" {
-		return fmt.Errorf("pki-core identity token carries no sub claim")
-	}
-	tenantUUID, _ := claims["tenant_uuid"].(string)
-	if tenantUUID == "" {
-		return fmt.Errorf("pki-core identity token carries no tenant_uuid: realm %q is not linked to a pki-core tenant", issuerRealm(effectiveIssuer))
-	}
-	tenantID, err := uuid.Parse(tenantUUID)
-	if err != nil {
-		return fmt.Errorf("pki-core identity token carries invalid tenant_uuid %q", tenantUUID)
-	}
-	tenantUUID = tenantID.String()
 	if identityToken.RefreshToken == "" {
 		return fmt.Errorf("wendy-auth returned no refresh token; cannot obtain a separate Cloud API token after PKI enrollment")
 	}
@@ -240,10 +263,10 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	// Step 8: create a PKCS#10 request with the same key used for DPoP and ask
 	// pki-core directly. pki-core enforces the three-way binding between this
 	// key, token cnf.jkt, and the proof's embedded JWK.
-	fmt.Println(tui.InfoMessage("Requesting an operator certificate from pki-core..."))
+	hooks.print(tui.InfoMessage("Requesting an operator certificate from pki-core..."))
 	certInfo, err := requestPKIIdentityCertificate(
 		ctx, http.DefaultClient, opts.IdentityEndpoint, privateKeyPEM, key,
-		identityToken.AccessToken, tenantUUID, subject,
+		identityToken.AccessToken, "", subject,
 	)
 	if err != nil {
 		return err
@@ -258,28 +281,18 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return fmt.Errorf("obtaining Cloud API token after certificate enrollment: %w", err)
 	}
-	cloudClaims, err := decodeJWTClaims(cloudToken.AccessToken)
+	cloudClaims, err := verifyAccessToken(tokenVerifier, cloudToken.AccessToken, cloudResource, thumbprint)
 	if err != nil {
-		return fmt.Errorf("inspecting Cloud API access token: %w", err)
+		return fmt.Errorf("verifying Cloud API access token: %w", err)
 	}
-	if confirmationThumbprint(cloudClaims) != thumbprint {
-		return fmt.Errorf("Cloud API access token is not bound to the generated operator key")
-	}
-	if !audienceContains(cloudClaims["aud"], cloudResource) {
-		return fmt.Errorf("Cloud API access token audience does not include %s", cloudResource)
-	}
-	if issuer, _ := cloudClaims["iss"].(string); issuer != effectiveIssuer {
-		return fmt.Errorf("Cloud API access token issuer %q does not match %q", issuer, effectiveIssuer)
+	if cloudSubject, _ := cloudClaims["sub"].(string); cloudSubject != subject {
+		return fmt.Errorf("Cloud API token identifies a different subject")
 	}
 	refreshToken := cloudToken.RefreshToken
 	if refreshToken == "" {
 		refreshToken = identityToken.RefreshToken
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
 	authEntry := config.AuthConfig{
 		CloudDashboard: opts.CloudURL,
 		CloudGRPC:      opts.CloudGRPC,
@@ -294,16 +307,45 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		DPoPPrivateKey: privateKeyPEM,
 		Certificates:   []config.CertificateInfo{certInfo},
 	}
-	cfg.AddAuth(authEntry)
-	// Name the new session as a context; the first login becomes "default" and
-	// current. A later login does not change the current context.
-	cfg.EnsureContexts()
-	if err := config.Save(cfg); err != nil {
+	// Registering calls Cloud, so it runs on a snapshot outside the config lock.
+	prior, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	keepRegistryKey(prior, &authEntry)
+	registerRegistryKeyAfterMint(ctx, &authEntry)
+	// Update, not Load then Save: auth_login runs this inside the long-lived
+	// MCP server, which may persist a refreshed token while the browser is open.
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.AddAuth(authEntry)
+		// Name the new session as a context; the first login becomes "default"
+		// and current. A later login changes the current context only through
+		// the saving hook.
+		cfg.EnsureContexts()
+		if hooks.saving != nil {
+			hooks.saving(cfg, authEntry)
+		}
+		return true, nil
+	}); err != nil {
 		return fmt.Errorf("saving OAuth session and certificates: %w", err)
 	}
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
+	// Record the org's display name while the access token is fresh, so
+	// pickers and labels show it rather than the tenant UUID.
+	cloudOrganizationName(ctx, &authEntry)
+	hooks.print(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
+	hooks.print(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
 	return nil
+}
+
+// keepRegistryKey keeps this machine's registry key across sign-ins of the
+// same operator on the same session; another principal starts without one.
+func keepRegistryKey(cfg *config.Config, entry *config.AuthConfig) {
+	for _, prior := range cfg.Auth {
+		if sameOAuthSession(&prior, entry) && len(prior.Certificates) > 0 && prior.Certificates[0].PrincipalURI == entry.Certificates[0].PrincipalURI {
+			entry.RegistryPrivateKey, entry.RegistryKeyID = prior.RegistryPrivateKey, prior.RegistryKeyID
+		}
+	}
 }
 
 type oidcHTTPDoer interface {
@@ -312,12 +354,14 @@ type oidcHTTPDoer interface {
 
 // requestPKIIdentityCertificate implements pki-core's operator identity wire
 // contract: raw PKCS#10 body, DPoP authorization, and a leaf-first PEM chain.
+// privateKeyPEM is the CSR key; key signs the DPoP proof. They differ only for
+// the Lite leaf (P-256 CSR proved by the ML-DSA session).
 func requestPKIIdentityCertificate(
 	ctx context.Context,
 	client oidcHTTPDoer,
 	endpoint, privateKeyPEM string,
 	key crypto.Signer,
-	accessToken, tenantUUID, subject string,
+	accessToken, expectedTenant, subject string,
 ) (config.CertificateInfo, error) {
 	if accessToken == "" {
 		return config.CertificateInfo{}, fmt.Errorf("requesting pki-core identity certificate: access token is empty")
@@ -378,7 +422,11 @@ func requestPKIIdentityCertificate(
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate chain: %w", err)
 	}
-	wantPublicKey, err := x509.MarshalPKIXPublicKey(key.Public())
+	csrKey, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return config.CertificateInfo{}, fmt.Errorf("parsing operator CSR key: %w", err)
+	}
+	wantPublicKey, err := x509.MarshalPKIXPublicKey(csrKey.Public())
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("encoding generated operator public key: %w", err)
 	}
@@ -386,19 +434,29 @@ func requestPKIIdentityCertificate(
 	if err != nil || !bytes.Equal(gotPublicKey, wantPublicKey) {
 		return config.CertificateInfo{}, fmt.Errorf("pki-core returned a certificate for a different key")
 	}
-	principalURI := fmt.Sprintf("spiffe://wendy.sh/tenant/%s/operator/%s", tenantUUID, subject)
-	principalMatches := 0
-	for _, uri := range leaf.URIs {
-		if uri.String() == principalURI {
-			principalMatches++
-			continue
-		}
-		if uri.Scheme == "spiffe" && uri.Host == "wendy.sh" && strings.HasPrefix(uri.Path, "/tenant/") {
-			return config.CertificateInfo{}, fmt.Errorf("pki-core returned a certificate for a different principal")
-		}
+	principalURI, ok := certs.TenantPrincipalFromCert(leaf)
+	if !ok {
+		return config.CertificateInfo{}, fmt.Errorf("pki-core certificate must contain exactly one tenant SPIFFE principal")
 	}
-	if principalMatches != 1 {
-		return config.CertificateInfo{}, fmt.Errorf("pki-core certificate does not contain the expected operator identity %s", principalURI)
+	identity, err := certs.ParsePrincipal(principalURI)
+	if err != nil {
+		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate principal: %w", err)
+	}
+	operatorPrefix := fmt.Sprintf("spiffe://wendy.sh/tenant/%s/operator/", identity.TenantUUID)
+	if !strings.HasPrefix(principalURI, operatorPrefix) || identity.EntityID != subject {
+		return config.CertificateInfo{}, fmt.Errorf("pki-core returned a certificate for a different operator")
+	}
+	if expectedTenant != "" && identity.TenantUUID != expectedTenant {
+		return config.CertificateInfo{}, fmt.Errorf("pki-core returned tenant %q while renewing tenant %q", identity.TenantUUID, expectedTenant)
+	}
+	// Apply the same small issuance skew on initial sign-in and re-issue.
+	// Never extend expiry or accept an inverted validity interval.
+	now := timeNowFn()
+	if !now.Before(leaf.NotAfter) || !leaf.NotBefore.Before(leaf.NotAfter) {
+		return config.CertificateInfo{}, fmt.Errorf("pki-core returned an expired or invalid certificate validity interval")
+	}
+	if leaf.NotBefore.After(now.Add(certificateIssuanceSkew)) {
+		return config.CertificateInfo{}, fmt.Errorf("pki-core certificate is not yet valid; check this computer's clock")
 	}
 	return config.CertificateInfo{
 		PemCertificate:      leafPEM,
@@ -436,14 +494,25 @@ func splitCertificateChainPEM(chain []byte) (string, string, *x509.Certificate, 
 // refreshOIDCCertificate replays the direct pki-core flow for an existing
 // OAuth session. The refresh-token family is first scoped to pki-core and then
 // rotated back to the Cloud API resource. The DPoP key cannot change here:
-// pki-core requires it to remain the CSR key as well.
-func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig) error {
+// pki-core requires it to remain the CSR key as well. With lite set it issues
+// the session's P-256 Lite leaf instead of the primary: same token and DPoP
+// key, a fresh P-256 CSR key. Callers hold the auth-refresh lock throughout;
+// each rotated handle is saved before further validation or issuance.
+func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig, lite bool) error {
+	if len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() == "" {
+		return fmt.Errorf("stored OAuth session has no authoritative tenant certificate")
+	}
+	expectedTenant := auth.Certificates[0].TenantUUID()
+	heldPrincipal, err := certs.ParsePrincipal(auth.Certificates[0].CertificatePrincipal())
+	if err != nil {
+		return fmt.Errorf("reading stored operator identity: %w", err)
+	}
 	refreshToken, err := auth.OAuthRefreshToken()
 	if err != nil {
 		return fmt.Errorf("loading OAuth refresh token: %w", err)
 	}
 	if refreshToken == "" {
-		return fmt.Errorf("OAuth session has no refresh token; sign in again")
+		return fmt.Errorf("OAuth session has no refresh token")
 	}
 	privateKeyPEM, err := auth.OAuthDPoPKey()
 	if err != nil {
@@ -479,43 +548,54 @@ func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig) error 
 	if identityToken.RefreshToken == "" {
 		return fmt.Errorf("wendy-auth did not rotate the refresh token for pki-core enrollment")
 	}
-	// The old handle has already been consumed. Retain the rotated one even if
-	// a later validation or issuance step fails; refreshAllCerts persists this
-	// mutation so the user's login is not stranded.
-	auth.RefreshToken = identityToken.RefreshToken
-	claims, err := decodeJWTClaims(identityToken.AccessToken)
+	// The old handle is consumed. Checkpoint its successor before any more
+	// network work so interruption cannot leave only the spent handle on disk.
+	if err := persistRotatedOAuthToken(auth, identityToken.RefreshToken); err != nil {
+		return err
+	}
+	tokenVerifier, err := loadOIDCTokenVerifier(ctx, meta)
 	if err != nil {
-		return fmt.Errorf("inspecting pki-core identity token: %w", err)
+		return err
 	}
-	if confirmationThumbprint(claims) != thumbprint {
-		return fmt.Errorf("pki-core identity token is not bound to the stored DPoP key")
-	}
-	if !audienceContains(claims["aud"], identityResource) {
-		return fmt.Errorf("pki-core identity token audience does not include %s", identityResource)
-	}
-	if issuer, _ := claims["iss"].(string); issuer != strings.TrimSuffix(auth.OAuthIssuer, "/") {
-		return fmt.Errorf("pki-core identity token issuer %q does not match %q", issuer, strings.TrimSuffix(auth.OAuthIssuer, "/"))
+	claims, err := verifyAccessToken(tokenVerifier, identityToken.AccessToken, identityResource, thumbprint)
+	if err != nil {
+		return fmt.Errorf("verifying pki-core identity token: %w", err)
 	}
 	subject, _ := claims["sub"].(string)
 	if subject == "" {
 		return fmt.Errorf("pki-core identity token carries no sub claim")
 	}
-	tenantUUID, _ := claims["tenant_uuid"].(string)
-	if tenantUUID == "" {
-		return fmt.Errorf("pki-core identity token carries no tenant_uuid: realm %q is not linked to a pki-core tenant", issuerRealm(auth.OAuthIssuer))
+	if subject != heldPrincipal.EntityID {
+		return fmt.Errorf("pki-core identity token identifies a different operator")
 	}
-	tenantID, err := uuid.Parse(tenantUUID)
-	if err != nil {
-		return fmt.Errorf("pki-core identity token carries invalid tenant_uuid %q", tenantUUID)
-	}
-	tenantUUID = tenantID.String()
 
+	csrKeyPEM := privateKeyPEM
+	if lite {
+		if csrKeyPEM, err = certs.GenerateKeyPair(); err != nil {
+			return err
+		}
+	}
 	certInfo, err := requestPKIIdentityCertificate(
-		ctx, http.DefaultClient, identityEndpoint, privateKeyPEM, key,
-		identityToken.AccessToken, tenantUUID, subject,
+		ctx, http.DefaultClient, identityEndpoint, csrKeyPEM, key,
+		identityToken.AccessToken, expectedTenant, subject,
 	)
 	if err != nil {
 		return err
+	}
+	if lite {
+		if err := checkLiteOperatorLeaf(certInfo.PemCertificate); err != nil {
+			return err
+		}
+	}
+	if !lite {
+		leaf, err := storedLeaf(certInfo.PemCertificate)
+		if err != nil {
+			return err
+		}
+		margin := certificateRenewalMargin(certInfo.PemCertificate)
+		if leaf.NotAfter.Sub(timeNowFn()) <= margin {
+			return fmt.Errorf("The replacement certificate is already inside its %s renewal margin. Try again later.", margin)
+		}
 	}
 	cloudToken, err := refreshOIDCToken(
 		ctx, key, meta, auth.OAuthClientID, identityToken.RefreshToken, auth.OAuthResource,
@@ -524,33 +604,50 @@ func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig) error 
 		return fmt.Errorf("restoring Cloud API token after certificate refresh: %w", err)
 	}
 	if cloudToken.RefreshToken != "" {
-		auth.RefreshToken = cloudToken.RefreshToken
+		if err := persistRotatedOAuthToken(auth, cloudToken.RefreshToken); err != nil {
+			return err
+		}
 	}
-	cloudClaims, err := decodeJWTClaims(cloudToken.AccessToken)
+	cloudClaims, err := verifyAccessToken(tokenVerifier, cloudToken.AccessToken, auth.OAuthResource, thumbprint)
 	if err != nil {
-		return fmt.Errorf("inspecting refreshed Cloud API token: %w", err)
+		return fmt.Errorf("verifying refreshed Cloud API token: %w", err)
 	}
-	if confirmationThumbprint(cloudClaims) != thumbprint {
-		return fmt.Errorf("refreshed Cloud API token is not bound to the stored DPoP key")
-	}
-	if !audienceContains(cloudClaims["aud"], auth.OAuthResource) {
-		return fmt.Errorf("refreshed Cloud API token audience does not include %s", auth.OAuthResource)
-	}
-	if issuer, _ := cloudClaims["iss"].(string); issuer != strings.TrimSuffix(auth.OAuthIssuer, "/") {
-		return fmt.Errorf("refreshed Cloud API token issuer %q does not match %q", issuer, strings.TrimSuffix(auth.OAuthIssuer, "/"))
+	if cloudSubject, _ := cloudClaims["sub"].(string); cloudSubject != subject {
+		return fmt.Errorf("refreshed Cloud API token identifies a different subject")
 	}
 	auth.APIKey = cloudToken.AccessToken
 	auth.OAuthExpiresAt = time.Now().Add(time.Duration(cloudToken.ExpiresIn) * time.Second).UTC().Format(time.RFC3339)
 	auth.PKIResource = identityResource
 	auth.PKIEndpoint = identityEndpoint
-	auth.Certificates = []config.CertificateInfo{certInfo}
+	if lite {
+		auth.LiteCertificate = certInfo.PemCertificate + certInfo.PemCertificateChain
+		auth.LitePrivateKey = csrKeyPEM
+	} else {
+		auth.Certificates = []config.CertificateInfo{certInfo}
+	}
 	clitimesync.CacheProof(ctx)
 	return nil
 }
 
-func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error {
+// The caller holds the auth-refresh lock. A failed checkpoint is fatal even
+// when an older certificate is usable: this handle has already rotated.
+func persistRotatedOAuthToken(auth *config.AuthConfig, token string) error {
+	auth.RefreshToken = token
+	if err := persistOAuthSession(auth); err != nil {
+		return certificatePersistenceError{err}
+	}
+	return nil
+}
+
+// oauthAccessTokenFreshFor reports whether the stored access token stays valid
+// for longer than d.
+func oauthAccessTokenFreshFor(auth *config.AuthConfig, d time.Duration) bool {
 	expiresAt, err := time.Parse(time.RFC3339, auth.OAuthExpiresAt)
-	if err == nil && time.Until(expiresAt) > 90*time.Second {
+	return err == nil && time.Until(expiresAt) > d
+}
+
+func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error {
+	if oauthAccessTokenFreshFor(auth, 90*time.Second) {
 		return nil
 	}
 	unlock, err := acquireAuthRefreshLock(ctx)
@@ -562,9 +659,11 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 		return err
 	}
 	// The process that held the lock may already have consumed our old token.
-	expiresAt, err = time.Parse(time.RFC3339, auth.OAuthExpiresAt)
-	if err == nil && time.Until(expiresAt) > 90*time.Second {
+	if oauthAccessTokenFreshFor(auth, 90*time.Second) {
 		return nil
+	}
+	if auth.ServiceAccount != "" {
+		return remintServiceAccountSession(ctx, auth)
 	}
 	refreshToken, err := auth.OAuthRefreshToken()
 	if err != nil {
@@ -589,19 +688,16 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	if err != nil {
 		return fmt.Errorf("refreshing OAuth session: %w", err)
 	}
-	claims, err := decodeJWTClaims(token.AccessToken)
-	if err != nil {
-		return fmt.Errorf("inspecting refreshed access token: %w", err)
-	}
 	thumbprint, err := operatorJWKThumbprint(key)
 	if err != nil {
 		return fmt.Errorf("computing OAuth DPoP thumbprint: %w", err)
 	}
-	if confirmationThumbprint(claims) != thumbprint {
-		return fmt.Errorf("refreshed access token is not bound to the stored DPoP key")
+	tokenVerifier, err := loadOIDCTokenVerifier(ctx, meta)
+	if err != nil {
+		return err
 	}
-	if !audienceContains(claims["aud"], auth.OAuthResource) {
-		return fmt.Errorf("refreshed access token audience does not include %s", auth.OAuthResource)
+	if _, err := verifyAccessToken(tokenVerifier, token.AccessToken, auth.OAuthResource, thumbprint); err != nil {
+		return fmt.Errorf("verifying refreshed access token: %w", err)
 	}
 	auth.APIKey = token.AccessToken
 	if token.RefreshToken != "" {
@@ -611,25 +707,23 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	return persistOAuthSession(auth)
 }
 
+// Callers hold auth-refresh.lock first. config.Update then takes config.lock
+// only around this load/modify/save, so an unrelated writer cannot restore a
+// pre-rotation snapshot. Never acquire the auth lock from an Update callback.
 func persistOAuthSession(auth *config.AuthConfig) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-	for i := range cfg.Auth {
-		if sameOAuthSession(&cfg.Auth[i], auth) {
-			cfg.Auth[i] = *auth
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("saving refreshed OAuth session: %w", err)
+	return config.Update(func(cfg *config.Config) (bool, error) {
+		for i := range cfg.Auth {
+			if sameOAuthSession(&cfg.Auth[i], auth) {
+				cfg.Auth[i] = *auth
+				return true, nil
 			}
-			return nil
 		}
-	}
-	return fmt.Errorf("OAuth session is no longer present in config")
+		return false, fmt.Errorf("OAuth session is no longer present in config")
+	})
 }
 
 // buildAuthorizeURL assembles the authorization request.
-func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challenge, state, resource string) (string, error) {
+func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challenge, state, nonce, resource, loginHint string) (string, error) {
 	u, err := url.Parse(meta.AuthorizationEndpoint)
 	if err != nil {
 		return "", fmt.Errorf("parsing authorization_endpoint: %w", err)
@@ -640,6 +734,7 @@ func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challe
 	q.Set("redirect_uri", redirectURI)
 	q.Set("scope", oidcScopes)
 	q.Set("state", state)
+	q.Set("nonce", nonce)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 	if resource != "" {
@@ -647,6 +742,9 @@ func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challe
 		// RFC 8707 allows either, and sending it here lets the server refuse an
 		// unknown resource before the user authenticates.
 		q.Set("resource", resource)
+	}
+	if loginHint != "" {
+		q.Set("login_hint", loginHint)
 	}
 	// url.Values.Encode() renders spaces as "+", which is correct only for an
 	// application/x-www-form-urlencoded BODY. In a query string "+" is a
@@ -656,7 +754,8 @@ func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challe
 	// contexts, so rewrite the separators.
 	//
 	// Safe as a blanket replacement here: every other parameter is base64url
-	// (which uses '-' and '_', never '+') or a loopback URI.
+	// (which uses '-' and '_', never '+'), a loopback URI, or the login_hint
+	// email, whose literal '+' Encode already escapes as %2B.
 	u.RawQuery = strings.ReplaceAll(q.Encode(), "+", "%20")
 	return u.String(), nil
 }
@@ -709,4 +808,50 @@ func printClaims(claims map[string]any, token *oidcTokenResponse) {
 		fmt.Printf("  %-12s (present)\n", "refresh")
 	}
 	fmt.Println()
+}
+
+// signedInURL is wendy-auth's themed "signed in" page on the session's
+// authority. It is built from the validated issuer or authorization base, never
+// from the callback request, so the loopback reply cannot redirect elsewhere.
+func signedInURL(authority string) string {
+	u, err := url.Parse(authority)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/signed-in"
+}
+
+// oidcCallbackHandler receives the authorization response on the loopback
+// redirect URI and sends the browser on to signedIn.
+func oidcCallbackHandler(state, signedIn string, resultCh chan<- oidcCallbackResult) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if errCode := q.Get("error"); errCode != "" {
+			desc := q.Get("error_description")
+			http.Error(w, "authorization failed: "+errCode, http.StatusBadRequest)
+			resultCh <- oidcCallbackResult{Err: fmt.Errorf("authorization failed: %s %s", errCode, desc)}
+			return
+		}
+		code := q.Get("code")
+		gotState := q.Get("state")
+		if code == "" {
+			http.Error(w, "missing code", http.StatusBadRequest)
+			resultCh <- oidcCallbackResult{Err: fmt.Errorf("callback received without an authorization code")}
+			return
+		}
+		// Constant-time compare: `state` is a CSRF defence, so treat it like a
+		// secret even though a timing leak here is a stretch.
+		if subtle.ConstantTimeCompare([]byte(gotState), []byte(state)) != 1 {
+			http.Error(w, "state mismatch", http.StatusBadRequest)
+			resultCh <- oidcCallbackResult{Err: fmt.Errorf("state mismatch: the callback did not originate from this login attempt")}
+			return
+		}
+		// The themed page lives on wendy-auth; the plain-text body is for
+		// callers that do not follow redirects.
+		w.Header().Set("Location", signedIn)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusSeeOther)
+		_, _ = io.WriteString(w, "Signed in. You can close this tab and return to the terminal.\n")
+		resultCh <- oidcCallbackResult{Code: code, State: gotState, Iss: q.Get("iss")}
+	}
 }

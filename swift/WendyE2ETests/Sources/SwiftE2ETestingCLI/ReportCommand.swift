@@ -10,7 +10,9 @@ struct ReportCommand: ParsableCommand {
         commandName: "report",
         abstract: "Generate an HTML report from a Swift E2E run.",
         discussion: """
-            Generates the static HTML index for a Swift E2E run.
+            Generates the static HTML index for a Swift E2E run. When
+            WENDY_E2E_REVIEW_OUTCOME is set to anything but success, review.md says
+            the AI review did not complete.
             """
     )
 
@@ -58,6 +60,7 @@ struct ReportCommand: ParsableCommand {
             runURL: runURL,
             files: files,
             aiReviews: aiReviews,
+            reviewOutcome: ProcessInfo.processInfo.environment["WENDY_E2E_REVIEW_OUTCOME"],
             outputURL: outputURL
         )
     }
@@ -1137,6 +1140,7 @@ private func renderReport(
     runURL: URL,
     files: [ReportTestFile],
     aiReviews: RunAIReviews,
+    reviewOutcome: String?,
     outputURL: URL
 ) throws {
     let tests = files.flatMap(\.tests)
@@ -1165,7 +1169,7 @@ private func renderReport(
         throw ValidationError("Report template does not contain expected card/footer markers.")
     }
 
-    try writeE2EReviewAggregate(in: runURL)
+    try writeE2EReviewAggregate(in: runURL, reviewOutcome: reviewOutcome)
     try renderReviewAggregateHTMLIfPresent(runURL: runURL)
 
     let reviewHTML = renderRunAIReview(aiReviews.root)

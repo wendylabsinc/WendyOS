@@ -122,7 +122,7 @@ func TestCloudArtifactConformance(t *testing.T) {
 				when                time.Time
 			}{
 				{"expired", tt.jws, tt.typ, tt.c.Aud, time.Unix(tt.c.Exp, 0)},
-				{"future", tt.jws, tt.typ, tt.c.Aud, time.Unix(tt.c.Iat-1, 0)},
+				{"future beyond skew", tt.jws, tt.typ, tt.c.Aud, time.Unix(tt.c.Iat, 0).Add(-cloudClockSkew - time.Second)},
 				{"wrong audience", tt.jws, tt.typ, tt.c.Aud + "x", now},
 				{"wrong type", tt.jws, "other", tt.c.Aud, now},
 				{"signature", tt.jws[:len(tt.jws)-8] + "AAAAAAAA", tt.typ, tt.c.Aud, now},
@@ -135,6 +135,40 @@ func TestCloudArtifactConformance(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// Cloud stamps lease and grant iat from its own clock, and the agent and CLI
+// check them against theirs. A verifier whose clock runs up to cloudClockSkew
+// behind Cloud must still accept a fresh artifact; exp stays strict.
+func TestCloudArtifactIatClockSkew(t *testing.T) {
+	v := loadVectors(t)
+	verifier := fixtureVerifier(t, v)
+	for _, tt := range []struct {
+		name, typ, jws string
+		c              claims
+	}{{"presence", leaseType, v.Artifacts.Presence.JWS, v.Artifacts.Presence.Claims}, {"session", grantType, v.Artifacts.Session.JWS, v.Artifacts.Session.Claims}} {
+		iat := time.Unix(tt.c.Iat, 0)
+		for _, c := range []struct {
+			name string
+			now  time.Time
+			ok   bool
+		}{
+			{"3s behind", iat.Add(-3 * time.Second), true},
+			{"skew behind", iat.Add(-cloudClockSkew), true},
+			{"beyond skew", iat.Add(-cloudClockSkew - time.Second), false},
+			{"at exp", time.Unix(tt.c.Exp, 0), false},
+		} {
+			t.Run(tt.name+"/"+c.name, func(t *testing.T) {
+				_, e := verifier.verify(context.Background(), tt.jws, tt.typ, tt.c.Aud, c.now)
+				if c.ok && e != nil {
+					t.Fatalf("want accept, got %v", e)
+				}
+				if !c.ok && e == nil {
+					t.Fatal("want reject, got accept")
+				}
+			})
+		}
 	}
 }
 func TestInstructionHPKEConformance(t *testing.T) {
@@ -207,7 +241,7 @@ func TestProofConformance(t *testing.T) {
 			if !ecdsa.Verify(&key.PublicKey, digest(preimage), new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])) {
 				t.Fatal("proof differs from frozen domain/framing contract")
 			}
-			ch.ExpiresAt = timestamppb.New(time.Now().Add(-2 * brokerChallengeSkew))
+			ch.ExpiresAt = timestamppb.New(time.Now().Add(-2 * cloudClockSkew))
 			if _, e = proof(key, domain, p.Audience, p.Opaque, p.JTI, artifact, p.Role, ch); e == nil {
 				t.Fatal("signed expired challenge")
 			}
@@ -259,10 +293,10 @@ func TestProofBrokerChallengeClockSkew(t *testing.T) {
 		ok   bool
 	}{
 		{"fresh", now.Add(20 * time.Second), true},
-		{"expired within skew", now.Add(-brokerChallengeSkew + time.Second), true},
-		{"excessive within skew", now.Add(30*time.Second + brokerChallengeSkew - time.Second), true},
-		{"stale beyond skew", now.Add(-2 * brokerChallengeSkew), false},
-		{"absurd TTL beyond skew", now.Add(30*time.Second + 2*brokerChallengeSkew), false},
+		{"expired within skew", now.Add(-cloudClockSkew + time.Second), true},
+		{"excessive within skew", now.Add(30*time.Second + cloudClockSkew - time.Second), true},
+		{"stale beyond skew", now.Add(-2 * cloudClockSkew), false},
+		{"absurd TTL beyond skew", now.Add(30*time.Second + 2*cloudClockSkew), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := accept(c.exp)

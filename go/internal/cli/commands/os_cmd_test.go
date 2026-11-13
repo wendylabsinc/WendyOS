@@ -2,15 +2,20 @@ package commands
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -622,6 +627,24 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 	fresh := now.Add(-2 * time.Minute).Unix()
 	stale := now.Add(-2 * time.Hour).Unix()
 
+	// An offline device stamps records with a clock days behind ours.
+	committedByUnsyncedClock := &agentpb.GetOSUpdateStatusResponse{
+		HasResult:     true,
+		Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		OldOsVersion:  "WendyOS-0.19.5",
+		NewOsVersion:  "WendyOS-0.19.5",
+		CreatedAtUnix: now.Add(-96 * time.Hour).Unix(),
+	}
+
+	// A record an earlier update left behind: it starts from another version.
+	leftoverByUnsyncedClock := &agentpb.GetOSUpdateStatusResponse{
+		HasResult:     true,
+		Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		OldOsVersion:  "WendyOS-0.19.3",
+		NewOsVersion:  "WendyOS-0.19.4",
+		CreatedAtUnix: now.Add(-96 * time.Hour).Unix(),
+	}
+
 	committed := &agentpb.GetOSUpdateStatusResponse{
 		HasResult:     true,
 		Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
@@ -693,6 +716,7 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 		rpcErr          error
 		preVer          string
 		postVer         string
+		recordCleared   bool
 		wantErr         bool
 		wantContains    []string
 		wantNotContains []string
@@ -704,6 +728,28 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 			postVer:      "WendyOS-0.11.0",
 			wantErr:      false,
 			wantContains: []string{"verified"},
+		},
+		{
+			name: "same version committed on healthy new slot is verified success",
+			resp: &agentpb.GetOSUpdateStatusResponse{
+				HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+				OldOsVersion: "WendyOS-0.19.3", NewOsVersion: "WendyOS-0.19.3", CreatedAtUnix: fresh,
+				EngineStatus: &agentpb.OSUpdateEngineStatus{CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{
+					{Slot: "A", Booted: true, RootfsHealth: "normal"}, {Slot: "B"},
+				}},
+			},
+			preVer: "WendyOS-0.19.3", postVer: "WendyOS-0.19.3",
+			wantContains: []string{"verified"},
+		},
+		{
+			name: "committed record with pending slot is not verified",
+			resp: &agentpb.GetOSUpdateStatusResponse{
+				HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+				NewOsVersion: "WendyOS-0.19.3", CreatedAtUnix: fresh,
+				EngineStatus: &agentpb.OSUpdateEngineStatus{CurrentSlot: "A", Pending: &agentpb.OSUpdateEngineStatus_PendingUpdate{TargetSlot: "B"}},
+			},
+			preVer: "WendyOS-0.19.3", postVer: "WendyOS-0.19.3", wantErr: true,
+			wantContains: []string{"pending"},
 		},
 		{
 			name:    "committed for a version the device is not running is rejected",
@@ -820,12 +866,13 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 			wantContains: []string{"commit", "ESRT capsule not staged"},
 		},
 		{
-			name:         "unimplemented with unchanged version warns of rollback",
-			rpcErr:       status.Error(codes.Unimplemented, "unknown method"),
-			preVer:       "WendyOS-0.10.4",
-			postVer:      "WendyOS-0.10.4",
-			wantErr:      true,
-			wantContains: []string{"WendyOS-0.10.4"},
+			name:            "unimplemented with unchanged version remains unverified",
+			rpcErr:          status.Error(codes.Unimplemented, "unknown method"),
+			preVer:          "WendyOS-0.10.4",
+			postVer:         "WendyOS-0.10.4",
+			wantErr:         true,
+			wantContains:    []string{"WendyOS-0.10.4", "could not be verified"},
+			wantNotContains: []string{"rolled back"},
 		},
 		{
 			name:         "unimplemented with changed version succeeds without verification",
@@ -833,39 +880,71 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 			preVer:       "WendyOS-0.10.4",
 			postVer:      "WendyOS-0.11.0",
 			wantErr:      false,
-			wantContains: []string{"WendyOS-0.11.0"},
+			wantContains: []string{"WendyOS-0.11.0", "not supported"},
 		},
 		{
-			name:    "no record with changed version succeeds without verification",
-			resp:    &agentpb.GetOSUpdateStatusResponse{HasResult: false},
-			preVer:  "WendyOS-0.10.4",
-			postVer: "WendyOS-0.11.0",
-			wantErr: false,
+			name:            "no record with changed version succeeds without verification",
+			resp:            &agentpb.GetOSUpdateStatusResponse{HasResult: false},
+			preVer:          "WendyOS-0.10.4",
+			postVer:         "WendyOS-0.11.0",
+			wantErr:         false,
+			wantContains:    []string{"fresh post-update health result was not available"},
+			wantNotContains: []string{"not supported"},
 		},
 		{
-			name: "stale record falls back to version comparison",
+			name: "boot clock skew with changed version does not claim unsupported health API",
+			resp: &agentpb.GetOSUpdateStatusResponse{
+				HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+				CreatedAtUnix: stale,
+			},
+			preVer: "WendyOS-0.19.3", postVer: "WendyOS-0.19.4",
+			wantContains:    []string{"fresh post-update health result was not available"},
+			wantNotContains: []string{"not supported", "critical services healthy"},
+		},
+		{
+			name: "stale record with same version remains unverified",
 			resp: &agentpb.GetOSUpdateStatusResponse{
 				HasResult:     true,
 				Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
 				CreatedAtUnix: stale,
 			},
-			preVer:  "WendyOS-0.10.4",
-			postVer: "WendyOS-0.10.4",
-			wantErr: true,
+			preVer:          "WendyOS-0.10.4",
+			postVer:         "WendyOS-0.10.4",
+			wantErr:         true,
+			wantContains:    []string{"could not be verified"},
+			wantNotContains: []string{"rolled back"},
 		},
 		{
-			name:         "unknown post version cannot verify but does not fail",
+			name:          "leftover record is not trusted although the agent clears records",
+			resp:          leftoverByUnsyncedClock,
+			preVer:        "WendyOS-0.19.4",
+			postVer:       "WendyOS-0.19.4",
+			recordCleared: true,
+			wantErr:       true,
+			wantContains:  []string{"could not be verified"},
+		},
+		{
+			name:          "cleared record trusted despite unsynced device clock",
+			resp:          committedByUnsyncedClock,
+			preVer:        "WendyOS-0.19.5",
+			postVer:       "WendyOS-0.19.5",
+			recordCleared: true,
+			wantErr:       false,
+			wantContains:  []string{"verified", "WendyOS-0.19.5"},
+		},
+		{
+			name:         "unknown post version without a result fails verification",
 			resp:         &agentpb.GetOSUpdateStatusResponse{HasResult: false},
 			preVer:       "WendyOS-0.10.4",
 			postVer:      "",
-			wantErr:      false,
+			wantErr:      true,
 			wantContains: []string{"could not be verified"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			msg, err := evaluateOSUpdateOutcome(tc.resp, tc.rpcErr, tc.preVer, tc.postVer, now)
+			msg, err := evaluateOSUpdateOutcome(tc.resp, tc.rpcErr, tc.preVer, tc.postVer, tc.recordCleared, now)
 			if tc.wantErr && err == nil {
 				t.Fatalf("error = nil, want non-nil; msg = %q", msg)
 			}
@@ -893,6 +972,116 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 	}
 }
 
+func TestRetryOSUpdateOutcomeWaitsForBootGate(t *testing.T) {
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	baseline := osUpdateBaseline{resultAtUnix: now.Add(-10 * time.Minute).Unix(), bootedSlot: "B"}
+	if !retryOSUpdateOutcome(&agentpb.GetOSUpdateStatusResponse{HasResult: false}, nil, now, baseline) {
+		t.Fatal("agent-online response without a committed result ended the postboot wait")
+	}
+	if !retryOSUpdateOutcome(&agentpb.GetOSUpdateStatusResponse{
+		HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		CreatedAtUnix: now.Add(-time.Hour).Unix(),
+	}, nil, now, baseline) {
+		t.Fatal("stale result ended the postboot wait")
+	}
+	if !retryOSUpdateOutcome(&agentpb.GetOSUpdateStatusResponse{
+		HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		CreatedAtUnix: baseline.resultAtUnix,
+	}, nil, now, baseline) {
+		t.Fatal("previous attempt's fresh committed result ended the postboot wait")
+	}
+	if !retryOSUpdateOutcome(&agentpb.GetOSUpdateStatusResponse{
+		HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		CreatedAtUnix: now.Unix(),
+		EngineStatus:  &agentpb.OSUpdateEngineStatus{CurrentSlot: "B"},
+	}, nil, now, baseline) {
+		t.Fatal("unchanged booted slot ended the postboot wait")
+	}
+	if retryOSUpdateOutcome(&agentpb.GetOSUpdateStatusResponse{
+		HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		CreatedAtUnix: now.Unix(),
+		EngineStatus:  &agentpb.OSUpdateEngineStatus{CurrentSlot: "A"},
+	}, nil, now, baseline) {
+		t.Fatal("fresh committed result did not end the postboot wait")
+	}
+	if retryOSUpdateOutcome(nil, status.Error(codes.Unimplemented, "old agent"), now, baseline) {
+		t.Fatal("unsupported status RPC must use the version fallback immediately")
+	}
+}
+
+func TestEvaluateOSUpdateOutcomeSinceSameVersionSlotSwitch(t *testing.T) {
+	now := time.Date(2026, 9, 24, 5, 0, 0, 0, time.UTC)
+	oldRecordAt := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC).Unix()
+	baseline := osUpdateBaseline{resultAtUnix: oldRecordAt, bootedSlot: "A"}
+	const version = "WendyOS-0.19.3"
+	engine := func(current string, bootA, bootB bool, healthB string, pending bool) *agentpb.OSUpdateEngineStatus {
+		st := &agentpb.OSUpdateEngineStatus{CurrentSlot: current, Slots: []*agentpb.OSUpdateEngineStatus_Slot{
+			{Slot: "A", Booted: bootA, RootfsHealth: "normal"},
+			{Slot: "B", Booted: bootB, RootfsHealth: healthB},
+		}}
+		if pending {
+			st.Pending = &agentpb.OSUpdateEngineStatus_PendingUpdate{TargetSlot: "B"}
+		}
+		return st
+	}
+	response := func(st *agentpb.OSUpdateEngineStatus) *agentpb.GetOSUpdateStatusResponse {
+		return &agentpb.GetOSUpdateStatusResponse{
+			HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+			CreatedAtUnix: oldRecordAt, OldOsVersion: version, NewOsVersion: version,
+			EngineStatus: st,
+		}
+	}
+	tests := []struct {
+		name       string
+		resp       *agentpb.GetOSUpdateStatusResponse
+		rpcErr     error
+		baseline   osUpdateBaseline
+		wantOK     bool
+		wantString string
+	}{
+		{"stale committed receipt but healthy A-to-B switch", response(engine("B", false, true, "normal", false)), nil, baseline, true, "slot B"},
+		{"stale rollback receipt but healthy A-to-B switch", &agentpb.GetOSUpdateStatusResponse{HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_ROLLED_BACK, CreatedAtUnix: oldRecordAt, EngineStatus: engine("B", false, true, "normal", false)}, nil, baseline, true, "slot B"},
+		{"missing receipt but healthy A-to-B switch", &agentpb.GetOSUpdateStatusResponse{EngineStatus: engine("B", false, true, "normal", false)}, nil, baseline, true, "slot B"},
+		{"healthy B-to-A switch", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true, RootfsHealth: "normal"}, {Slot: "B"}}}}, nil, osUpdateBaseline{bootedSlot: "B"}, true, "slot A"},
+		{"Pi U-Boot B-to-A switch without reported health", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{Connector: "ubootenv", CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true}, {Slot: "B"}}, Diagnostics: map[string]string{"wendyos_boot_slot": "0", "wendyos_upgrade_available": "0"}}}, nil, osUpdateBaseline{resultAtUnix: oldRecordAt, bootedSlot: "B"}, true, "slot A"},
+		{"unknown connector B-to-A switch without health", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{Connector: "unknown", CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true}, {Slot: "B"}}}}, nil, osUpdateBaseline{bootedSlot: "B"}, false, "unchanged version"},
+		{"unchanged boot slot", response(engine("A", true, false, "normal", false)), nil, baseline, false, "unchanged version"},
+		{"still pending", response(engine("B", false, true, "normal", true)), nil, baseline, false, "unchanged version"},
+		{"unhealthy new slot", response(engine("B", false, true, "bad", false)), nil, baseline, false, "unchanged version"},
+		{"unknown new slot health", response(engine("B", false, true, "", false)), nil, baseline, false, "unchanged version"},
+		{"ambiguous booted slots", response(engine("B", true, true, "normal", false)), nil, baseline, false, "unchanged version"},
+		{"duplicate slot entries", response(&agentpb.OSUpdateEngineStatus{CurrentSlot: "B", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "B", Booted: true, RootfsHealth: "normal"}, {Slot: "B"}}}), nil, baseline, false, "unchanged version"},
+		{"incomplete slot list", response(&agentpb.OSUpdateEngineStatus{CurrentSlot: "B", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "B", Booted: true, RootfsHealth: "normal"}}}), nil, baseline, false, "unchanged version"},
+		{"missing engine snapshot", response(nil), nil, baseline, false, "unchanged version"},
+		{"status RPC failure", response(engine("B", false, true, "normal", false)), status.Error(codes.Unavailable, "disconnected"), baseline, false, "unchanged version"},
+		{"fresh rollback takes precedence", &agentpb.GetOSUpdateStatusResponse{
+			HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_ROLLED_BACK,
+			CreatedAtUnix: now.Add(-time.Minute).Unix(), OldOsVersion: version, NewOsVersion: version,
+			EngineStatus: engine("B", false, true, "normal", false),
+		}, nil, baseline, false, "rolled back"},
+		{"fresh commit failure takes precedence", &agentpb.GetOSUpdateStatusResponse{
+			HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMIT_FAILED,
+			CreatedAtUnix: now.Add(-time.Minute).Unix(), OldOsVersion: version, NewOsVersion: version,
+			EngineStatus: engine("B", false, true, "normal", false),
+		}, nil, baseline, false, "commit"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, err := evaluateOSUpdateOutcomeSince(tc.resp, tc.rpcErr, version, version, tc.baseline, now)
+			if (err == nil) != tc.wantOK || !strings.Contains(strings.ToLower(msg+" "+errorText(err)), strings.ToLower(tc.wantString)) {
+				t.Fatalf("message=%q error=%v; want success=%v and text %q", msg, err, tc.wantOK, tc.wantString)
+			}
+		})
+	}
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func TestIsLoopbackHostIdentifiesAPortForwardedDevice(t *testing.T) {
 	// A VM answers on the host's loopback through a port forward. It reports no
 	// WiFi but is not offline, and the local artifact server could only ever
@@ -915,5 +1104,74 @@ func TestIsLoopbackHostIdentifiesAPortForwardedDevice(t *testing.T) {
 		if got := isLoopbackHost(tc.host); got != tc.want {
 			t.Errorf("isLoopbackHost(%q) = %v, want %v", tc.host, got, tc.want)
 		}
+	}
+}
+
+// fakeOSUpdateAgent records the order of the RPCs an OS update makes.
+type fakeOSUpdateAgent struct {
+	agentpb.UnimplementedWendyAgentServiceServer
+	statusErr error
+	mu        sync.Mutex
+	calls     []string
+}
+
+func (s *fakeOSUpdateAgent) record(call string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, call)
+}
+
+func (s *fakeOSUpdateAgent) GetOSUpdateStatus(context.Context, *agentpb.GetOSUpdateStatusRequest) (*agentpb.GetOSUpdateStatusResponse, error) {
+	s.record("status")
+	return &agentpb.GetOSUpdateStatusResponse{}, s.statusErr
+}
+
+func (s *fakeOSUpdateAgent) UpdateOS(_ *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
+	s.record("update")
+	return stream.Send(&agentpb.UpdateOSResponse{ResponseType: &agentpb.UpdateOSResponse_Completed_{
+		Completed: &agentpb.UpdateOSResponse_Completed{RebootRequired: true},
+	}})
+}
+
+// The probe must run before the update starts: afterwards the device is
+// rebooting. A failed probe cannot establish that the agent clears old records.
+func TestApplyOSUpdateAsksAboutRecordsBeforeStreaming(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		statusErr error
+		want      bool
+	}{
+		{"current agent", nil, true},
+		{"transient probe failure", status.Error(codes.Unavailable, "reset"), false},
+		{"agent without the status RPC", status.Error(codes.Unimplemented, "unknown method"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &fakeOSUpdateAgent{statusErr: tc.statusErr}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := grpc.NewServer()
+			agentpb.RegisterWendyAgentServiceServer(srv, agent)
+			go func() { _ = srv.Serve(ln) }()
+			t.Cleanup(srv.Stop)
+			cc, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cc.Close() })
+
+			recordCleared, err := applyOSUpdate(context.Background(),
+				&grpcclient.AgentConnection{AgentService: agentpb.NewWendyAgentServiceClient(cc)}, "http://host/a.wendy")
+			if err != nil {
+				t.Fatalf("applyOSUpdate: %v", err)
+			}
+			if recordCleared != tc.want {
+				t.Errorf("recordCleared = %v, want %v", recordCleared, tc.want)
+			}
+			if got := strings.Join(agent.calls, ","); got != "status,update" {
+				t.Errorf("calls = %s, want status,update", got)
+			}
+		})
 	}
 }

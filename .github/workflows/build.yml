@@ -1,4 +1,11 @@
 name: Build products and release
+# Nightly device updates yield to "Stable release · " runs (see
+# .github/scripts/release-priority.cjs). Releases that skip integration tests
+# never use the device runners, so they get a title nightly does not yield to.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.publish &&
+  (inputs.skip_integration_tests && format('Stable release without integration tests · {0}', github.ref_name) ||
+  format('Stable release · {0}', github.ref_name)) || format('Build · {0}', github.ref_name) }}
 
 on:
   push:
@@ -21,9 +28,11 @@ on:
         type: boolean
         default: false
 
+# Give each stable release its own group so pushes and later releases cannot
+# cancel it, even while it is queued. Non-release builds still supersede by ref.
 concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+  group: build-${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || !inputs.publish }}
 
 # Add permissions needed for creating releases
 permissions:
@@ -148,7 +157,7 @@ jobs:
           subject-path: ${{ env.archive }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.archive }}
           path: ${{ env.archive }}
@@ -236,6 +245,12 @@ jobs:
             -o "../${ARTIFACT}/wendy" ./cmd/wendy
           # libusb is statically linked (LGPL-2.1): ship its attribution/license.
           cp ../NOTICE "../${ARTIFACT}/NOTICE"
+          # USB access rules and their plugdev group for the AUR package, which
+          # installs from this archive.
+          mkdir -p "../${ARTIFACT}/udev" "../${ARTIFACT}/sysusers.d"
+          cp ../packaging/linux/udev/70-wendy-jetson.rules \
+            ../packaging/linux/udev/70-wendy-qualcomm.rules "../${ARTIFACT}/udev/"
+          cp ../packaging/linux/sysusers/wendy.conf "../${ARTIFACT}/sysusers.d/"
 
       - name: Verify static binary and smoke test
         run: |
@@ -257,8 +272,13 @@ jobs:
           tar -czvf "$ARCHIVE" "${ARTIFACT}/"
           echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ env.archive }}
+
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.archive }}
           path: ${{ env.archive }}
@@ -332,9 +352,52 @@ jobs:
           subject-path: ${{ env.archive }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.archive }}
+          path: ${{ env.archive }}
+          retention-days: 14
+          if-no-files-found: error
+
+  build-macos-runtime-guest:
+    name: wendy-macos-runtime-guest-arm64
+    runs-on: ubuntu-24.04-arm
+    needs: [determine-version]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build runtime guest
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpio
+          bash swift/WendyAgentMac/RuntimeGuest/build.sh
+
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          ARCHIVE="wendy-macos-runtime-guest-arm64-${VERSION}.tar.gz"
+          tar -C swift/WendyAgentMac/Resources/runtime -czf "$ARCHIVE" \
+            vmlinuz-arm64 initramfs-arm64.img
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ env.archive }}
+
+      - name: Upload runtime guest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}
           path: ${{ env.archive }}
           retention-days: 14
           if-no-files-found: error
@@ -343,14 +406,56 @@ jobs:
     name: wendy-agent-macos-app
     runs-on: macos-26
     timeout-minutes: 45
-    needs: [determine-version]
+    needs: [determine-version, build-macos-runtime-guest]
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download runtime guest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}
+          path: ${{ runner.temp }}/wendy-macos-runtime-guest
+
+      - name: Install runtime guest resources
+        shell: bash
+        run: |
+          tar -C swift/WendyAgentMac/Resources/runtime -xzf \
+            "${RUNNER_TEMP}/wendy-macos-runtime-guest/wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}.tar.gz"
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Identify Release build cache
+        id: release_cache
+        env:
+          DEPENDENCY_HASH: ${{ hashFiles('swift/**/Package.resolved', 'swift/**/Package.swift', 'swift/**/*.pbxproj') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_BUILD=$(xcodebuild -version | awk '/Build version/ { print $3 }')
+          # Build outputs contain absolute paths. Separate custom runners with
+          # different workspaces as well as toolchains and dependencies.
+          WORKSPACE_HASH=$(printf '%s' "$GITHUB_WORKSPACE" | shasum -a 256 | cut -c 1-16)
+          RUNNER_IMAGE="${ImageVersion:-$(sw_vers -buildVersion)}"
+          echo "name=macos-release-build-v1-${RUNNER_ARCH}-${RUNNER_IMAGE}-${XCODE_BUILD}-${WORKSPACE_HASH}-${DEPENDENCY_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Release build cache from main
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_CACHE_WORKFLOW_FILE: build.yml
+          BUILD_CACHE_TRUSTED_EVENTS: push workflow_dispatch
+          CACHE_NAME: ${{ steps.release_cache.outputs.name }}
+        shell: bash
+        run: |
+          # Use the same verified run artifacts as the Swift test workflows.
+          # This also survives checkout cleanup on a persistent custom runner.
+          .github/scripts/restore-trusted-build-cache.sh "$CACHE_NAME" swift/Build/Xcode
 
       - name: Setup macOS signing
         id: signing
@@ -358,6 +463,8 @@ jobs:
         env:
           DEVELOPER_ID_CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
           DEVELOPER_ID_KEY: ${{ secrets.DEVELOPER_ID_KEY }}
+          WENDY_AGENT_MAC_PROVISIONING_PROFILE: ${{ secrets.WENDY_AGENT_MAC_PROVISIONING_PROFILE }}
+          WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE: ${{ secrets.WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE }}
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
@@ -375,11 +482,39 @@ jobs:
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
           SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
           NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
+          APP_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.app_provisioning_profile_path }}
+          NET_PROXY_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.net_proxy_provisioning_profile_path }}
         shell: bash
         run: bash ./Scripts/Build.sh
 
+      - name: Archive Release build cache
+        id: archive_release_cache
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        env:
+          CACHE_NAME: ${{ steps.release_cache.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # DerivedData includes SourcePackages and compiled dependency outputs.
+          # GNU tar preserves the nanosecond mtimes Xcode compares. The signed
+          # app and signing assets live outside this directory.
+          gtar --posix -cf - --exclude=swift/Build/Xcode/Logs swift/Build/Xcode \
+            | zstd -T0 -3 -q -f -o "$RUNNER_TEMP/$CACHE_NAME.tar.zst"
+
+      - name: Upload Release build cache
+        if: ${{ !cancelled() && steps.archive_release_cache.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ steps.release_cache.outputs.name }}
+          path: ${{ runner.temp }}/${{ steps.release_cache.outputs.name }}.tar.zst
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Upload notarized app bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wendy-agent-macos-app-${{ needs.determine-version.outputs.version }}
           path: ${{ steps.build_wendy_agent_mac_app.outputs.app_path }}
@@ -387,7 +522,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload release zip
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ steps.build_wendy_agent_mac_app.outputs.artifact_name }}
           path: ${{ steps.build_wendy_agent_mac_app.outputs.artifact_path }}
@@ -399,11 +534,66 @@ jobs:
         shell: bash
         env:
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          APP_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.app_provisioning_profile_path }}
+          NET_PROXY_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.net_proxy_provisioning_profile_path }}
         run: |
           set -euo pipefail
+          for profile_path in \
+            "${APP_PROVISIONING_PROFILE_PATH:-}" \
+            "${NET_PROXY_PROVISIONING_PROFILE_PATH:-}"
+          do
+            if [ -n "$profile_path" ]; then
+              rm -f "$profile_path"
+            fi
+          done
           if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi
+
+  # The browser client (wendy-web) as one release asset, for pages that embed
+  # it. MANIFEST holds sha256sum lines for each file plus "wendy.wasm", the
+  # decompressed module, which is what the worker's ?sha256= pin checks.
+  package-web:
+    name: Package wendy-web
+    runs-on: ubuntu-latest
+    needs: [determine-version]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go and Node
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: wasm
+
+      - name: Build browser WASM assets
+        run: npm --prefix web-client run build:wasm
+
+      - name: Package wendy-web
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir wendy-web
+          cp web-client/public/{wendy.wasm.gz,wasm_exec.js,wendy-worker.js,wendy-credentials.js} wendy-web/
+          cd wendy-web
+          {
+            # Rebuilding the pin needs the same toolchain; sha256sum -c skips this line.
+            echo "# built with $(go version)"
+            sha256sum wendy.wasm.gz wasm_exec.js wendy-worker.js wendy-credentials.js
+            echo "$(gunzip -c wendy.wasm.gz | sha256sum | cut -d' ' -f1)  wendy.wasm"
+          } > MANIFEST
+          cat MANIFEST
+          tar -czf "../wendy-web-${VERSION}.tar.gz" *
+
+      - name: Upload wendy-web
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wendy-web-${{ needs.determine-version.outputs.version }}
+          path: wendy-web-${{ needs.determine-version.outputs.version }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error
 
   sbom-source:
     name: SBOM (source + swift)
@@ -413,7 +603,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.18.1
       - name: Generate source + swift SBOMs
@@ -427,7 +617,7 @@ jobs:
           scripts/generate-sbom.sh source "sboms/wendy-source-${VERSION}.spdx.json" --repo-root "$PWD"
 
       - name: Upload swift SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-swift-${{ needs.determine-version.outputs.version }}
           path: sboms/wendy-swift-${{ needs.determine-version.outputs.version }}.spdx.json
@@ -435,7 +625,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload source SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-source-${{ needs.determine-version.outputs.version }}
           path: sboms/wendy-source-${{ needs.determine-version.outputs.version }}.spdx.json
@@ -470,7 +660,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.18.1
 
@@ -510,7 +700,7 @@ jobs:
           sbom-path: ${{ steps.sbom.outputs.sbom }}
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-${{ matrix.artifact-name }}-${{ needs.determine-version.outputs.version }}
           path: ${{ steps.sbom.outputs.sbom }}
@@ -519,7 +709,8 @@ jobs:
 
   package-linux:
     name: Package Linux (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    # Pinned for WDY-4031: Ubuntu 26's rpmbuild writes RPM v4.0 leads that Artifact Registry rejects.
+    runs-on: ubuntu-24.04
     needs: [determine-version, build, build-cli-linux]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
@@ -563,6 +754,7 @@ jobs:
 
           mkdir -p pkgroot/wendy/usr/bin
           mkdir -p pkgroot/wendy/usr/lib/udev/rules.d
+          mkdir -p pkgroot/wendy/usr/lib/sysusers.d
           mkdir -p pkgroot/wendy/usr/share/doc/wendy
           mkdir -p pkgroot/wendy-agent/usr/bin
           mkdir -p pkgroot/wendy-agent/usr/lib/systemd/system
@@ -579,6 +771,9 @@ jobs:
             pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-jetson.rules
           install -m644 packaging/linux/udev/70-wendy-qualcomm.rules \
             pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-qualcomm.rules
+          # Creates plugdev, which the rules name, where the distro lacks it.
+          install -m644 packaging/linux/sysusers/wendy.conf \
+            pkgroot/wendy/usr/lib/sysusers.d/wendy.conf
           # libusb is statically linked into wendy (LGPL-2.1): ship its notice.
           install -m644 NOTICE pkgroot/wendy/usr/share/doc/wendy/NOTICE
           install -m755 ./wendy-agent-linux-${{ matrix.goarch }}/wendy-agent \
@@ -657,8 +852,10 @@ jobs:
           # RPM doesn't allow hyphens in version, replace with underscores
           RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
 
+          # Artifact Registry requires RPM v4; RPM 6 defaults to v6 packages.
           # Build wendy .rpm
           fpm -s dir -t rpm \
+            --rpm-rpmbuild-define "_rpmformat 4" \
             -n wendy \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
@@ -676,6 +873,7 @@ jobs:
 
           # Build wendy-agent .rpm
           fpm -s dir -t rpm \
+            --rpm-rpmbuild-define "_rpmformat 4" \
             -n wendy-agent \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
@@ -697,6 +895,7 @@ jobs:
             --config-files /etc/avahi/services/wendy-agent.service \
             --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
             --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
+            --rpm-posttrans packaging/linux/fpm/wendy-agent-posttrans.sh \
             -C pkgroot/wendy-agent \
             .
 
@@ -711,10 +910,21 @@ jobs:
           WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
           WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
 
+          # rpm can read v6 packages that Artifact Registry rejects. RPM v4
+          # uses a 3.0 lead; check it explicitly before publishing artifacts.
+          for package in "$WENDY_RPM" "$WENDY_AGENT_RPM"; do
+            lead=$(od -An -tx1 -N6 "$package" | tr -d ' \n')
+            if [[ "$lead" != "edabeedb0300" ]]; then
+              echo "::error file=$package::Expected an RPM v4 package with a 3.0 lead, got $lead"
+              exit 1
+            fi
+          done
+
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"
           dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
           dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
+          dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/sysusers.d/wendy.conf" > /dev/null
           dpkg-deb -c "$WENDY_DEB" | grep "usr/share/doc/wendy/NOTICE" > /dev/null
           dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*containerd"
           dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*dbus"
@@ -734,20 +944,22 @@ jobs:
           rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^avahi" > /dev/null
           rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
           rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
+          rpm -qpl "$WENDY_RPM" | grep "/usr/lib/sysusers.d/wendy.conf" > /dev/null
           rpm -qpl "$WENDY_RPM" | grep "/usr/share/doc/wendy/NOTICE" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendy-agent.service" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/default/wendy-agent" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/avahi/services/wendy-agent.service" > /dev/null
+          rpm -qp --scripts "$WENDY_AGENT_RPM" | grep "^posttrans scriptlet" > /dev/null
 
       - name: Upload .deb packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-packages-deb-${{ matrix.arch }}
           path: "*.deb"
           retention-days: 14
 
       - name: Upload .rpm packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-packages-rpm-${{ matrix.arch }}
           path: "*.rpm"
@@ -761,6 +973,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      # Re-signing changes the zip, so the build job's attestation no longer
+      # matches the released asset; attest the signed zip here.
+      attestations: write
     strategy:
       matrix:
         include:
@@ -813,8 +1028,13 @@ jobs:
           Remove-Item $ARCHIVE
           Compress-Archive -Path "wendy-cli-windows-${{ matrix.goarch }}" -DestinationPath $ARCHIVE
 
+      - name: Attest build provenance (signed zip)
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
+
       - name: Upload signed zip
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
           path: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
@@ -854,7 +1074,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Upload MSI
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi
           path: "wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi"
@@ -1021,7 +1241,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (macOS, stable gate)
-    if: github.event_name != 'workflow_dispatch' || !inputs.skip_integration_tests
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && !inputs.skip_integration_tests
     uses: ./.github/workflows/integration-tests.yml
     with:
       platform: macos
@@ -1030,7 +1250,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, test-templates, integration-tests]
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests]
     if: |
       always() &&
       needs.determine-version.result == 'success' &&
@@ -1041,6 +1261,7 @@ jobs:
       needs.sbom-binaries.result == 'success' &&
       needs.package-linux.result == 'success' &&
       needs.package-windows.result == 'success' &&
+      needs.package-web.result == 'success' &&
       needs.test-templates.result == 'success' &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)) &&
       (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
@@ -1048,6 +1269,8 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
+          # Build caches are internal and can be much larger than the release.
+          pattern: '!macos-release-build-*'
           merge-multiple: true
       - name: List files
         run: |
@@ -1058,9 +1281,28 @@ jobs:
             find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.msi" -o -name "*.deb" -o -name "*.rpm" -o -name "*.spdx.json" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
+      # Tag the commit this run built before creating the release. Left to
+      # itself, the release action creates the tag on the default branch's
+      # newest commit, which is later than the built one whenever something
+      # merges while the release is building. The action's documentation warns
+      # that the workflow token may not be allowed to tag an older commit, so
+      # if that happens, warn and fall back to the action's default.
+      - name: Tag the built commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.determine-version.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent 2>/dev/null; then
+            echo "Tag ${TAG} already exists; leaving it as it is."
+          elif gh api "repos/${GITHUB_REPOSITORY}/git/refs" --silent -f "ref=refs/tags/${TAG}" -f "sha=${GITHUB_SHA}"; then
+            echo "Tagged ${GITHUB_SHA} as ${TAG}."
+          else
+            echo "::warning::Could not tag ${GITHUB_SHA} as ${TAG}. The release will be tagged on the default branch's newest commit instead."
+          fi
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           name: ${{ needs.determine-version.outputs.version }}
           tag_name: ${{ needs.determine-version.outputs.tag_name }}

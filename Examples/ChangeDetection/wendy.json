@@ -7,7 +7,8 @@
   "entitlements": [
     { "type": "network", "mode": "host" },
     { "type": "http", "port": 8000 },
-    { "type": "camera" }
+    { "type": "camera" },
+    { "type": "audio" }
   ],
   "readiness": { "tcpSocket": { "port": 8000 }, "timeoutSeconds": 30 }
 }

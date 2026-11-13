@@ -1,0 +1,11 @@
+{
+  "appId": "sh.wendy.examples.so101-reader",
+  "version": "0.1.0",
+  "platform": "linux",
+  "env": { "SO101_MODE": "physical", "SO101_HTTP_PORT": "8876" },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8876 }
+  ],
+  "readiness": { "tcpSocket": { "port": 8876 }, "timeoutSeconds": 10 }
+}

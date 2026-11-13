@@ -2,7 +2,6 @@ package mcusource
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -18,7 +17,9 @@ import (
 )
 
 const (
-	// wendycomManifestTimeout applies when FetchManifest's ctx has no deadline.
+	// Wendy Lite TLS and protocol handshakes need their own connection budget.
+	wendycomConnectTimeout = 15 * time.Second
+	// wendycomManifestTimeout bounds the manifest round trip after connection.
 	wendycomManifestTimeout = 3 * time.Second
 	// wendycomSubscribeTimeout bounds the Subscribe round trip; the stream
 	// context carries no deadline of its own.
@@ -45,9 +46,10 @@ type wendycomClient interface {
 // both the manifest and the stream: a WendyCom handshake is costly on an
 // ESP32.
 type wendycomTransport struct {
-	logger        *zap.Logger
-	connect       func() (wendycomClient, error)
-	sourceAssetID int32 // the asset the board's certificate must name
+	logger             *zap.Logger
+	connect            func(context.Context) (wendycomClient, error)
+	sourceAssetID      int32 // the asset the board's certificate must name
+	sourcePrincipalURI string
 
 	mu     sync.Mutex
 	client wendycomClient // nil until the first successful connect
@@ -68,6 +70,11 @@ type wendycomTransport struct {
 // certificate does not name p.SourceAssetID, as mtlsDialer does for the other
 // transports.
 func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
+	if p.SourcePrincipalURI != "" {
+		if err := p.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	if certPEM == "" || keyPEM == "" {
 		return nil, errors.New("mcusource: agent has no mTLS identity (not provisioned)")
 	}
@@ -75,19 +82,27 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 		return nil, errors.New("mcusource: agent has no CA chain to verify a Wendy Lite board against")
 	}
 	return &wendycomTransport{
-		logger:        logger.With(zap.Int32("source", p.SourceAssetID), zap.String("addr", addr)),
-		sourceAssetID: p.SourceAssetID,
-		connect: func() (wendycomClient, error) {
-			cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+		logger:             logger.With(zap.Int32("source", p.SourceAssetID), zap.String("addr", addr)),
+		sourceAssetID:      p.SourceAssetID,
+		sourcePrincipalURI: p.SourcePrincipalURI,
+		connect: func(ctx context.Context) (wendycomClient, error) {
+			cert, err := certs.TLSKeyPair(certPEM, chainPEM, keyPEM)
 			if err != nil {
 				return nil, fmt.Errorf("mcusource: wendycom client certificate: %w", err)
+			}
+			if p.SourcePrincipalURI != "" {
+				c := liteclient.NewWendyLiteClient()
+				if err := c.ConnectSensorSource(ctx, addr, cert, chainPEM, p.SourcePrincipalURI); err != nil {
+					return nil, err
+				}
+				return c, nil
 			}
 			rootCAs := x509.NewCertPool()
 			if certs.AppendChainToPool(rootCAs, chainPEM) == 0 {
 				return nil, errors.New("mcusource: wendycom: no parseable certificate in the agent's CA chain")
 			}
 			c := liteclient.NewWendyLiteClient()
-			err = c.ConnectWithMutualAuthentication(addr, cert, *rootCAs)
+			err = c.ConnectWithMutualAuthenticationContext(ctx, addr, cert, *rootCAs)
 			if err != nil {
 				return nil, fmt.Errorf("mcusource: wendycom connect %s: %w", addr, err)
 			}
@@ -96,8 +111,8 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 	}, nil
 }
 
-// certAssetID returns the asset ID a board's certificate names, read the same
-// way mtls.NewClientTLSConfigExpectingPeer reads a peer agent's.
+// certAssetID returns the asset ID a board's certificate names, read the
+// same way mtls.NewClientTLSConfigExpectingIdentity reads a peer agent's.
 func certAssetID(leaf *x509.Certificate) (int32, bool) {
 	if leaf == nil {
 		return 0, false
@@ -115,6 +130,17 @@ func certAssetID(leaf *x509.Certificate) (int32, bool) {
 
 // checkPeer refuses a connection to any board but the paired one.
 func (t *wendycomTransport) checkPeer(c wendycomClient) error {
+	if t.sourcePrincipalURI != "" {
+		leaf := c.PeerCertificate()
+		if leaf == nil {
+			return errors.New("mcusource: source presented no verified certificate")
+		}
+		identity, ok, err := certs.IdentityFromCert(leaf)
+		if err != nil || !ok || identity.Principal != t.sourcePrincipalURI {
+			return errors.New("mcusource: source certificate does not match paired device")
+		}
+		return nil
+	}
 	id, ok := certAssetID(c.PeerCertificate())
 	if !ok {
 		return errors.New("mcusource: wendycom board presented no asset identity")
@@ -125,12 +151,17 @@ func (t *wendycomTransport) checkPeer(c wendycomClient) error {
 	return nil
 }
 
+// Connect lets the supervisor establish the shared connection before starting
+// its shorter manifest timeout.
+func (t *wendycomTransport) Connect(ctx context.Context) error {
+	_, err := t.clientFor(ctx)
+	return err
+}
+
 // clientFor returns the transport's connection, opening it on first use.
-// The client's connect methods take no context and their TCP dial has no
-// timeout, so ctx bounds the wait here instead: a dead address would
-// otherwise hold up Runner.Stop for minutes. A connect that finishes after
-// ctx gave up is closed rather than leaked. A connection to the wrong board is
-// closed and not kept, so the next call dials again.
+// Connection setup honors cancellation and finishes before returning, so a
+// failed attempt cannot leave another handshake running during the next retry.
+// A connection to the wrong board is closed and not kept.
 func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -143,34 +174,28 @@ func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	type result struct {
-		c   wendycomClient
-		err error
+	budget := wendycomConnectTimeout
+	if t.sourcePrincipalURI != "" {
+		budget = liteclient.SensorSourceSetupTimeout
 	}
-	done := make(chan result, 1)
-	go func() {
-		c, err := t.connect()
-		done <- result{c, err}
-	}()
-	select {
-	case r := <-done:
-		if r.err != nil {
-			return nil, r.err
+	connectCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	c, err := t.connect(connectCtx)
+	if connectCtx.Err() != nil {
+		if c != nil {
+			c.Close()
 		}
-		if err := t.checkPeer(r.c); err != nil {
-			r.c.Close()
-			return nil, err
-		}
-		t.client = r.c
-		return r.c, nil
-	case <-ctx.Done():
-		go func() {
-			if r := <-done; r.err == nil {
-				r.c.Close()
-			}
-		}()
-		return nil, fmt.Errorf("mcusource: wendycom connect: %w", ctx.Err())
+		return nil, fmt.Errorf("mcusource: wendycom connect: %w", connectCtx.Err())
 	}
+	if err != nil {
+		return nil, err
+	}
+	if err := t.checkPeer(c); err != nil {
+		c.Close()
+		return nil, err
+	}
+	t.client = c
+	return c, nil
 }
 
 func (t *wendycomTransport) FetchManifest(ctx context.Context) (*sensorlinkpb.SensorManifest, error) {
@@ -181,7 +206,7 @@ func (t *wendycomTransport) FetchManifest(ctx context.Context) (*sensorlinkpb.Se
 	// The client takes a timeout, not a context, and a timeout <= 0 would
 	// mean no deadline at all.
 	timeout := wendycomManifestTimeout
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
 		if timeout = time.Until(deadline); timeout <= 0 {
 			return nil, fmt.Errorf("mcusource: wendycom manifest: %w", context.DeadlineExceeded)
 		}

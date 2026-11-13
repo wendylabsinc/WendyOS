@@ -347,7 +347,10 @@ func TestHashicorpStreamBackendLiveAdvertise(t *testing.T) {
 	const port = 51260
 	want := map[string]string{"displayname": "HC Backend Test", "tls": "true"}
 
-	svc, err := mdns.NewMDNSService(instance, serviceType, "", "", port, nil, txtSliceFrom(want))
+	// Advertise our own address instead of requiring the test host's name to
+	// resolve in DNS. Actual multicast queries and repeated sweeps still run.
+	host := instance + ".local."
+	svc, err := mdns.NewMDNSService(instance, serviceType, "", host, port, []net.IP{net.IPv4(127, 0, 0, 1)}, txtSliceFrom(want))
 	if err != nil {
 		t.Fatalf("mdns.NewMDNSService: %v", err)
 	}
@@ -382,14 +385,29 @@ func TestHashicorpStreamBackendLiveAdvertise(t *testing.T) {
 	}
 	arrivals := make(chan arrival, 64)
 	done := make(chan error, 1)
+	workerDone := make(chan struct{})
 	go func() {
+		defer close(workerDone)
 		done <- hashicorpStreamBackend(ctx, serviceType, func(got MDNSService) {
 			if got.InstanceName != instance {
 				return
 			}
-			arrivals <- arrival{svc: got, at: time.Now()}
+			select {
+			case arrivals <- arrival{svc: got, at: time.Now()}:
+			case <-ctx.Done():
+			}
 		})
 	}()
+	// Fatal assertion paths must also join before cleanup restores the query
+	// timing globals used by the worker.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-workerDone:
+		case <-time.After(5 * time.Second):
+			t.Error("mDNS fixture worker did not stop during cleanup")
+		}
+	})
 
 	var first arrival
 	select {

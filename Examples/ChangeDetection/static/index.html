@@ -13,7 +13,7 @@
       <header>
         <a class="brand" href="/" aria-label="Wendy home"
           ><span class="mark" aria-hidden="true">W</span>WENDY</a
-        ><span class="edition">EXAMPLES / VISION</span
+        ><span class="edition">EXAMPLES / VISION + AUDIO</span
         ><span id="connection" class="pill">Connecting</span>
       </header>
       <section class="intro">
@@ -28,6 +28,68 @@
           <span class="caption">INPUT</span
           ><strong id="source">Waiting for frames</strong
           ><span id="classifier">Loading classifier</span>
+        </div>
+      </section>
+      <section id="audio-panel" class="audio-panel" aria-label="Audio anomaly detection" hidden>
+        <div class="section-title">
+          <div><p class="eyebrow">Hopper + conveyor / Audio monitoring</p><h2>What sounds different?</h2></div>
+          <span id="audio-source"></span>
+        </div>
+        <div class="toolbar">
+          <label id="audio-scenario-control">Audio scene
+            <select id="audio-scenario">
+              <option value="metal_impact">Metal impact in hopper</option>
+              <option value="belt_rip">Conveyor belt rip</option>
+              <option value="normal">Normal operation</option>
+              <option value="unknown">Unrecognized noise</option>
+              <option value="silence">Signal loss / silence</option>
+              <option value="clipping">Clipped microphone</option>
+            </select>
+          </label>
+          <button id="audio-pause">Pause audio</button>
+          <button id="audio-reset" class="secondary">Restart audio session</button>
+          <span id="audio-clock" class="mono">00:00</span>
+        </div>
+        <p class="note">Restart captures a new normal baseline and clears audio events and the simulated stop.</p>
+        <div id="audio-error" role="alert" hidden></div>
+        <div class="audio-overview">
+          <svg id="conveyor-scene" viewBox="0 0 640 185" role="img" aria-label="Hopper microphone above dump hopper; conveyor microphone above belt. Simulated belt stops after a confirmed audio candidate.">
+            <path d="M35 30 H215 L175 108 H80 Z" fill="#c8d2c5" stroke="#68756d" stroke-width="2"/>
+            <path d="M57 53 H192 L166 95 H88 Z" fill="#967b59"/>
+            <text x="88" y="43">Dump hopper</text>
+            <rect x="105" y="120" width="480" height="25" rx="12" fill="#34483d"/>
+            <g id="belt-motion" stroke="#dce9df" stroke-width="3">
+              <path d="M130 125v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15"/>
+            </g>
+            <path d="M145 146v20 m385-20v20" stroke="#68756d" stroke-width="8"/>
+            <g fill="#22634e">
+              <circle cx="235" cy="38" r="8"/><circle cx="450" cy="76" r="8"/>
+            </g>
+            <path d="M229 50l-55 25 m270 13l-25 26" stroke="#22634e" stroke-dasharray="4 4"/>
+            <text x="251" y="42">Hopper mic</text><text x="466" y="80">Belt mic</text>
+            <text x="250" y="178">Conveyor · simulated stop only</text>
+          </svg>
+          <div>
+            <div id="audio-stop" class="decision" role="status">Simulated conveyor running</div>
+            <p class="note">Either audio channel can latch the simulated stop. No PLC or physical conveyor is connected.</p>
+            <p class="note">Untrained spectral rules compare sound with the first 3 seconds of normal operation. Scores are deviations, not confidence probabilities.</p>
+          </div>
+        </div>
+        <div id="audio-channels" class="audio-channels"></div>
+        <div class="section-title"><h2>Audio events</h2><span>Click an event to listen and label</span></div>
+        <div id="audio-events"></div>
+        <div id="audio-evidence" hidden>
+          <p id="audio-evidence-description" class="muted"></p>
+          <audio id="audio-player" controls preload="none" aria-label="Selected audio event recording"></audio>
+          <div class="export">
+            <label>Human label <select id="audio-label">
+              <option value="">Choose a label</option>
+              <option value="metal_impact">Metal impact</option><option value="belt_rip">Belt rip</option>
+              <option value="normal">Normal</option><option value="unknown">Unknown</option>
+              <option value="silence">Silence</option><option value="clipping">Clipping</option>
+            </select></label>
+            <button id="audio-export" class="secondary" disabled>Export WAV + metadata</button>
+          </div>
         </div>
       </section>
       <section class="toolbar" aria-label="Playback controls">

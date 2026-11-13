@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build (!darwin && !linux) || ios
 
 package rcm
 
@@ -17,7 +17,8 @@ func (d *Device) Close()         {}
 func (d *Device) ReadWithTimeout([]byte, time.Duration) (int, error) {
 	return 0, errUnsupported
 }
-func (d *Device) Write([]byte) error { return errUnsupported }
+func (d *Device) Write([]byte) error          { return errUnsupported }
+func (d *Device) ReadChipID() (string, error) { return "", errUnsupported }
 
 func DownloadBootROMImages(dev *Device, images [][]byte) error { return errUnsupported }
 

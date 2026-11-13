@@ -45,7 +45,7 @@ func TestDetectNPUInfo(t *testing.T) {
 		wantBackends []string
 	}{
 		"dragonwing": {
-			[]string{"fastrpc-cdsp", "fastrpc-gdsp0", "fastrpc-cdsp-secure"},
+			[]string{"fastrpc-adsp", "fastrpc-cdsp", "fastrpc-gdsp0", "fastrpc-cdsp-secure"},
 			"26300000.remoteproc", "qcom,qcs8300-cdsp-pas\x00qcom,sa8775p-cdsp0-pas\x00",
 			true, "qualcomm", []string{"qnn"},
 		},
@@ -57,6 +57,12 @@ func TestDetectNPUInfo(t *testing.T) {
 			false, "", nil,
 		},
 		"no fastrpc nodes": {nil, "", "", false, "", nil},
+		// An audio DSP's FastRPC node is not an NPU: the UNO Q exposes only this one.
+		"audio dsp only": {
+			[]string{"fastrpc-adsp"},
+			"ab00000.remoteproc", "qcom,qcm2290-adsp-pas\x00qcom,sm6115-adsp-pas\x00",
+			false, "", nil,
+		},
 		// The qcom entry is not always the first in the compatible list.
 		"vendor entry not first": {
 			[]string{"fastrpc-cdsp"}, "26300000.remoteproc",

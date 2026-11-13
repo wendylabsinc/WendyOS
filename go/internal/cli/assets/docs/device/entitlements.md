@@ -14,7 +14,9 @@ Declare them in the `entitlements` array of your `wendy.json`, or add one with `
 }
 ```
 
-> **Complete reference:** for every entitlement type, its options, and security notes, see [wendy.json → Entitlements](../apps/wendy.json.md#entitlements-1). This page is a guide to the common ones and how to choose between similar options.
+> **Complete reference:** for every entitlement type, its options, and security notes, see [wendy.json → Entitlements](/docs/reference/app-configuration#entitlements-1). This page is a guide to the common ones and how to choose between similar options.
+
+A device's agent ignores an entitlement type it does not know, and starts the app without that access. When the agent reports the types it supports, `wendy run` checks your `wendy.json` against them before building and stops on a type the agent does not support, suggesting `wendy device update`. Agents that predate this report are not checked.
 
 ## Notifications
 
@@ -91,12 +93,16 @@ still accepted.
 
 ## Network
 
-The network entitlement allows the container to access the device's network. If the device is connected to WiFi, Ethernet or otherwise, the container will have access to make TCP and UDP connections to the internet.
+The network entitlement selects the container's network access. Host and bridge
+modes can use the device's Internet connection. Mesh mode grants Wendy Net
+service access without an Internet default route.
 
 A "network" type entitlement can have the following values:
 
 - **mode**: `host` shares the device's network for LAN access; `bridge` provides
-  outbound DNS/downloads through NAT without LAN port publishing; `none` provides
+  outbound DNS/downloads through NAT without LAN port publishing; `mesh` provides
+  isolated Wendy Net service access; `host-admin` adds host network administration;
+  `none` provides
   only loopback. Declare a mode explicitly. Omitting the entire entitlement gives
   an ordinary container only loopback, and `wendy run` warns before building.
   In a shared-network group, secondaries inherit the primary service's namespace.
@@ -109,6 +115,56 @@ A "network" type entitlement can have the following values:
     "mode": "host"
 }
 ```
+
+### Wendy Net service access
+
+Use `network` mode `mesh` with `serviceCIDR: "10.99.0.0/16"` and isolated
+networking. Declare incoming TCP or UDP ports explicitly. This enables service
+access, not general outbound Internet access. Follow the
+[service sharing guide](/docs/guides/wendy-net-services) for complete manifests.
+
+### Private Avahi
+
+Add `{ "type": "avahi" }` when an app uses Avahi through D-Bus or compatible
+client libraries. Apps using their own mDNS socket do not need this grant.
+Avahi does not grant network access by itself; combine it with the appropriate
+private network entitlement. See the
+[Avahi workflow](/docs/guides/wendy-net-services#alternative-use-private-avahi-through-d-bus).
+
+## HTTP
+
+Use `http` to declare a web endpoint for clients to discover. It grants no
+additional network access; combine it with host networking for a container
+server:
+
+```json
+[
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8080 }
+]
+```
+
+With host networking, two apps cannot serve the same port. The device refuses
+to start an app whose `http` or `mcp` port another app or process already
+uses, and names the holder; `wendy run` stops before the build when it can
+confirm the clash.
+
+Ordinary detached agent deployments include HTTP URLs in their
+[endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
+checking application health. See the [full `http` reference](/docs/reference/app-configuration#http)
+for discovery and attached-run behavior.
+
+## Wi-Fi Aware
+
+Use `{ "type": "nan" }` only when your app needs to manage Wi-Fi Aware discovery
+and direct connections itself. Ordinary Wendy Net apps do not need this grant.
+For an app that sends IP traffic over those direct connections, also add
+`{ "type": "network", "mode": "host" }`.
+
+This grants direct radio control to a trusted app. Wi-Fi Aware shares the device's
+radio with other apps and Wendy Net, so avoid radio-wide start, stop, or reset
+commands. See the [configuration reference](/docs/reference/app-configuration#nan) for the
+app's control socket, interface, and reply-directory settings.
 
 ## Input
 
@@ -161,6 +217,13 @@ Most USB HID devices (scanners, keyboards) should use `input`. You only need `us
 
 The USB entitlement allows the container to access USB devices.
 
+Wendy bind-mounts `/dev/bus/usb` when that directory exists on the host. On a
+host without a USB bus, including a VM, it skips the mount so container startup
+does not fail with `cannot stat /dev/bus/usb`. This grants no virtual USB devices:
+an app that needs a physical camera still needs that camera and its driver, or an
+explicit [simulator backend](../apps/wendy-services.md#simulation-backends).
+If the USB directory appears after deployment, redeploy to mount it.
+
 ## Serial / UART
 
 **UART access is the `serial` entitlement.** In Wendy, talking to a device over a UART means opening its serial tty node, and that is exactly what `serial` grants — so if you're looking for "UART," this is the section. It is **USB-serial only** (`ttyACM*`/`ttyUSB*`): on-board UARTs (`ttyAMA*`, `ttyS*`) are intentionally not supported, because `ttyS` shares its kernel major with a board's system-console UART and exposing it would add attack surface for no peripheral benefit. To reach a USB device with a raw protocol instead of a tty, see [USB](#usb); for HID event devices, see [Input](#input).
@@ -195,6 +258,34 @@ The container receives:
 Use `serial` for serial ports and `usb` for raw USB protocols — they expose different device majors. The SO-101's `/dev/ttyACM0` is reached with `serial`, not `usb`.
 
 > **Security note:** the cgroup rule is scoped to the named device's exact `major:minor`, so — unlike a whole-major grant — it never exposes other devices that share the major (e.g. other `ttyACM*`/`ttyUSB*` adapters on the host). The entitlement is USB-only, so it can never reach an on-board console UART. See *Replug behavior* above for why a reconnect needs a redeploy.
+
+## Arduino UNO Q microcontroller
+
+The UNO Q's STM32 runs an Arduino sketch next to WendyOS. Two `wendy.json` entries cover it:
+
+- **[`mcu`](/docs/apps/wendy.json#mcu)** names the sketch folder. `wendy run` compiles it with a pinned `arduino-cli`, then flashes it before the container deploy. If the compile or the flash fails, the app is not deployed.
+- **`arduino-bridge`** lets the app talk to the sketch through Arduino's router, the same Bridge that Arduino App Lab uses. Modulino modules sit on the microcontroller's Qwiic bus, so Linux reaches them only this way.
+
+```json
+{
+    "mcu": { "sketch": "sketch" },
+    "entitlements": [{ "type": "arduino-bridge" }]
+}
+```
+
+The container receives:
+- A bind mount of the host directory `/run/arduino-router`, which holds the router's socket. It is the directory, not the socket, so a router restart doesn't break the app.
+- The router's `arduino-router` group.
+- `APP_SOCKET=unix:///run/arduino-router/router.sock`, unless the app's `env` sets it.
+
+> The router starts at boot and tells the microcontroller that Linux is ready, so a sketch built with Arduino's default "wait for Linux" option starts after every reboot.
+
+> One Bridge message holds about 235 bytes (the buffer of Arduino_RPClite on the microcontroller). Send larger data in pieces.
+
+**Troubleshooting**
+- *"microcontroller is busy with another flash"*: another flash is still running after a 3-minute wait. Run again when it finishes.
+- *"cannot drive BOOT0 (GPIO 37) low"*: another app holds the microcontroller's GPIO lines, for example an old OpenOCD flasher app. Stop it and run again.
+- *"Warning: Arduino router is not running"*: the sketch was flashed, but it starts only once `wendyos-arduino-router` runs on the device.
 
 ## SPI
 

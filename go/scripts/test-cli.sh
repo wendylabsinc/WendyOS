@@ -150,11 +150,16 @@ echo ""
 
 if [[ -z "$HOSTNAME" ]]; then
     echo -e "${BOLD}==> Auto-discovering device...${RESET}"
-    DISCOVER_JSON=$("$WENDY" discover --json --timeout 5s 2>&1)
+    # stderr stays out of the jq input: in JSON mode it can carry notices or
+    # the error envelope.
+    DISCOVER_ERRF=$(mktemp)
+    DISCOVER_JSON=$("$WENDY" discover --json --timeout 5s 2>"$DISCOVER_ERRF")
+    DISCOVER_ERR=$(cat "$DISCOVER_ERRF"); rm -f "$DISCOVER_ERRF"
     DISCOVERED_HOST=$(echo "$DISCOVER_JSON" | jq -r '.lanDevices[0].hostname // empty' 2>/dev/null)
     if [[ -z "$DISCOVERED_HOST" ]]; then
         echo -e "${RED}ERROR: No LAN device found via 'wendy discover --json --timeout 5s'${RESET}"
         echo "    Output: $(echo "$DISCOVER_JSON" | head -5)"
+        echo "    Stderr: $(echo "$DISCOVER_ERR" | head -5)"
         echo ""
         echo "Hint: pass -h <hostname> to skip auto-discovery."
         exit 1

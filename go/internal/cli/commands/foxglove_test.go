@@ -22,7 +22,7 @@ func TestWriteFoxgloveApp(t *testing.T) {
 	for _, want := range []string{
 		"FROM ros:humble",
 		"ros-humble-foxglove-bridge",
-		"export ROS_LOCALHOST_ONLY=0",
+		"export ROS_LOCALHOST_ONLY=0 ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET",
 		"ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765 address:=127.0.0.1 include_hidden:=true",
 	} {
 		if !strings.Contains(dfs, want) {
@@ -42,12 +42,25 @@ func TestWriteFoxgloveApp(t *testing.T) {
 		`"domainId": 3`,
 		`"rmw": "rmw_cyclonedds_cpp"`,
 		`"distro": "humble"`,
-		`"discoveryScope": "host"`,
+		`"scope": "network"`,
 		`"type": "network", "mode": "host"`,
 	} {
 		if !strings.Contains(wjs, want) {
 			t.Fatalf("wendy.json missing %q:\n%s", want, wjs)
 		}
+	}
+	if strings.Contains(wjs, `"services"`) {
+		t.Fatalf("generated bridge must stay on the single-container chunk-diff deploy path:\n%s", wjs)
+	}
+}
+
+func TestFoxgloveServeCommandOffersBuilderFlag(t *testing.T) {
+	flag := newFoxgloveServeCmd().Flags().Lookup("builder")
+	if flag == nil {
+		t.Fatal("serve command is missing --builder")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("builder default = %q, want automatic selection", flag.DefValue)
 	}
 }
 
@@ -69,8 +82,15 @@ func TestWriteFoxgloveAppCycloneDDSInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 	df, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
-	if !strings.Contains(string(df), `NetworkInterface name=\"enP8p1s0\"`) {
-		t.Fatalf("CycloneDDS interface not templated into Dockerfile:\n%s", df)
+	for _, want := range []string{
+		`NetworkInterface name=\"lo\" multicast=\"true\"`,
+		`NetworkInterface name=\"enP8p1s0\"`,
+		`<ParticipantIndex>auto</ParticipantIndex>`,
+		`<Peer address=\"127.0.0.1\"/>`,
+	} {
+		if !strings.Contains(string(df), want) {
+			t.Fatalf("CycloneDDS interface override missing %q:\n%s", want, df)
+		}
 	}
 }
 

@@ -448,3 +448,31 @@ func TestLiteCameraMJPEGPipeline(t *testing.T) {
 		t.Fatalf("pipeline = %s", pipeline)
 	}
 }
+
+func TestLiteCameraMJPEGBackpressureKeepsLatestFrame(t *testing.T) {
+	c := fakeLiteCamera()
+	s, err := subscribeLiteCamera(context.Background(), c, liteVideoChannel(4, sensorlinkpb.VideoFormat_MJPEG))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	finished := make(chan struct{})
+	go func() {
+		for seq := uint32(1); seq <= 100; seq++ {
+			c.emit(&sensorlinkpb.SensorData{ChannelId: 4, FrameSeq: seq, Flags: sensorlink.FlagLastChunk, Payload: []byte{byte(seq)}})
+		}
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("slow viewer blocked WendyCom")
+	}
+	f, err := s.Recv()
+	if err != nil || f.Seq != 100 {
+		t.Fatalf("latest frame = %v, %v", f, err)
+	}
+	if len(s.frames) != 0 {
+		t.Fatal("stale frames remain queued")
+	}
+}

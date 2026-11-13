@@ -18,6 +18,9 @@ type SerialDevice struct {
 	ID          string
 	Name        string
 	DisplayName string
+	// EnrolledDeviceID is the enrolled device UUID the board reported; empty
+	// when it is unenrolled or its firmware predates the field.
+	EnrolledDeviceID string
 	// Responsive is false when Port matched the ESP32 USB VID/PID but never
 	// completed a Wendy Lite identity handshake — a board with no (or
 	// incompatible) Wendy Lite firmware installed. ID/Name/DisplayName are
@@ -376,11 +379,12 @@ func (d *SerialDiscovery) StartScan(repeatInterval time.Duration) {
 							dev = SerialDevice{Port: port, Responsive: false}
 						} else {
 							dev = SerialDevice{
-								Port:        port,
-								ID:          identity.ID,
-								Name:        identity.Name,
-								DisplayName: identity.DisplayName,
-								Responsive:  true,
+								Port:             port,
+								ID:               identity.ID,
+								Name:             identity.Name,
+								DisplayName:      identity.DisplayName,
+								EnrolledDeviceID: identity.EnrolledDeviceID,
+								Responsive:       true,
 							}
 						}
 

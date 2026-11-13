@@ -3,7 +3,7 @@
   "platform": "linux",
   "version": "1.0.0",
   "frameworks": {
-    "ros2": { "domainId": 0, "rmw": "rmw_cyclonedds_cpp", "distro": "humble", "discoveryScope": "host" }
+    "ros2": { "domainId": 0, "rmw": "rmw_cyclonedds_cpp", "distro": "humble", "scope": "peripherals" }
   },
   "entitlements": [
     { "type": "network", "mode": "host" },

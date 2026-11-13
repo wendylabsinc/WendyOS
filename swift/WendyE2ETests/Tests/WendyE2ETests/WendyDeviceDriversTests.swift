@@ -7,8 +7,8 @@ struct `'wendy device drivers'` {
 
     /**
      Displays usage for the `wendy device drivers` group. The output includes
-     the group summary, its subcommands, and inherited global flags. Help exits
-     successfully, writes to stdout, emits no stderr, and leaves configuration,
+     the interactive selection description, its subcommands, and inherited global
+     flags. Help exits successfully, writes to stdout, emits no stderr, and leaves configuration,
      cache, project, cloud, and device state untouched.
      */
     @Test
@@ -16,7 +16,11 @@ struct `'wendy device drivers'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy device drivers --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Manage kernel driver add-ons on the target device"))
+                #expect(
+                    result.stdout.contains(
+                        "Interactively select a driver to install, reinstall, or remove."
+                    )
+                )
                 #expect(result.stdout.contains("wendy device drivers [command]"))
                 #expect(result.stdout.contains("list"))
                 #expect(result.stdout.contains("install"))
@@ -35,7 +39,11 @@ struct `'wendy device drivers'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy device driver --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Manage kernel driver add-ons on the target device"))
+                #expect(
+                    result.stdout.contains(
+                        "Interactively select a driver to install, reinstall, or remove."
+                    )
+                )
             }
         }
     }

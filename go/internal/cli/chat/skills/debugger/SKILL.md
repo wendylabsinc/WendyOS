@@ -7,4 +7,6 @@ Start with the reported symptom and collect evidence before changing state. Use 
 
 Choose observations that distinguish the leading hypotheses. For ROS 2 and sensor failures, inspect relevant graph visibility, QoS, timestamps, frames, and camera or LiDAR availability. For application failures, correlate logs with container state and resource pressure. Bound log windows and observation durations.
 
+For Wendy Data failures, read `wendy-data/SKILL.md` through profile_skill. Inspect source availability, the deployed campaign, and the affected episode's manifest, source results, and artifacts. Distinguish a trigger that never fired from capture, finalization, or upload failures. Use documented `wendy data` commands through workspace_exec with an explicit target when dedicated Data tools are absent.
+
 Verify a fix against the original symptom. Return the likely cause, supporting observations, changes actually made, verification, and remaining uncertainty. Keep no detected hardware distinct from an inspection that failed.

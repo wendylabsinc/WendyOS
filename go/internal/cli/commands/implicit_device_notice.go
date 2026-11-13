@@ -23,6 +23,10 @@ const (
 	// The cloud roster is online-only, so this says nothing about how many
 	// devices are enrolled.
 	implicitSoleCloudDevice
+	// implicitEnvDevice is the WENDY_DEVICE value, used because --device was not
+	// given. It is not the saved default, and saying so would send the user to
+	// set-default to change a target set-default never chose.
+	implicitEnvDevice
 )
 
 // noticedImplicitDevice guards against repeating the notice inside one
@@ -42,13 +46,15 @@ func noteImplicitDevice(name string, reason implicitDeviceReason) {
 	if name == "" || noticedImplicitDevice {
 		return
 	}
-	// Machine-readable output must stay parseable, and the existing
-	// default-device spinner is gated the same way. Note the CLI turns this on by
-	// itself when stdout is not a terminal, so piped and CI runs stay quiet.
+	noticedImplicitDevice = true
+	// JSON mode (on by itself whenever stdout is not a terminal) keeps stdout
+	// parseable, so the device line goes to stderr as one plain line. The
+	// throttled how-to-change hint is left out: it is advice for a person at a
+	// terminal, and printing it here would also mark it shown for the day.
 	if jsonOutput {
+		plainNotice("%s", implicitDeviceLines(name, reason, false)[0])
 		return
 	}
-	noticedImplicitDevice = true
 
 	withHint := !implicitDeviceHintShownToday()
 	for _, line := range implicitDeviceLines(tui.Device(name), reason, withHint) {
@@ -66,6 +72,8 @@ func implicitDeviceLines(name string, reason implicitDeviceReason, withHint bool
 	switch reason {
 	case implicitSoleCloudDevice:
 		lines = append(lines, "Using "+name+", the only device currently online in this organisation.")
+	case implicitEnvDevice:
+		lines = append(lines, "Using device "+name+" from WENDY_DEVICE.")
 	default:
 		lines = append(lines, "Using default device "+name+".")
 	}
@@ -76,6 +84,8 @@ func implicitDeviceLines(name string, reason implicitDeviceReason, withHint bool
 			// set-default here would mislead; what the user needs to know is
 			// that offline devices are hidden from the roster.
 			lines = append(lines, "Target a different device with --device; offline devices are hidden, 'wendy cloud discover --all' lists every enrolled device.")
+		case implicitEnvDevice:
+			lines = append(lines, "Target a different device for one command with --device, or unset WENDY_DEVICE to use the default device.")
 		default:
 			lines = append(lines, "Target a different device for one command with --device, or change the default with 'wendy device set-default'.")
 		}
@@ -97,10 +107,8 @@ func implicitDeviceHintShownToday() bool {
 }
 
 func recordImplicitDeviceHintShown() {
-	cfg, err := config.Load()
-	if err != nil {
-		return
-	}
-	cfg.ImplicitDeviceHintShownAt = implicitDeviceHintToday()
-	_ = config.Save(cfg)
+	_ = config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.ImplicitDeviceHintShownAt = implicitDeviceHintToday()
+		return true, nil
+	})
 }

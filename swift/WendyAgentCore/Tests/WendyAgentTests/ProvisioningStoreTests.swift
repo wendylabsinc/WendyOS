@@ -11,11 +11,19 @@ struct ProvisioningStoreTests {
         return dir
     }
 
+    private func store(at dir: URL) -> ProvisioningStore {
+        // Clearing a fixture must never remove the real agent's Keychain item.
+        ProvisioningStore(
+            configPath: dir,
+            keychainStore: KeychainStore(service: "sh.wendy.agent.tests.\(UUID().uuidString)")
+        )
+    }
+
     @Test("save then load round-trips and never writes the key into provisioning.json")
     func roundTrip() throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = ProvisioningStore(configPath: dir)
+        let store = self.store(at: dir)
 
         try store.save(
             cloudHost: "cloud.example:50051",
@@ -41,18 +49,9 @@ struct ProvisioningStoreTests {
             encoding: .utf8
         )
         #expect(!json.contains("KEYPEM"))
-        // Individual PEM files exist.
         #expect(
-            FileManager.default.fileExists(
-                atPath: dir.appendingPathComponent("device-key.pem").path
-            )
-        )
-        #expect(
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent("device.pem").path)
-        )
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("ca.pem").path))
-        #expect(
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent(".provisioned").path)
+            try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()
+                == ["device-key.pem", "provisioning.json"]
         )
     }
 
@@ -63,7 +62,7 @@ struct ProvisioningStoreTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let legacy = """
             {"enrolled":true,"cloudHost":"c:50051","orgId":1,"assetId":2,\
-            "keyPem":"LEGACYKEY","certPem":"C","chainPem":"CH"}
+            "keyPem":"LEGACYKEY","certPem":"C","chainPem":"CH","futureState":{"generation":7}}
             """
         try legacy.write(
             to: dir.appendingPathComponent("provisioning.json"),
@@ -71,7 +70,7 @@ struct ProvisioningStoreTests {
             encoding: .utf8
         )
 
-        let store = ProvisioningStore(configPath: dir)
+        let store = self.store(at: dir)
         let loaded = try #require(store.load())
         #expect(loaded.keyBacking == .softwarePEM("LEGACYKEY"))
         // Migrated to device-key.pem and stripped from json.
@@ -85,9 +84,14 @@ struct ProvisioningStoreTests {
             encoding: .utf8
         )
         #expect(!json.contains("LEGACYKEY"))
+        let migrated = try #require(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+        #expect((migrated["futureState"] as? [String: Int])?["generation"] == 7)
+
     }
 
-    @Test("save leaves the device unprovisioned if writing the key/cert files fails")
+    @Test("save leaves the device unprovisioned if writing the key fails")
     func saveFailureDoesNotMarkEnrolled() throws {
         let dir = tempDir()
         let keyPath = dir.appendingPathComponent("device-key.pem")
@@ -107,17 +111,8 @@ struct ProvisioningStoreTests {
         // write would succeed here if `save` attempted it.
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // Pre-create `device-key.pem` as a NON-EMPTY DIRECTORY and make *it*
-        // (not the config dir) read-only. `writePEMFiles` writes the key
-        // first via the `writeFile` helper, which does
-        // `removeItem(at: device-key.pem)` before moving the new content
-        // into place. Removing a directory's contents requires write
-        // permission on that directory, not on the config dir containing it,
-        // so this makes only the key write fail while leaving json writes
-        // fully able to succeed -- the property that actually discriminates
-        // PEM-first (correct) from json-first (buggy) save ordering. Making
-        // the whole config dir read-only instead (the old approach) fails
-        // *every* write unconditionally and does not discriminate.
+        // Only the key destination is blocked; the config directory stays
+        // writable, so a JSON-first save would incorrectly mark it enrolled.
         try FileManager.default.createDirectory(at: keyPath, withIntermediateDirectories: true)
         try "blocker".write(
             to: keyPath.appendingPathComponent("blocker"),
@@ -129,7 +124,7 @@ struct ProvisioningStoreTests {
             ofItemAtPath: keyPath.path
         )
 
-        let store = ProvisioningStore(configPath: dir)
+        let store = self.store(at: dir)
 
         #expect(throws: (any Error).self) {
             try store.save(
@@ -156,7 +151,7 @@ struct ProvisioningStoreTests {
     func clearRemovesAll() throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = ProvisioningStore(configPath: dir)
+        let store = self.store(at: dir)
         try store.save(
             cloudHost: "c:50051",
             orgID: 1,
@@ -165,6 +160,15 @@ struct ProvisioningStoreTests {
             certPEM: "C",
             chainPEM: "CH"
         )
+
+        // Unprovision still removes copies emitted by older agents.
+        for name in ["device.pem", "ca.pem", ".provisioned"] {
+            try "legacy".write(
+                to: dir.appendingPathComponent(name),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
 
         try store.clear()
 
@@ -181,7 +185,7 @@ struct ProvisioningStoreTests {
     func secureEnclaveBackingPersistsNoKeyFile() throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = ProvisioningStore(configPath: dir)
+        let store = self.store(at: dir)
 
         try store.save(
             cloudHost: "h",
@@ -201,5 +205,180 @@ struct ProvisioningStoreTests {
         #expect(loaded.keyBacking == .secureEnclave)
         #expect(loaded.certPEM == "CERT")
         #expect(loaded.chainPEM == "CHAIN")
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["provisioning.json"]
+        )
     }
+    @Test("unchanged saves and loads preserve key and JSON metadata")
+    func unchangedStatePreservesFiles() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = self.store(at: dir)
+        func save() throws {
+            try store.save(
+                cloudHost: "h",
+                orgID: 1,
+                assetID: 2,
+                keyBacking: .softwarePEM("KEY"),
+                certPEM: "CERT",
+                chainPEM: "CHAIN"
+            )
+        }
+        try save()
+        var before: [String: NSDictionary] = [:]
+        for name in ["device-key.pem", "provisioning.json"] {
+            let path = dir.appendingPathComponent(name).path
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)],
+                ofItemAtPath: path
+            )
+            before[name] = try FileManager.default.attributesOfItem(atPath: path) as NSDictionary
+        }
+        try save()
+        #expect(store.load() != nil)
+        #expect(store.load() != nil)
+        for (name, attrs) in before {
+            let after = try FileManager.default.attributesOfItem(
+                atPath: dir.appendingPathComponent(name).path
+            )
+            for key: FileAttributeKey in [
+                .systemFileNumber, .posixPermissions, .modificationDate, .ownerAccountID,
+                .groupOwnerAccountID,
+            ] {
+                #expect((after[key] as? NSObject) == (attrs[key] as? NSObject))
+            }
+        }
+    }
+
+    @Test("changed contents, modes and symlinks are repaired for both state files")
+    func repairsStateFiles() throws {
+        for name in ["device-key.pem", "provisioning.json"] {
+            for damage in ["contents", "mode", "missing", "symlink"] {
+                let dir = tempDir()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = self.store(at: dir)
+                func save() throws {
+                    try store.save(
+                        cloudHost: "h",
+                        orgID: 1,
+                        assetID: 2,
+                        keyBacking: .softwarePEM("KEY"),
+                        certPEM: "CERT",
+                        chainPEM: "CHAIN"
+                    )
+                }
+                try save()
+                let url = dir.appendingPathComponent(name)
+                let original = try Data(contentsOf: url)
+                let target = dir.appendingPathComponent("symlink-target")
+                switch damage {
+                case "contents":
+                    var changed = original
+                    changed[0] ^= 1
+                    try changed.write(to: url)
+                case "mode":
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o644],
+                        ofItemAtPath: url.path
+                    )
+                case "missing":
+                    try FileManager.default.removeItem(at: url)
+                default:
+                    try original.write(to: target)
+                    try FileManager.default.removeItem(at: url)
+                    try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+                }
+                try save()
+                #expect(try Data(contentsOf: url) == original)
+                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                #expect(attributes[.type] as? FileAttributeType == .typeRegular)
+                #expect(attributes[.posixPermissions] as? Int == 0o600)
+                if damage == "symlink" { #expect(try Data(contentsOf: target) == original) }
+            }
+        }
+    }
+
+    @Test("a failed legacy key migration preserves its only saved copy")
+    func failedLegacyMigrationRetainsKey() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = dir.appendingPathComponent("device-key.pem")
+        try FileManager.default.createDirectory(at: key, withIntermediateDirectories: true)
+        try "blocker".write(
+            to: key.appendingPathComponent("blocker"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: key.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: key.path
+            )
+        }
+        let state = dir.appendingPathComponent("provisioning.json")
+        let legacy = #"{"enrolled":true,"keyPem":"LEGACY","certPem":"CERT"}"#
+        try legacy.write(to: state, atomically: true, encoding: .utf8)
+        #expect(self.store(at: dir).load() == nil)
+        #expect(try String(contentsOf: state, encoding: .utf8) == legacy)
+    }
+
+    @Test("a failed state file repair keeps the device enrolled")
+    func failedRepairKeepsEnrollment() throws {
+        let dir = tempDir()
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: dir.path
+            )
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let store = self.store(at: dir)
+        try store.save(
+            cloudHost: "h",
+            orgID: 1,
+            assetID: 2,
+            keyBacking: .softwarePEM("KEY"),
+            certPEM: "CERT",
+            chainPEM: "CHAIN"
+        )
+        // Both files need a mode repair, and a read-only directory makes it fail.
+        for name in ["device-key.pem", "provisioning.json"] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o644],
+                ofItemAtPath: dir.appendingPathComponent(name).path
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+
+        let loaded = try #require(store.load())
+        #expect(loaded.enrolled)
+        #expect(loaded.keyBacking == .softwarePEM("KEY"))
+        #expect(loaded.certPEM == "CERT")
+    }
+
+    @Test("saving never removes a directory at a state file path")
+    func savePreservesUnexpectedDirectory() throws {
+        for name in ["device-key.pem", "provisioning.json"] {
+            let dir = tempDir()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = self.store(at: dir)
+            let path = dir.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            let sentinel = path.appendingPathComponent("keep")
+            try Data("preserved".utf8).write(to: sentinel)
+            #expect(throws: (any Error).self) {
+                try store.save(
+                    cloudHost: "c",
+                    orgID: 1,
+                    assetID: 2,
+                    keyBacking: .softwarePEM("KEY"),
+                    certPEM: "CERT",
+                    chainPEM: "CHAIN"
+                )
+            }
+            #expect(try Data(contentsOf: sentinel) == Data("preserved".utf8))
+        }
+    }
+
 }

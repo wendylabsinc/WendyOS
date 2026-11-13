@@ -15,7 +15,7 @@ name: AI Security Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 concurrency:
@@ -29,7 +29,7 @@ env:
 jobs:
   security-review:
     name: Claude Security Review
-    if: github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')
+    if: "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')"
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
@@ -345,7 +345,7 @@ jobs:
 
       - name: Set up Python
         if: env.IS_DEPENDABOT != 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
@@ -354,6 +354,9 @@ jobs:
         run: |
           python3 .github/scripts/review_diff_test.py
           python3 .github/scripts/security_review_test.py
+          if [[ -f .github/scripts/review_sources_test.py ]]; then
+            python3 .github/scripts/review_sources_test.py
+          fi
 
       - name: Validate complete review input
         if: env.IS_DEPENDABOT != 'true'

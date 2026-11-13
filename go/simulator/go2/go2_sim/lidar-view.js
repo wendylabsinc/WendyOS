@@ -3,7 +3,8 @@ import * as THREE from './vendor/three.module.js';
 // An observer-only diagnostic layer. Every point is an actual captured return
 // in world coordinates; no maximum-range rays or decorative sweeps are drawn.
 export class LidarView {
-  constructor(scene) {
+  constructor(scene, requestJSON) {
+    this.requestJSON = requestJSON;
     this.enabled = true;
     this.active = true;
     this.identity = null;
@@ -87,9 +88,13 @@ export class LidarView {
     this.nextPoll = now + 100;
     const timeout = setTimeout(() => request.controller.abort(), 1500);
     try {
-      const response = await fetch('/api/scene/lidar', { cache: 'no-store', signal: request.controller.signal });
-      if (!response.ok) throw Error('Lidar unavailable');
-      const sample = await response.json();
+      let sample;
+      if (this.requestJSON) sample = await this.requestJSON('/api/scene/lidar');
+      else {
+        const response = await fetch('/api/scene/lidar', { cache: 'no-store', signal: request.controller.signal });
+        if (!response.ok) throw Error('Lidar unavailable');
+        sample = await response.json();
+      }
       const received = performance.now();
       if (this.request !== request || !this.eligible(received)) return;
       const state = this.identity;

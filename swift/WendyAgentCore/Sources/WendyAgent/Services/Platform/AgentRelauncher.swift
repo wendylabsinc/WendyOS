@@ -1,5 +1,5 @@
 import Darwin
-import Foundation
+public import Foundation
 
 protocol AgentRelaunchScheduling: Sendable {
     /// Spawns the detached watcher that reopens the bundle after this process exits.
@@ -11,9 +11,13 @@ protocol AgentRelaunchScheduling: Sendable {
 /// Spawns a detached watcher process that waits for this agent process to
 /// exit, then reopens the (freshly swapped-in) app bundle — the mechanism
 /// that turns "install a new bundle" into "the new version is running."
-struct AgentRelauncher: AgentRelaunchScheduling {
+public struct AgentRelauncher: AgentRelaunchScheduling {
     /// Injected by the app target (clean quit path); nil ⇒ exit(0).
     let terminate: (@Sendable () async -> Void)?
+
+    public init(terminate: (@Sendable () async -> Void)?) {
+        self.terminate = terminate
+    }
 
     /// The app target's update-specific termination path does not stop deployed
     /// apps; they survive the agent process and are adopted after relaunch. This
@@ -24,7 +28,7 @@ struct AgentRelauncher: AgentRelaunchScheduling {
     /// quit tears the connection down.
     static let ackFlushDelay: Duration = .milliseconds(500)
 
-    func scheduleRelaunch(of bundleURL: URL) throws {
+    public func scheduleRelaunch(of bundleURL: URL) throws {
         let pid = ProcessInfo.processInfo.processIdentifier
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")

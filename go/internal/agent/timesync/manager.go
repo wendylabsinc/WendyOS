@@ -2,6 +2,7 @@ package timesync
 
 import (
 	"context"
+	"net"
 	"sync"
 	"time"
 
@@ -12,19 +13,25 @@ import (
 // Manager coordinates all time-sync sources and applies the best verified time.
 // All sources call Apply; the clock is only ever advanced.
 type Manager struct {
-	logger     *zap.Logger
-	configPath string
-	mu         sync.RWMutex
-	latest     *Consensus
+	logger         *zap.Logger
+	configPath     string
+	mu             sync.RWMutex
+	clockMu        sync.Mutex
+	latest         *Consensus
+	directObserver func(DirectSyncObservation)
 
-	// Injection points for deterministic tests of RunDirect. They replace the
-	// network query, the clock write and the wait, so a test can drive the
-	// loop's policy without a Roughtime server, root privileges or the real
-	// six-hour interval. Nil means "use the real one", so a zero-value Manager
-	// still behaves.
-	query func(context.Context, []roughtime.Server) (Consensus, error)
-	apply func(time.Time)
-	sleep func(time.Duration) <-chan time.Time
+	// Injection points for tests of time-sync loops. Nil means use the real
+	// network, clock write and retry timer, so a zero-value Manager still behaves.
+	query       func(context.Context, []roughtime.Server) (Consensus, error)
+	apply       func(time.Time)
+	applyResult func(time.Time) error
+	now         func() time.Time
+	boot        func() (int64, error)
+	sleep       func(time.Duration) <-chan time.Time
+
+	multicastListen     func() (multicastPacketConn, error)
+	multicastInterfaces func() ([]net.Interface, error)
+	multicastInterval   time.Duration
 }
 
 func (m *Manager) queryConsensus(ctx context.Context, servers []roughtime.Server) (Consensus, error) {
@@ -82,6 +89,10 @@ func (m *Manager) ApplyFloor() {
 	if floor.IsZero() {
 		return
 	}
+	if m.apply != nil {
+		m.apply(floor)
+		return
+	}
 	if err := AdvanceTo(floor, m.logger); err != nil && m.logger != nil {
 		m.logger.Warn("timesync: floor apply failed", zap.Error(err))
 	}
@@ -90,7 +101,28 @@ func (m *Manager) ApplyFloor() {
 // Apply advances the clock to t if t is after the current time.
 // Safe to call from any goroutine.
 func (m *Manager) Apply(t time.Time) {
-	if err := AdvanceTo(t, m.logger); err != nil && m.logger != nil {
+	if err := m.advance(t); err != nil && m.logger != nil {
 		m.logger.Warn("timesync: apply failed", zap.Error(err))
 	}
+}
+
+// Serialize the agent's independent verified clock sources so their
+// advance-only checks cannot race one another into a backward step.
+func (m *Manager) advance(t time.Time) error {
+	m.clockMu.Lock()
+	defer m.clockMu.Unlock()
+	return m.applyClock(t)
+}
+
+// applyClock requires clockMu. All production clock writes still use the same
+// advance-only operation; the other branches are isolated test injections.
+func (m *Manager) applyClock(t time.Time) error {
+	if m.applyResult != nil {
+		return m.applyResult(t)
+	}
+	if m.apply != nil {
+		m.apply(t)
+		return nil
+	}
+	return AdvanceTo(t, m.logger)
 }

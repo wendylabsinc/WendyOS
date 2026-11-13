@@ -4,8 +4,7 @@ package t234
 
 import "os"
 
-// prepareRawTarget is a no-op off Windows: Linux and macOS do not block raw
-// writes to a physical device's sectors when a volume there is mounted (the
-// mount is unmounted separately via unmountUMSDisk), so there is nothing to
-// take offline here.
+// prepareRawTarget has no additional IOCTL step off Windows. Linux claims
+// the disk exclusively when opening it; macOS uses DiskArbitration claims
+// and unmountUMSDisk before opening its raw device.
 func prepareRawTarget(dev *os.File) error { return nil }

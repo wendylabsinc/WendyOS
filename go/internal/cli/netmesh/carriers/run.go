@@ -1,0 +1,388 @@
+package carriers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/wendylabsinc/WendyOS/go/babel"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+)
+
+type observed struct {
+	candidate   Candidate
+	seen        time.Time
+	sources     map[int]bool
+	retry       time.Time
+	unsupported bool
+}
+type attempt struct {
+	id        uint64
+	candidate Candidate
+	cancel    context.CancelFunc
+	peer      meshid.Device
+	verified  bool
+	canceled  bool
+	link      babel.LinkID
+}
+type sourceUpdate struct {
+	source int
+	items  []Candidate
+}
+type sourceError struct{ err error }
+type authenticated struct {
+	key  string
+	id   uint64
+	peer meshid.Device
+}
+type completed struct {
+	key string
+	id  uint64
+	err error
+}
+type attached struct {
+	key  string
+	id   uint64
+	link babel.LinkID
+}
+
+// Run owns candidate state and connection lifetimes until ctx ends. Source
+// disappearance does not close an attached link: BLE commonly stops advertising
+// after connection. Only the authenticated node snapshot can supersede it.
+func Run(parent context.Context, cfg Config) error {
+	if err := cfg.defaults(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	clockNow := cfg.now
+	if clockNow == nil {
+		clockNow = time.Now
+	}
+	var wg sync.WaitGroup
+	defer func() { cancel(); wg.Wait() }()
+	sources := cfg.Sources
+	if sources == nil {
+		sources = defaultSources(cfg)
+	}
+	if len(sources) > 16 {
+		return fmt.Errorf("too many discovery sources")
+	}
+	events := make(chan any, 2*cfg.Limits.Connections+2*len(sources)+1)
+	if len(cfg.Seeds) != 0 {
+		events <- sourceUpdate{source: -1, items: append([]Candidate(nil), cfg.Seeds...)}
+	}
+	for index, source := range sources {
+		if source == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(index int, source Source) {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				err := source(ctx, func(items []Candidate) {
+					if len(items) > cfg.Limits.Candidates {
+						items = items[:cfg.Limits.Candidates]
+					}
+					copyItems := append([]Candidate(nil), items...)
+					select {
+					case events <- sourceUpdate{index, copyItems}:
+					case <-ctx.Done():
+					}
+				})
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					select {
+					case events <- sourceError{err}:
+					case <-ctx.Done():
+						return
+					}
+				}
+				timer := time.NewTimer(cfg.Limits.RetryDelay)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+			}
+		}(index, source)
+	}
+	table := make(map[string]*observed)
+	active := make(map[string]*attempt)
+	cache := make(peerCache)
+	supported := make(map[string]bool)
+	for _, transport := range cfg.SupportedTransports {
+		supported[transport] = true
+	}
+	var queue localmesh.CandidateQueue
+	var serial uint64
+	ticker := time.NewTicker(cfg.Limits.PollInterval)
+	defer ticker.Stop()
+	snapshot := func() localmesh.NodeSnapshot {
+		if cfg.Snapshot != nil {
+			return cfg.Snapshot()
+		}
+		return localmesh.NodeSnapshot{}
+	}
+	hasSameCarrier := func(view localmesh.NodeSnapshot, peer meshid.Device, candidate Candidate) bool {
+		if peer == (meshid.Device{}) {
+			return false
+		}
+		// A verified attachment owns this carrier while Babel is still priming.
+		// Readiness is required for cheaper-carrier replacement, not for keeping
+		// another address for the same carrier from duplicating the connection.
+		for _, link := range view.Links {
+			if link.Device == peer && link.Transport == candidate.Transport && link.Cost == candidate.Cost {
+				return true
+			}
+		}
+		// Authentication precedes publishing the Node attachment. Use only the
+		// authenticated peer here, never the active attempt's discovery hint.
+		for _, a := range active {
+			if a.verified && !a.canceled && a.peer == peer && a.candidate.Transport == candidate.Transport && a.candidate.Cost == candidate.Cost {
+				return true
+			}
+		}
+		return false
+	}
+	hasDirectPeer := func(view localmesh.NodeSnapshot, peer meshid.Device) bool {
+		if peer != (meshid.Device{}) {
+			for _, link := range view.Links {
+				if link.Device == peer && !link.Retiring {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	idleOwnedLink := func(view localmesh.NodeSnapshot, a *attempt) bool {
+		if a.link == 0 {
+			return false // Authentication alone does not bind an incarnation.
+		}
+		for _, link := range view.Links {
+			if link.ID == a.link && link.Device == a.peer && link.Transport == a.candidate.Transport && link.Cost == a.candidate.Cost && !link.Retiring {
+				return !view.HasInstalledRouteOnLink(a.link)
+			}
+		}
+		return false
+	}
+	plan := func(now time.Time) {
+		view := snapshot()
+		ranking := view
+		ranking.Links = append([]localmesh.PeerLink(nil), view.Links...)
+		for _, a := range active {
+			if a.verified && !a.canceled && !hasDirectPeer(view, a.peer) {
+				// Authentication can precede Node publication. This contributes
+				// presence for ranking only, never route or eviction authority.
+				ranking.Links = append(ranking.Links, localmesh.PeerLink{Device: a.peer, Cost: a.candidate.Cost, Transport: a.candidate.Transport})
+			}
+		}
+		for key, e := range table {
+			if !e.sources[-1] && (len(e.sources) == 0 || now.Sub(e.seen) >= cfg.Limits.CandidateTTL) {
+				if active[key] == nil && !now.Before(e.retry) {
+					// A BLE advertisement often vanishes during connection. Keep
+					// its ordinary retry deadline when a legacy peer closes it and
+					// starts advertising again, without retaining an active link.
+					delete(table, key)
+				}
+			}
+		}
+		keys := make([]string, 0, len(table))
+		for key, e := range table {
+			if e.sources[-1] || (len(e.sources) != 0 && now.Sub(e.seen) < cfg.Limits.CandidateTTL) {
+				keys = append(keys, key)
+			}
+		}
+		keys = queue.OrderPreferred(keys, now, ranking, func(key string) (meshid.Device, uint16) {
+			c := table[key].candidate
+			return cache.peer(c, now, cfg.Limits.AuthenticatedTTL), c.Cost
+		})
+		for _, key := range keys {
+			e := table[key]
+			c := e.candidate
+			if active[key] != nil || now.Before(e.retry) || !supported[c.Transport] {
+				continue
+			}
+			// An unbound operator hint may share a principal with this installation.
+			// Equality includes the actual installation, so other logins remain peers.
+			if c.Device == cfg.Credentials.Device {
+				continue
+			}
+			peer := cache.peer(c, now, cfg.Limits.AuthenticatedTTL)
+			if hasSameCarrier(view, peer, c) {
+				continue
+			}
+			pending, bleCount := 0, 0
+			reclaiming := false
+			for _, a := range active {
+				reclaiming = reclaiming || a.canceled
+				if !a.verified {
+					pending++
+				}
+				if a.candidate.Transport == BLE {
+					bleCount++
+				}
+			}
+			if pending >= cfg.Limits.Attempts {
+				continue
+			}
+			full := len(active) >= cfg.Limits.Connections
+			bleFull := c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections
+			if full || bleFull {
+				// New peers may reclaim a slower owned backup, never the peer's
+				// last installed working path. Completion releases the real slot;
+				// cancellation itself does not grant admission or extra capacity.
+				if !reclaiming && !hasDirectPeer(ranking, peer) && queue.ReclaimEligible(key, now) {
+					var victim *attempt
+					for _, a := range active {
+						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !view.HasOtherForwardingLink(a.peer, a.link) || !idleOwnedLink(view, a) {
+							continue
+						}
+						if victim == nil || a.candidate.Cost > victim.candidate.Cost || (a.candidate.Cost == victim.candidate.Cost && a.id > victim.id) {
+							victim = a
+						}
+					}
+					if victim != nil {
+						victim.canceled = true
+						victim.cancel()
+					}
+				}
+				continue
+			}
+			serial++
+			child, closeChild := context.WithCancel(ctx)
+			a := &attempt{id: serial, candidate: c, cancel: closeChild}
+			active[key] = a
+			var once sync.Once
+			c.authenticated = func(peer meshid.Device) {
+				once.Do(func() {
+					select {
+					case events <- authenticated{key, a.id, peer}:
+					case <-child.Done():
+					}
+				})
+			}
+			var attachedOnce sync.Once
+			c.attached = func(link babel.LinkID) {
+				attachedOnce.Do(func() {
+					select {
+					case events <- attached{key, a.id, link}:
+					case <-child.Done():
+					}
+				})
+			}
+			wg.Add(1)
+			go func(key string, a *attempt, c Candidate) {
+				defer wg.Done()
+				err := cfg.Connect(child, c)
+				closeChild()
+				select {
+				case events <- completed{key, a.id, err}:
+				case <-ctx.Done():
+				}
+			}(key, a, c)
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return parent.Err()
+		case event := <-events:
+			now := clockNow()
+			switch v := event.(type) {
+			case sourceUpdate:
+				for _, e := range table {
+					delete(e.sources, v.source)
+				}
+				for _, candidate := range v.items {
+					candidate.authenticated = nil
+					candidate.attached = nil
+					if !candidate.valid() || !supported[candidate.Transport] {
+						continue
+					}
+					if candidate.Device != (meshid.Device{}) && candidate.Device.Tenant() != cfg.Credentials.Device.Tenant() {
+						continue
+					}
+					key := candidate.key()
+					entry := table[key]
+					if entry == nil {
+						if len(table) >= cfg.Limits.Candidates {
+							oldest := ""
+							for k, e := range table {
+								if active[k] == nil && !e.sources[-1] && (oldest == "" || e.seen.Before(table[oldest].seen) || (e.seen.Equal(table[oldest].seen) && k < oldest)) {
+									oldest = k
+								}
+							}
+							if oldest == "" {
+								continue
+							}
+							delete(table, oldest)
+						}
+						entry = &observed{sources: make(map[int]bool)}
+						table[key] = entry
+					}
+					if entry.unsupported && !entry.candidate.sameAdvertisement(candidate) {
+						entry.unsupported = false
+						entry.retry = time.Time{}
+					}
+					entry.candidate = candidate
+					entry.seen = now
+					entry.sources[v.source] = true
+				}
+			case authenticated:
+				a := active[v.key]
+				if a != nil && a.id == v.id && v.peer != (meshid.Device{}) && v.peer != cfg.Credentials.Device && v.peer.Tenant() == cfg.Credentials.Device.Tenant() {
+					a.verified = true
+					a.peer = v.peer
+					cache.remember(a.candidate, v.peer, now, cfg.Limits.AuthenticatedTTL, cfg.Limits.Candidates)
+				}
+			case completed:
+				if a := active[v.key]; a != nil && a.id == v.id {
+					delete(active, v.key)
+					if e := table[v.key]; e != nil {
+						if a.canceled {
+							e.retry = now
+							queue.Succeeded(v.key)
+						} else if errors.Is(v.err, localmesh.ErrCarrierCapacityRetry) {
+							// The node is waiting for an intentionally retired owner
+							// to release capacity. Preserve the ordinary dial cadence
+							// without treating this healthy candidate as a failure.
+							e.retry = now.Add(cfg.Limits.RetryDelay)
+							queue.Succeeded(v.key)
+						} else {
+							e.retry = now.Add(cfg.Limits.RetryDelay)
+							if errors.Is(v.err, ErrUnsupportedPeer) {
+								e.retry = now.Add(15 * time.Minute)
+								e.unsupported = true
+								if cfg.Status != nil {
+									cfg.Status(v.err)
+								}
+							}
+							if v.err != nil {
+								queue.Failed(v.key, now)
+							} else {
+								queue.Succeeded(v.key)
+							}
+						}
+					}
+				}
+			case attached:
+				if a := active[v.key]; a != nil && a.id == v.id && a.verified && v.link != 0 {
+					a.link = v.link
+				}
+			case sourceError:
+				if cfg.Status != nil {
+					cfg.Status(v.err)
+				}
+			}
+			plan(now)
+		case <-ticker.C:
+			plan(clockNow())
+		}
+	}
+}

@@ -7,10 +7,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
+	"time"
 
+	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -34,8 +38,9 @@ const defaultChunkStagingDir = "/var/lib/wendy/chunk-staging"
 
 // staging persists chunk bytes received via StageChunk to disk, keyed by hash,
 // until the next AssembleLayerFromChunks streams them into the content store.
-// Disk — not the agent heap — is the staging budget, so peak memory during a
-// deploy is one chunk rather than the whole uncompressed layer (×2 with the old
+// Disk — not the agent heap — is the staging budget, so reassembly's memory is
+// bounded by the segment buffer pool every assembly shares (assemblyBuffers,
+// 48 MiB for the whole agent), not by the uncompressed layer (×2 with the old
 // reconstruct buffer). Distinct chunks map to distinct files, so concurrent
 // deploys staging different content do not collide.
 type staging struct {
@@ -76,6 +81,25 @@ func (s *staging) path(h [32]byte) string {
 func (s *staging) has(h [32]byte) bool {
 	_, err := os.Stat(s.path(h))
 	return err == nil
+}
+
+// retain reports whether the chunk is staged, as has does, and keeps a chunk
+// it reports present clear of the sweep. The read may come much later than
+// the report: a build queued behind a long one reads its context only when it
+// runs, and the store can sit idle meanwhile. So a file older than
+// stagingRetention/2 gets its mtime moved to now, which keeps it at least that
+// long; a newer file costs nothing beyond has's stat. The refresh is best
+// effort: if it fails, a sweep can still take the chunk, and its read fails
+// closed as before.
+func (s *staging) retain(h [32]byte, now time.Time) bool {
+	fi, err := os.Stat(s.path(h))
+	if err != nil {
+		return false
+	}
+	if fi.ModTime().Before(now.Add(-stagingRetention / 2)) {
+		_ = os.Chtimes(s.path(h), now, now)
+	}
+	return true
 }
 
 // read returns the staged chunk bytes, or an os.IsNotExist error if absent.
@@ -135,9 +159,8 @@ type chunkSource func(h [32]byte) ([]byte, error)
 
 // chunkStream is an io.Reader that yields the chunks named by order in sequence,
 // holding at most one chunk in memory at a time and verifying each chunk's
-// SHA-256 as it is served. Feeding it to content.WriteBlob reassembles a layer
-// without ever buffering the whole layer in RAM; WriteBlob independently
-// verifies the overall layer digest as it streams.
+// SHA-256 as it is served. OpenChunkStream returns it to callers that want the
+// bytes themselves; layer assembly reads segments instead (readSegments).
 type chunkStream struct {
 	order [][32]byte
 	src   chunkSource
@@ -175,6 +198,13 @@ func (s *chunkStream) Read(p []byte) (int, error) {
 }
 
 func (c *Client) MissingChunks(ctx context.Context, hashes [][32]byte) ([][32]byte, error) {
+	// Maintenance never sweeps staged chunks while a query holds this, and
+	// staging.retain keeps each staged chunk this reports present clear of the
+	// sweep afterwards, whichever call reads it later.
+	c.chunkSweepMu.RLock()
+	defer c.chunkSweepMu.RUnlock()
+	c.chunkActivity.touch()
+
 	// The chunk index outlives containerd's content GC. Validate each backing
 	// blob once before reporting its chunks as present; otherwise a stale index
 	// entry makes the CLI skip the upload and assembly fails much later when it
@@ -182,72 +212,84 @@ func (c *Client) MissingChunks(ctx context.Context, hashes [][32]byte) ([][32]by
 	// layers because nearly the entire layer may be streamed before the stale
 	// chunk is encountered.
 	nsCtx := c.withNamespace(ctx)
-	indexed := make([]chunkLoc, 0, len(hashes))
+	now := time.Now()
+	candidates := make([][32]byte, 0, len(hashes))
 	for _, h := range hashes {
-		if c.staging.has(h) {
-			continue
-		}
-		if loc, ok := c.chunkIndex.Has(h); ok {
-			indexed = append(indexed, loc)
+		if !c.staging.retain(h, now) {
+			candidates = append(candidates, h)
 		}
 	}
+	// The index is a cache: a failure reading it must never fail a deploy.
+	// Treat a lookup error as if the index held none of the candidates, so
+	// every candidate not already staged is simply reported missing (and
+	// re-sent) rather than aborting the whole call.
+	locs, found, err := c.chunkIndex.Lookup(candidates)
+	if err != nil {
+		c.logger.Warn("Chunk index lookup failed; treating candidates as not indexed", zap.Error(err))
+	}
 
+	var cs content.Store
 	blobSizes := make(map[string]uint64)
 	invalidBlobs := make(map[string]struct{})
-	if len(indexed) > 0 {
-		cs := c.client.ContentStore()
-		for _, loc := range indexed {
-			if _, checked := blobSizes[loc.Blob]; checked {
-				continue
-			}
-			if _, invalid := invalidBlobs[loc.Blob]; invalid {
-				continue
-			}
-
-			dgst, err := digest.Parse(loc.Blob)
-			if err != nil {
-				invalidBlobs[loc.Blob] = struct{}{}
-				continue
-			}
-			info, err := cs.Info(nsCtx, dgst)
-			if err != nil {
-				if errdefs.IsNotFound(err) {
-					invalidBlobs[loc.Blob] = struct{}{}
-					continue
-				}
-				return nil, fmt.Errorf("checking indexed chunk blob %s: %w", loc.Blob, err)
-			}
-			if info.Size < 0 {
-				invalidBlobs[loc.Blob] = struct{}{}
-				continue
-			}
-			blobSizes[loc.Blob] = uint64(info.Size)
+	for i, loc := range locs {
+		if !found[i] {
+			continue
 		}
+		if _, checked := blobSizes[loc.Blob]; checked {
+			continue
+		}
+		if _, invalid := invalidBlobs[loc.Blob]; invalid {
+			continue
+		}
+		dgst, err := digest.Parse(loc.Blob)
+		if err != nil {
+			invalidBlobs[loc.Blob] = struct{}{}
+			continue
+		}
+		if cs == nil {
+			cs = c.client.ContentStore()
+		}
+		info, err := cs.Info(nsCtx, dgst)
+		if err != nil {
+			if errdefs.IsNotFound(err) {
+				invalidBlobs[loc.Blob] = struct{}{}
+				continue
+			}
+			return nil, fmt.Errorf("checking indexed chunk blob %s: %w", loc.Blob, err)
+		}
+		if info.Size < 0 {
+			invalidBlobs[loc.Blob] = struct{}{}
+			continue
+		}
+		blobSizes[loc.Blob] = uint64(info.Size)
 	}
 
 	// A malformed range means the persisted index cannot safely describe that
 	// blob. Drop all of its entries so every affected chunk is requested again.
-	for _, loc := range indexed {
+	for i, loc := range locs {
+		if !found[i] {
+			continue
+		}
 		size, valid := blobSizes[loc.Blob]
 		if !valid || loc.Offset > size || loc.Len > size-loc.Offset {
 			invalidBlobs[loc.Blob] = struct{}{}
 		}
 	}
-	if len(invalidBlobs) > 0 {
-		for blob := range invalidBlobs {
-			c.chunkIndex.Drop(blob)
-		}
-		if err := c.chunkIndex.Save(); err != nil {
-			return nil, fmt.Errorf("saving pruned chunk index: %w", err)
-		}
+	// In batches, not a transaction per blob: the first query after the legacy
+	// import can find hundreds of stale blobs, and this runs under the sweep
+	// lock's read side. A failed drop costs nothing here, since those chunks
+	// are reported missing below; the next query or reconcile retries it.
+	if _, err := c.chunkIndex.DropBlobs(slices.Collect(maps.Keys(invalidBlobs))); err != nil {
+		c.logger.Warn("Dropping stale chunk-index entries failed", zap.Int("blobs", len(invalidBlobs)), zap.Error(err))
 	}
 
 	var missing [][32]byte
-	for _, h := range hashes {
-		if c.staging.has(h) {
+	for i, h := range candidates {
+		if !found[i] {
+			missing = append(missing, h)
 			continue
 		}
-		if _, ok := c.chunkIndex.Has(h); !ok {
+		if _, invalid := invalidBlobs[locs[i].Blob]; invalid {
 			missing = append(missing, h)
 		}
 	}
@@ -281,6 +323,12 @@ func (c *Client) PresentLayers(ctx context.Context, diffIDs []string) (map[strin
 }
 
 func (c *Client) StageChunk(_ context.Context, h [32]byte, data []byte) error {
+	// Maintenance never sweeps staged chunks while a stage holds this: see
+	// MissingChunks above.
+	c.chunkSweepMu.RLock()
+	defer c.chunkSweepMu.RUnlock()
+	c.chunkActivity.touch()
+
 	if len(data) > maxStagedChunkBytes {
 		return status.Errorf(codes.ResourceExhausted, "chunk too large: %d > %d bytes", len(data), maxStagedChunkBytes)
 	}
@@ -305,7 +353,9 @@ func (c *Client) readIndexedChunk(ctx context.Context, loc chunkLoc) ([]byte, er
 	ra, err := cs.ReaderAt(ctx, ocispec.Descriptor{Digest: dgst})
 	if err != nil {
 		if errdefs.IsNotFound(err) {
-			c.chunkIndex.Drop(loc.Blob)
+			if derr := c.chunkIndex.Drop(loc.Blob); derr != nil {
+				c.logger.Warn("Dropping stale chunk-index entries failed", zap.String("blob", loc.Blob), zap.Error(derr))
+			}
 			return nil, nil
 		}
 		return nil, err
@@ -316,18 +366,6 @@ func (c *Client) readIndexedChunk(ctx context.Context, loc chunkLoc) ([]byte, er
 		return nil, err
 	}
 	return b, nil
-}
-
-// chunkLen returns a chunk's length from its staged file or its indexed blob
-// range, without reading the bytes. ok is false when the chunk is unavailable.
-func (c *Client) chunkLen(h [32]byte) (int64, bool) {
-	if n, ok := c.staging.statLen(h); ok {
-		return n, true
-	}
-	if loc, ok := c.chunkIndex.Has(h); ok {
-		return int64(loc.Len), true
-	}
-	return 0, false
 }
 
 // OpenChunkStream returns a reader over the chunks named by hashes, in order,
@@ -345,6 +383,7 @@ func (c *Client) chunkLen(h [32]byte) (int64, bool) {
 // caller reassembling something it will then execute — a build context — gets
 // either every requested byte or an error, never a silently short prefix.
 func (c *Client) OpenChunkStream(ctx context.Context, hashes [][32]byte) io.Reader {
+	c.chunkActivity.touch()
 	nsCtx := c.withNamespace(ctx)
 	src := func(h [32]byte) ([]byte, error) {
 		if b, err := c.staging.read(h); err == nil {
@@ -365,84 +404,74 @@ func (c *Client) OpenChunkStream(ctx context.Context, hashes [][32]byte) io.Read
 }
 
 func (c *Client) AssembleLayerFromChunks(ctx context.Context, diffID string, hashes [][32]byte) error {
+	defer c.chunkActivity.begin()()
 	nsCtx := c.withNamespace(ctx)
 
 	// Fast path: if the (uncompressed) layer blob already exists in the content
 	// store, it was reassembled and indexed on a previous deploy. Skip the
-	// expensive reconstruct + re-chunk + index-save entirely — for an unchanged
-	// layer this avoids reading and re-chunking the full layer on every deploy,
-	// which dominates redeploy latency for large base images.
+	// expensive reconstruct + index update entirely — for an unchanged layer
+	// this avoids reading the full layer on every deploy, which dominates
+	// redeploy latency for large base images.
 	if dgst, err := digest.Parse(diffID); err == nil {
 		if _, err := c.client.ContentStore().Info(nsCtx, dgst); err == nil {
 			return nil
 		}
 	}
 
-	// Total layer size is the sum of the chunk lengths, resolved without reading
-	// any bytes. content.WriteBlob needs the size up front to commit the blob.
-	var total int64
-	for i, h := range hashes {
-		n, ok := c.chunkLen(h)
-		if !ok {
-			return fmt.Errorf("chunk %d (%x) unavailable", i, h)
-		}
-		total += n
-	}
-
-	// Stream the chunks straight into the content store. WriteBlob verifies the
-	// reassembled bytes hash to diffID as it writes (so a corrupt or forged
-	// stream fails the commit), which subsumes the old whole-buffer digest check.
-	src := func(h [32]byte) ([]byte, error) {
-		if b, err := c.staging.read(h); err == nil {
-			return b, nil
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if loc, ok := c.chunkIndex.Has(h); ok {
-			return c.readIndexedChunk(nsCtx, loc)
-		}
-		return nil, nil
-	}
-	stream := &chunkStream{order: hashes, src: src}
-	if err := c.WriteLayer(nsCtx, diffID, stream, total); err != nil {
+	start := time.Now()
+	segs, refs, total, err := c.planAssembly(hashes)
+	if err != nil {
 		return err
 	}
-
-	// Re-chunk the freshly written blob by streaming it back out of the content
-	// store, so the index references this blob (offsets relative to it) without
-	// holding the layer in memory.
-	if err := c.indexLayerBlob(nsCtx, diffID); err != nil {
-		c.logger.Warn("failed to index reassembled layer", zap.String("diff_id", diffID), zap.Error(err))
+	stats, err := c.writeAssembledLayer(nsCtx, diffID, total, segs)
+	if err != nil {
+		return err
 	}
-
-	// Release the staged chunks now embedded in the blob.
-	for _, h := range hashes {
-		c.staging.remove(h)
+	// Nothing proved that an unverified manifest describes the committed
+	// blob: a concurrent assembly of the same layer committed it first, or
+	// the prefix this call resumed does not match. Indexing it would send
+	// later assemblies to ranges that fail their hashes.
+	if stats.verified {
+		c.indexAssembledLayer(diffID, refs, hashes)
 	}
-
+	// WDY-3213's acceptance is measured on devices from this line.
+	c.logger.Info("Assembled layer",
+		zap.String("diff_id", diffID),
+		zap.Int64("size", total),
+		zap.Duration("took", time.Since(start)),
+		zap.Int("segments", stats.segments),
+		zap.Int64("staged_bytes", stats.stagedBytes),
+		zap.Int64("indexed_bytes", stats.indexedBytes),
+		zap.Int64("resumed_bytes", stats.resumedBytes),
+		zap.Int("blobs", stats.blobs),
+		zap.Bool("verified", stats.verified))
 	return nil
 }
 
-// indexLayerBlob re-chunks the layer blob identified by diffID by streaming it
-// from the content store, and records the chunk ranges in the persistent index.
-func (c *Client) indexLayerBlob(ctx context.Context, diffID string) error {
-	dgst, err := digest.Parse(diffID)
-	if err != nil {
-		return err
+// indexAssembledLayer indexes a verified layer's blob from its manifest, then
+// releases the staged chunks the index now holds.
+//
+// Staged chunks go only once the index holds them. Until then a concurrent
+// assembly of another layer may rely on them: its waitForChunks, or its CLI's
+// MissingChunks, already counted them present. When this returns early, or
+// is never called, retire and the sweep reclaim them.
+func (c *Client) indexAssembledLayer(diffID string, refs []chunk.Ref, hashes [][32]byte) {
+	// Commit verified the blob digest and the segment reader verified each
+	// chunk's hash as it read it, so these ranges are exact; re-reading and
+	// re-chunking the blob to rediscover them cost ~1 s per 430 MB on an Orin
+	// Nano (WDY-3214). A resumed prefix, which the reader skips, is read back
+	// from the blob and checked, so the index never records a range this call
+	// did not verify.
+	if err := c.chunkIndex.AddLayer(diffID, refs); err != nil {
+		c.logger.Warn("failed to index reassembled layer", zap.String("diff_id", diffID), zap.Error(err))
+		return
 	}
-	ra, err := c.client.ContentStore().ReaderAt(ctx, ocispec.Descriptor{Digest: dgst})
-	if err != nil {
-		return err
+	if c.chunkIndex.disabled() {
+		return // nothing was recorded
 	}
-	defer ra.Close()
 
-	refs, err := chunk.ChunkReaderAt(ra, ra.Size())
-	if err != nil {
-		return err
+	// Release the staged chunks now embedded in the blob and indexed.
+	for _, h := range hashes {
+		c.staging.remove(h)
 	}
-	c.chunkIndex.AddLayer(diffID, refs)
-	if err := c.chunkIndex.Save(); err != nil {
-		c.logger.Warn("failed to persist chunk index", zap.Error(err))
-	}
-	return nil
 }

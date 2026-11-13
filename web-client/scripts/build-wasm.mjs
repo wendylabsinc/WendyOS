@@ -13,6 +13,9 @@ try {
     "go",
     [
       "build",
+      // Reproducible off CI: no build paths or checkout state in the module.
+      "-trimpath",
+      "-buildvcs=false",
       "-ldflags=-s -w",
       "-o",
       join(work, "wendy.wasm"),

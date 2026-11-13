@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,22 +19,14 @@ import (
 )
 
 // DetectionNotification contains metadata only, never camera images or secrets.
-type DetectionNotification struct {
-	ID       string `json:"id"`
-	Event    string `json:"event"`
-	Campaign string `json:"campaign"`
-	SourceID string `json:"source_id"`
-	Model    string `json:"model"`
-	Revision string `json:"model_revision"`
-	Count    int    `json:"count"`
-}
+type DetectionNotification = data.CampaignNotification
 
 type CampaignNotificationSender interface {
 	Send(context.Context, string, DetectionNotification) error
 }
 
-// CampaignCloudSender uses the campaign name as its Cloud app identity. Cloud
-// must authorize that identity for this device before accepting a notification.
+// CampaignCloudSender labels notifications with sh.wendy.campaign.<name>. Cloud derives
+// the destination organization from the enrolled device credential.
 // An explicit webhook continues to select direct HTTP delivery.
 type CampaignCloudSender struct {
 	Cloud NotificationSender
@@ -52,11 +46,12 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 		"model":          notification.Model,
 		"model_revision": notification.Revision,
 		"count":          notification.Count,
+		"occurred_at":    notification.OccurredAt,
 	})
 	if err != nil {
 		return err
 	}
-	appID := "campaign:" + notification.Campaign
+	appID := data.CampaignAppID(notification.Campaign)
 	response, err := s.Cloud.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{
 		AppId: &appID,
 		Audience: &cloudpb.NotificationAudience{Roles: []cloudpb.OrganizationRole{

@@ -11,25 +11,46 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	invite "github.com/wendylabsinc/wendy/go/proto/gen/cloudinvitepb"
 	"io"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	metadataKey    = "x-wendy-request-signature"
 	brokerAudience = "https://cloud.wendy.sh/broker"
-	signatureTTL   = 30 * time.Second
+	// signatureTTL is a request descriptor's lifetime. Cloud admits iat within
+	// ±60 s of its clock and enforces expiry strictly, so 60 s, as the console
+	// signs, tolerates a clock up to a minute slow (WDY-3939 #11).
+	signatureTTL = 60 * time.Second
+	// relayedSignatureTTL is the lifetime of what Cloud hands on to another
+	// verifier: the PKI management request, and the descriptors of
+	// relayedSignatures, which the device checks again. The agent's reset
+	// verifier caps a DeleteAsset descriptor at 30 s.
+	relayedSignatureTTL = 30 * time.Second
 )
+
+// relayedSignatures lists the methods whose descriptor Cloud forwards to the
+// device: DeleteAsset inside the reset authorization, and the postbox
+// request_jws of the deployment methods.
+var relayedSignatures = map[string]bool{
+	cloudpbv2.AssetService_DeleteAsset_FullMethodName:           true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName: true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName: true,
+}
 
 // Signer creates the JWS request descriptors required by Wendy Cloud for
 // operator-privileged mutations. A Signer is safe for concurrent RPCs: it
@@ -38,23 +59,174 @@ type Signer struct {
 	privateKey crypto.Signer
 	tenantUUID string
 	x5c        []string
+	kid        string // base64url(SHA-256(leaf DER)): the RFC 7515 x5t#S256 value
 	audience   string
 	now        func() time.Time
 	random     io.Reader
 }
 
-// DialOption returns a unary interceptor option for a session that has a
-// pki-core operator certificate. Legacy/token-only sessions return nil so
-// read-only RPCs continue to work; Cloud will reject their privileged writes.
-func DialOption(auth *config.AuthConfig) (grpc.DialOption, error) {
-	signer, err := newSigner(auth)
+// Invoke calls an operator-signed method with req wrapped in the
+// wendycloud.v2.SignedRequest envelope it takes (WDY-3458): payload is req
+// serialized once, payload_type its message name, and signature a JWS whose
+// body_sha256 binds exactly those payload bytes. Nothing is added to the call's
+// metadata.
+//
+// The JWS names the operator leaf by kid (WDY-3463) once the leaf is
+// registered, which happens once per process with RegisterOperatorLeaf, signed
+// with x5c. A Cloud without that RPC (Unimplemented) gets x5c instead, since
+// registration is optional by contract. Cloud refuses an unknown, revoked or
+// expired kid with a generic PERMISSION_DENIED, and a leaf pki-core holds no
+// DER for with FAILED_PRECONDITION "leaf not stored"; either is retried exactly
+// once signed with x5c under the same correlation_id, and the registration is
+// dropped so the next call registers again. The refusal cannot tell a stale
+// kid from a missing permission, so a second refusal is final.
+// CollidingFieldMetadataKey names the trailer Cloud attaches to a duplicate
+// refusal saying WHICH field collided ("name", "device_id", or "mesh_suffix").
+// The SQLSTATE is the same for all three; the trailer is what tells them apart.
+const CollidingFieldMetadataKey = "wendy-colliding-field"
+
+func Invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message) error {
+	return invoke(ctx, conn, auth, method, req, reply, nil)
+}
+
+// InvokeWithTrailer is Invoke, additionally collecting the call's trailing
+// metadata into *trailer. Callers that branch on a refusal -- enrollment's
+// mesh-address collision retry -- need the trailer; everyone else uses Invoke.
+func InvokeWithTrailer(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
+	return invoke(ctx, conn, auth, method, req, reply, trailer)
+}
+
+func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
+	s, err := newSigner(auth)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if signer == nil {
-		return nil, nil
+	if s == nil {
+		return fmt.Errorf("%s requires an operator certificate; run 'wendy auth login'", method)
 	}
-	return grpc.WithChainUnaryInterceptor(signer.unaryClientInterceptor()), nil
+	// Registration, retries and later calls adopt an existing operation ID.
+	correlationID, err := CorrelationID(ctx)
+	if err != nil {
+		return err
+	}
+	call := func(byKID bool) error {
+		signed, err := s.signRequest(method, req, byKID, correlationID)
+		if err != nil {
+			return err
+		}
+		markContextChannel(ctx, signed)
+		var opts []grpc.CallOption
+		if trailer != nil {
+			opts = append(opts, grpc.Trailer(trailer))
+		}
+		return explainClock(conn.Invoke(ctx, method, signed, reply, opts...))
+	}
+	if x5cOnly[method] {
+		return call(false)
+	}
+	registered, err := s.register(ctx, conn, correlationID)
+	if err != nil {
+		return err
+	}
+	if !registered {
+		return call(false)
+	}
+	err = call(true)
+	if !kidRefused(err) {
+		return err
+	}
+	registeredKIDs.Delete(s.kid)
+	if retryErr := call(false); retryErr != nil {
+		return fmt.Errorf("Cloud refused %s by key id and again with the operator certificate attached: %w", method, retryErr)
+	}
+	return nil
+}
+
+// x5cOnly lists the methods always signed with x5c, never kid: the leaf
+// registration itself, the registry key registration (Cloud serves the stored
+// request back to other clients as the binding), and the two whose JWS Cloud
+// forwards verbatim to devices (PostboxEntry.request_jws), which cannot
+// resolve a kid.
+var x5cOnly = map[string]bool{
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:   true,
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
+}
+
+// registeredKIDs holds the leaves this process has registered.
+// ponytail: per process, not persisted; a CLI run registers once per signed
+// command, which is one call today. Persist in the auth session if that grows.
+var registeredKIDs sync.Map
+
+// kidRefused reports the two refusals a kid-signed call may get for its key
+// reference: a generic PERMISSION_DENIED, or the explicit "leaf not stored".
+// Any other FAILED_PRECONDITION comes from the handler and is not retried, nor
+// is an expired signature, which x5c signed by the same clock repeats.
+func kidRefused(err error) bool {
+	st, _ := status.FromError(err)
+	switch st.Code() {
+	case codes.PermissionDenied:
+		return !signatureExpired(err)
+	case codes.FailedPrecondition:
+		return strings.Contains(st.Message(), "leaf not stored")
+	}
+	return false
+}
+
+// signatureExpired reports Cloud's refusal of a descriptor outside its
+// validity window: PERMISSION_DENIED with ErrorInfo reason "expired".
+func signatureExpired(err error) bool {
+	st, _ := status.FromError(err)
+	if st.Code() != codes.PermissionDenied {
+		return false
+	}
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == "wendy.sh" && info.GetReason() == "expired" {
+			return true
+		}
+	}
+	return false
+}
+
+// explainClock names the likely cause of an expired signature: this
+// computer's clock, which neither a retry nor a new login fixes.
+func explainClock(err error) error {
+	if !signatureExpired(err) {
+		return err
+	}
+	return fmt.Errorf("%w (Cloud found the request signature outside its validity window: check that this computer's clock is within a minute of the correct time)", err)
+}
+
+// register reports whether the leaf is registered and may be named by kid. A
+// Cloud that does not serve RegisterOperatorLeaf yields false, not an error.
+func (s *Signer) register(ctx context.Context, conn grpc.ClientConnInterface, correlationID string) (bool, error) {
+	if _, ok := registeredKIDs.Load(s.kid); ok {
+		return true, nil
+	}
+	method := cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName
+	signed, err := s.signRequest(method, &cloudpbv2.RegisterOperatorLeafRequest{OrganizationId: s.tenantUUID}, false, correlationID)
+	if err != nil {
+		return false, err
+	}
+	markContextChannel(ctx, signed)
+	var resp cloudpbv2.RegisterOperatorLeafResponse
+	if err := conn.Invoke(ctx, method, signed, &resp); err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return false, nil
+		}
+		return false, fmt.Errorf("registering the operator certificate with Cloud: %w", explainClock(err))
+	}
+	if resp.GetKid() != s.kid {
+		return false, fmt.Errorf("Cloud registered operator certificate %q, not this session's %q", resp.GetKid(), s.kid)
+	}
+	registeredKIDs.Store(s.kid, struct{}{})
+	return true, nil
+}
+
+func leafKID(der []byte) string {
+	sum := sha256.Sum256(der)
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func newSigner(auth *config.AuthConfig) (*Signer, error) {
@@ -99,6 +271,7 @@ func newSigner(auth *config.AuthConfig) (*Signer, error) {
 		privateKey: privateKey,
 		tenantUUID: tenantUUID,
 		x5c:        x5c,
+		kid:        leafKID(pair.Certificate[0]),
 		audience:   brokerAudience,
 		now:        time.Now,
 		random:     rand.Reader,
@@ -128,101 +301,263 @@ func operatorTenant(principal string) (string, error) {
 	return id.TenantUUID, nil
 }
 
-func (s *Signer) unaryClientInterceptor() grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		resource, required, err := signedResource(method, req)
-		if method == cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName {
-			in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
-			if !ok {
-				return requestTypeError(method, req)
+func (s *Signer) signRequest(method string, req proto.Message, byKID bool, correlationID string) (*cloudpbv2.SignedRequest, error) {
+	resource, ok := signedResources[method]
+	if !ok {
+		return nil, requestTypeError(method, req)
+	}
+	target, ok := resource(s.tenantUUID, req)
+	if !ok {
+		return nil, requestTypeError(method, req)
+	}
+	if err := stampValidity(req, s.now()); err != nil {
+		return nil, err
+	}
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling Cloud request %s: %w", method, err)
+	}
+	sum := sha256.Sum256(payload)
+	jws, err := s.sign(strings.TrimPrefix(method, "/"), target, base64.RawURLEncoding.EncodeToString(sum[:]), byKID, correlationID)
+	if err != nil {
+		return nil, fmt.Errorf("signing Cloud request %s: %w", method, err)
+	}
+	signed := &cloudpbv2.SignedRequest{
+		Payload:     payload,
+		PayloadType: string(req.ProtoReflect().Descriptor().FullName()),
+		Signature:   []byte(jws),
+	}
+	if method == cloudpbv2.AssetService_DeleteAsset_FullMethodName {
+		deletion := req.(*cloudpbv2.DeleteAssetRequest) // checked by signedResources
+		if deletion.ExpectedDeviceId != nil {
+			management, err := s.unenrollManagementRequest(deletion.GetExpectedDeviceId())
+			if err != nil {
+				return nil, err
 			}
-			resource = "org/" + s.tenantUUID + "/device/" + in.GetDeviceId()
-			required = true
+			signed.PkiManagementRequest = management
 		}
-		if err != nil {
+	}
+	markChannel(signed)
+	return signed, nil
+}
+
+// The MCP channel marker of this process and of the CLI children its tools
+// start, set by SetChannel and read by markChannel.
+const (
+	channelEnv        = "WENDY_MCP_CHANNEL"
+	mcpClientIDEnv    = "WENDY_MCP_CLIENT_ID"
+	relaySessionIDEnv = "WENDY_MCP_RELAY_SESSION_ID"
+)
+
+// SetChannel marks every later signed Cloud call of this process, and of the
+// CLI children it starts, as made through an MCP channel (Relay MCP contract,
+// docs/relay-mcp.md): MCP_LOCAL for `wendy mcp serve`, HOSTED_MCP with the web
+// client's OAuth client_id and the relay session for `wendy cloud mcp`. The
+// marker is outside the signature; a modified client can omit it.
+func SetChannel(channel cloudpbv2.RequestChannel, mcpClientID, relaySessionID string) error {
+	for _, kv := range [][2]string{{mcpClientIDEnv, mcpClientID}, {relaySessionIDEnv, relaySessionID}, {channelEnv, channel.String()}} {
+		if err := os.Setenv(kv[0], kv[1]); err != nil {
 			return err
 		}
-		if required {
-			// Sign exactly the bytes that go on the wire. Marshal the request
-			// once here, hash those bytes for body_sha256, then force a codec
-			// that hands the invoker the same bytes verbatim. The broker hashes
-			// the request as received (WDY-3007); letting grpc marshal a second
-			// time could put different bytes on the wire than we signed.
-			msg, ok := req.(proto.Message)
-			if !ok {
-				return requestTypeError(method, req)
-			}
-			raw, err := proto.Marshal(msg)
-			if err != nil {
-				return fmt.Errorf("marshaling Cloud request %s: %w", method, err)
-			}
-			sum := sha256.Sum256(raw)
-			envelope, err := s.sign(strings.TrimPrefix(method, "/"), resource, base64.RawURLEncoding.EncodeToString(sum[:]))
-			if err != nil {
-				return fmt.Errorf("signing Cloud request %s: %w", method, err)
-			}
-			md, ok := metadata.FromOutgoingContext(ctx)
-			if ok {
-				md = md.Copy()
-			} else {
-				md = metadata.MD{}
-			}
-			md.Set(metadataKey, envelope)
-			ctx = metadata.NewOutgoingContext(ctx, md)
-			opts = append(opts, grpc.ForceCodec(wireCodec{raw: raw}))
-		}
-		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+	return nil
+}
+
+func markChannel(signed *cloudpbv2.SignedRequest) {
+	signed.Channel = cloudpbv2.RequestChannel(cloudpbv2.RequestChannel_value[os.Getenv(channelEnv)])
+	if signed.Channel == cloudpbv2.RequestChannel_REQUEST_CHANNEL_HOSTED_MCP {
+		signed.McpClientId = os.Getenv(mcpClientIDEnv)
+		signed.RelaySessionId = os.Getenv(relaySessionIDEnv)
 	}
 }
 
-func signedResource(method string, req any) (string, bool, error) {
-	switch strings.TrimPrefix(method, "/") {
-	case "wendycloud.v1.AssetService/UpdateAsset":
-		in, ok := req.(*cloudpb.UpdateAssetRequest)
-		if !ok {
-			return "", true, requestTypeError(method, req)
-		}
-		return fmt.Sprintf("asset/%d", in.GetId()), true, nil
-	case "wendycloud.v1.AssetService/DeleteAsset":
-		in, ok := req.(*cloudpb.DeleteAssetRequest)
-		if !ok {
-			return "", true, requestTypeError(method, req)
-		}
-		return fmt.Sprintf("asset/%d", in.GetId()), true, nil
-	case "wendycloud.v1.CertificateService/RevokeCertificate":
-		in, ok := req.(*cloudpb.RevokeCertificateRequest)
-		if !ok {
-			return "", true, requestTypeError(method, req)
-		}
-		return fmt.Sprintf("certificate/%d", in.GetCertificateId()), true, nil
-	case "wendycloud.v1.CertificateService/CreateAssetEnrollmentToken":
-		in, ok := req.(*cloudpb.CreateAssetEnrollmentTokenRequest)
-		if !ok {
-			return "", true, requestTypeError(method, req)
-		}
-		return fmt.Sprintf("org/%d/enroll-asset-name/%s", in.GetOrganizationId(), in.GetName()), true, nil
-	default:
-		return "", false, nil
+// Cloud's shared unenrollment path relays this operator authority to PKI.
+// The same leaf signs both artifacts; this never calls PKI or revokes locally.
+func (s *Signer) unenrollManagementRequest(deviceID string) ([]byte, error) {
+	if deviceID == "" || len(deviceID) > 64 || strings.Trim(deviceID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != "" {
+		return nil, fmt.Errorf("unenrollment requires an exact safe PKI device identity")
 	}
+	if device, err := uuid.Parse(deviceID); err == nil && device.String() != deviceID {
+		return nil, fmt.Errorf("unenrollment requires a canonical device UUID")
+	}
+	return s.principalRevocationManagementRequest(deviceID)
 }
 
-func requestTypeError(method string, req any) error {
+// Principal revocation also supports Lite identities that are not UUIDs.
+// unenrollManagementRequest validates those IDs before signing.
+func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, error) {
+	tenant, err := uuid.Parse(s.tenantUUID)
+	if err != nil || tenant.String() != s.tenantUUID {
+		return nil, fmt.Errorf("unenrollment requires a canonical operator tenant UUID")
+	}
+	now := s.now().Unix()
+	payload, err := canonicalJSON(map[string]any{
+		"op": "revoke_principal", "tenant": s.tenantUUID,
+		"principal": "spiffe://wendy.sh/tenant/" + s.tenantUUID + "/device/" + deviceID,
+		"iat":       now, "exp": now + int64(relayedSignatureTTL/time.Second), "jti": uuid.NewString(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding unenrollment authority: %w", err)
+	}
+	jws, err := s.signPayload(payload, map[string]any{"x5c": s.x5c})
+	if err != nil {
+		return nil, fmt.Errorf("signing unenrollment authority: %w", err)
+	}
+	return []byte(jws), nil
+}
+
+// signedResources maps each operator-signed method the CLI calls to its
+// target.resource (cloud RequestSigning.md). The type assertion is what keeps
+// payload_type equal to the method's request message.
+var signedResources = map[string]func(tenant string, req proto.Message) (string, bool){
+	cloudpbv2.OrganizationService_AddMembersByEmails_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.AddMembersByEmailsRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(len(in.GetMembers()) > 0) {
+			return "", false
+		}
+		return "org/" + tenant + "/members-by-emails", true
+	},
+	cloudpbv2.OrganizationService_UpdateMemberRole_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateMemberRoleRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetUserId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/member/" + in.GetUserId(), true
+	},
+	cloudpbv2.OrganizationService_RemoveMember_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RemoveMemberRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetUserId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/member/" + in.GetUserId(), true
+	},
+	cloudpbv2.DeviceAccessService_CreateAccessEntry_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAccessEntryRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetPrincipalId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/device-access", true
+	},
+	cloudpbv2.DeviceAccessService_DeleteAccessEntry_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeleteAccessEntryRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetEntryId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/device-access/" + in.GetEntryId(), true
+	},
+	invite.OrganizationInviteService_CreateOrganizationInvite_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*invite.CreateOrganizationInviteRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(true) {
+			return "", false
+		}
+		return "org/" + tenant + "/invite", true
+	},
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RegisterOperatorLeafRequest)
+		return "org/" + in.GetOrganizationId() + "/operator-leaf", ok
+	},
+	cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
+		return "org/" + tenant + "/device/" + in.GetDeviceId(), ok
+	},
+	cloudpbv2.AppService_UpdateApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
+	},
+	cloudpbv2.AppService_UpsertApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpsertAppRequest)
+		if !ok || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
+	},
+	// Cloud DeploymentServiceHandler createAppRelease / updateAppRelease.
+	cloudpbv2.DeploymentService_CreateAppRelease_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAppReleaseRequest)
+		if !ok || in.GetOrganizationId() != tenant || in.GetAppId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetAppId(), true
+	},
+	cloudpbv2.DeploymentService_UpdateAppRelease_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppReleaseRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "app-release/" + in.GetId(), true
+	},
+	// Ruled 2026-10-13 (WDY-3660); cloud's RequestSigning.md row follows.
+	cloudpbv2.RelayMcpService_OpenRelaySession_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.OpenRelaySessionRequest)
+		return "org/" + in.GetOrganizationId() + "/relay-session", ok
+	},
+	// `wendy device rename` on a v2 enrollment.
+	cloudpbv2.AssetService_UpdateAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAssetRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "asset/" + in.GetId(), true
+	},
+	cloudpbv2.AssetService_DeleteAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeleteAssetRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "asset/" + in.GetId(), true
+	},
+	// Cloud RequestSigning.md: org/<organization_id>/encryption-key.
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
+		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
+	},
+	cloudpbv2.PKIAdminService_RevokeEnrollmentToken_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RevokeEnrollmentTokenRequest)
+		return "org/" + tenant + "/pki", ok && in.GetOrganizationId() == tenant && in.GetTokenId() != ""
+	},
+	cloudpbv2.PKIAdminService_RevokeEABKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RevokeEABKeyRequest)
+		return "org/" + tenant + "/pki", ok && in.GetOrganizationId() == tenant && in.GetKeyId() != ""
+	},
+}
+
+func requestTypeError(method string, req proto.Message) error {
 	return fmt.Errorf("cannot sign Cloud request %s with message type %T", method, req)
 }
 
-func (s *Signer) sign(operation, resource, bodyDigest string) (string, error) {
+func (s *Signer) sign(operation, resource, bodyDigest string, byKID bool, correlationID string) (string, error) {
 	nonceBytes := make([]byte, 32)
 	if _, err := io.ReadFull(s.random, nonceBytes); err != nil {
 		return "", fmt.Errorf("generating request nonce: %w", err)
 	}
 	now := s.now().Unix()
+	ttl := signatureTTL
+	if relayedSignatures["/"+operation] {
+		ttl = relayedSignatureTTL
+	}
 	descriptor := map[string]any{
-		"aud":         s.audience,
-		"body_sha256": bodyDigest,
-		"expiry":      now + int64(signatureTTL/time.Second),
-		"iat":         now,
-		"nonce":       base64.RawURLEncoding.EncodeToString(nonceBytes),
-		"operation":   operation,
+		"aud":            s.audience,
+		"body_sha256":    bodyDigest,
+		"correlation_id": correlationID,
+		"expiry":         now + int64(ttl/time.Second),
+		"iat":            now,
+		"nonce":          base64.RawURLEncoding.EncodeToString(nonceBytes),
+		"operation":      operation,
 		"target": map[string]any{
 			"resource": resource,
 			"tenant":   s.tenantUUID,
@@ -232,15 +567,36 @@ func (s *Signer) sign(operation, resource, bodyDigest string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encoding request descriptor: %w", err)
 	}
-	// Cloud validates only x5c[0] through PKI, which owns the issuer chain.
-	// Sending the ML-DSA intermediates here can exceed the broker's 16 KiB
-	// HTTP/2 header limit once the JWS and OAuth bearer are combined.
-	return s.signPayload(payload, s.x5c[:1])
+	// Exactly one leaf reference: its kid, or an x5c of the leaf alone (Cloud
+	// validates only the leaf through PKI, which owns the issuer chain).
+	if byKID {
+		return s.signPayload(payload, map[string]any{"kid": s.kid})
+	}
+	return s.signPayload(payload, map[string]any{"x5c": s.x5c[:1]})
 }
 
 // EnrollmentRequest signs PKI's enrollment authority separately from the Cloud
 // RPC descriptor. PKI verifies this JWS against the tenant's Operator Authority.
 func EnrollmentRequest(auth *config.AuthConfig, deviceID string) ([]byte, error) {
+	return EnrollmentRequestForClass(auth, deviceID, "B")
+}
+
+// EnrollmentRequestForClass binds the operator authorization to a device tier.
+func EnrollmentRequestForClass(auth *config.AuthConfig, deviceID, deviceClass string) ([]byte, error) {
+	return EnrollmentRequestForChain(auth, deviceID, deviceClass, "")
+}
+
+// EnrollmentChainP256 selects the PKI's P-256 device authority for constrained
+// devices. The operator signature binds this choice alongside the device tier.
+const EnrollmentChainP256 = "ECDSA_P256"
+
+func EnrollmentRequestForChain(auth *config.AuthConfig, deviceID, deviceClass, chainAlgorithm string) ([]byte, error) {
+	if deviceClass != "A" && deviceClass != "B" && deviceClass != "C" {
+		return nil, fmt.Errorf("invalid device class %q", deviceClass)
+	}
+	if chainAlgorithm != "" && (deviceClass != "C" || chainAlgorithm != EnrollmentChainP256) {
+		return nil, fmt.Errorf("P-256 certificate chains are supported only for Class C enrollment")
+	}
 	s, err := newSigner(auth)
 	if err != nil {
 		return nil, err
@@ -249,21 +605,28 @@ func EnrollmentRequest(auth *config.AuthConfig, deviceID string) ([]byte, error)
 		return nil, fmt.Errorf("device enrollment requires an operator certificate")
 	}
 	now := s.now().Unix()
-	payload, err := canonicalJSON(map[string]any{
-		"tenant": s.tenantUUID, "device_id": deviceID, "device_class": "B",
+	claims := map[string]any{
+		"tenant": s.tenantUUID, "device_id": deviceID, "device_class": deviceClass,
 		"iat": now, "exp": now + 300, "jti": uuid.NewString(),
-	})
+	}
+	if chainAlgorithm != "" {
+		claims["chain_algorithm"] = chainAlgorithm
+	}
+	payload, err := canonicalJSON(claims)
 	if err != nil {
 		return nil, err
 	}
 	// This artifact is carried in the protobuf body, not HTTP metadata. Keep
 	// the full chain for PKI's enrollment signature verifier.
-	jws, err := s.signPayload(payload, s.x5c)
+	jws, err := s.signPayload(payload, map[string]any{"x5c": s.x5c})
 	return []byte(jws), err
 }
 
-func (s *Signer) signPayload(payload []byte, chain []string) (string, error) {
-	header, err := canonicalJSON(map[string]any{"alg": "ML-DSA-65", "x5c": chain})
+// signPayload signs payload under a protected header of alg plus ref, the
+// signer's leaf reference (x5c or kid).
+func (s *Signer) signPayload(payload []byte, ref map[string]any) (string, error) {
+	ref["alg"] = "ML-DSA-65"
+	header, err := canonicalJSON(ref)
 	if err != nil {
 		return "", fmt.Errorf("encoding JWS header: %w", err)
 	}
@@ -285,24 +648,6 @@ func (s *Signer) signPayload(payload []byte, chain []string) (string, error) {
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-// wireCodec forwards the exact request bytes the signer already hashed for
-// body_sha256, so grpc puts those bytes — not a fresh, possibly different
-// marshalling — on the wire. Replies decode with the standard proto codec.
-// Name is "proto" so the content-subtype and the server's codec are unchanged.
-type wireCodec struct{ raw []byte }
-
-func (wireCodec) Name() string { return "proto" }
-
-func (c wireCodec) Marshal(any) ([]byte, error) { return c.raw, nil }
-
-func (wireCodec) Unmarshal(data []byte, v any) error {
-	msg, ok := v.(proto.Message)
-	if !ok {
-		return fmt.Errorf("cloud request codec: reply type %T is not a proto message", v)
-	}
-	return proto.Unmarshal(data, msg)
-}
-
 // canonicalJSON is sufficient for the request descriptor's deliberately
 // narrow RFC 8785 subset: string-keyed objects, strings, arrays, and integers.
 // encoding/json sorts map keys; disabling HTML escaping preserves JCS strings.
@@ -314,4 +659,20 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.TrimSuffix(b.String(), "\n")), nil
+}
+
+// WithLocalMCP marks requests made by an embedded MCP call without changing
+// the process-wide channel used by unrelated native UI operations.
+func WithLocalMCP(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localMCPContextKey{}, true)
+}
+
+type localMCPContextKey struct{}
+
+func markContextChannel(ctx context.Context, signed *cloudpbv2.SignedRequest) {
+	if local, _ := ctx.Value(localMCPContextKey{}).(bool); local {
+		signed.Channel = cloudpbv2.RequestChannel_REQUEST_CHANNEL_MCP_LOCAL
+		signed.McpClientId = ""
+		signed.RelaySessionId = ""
+	}
 }

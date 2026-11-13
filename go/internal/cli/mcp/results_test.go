@@ -230,6 +230,19 @@ func TestProxiedResultSizerMatchesWireJSON(t *testing.T) {
 		},
 	}
 
+	// The SDK preserves raw structuredContent and adds modern protocol fields.
+	for _, wire := range []string{
+		`{"content":[],"structuredContent": { "html": "<tag>&", "number": 1234567890123456789, "escaped": "\\\"" }}`,
+		"{\"content\":[],\"structuredContent\":{\"text\":\"\u2028\u2029\"}}",
+		`{"content":[{"type":"tool_result","toolUseId":"nested","content":[],"structuredContent": {"html":"<nested>"}}],"resultType":"tools/call","requestState":"resume-state"}`,
+	} {
+		var result mcpgo.CallToolResult
+		if err := json.Unmarshal([]byte(wire), &result); err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, &result)
+	}
+
 	for i, result := range results {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			b, err := json.Marshal(result)
@@ -237,7 +250,9 @@ func TestProxiedResultSizerMatchesWireJSON(t *testing.T) {
 				t.Fatalf("marshal result: %v", err)
 			}
 			if proxiedResultExceedsMaxBytes(result, len(b)) {
-				t.Fatalf("exact-size result reported over limit: size=%d", len(b))
+				sizer := boundedJSONSizer{maxBytes: len(b)}
+				err := sizer.callToolResult(result)
+				t.Fatalf("exact-size result reported over limit: size=%d, measured=%d, error=%v", len(b), sizer.bytes, err)
 			}
 			if !proxiedResultExceedsMaxBytes(result, len(b)-1) {
 				t.Fatalf("result not reported over one-byte-short limit: size=%d", len(b))
@@ -275,5 +290,37 @@ func TestCapProxiedResult_ZeroMaxBytesDisablesCap(t *testing.T) {
 	r := capProxiedResult(big, 0)
 	if r != big {
 		t.Fatal("maxBytes<=0 should disable the cap and return the original result")
+	}
+}
+
+func TestOkListBounded_KeepsCompleteRowsAndCountsOmissions(t *testing.T) {
+	items := make([]map[string]any, 0, 20)
+	for i := range 20 {
+		items = append(items, map[string]any{"id": i, "body": strings.Repeat("世", 40)})
+	}
+	r := okListBounded("logs", items, 512)
+	rows := listPayload(t, r, "logs")
+	if len(rows) == 0 || len(rows) >= len(items) || len(toolResultText(t, r)) > 512 {
+		t.Fatalf("want a non-empty partial list within 512 bytes, got %d rows: %s", len(rows), toolResultText(t, r))
+	}
+	meta := structuredMap(t, r)
+	if meta["truncated"] != true || meta["returned"] != len(rows) || meta["omitted"] != len(items)-len(rows) {
+		t.Fatalf("bad truncation metadata: %v", meta)
+	}
+	if rows[0]["body"] != items[0]["body"] || rows[len(rows)-1]["id"] != float64(len(rows)-1) {
+		t.Fatal("rows must be a complete, in-order prefix")
+	}
+}
+
+// Review focus: one row larger than the budget yields an explicit empty
+// prefix with omitted counts, never a silently empty list.
+func TestOkListBounded_SingleOversizedRowReportsOmission(t *testing.T) {
+	r := okListBounded("batches", []string{strings.Repeat("a", 1000)}, 200)
+	meta := structuredMap(t, r)
+	if meta["truncated"] != true || meta["returned"] != 0 || meta["omitted"] != 1 {
+		t.Fatalf("oversized row must be reported as omitted: %v", meta)
+	}
+	if rows := listPayload(t, r, "batches"); len(rows) != 0 {
+		t.Fatalf("rows = %v", rows)
 	}
 }

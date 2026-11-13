@@ -16,7 +16,7 @@ type StubManager struct {
 	logger *zap.Logger
 }
 
-func newPlatformManager(logger *zap.Logger) Manager {
+func newPlatformManager(logger *zap.Logger, _ managerOptions) Manager {
 	return &StubManager{logger: logger}
 }
 

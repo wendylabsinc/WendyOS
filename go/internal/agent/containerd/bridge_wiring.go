@@ -81,3 +81,11 @@ func hasImplicitHostNetworkMode(entitlements []appconfig.Entitlement) bool {
 	}
 	return false
 }
+
+// needsInternetDefaultRoute grants Internet routing only to explicit bridge
+// apps. Mesh and service-only isolation keep their scoped routes.
+func needsInternetDefaultRoute(entitlements []appconfig.Entitlement) bool {
+	_, bridge := findBridgeEntitlement(entitlements)
+	_, mesh := findMeshEntitlement(entitlements)
+	return bridge && !mesh
+}

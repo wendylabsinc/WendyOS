@@ -4,16 +4,64 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/agent/realsense"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 )
+
+const maxCameraErrorDetail = 4096
+
+// gstCameraPipelineError keeps the capture diagnostic available to remote callers.
+// Device paths and element names identify what failed; this local-camera pipeline
+// contains no credentials. Redact URL credentials defensively and keep the status
+// bounded and safe to print in a terminal.
+func gstCameraPipelineError(devicePath, encoder, stderr string, waitErr, runErr error) error {
+	if runErr == nil {
+		if waitErr == nil || !exitedOnError(waitErr) {
+			return nil
+		}
+		if isBusyStderr(stderr, devicePath) {
+			return errCameraInUse(devicePath)
+		}
+		runErr = status.Error(codes.Internal, "GStreamer pipeline failed")
+	}
+
+	msg := fmt.Sprintf("%s for camera %s using %s", status.Convert(runErr).Message(), devicePath, encoder)
+	if exitedOnError(waitErr) {
+		msg += ": " + waitErr.Error()
+	}
+	detail := ipcam.RedactText(stderr)
+	detail = strings.Join(strings.Fields(detail), " ")
+	detail = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, detail)
+	if len(detail) > maxCameraErrorDetail {
+		// Do not cut a UTF-8 character in half in a protobuf string.
+		detail = strings.ToValidUTF8(detail[:maxCameraErrorDetail], "") + "... [truncated]"
+	}
+	if detail != "" {
+		msg += ": " + detail
+	} else {
+		msg += "; GStreamer produced no error output"
+	}
+	msg += ". Run `wendy device logs --tail 50` for agent logs."
+	return status.Error(status.Code(runErr), msg)
+}
 
 // reasonCameraInUse is the ErrorInfo reason for a camera another process holds AND that
 // could not be read through the PipeWire graph either -- reaching it means sharing was
@@ -22,10 +70,51 @@ const reasonCameraInUse = streamreason.CameraInUse
 
 // errCameraInUse reports contention as a FailedPrecondition: the device is
 // healthy, its state is wrong, and the caller can retry once the holder stops.
+// When the agent can tell what is likely holding the node, the message and
+// the "hint" metadata say so -- see cameraHolderHint.
 func errCameraInUse(devicePath string) error {
-	return streamreason.New(codes.FailedPrecondition,
-		fmt.Sprintf("camera %s is already in use by another application on this device", devicePath),
-		reasonCameraInUse, map[string]string{"device": devicePath})
+	msg := fmt.Sprintf("camera %s is already in use by another application on this device", devicePath)
+	metadata := map[string]string{"device": devicePath}
+	if hint := cameraHolderHint(devicePath); hint != "" {
+		msg += ". " + hint
+		metadata["hint"] = hint
+	}
+	return streamreason.New(codes.FailedPrecondition, msg, reasonCameraInUse, metadata)
+}
+
+// cameraHolderHint names what is likely holding a node the agent could not
+// claim, when the agent can tell. On a RealSense that is an app using the
+// vendor SDK, which claims every node of the camera at once; colour is shared
+// with calibrated frame streams through the camera hub, but the depth node is
+// also held by the agent's own Z16 capture while such a stream runs
+// (realsense_source.go). "Another application" alone would leave the operator
+// guessing between the two. A seam so it can be answered without a sysfs.
+var cameraHolderHint = func(devicePath string) string {
+	name, err := os.ReadFile(filepath.Join("/sys/class/video4linux", filepath.Base(devicePath), "name"))
+	if err != nil {
+		return ""
+	}
+	if !strings.Contains(strings.ToLower(string(name)), "realsense") {
+		return ""
+	}
+	hint := "This is a RealSense node, and an app using the vendor SDK (librealsense) claims every node of the camera"
+	if isRealSenseDepthNode(devicePath) {
+		hint += "; this depth node is also held by a calibrated frame stream (`wendy device camera frames`) for as long as one runs"
+	}
+	return hint
+}
+
+func isRealSenseDepthNode(devicePath string) bool {
+	cams, err := realsense.Detect("")
+	if err != nil {
+		return false
+	}
+	for _, cam := range cams {
+		if filepath.Base(cam.DepthNode) == filepath.Base(devicePath) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCameraInUse reports whether err is the contention error above.

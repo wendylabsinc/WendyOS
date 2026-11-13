@@ -11,7 +11,7 @@ Prefer adapting known Wendy templates before hand-writing a new scaffold. If the
 
 Search in this order:
 
-1. Local sibling repo: `../templates` from a Wendy workspace, or `/Users/maximilianalexander/wendylabsinc/templates` when available.
+1. Local sibling repo: `../templates` from a Wendy workspace.
 2. A `templates/` directory in the current workspace.
 3. GitHub repo `wendylabsinc/templates` if local source is missing or stale.
 
@@ -19,7 +19,7 @@ Useful searches:
 
 ```bash
 rg -n "realsense|camera|yolo|voice|audio|fullstack|simple-api" ../templates
-find ../templates -name template.json -o -name wendy.json -o -name Dockerfile -o -name Containerfile
+rg --files ../templates -g template.json -g wendy.json -g Dockerfile -g Containerfile
 ```
 
 Read the candidate template's `template.json`, `wendy.json`, `Dockerfile` or `Containerfile`, and main source files before copying or rewriting code. Use `meta.json` to discover template names and descriptions when present.
@@ -38,6 +38,7 @@ When the template is available through `wendy init`, prefer explicit non-interac
 mkdir -p <destination>
 cd <destination>
 wendy init \
+  --here \
   --app-id <app-id> \
   --target wendyos \
   --language <language> \
@@ -48,7 +49,7 @@ wendy init \
   --git-init no
 ```
 
-Pass every required `template.json` variable with `--var`; otherwise the command may prompt. If `wendy init` cannot express the needed customization, copy the closest template into the requested destination and adapt it directly.
+`--here` keeps the scaffold in the directory just created; without it, `--app-id` creates another subdirectory. Pass every required `template.json` variable with `--var`; otherwise the command may prompt. If `wendy init` cannot express the needed customization, copy the closest template into the requested destination and adapt it directly. Verify that `<destination>/wendy.json` exists before building.
 
 ## Adapt safely
 

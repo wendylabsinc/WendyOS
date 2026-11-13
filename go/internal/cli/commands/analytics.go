@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 )
 
 func newAnalyticsCmd() *cobra.Command {
@@ -36,6 +37,9 @@ func newAnalyticsEnableCmd() *cobra.Command {
 				return err
 			}
 
+			// Apply the preference to this invocation too. Init still enforces
+			// environment/CI overrides and handles an unusable identity file.
+			analytics.Init(cfg)
 			cmd.Println("Analytics enabled.")
 			return nil
 		},
@@ -77,15 +81,21 @@ func newAnalyticsStatusCmd() *cobra.Command {
 				return err
 			}
 
+			if env.IsCI() {
+				cmd.Println("Analytics: disabled (CI environment detected)")
+				return nil
+			}
 			if analytics.EnvOverride() {
 				cmd.Println("Analytics: disabled (overridden by WENDY_ANALYTICS=false)")
 				return nil
 			}
 
-			if cfg.Analytics == nil || cfg.Analytics.Enabled {
-				cmd.Println("Analytics: enabled")
-			} else {
+			if cfg.Analytics != nil && !cfg.Analytics.Enabled {
 				cmd.Println("Analytics: disabled")
+			} else if !analytics.Enabled() {
+				cmd.Println("Analytics: disabled (analytics initialization failed)")
+			} else {
+				cmd.Println("Analytics: enabled")
 			}
 
 			return nil

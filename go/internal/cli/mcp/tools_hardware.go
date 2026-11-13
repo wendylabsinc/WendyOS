@@ -17,7 +17,7 @@ func (s *mcpServer) registerHardwareTools(srv *server.MCPServer) {
 		mcpgo.WithNumber("max_bytes", mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)")),
 	}
 	capsOpts = append(capsOpts, readOnly()...)
-	capsOpts = append(capsOpts, localOnly()...)
+	capsOpts = append(capsOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("hardware_capabilities", capsOpts...), s.handleHardwareCapabilities)
 }
 

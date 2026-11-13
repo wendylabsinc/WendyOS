@@ -37,6 +37,9 @@ func EnsureDeviceTypeAdvertisement(logger *zap.Logger) {
 // ensureDeviceTypeAdvertisement is the testable core of
 // EnsureDeviceTypeAdvertisement, with the paths and the avahi restart injected.
 func ensureDeviceTypeAdvertisement(logger *zap.Logger, deviceTypePath, serviceFile string, restartAvahi func() bool) {
+	unlock := LockAvahiServiceFile()
+	defer unlock()
+
 	data, err := os.ReadFile(deviceTypePath)
 	if err != nil {
 		// Absent on an image that never wrote one, and on desktop installs.
@@ -74,10 +77,29 @@ func ensureDeviceTypeAdvertisement(logger *zap.Logger, deviceTypePath, serviceFi
 
 // avahiContentWithDeviceType returns content with the devicetype TXT record of
 // the _wendyos._udp block set to deviceType, adding the record when the block
-// has none. Other service blocks in the file are left alone. The block walk
-// mirrors configpartition.updateWendyOSServicePort; it lives here because
-// configpartition imports this package, not the other way round.
+// has none.
 func avahiContentWithDeviceType(content, deviceType string) string {
+	return editWendyOSServiceBlock(content, func(block string) string {
+		return setAvahiTXTRecord(block, "devicetype", deviceType)
+	})
+}
+
+// setAvahiTXTRecord sets key=value in a service block, adding the record when
+// the block has none.
+func setAvahiTXTRecord(block, key, value string) string {
+	if strings.Contains(block, "<txt-record>"+key+"=") {
+		return replaceAvahiTXTRecord(block, key, value)
+	}
+	return strings.Replace(block, "</service>",
+		"    <txt-record>"+key+"="+value+"</txt-record>\n  </service>", 1)
+}
+
+// editWendyOSServiceBlock applies edit to the _wendyos._udp service block of
+// content and leaves every other service block alone; content without that
+// block comes back unchanged. The block walk mirrors
+// configpartition.updateWendyOSServicePort; it lives here because
+// configpartition imports this package, not the other way round.
+func editWendyOSServiceBlock(content string, edit func(block string) string) string {
 	const typeTag = "<type>_wendyos._udp</type>"
 	typeIdx := strings.Index(content, typeTag)
 	if typeIdx < 0 {
@@ -92,13 +114,5 @@ func avahiContentWithDeviceType(content, deviceType string) string {
 		return content
 	}
 	serviceEnd := typeIdx + closeOffset + len("</service>")
-
-	block := content[serviceStart:serviceEnd]
-	if strings.Contains(block, "<txt-record>devicetype=") {
-		block = replaceAvahiTXTRecord(block, "devicetype", deviceType)
-	} else {
-		block = strings.Replace(block, "</service>",
-			"    <txt-record>devicetype="+deviceType+"</txt-record>\n  </service>", 1)
-	}
-	return content[:serviceStart] + block + content[serviceEnd:]
+	return content[:serviceStart] + edit(content[serviceStart:serviceEnd]) + content[serviceEnd:]
 }

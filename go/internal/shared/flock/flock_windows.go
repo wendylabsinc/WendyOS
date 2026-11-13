@@ -9,6 +9,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Lock waits until an exclusive file lock is available.
+func Lock(f *os.File) error {
+	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, new(windows.Overlapped))
+}
+
 // TryLock attempts a non-blocking exclusive lock on f via LockFileEx. It
 // returns (true, nil) when the lock was acquired, (false, nil) when another
 // process holds it, and a non-nil error for any other failure.
@@ -32,4 +37,11 @@ func TryLock(f *os.File) (bool, error) {
 func Unlock(f *os.File) error {
 	ol := new(windows.Overlapped)
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, ol)
+}
+
+// lookupOwner is a no-op on Windows: file ownership there isn't chown-based,
+// so there is nothing meaningful to report, and Acquire's geteuid()==0 check
+// never fires on this platform anyway.
+func lookupOwner(string) (uid, gid int, ok bool) {
+	return 0, 0, false
 }

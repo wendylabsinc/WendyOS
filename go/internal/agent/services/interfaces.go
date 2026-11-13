@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ros2inspection"
@@ -56,6 +57,9 @@ type ContainerdClient interface {
 	AssembleLayerFromChunks(ctx context.Context, diffID string, hashes [][32]byte) error
 	CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error
+	// ValidateContainer makes the checks CreateContainer makes before it
+	// replaces an existing container, without creating or replacing anything.
+	ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	StartContainer(ctx context.Context, appName, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan ContainerOutput, error)
 	StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan ContainerOutput, error)
 	StopContainer(ctx context.Context, appName string) error
@@ -100,12 +104,28 @@ type ContainerdClient interface {
 	GetContainerRestartPolicyLabel(ctx context.Context, appName string) (string, error)
 }
 
+// NANSocketStalenessDetector is an optional monitor capability. A running
+// NAN-entitled app can retain a bind-mounted wpa_supplicant socket inode after
+// the host socket is replaced; the monitor restarts only the affected tasks.
+type NANSocketStalenessDetector interface {
+	StaleNANSocketContainers(ctx context.Context) ([]string, error)
+}
+
 // ImagePreparer is the optional fast-deploy capability that assembles
 // chunk-backed image layers and unpacks their snapshots before RunContainer.
 // It stays separate from ContainerdClient so older test doubles and alternate
 // runtimes can decline the optimization without affecting normal deploys.
 type ImagePreparer interface {
 	PrepareImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader, imageConfig []byte) error
+}
+
+// CachePruneOptions configures a ContainerdCachePruner.PruneCache call.
+type CachePruneOptions struct {
+	DryRun bool
+	// MinAge overrides the agent's default grace period before a cache pin
+	// is released. Nil selects the server default; a duration of 0 releases
+	// every pin regardless of age.
+	MinAge *time.Duration
 }
 
 // CachePruneResult describes Wendy-managed container cache pins released by a
@@ -118,13 +138,33 @@ type CachePruneResult struct {
 	Snapshots         uint64
 	SnapshotBytes     uint64
 	MinimumAgeSeconds uint64
+	// ReclaimedBytes is the free-space delta measured on the container-storage
+	// filesystem across the synchronous containerd GC pass PruneCache forces
+	// after releasing pins. Nil when not measured (dry run, or the agent could
+	// not force GC or stat the filesystem).
+	ReclaimedBytes *uint64
+	// StagedChunks and StagedBytes count chunk uploads left staged on the
+	// device by earlier deploys and builds (interrupted deploys, remote build
+	// contexts, and every deploy while the chunk index is disabled) that the
+	// prune removed (or, on a dry run, would remove). WDY-3217.
+	StagedChunks uint64
+	StagedBytes  uint64
+	// StagingInUse reports that a deploy or build was using the chunk store
+	// (a chunk RPC within the last minute, or an image preparation or layer
+	// assembly in flight), so the prune left the staged chunks alone.
+	StagingInUse bool
+	// ChunkIndexBlobsDropped counts layer blobs whose chunk-index entries the
+	// prune dropped because containerd no longer holds them. Zero while
+	// StagingInUse: the prune then leaves that reconcile to idle maintenance
+	// or the next prune. WDY-3212.
+	ChunkIndexBlobsDropped uint64
 }
 
 // ContainerdCachePruner is an optional capability implemented by the real
 // containerd client. It remains separate from ContainerdClient so existing
 // service fakes do not need to implement maintenance operations.
 type ContainerdCachePruner interface {
-	PruneCache(ctx context.Context, dryRun bool) (CachePruneResult, error)
+	PruneCache(ctx context.Context, opts CachePruneOptions) (CachePruneResult, error)
 }
 
 // ContainerExecer is the optional capability to run a process inside a running
@@ -147,6 +187,19 @@ type BootContainer struct {
 	Name          string
 	RestartPolicy string
 	MaxRetries    int
+}
+
+// RunningTaskOutputRecoverer reconnects stdout/stderr for tasks that survive an
+// agent restart, including tasks whose policy disables automatic restart.
+// Publish must consume output without waiting for a remote log subscriber.
+type RunningTaskOutputRecoverer interface {
+	RecoverRunningTaskOutput(context.Context, func(string, ContainerOutput)) error
+}
+
+// InterruptedTaskStartRecoverer cleans held tasks left by an agent crash,
+// including apps whose policy deliberately prevents automatic restart.
+type InterruptedTaskStartRecoverer interface {
+	RecoverInterruptedTaskStarts(context.Context) error
 }
 
 // GroupRestarter is the optional capability a ContainerdClient may provide to
@@ -256,9 +309,13 @@ type RestartStatusProvider interface {
 }
 
 type ContainerOutput struct {
-	Stdout []byte
-	Stderr []byte
-	Done   bool
+	// PublishIfCurrent orders a terminal marker against task replacement at
+	// the producer. Log pumps must preserve it; ContainerLogManager invokes it
+	// around nonblocking publication so a delayed old run cannot end new logs.
+	PublishIfCurrent func(func()) `json:"-"`
+	Stdout           []byte
+	Stderr           []byte
+	Done             bool
 }
 
 type ContainerMetrics struct {

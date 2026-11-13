@@ -4,14 +4,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 // WendyLiteServiceType is the mDNS service type advertised by Wendy Lite
 // (ESP32) boards. Distinct from wendyServiceType ("_wendyos._udp"): a Wendy
-// Lite board is never a WendyOS agent, but once cloud-enrolled it advertises
-// the same assetid/orgid/caps TXT keys on this service, plus its own mtls
-// key (see LANDeviceFromWendyLiteService).
+// Lite board is never a WendyOS agent. Legacy enrollment advertises
+// assetid/orgid; direct PKI enrollment advertises tenant instead. Both use
+// caps and their own mtls key (see LANDeviceFromWendyLiteService).
 const WendyLiteServiceType = "_wendy-lite._tcp"
 
 // LANDeviceFromWendyLiteService converts a resolved _wendy-lite._tcp mDNS
@@ -58,6 +60,15 @@ func LANDeviceFromWendyLiteService(svc MDNSService) models.LANDevice {
 	if dev.IPAddress != "" {
 		dev.Addresses = []string{dev.IPAddress}
 	}
+	dev.TenantUUID = CanonicalTenantUUID(svc.TXTRecords["tenant"])
+	if dev.TenantUUID != "" {
+		// An enrolled board advertises its principal. A board that does not
+		// gets no pin hint: id= is never turned into a device identity.
+		principal := svc.TXTRecords["principal"]
+		if DevicePrincipalInTenant(principal, dev.TenantUUID) {
+			dev.PrincipalURI = principal
+		}
+	}
 	if v, ok := svc.TXTRecords["assetid"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
 			dev.AssetID = int32(n)
@@ -77,4 +88,21 @@ func LANDeviceFromWendyLiteService(svc MDNSService) models.LANDevice {
 	}
 	dev.Sensorlink = contains(dev.Caps, "sensors")
 	return dev
+}
+
+// CanonicalTenantUUID returns raw when it is a tenant UUID in canonical form
+// (lowercase and hyphenated), and "" otherwise.
+func CanonicalTenantUUID(raw string) string {
+	if tenant, err := uuid.Parse(raw); err == nil && tenant.String() == raw {
+		return raw
+	}
+	return ""
+}
+
+// DevicePrincipalInTenant reports whether principal is a PKI device principal
+// inside tenant. A source keeps a principal hint only when it passes, so a
+// tenant check on the source always compares the tenant its principal names.
+func DevicePrincipalInTenant(principal, tenant string) bool {
+	identity, err := certs.ParseDevicePrincipal(principal)
+	return err == nil && identity.TenantUUID == tenant
 }

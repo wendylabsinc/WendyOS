@@ -14,6 +14,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
 )
@@ -25,6 +26,102 @@ func deviceProps(address string, extra map[string]dbus.Variant) map[string]dbus.
 		props[k] = v
 	}
 	return props
+}
+
+type scanObjectClient struct {
+	object dbus.BusObject
+}
+
+func (c scanObjectClient) Object(string, dbus.ObjectPath) dbus.BusObject { return c.object }
+
+type scanObject struct {
+	dbus.BusObject
+	call func(context.Context) *dbus.Call
+}
+
+func (o scanObject) CallWithContext(ctx context.Context, _ string, _ dbus.Flags, _ ...any) *dbus.Call {
+	return o.call(ctx)
+}
+
+func TestCollectPeripheralsCanceledScan(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "canceled"
+		if deadline {
+			name = "deadline expired"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if deadline {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			} else {
+				cancel()
+			}
+			defer cancel()
+			core, logs := observer.New(zap.WarnLevel)
+			m := &BlueZManager{logger: zap.New(core)}
+			// No D-Bus connection should be used after the caller has canceled.
+			if got := m.collectPeripherals(ctx, nil, "/org/bluez/hci0", nil); len(got) != 0 {
+				t.Fatalf("canceled scan returned %d devices", len(got))
+			}
+			if logs.Len() != 0 {
+				t.Fatalf("canceled scan logged warnings: %v", logs.All())
+			}
+		})
+	}
+}
+
+func TestCollectPeripheralsCancellationDuringEnumeration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	core, logs := observer.New(zap.WarnLevel)
+	m := &BlueZManager{logger: zap.New(core)}
+	conn := scanObjectClient{object: scanObject{call: func(ctx context.Context) *dbus.Call {
+		cancel()
+		return &dbus.Call{Err: ctx.Err()}
+	}}}
+	if got := m.collectPeripherals(ctx, conn, "/org/bluez/hci0", nil); len(got) != 0 {
+		t.Fatalf("canceled enumeration returned %d devices", len(got))
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("canceled enumeration logged warnings: %v", logs.All())
+	}
+}
+
+func TestCollectPeripheralsCompletedScan(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	m := &BlueZManager{logger: zap.New(core)}
+	objects := managedObjects{
+		"/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF": {
+			deviceIface: deviceProps("AA:BB:CC:DD:EE:FF", map[string]dbus.Variant{
+				"RSSI": dbus.MakeVariant(int16(-60)),
+			}),
+		},
+	}
+	conn := scanObjectClient{object: scanObject{call: func(context.Context) *dbus.Call {
+		return &dbus.Call{Body: []any{objects}}
+	}}}
+	got := m.collectPeripherals(context.Background(), conn, "/org/bluez/hci0", nil)
+	if len(got) != 1 || got[0].Address != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("completed scan returned %v, want the discovered device", got)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("completed scan logged warnings: %v", logs.All())
+	}
+}
+
+func TestCollectPeripheralsLogsEnumerationFailure(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	m := &BlueZManager{logger: zap.New(core)}
+	conn := scanObjectClient{object: scanObject{call: func(context.Context) *dbus.Call {
+		return &dbus.Call{Err: errors.New("BlueZ unavailable")}
+	}}}
+	if got := m.collectPeripherals(context.Background(), conn, "/org/bluez/hci0", nil); len(got) != 0 {
+		t.Fatalf("failed enumeration returned %d devices", len(got))
+	}
+	if logs.FilterMessage("Failed to enumerate Bluetooth devices").Len() != 1 {
+		t.Fatalf("enumeration failure was not reported: %v", logs.All())
+	}
 }
 
 func TestFindDeviceByAddress(t *testing.T) {
@@ -729,5 +826,16 @@ func TestWaitForAudioSession(t *testing.T) {
 	audioSessionTimeout = 0
 	if !waitForAudioSession(context.Background()) {
 		t.Error("timeout should proceed anyway rather than skip the reconnect")
+	}
+}
+
+func TestNewManager_WithLinkReporter(t *testing.T) {
+	r := fakeLinkReporter{}
+	m, ok := NewManager(zap.NewNop(), WithLinkReporter(r)).(*BlueZManager)
+	if !ok {
+		t.Fatal("NewManager did not return a *BlueZManager")
+	}
+	if _, ok := m.links.(fakeLinkReporter); !ok {
+		t.Errorf("manager links = %T; want the reporter passed in", m.links)
 	}
 }

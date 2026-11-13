@@ -136,6 +136,29 @@ func TestAuthPickerItems(t *testing.T) {
 	}
 }
 
+// A UUID (OIDC) session renders the org name and the org ID as different
+// columns; with no known name it says so rather than repeating the ID.
+func TestAuthPickerItemsUUIDSessionNameAndID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const tenant = "8a53be77-2a69-464f-8f73-83643fe0beaa"
+	cfg := &config.Config{Auth: []config.AuthConfig{{
+		CloudGRPC:    "api:443",
+		Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/u"}},
+	}}}
+	for _, tc := range []struct {
+		names map[string]string
+		want  string
+	}{
+		{map[string]string{"api:443::" + tenant: "Robotics"}, "Robotics"},
+		{nil, "(unnamed)"},
+	} {
+		item := authPickerItems(cfg, tc.names)[0]
+		if item.Name != tc.want || item.Description != tenant {
+			t.Errorf("names=%v: Name=%q Org. ID=%q, want %q / %q", tc.names, item.Name, item.Description, tc.want, tenant)
+		}
+	}
+}
+
 func TestAuthPickerItemsDeduplicatesLegacyAndOperatorSessions(t *testing.T) {
 	cfg := &config.Config{Auth: []config.AuthConfig{
 		{CloudDashboard: "https://cloud.dev.wendy.sh", CloudGRPC: "api.dev.wendy.sh:443", Certificates: []config.CertificateInfo{{OrganizationID: 0}}},

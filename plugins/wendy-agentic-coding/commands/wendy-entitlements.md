@@ -7,4 +7,5 @@ Use the `wendy-entitlements` skill. Create or review entitlements for:
 
 `$ARGUMENTS`
 
-Base recommendations on the app's actual device/network/storage needs and the runtime behavior in `wendy-agent/go/internal/agent/oci/entitlements.go`.
+Base recommendations on the app's actual device, network, and storage needs.
+Validate its `wendy.json` and inspect hardware on the selected device.

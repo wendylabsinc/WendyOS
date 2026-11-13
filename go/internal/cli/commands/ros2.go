@@ -43,7 +43,7 @@ require their ROS 2 packages. Use lidar sample for bounded geometry observations
 
 To add ROS 2 to a project: wendy project frameworks add ros2
 For the full "frameworks.ros2" config shape (domainId, rmw, distro,
-discoveryScope) and how it's used: wendy docs ros2`,
+scope) and how it's used: wendy docs ros2`,
 	}
 
 	cmd.AddCommand(

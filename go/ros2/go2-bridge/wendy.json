@@ -1,0 +1,16 @@
+{
+  "appId": "sh.wendy.go2-bridge",
+  "version": "0.1.0",
+  "frameworks": {
+    "ros2": {
+      "distro": "humble",
+      "rmw": "rmw_cyclonedds_cpp",
+      "domainId": 0,
+      "scope": "device"
+    }
+  },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "admin" }
+  ]
+}

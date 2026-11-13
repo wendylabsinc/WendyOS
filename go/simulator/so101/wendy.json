@@ -1,0 +1,17 @@
+{
+  "appId": "sh.wendy.simulator.so101",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    }
+  ],
+  "readiness": {
+    "tcpSocket": {
+      "port": 8890
+    },
+    "timeoutSeconds": 120
+  }
+}

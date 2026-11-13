@@ -413,3 +413,35 @@ func TestManagerOneGraphEnumerationFailureDoesNotPinOtherStaleLeases(t *testing.
 		t.Fatal("the failing graph lost the coverage it already had")
 	}
 }
+
+func TestCameraIdentitySurvivesRediscoveryAndSeparatesGraphs(t *testing.T) {
+	makeManager := func() *Manager {
+		m := NewManager(context.Background(), zap.NewNop(), &fakeLoopback{}, filepath.Join(t.TempDir(), "registry.json"), nil, nil)
+		t.Cleanup(m.Shutdown)
+		return m
+	}
+	register := func(m *Manager, graph string, domain int, guid uint32) Camera {
+		p := &participantState{iface: "eth0", domainID: domain, graphKey: graph}
+		m.registerEndpoint(p, rtps.Endpoint{Topic: "rt/camera/color/image_raw", Type: TypeImage, GUID: rtps.GUID{EntityID: guid}})
+		for _, cam := range m.List() {
+			if cam.Graph == graph && cam.DomainID == domain {
+				return cam
+			}
+		}
+		t.Fatal("camera not registered")
+		return Camera{}
+	}
+	first := makeManager()
+	a := register(first, "app-a", 0, 1)
+	b := register(first, "app-b", 0, 2)
+	c := register(first, "app-a", 1, 3)
+	if a.StableID == "" || a.StableID == b.StableID || a.StableID == c.StableID {
+		t.Fatalf("identities must distinguish graph and domain: %+v %+v %+v", a, b, c)
+	}
+	second := makeManager()
+	register(second, "app-b", 0, 9)
+	rebound := register(second, "app-a", 0, 10)
+	if a.ID == rebound.ID || a.StableID != rebound.StableID {
+		t.Fatalf("identity must survive changed discovery order and publisher GUID: %+v %+v", a, rebound)
+	}
+}

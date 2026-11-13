@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
@@ -21,18 +23,10 @@ type dialTarget struct {
 	// PinKey is the name the user asked for (--device value, saved default, or
 	// the picker's device name) — never the resolved IP, which changes on
 	// ordinary DHCP churn and would train users to unpin reflexively. An empty
-	// PinKey disables pin enforcement for this dial.
+	// PinKey cannot supply an expected identity for an enrolled-device dial.
 	PinKey string
-	// PinnedKey is the key the governing pin is ACTUALLY filed under, which is
-	// not always PinKey: lookupPin resolves a pin across every name the device
-	// answers to, so dialling "wendyos-calm-zinnia" can be governed by a pin
-	// recorded under the cloud roster's "calm-zinnia". Empty when no pin
-	// governs this dial.
-	//
-	// It exists because a refusal has to name a key `wendy device unpin` can
-	// act on. Naming the dialled key when an alias holds the pin sends the user
-	// to a command that clears nothing, and the next dial refuses identically —
-	// a permanent dead end dressed up as an escape hatch.
+	// PinnedKey is the selected-name key holding the saved binding. Empty
+	// when that name has no binding. Refusals use it for recovery guidance.
 	PinnedKey string
 	// Addr is the host:port actually dialed, and the first of Candidates when
 	// there are several. It stays the single "primary" address so every caller
@@ -90,12 +84,9 @@ func (t dialTarget) refusalKey() string {
 // target's Expected or refusalKey. Deriving both from the same resolution makes
 // that disagreement unrepresentable.
 //
-// PinnedKey is non-empty for exactly the dials lookupPin found a pin for, and
-// never empty when it did: the key comes from pinCandidateKeys, which drops
-// empty candidates, so "a pin governs" and "we know the key it is filed under"
-// are the same fact. Expected is deliberately NOT consulted — it is set only
-// when a pin names an asset, so a pin without one would read as unpinned, and
-// the constraint Expected carries is enforced in VerifyConnection, not here.
+// PinnedKey is non-empty exactly when the selected name has a saved pin.
+// Expected is deliberately not consulted: older organization-only pins still
+// forbid plaintext even though they cannot supply a complete device identity.
 func (t dialTarget) pinned() bool {
 	return t.PinnedKey != ""
 }
@@ -124,9 +115,8 @@ var identityMismatchFn = (*grpcclient.AgentConnection).IdentityMismatch
 var pinMismatchFn = (*grpcclient.AgentConnection).PinMismatch
 
 // newDialTarget resolves the pin for pinKey and returns a target constrained by
-// it. Key resolution deliberately may read discovery-derived names: choosing
-// the wrong key can only ever produce a mismatch — a stricter outcome — never
-// a bypass, because the trust decision itself stays on the certificate.
+// it. Only the selected name's saved binding supplies the expected identity;
+// discovery supplies routing addresses, never alternate identity bindings.
 func newDialTarget(pinKey, addr string) dialTarget {
 	return newDialTargetCandidates(pinKey, []string{addr})
 }
@@ -152,11 +142,8 @@ func newDialTargetCandidates(pinKey string, addrs []string) dialTarget {
 	return target
 }
 
-// governingPin resolves the pin that governs pinKey across every name the
-// device answers to, returning it and the key it is actually filed under. It is
-// the single reader of pin state on the dial path, so the identity a dial
-// enforces, the fact that it is pinned, and the key a refusal names can never
-// disagree about which pin they are talking about.
+// governingPin reads the selected name's saved binding once, so TLS checks,
+// plaintext refusal and recovery guidance all use the same pin state.
 func governingPin(pinKey string) (config.DevicePin, string, bool) {
 	if pinKey == "" {
 		return config.DevicePin{}, "", false
@@ -174,24 +161,208 @@ func governingPin(pinKey string) (config.DevicePin, string, bool) {
 // means. A resolved IP is deliberately never used as a key — it changes on
 // ordinary DHCP churn — but an address the user typed as a literal IP is the
 // name they asked for, so it keys a pin like any other host.
-// Loopback gets no special case. It used to: local VMs all answer on 127.0.0.1,
-// so two of them collide on one key. But every alternative was worse -- an
-// empty key reads as "unpinned" and disarms the guard against reaching a
-// previously-authenticated host over plaintext, and a port-qualified key
-// orphans the pins existing users already hold under the bare host. Known VM
-// aliases instead use their own vm:<name> key (see connectSimulatorAgent),
-// leaving typed IP addresses governed by their existing pins.
+//
+// Loopback keeps the host key too: every local agent and port forward answers
+// on it, but every alternative was worse -- an empty key reads as "unpinned"
+// and disarms the guard against reaching a previously-authenticated host over
+// plaintext, and a port-qualified key orphans the pins existing users already
+// hold under the bare host, turning a mismatch into a silent first use. So
+// 127.0.0.1:50061, localhost:50051 and [::1]:50051 are keyed 127.0.0.1,
+// localhost and ::1, whatever the port.
+//
+// The one exception is a running local VM's own forward: the literal text
+// 127.0.0.1 — the one address QEMU's user-mode forward binds — on the
+// forwarded plaintext agent port of a running user-mode VM is keyed as that
+// VM, vm:<name>, the key its alias already uses. That VM is known by name, so
+// two VMs on different ports never share a pin, and a bare 127.0.0.1 pin never
+// refuses a VM answering on its own forward — the same trust the alias gets
+// (see connectSimulatorAgent). Nothing else maps to a VM: the mTLS port beside
+// it is re-aimed at the agent port by the callers that dial it (see
+// vmForwardDialAddr), localhost can resolve to ::1 first, ::1, 127.0.0.x and
+// IPv4-mapped addresses are other sockets that something other than the VM can
+// answer on, and "127.0.0.1." or a padded " 127.0.0.1" is not dialled as that
+// address at all. Once the VM stops, its address is keyed 127.0.0.1 again; a
+// typed connection to the VM also records its identity there, as the bare key
+// always did (see typedVMBarePinKey).
 func pinKeyForAddr(addr string) string {
 	// SplitHostPort accepts non-numeric service names, so vm:dev would
 	// otherwise become just "vm" when set-default/unpin derives its key.
 	if name, matched, err := simulatorName(addr); err == nil && matched {
 		return vmDeviceIDPrefix + name
 	}
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return strings.TrimSpace(addr)
 	}
+	// Compared as typed: only the literal address reaches the forward.
+	if host == vmForwardHost {
+		if p, convErr := strconv.Atoi(port); convErr == nil {
+			if name, ok := loopbackVMNameFn(p); ok {
+				return vmDeviceIDPrefix + name
+			}
+		}
+	}
 	return host
+}
+
+// vmForwardHost is the only address a user-mode VM's agent forward listens on:
+// the launcher binds hostfwd to 127.0.0.1 explicitly (vm.NetConfig's QEMU
+// arguments), never to localhost, ::1 or the rest of 127/8.
+const vmForwardHost = "127.0.0.1"
+
+// loopbackVMNameFn names the running user-mode VM whose agent is forwarded to
+// a loopback port. A seam over the VM store for tests.
+var loopbackVMNameFn = runningVMOnLoopbackPort
+
+// runningVMOnLoopbackPort reports which running user-mode VM forwards its
+// plaintext agent port to port on 127.0.0.1. It is consulted for
+// vmForwardHost only. The mTLS port beside it (AgentPort+1) does not name the
+// VM: the dial ladder tries the given port and the one after it, and
+// AgentPort+2 is not forwarded — something else can listen there — so a dial
+// at AgentPort+1 is never made under the VM's key. A direct dial there is
+// re-aimed at AgentPort first (vmForwardDialAddr); anything else keys it as
+// the bare 127.0.0.1. A run record counts only while its VM holds the run lock
+// (vm.Store.Status reaps stale ones), and two records claiming one port name no
+// VM: the key then stays the bare host rather than a guess.
+func runningVMOnLoopbackPort(port int) (string, bool) {
+	statuses, err := vmStatusesFn()
+	if err != nil {
+		return "", false
+	}
+	match := ""
+	for _, st := range statuses {
+		if vm.IsLiteProfile(st.Meta.Profile) {
+			continue
+		}
+		if !st.Running || st.State.NetMode != vm.NetUser || st.State.AgentPort == 0 {
+			continue
+		}
+		if port != st.State.AgentPort {
+			continue
+		}
+		if match != "" {
+			return "", false
+		}
+		match = st.Name
+	}
+	return match, match != ""
+}
+
+// runningVMAgentPortFn reports the plaintext agent port a running user-mode VM
+// forwards on 127.0.0.1. A seam over the VM store for tests.
+var runningVMAgentPortFn = runningVMAgentPort
+
+// runningVMAgentPort reports name's plaintext agent port while it runs in user
+// mode — the port QEMU forwards on 127.0.0.1, with its mTLS port beside it.
+func runningVMAgentPort(name string) (int, bool) {
+	statuses, err := vmStatusesFn()
+	if err != nil {
+		return 0, false
+	}
+	for _, st := range statuses {
+		if vm.IsLiteProfile(st.Meta.Profile) {
+			continue
+		}
+		if st.Name == name && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
+			return st.State.AgentPort, true
+		}
+	}
+	return 0, false
+}
+
+// dialPinKeyForDevice is the pin key a dial to device — as typed for --device
+// or set-default — is checked under. It adds the default agent port and
+// re-aims a running VM's mTLS forward first, exactly as resolveDeviceAddress
+// does, because a running VM's forward is keyed by its port: `set-default
+// 127.0.0.1` dials 127.0.0.1:50051, which is checked under vm:<name> while a
+// VM forwards that port and under the bare 127.0.0.1 otherwise.
+func dialPinKeyForDevice(device string) string {
+	if _, matched, err := simulatorName(device); matched || err != nil {
+		return pinKeyForAddr(device)
+	}
+	if _, _, err := net.SplitHostPort(device); err != nil {
+		device = hostPort(device, defaultAgentPort)
+	}
+	return pinKeyForAddr(vmForwardDialAddr(device))
+}
+
+// typedVMBarePinKey is the key a connection judged under pinKey, and dialled
+// by a front door at dialAddr — the address the user typed — also records its
+// accepted identity under (see recordTypedVMBarePin): the bare 127.0.0.1 when
+// pinKey is a running VM's vm:<name> key reached at its literal 127.0.0.1
+// forward. That is the key main judged and pinned the same typed connection
+// under, so the address stays as pinned as main left it once the VM stops and
+// pinKeyForAddr keys it as the bare host again.
+//
+// "" for every other connection: a vm:<name> key reached by its alias (the
+// dialled address is then not a typed 127.0.0.1 one, and main never filed a
+// bare pin for the alias), a connection some fallback substituted for the dial
+// (dialAddr ""), and every key that already is the bare host or is not
+// loopback at all.
+func typedVMBarePinKey(pinKey, dialAddr string) string {
+	if !strings.HasPrefix(pinKey, vmDeviceIDPrefix) || dialAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(dialAddr)
+	if err != nil || host != vmForwardHost {
+		return ""
+	}
+	return vmForwardHost
+}
+
+// vmAgentForwardAddr maps a VM's mTLS forward, 127.0.0.1:AgentPort+1 — what
+// conn.Addr holds after a provisioned connection, and so what a reconnect
+// after an agent update passes — back to its plaintext agent forward. The
+// dial ladder tries the given port and the one after it, so dialling the mTLS
+// forward would also try AgentPort+2, which QEMU does not forward. Any other
+// address, or a VM the store cannot place, is returned unchanged.
+func vmAgentForwardAddr(name, addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != vmForwardHost {
+		return addr
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return addr
+	}
+	agentPort, ok := runningVMAgentPortFn(name)
+	if !ok || p != agentPort+agentMTLSPortOffset {
+		return addr
+	}
+	return net.JoinHostPort(vmForwardHost, strconv.Itoa(agentPort))
+}
+
+// vmForwardDialAddr is vmAgentForwardAddr for a direct dial that does not know
+// it is reaching a VM: a typed --device address, or the conn.Addr a reconnect
+// after an agent update dials. The literal forward address 127.0.0.1 on the
+// mTLS port of a running user-mode VM (AgentPort+1, a port that is not itself
+// a VM's agent port) becomes that VM's agent forward, 127.0.0.1:AgentPort, so
+// the connection is keyed vm:<name> by pinKeyForAddr, exactly like a dial of
+// the agent port or the vm:<name> alias.
+//
+// Keyed by its own port instead, the same running VM would be judged under the
+// bare 127.0.0.1 key at its mTLS port and under vm:<name> at its agent port,
+// and its ladder would also try AgentPort+2, which QEMU does not forward.
+// Every other address is returned unchanged — without reading the VM store
+// unless the host is the literal forward address.
+func vmForwardDialAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != vmForwardHost {
+		return addr
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= agentMTLSPortOffset {
+		return addr
+	}
+	// A VM's own agent port keys as that VM already.
+	if _, ok := loopbackVMNameFn(p); ok {
+		return addr
+	}
+	name, ok := loopbackVMNameFn(p - agentMTLSPortOffset)
+	if !ok {
+		return addr
+	}
+	return vmAgentForwardAddr(name, addr)
 }
 
 // isLoopbackHost reports whether host names this machine. "localhost" is
@@ -210,12 +381,12 @@ func isLoopbackHost(host string) bool {
 }
 
 // expectedIdentityFor returns the asset identity pinned for pinKey, or nil when
-// the host is unpinned or its pin predates asset ids. Nil means "first contact
-// is permissive" — the posture that keeps legacy and unprovisioned devices
-// working; the pin is written on the first successful connect.
+// the host is unpinned or its pin predates asset ids. Enrolled-device mTLS
+// refuses that missing binding; obtain it through trusted enrollment or Cloud
+// inventory before connecting. Pre-provisioning plaintext is a separate path.
 //
-// The lookup goes through lookupPin, so a pin recorded under any of the
-// device's names — hostname, mesh name, or display name — is honoured here.
+// Only a saved binding for the selected name can supply this identity.
+// Unauthenticated discovery aliases cannot create or replace that binding.
 func expectedIdentityFor(pinKey string) *certs.WendyIdentity {
 	pin, _, ok := governingPin(pinKey)
 	if !ok {
@@ -244,32 +415,11 @@ func expectedIdentityForPin(pin config.DevicePin) *certs.WendyIdentity {
 	return &certs.WendyIdentity{OrgID: int32(pin.OrgID), EntityType: certs.EntityAsset, EntityID: pin.AssetID}
 }
 
-// pinCandidateKeys returns the keys a pin for pinKey may have been recorded
-// under, most-specific first: the name the caller dialed, then — from the
-// discovery-cache entry whose hostname matches it — that device's mesh name and
-// display name. One device answers to all three, and different surfaces record
-// under different ones: enforceDevicePin records the dialed mDNS hostname
-// (wendyos-calm-zinnia), cloud seeding records the asset name the roster
-// carries (calm-zinnia, which is the cache's display name), and mesh dials name
-// the device by its mesh name. A cloud Asset carries only {Id, Name} — no
-// hostname — so the cloud side cannot record under the dial key, and the
-// reconciliation has to happen here on lookup.
-//
-// Duplicates are dropped under the same normalisation the pin store applies, so
-// an alias that is only a cosmetic variant of the dialed name never produces a
-// second, redundant candidate, and empty names are never looked up.
-//
-// Reading discovery-derived names to pick a key is safe FOR LOOKUP in a way
-// that reading them to make a trust decision would not be: consulting an extra
-// candidate can only ever FIND a pin, never discard one, so an attacker-chosen
-// alias can at most impose a constraint that the real device fails — a stricter
-// outcome, not a bypass. The trust decision itself stays on the certificate.
-//
-// That justification is about lookup and does not carry to clearing. A caller
-// that DELETES every candidate turns the same attacker-chosen alias into a way
-// to drop another device's pin, which is a bypass — see clearPinsGoverning,
-// which consumes this list but removes an alias's pin only when it names the
-// same device as the governing one.
+// pinCandidateKeys returns the selected name and discovery-cache alias hints
+// for removing redundant saved entries. Names are deduplicated using the pin
+// store's normalization. These unauthenticated hints never supply an expected
+// identity: clearPinsGoverning removes an alias only when its saved binding
+// names the same device as the selected name's own binding.
 func pinCandidateKeys(pinKey string) []string {
 	if pinKey == "" {
 		return nil
@@ -294,50 +444,19 @@ func pinCandidateKeys(pinKey string) []string {
 	return candidates
 }
 
-// lookupPin resolves the pin governing pinKey across every candidate key,
-// returning it, the key it was found under, and whether there was one.
-//
-// A cloud-sourced pin outranks a LAN-sourced one wherever each sits in the
-// candidate order: cloud learned the binding from the org's cloud over an
-// authenticated session, while a LAN pin records only what some host on the
-// local network presented. Among pins of equal source the earliest candidate
-// wins, which keeps the dialed name authoritative over an alias.
-//
-// That precedence yields to one invariant: an asset-less cloud pin never
-// displaces an incumbent carrying an asset id. Cloud authority decides WHICH
-// binding to believe, and applying it is worth nothing if it leaves
-// expectedIdentityFor with no binding to enforce — a host constrained to one
-// asset would become constrained to none, which is exactly the same-CA-host
-// redirect this path exists to stop. An asset-less pin is a real state, not a
-// hypothetical: config's EvaluateDevicePin carries a dedicated branch for a
-// cloud-sourced pin with no asset id.
-//
-// Because the search only ever adds keys, a host pinned under pinKey stays
-// pinned no matter what the cache says or fails to say — the property that lets
-// the cache be consulted best-effort without a cache outage quietly switching
-// enforcement off.
+// lookupPin reads the binding for the selected name. Cloud may authenticate its
+// own inventory names, but discovery cannot assert that a different hostname
+// is an alias for one of them. Verified enrollment saves additional names as
+// explicit bindings instead.
 func lookupPin(cfg *config.Config, pinKey string) (config.DevicePin, string, bool) {
-	if cfg == nil {
+	if cfg == nil || pinKey == "" {
 		return config.DevicePin{}, "", false
 	}
-	var best config.DevicePin
-	var bestKey string
-	found := false
-	for _, key := range pinCandidateKeys(pinKey) {
-		pin, ok := cfg.DevicePinFor(key)
-		if !ok {
-			continue
-		}
-		if !found {
-			best, bestKey, found = pin, key, true
-			continue
-		}
-		if best.Source != config.PinSourceCloud && pin.Source == config.PinSourceCloud &&
-			(pin.AssetID != "" || best.AssetID == "") {
-			best, bestKey = pin, key
-		}
+	pin, ok := cfg.DevicePinFor(pinKey)
+	if !ok {
+		return config.DevicePin{}, "", false
 	}
-	return best, bestKey, found
+	return pin, pinKey, true
 }
 
 // errDeviceIdentityRefused is what every refusal in this package answers
@@ -354,9 +473,12 @@ var errDeviceIdentityRefused = errors.New("device identity refused")
 type deviceIdentityRefusalError struct {
 	msg        string
 	diagnostic *devicePinDiagnostic
+	cause      error
 }
 
 func (e *deviceIdentityRefusalError) Error() string { return e.msg }
+
+func (e *deviceIdentityRefusalError) Unwrap() error { return e.cause }
 
 func (e *deviceIdentityRefusalError) Is(target error) bool {
 	return target == errDeviceIdentityRefused
@@ -373,15 +495,31 @@ func refuseIdentity(format string, args ...any) *deviceIdentityRefusalError {
 // JSON, and non-interactive modes — there is deliberately no "trust this?"
 // prompt, because a MITM warning that can be dismissed gets dismissed.
 func identityRefusal(pinKey string, im *certs.IdentityMismatchError) error {
-	got := "no wendy identity"
-	if im.GotAsset != "" {
-		got = fmt.Sprintf("asset %s in organization %d", im.GotAsset, im.GotOrg)
-	}
+	saved, now := identityMismatchSides(im)
 	return refuseDevicePin(devicePinDiagnostic{
 		hostname: pinKey,
 		heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", pinKey),
-		details:  fmt.Sprintf("Saved: asset %s in organization %d\nNow:   %s", im.WantAsset, im.WantOrg, got),
+		details:  fmt.Sprintf("Saved: %s\nNow:   %s", saved, now),
 	})
+}
+
+// identityMismatchSides names the expected and presented identities. A SPIFFE
+// principal wins where one is present: the legacy fields cannot tell tenants
+// apart, since both sides read as the same asset in org 0.
+func identityMismatchSides(im *certs.IdentityMismatchError) (saved, now string) {
+	saved = fmt.Sprintf("asset %s in organization %s", im.WantAsset, orgLabel("", im.WantOrg))
+	if im.WantPrincipal != "" {
+		saved = "principal " + im.WantPrincipal
+	}
+	switch {
+	case im.GotPrincipal != "":
+		now = "principal " + im.GotPrincipal
+	case im.GotAsset != "":
+		now = fmt.Sprintf("asset %s in organization %s", im.GotAsset, orgLabel("", im.GotOrg))
+	default:
+		now = "no wendy identity"
+	}
+	return saved, now
 }
 
 // errNoAuthenticatedEndpoint is what a "nothing answered" refusal answers
@@ -397,15 +535,50 @@ func identityRefusal(pinKey string, im *certs.IdentityMismatchError) error {
 // population that needs it.
 var errNoAuthenticatedEndpoint = errors.New("no authenticated endpoint answered")
 
-// noAuthenticatedEndpointError carries the full user-facing text while staying
-// recognisable to errors.Is, mirroring deviceIdentityRefusalError.
-type noAuthenticatedEndpointError struct{ msg string }
+// noAuthenticatedEndpointError retains the failed target for enrollment's
+// explicit trust prompt. Other callers use its diagnostic and errors.Is marker.
+type noAuthenticatedEndpointError struct {
+	msg        string
+	pinKey     string
+	pinnedKey  string
+	candidates []string
+	certSeen   bool
+	// diagnostic is set only when the device answered without TLS — the
+	// unprovisioned case, which is told how to unpin. Unwrap exposes it, styled
+	// like the identity refusals it then reads as.
+	diagnostic *devicePinDiagnostic
+}
 
 func (e *noAuthenticatedEndpointError) Error() string { return e.msg }
 
 func (e *noAuthenticatedEndpointError) Is(target error) bool {
 	return target == errNoAuthenticatedEndpoint
 }
+
+// Unwrap yields the styled rendering of an unprovisioned refusal, and nothing
+// for the others. The CLI entry point restyles any error in the chain with a
+// CLIMessage, splicing it into the surrounding text, so a reachability refusal
+// carrying one would lose the plain rendering every other error gets: an
+// unstyled wrapper with the error marker mid-line, and no gRPC rewriting.
+func (e *noAuthenticatedEndpointError) Unwrap() error {
+	if e.diagnostic == nil {
+		return nil
+	}
+	return &unprovisionedRefusal{msg: e.msg, diagnostic: e.diagnostic}
+}
+
+// unprovisionedRefusal is the CLI rendering of a pinned device that answered
+// unprovisioned; see noAuthenticatedEndpointError.Unwrap.
+type unprovisionedRefusal struct {
+	msg        string
+	diagnostic *devicePinDiagnostic
+}
+
+func (e *unprovisionedRefusal) Error() string { return e.msg }
+
+// CLIMessage renders the refusal like the identity refusals, whose recovery
+// steps it shares.
+func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message(true) }
 
 // blocksUnauthenticatedFallback reports whether err forbids reaching this device
 // over a transport that enforces nothing — today the picker's Bluetooth
@@ -421,17 +594,18 @@ func (e *noAuthenticatedEndpointError) Is(target error) bool {
 //   - errNoAuthenticatedEndpoint: nothing authenticated answered a host we hold
 //     a PIN for — meaning we have reached this device over mTLS before and know
 //     it authenticates. An unauthenticated BLE peer advertising its name is not
-//     evidence of being that device, and BLE checks nothing, so accepting one
+//     evidence of being that device, so accepting one
 //     here would be the downgrade the pin exists to prevent. The error is
 //     raised only under target.pinned(), so an unpinned device that simply did
 //     not answer still gets its fallback — which is what that fallback is for.
 //
 // Splitting the sentinels is about what the user is TOLD (an unreachable device
-// must not be told its identity is suspect, nor handed an `unpin` command) and
-// about letting a caller tell the two facts apart. It is not licence to route a
-// pinned device onto an unauthenticated transport.
+// must not be told its identity is suspect, nor handed an `unpin` command — only
+// one that answered without TLS is) and about letting a caller tell the two
+// facts apart. It is not licence to route a pinned device onto an
+// unauthenticated transport.
 func blocksUnauthenticatedFallback(err error) bool {
-	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint)
+	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, certs.ErrExpectedDeviceIdentity)
 }
 
 // pinnedHostNoAuthenticatedEndpointError renders the honest version of what
@@ -453,9 +627,45 @@ func blocksUnauthenticatedFallback(err error) bool {
 // fact that made the original report take hours to diagnose.
 // certSeen must be true when ANY address rejected our certificate, so the
 // message never claims nothing was compared when something was.
-func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, attempts []mtlsAttemptError, certSeen bool) error {
+//
+// One outcome is not about reachability: an address that answered the TLS
+// probe in plaintext. That is what an agent reset to unprovisioned looks like —
+// plaintext port open, mTLS port closed — after `wendy device unenroll`, a
+// reflash or a factory reset (WDY-3974). Calling that "not the fix" sent users
+// away from the one command that resolves it, so that case gets the identity
+// refusals' guidance instead: unpin if the reset was intentional, otherwise keep
+// the pin and verify the device. It is diagnosis only, from evidence the
+// authenticated ladder already gathered — nothing is dialled in plaintext to
+// produce it, and nothing is unpinned.
+func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, attempts []mtlsAttemptError, certSeen bool) *noAuthenticatedEndpointError {
+	failure := &noAuthenticatedEndpointError{
+		pinKey: pinKey, pinnedKey: pinKey,
+		candidates: append([]string(nil), candidates...), certSeen: certSeen,
+	}
+	tried := describeDialAttempts(attempts)
+	if plaintext := addrsAnsweredWithoutTLS(attempts); len(plaintext) > 0 && !certSeen {
+		details := fmt.Sprintf("Now:   %s answered without TLS, as an unprovisioned agent does; no mTLS endpoint answered\nTried: %s",
+			strings.Join(plaintext, ", "), strings.Join(tried, ", "))
+		// The answering address is not proof it is still this device's: a stale
+		// DNS or mDNS record can point at a neighbour's freshly flashed board
+		// while the device itself is silent. Keep the reachability caution when
+		// some address had no agent at all, so an unpin there is a choice made
+		// knowing that.
+		if silent := hostsWithoutAgent(candidates, plaintext); len(silent) > 0 {
+			details += fmt.Sprintf("\nNote:  no agent answered at %s. If %s is no longer this device's address (a stale DNS or mDNS record), the agent answering there is another machine: keep the pin.",
+				strings.Join(silent, ", "), strings.Join(hostsOf(plaintext), ", "))
+		}
+		diagnostic := devicePinDiagnostic{
+			hostname: pinKey,
+			heading:  fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
+			details:  details,
+		}
+		failure.msg = diagnostic.message(false)
+		failure.diagnostic = &diagnostic
+		return failure
+	}
 	var where string
-	if tried := describeDialAttempts(attempts); len(tried) > 0 {
+	if len(tried) > 0 {
 		where = fmt.Sprintf("at any address it resolves to: %s (each tried on both its plaintext and mTLS port)",
 			strings.Join(tried, ", "))
 	} else {
@@ -472,41 +682,132 @@ func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, 
 		diagnosis = "The pin is intact; one address did present a certificate that was refused, so check the certificate diagnostics above as well as reachability"
 	}
 	v4, v6 := addrFamilyCounts(candidates)
-	return &noAuthenticatedEndpointError{msg: fmt.Sprintf(
+	failure.msg = fmt.Sprintf(
 		"device %q is pinned to an enrolled identity and no authenticated endpoint answered %s. "+
 			"%s — unpinning the device is not the fix. "+
 			"Tried %s; if the device is only reachable over one address family, check that its agent is listening and that stale DNS/mDNS records are not holding the CLI to an address the device no longer has.",
-		pinKey, where, diagnosis, describeAddrFamilies(v4, v6))}
+		pinKey, where, diagnosis, describeAddrFamilies(v4, v6))
+	return failure
 }
 
-// describeDialAttempts renders one entry per ADDRESS tried, in the order tried,
-// carrying that address's last failure. Attempts arrive per address *and port*
-// (the ladder tries the plaintext port and the mTLS port), so they are folded by
-// host: six entries for three addresses would read as though the CLI had tried
-// twice as many places as it did, and the count would then disagree with the
-// family summary the user is being asked to act on.
+// notTLSEndpointSignal is how crypto/tls reports a peer that replied in
+// something other than TLS. On an agent's plaintext port that is the agent
+// itself, serving unprovisioned.
+const notTLSEndpointSignal = "first record does not look like a TLS handshake"
+
+// addrsAnsweredWithoutTLS lists, once each and in the order tried, the
+// endpoints whose TLS probe was answered in plaintext. Only the ladder's own
+// TLS probes are read: the plaintext rung is never offered a pinned host.
+func addrsAnsweredWithoutTLS(attempts []mtlsAttemptError) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range attempts {
+		if a.err == nil || seen[a.addr] || !strings.Contains(a.err.Error(), notTLSEndpointSignal) {
+			continue
+		}
+		seen[a.addr] = true
+		out = append(out, a.addr)
+	}
+	return out
+}
+
+// hostsWithoutAgent lists, once each and in candidate order, the candidate
+// hosts that are not among answered's. In the unprovisioned branch nothing
+// presented a certificate, so these are the addresses where no agent answered
+// on either port.
+func hostsWithoutAgent(candidates, answered []string) []string {
+	answeredHost := map[string]bool{}
+	for _, host := range hostsOf(answered) {
+		answeredHost[host] = true
+	}
+	var out []string
+	for _, host := range hostsOf(candidates) {
+		if !answeredHost[host] {
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
+// hostsOf is the host of each host:port in addrs, once each and in order.
+func hostsOf(addrs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, addr := range addrs {
+		host := hostOnly(addr)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		out = append(out, host)
+	}
+	return out
+}
+
+// describeDialAttempts renders one entry per ADDRESS tried, in the order tried.
+// Attempts arrive per address *and port* (the ladder tries the plaintext port
+// and the mTLS port), so they are folded by host: six entries for three
+// addresses would read as though the CLI had tried twice as many places as it
+// did, and the count would then disagree with the family summary the user is
+// being asked to act on.
+//
+// Folding must not merge the ports' outcomes, though. When an address's ports
+// failed differently each port is listed with its own last failure; keeping
+// only the address's last failure made an unprovisioned device — plaintext
+// port answering, mTLS port refusing — read as "connection refused" on both
+// (WDY-3974).
 func describeDialAttempts(attempts []mtlsAttemptError) []string {
+	type portReason struct{ port, reason string }
 	var order []string
-	lastReason := map[string]string{}
+	reasons := map[string][]portReason{}
 	for _, a := range attempts {
 		host := hostOnly(a.addr)
 		if host == "" {
 			continue
 		}
-		if _, seen := lastReason[host]; !seen {
+		if _, seen := reasons[host]; !seen {
 			order = append(order, host)
+			reasons[host] = nil
 		}
-		if a.err != nil {
-			lastReason[host] = condenseDialReason(a.err.Error())
+		if a.err == nil {
+			continue
+		}
+		_, port, _ := net.SplitHostPort(a.addr)
+		reason := condenseDialReason(a.err.Error())
+		found := false
+		for i := range reasons[host] {
+			if reasons[host][i].port == port {
+				reasons[host][i].reason, found = reason, true
+			}
+		}
+		if !found {
+			reasons[host] = append(reasons[host], portReason{port: port, reason: reason})
 		}
 	}
 	out := make([]string, 0, len(order))
 	for _, host := range order {
-		if reason := lastReason[host]; reason != "" {
-			out = append(out, fmt.Sprintf("%s (%s)", host, reason))
-		} else {
+		byPort := reasons[host]
+		if len(byPort) == 0 {
 			out = append(out, host)
+			continue
 		}
+		same := true
+		for _, r := range byPort[1:] {
+			same = same && r.reason == byPort[0].reason
+		}
+		if same {
+			out = append(out, fmt.Sprintf("%s (%s)", host, byPort[0].reason))
+			continue
+		}
+		parts := make([]string, 0, len(byPort))
+		for _, r := range byPort {
+			if r.port == "" {
+				parts = append(parts, r.reason)
+			} else {
+				parts = append(parts, fmt.Sprintf("port %s: %s", r.port, r.reason))
+			}
+		}
+		out = append(out, fmt.Sprintf("%s (%s)", host, strings.Join(parts, "; ")))
 	}
 	return out
 }
@@ -534,6 +835,12 @@ func condenseDialReason(reason string) string {
 		if strings.Contains(flat, timeout) {
 			return "no response before the handshake budget elapsed"
 		}
+	}
+	// Quoted, crypto/tls's wording reads like a certificate problem. What it
+	// says is that something answered and does not speak TLS — the opposite of
+	// unreachable.
+	if strings.Contains(flat, notTLSEndpointSignal) {
+		return "answered without TLS"
 	}
 	// Ordered so a more specific phrase wins over one it contains.
 	for _, phrase := range []string{
@@ -650,7 +957,28 @@ func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 	if unpinArg == "" {
 		unpinArg = named
 	}
-	return refuseIdentity(
+	refusal := refuseIdentity(
 		"device %q presented a different certificate key than the one pinned for %s (pinned %s, now %s); refusing to connect — if its certificate was legitimately reissued, run 'wendy device unpin %s'",
 		named, pm.Key, pm.Want, pm.Got, unpinArg)
+	refusal.cause = pm
+	return refusal
+}
+
+// errVMChangedDuringConnect is a front door's refusal of a connection whose
+// pin key changed while it was being made: a local VM started or stopped
+// between the dial and the check, so the check would judge the connection
+// under a pin its dial was not made under. Retrying derives the key afresh.
+var errVMChangedDuringConnect = errors.New("VM state changed during connect")
+
+// recheckDialPinKey derives the pin key for addr — the address a front door
+// dialled, already re-aimed — again after the connection is made, and returns
+// errVMChangedDuringConnect, naming both keys, when it no longer equals
+// pinKey, the key the dial was made under and the check is about to use. A
+// non-loopback address never reads the VM store, so its key cannot change.
+func recheckDialPinKey(addr, pinKey string) error {
+	now := pinKeyForAddr(vmForwardDialAddr(addr))
+	if now == pinKey {
+		return nil
+	}
+	return fmt.Errorf("%w: %s was dialled as %q but now keys as %q (a local VM started or stopped); retry the command", errVMChangedDuringConnect, addr, pinKey, now)
 }

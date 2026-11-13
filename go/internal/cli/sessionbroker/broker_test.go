@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -218,7 +219,18 @@ func TestServeRelaysTerminalStatusWhenUpstreamEndsWhileSending(t *testing.T) {
 	}
 }
 
-func TestServeProxiesUnaryAndStreamingRPCsAndExpires(t *testing.T) {
+func TestServeProxiesUnaryAndStreamingRPCsAndExpires(t *testing.T) { serveNormalRPCAndExpiry(t) }
+
+// Named pipes stop admission by closing their listener, rather than unlinking
+// an inode. Exercise that owner/drain path with normal real RPCs on the host.
+func TestServeNormalListenerCloseDrainContract(t *testing.T) {
+	previous := localIPCRequiresListenerClose
+	localIPCRequiresListenerClose = true
+	t.Cleanup(func() { localIPCRequiresListenerClose = previous })
+	serveNormalRPCAndExpiry(t)
+}
+
+func serveNormalRPCAndExpiry(t *testing.T) {
 	dir := shortTempDir(t)
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -513,6 +525,44 @@ func TestServeKeepsPreparedBrokerWhileParentInvocationLives(t *testing.T) {
 	}
 }
 
+func TestIsLocalCancellation(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		timeout   time.Duration
+		elapsed   time.Duration
+		cancel    bool
+		code      codes.Code
+		wantLocal bool
+	}{
+		{name: "explicit cancellation without deadline", cancel: true, code: codes.Canceled, wantLocal: true},
+		{name: "explicit cancellation before deadline", timeout: time.Minute, cancel: true, code: codes.Canceled, wantLocal: true},
+		// gRPC sends a relative timeout. The client's deadline can expire
+		// before the broker's reconstructed deadline, canceling its context.
+		{name: "client deadline before broker deadline", timeout: 100 * time.Millisecond, elapsed: 99 * time.Millisecond, cancel: true, code: codes.Canceled},
+		{name: "broker deadline expired", timeout: 100 * time.Millisecond, elapsed: 101 * time.Millisecond, code: codes.Canceled},
+		{name: "upstream cancellation with live caller", code: codes.Canceled},
+		{name: "deadline status with canceled caller", cancel: true, code: codes.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				if tt.timeout > 0 {
+					cancel()
+					ctx, cancel = context.WithTimeout(context.Background(), tt.timeout)
+				}
+				defer cancel()
+				time.Sleep(tt.elapsed)
+				if tt.cancel {
+					cancel()
+				}
+				if got := isLocalCancellation(ctx, status.Error(tt.code, "request ended")); got != tt.wantLocal {
+					t.Fatalf("isLocalCancellation() = %v, want %v", got, tt.wantLocal)
+				}
+			})
+		})
+	}
+}
+
 // canceledUploadServer leaves chunk requests pending until the CLI cancels
 // them, as happens when PrepareImage rejects a deployment on an older agent.
 // Version probes still answer, so the retained device connection is healthy.
@@ -645,7 +695,8 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 		Expected:        certs.WendyIdentity{OrgID: 7, EntityType: "asset", EntityID: "47"},
 		ParentPID:       os.Getpid(),
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	base, exit := exitFixtureContext(context.Background())
+	ctx, cancel := context.WithCancel(base)
 	defer cancel()
 	// A live parent plus stats-event touches used to renew the zombie's TTL off
 	// its own failed probes indefinitely; the hour-long TTL proves the exit
@@ -657,7 +708,7 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer proxy.Close()
-	for i := 0; i < 3; i++ {
+	for i := 0; i < maxUnansweredRPCs; i++ {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		_, err := proxy.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 		probeCancel()
@@ -673,6 +724,9 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("broker kept serving (and holding its identity lock) after repeatedly failing to answer")
+	}
+	if cause := exit.first.Load(); cause == nil || cause.reason != "upstream_unavailable" {
+		t.Fatalf("eviction reason missing: %+v", cause)
 	}
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Fatalf("socket remains after eviction: %v", err)

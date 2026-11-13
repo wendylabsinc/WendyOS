@@ -102,8 +102,68 @@ func reloadAuthEntry(prev *config.AuthConfig) *config.AuthConfig {
 	return nil
 }
 
-// performLoginFn is the login entry point, indirected so tests can stub it.
-var performLoginFn = performLogin
+// performLoginFn and performOIDCLoginFn are the login entry points, indirected
+// so tests can stub them.
+var (
+	performLoginFn     = performLogin
+	performOIDCLoginFn = performOIDCLogin
+)
+
+// relogin signs in again to the cloud the stored session targets: a
+// service-account session re-mints its token, an OAuth session goes back
+// through its wendy-auth realm, and a legacy session uses the dashboard flow.
+// With no stored session, login starts at the production Cloud's universal page.
+func relogin(ctx context.Context, auth *config.AuthConfig) error {
+	switch {
+	case auth == nil:
+		return performOIDCLoginFn(ctx, oidcLoginOptions{
+			AuthorizationBase: defaultProdAuthBase,
+			ClientID:          "wendy-cli",
+			CloudResource:     defaultProdCloudResource,
+			IdentityResource:  defaultPKIIdentityResource,
+			IdentityEndpoint:  defaultProdPKIIdentityEndpoint,
+			CloudURL:          defaultProdCloudDashboard,
+			CloudGRPC:         defaultProdCloudGRPC,
+		})
+	case auth.ServiceAccount != "":
+		unlock, err := acquireAuthRefreshLock(ctx)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		local := *auth
+		if err := reloadOAuthSession(&local); err != nil {
+			return err
+		}
+		return remintServiceAccountSession(ctx, &local)
+	case auth.OAuthIssuer != "":
+		return performOIDCLoginFn(ctx, oidcReloginOptions(auth))
+	}
+	dashboard, grpc := loginTargetsForAuth(auth)
+	return performLoginFn(ctx, dashboard, grpc)
+}
+
+// oidcReloginOptions keeps the stored session's realm and deployment settings
+// for a fresh OIDC login. Sessions from before the PKI fields were stored get
+// the historical development PKI defaults.
+func oidcReloginOptions(auth *config.AuthConfig) oidcLoginOptions {
+	opts := oidcLoginOptions{
+		Issuer:           auth.OAuthIssuer,
+		ClientID:         auth.OAuthClientID,
+		CloudResource:    auth.OAuthResource,
+		IdentityResource: auth.PKIResource,
+		IdentityEndpoint: auth.PKIEndpoint,
+		CloudURL:         auth.CloudDashboard,
+		CloudGRPC:        auth.CloudGRPC,
+	}
+	if opts.IdentityResource == "" {
+		opts.IdentityResource = defaultPKIIdentityResource
+	}
+	if opts.IdentityEndpoint == "" {
+		opts.IdentityEndpoint = defaultDevPKIIdentityEndpoint
+	}
+	return opts
+}
 
 // offerReloginOnUnauthenticated detects an unauthenticated cloud error (an
 // expired or missing session) and, in an interactive terminal, tells the user
@@ -112,7 +172,11 @@ var performLoginFn = performLogin
 // may proceed or retry with the new credentials. Non-interactive or JSON runs
 // never prompt (they surface the original error to the caller unchanged).
 func offerReloginOnUnauthenticated(ctx context.Context, auth *config.AuthConfig, err error) bool {
-	if !isUnauthenticatedCloudError(err) {
+	if auth != nil && auth.OAuthIssuer != "" {
+		if !isOIDCSignInRefused(err) {
+			return false
+		}
+	} else if !isUnauthenticatedCloudError(err) {
 		return false
 	}
 	if jsonOutput || !isInteractiveTerminal() {
@@ -122,8 +186,7 @@ func offerReloginOnUnauthenticated(ctx context.Context, auth *config.AuthConfig,
 	if !confirmFn("Log in again now?") {
 		return false
 	}
-	dashboard, grpc := loginTargetsForAuth(auth)
-	if lerr := performLoginFn(ctx, dashboard, grpc); lerr != nil {
+	if lerr := relogin(ctx, auth); lerr != nil {
 		fmt.Fprintln(os.Stderr, tui.ErrorMessage(fmt.Sprintf("Login failed: %v", lerr)))
 		return false
 	}

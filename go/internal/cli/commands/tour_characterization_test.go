@@ -28,16 +28,15 @@ func key(s string) tea.KeyMsg {
 	}
 }
 
-func TestTourWelcomeStartsAICheck(t *testing.T) {
+func TestTourWelcomeStartsDeviceSetup(t *testing.T) {
 	m := newTourWizardModel()
 	m.phase = phaseWelcome
 	got, cmd := stepTour(t, m, key("enter"))
-	// Welcome stays put until the async AI-check result arrives.
-	if got.phase != phaseWelcome {
-		t.Errorf("phase = %v, want phaseWelcome", got.phase)
+	if got.phase != phaseLoadDevices {
+		t.Errorf("phase = %v, want phaseLoadDevices", got.phase)
 	}
 	if cmd == nil {
-		t.Error("expected an AI-check command")
+		t.Error("expected a device-load command")
 	}
 }
 

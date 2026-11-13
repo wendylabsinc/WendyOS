@@ -38,6 +38,9 @@ const (
 // Per-OS seams: pickOrinRecoveryDevice, orinStageOne, and runT234Helper
 // (os_install_orin_unix.go / os_install_orin_windows.go).
 func installOrin(ctx context.Context, opts t234InstallOptions) error {
+	if err := opts.Agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	cacheDir, err := osCacheDir()
 	if err != nil {
 		return fmt.Errorf("resolving cache dir: %w", err)
@@ -67,6 +70,19 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 	defer os.RemoveAll(handoffDir)
 
+	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmOrinReady(opts); err != nil {
+		return err
+	}
+	dev, err := pickOrinRecoveryDevice(opts)
+	if err != nil {
+		return err
+	}
+
 	creds, err := resolveWiFiCredentialsList(opts.WiFi)
 	if err != nil {
 		return err
@@ -75,30 +91,17 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, name)
+	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
 	if err != nil {
 		return err
 	}
-
-	if err := confirmOrinReady(opts); err != nil {
+	enrolled := provJSON != nil
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Describe(),
+		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
+		question: fmt.Sprintf("Flash %s?", dev.Describe()),
+	}, name, creds, enrolled, opts.Force); err != nil {
 		return err
-	}
-	dev, err := pickOrinRecoveryDevice(opts)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Describe()))
-
-	if !opts.Force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage))))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Describe()))
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
 	}
 
 	if err := preAuthElevation(); err != nil {
@@ -107,6 +110,13 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	elevationCtx, cancelElevation := context.WithCancel(ctx)
 	defer cancelElevation()
 	keepElevationAlive(elevationCtx)
+	// Otherwise macOS asks about each flashing disk it can't read, and choosing
+	// Eject there releases the disk before the flash is done with it.
+	if releaseClaims, err := t234.SuppressDiskPrompts(); err != nil {
+		fmt.Println(tui.WarningMessage(fmt.Sprintf("Could not stop macOS disk prompts (%v). If macOS says a disk is not readable, choose Ignore.", err)))
+	} else {
+		defer releaseClaims()
+	}
 	flashCtx, cancelFlash := context.WithCancel(ctx)
 	defer cancelFlash()
 
@@ -117,6 +127,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — %s %s recovery — WendyOS %s\n\n", opts.DeviceType, opts.Storage, opts.Version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {
@@ -154,7 +165,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			if err != nil {
 				return false, err
 			}
-			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail); err != nil {
+			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, opts.Agent); err != nil {
 				return false, err
 			}
 			flashPlan, err = t234.LoadXMLPlan(layoutPath, workspace, fp.Manifest.RootfsDevice)
@@ -238,6 +249,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Recovered %s %s with WendyOS %s; the Jetson will reboot after the final LUN is released.", opts.DeviceName, strings.ToUpper(opts.Storage), opts.Version)))
+	printFirstBootVerification(opts.DeviceType, opts.Version)
 	return nil
 }
 
@@ -357,19 +369,21 @@ func prepareT234Workspace(fp *flashpack.Flashpack) (workspace, layoutPath string
 	return workspace, filepath.Join(workspace, layoutRel), nil
 }
 
-func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string)) error {
-	detail("downloading agent")
-	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
-	if err != nil {
-		fmt.Fprintf(out, "warning: could not download wendy-agent (%v); using the agent baked into the image\n", err)
-	} else {
-		detail("agent " + agentVer)
+func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) (err error) {
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
 	}
+	agentBinary, _ := resolveSeedAgent(out, detail, agent)
+
 	d, err := diskfs.Open(imagePath)
 	if err != nil {
 		return fmt.Errorf("opening per-run config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing per-run config image: %w", closeErr)
+		}
+	}()
 	fsys, err := d.GetFilesystem(0)
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)
@@ -436,7 +450,7 @@ func confirmOrinReady(opts t234InstallOptions) error {
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target connected and in recovery mode?")
+	ok, err := confirmInstallStep("flashing the "+opts.DeviceName, "Is the target connected and in recovery mode?", false, opts.Force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}
@@ -508,10 +522,9 @@ func orinRecoveryBriefingBox(opts t234InstallOptions) string {
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,
 			"",
-			briefMarker.Render("●")+" "+briefTitle.Render("macOS disk warnings"),
-			"  While flashing, macOS may complain \"The disk you attached was not readable\" —",
-			"  the Jetson's raw flashing disks are expected to look that way. Choose "+briefKey.Render("Ignore")+";",
-			"  "+briefKey.Render("Initialize…")+" or "+briefKey.Render("Eject")+" can corrupt or interrupt the flash.",
+			briefMarker.Render("●")+" "+briefTitle.Render("macOS disk prompts"),
+			"  wendy keeps macOS from asking about the Jetson's flashing disks. If it still says a",
+			"  disk is not readable, choose "+briefKey.Render("Ignore")+"; "+briefKey.Render("Eject")+" interrupts the flash.",
 		)
 	}
 	if runtime.GOOS == "windows" {

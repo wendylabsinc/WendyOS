@@ -26,15 +26,17 @@ Hosted defaults:
 
 | Purpose | Development | Production |
 | --- | --- | --- |
-| Device authorization / telemetry mTLS | `devices.dev.wendy.sh:443` | `devices.wendy.sh:443` |
+| Device authorization mTLS | `devices.dev.wendy.sh:443` | `devices.wendy.sh:443` |
 | Grant issuer and JWKS origin | `https://api.dev.wendy.sh` | `https://api.wendy.sh` |
 
 `WENDY_DEVICE_CLOUD_URL` overrides the device mTLS endpoint, and
 `WENDY_CLOUD_GRANT_ISSUER` sets the exact trusted issuer. Keys come from that
 issuer's `/.well-known/wendy-cloud-grants/jwks.json`, never an artifact-supplied
-URL. `WENDY_TELEMETRY_URL` can select a separate OTLP collector; Cloud must expose
-the standard logs/metrics/traces Export RPCs there. These environment variables
-must be set in the agent's service environment for device-side connections.
+URL. Cloud's devices listener does not expose OTLP ingestion. Cloud telemetry
+export requires an explicit `WENDY_TELEMETRY_URL` pointing to a collector that
+exposes the standard logs/metrics/traces Export RPCs. Without it, the agent keeps
+telemetry buffered locally. These environment variables must be set in the agent's
+service environment for device-side connections.
 Custom/on-prem deployments must explicitly configure their devices listener if
 it differs from the enrolled Cloud address. Relay endpoints themselves come
 from Cloud authorization; a PKI session cannot override them with `--broker-url`.

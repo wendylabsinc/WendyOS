@@ -56,6 +56,7 @@ func newCloudCmd() *cobra.Command {
 	addToGroup("connectivity",
 		newCloudTunnelCmd(),
 		newCloudPingCmd(),
+		newCloudMCPCmd(),
 	)
 	return cmd
 }
@@ -66,7 +67,7 @@ func newCloudDeviceCmd() *cobra.Command {
 
 	cmd := newDeviceCmd()
 	cmd.Short = "Manage WendyOS devices through Wendy Cloud"
-	cmd.Long = "Mirror of 'wendy device', but connects to the target device through the Wendy Cloud tunnel broker."
+	cmd.Long = "Mirror of 'wendy device', connecting through Wendy Cloud. The unenroll command removes the cloud enrollment directly and also works for offline devices."
 	cmd.PersistentFlags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (optional when a default session is set via 'wendy auth use')")
 	cmd.PersistentFlags().StringVar(&brokerURL, "broker-url", os.Getenv("WENDY_BROKER_URL"), "Tunnel broker host:port (default: cloud :443 endpoint, otherwise <cloud-host>:50052)")
 
@@ -77,6 +78,15 @@ func newCloudDeviceCmd() *cobra.Command {
 			BrokerURL:  brokerURL,
 		}
 	})
+	// Enrollment needs a direct LAN/USB path to a device that is not in Cloud
+	// yet, so the mirror's copy of `wendy device enroll` stays off the help page.
+	// It remains runnable (wrapCloudDeviceCommands leaves it on the local path),
+	// and `wendy cloud enroll-device` is the visible alias under `wendy cloud`.
+	for _, child := range cmd.Commands() {
+		if child.Annotations[localEnrollmentAnnotation] == "true" {
+			child.Hidden = true
+		}
+	}
 	return cmd
 }
 
@@ -118,7 +128,16 @@ func effectiveDeviceName(local string) string {
 	return deviceFlag
 }
 
+// localEnrollmentAnnotation marks a command that enrolls a device it reaches
+// directly. The `wendy cloud device` mirror neither routes it through the cloud
+// tunnel nor lists it in help.
+const localEnrollmentAnnotation = "wendy.local-enrollment"
+
 func wrapCloudDeviceCommands(cmd *cobra.Command, cfg func(*cobra.Command) cloudDeviceConfig) {
+	// Enrollment provisions a local target before it can be reached through Cloud.
+	if cmd.Annotations[localEnrollmentAnnotation] == "true" {
+		return
+	}
 	if cmd.RunE != nil {
 		runE := cmd.RunE
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -144,42 +163,10 @@ func cloudDeviceConfigFromContext(ctx context.Context) (cloudDeviceConfig, bool)
 }
 
 func newCloudEnrollDeviceCmd() *cobra.Command {
-	var name string
-	var cloudGRPC string
-	var orgID int32
-	var acmeDirectoryURL string
-
-	cmd := &cobra.Command{
-		Use:   "enroll-device",
-		Short: "Enroll the connected device with Wendy Cloud or a local pki-core",
-		Long:  "Alias for 'wendy device enroll'. OIDC accounts use direct PKI enrollment through Cloud's enrollment relay; legacy accounts use Cloud enrollment.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			auth, err := resolveEnrollmentAuthEntry(cloudGRPC, orgID)
-			if err != nil {
-				return err
-			}
-			auth, err = prepareEnrollmentAuth(ctx, auth)
-			if err != nil {
-				return err
-			}
-
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
-
-			promptWifiIfNeeded(ctx, conn)
-
-			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
-		},
-	}
-
-	cmd.Flags().StringVar(&name, "name", "", "Device name")
-	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use; limits the organization picker to this endpoint")
-	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
+	cmd := newDeviceEnrollCmd()
+	cmd.Use = "enroll-device"
+	cmd.Hidden = false
+	cmd.Short = "Enroll the selected device in Wendy Cloud"
+	cmd.Long = "Alias for 'wendy device enroll'. " + cmd.Long
 	return cmd
 }

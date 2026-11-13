@@ -4,6 +4,7 @@
     "logout",
     "status",
     "discover",
-    "tunnel"
+    "tunnel",
+    "mcp"
   ]
 }

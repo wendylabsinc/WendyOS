@@ -7,12 +7,28 @@ actor VideoService: RegistrableRPCService {
     private static let maxConcurrentStreams = 2
 
     private let camera: any CameraManaging
+    private let controls: any CameraControlManaging
     private let logger = Logger(label: "sh.wendy.agent.video")
     private var devicesByID: [UInt32: CameraDeviceInfo] = [:]
     private var activeStreamCount = 0
 
-    init(camera: any CameraManaging = AVCaptureCameraManager()) {
+    init(
+        camera: any CameraManaging = AVCaptureCameraManager(),
+        controls: any CameraControlManaging = CameraControls()
+    ) {
         self.camera = camera
+        self.controls = controls
+    }
+
+    func restoreCameraControls() async {
+        for device in await discoverDevices() where device.isExternal {
+            do { try await controls.restore(uniqueID: device.uniqueID) } catch {
+                logger.warning(
+                    "Camera controls could not be restored",
+                    metadata: ["camera_id": "\(device.id)", "error": "\(error)"]
+                )
+            }
+        }
     }
 
     nonisolated func registerMethods<Transport>(
@@ -167,11 +183,21 @@ actor VideoService: RegistrableRPCService {
 
         let device = try await device(id: message.deviceID)
         let camera = self.camera
+        let controls = self.controls
         let remotePeer = context.remotePeer
         return StreamingServerResponse { writer in
             try await self.reserveStream(device: device, remotePeer: remotePeer)
             do {
+                var restored = false
                 for try await frame in camera.frames(for: device) {
+                    // Capture may restore firmware defaults when opening. Reapply
+                    // once its first frame arrives; that frame can precede tuning.
+                    if !restored {
+                        restored = true
+                        do { try await controls.restore(uniqueID: device.uniqueID) } catch {
+                            await self.logControlRestoreFailure(device: device, error: error)
+                        }
+                    }
                     var proto = Wendy_Agent_Services_V1_VideoFrame()
                     proto.data = frame.annexB
                     proto.timestampNs = frame.timestampNanoseconds
@@ -225,21 +251,100 @@ actor VideoService: RegistrableRPCService {
         request: ServerRequest<Wendy_Agent_Services_V1_GetCameraControlsRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_GetCameraControlsResponse> {
-        throw Self.unsupportedV4L2Controls()
+        let device = try await controlDevice(id: request.message.deviceID)
+        do {
+            var response = Wendy_Agent_Services_V1_GetCameraControlsResponse()
+            response.controls = try await controls.list(uniqueID: device.uniqueID).map { control in
+                var proto = Wendy_Agent_Services_V1_CameraControl()
+                proto.name = control.name
+                proto.value = control.value
+                proto.minimum = control.minimum
+                proto.maximum = control.maximum
+                proto.step = control.step
+                proto.defaultValue = control.defaultValue
+                proto.mutable = control.mutable
+                return proto
+            }
+            return ServerResponse(message: response)
+        } catch { throw Self.controlRPCError(error) }
     }
 
     func setCameraControls(
         request: ServerRequest<Wendy_Agent_Services_V1_SetCameraControlsRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_SetCameraControlsResponse> {
-        throw Self.unsupportedV4L2Controls()
+        let device = try await controlDevice(id: request.message.deviceID)
+        do {
+            var response = Wendy_Agent_Services_V1_SetCameraControlsResponse()
+            response.results = try await controls.set(
+                uniqueID: device.uniqueID,
+                values: request.message.controls.map { ($0.name, $0.value) },
+                persist: request.message.persist
+            ).map(Self.controlResult)
+            return ServerResponse(message: response)
+        } catch { throw Self.controlRPCError(error) }
     }
 
     func resetCameraControls(
         request: ServerRequest<Wendy_Agent_Services_V1_ResetCameraControlsRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ResetCameraControlsResponse> {
-        throw Self.unsupportedV4L2Controls()
+        let device = try await controlDevice(id: request.message.deviceID)
+        do {
+            var response = Wendy_Agent_Services_V1_ResetCameraControlsResponse()
+            response.results = try await controls.reset(
+                uniqueID: device.uniqueID,
+                names: request.message.names
+            ).map(Self.controlResult)
+            return ServerResponse(message: response)
+        } catch { throw Self.controlRPCError(error) }
+    }
+
+    private func controlDevice(id: UInt32) async throws -> CameraDeviceInfo {
+        // Numeric IDs are discovery positions, not persistent USB identities.
+        // Refresh every control request; never act on a stale cached device.
+        let devices = await discoverDevices()
+        guard let device = devices.first(where: { $0.id == id }) else {
+            throw RPCError(code: .notFound, message: "Camera \(id) was not found on this Mac.")
+        }
+        guard device.isExternal, devices.filter({ $0.uniqueID == device.uniqueID }).count == 1
+        else {
+            throw RPCError(
+                code: .unimplemented,
+                message: "Controls require one exact external USB camera."
+            )
+        }
+        do { _ = try UVCIdentity(uniqueID: device.uniqueID) } catch {
+            throw Self.controlRPCError(error)
+        }
+        return device
+    }
+
+    private func logControlRestoreFailure(device: CameraDeviceInfo, error: any Error) {
+        logger.warning(
+            "Camera controls could not be restored after capture opened",
+            metadata: ["camera_id": "\(device.id)", "error": "\(error)"]
+        )
+    }
+
+    private static func controlResult(
+        _ result: CameraControlOutcome
+    ) -> Wendy_Agent_Services_V1_CameraControlResult {
+        var proto = Wendy_Agent_Services_V1_CameraControlResult()
+        proto.name = result.name
+        proto.applied = result.applied
+        proto.detail = result.detail
+        return proto
+    }
+
+    private static func controlRPCError(_ error: any Error) -> RPCError {
+        let code: RPCError.Code
+        switch error {
+        case UVCError.unsupported: code = .unimplemented
+        case UVCError.invalidValue: code = .invalidArgument
+        default: code = .failedPrecondition
+        }
+        return RPCError(code: code, message: "\(error)")
     }
 
     private func reserveStream(
@@ -312,7 +417,7 @@ actor VideoService: RegistrableRPCService {
             return RPCError(code: .permissionDenied, message: error.description)
         case .deviceNotFound, .noDevice:
             return RPCError(code: .notFound, message: error.description)
-        case .cannotAddInput, .cannotAddOutput:
+        case .cannotAddInput, .cannotAddOutput, .noUsableFormat:
             return RPCError(code: .failedPrecondition, message: error.description)
         case .vtStatus:
             return RPCError(code: .internalError, message: error.description)
@@ -337,10 +442,4 @@ actor VideoService: RegistrableRPCService {
         )
     }
 
-    private static func unsupportedV4L2Controls() -> RPCError {
-        RPCError(
-            code: .unimplemented,
-            message: "V4L2 camera controls are not available on macOS."
-        )
-    }
 }

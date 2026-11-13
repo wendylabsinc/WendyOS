@@ -125,14 +125,14 @@ func TestRunEnrollDeviceUsesSessionOrganization(t *testing.T) {
 			conn := &grpcclient.AgentConnection{ProvisioningService: provisioning}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := runEnrollDevice(ctx, conn, auth, "simulator", tc.override); err != nil {
+			if _, err := runEnrollDeviceIdentity(ctx, conn, auth, "simulator", tc.override); err != nil {
 				t.Fatal(err)
 			}
 			if svc.request.GetOrganizationId() != tc.want || svc.request.GetName() != "simulator" {
 				t.Fatalf("unexpected token request: %v", svc.request)
 			}
-			if tc.operator && !strings.Contains(strings.Join(svc.headers.Get("x-wendy-client-cert"), ""), auth.Certificates[0].PrincipalURI) {
-				t.Fatal("operator tenant identity missing from token request")
+			if tc.operator && len(svc.headers.Get("x-wendy-client-cert"))+len(svc.headers.Get("x-forwarded-client-cert")) != 0 {
+				t.Fatal("PKI-principal session sent a client-cert identity header")
 			}
 			if provisioning.request.GetOrganizationId() != 42 || provisioning.request.GetAssetId() != 99 || provisioning.request.GetEnrollmentToken() != "enrollment-token" || provisioning.request.GetCloudHost() != auth.CloudGRPC {
 				t.Fatalf("unexpected provisioning request: %v", provisioning.request)

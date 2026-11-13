@@ -12,11 +12,15 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -24,6 +28,15 @@ type fakeMacRunState struct {
 	fakeSyncServer
 	createReqs []*agentpb.CreateContainerRequest
 	startReqs  []*agentpb.StartContainerRequest
+	// sendStarted makes StartContainer acknowledge the start, as a real
+	// agent does, instead of closing the stream silently.
+	sendStarted bool
+	// validates makes the fake an agent with ValidateContainer, which refuses
+	// any container whose name ends in refuseSuffix. Without it the fake is an
+	// older agent that answers Unimplemented.
+	validates    bool
+	refuseSuffix string
+	validateReqs []*agentpb.CreateContainerRequest
 }
 
 type fakeMacAgentServer struct {
@@ -58,6 +71,17 @@ func (s *fakeMacContainerServer) CreateContainer(_ context.Context, req *agentpb
 	return &agentpb.CreateContainerResponse{}, nil
 }
 
+func (s *fakeMacContainerServer) ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest) (*agentpb.ValidateContainerResponse, error) {
+	if !s.state.validates {
+		return s.UnimplementedWendyContainerServiceServer.ValidateContainer(ctx, req)
+	}
+	s.state.validateReqs = append(s.state.validateReqs, proto.Clone(req).(*agentpb.CreateContainerRequest))
+	if s.state.refuseSuffix != "" && strings.HasSuffix(req.GetAppName(), s.state.refuseSuffix) {
+		return nil, status.Error(codes.FailedPrecondition, "container would fail to create: image cannot be pulled")
+	}
+	return &agentpb.ValidateContainerResponse{}, nil
+}
+
 func (s *fakeMacContainerServer) ListContainers(_ *agentpb.ListContainersRequest, stream grpc.ServerStreamingServer[agentpb.ListContainersResponse]) error {
 	for _, req := range s.state.createReqs {
 		if err := stream.Send(&agentpb.ListContainersResponse{Container: &agentpb.AppContainer{AppName: req.AppName, RunningState: agentpb.AppRunningState_RUNNING}}); err != nil {
@@ -67,8 +91,13 @@ func (s *fakeMacContainerServer) ListContainers(_ *agentpb.ListContainersRequest
 	return nil
 }
 
-func (s *fakeMacContainerServer) StartContainer(req *agentpb.StartContainerRequest, _ grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
+func (s *fakeMacContainerServer) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
 	s.state.startReqs = append(s.state.startReqs, proto.Clone(req).(*agentpb.StartContainerRequest))
+	if s.state.sendStarted {
+		return stream.Send(&agentpb.RunContainerLayersResponse{
+			ResponseType: &agentpb.RunContainerLayersResponse_Started_{Started: &agentpb.RunContainerLayersResponse_Started{}},
+		})
+	}
 	return nil
 }
 
@@ -110,7 +139,10 @@ func startFakeMacRunServer(t *testing.T, state *fakeMacRunState) (*grpcclient.Ag
 	return ac, cleanup
 }
 
-func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *testing.T) {
+// newStubbedXcodeProject creates an Xcode project directory whose build is
+// stubbed: the "xcodebuild" run writes the scheme's product and succeeds.
+func newStubbedXcodeProject(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)
@@ -135,6 +167,11 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 		}
 		return exec.CommandContext(ctx, "true")
 	}
+	return dir
+}
+
+func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *testing.T) {
+	dir := newStubbedXcodeProject(t)
 
 	state := &fakeMacRunState{}
 	conn, cleanup := startFakeMacRunServer(t, state)
@@ -146,6 +183,19 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 		Xcode:    &appconfig.XcodeConfig{Scheme: "MyScheme"},
 		Run:      &appconfig.RunConfig{Args: []string{"--from-config", "hello world"}},
 	}
+
+	// The Xcode path is one of the dispatch-and-return branches in
+	// runWithAgentRecorded that has no phase timings of its own (WDY-3215);
+	// assert it still reports exactly one deploy_completed event, correctly
+	// labeled, rather than being silently swallowed by deployMetrics.emit's
+	// transport=="" guard.
+	var events []map[string]string
+	analytics.SetTrackHookForTesting(func(event string, props map[string]string) {
+		if event == "deploy_completed" {
+			events = append(events, props)
+		}
+	})
+	t.Cleanup(func() { analytics.SetTrackHookForTesting(nil) })
 
 	err := runWithAgent(context.Background(), conn, dir, appCfg, runOptions{
 		deploy:   true,
@@ -167,6 +217,50 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 	}
 	if len(got.UserArgs) != 2 || got.UserArgs[0] != "--from-config" || got.UserArgs[1] != "hello world" {
 		t.Fatalf("UserArgs = %v, want %v", got.UserArgs, appCfg.Run.Args)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("deploy_completed events = %d, want 1: %v", len(events), events)
+	}
+	if got := events[0]["deploy_transport"]; got != "xcode" {
+		t.Fatalf("deploy_transport = %q, want %q", got, "xcode")
+	}
+}
+
+// TestRunWithAgent_ReportsTheStartedAcknowledgementOnAnEarlyPath drives a
+// detached Xcode deploy through runWithAgent. The agent's Started
+// acknowledgement, received deep in runMacOSNativeContainer, must reach the
+// deploy_completed event, and the target platform must already be known on
+// this dispatch-and-return path, which runs before the image-build paths.
+func TestRunWithAgent_ReportsTheStartedAcknowledgementOnAnEarlyPath(t *testing.T) {
+	dir := newStubbedXcodeProject(t)
+	state := &fakeMacRunState{sendStarted: true}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+	events := captureDeployEvents(t)
+
+	appCfg := &appconfig.AppConfig{
+		AppID:    "sh.wendy.MyXcodeApp",
+		Platform: appconfig.PlatformDarwin,
+		Xcode:    &appconfig.XcodeConfig{Scheme: "MyScheme"},
+	}
+	if err := runWithAgent(context.Background(), conn, dir, appCfg, runOptions{detach: true}); err != nil {
+		t.Fatalf("runWithAgent: %v", err)
+	}
+
+	if len(*events) != 1 {
+		t.Fatalf("deploy_completed events = %d, want 1: %v", len(*events), *events)
+	}
+	want := map[string]string{
+		"deploy_transport":       "xcode",
+		"deploy_started":         "true",
+		"success":                "true",
+		"deploy_target_platform": resolveAgentPlatform(appCfg.Platform, "darwin", runtime.GOARCH),
+	}
+	for k, v := range want {
+		if got := (*events)[0][k]; got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
 	}
 }
 
@@ -532,6 +626,55 @@ func TestRunComposeWithAgent_AllowsMacAgentWithPrebuiltImage(t *testing.T) {
 	}
 }
 
+// WDY-3850: compose creates its services one by one, so a service the agent
+// would refuse is caught before any service is replaced.
+func TestRunComposeWithAgent_ValidatesEveryServiceBeforeReplacingAny(t *testing.T) {
+	dir := t.TempDir()
+	compose := []byte("services:\n  web:\n    image: docker.io/library/nginx:latest\n  worker:\n    image: docker.io/library/busybox:latest\n")
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), compose, 0o644); err != nil {
+		t.Fatalf("WriteFile compose.yaml: %v", err)
+	}
+
+	state := &fakeMacRunState{validates: true, refuseSuffix: "worker"}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true})
+	if err == nil || !strings.Contains(err.Error(), "worker") || !strings.Contains(err.Error(), "none of the 2 services was replaced") {
+		t.Fatalf("runComposeWithAgent error = %v, want the worker refusal before any replace", err)
+	}
+	if len(state.validateReqs) != 2 {
+		t.Fatalf("ValidateContainer calls = %d, want 2", len(state.validateReqs))
+	}
+	if len(state.createReqs) != 0 {
+		t.Fatalf("CreateContainer calls = %d, want 0", len(state.createReqs))
+	}
+}
+
+func TestRunComposeWithAgent_CreatesServicesTheAgentAccepts(t *testing.T) {
+	dir := t.TempDir()
+	compose := []byte("services:\n  web:\n    image: docker.io/library/nginx:latest\n  worker:\n    image: docker.io/library/busybox:latest\n")
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), compose, 0o644); err != nil {
+		t.Fatalf("WriteFile compose.yaml: %v", err)
+	}
+
+	state := &fakeMacRunState{validates: true}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	if err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true}); err != nil {
+		t.Fatalf("runComposeWithAgent: %v", err)
+	}
+	if len(state.validateReqs) != 2 || len(state.createReqs) != 2 {
+		t.Fatalf("ValidateContainer calls = %d, CreateContainer calls = %d; want 2 each", len(state.validateReqs), len(state.createReqs))
+	}
+	for i, req := range state.validateReqs {
+		if !proto.Equal(req, state.createReqs[i]) {
+			t.Fatalf("service %d validated %v but created %v", i, req, state.createReqs[i])
+		}
+	}
+}
+
 func TestRunMacOSNativeContainer_OverwritesPrepopulatedAppConfig(t *testing.T) {
 	state := &fakeMacRunState{}
 	conn, cleanup := startFakeMacRunServer(t, state)
@@ -615,11 +758,8 @@ func startFakeProvisioningServer(t *testing.T, prov agentpb.WendyProvisioningSer
 // gate that the fakeMacProvisioningServer ("not provisioned") deliberately
 // bypasses in the other Mac run tests.
 func TestRequireRegistryAuth_EnforcesMTLSWhenProvisionedWithoutCert(t *testing.T) {
-	// Point config resolution (loadCLICert -> config.Load -> os.UserHomeDir) at
-	// an empty home so no CLI certificate is present regardless of the machine.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	// The fixture has no CLI certificate, including under a config override.
+	setTempConfig(t, &config.Config{})
 
 	conn, cleanup := startFakeProvisioningServer(t, &fakeProvisionedServer{})
 	defer cleanup()
@@ -637,9 +777,7 @@ func TestRequireRegistryAuth_EnforcesMTLSWhenProvisionedWithoutCert(t *testing.T
 // requireRegistryAuth passes through even with no CLI cert. This documents the
 // intended bypass that fakeMacProvisioningServer relies on.
 func TestRequireRegistryAuth_AllowsWhenNotProvisioned(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	setTempConfig(t, &config.Config{})
 
 	conn, cleanup := startFakeProvisioningServer(t, &fakeMacProvisioningServer{})
 	defer cleanup()
@@ -649,12 +787,28 @@ func TestRequireRegistryAuth_AllowsWhenNotProvisioned(t *testing.T) {
 	}
 }
 
+// A container with the admin entitlement reaches the agent over its socket with
+// no client certificates; the socket is its credential, so the gate is skipped.
+func TestRequireRegistryAuthSkipsOverTheAgentSocket(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	conn, cleanup := startFakeProvisioningServer(t, &fakeProvisionedServer{})
+	defer cleanup()
+	conn.Host = "unix:/run/wendy/agent.sock"
+
+	if err := requireRegistryAuth(context.Background(), conn); err != nil {
+		t.Fatalf("requireRegistryAuth = %v; want nil over the agent socket", err)
+	}
+}
+
 func TestStartAndStreamContainer_FallsBackWhenCreateProgressIsUnimplemented(t *testing.T) {
 	origInteractive := isInteractiveTerminalFn
 	t.Cleanup(func() { isInteractiveTerminalFn = origInteractive })
 	isInteractiveTerminalFn = func() bool { return false }
 
-	state := &fakeMacRunState{}
+	state := &fakeMacRunState{sendStarted: true}
 	conn, cleanup := startFakeMacRunServer(t, state)
 	defer cleanup()
 

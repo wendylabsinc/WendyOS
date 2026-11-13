@@ -168,7 +168,8 @@ func targetForDevice(dev models.LANDevice) fleetTarget {
 		ID:      dev.Hostname,
 		Address: addr,
 		connect: func(ctx context.Context) (*grpcclient.AgentConnection, error) {
-			return connectWithAutoTLS(ctx, addr)
+			conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, pinKeyForLANDevice(&dev))
+			return conn, err
 		},
 	}
 }

@@ -4,13 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestResolveVMAliasIgnoresAnythingThatIsNotAVM(t *testing.T) {
@@ -72,6 +78,67 @@ func TestConnectSimulatorChoiceSurfacesAMissingQEMU(t *testing.T) {
 	_, err := connectSimulatorChoice(context.Background(), &simulatorChoice{Name: "sim"}, true)
 	if !errors.Is(err, errSimulatorUnavailable) {
 		t.Errorf("err = %v, want errSimulatorUnavailable so it never falls back to cloud", err)
+	}
+}
+
+func TestSimulatorWithoutDetachedSupport(t *testing.T) {
+	savedDetach, savedQEMU := vmDetachSupportedFn, ensureQEMUFn
+	vmDetachSupportedFn = func() bool { return false }
+	ensureQEMUFn = func(context.Context) error {
+		t.Fatal("foreground VM guidance and an already-running VM must not check QEMU")
+		return nil
+	}
+	t.Cleanup(func() { vmDetachSupportedFn, ensureQEMUFn = savedDetach, savedQEMU })
+
+	t.Run("create", func(t *testing.T) {
+		err := createSimulator("test1")
+		if !errors.Is(err, errSimulatorUnavailable) || !errors.Is(err, vm.ErrDetachUnsupported) {
+			t.Fatalf("error = %v, want unsupported simulator creation", err)
+		}
+		// The recovery commands are user-visible output, not error classification.
+		message := err.Error()
+		for _, want := range []string{"wendy vm create test1 --profile generic", "wendy vm start test1", "separate terminal", "WSL2"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("error = %v, missing %q", err, want)
+			}
+		}
+	})
+
+	for _, running := range []bool{false, true} {
+		t.Run(fmt.Sprintf("running=%t", running), func(t *testing.T) {
+			setTempConfig(t, &config.Config{})
+			store, err := vm.NewStore()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(store.Dir("test1"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if running {
+				release, err := flock.Acquire(store.LockPath("test1"), time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				if err := store.WriteState(vm.State{Name: "test1", PID: os.Getpid(), NetMode: vm.NetUser, AgentPort: 50103}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			addr, started, err := ensureSimulatorRunning(context.Background(), "test1")
+			if running {
+				if err != nil || started || addr != "127.0.0.1:50103" {
+					t.Fatalf("running foreground VM = %q, %t, %v", addr, started, err)
+				}
+				return
+			}
+			if !errors.Is(err, vm.ErrDetachUnsupported) || started || addr != "" {
+				t.Fatalf("stopped VM = %q, %t, %v, want named foreground command", addr, started, err)
+			}
+			message := err.Error()
+			if !strings.Contains(message, "wendy vm start test1") {
+				t.Fatalf("stopped VM recovery command missing from %q", message)
+			}
+		})
 	}
 }
 
@@ -156,7 +223,7 @@ func TestWaitForSimulatorAgentRetriesPinnedEndpointDuringBoot(t *testing.T) {
 	}
 }
 
-func TestWaitForSimulatorAgentPinnedFailures(t *testing.T) {
+func TestWaitForSimulatorAgentConnectionFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		failure error
@@ -164,6 +231,12 @@ func TestWaitForSimulatorAgentPinnedFailures(t *testing.T) {
 	}{
 		{"unreachable", fmt.Errorf("booting: %w", errNoAuthenticatedEndpoint), true},
 		{"identity mismatch", fmt.Errorf("wrong device: %w", errDeviceIdentityRefused), false},
+		{"TLS rejection", newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate")), false},
+		{"certificate algorithms", newTLSHandshakeRejectedError(errors.New("tls: peer doesn't support any of the certificate's signature algorithms")), false},
+		{"wrong organization", fmt.Errorf("connect: %w", orgMismatchDeviceError{deviceOrg: 42, userOrgs: []int32{1}}), false},
+		{"unauthenticated", status.Error(codes.Unauthenticated, "certificate expired"), false},
+		{"permission denied", status.Error(codes.PermissionDenied, "access denied"), false},
+		{"agent restarting", status.Error(codes.Unavailable, "connection refused"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTempConfig(t, &config.Config{})
@@ -187,6 +260,52 @@ func TestWaitForSimulatorAgentPinnedFailures(t *testing.T) {
 			}
 			if elapsed := time.Since(start); elapsed > time.Second {
 				t.Fatalf("wait exceeded boot budget: %v", elapsed)
+			}
+		})
+	}
+}
+
+func TestAwaitSimulatorKeepsRecoveryErrorWithoutBootLog(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	stubTerminal(t, false)
+	store, err := vm.NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := store.LogPath("dev")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("boot diagnostic\nlogin banner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rejection := newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))
+	for _, tc := range []struct {
+		name        string
+		cause       error
+		wantConsole bool
+		unavailable bool
+	}{
+		{"TLS rejection", rejection, false, true},
+		{"identity mismatch", errDeviceIdentityRefused, false, true},
+		{"wrong organization", fmt.Errorf("connect: %w", orgMismatchDeviceError{deviceOrg: 42}), false, true},
+		{"timeout", fmt.Errorf("simulator did not answer: %w", context.DeadlineExceeded), true, true},
+		{"cancelled", context.Canceled, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := awaitSimulatorWith(context.Background(), "dev", "127.0.0.1:50103", false,
+				func(context.Context) (*grpcclient.AgentConnection, error) { return nil, tc.cause })
+			if !errors.Is(err, tc.cause) || errors.Is(err, errSimulatorUnavailable) != tc.unavailable {
+				t.Fatalf("error = %v, lost cause or simulator classification", err)
+			}
+			if got := strings.Contains(err.Error(), "login banner"); got != tc.wantConsole {
+				t.Fatalf("error = %v, want console output %v", err, tc.wantConsole)
+			}
+			if errors.Is(err, errTLSHandshakeRejected) {
+				if !strings.Contains(err.Error(), "wendy device sync-time") || strings.Contains(err.Error(), "wendy auth refresh-certs") {
+					t.Fatalf("TLS rejection missing recovery instructions: %v", err)
+				}
 			}
 		})
 	}

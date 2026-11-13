@@ -23,6 +23,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -156,6 +159,12 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 	if displayName == "" {
 		displayName = svc.Hostname
 	}
+	// The PKI pin target is the device id in the principal an enrolled board
+	// advertises, never id=, which older firmware sets to its hardware id.
+	var enrolledDeviceID string
+	if identity, err := certs.ParseDevicePrincipal(discovery.LANDeviceFromWendyLiteService(svc).PrincipalURI); err == nil {
+		enrolledDeviceID = identity.EntityID
+	}
 	return models.ExternalDevice{
 		ID:          fmt.Sprintf("wendy-lite:%s", svc.Hostname),
 		DisplayName: displayName,
@@ -168,6 +177,11 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 			"ip":       svc.IPAddress,
 			"port":     fmt.Sprintf("%d", svc.Port),
 			"mtls":     fmt.Sprintf("%t", svc.TXTRecords["mtls"] == "true"),
+			"tenantId": svc.TXTRecords["tenant"],
+			"orgId":    svc.TXTRecords["orgid"],
+			"assetId":  svc.TXTRecords["assetid"],
+			// Set only from a principal inside the advertised tenant.
+			"enrolledDeviceId": enrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -175,7 +189,7 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 
 // connectableLiteMDNSService rejects incomplete/stale DNS-SD records. The
 // Wendy Lite LAN connector requires both an IP and a port; presenting a row
-// without them creates a blank-address "LAN (Lite)" device that can never be
+// without them creates a blank-address "LAN" device that can never be
 // selected successfully (commonly an offline device lingering in the macOS
 // mDNSResponder cache).
 func connectableLiteMDNSService(svc discovery.MDNSService) bool {
@@ -211,6 +225,10 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 			"deviceId":   dev.ID,
 			"name":       dev.Name,
 			"serialPort": dev.Port,
+			// deviceId stays the hardware id over USB even once enrolled; the
+			// enrolled UUID is what lets this row meet the board's LAN and BLE
+			// rows (see ExternalDevice.LiteDedupID).
+			"enrolledDeviceId": dev.EnrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -221,6 +239,12 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 // no problem: ConnectViaBLE reads the info service itself and falls back to
 // liteclient.DefaultL2CAPPSM.
 func (p *MicroWendyProvider) bleExternalDevice(dev discovery.BLELiteDevice) models.ExternalDevice {
+	// Like LAN's principal=, the advertised principal only picks the pin; the
+	// TLS leaf must still match it. Without one, connectClient asks Cloud.
+	var tenant, enrolledDeviceID string
+	if identity, err := certs.ParseDevicePrincipal(dev.Info.Principal); err == nil {
+		tenant, enrolledDeviceID = identity.TenantUUID, identity.EntityID
+	}
 	return models.ExternalDevice{
 		ID:          fmt.Sprintf("wendy-lite:%s", dev.Address),
 		DisplayName: bleLiteDisplayName(dev),
@@ -232,6 +256,9 @@ func (p *MicroWendyProvider) bleExternalDevice(dev discovery.BLELiteDevice) mode
 			"address":  dev.Address,
 			"psm":      strconv.FormatUint(uint64(dev.Info.PSM), 10),
 			"mtls":     fmt.Sprintf("%t", dev.Info.MTLSEnabled),
+			"tenantId": tenant,
+			// The device UUID from the advertised principal.
+			"enrolledDeviceId": enrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -574,11 +601,22 @@ type AppRequirementsUnsupportedError struct {
 }
 
 func (e *AppRequirementsUnsupportedError) Error() string {
-	return fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
+	message := fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
+	if strings.HasPrefix(e.Device.ID, "vm:") {
+		profile := "wendy-lite"
+		if e.Missing == "native apps" {
+			profile = "wendy-lite-native"
+		}
+		message += fmt.Sprintf("; create a compatible simulator with 'wendy vm create <name> --profile %s', then run with 'wendy run --device vm:<name>'", profile)
+	}
+	return message
 }
 
 // MissingWendyCoreError lets the CLI offer to configure an ESP-IDF project.
-type MissingWendyCoreError struct{}
+// Toolchain is the one that configured the project, so setup uses it too.
+type MissingWendyCoreError struct {
+	Toolchain *espidftoolchain.ProjectToolchain
+}
 
 func (*MissingWendyCoreError) Error() string {
 	return "this project does not include the wendy_core component; run 'wendy run' interactively to add it, or add it to main/idf_component.yml and call ESP_ERROR_CHECK(wendy_core_init()) first in app_main()"
@@ -599,23 +637,21 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "native apps"}
 	}
 
-	// ensures the ESP-IDF toolchain is available, install it if not
-	if err := espidftoolchain.EnsureVersion(ctx); err != nil {
-		return nil, err
-	}
-
-	// check if the project has been configured for the right target
 	target := di.DeviceType
 	if strings.ContainsAny(target, " \t\r\n") {
 		return nil, fmt.Errorf("invalid device target %q", target)
 	}
+	toolchain, err := espidftoolchain.LoadProjectToolchain(projectPath, target)
+	if err != nil {
+		return nil, err
+	}
+	if err := toolchain.Ensure(ctx); err != nil {
+		return nil, err
+	}
+
 	configuredTarget := espidftoolchain.ProjectTarget(projectPath)
 	if target != "" && target != configuredTarget {
-		cmd := espidftoolchain.IdfCommandContext(ctx, "set-target", target)
-		cmd.Dir = projectPath
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		if err := toolchain.Run(ctx, projectPath, "set-target", target); err != nil {
 			return nil, fmt.Errorf("idf.py set-target %s: %w", target, err)
 		}
 	}
@@ -640,16 +676,13 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 			return nil, err
 		}
 		if !hasCore {
-			return nil, &MissingWendyCoreError{}
+			return nil, &MissingWendyCoreError{Toolchain: toolchain}
 		}
 	}
 
 	// build the project
-	cmd := espidftoolchain.IdfCommandContext(ctx, "gen_project_binary") // build only the app binary, not the whole firmware image
-	cmd.Dir = projectPath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	// Build only the app binary, not the whole firmware image.
+	if err := toolchain.Run(ctx, projectPath, "gen_project_binary"); err != nil {
 		return nil, fmt.Errorf("build: idf.py gen_project_binary: %w", err)
 	}
 
@@ -675,7 +708,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 		return fmt.Errorf("wendy-lite provider: invalid build context")
 	}
 
-	client, err := p.connectClient(app.Device)
+	client, err := p.connectClient(ctx, app.Device)
 	if err != nil {
 		return err
 	}
@@ -683,11 +716,9 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 	// a post-reboot connection that this defer must close instead.
 	defer func() { client.Close() }()
 
-	if bc.AppType == liteclient.AppTypeWasm {
-		if err := client.StopApp(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: app stop: %v\n", err)
-		}
-	}
+	// For WASM, PushBegin stops execution without unloading the old instance.
+	// An explicit StopApp here would prevent firmware from retaining its linear
+	// memory mapping when StartApp installs the replacement.
 
 	if detach {
 		if err := client.PushApp(bc.AppPath, bc.AppType, nil); err != nil {
@@ -711,7 +742,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 			})
 			pp.Send(tui.ProgressDoneMsg{Err: pushErr})
 		}()
-		finalModel, err := pp.Run()
+		finalModel, err := tui.RunProgram(pp)
 		if err != nil {
 			return fmt.Errorf("progress TUI: %w", err)
 		}
@@ -729,6 +760,10 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 		if err := client.ResetTargetDevice(true, 30*time.Second); err != nil {
 			return fmt.Errorf("device reset: %w", err)
 		}
+		client.WaitReboot(ctx)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := client.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: close: %v\n", err)
 		}
@@ -742,7 +777,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 
 		deadline := time.Now().Add(60 * time.Second)
 		for {
-			newClient, err := p.connectClient(app.Device)
+			newClient, err := p.connectClient(ctx, app.Device)
 			if err == nil {
 				client = newClient
 				break
@@ -834,7 +869,7 @@ func (p *MicroWendyProvider) GetDeviceInfo(ctx context.Context, device models.Ex
 	if device.ConnectionInfo["needsInstall"] == "true" {
 		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "Wendy Lite firmware (none installed)"}
 	}
-	client, err := p.connectClient(device)
+	client, err := p.connectClient(ctx, device)
 	if err != nil {
 		return nil, err
 	}
@@ -856,21 +891,21 @@ func (p *MicroWendyProvider) GetDeviceInfo(ctx context.Context, device models.Ex
 	}, nil
 }
 
-func (p *MicroWendyProvider) WifiConnect(_ context.Context, device models.ExternalDevice, ssid, password string) error {
-	return p.pushWifiConf(device, &litepb.WendyConfWifi{
+func (p *MicroWendyProvider) WifiConnect(ctx context.Context, device models.ExternalDevice, ssid, password string) error {
+	return p.pushWifiConf(ctx, device, &litepb.WendyConfWifi{
 		Networks: []*litepb.WendyConfWifiNetwork{{Ssid: ssid, Password: password}},
 	})
 }
 
-func (p *MicroWendyProvider) WifiDisconnect(_ context.Context, device models.ExternalDevice) error {
-	return p.pushWifiConf(device, &litepb.WendyConfWifi{})
+func (p *MicroWendyProvider) WifiDisconnect(ctx context.Context, device models.ExternalDevice) error {
+	return p.pushWifiConf(ctx, device, &litepb.WendyConfWifi{})
 }
 
 // pushWifiConf stops the app, pushes a conf updating only the wifi root field,
 // and reboots the device so the new configuration takes effect.
-func (p *MicroWendyProvider) pushWifiConf(device models.ExternalDevice, wifi *litepb.WendyConfWifi) error {
+func (p *MicroWendyProvider) pushWifiConf(ctx context.Context, device models.ExternalDevice, wifi *litepb.WendyConfWifi) error {
 	fmt.Println("Connecting to the device...")
-	client, err := p.connectClient(device)
+	client, err := p.connectClient(ctx, device)
 	if err != nil {
 		return err
 	}
@@ -888,27 +923,76 @@ func (p *MicroWendyProvider) pushWifiConf(device models.ExternalDevice, wifi *li
 	if err := client.ResetTargetDevice(true, 0); err != nil {
 		return fmt.Errorf("device reset: %w", err)
 	}
+	client.WaitReboot(ctx)
 	return nil
 }
 
 // ConnectSensorLink opens the provider's normal authenticated connection for
 // SensorLink commands. The caller must close the client.
 func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
-	return p.connectClient(device)
+	return p.connectClient(context.Background(), device)
 }
 
+// ConnectSensorLinkContext opens a cancellable authenticated WendyCom connection.
+func (p *MicroWendyProvider) ConnectSensorLinkContext(ctx context.Context, device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	if device.ConnectionInfo["needsInstall"] == "true" {
+		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "Wendy Lite firmware (none installed)"}
+	}
+	return p.connectClient(ctx, device)
+}
+
+// ConnectEnrollment opens a physical USB serial connection for enrollment and
+// status checks. Enrollment credentials and trust bundles must stay off network
+// transports, even if a peer claims to support enrollment.
+// The caller must close the client.
+func (p *MicroWendyProvider) ConnectEnrollment(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	if device.ConnectionType() != "USB" {
+		return nil, fmt.Errorf("Wendy Lite enrollment requires a USB connection; select the board's USB device")
+	}
+	return p.connectClient(context.Background(), device)
+}
+
+// CloudRelayDialer opens the Wendy Cloud connection that a "Cloud" device's
+// relay runs over, already set up with the user's Cloud credentials, and the
+// context whose call metadata carries them. The commands package owns Cloud
+// sessions and sets it; this package cannot import commands.
+// renew asks for a fresh Lite operator leaf instead of the stored one.
+var CloudRelayDialer func(ctx context.Context, device models.ExternalDevice, renew bool) (*grpc.ClientConn, context.Context, liteclient.RelayOptions, error)
+
+// LiteIdentityResolver refreshes a session's primary identity for direct
+// LAN/BLE connections and returns device trust separately from the client chain.
+// The commands package owns credential persistence and installs this hook.
+var LiteIdentityResolver func(ctx context.Context, auth *config.AuthConfig) (config.CertificateInfo, string, error)
+
+// LiteBoardIdentityResolver maps the hardware id a Lite board advertises to the
+// tenant and device UUID of its single enrollment in the signed-in Wendy Cloud
+// organization. The commands package installs it.
+var LiteBoardIdentityResolver func(ctx context.Context, hardwareID string) (tenant, deviceID string, err error)
+
+// LiteDeviceCAChainResolver returns the session tenant's Lite Device CA chain
+// loader, so LAN and BLE verify Lite-issued boards like the Cloud relay does.
+// The commands package installs it; nil leaves only the session's trust.
+var LiteDeviceCAChainResolver func(auth *config.AuthConfig) liteclient.LiteDeviceCAChain
+
 // connectClient opens a WendyLiteClient connection to the device over serial,
-// LAN or BLE (with mTLS when the device advertises it). The caller must Close
-// the client.
-func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+// LAN or BLE (with mTLS when the device advertises it), or through the Wendy
+// Cloud relay. The caller must Close the client.
+func (p *MicroWendyProvider) connectClient(ctx context.Context, device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	client := liteclient.NewWendyLiteClient()
 	switch device.ConnectionInfo["type"] {
+	case "Mesh":
+		if err := connectMeshLite(ctx, client, device); err != nil {
+			return nil, fmt.Errorf("connect to mesh Wendy Lite: %w", err)
+		}
 	case "USB":
 		serialPort := device.ConnectionInfo["serialPort"]
 		if serialPort == "" {
 			return nil, fmt.Errorf("wendy-lite provider: missing serial port in connection info")
 		}
-		if err := connectSerialWithRetry(client, serialPort); err != nil {
+		if err := connectSerialWithRetry(ctx, client, serialPort); err != nil {
 			return nil, fmt.Errorf("connect to device via serial: %w", err)
 		}
 	case "LAN":
@@ -919,13 +1003,41 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		}
 		addr := net.JoinHostPort(ip, port)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool) error {
-				return client.ConnectWithMutualAuthentication(addr, cert, rootCAs)
+			legacy, err := legacyLiteIdentity(device)
+			if err != nil {
+				return nil, err
+			}
+			if legacy == nil && device.ConnectionInfo["enrolledDeviceId"] == "" {
+				return nil, fmt.Errorf("this board does not advertise its enrolled identity (mDNS principal=); update its firmware, or connect over USB or Wendy Cloud")
+			}
+			if legacy != nil {
+				if err := connectWithLegacyCLIIdentities(ctx, legacy.orgID, func(cert tls.Certificate, chain string, _ liteclient.LiteDeviceCAChain) error {
+					return client.ConnectWithLegacyAuthenticationContext(ctx, addr, cert, chain, legacy.orgID, legacy.assetID)
+				}); err != nil {
+					return nil, err
+				}
+				return client, nil
+			}
+			if err := connectWithCLIIdentities(ctx, device.ConnectionInfo["tenantId"], func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error {
+				if tenant := device.ConnectionInfo["tenantId"]; tenant != "" {
+					leaf, err := x509.ParseCertificate(cert.Certificate[0])
+					if err != nil {
+						return err
+					}
+					identity, ok, err := certs.IdentityFromCert(leaf)
+					if err != nil {
+						return err
+					}
+					if !ok || identity.TenantUUID != tenant {
+						return fmt.Errorf("client identity does not match advertised PKI tenant; sign in to the board's organization with wendy auth login --email <email>")
+					}
+				}
+				return client.ConnectWithPKIAuthenticationContext(ctx, addr, cert, chain, device.ConnectionInfo["enrolledDeviceId"], lite)
 			}); err != nil {
 				return nil, err
 			}
 		} else {
-			if err := client.ConnectInsecure(addr); err != nil {
+			if err := client.ConnectInsecureContext(ctx, addr); err != nil {
 				return nil, fmt.Errorf("connect to device: %w", err)
 			}
 		}
@@ -939,58 +1051,241 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		psm64, _ := strconv.ParseUint(device.ConnectionInfo["psm"], 10, 16)
 		psm := uint16(psm64)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool) error {
-				return client.ConnectViaBLEWithMutualAuthentication(address, psm, cert, rootCAs)
+			// Firmware without the principal characteristic advertises only its
+			// hardware id, so Cloud maps it to the enrolled device UUID. Either way
+			// the pin is checked against the board's TLS leaf.
+			tenant, deviceID := device.ConnectionInfo["tenantId"], device.ConnectionInfo["enrolledDeviceId"]
+			if deviceID == "" {
+				if LiteBoardIdentityResolver == nil {
+					return nil, fmt.Errorf("wendy-lite provider: Wendy Cloud board lookup is not available")
+				}
+				var err error
+				if tenant, deviceID, err = LiteBoardIdentityResolver(ctx, device.ConnectionInfo["deviceId"]); err != nil {
+					return nil, err
+				}
+			}
+			if err := connectWithCLIIdentities(ctx, tenant, func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error {
+				return client.ConnectViaBLEWithPKIAuthenticationContext(ctx, address, psm, cert, chain, deviceID, lite)
 			}); err != nil {
 				return nil, err
 			}
 		} else {
-			if err := client.ConnectViaBLEInsecure(address, psm); err != nil {
+			if err := client.ConnectViaBLEContext(ctx, address, psm, nil); err != nil {
 				return nil, fmt.Errorf("connect to device over BLE: %w", err)
 			}
 		}
+	case "Cloud":
+		assetID := device.ConnectionInfo["assetId"]
+		if assetID == "" {
+			return nil, fmt.Errorf("wendy-lite provider: missing Cloud asset ID in connection info")
+		}
+		if CloudRelayDialer == nil {
+			return nil, fmt.Errorf("wendy-lite provider: Wendy Cloud connections are not available")
+		}
+		connect := func(renew bool) (err error) {
+			cc, ctx, options, err := CloudRelayDialer(ctx, device, renew)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					cc.Close()
+				}
+			}()
+			if device.ConnectionInfo["tenantId"] == "" || device.ConnectionInfo["deviceId"] == "" {
+				return fmt.Errorf("wendy-lite provider: missing Cloud tenant or device identity")
+			}
+			// The one-shot relay grant binds both the operator principal and
+			// its key. Use the signer's identity, never another stored login.
+			selected := options.OperatorIdentity
+			if selected.PrincipalURI == "" {
+				return fmt.Errorf("missing selected Cloud operator identity")
+			}
+			key, err := selected.PrivateKeyPEM()
+			if err != nil {
+				return err
+			}
+			cert, err := certs.TLSKeyPair(selected.PemCertificate, selected.PemCertificateChain, key)
+			if err != nil {
+				return err
+			}
+			leaf, err := x509.ParseCertificate(cert.Certificate[0])
+			if err != nil {
+				return err
+			}
+			identity, ok, err := certs.IdentityFromCert(leaf)
+			if err != nil {
+				return err
+			}
+			if !ok || identity.TenantUUID != device.ConnectionInfo["tenantId"] {
+				return fmt.Errorf("operator identity does not match selected device tenant")
+			}
+			if identity.Principal != selected.PrincipalURI {
+				return fmt.Errorf("operator certificate does not match selected Cloud principal")
+			}
+			return client.ConnectViaRelay(ctx, cc, assetID, cert, options.DeviceTrustChainPEM, device.ConnectionInfo["deviceId"], options)
+		}
+		err := connect(false)
+		// Cloud refuses a Lite leaf it no longer accepts (revoked, or not
+		// pki-core's Lite profile) before attestation: request a fresh one once.
+		if s := status.Convert(err); s.Code() == codes.PermissionDenied && s.Message() == "invalid Lite principal request" {
+			err = connect(true)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
+		}
+
 	default:
 		return nil, fmt.Errorf("wendy-lite provider: unsupported connection type: %s", device.ConnectionInfo["type"])
 	}
 	return client, nil
 }
 
-// connectWithCLIIdentities tries connect once per CLI certificate, since the
-// user may hold identities from several organizations and only one of them is
-// the device's issuer. It reports the failures of every identity it tried:
-// with one certificate per organization, "which one was this device enrolled
-// with" is exactly what the reader needs to see.
-func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.CertPool) error) error {
-	certInfos, err := loadAllCLICerts()
+type liteLegacyIdentity struct {
+	orgID   int32
+	assetID int32
+}
+
+// Legacy IDs select a trust path; TLS must still authenticate the exact asset.
+// An advertised tenant always selects PKI, even if legacy hints are also present.
+func legacyLiteIdentity(device models.ExternalDevice) (*liteLegacyIdentity, error) {
+	info := device.ConnectionInfo
+	if info["tenantId"] != "" || (info["orgId"] == "" && info["assetId"] == "") {
+		return nil, nil
+	}
+	org, orgErr := strconv.ParseInt(info["orgId"], 10, 32)
+	asset, assetErr := strconv.ParseInt(info["assetId"], 10, 32)
+	if orgErr != nil || assetErr != nil || org <= 0 || asset <= 0 {
+		return nil, fmt.Errorf("legacy Wendy Lite device must advertise a valid organization and asset ID")
+	}
+	return &liteLegacyIdentity{orgID: int32(org), assetID: int32(asset)}, nil
+}
+
+// connectWithCLIIdentities tries eligible operator sessions until one connects.
+// The resolver retains the tenant credential and handles certificate renewal;
+// tenant sessions also get the Lite Device CA chain loader the relay uses.
+func connectWithCLIIdentities(ctx context.Context, advertisedTenant string, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
+	return connectWithScopedCLIIdentities(ctx, advertisedTenant, 0, connect)
+}
+
+func connectWithLegacyCLIIdentities(ctx context.Context, orgID int32, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
+	if orgID <= 0 {
+		return fmt.Errorf("legacy Wendy Lite connection requires an organization ID")
+	}
+	return connectWithScopedCLIIdentities(ctx, "", orgID, connect)
+}
+
+func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string, legacyOrg int32, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
+	return connectWithScopedCLIPrincipal(ctx, advertisedTenant, legacyOrg, "", connect)
+}
+
+// A mesh dial uses the selected primary context, rather than trying unrelated
+// saved logins in the same tenant as physical discovery historically permits.
+func connectWithScopedCLIPrincipal(ctx context.Context, advertisedTenant string, legacyOrg int32, primary string, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if LiteIdentityResolver == nil {
+		return fmt.Errorf("wendy-lite provider: Lite operator identity resolver is not available")
+	}
+	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("wendy-lite provider: loading mTLS certs: %w", err)
+		return fmt.Errorf("wendy-lite provider: loading operator sessions: %w", err)
+	}
+	if primary != "" {
+		auth, err := config.ResolveAuth(cfg, "", nil)
+		if err != nil {
+			return err
+		}
+		cfg.Auth = []config.AuthConfig{*auth}
 	}
 	var connectErrs []error
-	for _, certInfo := range certInfos {
+	for i := range cfg.Auth {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		auth := &cfg.Auth[i]
+		if len(auth.Certificates) == 0 {
+			continue
+		}
+		leaves, err := certs.ParseCertsFromPEM([]byte(auth.Certificates[0].PemCertificate))
+		if err != nil || len(leaves) != 1 {
+			continue
+		}
+		identity, hasIdentity, err := certs.IdentityFromCert(leaves[0])
+		if err != nil || !hasIdentity {
+			continue
+		}
+		if legacyOrg > 0 {
+			if identity.TenantUUID != "" || identity.OrgID != legacyOrg || identity.EntityType != certs.EntityUser {
+				continue
+			}
+		} else if identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
+			continue
+		}
+		if primary != "" && identity.Principal != primary {
+			continue
+		}
+		// Discovery is only a selection hint. The TLS verifier still checks the
+		// device's authenticated tenant and identity after this filtering.
+		if advertisedTenant != "" && identity.TenantUUID != advertisedTenant {
+			continue
+		}
+		name := auth.Name
+		if name == "" {
+			name = auth.CloudGRPC
+		}
+		certInfo, deviceTrust, err := LiteIdentityResolver(ctx, auth)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			connectErrs = append(connectErrs, fmt.Errorf("context %q: %w", name, err))
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		keyPEM, err := certInfo.PrivateKeyPEM()
 		if err != nil {
-			return fmt.Errorf("wendy-lite provider: loading client key: %w", err)
+			connectErrs = append(connectErrs, fmt.Errorf("context %q: loading Lite client key: %w", name, err))
+			continue
 		}
-		cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
+		cert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 		if err != nil {
-			return fmt.Errorf("wendy-lite provider: parsing mTLS cert: %w", err)
+			connectErrs = append(connectErrs, fmt.Errorf("context %q: parsing Lite mTLS certificate: %w", name, err))
+			continue
 		}
-		rootCAs := x509.NewCertPool()
-		certs.AppendChainToPool(rootCAs, certInfo.PemCertificateChain)
-		if err := connect(cert, *rootCAs); err != nil {
-			connectErrs = append(connectErrs, err)
+		var lite liteclient.LiteDeviceCAChain
+		if legacyOrg == 0 && LiteDeviceCAChainResolver != nil {
+			lite = LiteDeviceCAChainResolver(auth)
+		}
+		if err := connect(cert, deviceTrust, lite); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			connectErrs = append(connectErrs, fmt.Errorf("context %q: %w", name, err))
 			continue
 		}
 		return nil
 	}
 
+	if len(connectErrs) == 0 {
+		if legacyOrg > 0 {
+			return fmt.Errorf("no legacy Cloud user login matches organization %s; run 'wendy auth login' for that organization", config.OrganizationLabel("", strconv.FormatInt(int64(legacyOrg), 10)))
+		}
+		if advertisedTenant != "" {
+			return fmt.Errorf("no operator login matches the device's advertised tenant; sign in to its organization with 'wendy auth login --email <email>'")
+		}
+		return fmt.Errorf("Wendy Lite requires a tenant-scoped operator login; run 'wendy auth login'")
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Wendy Lite connection error")
 	for i, e := range connectErrs {
 		if i == 0 {
-			fmt.Fprintf(&b, ": identity %d: %v", i+1, e)
+			fmt.Fprintf(&b, ": %v", e)
 		} else {
-			fmt.Fprintf(&b, "; identity %d: %v", i+1, e)
+			fmt.Fprintf(&b, "; %v", e)
 		}
 	}
 	return errors.New(b.String())
@@ -1010,8 +1305,8 @@ var serialConnectRetryDelay = 400 * time.Millisecond
 
 // connectSerialFn performs a single ConnectToSerial attempt. Indirected so
 // tests can simulate transient and permanent failures without real hardware.
-var connectSerialFn = func(client *liteclient.WendyLiteClient, port string) error {
-	return client.ConnectToSerial(port)
+var connectSerialFn = func(ctx context.Context, client *liteclient.WendyLiteClient, port string) error {
+	return client.ConnectToSerialContext(ctx, port)
 }
 
 // connectSerialWithRetry opens a Wendy Lite serial connection, retrying on
@@ -1020,34 +1315,26 @@ var connectSerialFn = func(client *liteclient.WendyLiteClient, port string) erro
 // lock released, link cleared), so it's safe to call again on the same
 // client. Prints a short notice to stderr once a retry is actually needed, so
 // a transient hiccup doesn't read as a silent hang.
-func connectSerialWithRetry(client *liteclient.WendyLiteClient, serialPort string) error {
+func connectSerialWithRetry(ctx context.Context, client *liteclient.WendyLiteClient, serialPort string) error {
 	var lastErr error
 	for attempt := 1; attempt <= serialConnectMaxAttempts; attempt++ {
-		if lastErr = connectSerialFn(client, serialPort); lastErr == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if lastErr = connectSerialFn(ctx, client, serialPort); lastErr == nil {
 			return nil
 		}
 		if attempt < serialConnectMaxAttempts {
 			fmt.Fprintf(os.Stderr, "connecting to %s failed (%v), retrying (%d/%d)...\n", serialPort, lastErr, attempt+1, serialConnectMaxAttempts)
-			time.Sleep(serialConnectRetryDelay * time.Duration(attempt))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(serialConnectRetryDelay * time.Duration(attempt)):
+			}
 		}
 	}
 	return fmt.Errorf(
 		"%w after %d attempts — if this keeps happening, make sure no other process (e.g. `idf.py monitor`, `wendy device camera view`) is using %s, or try unplugging and reconnecting the board",
 		lastErr, serialConnectMaxAttempts, serialPort,
 	)
-}
-
-func loadAllCLICerts() ([]config.CertificateInfo, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	var out []config.CertificateInfo
-	for _, auth := range cfg.Auth {
-		out = append(out, auth.Certificates...)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("not logged in (no certificate found)")
-	}
-	return out, nil
 }

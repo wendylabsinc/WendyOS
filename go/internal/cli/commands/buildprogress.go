@@ -28,6 +28,20 @@ var (
 	buildProgressProgram               = func(model tea.Model) *tea.Program { return tui.NewProgressProgram(model) }
 )
 
+// progressHintsOffKey marks work whose progress views leave out the rotating
+// "Tip:" line: the simulator's own setup, where tips about 'wendy init' or
+// entitlements in wendy.json describe a job the user is not doing.
+type progressHintsOffKey struct{}
+
+func withoutProgressHints(ctx context.Context) context.Context {
+	return context.WithValue(ctx, progressHintsOffKey{}, true)
+}
+
+func progressHintsOff(ctx context.Context) bool {
+	off, _ := ctx.Value(progressHintsOffKey{}).(bool)
+	return off
+}
+
 func forceBuildProgressInteractive(v bool) func() {
 	prev := buildProgressInteractive
 	buildProgressInteractive = func() bool { return v }
@@ -54,7 +68,7 @@ func runBuildProgressProgram(prog *tea.Program) (tea.Model, error) {
 		logger.SetOutput(out)
 		_, _ = out.Write(logs.Bytes())
 	}()
-	return prog.Run()
+	return tui.RunProgram(prog)
 }
 
 // maxRawBuildCapture bounds the raw buildx log retained for failure replay.
@@ -286,8 +300,9 @@ func (f *firstWriteHookWriter) Write(p []byte) (int, error) {
 // runBuildWithProgress runs build, rendering its buildx output as a clean live
 // step list (interactive) or concise per-step lines (non-interactive). When a
 // build fails and dumpRawOnFailure(err) is true, the useful step/cause/location
-// are printed and the detailed raw output is retained in a temporary log file
-// (never on cancellation). Setup-log chatter written to logw is retained in
+// are printed, the detailed raw output is retained in a temporary log file, and
+// the returned error names the failing step and its cause (never on
+// cancellation). Setup-log chatter written to logw is retained in
 // the same file, AND (WDY-2432) rendered live as a synthetic "preparing
 // buildx builder" step via newBuildSetupStepWriter, so a cold builder
 // bootstrap is visible rather than a silent gap until either it fails or
@@ -295,34 +310,52 @@ func (f *firstWriteHookWriter) Write(p []byte) (int, error) {
 // Callers whose failures can trigger a fallback rebuild (which would repeat
 // the same diagnostics) use the predicate to stay quiet in those cases.
 func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure func(error) bool, build func(context.Context, io.Writer, io.Writer) error) error {
+	if isRobotTour(ctx) {
+		title = "Building your robot app..."
+	}
 	start := time.Now()
 	raw := &boundedBuffer{max: maxRawBuildCapture}
 	var setupLog bytes.Buffer
+	out := buildProgressOut
+	if detachedJSONRun(ctx) {
+		out = os.Stderr
+	}
 
-	if !buildProgressInteractive() {
-		emit, tally, stopHeartbeat := tui.NewBuildPlainRenderer(buildProgressOut)
+	if !buildProgressInteractive() || detachedJSONRun(ctx) {
+		emit, tally, stopHeartbeat := tui.NewBuildPlainRenderer(out)
+		if isRobotTour(ctx) {
+			emit = tourBuildEvents(emit)
+		}
 		parser := tui.NewBuildParser(emit)
 		buildStream := io.MultiWriter(parser, raw)
 		setupw, finishSetup := newBuildSetupStepWriter(emit, &setupLog)
 		stream := firstWriteHook(buildStream, finishSetup)
-		fmt.Fprintf(buildProgressOut, "%s\n", title)
+		fmt.Fprintf(out, "%s\n", title)
 		err := build(ctx, stream, setupw)
 		finishSetup() // idempotent; catches builds that never write to stream
 		stopHeartbeat()
 		if err != nil {
 			if ctx.Err() == nil && dumpRawOnFailure(err) {
-				renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), err)
+				return renderBuildFailure(out, "", string(raw.Bytes())+setupLog.String(), err)
 			}
 			return err
 		}
-		printBuildSummary(buildProgressOut, tally(), time.Since(start))
+		if !isRobotTour(ctx) {
+			printBuildSummary(out, tally(), time.Since(start))
+		}
 		return nil
 	}
 
 	// Interactive: run the steps model while the build streams events to it.
 	m := tui.NewBuildStepsModel(title)
+	if progressHintsOff(ctx) {
+		m = m.WithoutHints()
+	}
 	prog := buildProgressProgram(m)
 	emit := func(e tui.BuildStepEvent) { prog.Send(tui.BuildStepMsg(e)) }
+	if isRobotTour(ctx) {
+		emit = tourBuildEvents(emit)
+	}
 	parser := tui.NewBuildParser(emit)
 	buildStream := io.MultiWriter(parser, raw)
 	setupw, finishSetup := newBuildSetupStepWriter(emit, &setupLog)
@@ -363,14 +396,38 @@ func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure fu
 	buildErr := <-buildErrC
 	if buildErr != nil {
 		if ctx.Err() == nil && dumpRawOnFailure(buildErr) {
-			renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), buildErr)
+			return renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), buildErr)
 		}
 		return buildErr
 	}
 	elapsed := time.Since(start)
-	printBuildSummary(buildProgressOut, fm.Tally(), elapsed)
-	maybeSuggestOptimizeAfterBuild(fm.Tally(), elapsed)
+	if !isRobotTour(ctx) {
+		printBuildSummary(buildProgressOut, fm.Tally(), elapsed)
+		maybeSuggestOptimizeAfterBuild(fm.Tally(), elapsed)
+	}
 	return nil
+}
+
+// Keep the tour's live build feedback to one row. Raw commands and setup logs
+// still reach the existing failure capture, but completed Dockerfile steps do
+// not each leave a line in the tour. Byte counters come from the build parser.
+func tourBuildEvents(emit func(tui.BuildStepEvent)) func(tui.BuildStepEvent) {
+	return func(e tui.BuildStepEvent) {
+		detail := "Building your robot app..."
+		switch e.Kind {
+		case tui.BuildVertexSetup:
+			detail = "Preparing the build..."
+		case tui.BuildVertexPull:
+			detail = "Downloading app files..."
+		case tui.BuildVertexExport:
+			detail = "Saving your robot app..."
+		}
+		emit(tui.BuildStepEvent{
+			ID: "tour-build", Kind: tui.BuildVertexSetup,
+			Display: "Robot app", Status: tui.BuildStepRunning,
+			Detail: detail, Bytes: e.Bytes,
+		})
+	}
 }
 
 func printBuildSummary(w io.Writer, t tui.BuildTally, d time.Duration) {

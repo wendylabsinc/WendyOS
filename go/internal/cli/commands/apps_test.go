@@ -2,6 +2,8 @@ package commands
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -160,5 +162,73 @@ func TestHTTPPortColumn_Zero(t *testing.T) {
 func TestHTTPPortColumn_NonZero(t *testing.T) {
 	if got := httpPortColumn(8080); got != ":8080" {
 		t.Errorf("httpPortColumn(8080) = %q, want %q", got, ":8080")
+	}
+}
+
+// The wendy-app-lifecycle skill tells agents to run
+// `wendy device apps start <app> --detach`; keep the flag it relies on.
+func TestAppsStartCmd_HasDetachFlag(t *testing.T) {
+	f := newAppsStartCmd().Flags().Lookup("detach")
+	if f == nil || f.Shorthand != "d" {
+		t.Fatalf("device apps start must keep -d/--detach, got %+v", f)
+	}
+}
+
+// The skill once claimed `apps start` had no --detach and recommended GNU
+// `timeout`, which macOS lacks, to bound a log sample. Guard every copy (the
+// plugin source and, when present, the CLI's embedded copy) against those
+// claims coming back.
+func TestAppLifecycleSkill_NoStaleClaims(t *testing.T) {
+	copies := []string{
+		filepath.Join("..", "..", "..", "..", "plugins", "wendy-agentic-coding", "skills", "wendy-app-lifecycle", "SKILL.md"),
+		filepath.Join("..", "assets", "skills", "wendy-app-lifecycle", "SKILL.md"),
+	}
+	checked := 0
+	for _, path := range copies {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		text := string(data)
+		// The log-sampling snippet must not drop a file into the user's
+		// working directory either.
+		for _, stale := range []string{"There is no `wendy device apps start --detach` flag", "timeout 20s wendy", "> wendy-logs.jsonl"} {
+			if strings.Contains(text, stale) {
+				t.Errorf("%s still says %q", path, stale)
+			}
+		}
+		if !strings.Contains(text, "wendy device apps start <app-id> --detach") {
+			t.Errorf("%s should show `wendy device apps start <app-id> --detach`", path)
+		}
+		if !strings.Contains(text, "--tail 50 --no-follow") {
+			t.Errorf("%s should take a finite log sample with `--tail 50 --no-follow`", path)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no copy of the wendy-app-lifecycle skill found")
+	}
+}
+
+// The /wendy-apps plugin command once said `apps start` always attaches and
+// sent agents to `wendy run --detach` instead; it must point at
+// `apps start --detach` and say what that restart policy means.
+func TestWendyAppsCommand_MentionsStartDetach(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "plugins", "wendy-agentic-coding", "commands", "wendy-apps.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "currently attaches to the app stream") {
+		t.Errorf("%s still says apps start always attaches", path)
+	}
+	for _, want := range []string{"wendy device apps start <app-id> --detach", "unless-stopped"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%s should mention %q", path, want)
+		}
 	}
 }

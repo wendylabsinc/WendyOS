@@ -1,0 +1,11 @@
+{
+  "mode": "physical",
+  "port": null,
+  "baud": 1000000,
+  "ids": [1, 2, 3, 4, 5, 6],
+  "joints": ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"],
+  "host": "127.0.0.1",
+  "http_port": 8876,
+  "binding": { "id": "operator-selected-follower", "provenance": "operator_supplied_unverified" },
+  "calibration_file": null
+}

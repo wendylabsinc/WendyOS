@@ -5,8 +5,10 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -192,17 +194,74 @@ func TestCloudFlusher_ScrubsBeforeExport(t *testing.T) {
 	}
 }
 
-func TestTelemetryCloudEndpointPKI(t *testing.T) {
-	endpoint, err := telemetryCloudEndpoint("api.dev.wendy.sh:443", "spiffe://wendy.sh/tenant/t/device/d", "", "")
-	if err != nil || endpoint != "devices.dev.wendy.sh:443" {
-		t.Fatalf("PKI telemetry endpoint=%q,%v", endpoint, err)
+func TestCloudFlusher_WithoutEndpointKeepsTelemetryLocal(t *testing.T) {
+	t.Setenv("WENDY_TELEMETRY_URL", "")
+	t.Setenv("WENDY_DEVICE_CLOUD_URL", "https://devices.example:443")
+	for _, enrolled := range []bool{false, true} {
+		name := "unenrolled"
+		if enrolled {
+			name = "enrolled"
+		}
+		t.Run(name, func(t *testing.T) {
+			buf, _ := makeTestBuffer(t, 10*1024*1024, 1*1024*1024)
+			buf.PublishLogs(makeLogReq("keep-local"))
+			core, observed := observer.New(zap.InfoLevel)
+			provisioning := &ProvisioningService{
+				enrolled:     enrolled,
+				cloudHost:    "api.wendy.dev:443",
+				principalURI: "spiffe://wendy.sh/tenant/t/device/d",
+			}
+			flusher := NewCloudFlusherWithProvisioning(zap.New(core), buf, provisioning)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			flusher.Run(ctx)
+			if ctx.Err() != nil {
+				t.Fatal("Run waited for enrollment or attempted to dial without a collector")
+			}
+			entries := observed.All()
+			if len(entries) != 1 || entries[0].Level != zap.InfoLevel || entries[0].Message != "cloud flusher: WENDY_TELEMETRY_URL is not set; telemetry uploads are disabled and telemetry remains available locally" {
+				t.Fatalf("want one disabled-upload info message, got %+v", entries)
+			}
+
+			// Disabling exports must leave the buffered frame and cursor intact.
+			logs := &fakeLogsClient{}
+			if err := flusher.runOnce(context.Background(), logs, &fakeMetricsClient{}, &fakeTraceClient{}); err != nil {
+				t.Fatalf("export retained frame: %v", err)
+			}
+			if logs.count() != 1 {
+				t.Fatalf("want one retained frame, got %d", logs.count())
+			}
+		})
 	}
-	endpoint, err = telemetryCloudEndpoint("api.dev.wendy.sh:443", "principal", "https://collector.example:4317", "")
-	if err != nil || endpoint != "collector.example:4317" {
-		t.Fatalf("collector override=%q,%v", endpoint, err)
-	}
-	endpoint, err = telemetryCloudEndpoint("legacy.example:8501", "", "", "")
-	if err != nil || endpoint != "legacy.example:8501" {
-		t.Fatalf("legacy endpoint=%q,%v", endpoint, err)
+}
+
+func TestTelemetryCloudEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		want     string
+		wantErr  bool
+	}{
+		{name: "disabled"},
+		{name: "https", endpoint: "https://collector.example:4317", want: "collector.example:4317"},
+		{name: "default port", endpoint: "collector.example", want: "collector.example:443"},
+		{name: "explicit host", endpoint: "api.wendy.dev:443", want: "api.wendy.dev:443"},
+		{name: "insecure URL", endpoint: "http://collector.example:4317", wantErr: true},
+		{name: "URL path", endpoint: "https://collector.example/v1/logs", wantErr: true},
+		{name: "URL credentials", endpoint: "https://user:password@collector.example", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint, err := telemetryCloudEndpoint(tc.endpoint)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("telemetryCloudEndpoint(%q) accepted invalid endpoint %q", tc.endpoint, endpoint)
+				}
+				return
+			}
+			if err != nil || endpoint != tc.want {
+				t.Fatalf("telemetryCloudEndpoint(%q) = %q, %v; want %q", tc.endpoint, endpoint, err, tc.want)
+			}
+		})
 	}
 }

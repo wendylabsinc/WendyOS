@@ -2,6 +2,7 @@ package configpartition
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -258,7 +259,7 @@ func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	applyWendyConf(logger, dir)
+	applyWendyConf(logger, dir, t.TempDir())
 
 	if _, err := os.Stat(conf); !os.IsNotExist(err) {
 		t.Error("wendy.conf should be deleted after applyWendyConf")
@@ -268,7 +269,7 @@ func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 func TestApplyWendyConf_NoFile(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	// Should return without panic when file doesn't exist.
-	applyWendyConf(logger, t.TempDir())
+	applyWendyConf(logger, t.TempDir(), t.TempDir())
 }
 
 func TestValidDeviceName(t *testing.T) {
@@ -322,8 +323,22 @@ func TestApplyDeviceName_InvalidName(t *testing.T) {
 func TestApplyPreProvisioning_Success(t *testing.T) {
 	cfgDir := t.TempDir()
 	configPath := t.TempDir()
+	path := filepath.Join(configPath, "provisioning.json")
+	if err := os.WriteFile(path, []byte(`{"enrolled":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Hold the old inode open to detect truncation or inode reuse.
+	old, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	oldInfo, err := old.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	state := `{"enrolled":true,"cloudHost":"cloud.wendy.dev","orgId":1,"assetId":42,"keyPem":"fake-key","certPem":"fake-cert","chainPem":"fake-chain"}`
+	state := `{"enrolled":true,"cloudHost":"cloud.wendy.dev","orgId":1,"assetId":42,"keyPem":"fake-key","certPem":"fake-cert","chainPem":"fake-chain","principalURI":"spiffe://example/device/42"}`
 	if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -339,42 +354,120 @@ func TestApplyPreProvisioning_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provisioning.json not written to configPath: %v", err)
 	}
-	if string(got) != state {
-		t.Errorf("provisioning.json content = %q; want %q", got, state)
+	var saved preProvisionedState
+	if err := json.Unmarshal(got, &saved); err != nil {
+		t.Fatal(err)
 	}
-
-	for _, name := range []string{"device-key.pem", "device.pem", "ca.pem"} {
-		if _, err := os.Stat(filepath.Join(configPath, name)); err != nil {
-			t.Errorf("%s not written: %v", name, err)
+	newInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(oldInfo, newInfo) {
+		t.Fatal("pre-provisioning overwrote the existing state instead of replacing it atomically")
+	}
+	if saved.KeyPEM != "" || saved.CertPEM != "fake-cert" || saved.ChainPEM != "fake-chain" || !saved.Enrolled {
+		t.Fatalf("wrong persisted state: %s", got)
+	}
+	key, err := os.ReadFile(filepath.Join(configPath, "device-key.pem"))
+	if err != nil || string(key) != "fake-key" {
+		t.Fatalf("wrong key: %q %v", key, err)
+	}
+	for _, name := range []string{"device-key.pem", "provisioning.json"} {
+		info, err := os.Stat(filepath.Join(configPath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %o; want 0600", name, info.Mode().Perm())
+		}
+	}
+	for _, name := range []string{"device.pem", "ca.pem", ".provisioned"} {
+		if _, err := os.Stat(filepath.Join(configPath, name)); !os.IsNotExist(err) {
+			t.Errorf("unused file %s emitted", name)
+		}
+	}
+	if !strings.Contains(string(got), "spiffe://example/device/42") {
+		t.Fatal("import discarded an unknown enrollment field")
+	}
+	// A retried first-boot handoff must preserve both destination files.
+	before := make(map[string]os.FileInfo)
+	for _, name := range []string{"device-key.pem", "provisioning.json"} {
+		info, err := os.Stat(filepath.Join(configPath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = info
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applyPreProvisioning(logger, cfgDir, configPath)
+	for name, previous := range before {
+		current, err := os.Stat(filepath.Join(configPath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(previous, current) || !previous.ModTime().Equal(current.ModTime()) {
+			t.Fatalf("retried import rewrote %s", name)
 		}
 	}
 
-	info, err := os.Stat(filepath.Join(configPath, "device-key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("device-key.pem mode = %o; want 0600", info.Mode().Perm())
-	}
+}
 
-	info, err = os.Stat(filepath.Join(configPath, "device.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("device.pem mode = %o; want 0644", info.Mode().Perm())
-	}
-
-	info, err = os.Stat(filepath.Join(configPath, "ca.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("ca.pem mode = %o; want 0644", info.Mode().Perm())
-	}
-
-	if _, err := os.Stat(filepath.Join(configPath, ".provisioned")); err != nil {
-		t.Error(".provisioned marker not written")
+func TestApplyPreProvisioningFlashReplacesResetRecovery(t *testing.T) {
+	for _, existing := range []string{
+		`{"enrolled":true,"unenrollment":{"status":"pending","receipt":"public-evidence"}}`,
+		`{"enrolled":false,"unenrollment":{"status":"completed","receipt":"public-evidence"}}`,
+		`{"unenrollment":null}`,
+		`invalid existing state`,
+	} {
+		t.Run(existing, func(t *testing.T) {
+			cfgDir, configPath := t.TempDir(), t.TempDir()
+			media := []byte(`{"enrolled":true,"cloudHost":"cloud.example","keyPem":"fixture-key","certPem":"fixture-cert","chainPem":"fixture-chain"}`)
+			if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), media, 0600); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(configPath, "provisioning.json")
+			if err := os.WriteFile(path, []byte(existing), 0600); err != nil {
+				t.Fatal(err)
+			}
+			applyPreProvisioning(zap.NewNop(), cfgDir, configPath)
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved, expected map[string]json.RawMessage
+			if err := json.Unmarshal(got, &saved); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(media, &expected); err != nil {
+				t.Fatal(err)
+			}
+			delete(expected, "keyPem")
+			savedJSON, err := json.Marshal(saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedJSON, err := json.Marshal(expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(savedJSON, expectedJSON) {
+				t.Fatalf("flash provisioning did not replace old recovery state with key-free enrollment: %s", got)
+			}
+			key, err := os.ReadFile(filepath.Join(configPath, "device-key.pem"))
+			if err != nil || string(key) != "fixture-key" {
+				t.Fatalf("first-boot key not persisted separately: %q: %v", key, err)
+			}
+			for _, name := range []string{"device.pem", "ca.pem", ".provisioned"} {
+				if _, err := os.Stat(filepath.Join(configPath, name)); !os.IsNotExist(err) {
+					t.Fatalf("unused first-boot credential emitted: %s: %v", name, err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(cfgDir, "provisioning.json")); !os.IsNotExist(err) {
+				t.Fatal("first-boot source not consumed", err)
+			}
+		})
 	}
 }
 
@@ -436,6 +529,10 @@ func TestApplyPreProvisioning_CreatesConfigDir(t *testing.T) {
 	}
 }
 
+// testPrincipal is a canonical SPIFFE device principal used to drive the
+// principal TXT record through the avahi helpers.
+const testPrincipal = "spiffe://wendy.sh/tenant/2f6a8a10-1111-4aaa-8bbb-000000000001/device/3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
 const avahiServiceTemplate = `<?xml version="1.0" standalone='no'?>
 <service-group>
   <name replace-wildcards="yes">WendyOS on %h</name>
@@ -451,7 +548,7 @@ const avahiServiceTemplate = `<?xml version="1.0" standalone='no'?>
 `
 
 func TestUpdateWendyOSServicePort_Provisioned(t *testing.T) {
-	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 0, 0)
+	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, "")
 
 	if !strings.Contains(out, "<port>50052</port>") {
 		t.Errorf("expected wendyos port updated to 50052:\n%s", out)
@@ -467,8 +564,8 @@ func TestUpdateWendyOSServicePort_Provisioned(t *testing.T) {
 
 func TestUpdateWendyOSServicePort_Unprovisioned(t *testing.T) {
 	// Start from a provisioned advertisement and revert it.
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 0, 0)
-	out := updateWendyOSServicePort(provisioned, 50051, false, 0, 0)
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	out := updateWendyOSServicePort(provisioned, 50051, false, "")
 
 	if !strings.Contains(out, "<port>50051</port>") {
 		t.Errorf("expected wendyos port reverted to 50051:\n%s", out)
@@ -481,24 +578,24 @@ func TestUpdateWendyOSServicePort_Unprovisioned(t *testing.T) {
 	}
 }
 
-func TestUpdateWendyOSServicePort_ProvisionedWithAssetID(t *testing.T) {
-	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 215, 0)
+func TestUpdateWendyOSServicePort_ProvisionedWithPrincipal(t *testing.T) {
+	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
 
-	if !strings.Contains(out, "<txt-record>assetid=215</txt-record>") {
-		t.Errorf("expected assetid=215 TXT record:\n%s", out)
+	if !strings.Contains(out, "<txt-record>principal="+testPrincipal+"</txt-record>") {
+		t.Errorf("expected principal TXT record:\n%s", out)
 	}
 }
 
-func TestUpdateWendyOSServicePort_UnprovisioningRemovesAssetID(t *testing.T) {
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 215, 0)
-	if !strings.Contains(provisioned, "assetid=215") {
-		t.Fatalf("test setup: expected assetid=215 to be present:\n%s", provisioned)
+func TestUpdateWendyOSServicePort_UnprovisioningRemovesPrincipal(t *testing.T) {
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	if !strings.Contains(provisioned, "principal=") {
+		t.Fatalf("test setup: expected principal TXT to be present:\n%s", provisioned)
 	}
 
-	out := updateWendyOSServicePort(provisioned, 50051, false, 0, 0)
+	out := updateWendyOSServicePort(provisioned, 50051, false, "")
 
-	if strings.Contains(out, "assetid=") {
-		t.Errorf("expected assetid TXT record to be removed on unprovisioning:\n%s", out)
+	if strings.Contains(out, "principal=") {
+		t.Errorf("expected principal TXT record to be removed on unprovisioning:\n%s", out)
 	}
 	// SSH block still untouched.
 	if !strings.Contains(out, "<port>22</port>") {
@@ -506,19 +603,20 @@ func TestUpdateWendyOSServicePort_UnprovisioningRemovesAssetID(t *testing.T) {
 	}
 }
 
-func TestUpdateWendyOSServicePort_UpdatesExistingAssetID(t *testing.T) {
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 215, 0)
-	out := updateWendyOSServicePort(provisioned, 50052, true, 999, 0)
+func TestUpdateWendyOSServicePort_UpdatesExistingPrincipal(t *testing.T) {
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	rotated := "spiffe://wendy.sh/tenant/2f6a8a10-1111-4aaa-8bbb-000000000001/device/00000000-0000-4000-8000-000000000002"
+	out := updateWendyOSServicePort(provisioned, 50052, true, rotated)
 
-	if !strings.Contains(out, "<txt-record>assetid=999</txt-record>") {
-		t.Errorf("expected assetid updated to 999:\n%s", out)
+	if !strings.Contains(out, "<txt-record>principal="+rotated+"</txt-record>") {
+		t.Errorf("expected principal updated:\n%s", out)
 	}
-	if strings.Contains(out, "assetid=215") {
-		t.Errorf("old assetid=215 should have been replaced:\n%s", out)
+	if strings.Contains(out, testPrincipal) {
+		t.Errorf("old principal should have been replaced:\n%s", out)
 	}
 }
 
-func TestUpdateAvahiService_ProvisioningWritesAssetIDTXTRecord(t *testing.T) {
+func TestUpdateAvahiService_ProvisioningWritesPrincipalTXTRecord(t *testing.T) {
 	dir := t.TempDir()
 	serviceFile := filepath.Join(dir, "wendyos-mdns.service")
 	if err := os.WriteFile(serviceFile, []byte(avahiServiceTemplate), 0o644); err != nil {
@@ -527,7 +625,7 @@ func TestUpdateAvahiService_ProvisioningWritesAssetIDTXTRecord(t *testing.T) {
 
 	logger, _ := zap.NewDevelopment()
 	restarts := 0
-	updateAvahiService(logger, dir, 50052, true, 215, 0, func() bool { restarts++; return true })
+	updateAvahiService(logger, dir, 50052, true, testPrincipal, func() bool { restarts++; return true })
 	if restarts != 1 {
 		t.Errorf("restarted avahi %d times, want 1", restarts)
 	}
@@ -536,25 +634,28 @@ func TestUpdateAvahiService_ProvisioningWritesAssetIDTXTRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "<txt-record>assetid=215</txt-record>") {
-		t.Errorf("expected assetid=215 TXT record written to service file:\n%s", got)
+	if !strings.Contains(string(got), "<txt-record>principal="+testPrincipal+"</txt-record>") {
+		t.Errorf("expected principal TXT record written to service file:\n%s", got)
 	}
 	if !strings.Contains(string(got), "<port>50052</port>") {
 		t.Errorf("expected port updated to 50052:\n%s", got)
 	}
 }
 
-func TestUpdateAvahiService_UnprovisioningRemovesAssetID(t *testing.T) {
+func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
 	dir := t.TempDir()
 	serviceFile := filepath.Join(dir, "wendyos-mdns.service")
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 215, 0)
+	provisioned := strings.Replace(avahiServiceTemplate, "<port>50051</port>", `<port>50052</port>
+    <txt-record>tls=true</txt-record>
+    <txt-record>principal=`+testPrincipal+`</txt-record>
+    <txt-record>id=device-uuid</txt-record>`, 1)
 	if err := os.WriteFile(serviceFile, []byte(provisioned), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	logger, _ := zap.NewDevelopment()
 	restarts := 0
-	updateAvahiService(logger, dir, 50051, false, 0, 0, func() bool { restarts++; return true })
+	updateAvahiService(logger, dir, 50051, false, "", func() bool { restarts++; return true })
 	if restarts != 1 {
 		t.Errorf("restarted avahi %d times, want 1", restarts)
 	}
@@ -563,8 +664,15 @@ func TestUpdateAvahiService_UnprovisioningRemovesAssetID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(got), "assetid=") {
-		t.Errorf("expected assetid TXT record removed from service file:\n%s", got)
+	for _, stale := range []string{"principal=", "tls=true", "<port>50052</port>"} {
+		if strings.Contains(string(got), stale) {
+			t.Errorf("stale enrollment field %q remains:\n%s", stale, got)
+		}
+	}
+	for _, want := range []string{"<port>50051</port>", "<txt-record>tls=false</txt-record>", "<txt-record>id=device-uuid</txt-record>", "<type>_ssh._tcp</type>", "<port>22</port>"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing setup or unrelated field %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -615,15 +723,38 @@ func TestApplyClockFloor_NoFile(t *testing.T) {
 	}
 }
 
-func TestUpdateOrgIDTXTRecord(t *testing.T) {
-	block := "  <service>\n    <type>_wendyos._udp</type>\n  </service>"
-	got := updateOrgIDTXTRecord(block, 42)
-	if !strings.Contains(got, "<txt-record>orgid=42</txt-record>") {
-		t.Fatalf("orgid record not inserted: %q", got)
+func TestUpdatePrincipalTXTRecordReplacesNumericIdentity(t *testing.T) {
+	block := "<service>\n<type>_wendyos._udp</type>\n<txt-record>orgid=42</txt-record>\n<txt-record>assetid=7</txt-record>\n</service>"
+	principal := "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222"
+	got := updatePrincipalTXTRecord(block, principal)
+	got = updatePrincipalTXTRecord(got, principal)
+	if strings.Contains(got, "orgid=") || strings.Contains(got, "assetid=") || strings.Count(got, "principal="+principal) != 1 {
+		t.Fatalf("invalid principal advertisement: %s", got)
 	}
-	// Idempotent replace, not duplicate.
-	got2 := updateOrgIDTXTRecord(got, 7)
-	if strings.Count(got2, "<txt-record>orgid=") != 1 || !strings.Contains(got2, "orgid=7") {
-		t.Fatalf("orgid record not replaced idempotently: %q", got2)
+}
+
+func TestApplyPreProvisioningWriteFailurePreservesHandoff(t *testing.T) {
+	for _, blocked := range []string{"device-key.pem", "provisioning.json"} {
+		t.Run(blocked, func(t *testing.T) {
+			cfgDir, configPath := t.TempDir(), t.TempDir()
+			source := filepath.Join(cfgDir, "provisioning.json")
+			data := []byte(`{"enrolled":true,"cloudHost":"cloud","keyPem":"key","certPem":"cert"}`)
+			if err := os.WriteFile(source, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(configPath, blocked), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			applyPreProvisioning(zap.NewNop(), cfgDir, configPath)
+			got, err := os.ReadFile(source)
+			if err != nil || string(got) != string(data) {
+				t.Fatalf("lost enrollment handoff: %q %v", got, err)
+			}
+			if blocked == "device-key.pem" {
+				if _, err := os.Stat(filepath.Join(configPath, "provisioning.json")); !os.IsNotExist(err) {
+					t.Fatal("state committed without key")
+				}
+			}
+		})
 	}
 }

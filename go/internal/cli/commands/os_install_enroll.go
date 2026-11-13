@@ -77,7 +77,7 @@ func selectEnrollmentAuth(cfg *config.Config, cloudGRPC string, interactive bool
 		}
 		desc := a.CloudGRPC
 		if len(a.Certificates) > 0 {
-			desc = fmt.Sprintf("org %d — %s", a.Certificates[0].OrganizationID, a.CloudGRPC)
+			desc = fmt.Sprintf("org %s — %s", config.OrganizationLabel(a.CloudGRPC, a.OrganizationKey()), a.CloudGRPC)
 		}
 		items = append(items, tui.PickerItem{Name: name, Description: desc, Value: strconv.Itoa(i)})
 	}
@@ -194,9 +194,29 @@ func ackContinueUnenrolled() error {
 // abort UX but mints an EAB credential via DeviceEnrollmentService.EnrollDevice
 // instead of the retired v1 token+certificate path, and drops the org lookup:
 // the tenant rides in the operator session's signed identity. The ESP32/litepb
-// install keeps resolvePreEnrollment unchanged (it is a different device class
-// that does not run the ACME agent). Returns nil to bake nothing.
-func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName string) (*acmeEnrollmentBake, error) {
+// install uses resolveLiteInstallEnrollment and enrolls over USB after reboot
+// with a device challenge. Returns nil to bake nothing. A blank *deviceName is
+// settled before the mint and written back, so the device is given the name
+// Cloud reserved.
+func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
+	plan, err := planACMEPreEnrollment(cfg, opts, interactive, deviceName)
+	if err != nil || plan == nil {
+		return nil, err
+	}
+	return plan.mint(ctx, *deviceName)
+}
+
+// acmePreEnrollPlan is a settled choice to pre-enroll with auth; nothing has
+// been reserved in Cloud yet.
+type acmePreEnrollPlan struct {
+	auth        *config.AuthConfig
+	interactive bool
+}
+
+// planACMEPreEnrollment asks everything resolveACMEPreEnrollment asks and
+// settles a blank *deviceName, reading only the local config: Cloud is not
+// contacted. A nil plan means nothing will be baked.
+func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
 	switch opts.mode {
 	case preEnrollSkip:
 		return nil, nil
@@ -229,13 +249,41 @@ func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preE
 		return nil, nil
 	}
 
+	// Cloud reserves the device under its name and refuses a blank one
+	// (WDY-3016), so a blank name cannot wait for the device to name itself on
+	// first boot. The caller writes the name settled here to the config
+	// partition, so the device's hostname and its Cloud row agree.
+	if *deviceName == "" {
+		if !interactive {
+			return nil, fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
+		}
+		name, err := promptDeviceName(
+			"Device name",
+			fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen),
+			validateDeviceName,
+		)
+		if err != nil {
+			if errors.Is(err, tui.ErrCancelled) {
+				return nil, ErrUserCancelled
+			}
+			return nil, fmt.Errorf("device-name prompt: %w", err)
+		}
+		*deviceName = name
+	}
+	return &acmePreEnrollPlan{auth: auth, interactive: interactive}, nil
+}
+
+// mint reserves deviceName in Cloud and returns the EAB credential to bake.
+// Without a terminal a failure ends the install; with one the person may
+// continue unenrolled, which returns nil.
+func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName string) (*acmeEnrollmentBake, error) {
 	fmt.Println("Pre-enrolling device with Wendy Cloud...")
-	state, enrollErr := preEnrollACMEFn(ctx, auth, deviceName)
+	state, enrollErr := preEnrollACMEFn(ctx, p.auth, deviceName)
 	if enrollErr == nil {
-		fmt.Println("Device pre-enrolled. It will ACME-enroll from its baked credential on first boot.")
+		fmt.Println("Cloud enrollment reserved; credential staged for first boot. Automatic ACME enrollment requires an image with a compatible agent; device enrollment and Cloud presence are not yet verified.")
 		return state, nil
 	}
-	if !interactive {
+	if !p.interactive {
 		return nil, fmt.Errorf("--pre-enroll: pre-enrollment failed: %w", enrollErr)
 	}
 	fmt.Printf("Pre-enrollment failed: %v\n", enrollErr)

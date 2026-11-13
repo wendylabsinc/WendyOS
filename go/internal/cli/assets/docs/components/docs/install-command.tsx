@@ -7,6 +7,11 @@ import { trackDocsAnalyticsEvent, type DocsAnalyticsTrackingProps } from '@/lib/
 export const cliCurlCommand = 'curl -fsSL https://install.wendy.dev/cli.sh | bash';
 export const cliWingetCommand = 'winget install WendyLabs.Wendy --source winget';
 export const agentCurlCommand = 'curl -fsSL https://install.wendy.dev/agent.sh | bash';
+// SECURITY: This explicit WendyLabs tap trust is required when HOMEBREW_REQUIRE_TAP_TRUST is set;
+// the linked Mac installation guide explains Homebrew version behavior and the narrower fallback.
+export const agentMacBrewCommand = `brew tap wendylabsinc/tap
+brew trust wendylabsinc/tap
+brew install --cask wendy-agent`;
 
 type CopyButtonProps = DocsAnalyticsTrackingProps & {
   text: string;

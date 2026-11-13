@@ -18,7 +18,9 @@ the pinned Hugging Face checkpoint on first use. This requires internet access,
 several GB of free space and enough RAM for the model. Subsequent starts reuse
 the cache in the agent's data partition. This initial backend supports CPU
 inference on 64-bit Linux (x86_64 and aarch64) and Apple Silicon macOS; its Linux
-wheels require glibc 2.28 or newer. GPU execution is not enabled by this example.
+wheels require glibc 2.28 or newer. GPU execution is not enabled by this example:
+`inference.accelerator` runs `yolo_onnx` models through TensorRT on a Jetson,
+and Transformers models always run on the CPU.
 
 `inference_status` in campaign inspect (or the plan JSON from list) reports `pending`, `loading`,
 `running`, `waiting_for_cameras`, `error` or `disabled`, with per-camera health and
@@ -42,6 +44,38 @@ The backend accepts safetensors checkpoints supported by Transformers'
 `AutoModelForObjectDetection` and an image processor with
 `post_process_object_detection`. Remote model code is disabled. Labels must
 exist in the checkpoint; a mismatch is reported as a model-loading error.
+
+YOLOv8 and YOLO11 detection exports can use `inference.backend: yolo_onnx`
+and `inference.model_file: path/to/model.onnx` with the same repository and
+commit fields. The ONNX file must embed its class names and use one float32
+`[1, 3, height, width]` input with fixed dimensions of 32 through 1280 pixels.
+The supported output is the raw `[1, 4 + classes, anchors]` detection tensor.
+Exports with embedded NMS, segmentation, pose, dynamic image dimensions or
+external tensor files are not supported. The agent downloads only the pinned
+ONNX file, limited to 512 MiB, and runs it on CPU without loading repository
+Python, custom operators or PyTorch pickle checkpoints.
+
+In the ChatGPT gateway, `deploy_yolo_detector` takes an explicit `robot_id`, a
+detector `name`, and `model_ref` such as `owner/repository` or
+`owner/repository@commit`. The gateway resolves a branch or tag to a commit and
+selects the ONNX file only when the repository contains exactly one; otherwise
+provide `model_file`. It selects a camera only when there is one healthy source;
+otherwise provide its exact Wendy Data `source_id`. Labels default to `person`.
+The caller needs `triggers:write` and `cameras:capture`, and the device policy
+must permit camera access.
+
+The tool deploys `chatgpt-yolo-<name>` with `notify.on: detection`. It retains
+one-second detection episodes locally with manual upload. Its requested 128 MiB
+campaign quota is metadata; only the device-wide storage quota is currently
+enforced.
+Use `inspect_yolo_detector` to check loading and camera state, and
+`stop_yolo_detector` to request that inference stops. Inspect until
+`inference_status.state` is `disabled`; `stopping` means the worker or camera
+subscriptions have not exited yet. Subscribe to the MCP event
+`wendy.data.notification` using the returned `robot_id` and `campaign` filters
+for ChatGPT delivery. This subscription is separate from the Wendy Cloud app
+notification grant described below. An updated Wendy Agent is required; older
+agents reject the new inference fields.
 
 One shared model handles the campaign's cameras in turn, scoring each camera's
 latest decoded frame at up to `rate` frames per second. Throughput depends on
@@ -111,8 +145,9 @@ Use `upload: {when: manual}` to keep episodes local without automatic uploads.
 `on: detection` remains available for all appearances from the campaign's model.
 
 The agent POSTs JSON containing `id`, `event`, `campaign`, `source_id`, `model`,
-`model_revision`, and `count`. Configure an endpoint that accepts this format and
-delivers your notification, returning a 2xx response. The URL is stored in the
+`model_revision`, `count`, `occurred_at`, and (for detection notifications)
+`detections`. Receivers should ignore fields they do not know. Configure an endpoint that
+accepts this format and delivers your notification, returning a 2xx response. The URL is stored in the
 campaign plan; credentials in userinfo and URL fragments are rejected. Redirects
 are not followed. The model worker never receives the webhook URL.
 
@@ -128,7 +163,11 @@ Cloud delivery uses the same bounded queue and event UUID. Permission failures a
 registration never grants notification permission automatically.
 
 Episodes contain prediction and detection records in `events.jsonl` and the
-model revision in the manifest. The input ledger records the encoded samples
+model revision in the manifest. Each detection carries `box`, `[x1, y1, x2, y2]`
+in pixels of the scored picture, and `box_norm`, the same corners clamped to
+the picture and normalised to `[0, 1]` from its top-left corner. The record's
+`width` and `height` give the picture's size, so a viewer can draw `box_norm`
+on the picture at any size. The input ledger records the encoded samples
 delivered to the model process. The first backend decodes opaque H.264/WebM
 streams without an exact decoded-frame-to-sample mapping, so prediction records
 explicitly report `input_reference_status` and do not invent input sample IDs.

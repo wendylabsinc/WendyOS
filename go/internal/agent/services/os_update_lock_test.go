@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,65 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
+
+func TestAgentServerCleanupWaitsForUpdaterRestore(t *testing.T) {
+	original := systemctlFn
+	restoreEntered := make(chan struct{})
+	restoreReleased := make(chan struct{})
+	restoreFinished := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(restoreReleased) }) }
+	cleanup := func() {}
+	t.Cleanup(func() {
+		release()
+		cleanup()
+		systemctlFn = original
+	})
+	systemctlFn = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "start" {
+			close(restoreEntered)
+			<-restoreReleased
+			close(restoreFinished)
+		}
+		return nil, nil
+	}
+	client, stopServer := startAgentServer(t, &mockNetworkManager{}, &mockHardwareDiscoverer{}, &mockBluetoothManager{}, func(svc *AgentService) {
+		svc.isWendyOSHost = func() bool { return true }
+		svc.osUpdateStateDir = t.TempDir()
+	})
+	cleanup = stopServer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.UpdateOS(ctx, &agentpb.UpdateOSRequest{
+		ArtifactUrl: "http://example.invalid/update.wendy", UpdaterBackend: "unrecognized-test-backend",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Recv()
+	if err != nil || response.GetFailed() == nil {
+		t.Fatalf("expected backend rejection, got %v: %v", response, err)
+	}
+	select {
+	case <-restoreEntered:
+	case <-ctx.Done():
+		t.Fatal("updater restore was not reached")
+	}
+	stopped := make(chan struct{})
+	go func() { cleanup(); close(stopped) }()
+	returnedEarly := false
+	select {
+	case <-stopped:
+		returnedEarly = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	<-restoreFinished
+	<-stopped
+	if returnedEarly {
+		t.Fatal("test server cleanup returned while the RPC still used the systemctl hook")
+	}
+}
 
 // countSystemctl stubs systemctlFn and counts calls, so a test can prove a
 // refused update never reached inhibitAutoUpdater.
@@ -82,7 +142,7 @@ func updateOSV1(t *testing.T, opt func(*AgentService)) string {
 func updateOSV2(t *testing.T, svc *OSUpdateService) string {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpc.WaitForHandlers(true))
 	agentpbv2.RegisterWendyOSUpdateServiceServer(srv, svc)
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.Stop()

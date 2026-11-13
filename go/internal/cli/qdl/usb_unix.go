@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build (darwin || linux) && !ios
 
 package qdl
 
@@ -11,12 +11,6 @@ import (
 	"time"
 
 	"github.com/google/gousb"
-)
-
-// A Qualcomm SoC in Emergency Download mode.
-const (
-	VendorQualcomm gousb.ID = 0x05c6
-	ProductEDL     gousb.ID = 0x9008
 )
 
 // The EDL interface is vendor-specific. Protocol 0xff is the generic case;

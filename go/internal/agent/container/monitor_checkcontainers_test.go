@@ -101,6 +101,9 @@ func (f *fakeContainerd) CreateContainer(ctx context.Context, req *agentpb.Creat
 func (f *fakeContainerd) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	return nil
 }
+func (f *fakeContainerd) ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	return nil
+}
 func (f *fakeContainerd) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
 	return f.StartContainer(ctx, appName, postStartAgentCommand, restartPolicy)
 }
@@ -475,5 +478,20 @@ func TestProbeExposedPortsInvokesProber(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.probeCalls != 1 {
 		t.Fatalf("WarnPubliclyExposedPorts called %d times, want 1", f.probeCalls)
+	}
+}
+
+func TestRestartSingle_DoesNotResurrectRetiredAlias(t *testing.T) {
+	fake := &fakeContainerd{started: make(chan string, 1)}
+	m := newMonitorWithClient(fake)
+	m.Register("demo", RestartUnlessStopped, 0)
+	m.Unregister("demo")
+	m.Register("demo_relay", RestartUnlessStopped, 0)
+	m.MarkExplicitStop("demo_relay")
+	// Model old alias work already scheduled before canonical registration.
+	m.restartSingle(context.Background(), "demo")
+	m.restartSingle(context.Background(), "demo_relay")
+	if calls := fake.startCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("stopped app resurrected: %v", calls)
 	}
 }

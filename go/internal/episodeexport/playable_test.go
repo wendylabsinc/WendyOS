@@ -72,8 +72,8 @@ func buildEpisode(t *testing.T) (dir string, wantIntervals []time.Duration) {
 	t.Helper()
 	dir = t.TempDir()
 	sps, pps := mustHex(t, realSPS), mustHex(t, realPPS)
-	idr := append([]byte{0x65}, make([]byte, 40)...)
-	slice := append([]byte{0x41}, make([]byte, 30)...)
+	idr := append([]byte{0x65, 0xB8}, make([]byte, 40)...)
+	slice := append([]byte{0x41, 0xC0}, make([]byte, 30)...)
 
 	// Intervals chosen so that no two are equal: a constant rate could not
 	// reproduce them, so the test fails if one is ever assumed.
@@ -462,8 +462,8 @@ func writeSingleSourceEpisode(t *testing.T, stamps []int64, payloads [][]byte) (
 func keyframeAndInter(t *testing.T) (key, inter []byte) {
 	t.Helper()
 	sps, pps := mustHex(t, realSPS), mustHex(t, realPPS)
-	return annexB(sps, pps, append([]byte{0x65}, make([]byte, 40)...)),
-		annexB(append([]byte{0x41}, make([]byte, 30)...))
+	return annexB(sps, pps, append([]byte{0x65, 0xB8}, make([]byte, 40)...)),
+		annexB(append([]byte{0x41, 0xC0}, make([]byte, 30)...))
 }
 
 // A gap a 32-bit sample duration cannot carry must be refused by name rather

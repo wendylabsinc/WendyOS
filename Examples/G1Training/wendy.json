@@ -7,7 +7,7 @@
       "domainId": 0,
       "rmw": "rmw_cyclonedds_cpp",
       "distro": "humble",
-      "discoveryScope": "app"
+      "scope": "device"
     }
   },
   "entitlements": [

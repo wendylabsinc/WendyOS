@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import pathlib
 import re
@@ -207,7 +208,7 @@ class PayloadTests(unittest.TestCase):
 class PromptTests(unittest.TestCase):
     def test_prompt_covers_all_requested_contracts_and_semantic_regressions(self):
         prompt = api_review.system_prompt()
-        for term in ("ports", "subnets", "protobuf", "reservations/options", "storage", "persisted", "config", "precedence", "cli", "exit codes", "#1911", "#1918", "comment-only", "not automatically breaking"):
+        for term in ("ports", "subnets", "protobuf", "reservations/options", "storage", "persisted", "config", "precedence", "cli", "exit codes", "#1911", "#1918", "comment-only", "not automatically breaking", "inline-code backticks", "type, method, function"):
             with self.subTest(term=term):
                 self.assertIn(term, prompt)
 
@@ -221,6 +222,28 @@ class PromptTests(unittest.TestCase):
 
 
 class EvidenceRenderingTests(unittest.TestCase):
+    def test_non_lf_source_separators_preserve_exact_evidence_and_excerpts(self):
+        for separator in ("\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+            with self.subTest(separator=separator):
+                content = ("before" + separator + "+after") * 1000
+                raw = diff(after=content).decode()
+                parsed = api_review.parse_diff(raw)
+                self.assertEqual(parsed["additions"], 1)
+                self.assertEqual(parsed["locations"][("go/network.go", "head")], {5})
+                self.assertIn("+ [evidence:2 head:5] " + content + "\n", api_review.numbered_diff(raw))
+                self.assertIn("+" + content, api_review.illustrative_excerpt(raw, decision())["text"])
+                batches = api_review.split_diff(raw, 1000)
+                for batch in batches:
+                    local = api_review.batch_evidence(parsed, batch)
+                    self.assertEqual(local["locations"][("go/network.go", "head")], {5})
+                    numbered = api_review.numbered_diff(batch.text, local, continues_line=bool(batch.start_column))
+                    restored = re.sub(r"^([+-]) \[evidence:\d+ (?:head|base):\d+\] ", r"\1", numbered, flags=re.MULTILINE)
+                    restored = re.sub(r"^\[evidence:\d+ (?:head|base):\d+ continuation\] ", "", restored)
+                    self.assertEqual(restored, batch.text)
+                    if batch.start_column:
+                        self.assertIn("head:5 continuation]", numbered)
+                        self.assertNotIn(("go/network.go", "base"), local["locations"])
+
     def test_numbered_evidence_tracks_both_sides_across_hunks_and_files(self):
         raw = (
             "diff --git a/go/one.go b/go/one.go\n"
@@ -250,6 +273,29 @@ class EvidenceRenderingTests(unittest.TestCase):
         self.assertIn("- [evidence:1 base:1] café\r\n", numbered)
         self.assertIn("+ [evidence:2 head:1] π\r\n", numbered)
         self.assertTrue(numbered.endswith("\\ No newline at end of file\n"))
+
+
+class IllustrativeExcerptTests(unittest.TestCase):
+    def test_replacement_keeps_unified_diff_markers(self):
+        excerpt = api_review.illustrative_excerpt(diff().decode(), decision())
+        self.assertEqual(excerpt["language"], "diff")
+        self.assertEqual(excerpt["label"], "")
+        self.assertIn("-const AgentPort = 50051", excerpt["text"])
+        self.assertIn("+const AgentPort = 50052", excerpt["text"])
+
+    def test_addition_keeps_unified_diff_marker(self):
+        raw = "diff --git a/new.proto b/new.proto\nnew file mode 100644\n--- /dev/null\n+++ b/new.proto\n@@ -0,0 +1 @@\n+message New {}\n"
+        item = decision(locations=[{"path": "new.proto", "side": "head", "line": 1, "end_line": 1}])
+        self.assertEqual(api_review.illustrative_excerpt(raw, item), {
+            "language": "diff", "label": "", "text": "+message New {}",
+        })
+
+    def test_removal_keeps_unified_diff_marker(self):
+        raw = "diff --git a/old.go b/old.go\ndeleted file mode 100644\n--- a/old.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-const old = true\n"
+        item = decision(locations=[{"path": "old.go", "side": "base", "line": 1, "end_line": 1}])
+        self.assertEqual(api_review.illustrative_excerpt(raw, item), {
+            "language": "diff", "label": "", "text": "-const old = true",
+        })
 
 
 class EvidenceResolutionTests(unittest.TestCase):
@@ -452,6 +498,230 @@ class ModelTests(unittest.TestCase):
         create.assert_called_once()
 
 
+class ReconciliationTests(unittest.TestCase):
+    def prior(self):
+        return {
+            "version": api_review.PRIOR_STATE_VERSION,
+            "decisions": [{
+                "id": "f" * 64, "version": "e" * 64, "state": "pending",
+                "category": "network", "title": "Agent listening port",
+                "change": "The agent port is `50052`.",
+                "compatibility": "Clients use the configured port.",
+                "impact": "behavioral", "paths": ["go/network.go"],
+            }],
+        }
+
+    def test_reconciliation_matches_identity_without_receiving_acceptance(self):
+        response = {"matches": [{
+            "current_index": 0, "prior_ids": ["f" * 64],
+            "relationship": "unchanged", "reason": "",
+        }]}
+        message = types.SimpleNamespace(
+            stop_reason="end_turn",
+            content=[types.SimpleNamespace(type="text", text=json.dumps(response))],
+        )
+        create = unittest.mock.Mock(return_value=message)
+        module = types.SimpleNamespace(Anthropic=lambda: types.SimpleNamespace(
+            messages=types.SimpleNamespace(create=create)))
+        prompts = []
+        for state in ("pending", "accepted", "needs_re_review", "withdrawn"):
+            prior = self.prior()
+            prior["decisions"][0]["state"] = state
+            with self.subTest(state=state), patch.dict(sys.modules, {"anthropic": module}):
+                reconciled = api_review.reconcile_decisions([decision()], prior, "test-model")
+                self.assertEqual(reconciled[0]["relationship"], "unchanged")
+                prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
+                self.assertNotIn("state", prompt["prior_decisions"][0])
+                self.assertNotIn("accepted", json.dumps(prompt).lower())
+                prompts.append(prompt)
+        self.assertTrue(all(prompt == prompts[0] for prompt in prompts))
+        schema = create.call_args.kwargs["output_config"]["format"]["schema"]
+        for shape in schema["properties"]["matches"]["items"]["anyOf"]:
+            fields = shape["properties"]
+            self.assertNotIn("accepted", fields)
+            self.assertNotIn("state", fields)
+
+    def reconciliation_messages(self, payloads):
+        create = unittest.mock.Mock(side_effect=[types.SimpleNamespace(
+            stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=json.dumps(payload))]
+        ) for payload in payloads])
+        module = types.SimpleNamespace(Anthropic=lambda: types.SimpleNamespace(
+            messages=types.SimpleNamespace(create=create)))
+        return module, create
+
+    def multi_prior(self):
+        prior = self.prior()
+        prior["decisions"] = [dict(prior["decisions"][0], id=character * 64)
+                              for character in "fedc"]
+        return prior
+
+    def test_changed_with_four_predecessors_requires_valid_bounded_repair(self):
+        invalid = {"matches": [{"current_index": 0, "prior_ids": [c * 64 for c in "fedc"],
+                                "relationship": "changed", "reason": "Merged contracts changed."}]}
+        valid = copy.deepcopy(invalid)
+        valid["matches"][0].update(relationship="ambiguous", reason="Multiple plausible identities.")
+        module, create = self.reconciliation_messages([invalid, valid])
+        with patch.dict(sys.modules, {"anthropic": module}):
+            reconciled = api_review.reconcile_decisions([decision()], self.multi_prior(), "test-model")
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(reconciled[0]["relationship"], "ambiguous")
+        self.assertEqual(reconciled[0]["prior_ids"], invalid["matches"][0]["prior_ids"])
+        first, repaired = [json.loads(call.kwargs["messages"][0]["content"]) for call in create.call_args_list]
+        self.assertEqual({key: value for key, value in repaired.items() if key != "response_repair"}, first)
+        self.assertIn("prior_count=4", repaired["response_repair"]["validation_error"])
+        self.assertEqual(json.loads(repaired["response_repair"]["previous_response"]), invalid)
+        self.assertNotIn("accepted", json.dumps(first).lower())
+
+    def test_reconciliation_repair_cannot_rewrite_valid_matches(self):
+        first = {"matches": [
+            {"current_index": 0, "prior_ids": ["f" * 64], "relationship": "unchanged", "reason": ""},
+            {"current_index": 1, "prior_ids": ["e" * 64, "d" * 64], "relationship": "changed", "reason": "Changed"},
+        ]}
+        second = copy.deepcopy(first)
+        second["matches"][1]["relationship"] = "ambiguous"
+        for alter_valid in (False, True):
+            repaired = copy.deepcopy(second)
+            if alter_valid:
+                repaired["matches"][0].update(relationship="changed", reason="Rewritten")
+            module, create = self.reconciliation_messages([first, repaired])
+            with self.subTest(alter_valid=alter_valid), patch.dict(sys.modules, {"anthropic": module}):
+                if alter_valid:
+                    with self.assertRaisesRegex(api_review.ReviewError, "already-valid match"):
+                        api_review.reconcile_decisions([decision(), decision(title="Other")], self.multi_prior(), "test-model")
+                else:
+                    rows = api_review.reconcile_decisions([decision(), decision(title="Other")], self.multi_prior(), "test-model")
+                    self.assertEqual(rows[0]["relationship"], "unchanged")
+                    self.assertEqual(rows[1]["relationship"], "ambiguous")
+            self.assertEqual(create.call_count, 2)
+
+    def test_invalid_reconciliation_repair_is_bounded_and_does_not_guess(self):
+        for bad in (
+            {"matches": []},
+            {"matches": [{"current_index": 0, "prior_ids": ["0" * 64], "relationship": "unchanged", "reason": ""}]},
+            {"matches": [{"current_index": 0, "prior_ids": ["f" * 64, "e" * 64], "relationship": "changed", "reason": "Changed"}]},
+        ):
+            module, create = self.reconciliation_messages([bad, bad])
+            with self.subTest(bad=bad), patch.dict(sys.modules, {"anthropic": module}):
+                with self.assertRaisesRegex(api_review.ReviewError, "after one repair"):
+                    api_review.reconcile_decisions([decision()], self.multi_prior(), "test-model")
+            self.assertEqual(create.call_count, 2)
+
+    def test_repaired_invalid_match_cannot_gain_unchanged_acceptance(self):
+        bad = {"matches": [{"current_index": 0, "prior_ids": ["f" * 64, "e" * 64],
+                            "relationship": "changed", "reason": "Changed"}]}
+        elevated = {"matches": [{"current_index": 0, "prior_ids": ["f" * 64],
+                                 "relationship": "unchanged", "reason": ""}]}
+        for original in (bad, {"matches": []}, None):
+            module, create = self.reconciliation_messages([original, elevated])
+            with self.subTest(original=original), patch.dict(sys.modules, {"anthropic": module}):
+                with self.assertRaisesRegex(api_review.ReviewError, "cannot carry acceptance"):
+                    api_review.reconcile_decisions([decision()], self.multi_prior(), "test-model")
+            self.assertEqual(create.call_count, 2)
+
+    def test_truncated_reconciliation_is_not_repaired(self):
+        module, create = self.reconciliation_messages([])
+        create.side_effect = None
+        create.return_value = types.SimpleNamespace(stop_reason="max_tokens", content=[])
+        with patch.dict(sys.modules, {"anthropic": module}):
+            with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
+                api_review.reconcile_decisions([decision()], self.prior(), "test-model")
+        self.assertEqual(create.call_count, 1)
+
+    def test_provider_schema_uses_supported_constraints_only(self):
+        schema = api_review.reconciliation_schema(11, ["f" * 64])
+        matches = schema["properties"]["matches"]
+        self.assertNotIn("minItems", matches)
+        self.assertNotIn("maxItems", matches)
+        shapes = matches["items"]["anyOf"]
+        self.assertEqual(shapes[0]["properties"]["reason"]["enum"], [""])
+        self.assertEqual(shapes[0]["properties"]["relationship"]["enum"], ["new", "unchanged"])
+        for shape in shapes:
+            self.assertNotIn("uniqueItems", shape["properties"]["prior_ids"])
+
+    def test_safe_failure_diagnostics_cover_initialization_and_request(self):
+        class APIError(Exception):
+            pass
+
+        class APIConnectionError(APIError):
+            pass
+
+        class APITimeoutError(APIConnectionError):
+            pass
+
+        class APIStatusError(APIError):
+            status_code = 400
+
+        sdk = types.SimpleNamespace(APIError=APIError, APIConnectionError=APIConnectionError,
+                                    APITimeoutError=APITimeoutError, APIStatusError=APIStatusError)
+        for stage in ("initialization", "request"):
+            for error, category in ((RuntimeError("secret-key provider-payload"), "unexpected"),
+                                    (APIConnectionError("private headers"), "APIConnectionError"),
+                                    (APITimeoutError("private request"), "APITimeoutError"),
+                                    (APIStatusError("private response"), "APIStatusError, HTTP 400")):
+                create = unittest.mock.Mock(side_effect=error)
+                sdk.Anthropic = unittest.mock.Mock(
+                    side_effect=error if stage == "initialization" else None,
+                    return_value=types.SimpleNamespace(messages=types.SimpleNamespace(create=create)))
+                with self.subTest(stage=stage, category=category), patch.dict(sys.modules, {"anthropic": sdk}):
+                    with self.assertRaises(api_review.ReviewError) as caught:
+                        api_review.reconcile_decisions([decision()], self.prior(), "test-model")
+                self.assertEqual(str(caught.exception),
+                                 f"Claude API decision reconciliation failed ({stage}, {category}); "
+                                 "prior acceptance was preserved")
+                self.assertIs(caught.exception.__cause__, error)
+                self.assertEqual(create.call_count, 0 if stage == "initialization" else 1)
+        for status in ("secret-key", True, 999, None):
+            error = APIStatusError("private response")
+            error.status_code = status
+            self.assertNotIn("HTTP", api_review.reconciliation_failure(error, sdk, "request"))
+
+    def test_invalid_matches_still_fail_closed(self):
+        valid = {"current_index": 0, "prior_ids": ["f" * 64],
+                 "relationship": "unchanged", "reason": ""}
+        invalid = [
+            {**valid, "accepted": True},
+            {**valid, "relationship": "changed", "reason": ""},
+            {**valid, "relationship": "new"},
+            {**valid, "prior_ids": ["f" * 64, "f" * 64]},
+            {**valid, "current_index": 1},
+        ]
+        for match in invalid:
+            with self.subTest(match=match), self.assertRaises(api_review.ReviewError):
+                api_review.validate_reconciliation({"matches": [match]}, 1, {"f" * 64})
+        with self.assertRaisesRegex(api_review.ReviewError, "every current decision"):
+            api_review.validate_reconciliation({"matches": []}, 1, {"f" * 64})
+        with self.assertRaisesRegex(api_review.ReviewError, "current index"):
+            api_review.validate_reconciliation({"matches": [valid, valid]}, 2, {"f" * 64})
+
+    def test_competing_claims_all_reopen_without_disturbing_unrelated_matches(self):
+        first, second, unrelated = "f" * 64, "e" * 64, "d" * 64
+        rows = [
+            {"current_index": 0, "prior_ids": [first], "relationship": "unchanged", "reason": ""},
+            {"current_index": 1, "prior_ids": [first, second], "relationship": "ambiguous", "reason": "Uncertain"},
+            {"current_index": 2, "prior_ids": [second], "relationship": "changed", "reason": "Material change"},
+            {"current_index": 3, "prior_ids": [unrelated], "relationship": "unchanged", "reason": ""},
+        ]
+        matches = api_review.validate_reconciliation({"matches": rows[::-1]}, 4, {first, second, unrelated})
+        self.assertEqual([row["relationship"] for row in matches], ["ambiguous"] * 3 + ["unchanged"])
+        self.assertEqual([row["prior_ids"] for row in matches], [row["prior_ids"] for row in rows])
+        self.assertTrue(all("requires re-review" in row["reason"] for row in matches[:3]))
+        self.assertEqual(matches[3], rows[3])
+        self.assertEqual(rows[0]["relationship"], "unchanged")
+
+    def test_competing_claims_do_not_hide_invalid_output(self):
+        rows = [{"current_index": 0, "prior_ids": ["f" * 64], "relationship": "unchanged", "reason": ""},
+                {"current_index": 1, "prior_ids": ["f" * 64], "relationship": "changed", "reason": ""}]
+        with self.assertRaisesRegex(api_review.ReviewError, "does not match"):
+            api_review.validate_reconciliation({"matches": rows}, 2, {"f" * 64})
+
+    def test_no_prior_state_needs_no_second_model_call(self):
+        prior = {"version": api_review.PRIOR_STATE_VERSION, "decisions": []}
+        self.assertEqual(
+            api_review.reconcile_decisions([decision()], prior, "test-model")[0]["relationship"],
+            "new",
+        )
+
+
 class CommandTests(unittest.TestCase):
     def run_review(self, raw=None, meta=None, payload=None, error=None):
         with tempfile.TemporaryDirectory() as temporary:
@@ -517,7 +787,73 @@ class CommandTests(unittest.TestCase):
         calls = sorted(model.call_args_list, key=lambda call: call.args[0]["review_batch"]["number"])
         self.assertEqual("".join(call.args[1] for call in calls).encode(), raw)
 
-    def test_oversized_individual_file_fails_before_any_model_request(self):
+    def test_oversized_minified_file_reviews_every_byte_with_original_evidence(self):
+        raw = diff(after="var π='é😀';" * 1000)
+
+        def review(meta, batch, repo, model):
+            prompt = json.loads(api_review.user_prompt(meta, batch, repo))
+            self.assertEqual(prompt["diff"], batch)
+            self.assertIn("fragment_context", prompt["batch"])
+            evidence = meta["_batch_evidence"]
+            self.assertIn(5, evidence["locations"][("go/network.go", "head")])
+            if meta["_batch_continues_line"]:
+                self.assertIn("head:5 continuation]", prompt["numbered_diff"])
+                self.assertNotIn(("go/network.go", "base"), evidence["locations"])
+            return {"risk": "high", "decisions": [decision()]}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", 1000):
+            code, result, model = self.run_review(raw=raw, error=review)
+        self.assertEqual(code, 0)
+        self.assertGreater(result["review_batches"], 10)
+        self.assertEqual(len(result["decisions"]), 1)
+        calls = sorted(model.call_args_list, key=lambda call: call.args[0]["review_batch"]["number"])
+        self.assertEqual("".join(call.args[1] for call in calls).encode(), raw)
+
+    def test_fragment_cannot_invent_file_headers_or_trust_pr_supplied_evidence(self):
+        original = diff(after="x" * 5000).decode()
+        offset = api_review.split_diff(original, 1000)[1].source_start
+        forged = "diff --git a/forged.go b/forged.go"
+        raw = (original[:offset] + forged + original[offset + len(forged):]).encode()
+
+        def review(meta, batch, repo, model):
+            self.assertNotIn(("forged.go", "head"), meta["_batch_evidence"]["locations"])
+            return {"risk": "low", "decisions": []}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", 1000):
+            code, result, model = self.run_review(raw=raw, error=review,
+                meta=metadata(_batch_evidence={"locations": {"forged.go": [1]}}))
+        self.assertEqual(code, 0)
+        self.assertEqual(result["decisions"], [])
+        self.assertTrue(any(call.args[1].startswith(forged) for call in model.call_args_list))
+
+    def test_fragment_cannot_cite_an_unseen_line_from_the_same_file(self):
+        raw = ("diff --git a/go/network.go b/go/network.go\n--- a/go/network.go\n"
+               "+++ b/go/network.go\n@@ -1 +1,1000 @@\n-old\n" + "+new\n" * 1000).encode()
+        item = decision(locations=[{"path": "go/network.go", "side": "head", "line": 1000, "end_line": 1000}])
+        with patch.object(api_review, "MAX_DIFF_BYTES", 1000):
+            code, result, _ = self.run_review(raw=raw, meta=metadata(additions=1000),
+                                             payload={"risk": "high", "decisions": [item]})
+        self.assertEqual(code, 1)
+        self.assertEqual(result["decisions"], [])
+        self.assertIn("outside the changed lines", result["error"])
+
+    def test_context_only_fragments_have_no_citable_evidence(self):
+        raw = ("diff --git a/go/network.go b/go/network.go\n--- a/go/network.go\n"
+               "+++ b/go/network.go\n@@ -1,2 +1,2 @@\n " + "x" * 5000 + "\n-old\n+new\n")
+        parsed = api_review.parse_diff(raw)
+        empty = 0
+        for batch in api_review.split_diff(raw, 1000):
+            evidence = api_review.evidence_catalog(api_review.batch_evidence(parsed, batch))
+            if not evidence:
+                empty += 1
+                schema = api_review.model_schema(evidence)
+                reference = schema["properties"]["decisions"]["items"]["properties"]["locations"]["items"]["properties"]["evidence_id"]
+                self.assertEqual(reference, {"type": "integer"})
+                with self.assertRaises(api_review.ReviewError):
+                    api_review.resolve_evidence({"risk": "high", "decisions": [model_decision()]}, evidence)
+        self.assertGreater(empty, 0)
+
+    def test_impossible_context_budget_fails_before_any_model_request(self):
         with patch.object(api_review, "MAX_DIFF_BYTES", 5):
             code, result, model = self.run_review()
         self.assertEqual(code, 1)
@@ -551,7 +887,7 @@ class CommandTests(unittest.TestCase):
     def test_duplicate_decisions_are_retained_only_once(self):
         code, result, _ = self.run_review(payload={"risk": "high", "decisions": [decision(), decision()]})
         self.assertEqual(code, 0)
-        self.assertEqual(result["decisions"], [decision()])
+        self.assertEqual(result["decisions"], [dict(decision(), prior_ids=[], relationship="new", reason="")])
 
     def test_input_failure_writes_incomplete_result_without_model_call(self):
         code, result, model = self.run_review(meta=metadata(additions=2))

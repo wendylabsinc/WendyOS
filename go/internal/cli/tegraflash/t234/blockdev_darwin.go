@@ -17,6 +17,8 @@ const (
 	dkiocGetBlockCount = 0x40086419
 )
 
+const rawWriteFlags = os.O_RDWR
+
 // blockDeviceSize returns the device's capacity in bytes.
 func blockDeviceSize(dev *os.File) (int64, error) {
 	if info, err := dev.Stat(); err == nil && info.Mode().IsRegular() {

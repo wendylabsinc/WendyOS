@@ -1,0 +1,57 @@
+name: Give stable releases priority
+description: Defer nightly device work while a stable release is active.
+inputs:
+  devices:
+    description: >-
+      JSON list of the devices this run covers. A deferral records the ones
+      whose update job has not finished. Empty means every discovered device.
+    required: false
+    default: ''
+outputs:
+  allowed:
+    description: Whether nightly work may start.
+    value: ${{ steps.check.outputs.allowed }}
+runs:
+  using: composite
+  steps:
+    - name: Check active stable releases
+      id: check
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      env:
+        DEVICES: ${{ inputs.devices }}
+      with:
+        script: |
+          const { activeStableReleases, deferralName, unfinishedDevices } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/release-priority.cjs`);
+          const releases = await activeStableReleases({ github, context });
+          core.setOutput('allowed', String(releases.length === 0));
+          if (releases.length) {
+            // One blocking release is enough. If another is still active when
+            // the retry starts, that retry records its own deferral.
+            const devices = process.env.DEVICES
+              ? await unfinishedDevices({ github, context, devices: JSON.parse(process.env.DEVICES) })
+              : null;
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const marker = path.join(process.env.RUNNER_TEMP, 'nightly-release-deferral.json');
+            fs.writeFileSync(marker, JSON.stringify({ release: releases[0].html_url, devices }));
+            core.setOutput('marker', marker);
+            core.setOutput('artifact', deferralName(releases[0]));
+            const links = releases.map(run => run.html_url).join('\n');
+            core.notice(`Nightly work deferred for stable releases:\n${links}`);
+            await core.summary
+              .addHeading('Nightly work deferred')
+              .addRaw('A stable release needs the shared runner. An update already underway is allowed to finish. Nightly work will retry after the release completes.\n\n')
+              .addRaw(links)
+              .addRaw(devices ? `\n\nDevices left for the retry: ${devices.join(', ')}` : '')
+              .write();
+          }
+    - name: Record deferred nightly work
+      if: steps.check.outputs.marker != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: ${{ steps.check.outputs.artifact }}
+        path: ${{ steps.check.outputs.marker }}
+        retention-days: 7
+        if-no-files-found: error
+        # A re-run of this nightly records its deferral again.
+        overwrite: true

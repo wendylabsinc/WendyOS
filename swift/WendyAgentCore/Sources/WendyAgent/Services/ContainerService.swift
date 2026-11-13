@@ -22,6 +22,13 @@ typealias PIDExecutablePathLookup = @Sendable (Int32) -> String?
 /// which were not.
 typealias PIDSignalSender = @Sendable (Int32, Int32) -> Void
 
+typealias BrewBundleResult = (status: Int32, output: String, outputTruncated: Bool)
+typealias BrewExecutableLookup = @Sendable () -> String?
+typealias BrewBundleRunner =
+    @Sendable (_ brewExecutable: String, _ brewfilePath: String, _ appDirectory: String)
+    async throws
+    -> BrewBundleResult
+
 /// Client-facing view of an app-owned stdout/stderr drain. Finishing this
 /// stream stops delivery to a disconnected RPC without stopping pipe reads or
 /// telemetry broadcast by the app-lifetime task.
@@ -81,6 +88,13 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private let pidExecutablePath: PIDExecutablePathLookup
     private let pidBirthTime: PIDBirthTimeLookup
     private let sendSignal: PIDSignalSender
+    private let brewExecutableLookup: BrewExecutableLookup
+    private let brewBundleRunner: BrewBundleRunner
+    /// Number of replacement operations currently preparing each app. This is
+    /// separate from `launchToken`: a replacement owns no process, but still
+    /// needs to keep reconcile and the supervisor away across actor suspension
+    /// points such as OCI extraction and `brew bundle`.
+    private var replacementCounts: [String: Int] = [:]
 
     init(
         broadcaster: TelemetryBroadcaster,
@@ -101,6 +115,16 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             NativeProcessConfiguration.birthTime(forPID: $0)
         },
         sendSignal: @escaping PIDSignalSender = { pid, signal in _ = Darwin.kill(pid, signal) },
+        brewExecutableLookup: @escaping BrewExecutableLookup = {
+            ContainerService.findBrewExecutable()
+        },
+        brewBundleRunner: @escaping BrewBundleRunner = {
+            try await ContainerService.runBrewBundle(
+                brewExecutable: $0,
+                brewfilePath: $1,
+                appDirectory: $2
+            )
+        },
         onAppsChanged: @escaping @Sendable ([WendyAppInfo]) async -> Void = { _ in }
     ) {
         self.broadcaster = broadcaster
@@ -115,6 +139,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.pidExecutablePath = pidExecutablePath
         self.pidBirthTime = pidBirthTime
         self.sendSignal = sendSignal
+        self.brewExecutableLookup = brewExecutableLookup
+        self.brewBundleRunner = brewBundleRunner
 
         let defaultStateDirectory = WendyAgentPaths.stateDirectory
         let resolvedStateDirectory = stateDirectory ?? appsBase ?? defaultStateDirectory
@@ -266,6 +292,23 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         }
     }
 
+    private func beginReplacingApp(id: String) {
+        self.replacementCounts[id, default: 0] += 1
+    }
+
+    private func endReplacingApp(id: String) {
+        guard let count = self.replacementCounts[id] else { return }
+        if count == 1 {
+            self.replacementCounts.removeValue(forKey: id)
+        } else {
+            self.replacementCounts[id] = count - 1
+        }
+    }
+
+    private func isReplacingApp(id: String) -> Bool {
+        self.replacementCounts[id, default: 0] > 0
+    }
+
     private func registerApp(
         id: String,
         kind: WendyAppInfo.Kind,
@@ -273,6 +316,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         container: WendyApp.ContainerMetadata? = nil,
         restartPolicy: PersistedRestartPolicy = .default
     ) async throws {
+        try await self.ensureAppCanBeRegistered(id: id)
         self.appsByID[id] = WendyApp(
             info: WendyAppInfo(
                 id: id,
@@ -288,6 +332,45 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         )
         try self.saveApps()
         await self.publishApps()
+    }
+
+    /// Registration replaces the complete in-memory entry, including process
+    /// ownership. Stop anything that became live after the replacement's first
+    /// stop check, and fail closed if a launch is still in flight: overwriting
+    /// either shape would leave a process that no later stop can reach.
+    private func ensureAppCanBeRegistered(id: String) async throws {
+        guard let existing = self.appsByID[id] else { return }
+
+        guard !Self.isLaunchInFlight(existing) else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "Cannot replace app \(id) while it is starting"
+            )
+        }
+
+        if existing.info.status == .running {
+            _ = try await self.stopTrackedAppIfRunning(id: id)
+        } else if let pid = existing.persistedPID,
+            existing.native != nil,
+            self.isPIDRunningApp(pid, app: existing)
+        {
+            await self.stopAdoptedNativeApp(id: id, pid: pid, app: existing)
+        }
+
+        guard let current = self.appsByID[id] else { return }
+        let persistedProcessIsLive =
+            current.persistedPID.map { self.isPIDRunningApp($0, app: current) } ?? false
+        guard current.info.status != .running,
+            current.info.pid == nil,
+            current.process == nil,
+            current.launchToken == nil,
+            !persistedProcessIsLive
+        else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "Cannot replace app \(id) while its previous process is still active"
+            )
+        }
     }
 
     private func prepareAppForLaunch(id: String, launchToken: UUID) {
@@ -539,6 +622,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             // any of the awaits below. Never start an app that is already
             // running (or launching) — that would orphan the live process.
             guard let app = self.appsByID[id],
+                !self.isReplacingApp(id: id),
                 app.info.status != .running,
                 !Self.isLaunchInFlight(app),
                 Self.shouldRestart(app)
@@ -584,7 +668,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         let now = Date()
         for id in self.appsByID.keys.sorted() {
             guard !self.isStopping else { return }
-            guard var app = self.appsByID[id] else { continue }
+            guard var app = self.appsByID[id], !self.isReplacingApp(id: id) else { continue }
             guard app.info.status != .running, !Self.isLaunchInFlight(app) else { continue }
             guard Self.shouldRestart(app) else { continue }
             if let lastRestart = app.lastRestart,
@@ -650,7 +734,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         // This cannot cancel a launch already inside `launchApp` — a container
         // pull is not cancellation-aware — but it closes the window for any
         // launch that has not yet begun.
-        guard !self.isStopping else { return }
+        guard !self.isStopping, !self.isReplacingApp(id: id) else { return }
 
         do {
             let launched = try await self.launchApp(appName: id)
@@ -756,6 +840,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         for id in self.appsByID.keys.sorted() {
             guard let app = self.appsByID[id],
+                !self.isReplacingApp(id: id),
                 app.container != nil,
                 app.process == nil,
                 !Self.isLaunchInFlight(app)
@@ -804,6 +889,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private func syncAdoptedNativeStates() async {
         for id in self.appsByID.keys.sorted() {
             guard let app = self.appsByID[id],
+                !self.isReplacingApp(id: id),
                 app.native != nil,
                 app.process == nil,
                 !Self.isLaunchInFlight(app)
@@ -1436,7 +1522,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         let brewfilePath = brewfileURL.path
         try Self.validateSyncedBrewfile(atPath: brewfilePath)
 
-        guard let brewExecutable = Self.findBrewExecutable() else {
+        guard let brewExecutable = self.brewExecutableLookup() else {
             throw RPCError(
                 code: .failedPrecondition,
                 message:
@@ -1454,10 +1540,10 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         let result: (status: Int32, output: String, outputTruncated: Bool)
         do {
-            result = try await Self.runBrewBundle(
-                brewExecutable: brewExecutable,
-                brewfilePath: brewfilePath,
-                appDirectory: appDirectory
+            result = try await self.brewBundleRunner(
+                brewExecutable,
+                brewfilePath,
+                appDirectory
             )
         } catch {
             throw RPCError(
@@ -1511,7 +1597,16 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         )
 
         try self.ensureLifecycleMutationsAllowed()
+        self.beginReplacingApp(id: appName)
+        defer { self.endReplacingApp(id: appName) }
+
         try await self.stopTrackedAppIfRunning(id: appName)
+        if let app = self.appsByID[appName], Self.isLaunchInFlight(app) {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "Cannot replace app \(appName) while it is starting"
+            )
+        }
 
         // Parse app config to determine the target platform.
         let appConfig: WendyAppConfig? = {
@@ -1718,6 +1813,12 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// streams them to the client, the unattended path drains them into
     /// telemetry. Left unread, the app blocks once the pipe buffer fills.
     private func launchApp(appName: String) async throws -> LaunchedApp {
+        guard !self.isReplacingApp(id: appName) else {
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "Cannot start app \(appName) while it is being replaced"
+            )
+        }
         guard let app = self.appsByID[appName] else {
             throw RPCError(
                 code: .failedPrecondition,
@@ -2026,8 +2127,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         // the actor's executor.
         let containers = self.appsByID.values
             .sorted { $0.info.id < $1.info.id }
-            .map { app -> AppContainer in
-                var container = AppContainer()
+            .map { app -> Wendy_Agent_Services_V1_AppContainer in
+                var container = Wendy_Agent_Services_V1_AppContainer()
                 container.appName = app.info.id
                 container.runningState = Self.runningState(for: app)
                 let (http, mcp) = self.entitlementPorts(forAppID: app.info.id)
@@ -2080,11 +2181,36 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         return (http, mcp)
     }
 
+    // Preserve the Mac agent's unimplemented results for newly generated RPC requirements.
+    func validateContainer(
+        request: ServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse> {
+        throw RPCError(
+            code: .unimplemented,
+            message: "ValidateContainer is not implemented on macOS"
+        )
+    }
+
+    func prepareImage(
+        request: ServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse> {
+        throw RPCError(code: .unimplemented, message: "PrepareImage is not implemented on macOS")
+    }
+
+    func getNetworkStats(
+        request: ServerRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_NetworkStats> {
+        throw RPCError(code: .unimplemented, message: "GetNetworkStats is not implemented on macOS")
+    }
+
     /// A down app the supervisor has already restarted at least once and will
     /// restart again reports `CRASH_LOOPING` rather than `STOPPED`, so a crash
     /// loop is visible instead of masquerading as an ordinary stop. A
     /// user-stopped app, or one whose policy won't restart it, stays `STOPPED`.
-    private static func runningState(for app: WendyApp) -> AppRunningState {
+    private static func runningState(for app: WendyApp) -> Wendy_Agent_Services_V1_AppRunningState {
         if app.info.status == .running { return .running }
         if app.failureCount > 0, Self.shouldRestart(app) { return .crashLooping }
         return .stopped

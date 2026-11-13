@@ -14,15 +14,32 @@ import (
 
 type versionOnlyAgent struct {
 	agentpb.UnimplementedWendyAgentServiceServer
+	os       string
+	features []string
 }
 
-func (versionOnlyAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
-	return &agentpb.GetAgentVersionResponse{Version: "sock"}, nil
+func (a versionOnlyAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
+	return &agentpb.GetAgentVersionResponse{Version: "sock", Os: a.os, Featureset: a.features}, nil
 }
 
 // startUDSAgent serves a minimal agent on a unix socket and sets
 // WENDY_AGENT_SOCKET to its path for the duration of the test.
 func startUDSAgent(t *testing.T, register ...func(*grpc.Server)) {
+	startUDSAgentWithOS(t, "", register...)
+}
+
+func startUDSAgentWithOS(t *testing.T, osName string, register ...func(*grpc.Server)) {
+	startUDSAgentWithFeatures(t, osName, nil, register...)
+}
+
+func startUDSAgentWithFeatures(t *testing.T, osName string, features []string, register ...func(*grpc.Server)) {
+	t.Helper()
+	startUDSAgentServing(t, versionOnlyAgent{os: osName, features: features}, register...)
+}
+
+// startUDSAgentServing is startUDSAgent with the caller's agent service, for
+// tests that need agent RPCs beyond GetAgentVersion.
+func startUDSAgentServing(t *testing.T, agent agentpb.WendyAgentServiceServer, register ...func(*grpc.Server)) {
 	t.Helper()
 	// Short temp dir to stay under the unix-socket sun_path limit on macOS
 	// (see localsocket_test.go for the convention).
@@ -38,7 +55,7 @@ func startUDSAgent(t *testing.T, register ...func(*grpc.Server)) {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	agentpb.RegisterWendyAgentServiceServer(srv, versionOnlyAgent{})
+	agentpb.RegisterWendyAgentServiceServer(srv, agent)
 	for _, registerService := range register {
 		registerService(srv)
 	}

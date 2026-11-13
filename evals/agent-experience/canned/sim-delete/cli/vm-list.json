@@ -1,0 +1,19 @@
+{
+  "argv_prefix": [
+    "vm",
+    "list"
+  ],
+  "stdout": "[{\"name\": \"old-bench\", \"state\": \"stopped\", \"version\": \"0.19.5\", \"source\": \"release\"}]",
+  "stderr": "",
+  "exit_code": 0,
+  "after": {
+    "actions": [
+      "tool:simulator_delete",
+      "cli:vm rm",
+      "cli:vm remove"
+    ],
+    "stdout": "[]",
+    "stderr": "",
+    "exit_code": 0
+  }
+}

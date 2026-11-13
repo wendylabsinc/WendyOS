@@ -20,7 +20,7 @@ fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobu
   typealias Version = _2
 }
 
-public nonisolated enum RestartPolicyMode: SwiftProtobuf.Enum, Swift.CaseIterable {
+public nonisolated enum Wendy_Agent_Services_V1_RestartPolicyMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
 
   /// Agent chooses default (unless-stopped for normal runs)
@@ -61,7 +61,7 @@ public nonisolated enum RestartPolicyMode: SwiftProtobuf.Enum, Swift.CaseIterabl
   }
 
   // The compiler won't synthesize support with the UNRECOGNIZED case.
-  public static let allCases: [RestartPolicyMode] = [
+  public static let allCases: [Wendy_Agent_Services_V1_RestartPolicyMode] = [
     .default,
     .unlessStopped,
     .no,
@@ -70,7 +70,7 @@ public nonisolated enum RestartPolicyMode: SwiftProtobuf.Enum, Swift.CaseIterabl
 
 }
 
-public nonisolated enum AppRunningState: SwiftProtobuf.Enum, Swift.CaseIterable {
+public nonisolated enum Wendy_Agent_Services_V1_AppRunningState: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case stopped // = 0
   case running // = 1
@@ -106,7 +106,7 @@ public nonisolated enum AppRunningState: SwiftProtobuf.Enum, Swift.CaseIterable 
   }
 
   // The compiler won't synthesize support with the UNRECOGNIZED case.
-  public static let allCases: [AppRunningState] = [
+  public static let allCases: [Wendy_Agent_Services_V1_AppRunningState] = [
     .stopped,
     .running,
     .crashLooping,
@@ -115,7 +115,7 @@ public nonisolated enum AppRunningState: SwiftProtobuf.Enum, Swift.CaseIterable 
 }
 
 /// Charge state of a system battery, as reported by the kernel.
-public nonisolated enum BatteryState: SwiftProtobuf.Enum, Swift.CaseIterable {
+public nonisolated enum Wendy_Agent_Services_V1_BatteryState: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
 
   /// kernel reports "Unknown", or no status file
@@ -156,7 +156,7 @@ public nonisolated enum BatteryState: SwiftProtobuf.Enum, Swift.CaseIterable {
   }
 
   // The compiler won't synthesize support with the UNRECOGNIZED case.
-  public static let allCases: [BatteryState] = [
+  public static let allCases: [Wendy_Agent_Services_V1_BatteryState] = [
     .unknown,
     .charging,
     .discharging,
@@ -166,12 +166,12 @@ public nonisolated enum BatteryState: SwiftProtobuf.Enum, Swift.CaseIterable {
 
 }
 
-public nonisolated struct RestartPolicy: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_RestartPolicy: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  public var mode: RestartPolicyMode = .default
+  public var mode: Wendy_Agent_Services_V1_RestartPolicyMode = .default
 
   /// Only used when mode==ON_FAILURE
   public var onFailureMaxRetries: Int32 = 0
@@ -184,21 +184,21 @@ public nonisolated struct RestartPolicy: Sendable {
 /// ServiceEntry describes a single container within a services-map app group.
 /// Present in AppContainer.services for any app that declares named services
 /// (single- or multi-service); see AppContainer.services.
-public nonisolated struct ServiceEntry: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_ServiceEntry: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   public var name: String = String()
 
-  public var runningState: AppRunningState = .stopped
+  public var runningState: Wendy_Agent_Services_V1_AppRunningState = .stopped
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 }
 
-public nonisolated struct AppContainer: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_AppContainer: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -209,7 +209,7 @@ public nonisolated struct AppContainer: Sendable {
   public var appVersion: String = String()
 
   /// aggregate: RUNNING if any service is running
-  public var runningState: AppRunningState = .stopped
+  public var runningState: Wendy_Agent_Services_V1_AppRunningState = .stopped
 
   public var failureCount: UInt32 = 0
 
@@ -218,7 +218,7 @@ public nonisolated struct AppContainer: Sendable {
   /// One entry per service container for apps that declare named services
   /// (single- or multi-service services-map apps). Empty for single-container
   /// apps and flattened single-service apps (those with no service name).
-  public var services: [ServiceEntry] = []
+  public var services: [Wendy_Agent_Services_V1_ServiceEntry] = []
 
   /// Exit diagnostics for the last run, only meaningful when running_state is
   /// STOPPED. Fields 7-10 are left for the in-flight provenance PR #1234, so
@@ -241,7 +241,7 @@ public nonisolated struct AppContainer: Sendable {
 /// BatteryStats is the device's aggregate system-battery state. It is only ever
 /// set for devices that actually have a battery: consumers must treat its
 /// absence as "mains-powered" and show nothing, never as 0%.
-public nonisolated struct BatteryStats: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_BatteryStats: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -249,7 +249,7 @@ public nonisolated struct BatteryStats: Sendable {
   /// Charge level, 0-100, across every system battery on the device.
   public var percent: Double = 0
 
-  public var state: BatteryState = .unknown
+  public var state: Wendy_Agent_Services_V1_BatteryState = .unknown
 
   /// Estimated seconds until empty (discharging) or until full (charging).
   /// Absent whenever the kernel reports no usable charge/discharge rate — a
@@ -272,20 +272,22 @@ public nonisolated struct BatteryStats: Sendable {
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
-nonisolated extension RestartPolicyMode: SwiftProtobuf._ProtoNameProviding {
+fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
+
+nonisolated extension Wendy_Agent_Services_V1_RestartPolicyMode: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0DEFAULT\0\u{1}UNLESS_STOPPED\0\u{1}NO\0\u{1}ON_FAILURE\0")
 }
 
-nonisolated extension AppRunningState: SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Wendy_Agent_Services_V1_AppRunningState: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0STOPPED\0\u{1}RUNNING\0\u{1}CRASH_LOOPING\0")
 }
 
-nonisolated extension BatteryState: SwiftProtobuf._ProtoNameProviding {
+nonisolated extension Wendy_Agent_Services_V1_BatteryState: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0BATTERY_STATE_UNKNOWN\0\u{1}BATTERY_STATE_CHARGING\0\u{1}BATTERY_STATE_DISCHARGING\0\u{1}BATTERY_STATE_FULL\0\u{1}BATTERY_STATE_NOT_CHARGING\0")
 }
 
-nonisolated extension RestartPolicy: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = "RestartPolicy"
+nonisolated extension Wendy_Agent_Services_V1_RestartPolicy: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".RestartPolicy"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}mode\0\u{3}on_failure_max_retries\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -311,7 +313,7 @@ nonisolated extension RestartPolicy: SwiftProtobuf.Message, SwiftProtobuf._Messa
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: RestartPolicy, rhs: RestartPolicy) -> Bool {
+  public static func ==(lhs: Wendy_Agent_Services_V1_RestartPolicy, rhs: Wendy_Agent_Services_V1_RestartPolicy) -> Bool {
     if lhs.mode != rhs.mode {return false}
     if lhs.onFailureMaxRetries != rhs.onFailureMaxRetries {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -319,8 +321,8 @@ nonisolated extension RestartPolicy: SwiftProtobuf.Message, SwiftProtobuf._Messa
   }
 }
 
-nonisolated extension ServiceEntry: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = "ServiceEntry"
+nonisolated extension Wendy_Agent_Services_V1_ServiceEntry: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ServiceEntry"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{3}running_state\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -346,7 +348,7 @@ nonisolated extension ServiceEntry: SwiftProtobuf.Message, SwiftProtobuf._Messag
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: ServiceEntry, rhs: ServiceEntry) -> Bool {
+  public static func ==(lhs: Wendy_Agent_Services_V1_ServiceEntry, rhs: Wendy_Agent_Services_V1_ServiceEntry) -> Bool {
     if lhs.name != rhs.name {return false}
     if lhs.runningState != rhs.runningState {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -354,8 +356,8 @@ nonisolated extension ServiceEntry: SwiftProtobuf.Message, SwiftProtobuf._Messag
   }
 }
 
-nonisolated extension AppContainer: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = "AppContainer"
+nonisolated extension Wendy_Agent_Services_V1_AppContainer: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AppContainer"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_name\0\u{3}app_version\0\u{3}running_state\0\u{3}failure_count\0\u{3}mcp_port\0\u{1}services\0\u{4}\u{5}exit_code\0\u{3}termination_reason\0\u{3}http_port\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -409,7 +411,7 @@ nonisolated extension AppContainer: SwiftProtobuf.Message, SwiftProtobuf._Messag
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: AppContainer, rhs: AppContainer) -> Bool {
+  public static func ==(lhs: Wendy_Agent_Services_V1_AppContainer, rhs: Wendy_Agent_Services_V1_AppContainer) -> Bool {
     if lhs.appName != rhs.appName {return false}
     if lhs.appVersion != rhs.appVersion {return false}
     if lhs.runningState != rhs.runningState {return false}
@@ -424,8 +426,8 @@ nonisolated extension AppContainer: SwiftProtobuf.Message, SwiftProtobuf._Messag
   }
 }
 
-nonisolated extension BatteryStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = "BatteryStats"
+nonisolated extension Wendy_Agent_Services_V1_BatteryStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".BatteryStats"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}percent\0\u{1}state\0\u{3}seconds_remaining\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -459,7 +461,7 @@ nonisolated extension BatteryStats: SwiftProtobuf.Message, SwiftProtobuf._Messag
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: BatteryStats, rhs: BatteryStats) -> Bool {
+  public static func ==(lhs: Wendy_Agent_Services_V1_BatteryStats, rhs: Wendy_Agent_Services_V1_BatteryStats) -> Bool {
     if lhs.percent != rhs.percent {return false}
     if lhs.state != rhs.state {return false}
     if lhs._secondsRemaining != rhs._secondsRemaining {return false}

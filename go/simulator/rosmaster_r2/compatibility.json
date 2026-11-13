@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "robot_kind": "rosmaster-r2",
+  "hardware_target": "ROSMASTER R2 with Jetson Nano B01",
+  "compute_emulation": false,
+  "model_bundle": "r2-ackermann-kinematic-v1",
+  "model": "Ideal planar Ackermann rolling kinematics, rear-axle base_link",
+  "geometry": {
+    "calibrated": false,
+    "wheelbase_m": 0.26,
+    "track_m": 0.24,
+    "wheel_radius_m": 0.05,
+    "length_m": 0.4,
+    "width_m": 0.32
+  },
+  "limits": {
+    "speed_m_s": 1.8,
+    "steering_deg": 30,
+    "acceleration_m_s2": 1.2,
+    "steering_rate_deg_s": 90,
+    "command_timeout_s": 0.3,
+    "braking_m_s2": 2.4
+  },
+  "commands": {
+    "/cmd_vel": {
+      "type": "geometry_msgs/msg/Twist",
+      "linear.x": "rear-axle speed in m/s",
+      "linear.y": "must be zero",
+      "angular.z": "yaw rate in rad/s, converted to steering and bounded; cannot turn in place"
+    }
+  },
+  "observations": {
+    "/odom": {
+      "type": "nav_msgs/msg/Odometry",
+      "rate_hz": 50,
+      "frame": "odom",
+      "child_frame": "base_link"
+    },
+    "/scan": {
+      "type": "sensor_msgs/msg/LaserScan",
+      "rate_hz": 10,
+      "frame": "laser_frame",
+      "rays": 360
+    },
+    "/imu/data": {
+      "type": "sensor_msgs/msg/Imu",
+      "rate_hz": 50,
+      "frame": "imu_link"
+    },
+    "/joint_states": {
+      "type": "sensor_msgs/msg/JointState",
+      "rate_hz": 50
+    },
+    "/tf": {
+      "type": "tf2_msgs/msg/TFMessage",
+      "rate_hz": 50
+    },
+    "/tf_static": {
+      "type": "tf2_msgs/msg/TFMessage",
+      "delivery": "transient local"
+    },
+    "/camera/color/image_raw": {
+      "type": "sensor_msgs/msg/Image",
+      "rate_hz": 10,
+      "frame": "camera_optical_frame",
+      "encoding": "rgb8",
+      "width": 320,
+      "height": 240
+    },
+    "/camera/color/camera_info": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "rate_hz": 10,
+      "frame": "camera_optical_frame"
+    },
+    "/camera/depth/image_raw": {
+      "type": "sensor_msgs/msg/Image",
+      "rate_hz": 10,
+      "frame": "camera_optical_frame",
+      "encoding": "16UC1",
+      "width": 320,
+      "height": 240
+    },
+    "/camera/depth/camera_info": {
+      "type": "sensor_msgs/msg/CameraInfo",
+      "rate_hz": 10,
+      "frame": "camera_optical_frame"
+    }
+  },
+  "clock": "Wall-clock capture timestamps, use_sim_time=false, no /clock",
+  "control": "One browser token or DDS publisher at a time. Reset, pause and stop revoke control. Explicit rearming is required. ROS starts armed at process startup.",
+  "limitations": [
+    "Approximate geometry, not factory calibration",
+    "No tire slip, suspension, terrain or dynamic contact physics",
+    "Collisions stop motion at a rectangular footprint",
+    "Ideal lidar, IMU and odometry with no calibrated noise or drift",
+    "No point cloud topic; RGB/depth are ideal synthetic images without optical noise",
+    "No USB camera firmware, Rosmaster_Lib serial protocol, voice or battery emulation; hardware apps need an explicit simulator backend",
+    "No autonomous navigation stack included"
+  ],
+  "camera": {
+    "model": "ideal pinhole ray casting against the same collision world",
+    "depth_units": "uint16 millimetres, zero invalid",
+    "range_m": [
+      0.2,
+      4.0
+    ],
+    "calibrated": false
+  },
+  "app_api": {
+    "claim": "/api/app/claim",
+    "command": "/api/app/command",
+    "color": "/stream/color",
+    "depth": "/stream/depth",
+    "calibration": "/api/camera/info",
+    "raw_depth": "/api/camera/depth.raw"
+  }
+}

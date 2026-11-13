@@ -18,19 +18,62 @@ struct `'wendy auth login'` {
             try await cli.sh("wendy auth login --help") { result in
                 let stdout = result.stdout
                 #expect(result.status.isSuccess)
-                #expect(stdout.contains("Signs in to Wendy Cloud"))
+                #expect(stdout.contains("Sign in to Wendy Cloud in your browser"))
                 #expect(stdout.contains("wendy auth login [flags]"))
-                #expect(stdout.contains("--api-key"))
+                #expect(!stdout.contains("--api-key"))
                 #expect(stdout.contains("--cloud"))
                 #expect(stdout.contains("--cloud-grpc"))
-                #expect(stdout.contains("--org"))
+                #expect(!stdout.contains("--org"))
+                #expect(!stdout.contains("--production"))
+                #expect(!stdout.contains("--development"))
+                #expect(!stdout.contains("--legacy"))
                 #expect(result.stderr == "")
             }
         }
     }
 
     /**
-     Without `--api-key`, starts the Wendy Cloud browser login flow,
+     Production and development Cloud targets start at the realm-less Wendy Auth
+     page. The browser collects email and organization, then returns the selected
+     realm to the CLI. This needs the protected browser/Auth fixture tracked by
+     WDY-1949; an E2E must never open a real browser or use personal credentials.
+     */
+    @Test(
+        .disabled(
+            "WDY-1949: realm-less Cloud login needs a protected browser/Auth fixture and injectable browser."
+        )
+    )
+    func `starts realm-less login for the selected Cloud target`() async throws {
+        // Unit coverage verifies target routing without network or browser access.
+    }
+
+    /**
+     A login can select only one built-in Cloud target. Conflicting target flags
+     fail locally before browser, credential, configuration, or network work.
+     */
+    @Test
+    func `rejects conflicting Cloud targets`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for flags in [
+                "--production --development",
+                "--production --legacy",
+                "--development --legacy",
+            ] {
+                try await cli.sh("wendy auth login \(flags)") { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stdout == "")
+                    #expect(
+                        result.stderr.contains(
+                            "--production, --development, and --legacy are mutually exclusive"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     Starts the Wendy Cloud browser login flow,
      receives the callback token, generates client credentials, and
      stores the resulting session in the CLI configuration. Success
      output gives concise next-step guidance and stderr stays empty.
@@ -42,20 +85,6 @@ struct `'wendy auth login'` {
     )
     func `starts browser-based login and stores the auth session`() async throws {
         // TODO: enable with protected browser and auth fixtures (WDY-1949).
-    }
-
-    /**
-     With `--api-key`, authenticates against the selected cloud gRPC or
-     local pki-core endpoint using the provided bearer token. The token
-     is not echoed to stdout, stderr, command records, or saved config.
-     */
-    @Test(
-        .disabled(
-            "WDY-1949: API-key login needs an ephemeral protected pki-core endpoint with recorder redaction; production or personal keys cannot be used."
-        )
-    )
-    func `logs in with an API key without opening a browser`() async throws {
-        // TODO: enable with protected PKI and secret-redaction fixtures (WDY-1949).
     }
 
     /**
@@ -117,37 +146,17 @@ struct `'wendy auth login'` {
                     Set-Content -NoNewline -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{ invalid json'
                     """
             )
-            try await cli.sh("wendy auth login --api-key fixture-value --cloud-grpc localhost:1") {
+            try await cli.sh("wendy auth login --cloud-grpc localhost:1") {
                 result in
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
                 #expect(result.stderr.contains("parsing config"))
-                #expect(!result.stderr.contains("fixture-value"))
             }
             try await cli.sh(
                 posix: "cat \"$HOME/.wendy/config.json\"",
                 power: "Get-Content -Raw -LiteralPath (Join-Path $env:HOME '.wendy/config.json')"
             ) { result in
                 #expect(result.stdout.contains("{ invalid json"))
-            }
-        }
-    }
-
-    /**
-     Requires the API endpoint needed to exchange an API key for a Wendy auth
-     session.
-
-     Missing endpoint configuration fails locally without writing partial
-     credentials.
-     */
-    @Test
-    func `requires an endpoint for API key login`() async throws {
-        try await self.scenario.run(authenticated: false) { cli, _ in
-            try await cli.sh("wendy auth login --api-key fixture-value") { result in
-                #expect(result.status.isFailure)
-                #expect(result.stdout == "")
-                #expect(result.stderr.contains("--cloud-grpc is required"))
-                #expect(!result.stderr.contains("fixture-value"))
             }
         }
     }

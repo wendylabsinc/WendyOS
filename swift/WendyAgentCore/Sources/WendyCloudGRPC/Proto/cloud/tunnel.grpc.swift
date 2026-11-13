@@ -14,6 +14,12 @@
 //      TunnelData{session_id} (empty payload) as its first message to claim the session.
 //   4. Broker pairs the two streams by session_id and begins relaying payload data
 //      transparently in both directions. session_id is ignored in all subsequent messages.
+//
+// DATAGRAM sessions follow the same rendezvous (steps 1-4 above), except the
+// agent dials nothing upfront: host/port on the open message are ignored, and
+// the resulting session multiplexes many UDP flows (TunnelDatagram) and ICMP
+// echoes (IcmpEchoRequest/IcmpEchoReply) over the single paired stream pair,
+// keyed by flow_id.
 
 // DO NOT EDIT.
 // swift-format-ignore-file
@@ -76,11 +82,25 @@ public enum Wendycloud_V1_TunnelBrokerService: Sendable {
                 type: .bidirectionalStreaming
             )
         }
+        /// Namespace for "ServiceTunnel" metadata.
+        public enum ServiceTunnel: Sendable {
+            /// Request type for "ServiceTunnel".
+            public typealias Input = Wendycloud_V1_ServiceTunnelMessage
+            /// Response type for "ServiceTunnel".
+            public typealias Output = Wendycloud_V1_TunnelData
+            /// Descriptor for "ServiceTunnel".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.TunnelBrokerService"),
+                method: "ServiceTunnel",
+                type: .bidirectionalStreaming
+            )
+        }
         /// Descriptors for all methods in the "wendycloud.v1.TunnelBrokerService" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
             RegisterPresence.descriptor,
             AgentTunnel.descriptor,
-            ClientTunnel.descriptor
+            ClientTunnel.descriptor,
+            ServiceTunnel.descriptor
         ]
     }
 }
@@ -165,6 +185,26 @@ extension Wendycloud_V1_TunnelBrokerService {
             request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ClientTunnelMessage>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_TunnelData>
+
+        /// Handle the "ServiceTunnel" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+        /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+        /// > subsequent messages carry payload data relayed to/from the agent.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendycloud_V1_TunnelData` messages.
+        func serviceTunnel(
+            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ServiceTunnelMessage>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_TunnelData>
     }
 
     /// Service protocol for the "wendycloud.v1.TunnelBrokerService" service.
@@ -232,6 +272,26 @@ extension Wendycloud_V1_TunnelBrokerService {
         /// - Returns: A streaming response of `Wendycloud_V1_TunnelData` messages.
         func clientTunnel(
             request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ClientTunnelMessage>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_TunnelData>
+
+        /// Handle the "ServiceTunnel" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+        /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+        /// > subsequent messages carry payload data relayed to/from the agent.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendycloud_V1_TunnelData` messages.
+        func serviceTunnel(
+            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ServiceTunnelMessage>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_TunnelData>
     }
@@ -304,6 +364,27 @@ extension Wendycloud_V1_TunnelBrokerService {
             response: GRPCCore.RPCWriter<Wendycloud_V1_TunnelData>,
             context: GRPCCore.ServerContext
         ) async throws
+
+        /// Handle the "ServiceTunnel" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+        /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+        /// > subsequent messages carry payload data relayed to/from the agent.
+        ///
+        /// - Parameters:
+        ///   - request: A stream of `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - response: A response stream of `Wendycloud_V1_TunnelData` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        func serviceTunnel(
+            request: GRPCCore.RPCAsyncSequence<Wendycloud_V1_ServiceTunnelMessage, any Swift.Error>,
+            response: GRPCCore.RPCWriter<Wendycloud_V1_TunnelData>,
+            context: GRPCCore.ServerContext
+        ) async throws
     }
 }
 
@@ -339,6 +420,17 @@ extension Wendycloud_V1_TunnelBrokerService.StreamingServiceProtocol {
             serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_TunnelData>(),
             handler: { request, context in
                 try await self.clientTunnel(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendycloud_V1_TunnelBrokerService.Method.ServiceTunnel.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ServiceTunnelMessage>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_TunnelData>(),
+            handler: { request, context in
+                try await self.serviceTunnel(
                     request: request,
                     context: context
                 )
@@ -397,6 +489,23 @@ extension Wendycloud_V1_TunnelBrokerService.SimpleServiceProtocol {
             metadata: [:],
             producer: { writer in
                 try await self.clientTunnel(
+                    request: request.messages,
+                    response: writer,
+                    context: context
+                )
+                return [:]
+            }
+        )
+    }
+
+    public func serviceTunnel(
+        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ServiceTunnelMessage>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_TunnelData> {
+        return GRPCCore.StreamingServerResponse<Wendycloud_V1_TunnelData>(
+            metadata: [:],
+            producer: { writer in
+                try await self.serviceTunnel(
                     request: request.messages,
                     response: writer,
                     context: context
@@ -486,6 +595,31 @@ extension Wendycloud_V1_TunnelBrokerService {
         func clientTunnel<Result>(
             request: GRPCCore.StreamingClientRequest<Wendycloud_V1_ClientTunnelMessage>,
             serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ClientTunnelMessage>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_TunnelData>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendycloud_V1_TunnelData>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ServiceTunnel" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+        /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+        /// > subsequent messages carry payload data relayed to/from the agent.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request producing `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - serializer: A serializer for `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - deserializer: A deserializer for `Wendycloud_V1_TunnelData` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func serviceTunnel<Result>(
+            request: GRPCCore.StreamingClientRequest<Wendycloud_V1_ServiceTunnelMessage>,
+            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ServiceTunnelMessage>,
             deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_TunnelData>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendycloud_V1_TunnelData>) async throws -> Result
@@ -609,6 +743,40 @@ extension Wendycloud_V1_TunnelBrokerService {
                 onResponse: handleResponse
             )
         }
+
+        /// Call the "ServiceTunnel" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+        /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+        /// > subsequent messages carry payload data relayed to/from the agent.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request producing `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - serializer: A serializer for `Wendycloud_V1_ServiceTunnelMessage` messages.
+        ///   - deserializer: A deserializer for `Wendycloud_V1_TunnelData` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func serviceTunnel<Result>(
+            request: GRPCCore.StreamingClientRequest<Wendycloud_V1_ServiceTunnelMessage>,
+            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ServiceTunnelMessage>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_TunnelData>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendycloud_V1_TunnelData>) async throws -> Result
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.bidirectionalStreaming(
+                request: request,
+                descriptor: Wendycloud_V1_TunnelBrokerService.Method.ServiceTunnel.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
     }
 }
 
@@ -696,6 +864,35 @@ extension Wendycloud_V1_TunnelBrokerService.ClientProtocol {
         try await self.clientTunnel(
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ClientTunnelMessage>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_TunnelData>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ServiceTunnel" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+    /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+    /// > subsequent messages carry payload data relayed to/from the agent.
+    ///
+    /// - Parameters:
+    ///   - request: A streaming request producing `Wendycloud_V1_ServiceTunnelMessage` messages.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func serviceTunnel<Result>(
+        request: GRPCCore.StreamingClientRequest<Wendycloud_V1_ServiceTunnelMessage>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendycloud_V1_TunnelData>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        try await self.serviceTunnel(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ServiceTunnelMessage>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_TunnelData>(),
             options: options,
             onResponse: handleResponse
@@ -802,6 +999,40 @@ extension Wendycloud_V1_TunnelBrokerService.ClientProtocol {
             producer: producer
         )
         return try await self.clientTunnel(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ServiceTunnel" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Services backend: open a tunnel to a device. Authenticated via x-service-token
+    /// > metadata header instead of mTLS. The first message must be ServiceTunnelOpen;
+    /// > subsequent messages carry payload data relayed to/from the agent.
+    ///
+    /// - Parameters:
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func serviceTunnel<Result>(
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        requestProducer producer: @Sendable @escaping (GRPCCore.RPCWriter<Wendycloud_V1_ServiceTunnelMessage>) async throws -> Void,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendycloud_V1_TunnelData>) async throws -> Result
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.StreamingClientRequest<Wendycloud_V1_ServiceTunnelMessage>(
+            metadata: metadata,
+            producer: producer
+        )
+        return try await self.serviceTunnel(
             request: request,
             options: options,
             onResponse: handleResponse

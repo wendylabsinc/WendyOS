@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -589,14 +590,16 @@ func TestIngestCallsCarryNoIdentityHeader(t *testing.T) {
 func TestRunWithoutEndpointDoesNotDial(t *testing.T) {
 	mgr, root := newTestManager(t)
 	writeFixtureEpisode(t, root, "ep-queued", "", "pending", map[string][]byte{"blob.bin": []byte("payload")})
+	core, logs := observer.New(zap.DebugLevel)
 
 	var dials int32
 	w := &DataTransferWorker{
-		logger:      zap.NewNop(),
-		manager:     mgr,
-		maxAttempts: transferMaxAttempts,
-		now:         time.Now,
-		newSleeper:  contextSleeper,
+		logger:          zap.New(core),
+		manager:         mgr,
+		provisioningSvc: &ProvisioningService{}, // disabled uploads must not wait for enrollment
+		maxAttempts:     transferMaxAttempts,
+		now:             time.Now,
+		newSleeper:      contextSleeper,
 	}
 	w.factory = func(context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
 		atomic.AddInt32(&dials, 1)
@@ -617,6 +620,10 @@ func TestRunWithoutEndpointDoesNotDial(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&dials); n != 0 {
 		t.Fatalf("factory called %d times without an endpoint, want 0", n)
+	}
+	entries := logs.All()
+	if len(entries) != 1 || entries[0].Level != zap.InfoLevel || !strings.Contains(entries[0].Message, "WENDY_DATA_INGEST_URL is not set") {
+		t.Fatalf("disabled uploads should log once at info level, got %v", entries)
 	}
 	if got := uploadState(t, mgr, "ep-queued").State; got != uploadStatePending {
 		t.Fatalf("queued episode state = %q, want %q (nothing may be marked failed)", got, uploadStatePending)

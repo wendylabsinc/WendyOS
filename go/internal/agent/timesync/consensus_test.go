@@ -1,6 +1,31 @@
 package timesync
 
-import "testing"
+import (
+	"context"
+	"crypto/ed25519"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/roughtime"
+)
+
+func TestConsensusRetainsOnlyObservedVerifiedPathMetadata(t *testing.T) {
+	servers := []roughtime.Server{{Name: "one", Address: "one:2002", PublicKey: make(ed25519.PublicKey, 32)}, {Name: "two", Address: "two:2002", PublicKey: make(ed25519.PublicKey, 32)}}
+	var boot atomic.Int64
+	boot.Store(int64(time.Second))
+	c, err := queryConsensus(context.Background(), servers, func(_ context.Context, s roughtime.Server) (roughtime.Result, error) {
+		return roughtime.Result{Server: s.Name, Midpoint: time.Unix(1800000000, 0), Radius: time.Second, LocalAddress: "10.88.0.1:1000", RemoteAddress: s.Address}, nil
+	}, func() (int64, error) { return boot.Add(1), nil })
+	if err != nil || c.Quorum != 2 {
+		t.Fatal("fixture did not form quorum", c, err)
+	}
+	for _, ev := range c.Evidence {
+		if !ev.Included || ev.LocalAddress != "10.88.0.1:1000" || ev.RemoteAddress != ev.Address {
+			t.Fatal("verified socket observations dropped", ev)
+		}
+	}
+}
 
 func TestLargestIntersectionExcludesOutlier(t *testing.T) {
 	evidence := []RoughtimeEvidence{

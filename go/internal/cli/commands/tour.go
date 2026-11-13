@@ -4,6 +4,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -64,6 +67,8 @@ const (
 	phaseCloud                          // cloud ready message
 	phaseDone                           // quit
 	phaseError                          // error with restart hint
+	phaseNativeInstall                  // board-specific recovery installer
+	phaseSampleReadiness                // bounded health check after detached deploy
 )
 
 // ─── messages ────────────────────────────────────────────────────────────────
@@ -82,11 +87,20 @@ type (
 		networks []localWifiNetwork
 		err      error
 	}
-	tourDriveRescanMsg           struct{}
-	tourDiscoveryTickMsg         struct{}
-	tourDiscoveryFoundMsg        struct{ addr, name string }
-	tourOSInstallDoneMsg         struct{ err error }
-	tourRunDoneMsg               struct{ err error }
+	tourDriveRescanMsg    struct{}
+	tourDiscoveryTickMsg  struct{}
+	tourDiscoveryErrorMsg struct{ err error }
+	tourDiscoveryFoundMsg struct{ addr, name string }
+	tourOSInstallDoneMsg  struct {
+		err    error
+		native bool
+	}
+	tourRunDoneMsg       struct{ err error }
+	tourSampleReadyMsg   struct{ err error }
+	tourSampleCreatedMsg struct {
+		path, id string
+		err      error
+	}
 	tourAICheckDoneMsg           struct{ claudePath, codexPath string }
 	tourMCPSetupDoneMsg          struct{ results []mcpSetupResult }
 	tourCompletionInstallDoneMsg struct{ err error }
@@ -112,8 +126,13 @@ const tourWendyJSONTemplate = `{
         {
             "type": "network",
             "mode": "host"
+        },
+        {
+            "type": "http",
+            "port": 8000
         }
     ],
+    "readiness": { "tcpSocket": { "port": 8000 } },
     "python": {
         "container": {
             "sourceRoot": "/app"
@@ -151,12 +170,12 @@ class HelloHandler(BaseHTTPRequestHandler):
 </body></html>""".encode())
 
     def log_message(self, fmt, *args):
-        print(f"[{{self.date_time_string()}}] {{fmt % args}}", flush=True)
+        print(f"[{self.date_time_string()}] {fmt % args}", flush=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     addr = ("0.0.0.0", port)
-    print(f"Serving on http://0.0.0.0:{{port}}", flush=True)
+    print(f"Serving on http://0.0.0.0:{port}", flush=True)
     HTTPServer(addr, HelloHandler).serve_forever()
 `
 
@@ -175,6 +194,10 @@ const tourRequirements = "debugpy\n"
 // ─── model ───────────────────────────────────────────────────────────────────
 
 type tourWizardModel struct {
+	ctx              context.Context
+	discoveryStarted time.Time
+	installedByTour  bool
+	diagnosticStep   string
 	// root is the root cobra command, used to generate completion scripts
 	// in-process when installing shell completions.
 	root *cobra.Command
@@ -252,7 +275,7 @@ func newTourWizardModel() tourWizardModel {
 	ti.Width = 48
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
-	return tourWizardModel{input: ti}
+	return tourWizardModel{input: ti, ctx: context.Background()}
 }
 
 // ─── styles ───────────────────────────────────────────────────────────────────
@@ -281,6 +304,10 @@ func (m tourWizardModel) Init() tea.Cmd {
 }
 
 func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyclop
+	// Preserve the phase that failed while the error screen receives redraws.
+	if m.phase != phaseError {
+		m.diagnosticStep = tourPhaseDiagnosticStep(m.phase)
+	}
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
@@ -341,8 +368,16 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 
 	case tourDiscoveryTickMsg:
 		if m.phase == phaseDiscovering {
+			if m.discoveryStarted.IsZero() {
+				// The first tick arrives after USB setup and any sudo prompt.
+				m.discoveryStarted = time.Now()
+			}
 			return m, m.cmdDiscoveryCheck()
 		}
+		return m, nil
+	case tourDiscoveryErrorMsg:
+		m.err = msg.err
+		m.phase = phaseError
 		return m, nil
 
 	case tourDiscoveryFoundMsg:
@@ -357,6 +392,11 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 			m.phase = phaseError
 			return m, nil
 		}
+		m.installedByTour = true
+		if msg.native {
+			m.phase = phaseExistingDeviceScan
+			return m, scanLANDevicesCmd()
+		}
 		m.phase = phaseBootInstructions
 		return m, nil
 
@@ -366,7 +406,25 @@ func (m tourWizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:cyc
 			m.phase = phaseError
 			return m, nil
 		}
-		m.phase = phaseCloud
+		m.phase = phaseSampleReadiness
+		return m, m.cmdSampleReadiness()
+	case tourSampleReadyMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.phase = phaseError
+		} else {
+			m.phase = phaseCloud
+		}
+		return m, nil
+	case tourSampleCreatedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.phase = phaseError
+			return m, nil
+		}
+		m.projectPath, m.projectID = msg.path, msg.id
+		tourStage(m.ctx, "physical", "project_ready", "completed", nil, "project")
+		m.phase = phaseCreateProject
 		return m, nil
 
 	case tourAICheckDoneMsg:
@@ -492,6 +550,15 @@ func (m tourWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleWifiNetworkPickerKey(key)
 	case phaseReadyToInstall:
 		return m.handleReadyToInstallKey(key)
+	case phaseNativeInstall:
+		if key == "enter" || key == " " {
+			m.phase = phaseInstalling
+			return m, m.cmdNativeOSInstall()
+		}
+		if key == "q" || key == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m, nil
 	case phaseBootInstructions:
 		return m.handleBootInstructionsKey(key)
 	case phaseDeviceFound:
@@ -513,7 +580,7 @@ func (m tourWizardModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		// Spinner/async phases (loading, scanning, installing, discovering)
 		// accept only ctrl+c to abort.
-		if key == "ctrl+c" {
+		if key == "ctrl+c" || key == "q" {
 			return m, tea.Quit
 		}
 	}
@@ -538,7 +605,8 @@ func (m *tourWizardModel) moveMenuCursor(key string, count int) {
 func (m tourWizardModel) handleWelcomeKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter", " ":
-		return m, m.cmdCheckAITools()
+		m.phase = phaseLoadDevices
+		return m, loadDevicesCmd()
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
@@ -560,6 +628,7 @@ func (m tourWizardModel) handleDeviceListKey(key string) (tea.Model, tea.Cmd) {
 		if m.deviceCursor < len(m.devices) {
 			dev := m.devices[m.deviceCursor]
 			m.selected = &dev
+			tourStage(m.ctx, "physical", "target_selected", "completed", nil, "select_target")
 			m.useNVMe = deviceUsesNVMe(dev.Key)
 			m.phase = phaseOSInstalled
 			m.menuCursor = 0
@@ -583,6 +652,10 @@ func (m tourWizardModel) handleOSInstalledKey(key string) (tea.Model, tea.Cmd) {
 			return m, scanLANDevicesCmd()
 		}
 		// Need to install
+		if tourNeedsNativeInstaller(m.selected) {
+			m.phase = phaseNativeInstall
+			return m, nil
+		}
 		m.phase = phaseStorageGuide
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -610,7 +683,10 @@ func (m tourWizardModel) handleExistingDevicePickerKey(key string) (tea.Model, t
 			m.foundAddr = preferredLANAddress(dev)
 			m.foundName = dev.DisplayName
 			m.targetName = strings.TrimSuffix(dev.Hostname, ".local")
-			m.phase = phaseDeviceFound
+			m.hostname = m.foundAddr
+			m.phase = phaseDiscovering
+			m.discoveryStarted = time.Now()
+			return m, m.cmdDiscoveryCheck()
 		} else {
 			// "Enter manually" option at bottom of list
 			m.phase = phaseEnterHostname
@@ -781,6 +857,7 @@ func (m tourWizardModel) handleWifiNetworkPickerKey(key string) (tea.Model, tea.
 func (m tourWizardModel) handleReadyToInstallKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter", " ":
+		m.phase = phaseInstalling
 		return m, m.cmdRunOSInstall()
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -792,7 +869,8 @@ func (m tourWizardModel) handleBootInstructionsKey(key string) (tea.Model, tea.C
 	switch key {
 	case "enter", " ":
 		m.phase = phaseDiscovering
-		return m, m.cmdDiscoveryCheck()
+		m.discoveryStarted = time.Time{}
+		return m, m.cmdHardwareDiscoveryStart()
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
@@ -816,7 +894,10 @@ func (m tourWizardModel) handleCreateProjectPromptKey(key string) (tea.Model, te
 	case "enter", " ":
 		if m.menuCursor == 0 {
 			m.phase = phaseTemplateLoading
-			return m, fetchTourTemplatesCmd()
+			return m, func() tea.Msg {
+				err := m.createPythonProject()
+				return tourSampleCreatedMsg{path: m.projectPath, id: m.projectID, err: err}
+			}
 		}
 		// Skip deploying a sample app — finish the tour. AI-tooling setup was
 		// already offered at the start, so there's nothing left to do here.
@@ -861,6 +942,7 @@ func (m tourWizardModel) handleTemplatePickerKey(key string) (tea.Model, tea.Cmd
 func (m tourWizardModel) handleCreateProjectKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "enter", " ":
+		m.phase = phaseRunProject
 		return m, m.cmdRunProject()
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -1074,6 +1156,10 @@ func (m tourWizardModel) View() string {
 		body = m.viewCloud(inner)
 	case phaseError:
 		body = m.viewError(inner)
+	case phaseNativeInstall:
+		body = wizTitleStyle.Render("Install your Jetson developer kit") + "\n\n" + wizBodyStyle.Width(inner).Render("Use the developer kit's USB data/recovery port and power supply. The installer will explain recovery mode, ask for storage, and confirm what will be erased. Custom robot carriers should keep their vendor OS and use the Agent installation path instead.\n\nAfter installation, power on the device and select it from the discovery list. No external drive adapter is required for full recovery.") + "\n\n" + wizHintStyle.Render("Enter to open the board-specific installer · q to exit")
+	case phaseSampleReadiness:
+		body = wizSubStyle.Render("Waiting for the sample's HTTP response (up to 45 seconds)…")
 	case phaseDone:
 		return ""
 	default:
@@ -1088,13 +1174,12 @@ func (m tourWizardModel) View() string {
 func (m tourWizardModel) viewWelcome(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizTitleStyle.Render("Welcome to Wendy") + "\n")
-	sb.WriteString(wizSubStyle.Render("Let's get you set up from scratch — takes about 5 minutes.") + "\n\n")
+	sb.WriteString(wizSubStyle.Render("Set up a physical device. Downloads and first boot can take several minutes.") + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		"This wizard will:\n"+
-			"  1. Connect your AI coding assistant (if installed)\n"+
-			"  2. Flash WendyOS onto your device\n"+
-			"  3. Boot it and connect over the network\n"+
-			"  4. Deploy a sample Python app\n\n"+
+			"  1. Flash WendyOS onto your device\n"+
+			"  2. Boot it and verify the connection\n"+
+			"  3. Deploy and open a working sample app\n\n"+
 			"If anything goes wrong you can restart at any time with:\n") + "\n")
 	sb.WriteString("  " + wizCodeStyle.Render("wendy tour") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Press Enter to begin"))
@@ -1217,7 +1302,7 @@ func (m tourWizardModel) viewAptInstall(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizTitleStyle.Render("Step 2 — Install the Wendy Agent") + "\n")
 	sb.WriteString(wizSubStyle.Render("Run the following on your Linux device:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("curl -fsSL https://install.wendy.dev/agent.sh | bash") + "\n\n")
+	sb.WriteString("  " + wizCodeStyle.Render(linuxDesktopCommand("", "", linuxDesktopMachineLabel)) + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		"Or using APT:\n") + "\n")
 	sb.WriteString("  " + wizCodeStyle.Render("curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -") + "\n")
@@ -1584,18 +1669,25 @@ func (m tourWizardModel) viewAIMCPSetup(w int) string {
 	if len(m.mcpSetupResult) == 0 {
 		sb.WriteString(wizSubStyle.Render("Configuring…") + "\n")
 	} else {
+		restart := false
 		for _, r := range m.mcpSetupResult {
-			if r.err != nil {
+			switch {
+			case r.err != nil:
 				sb.WriteString(wizErrorStyle.Render(fmt.Sprintf("✗ %s: %v", r.tool, r.err)) + "\n")
-			} else {
+			case r.note != "":
+				sb.WriteString(wizSuccessStyle.Render(mcpSetupResultLine(r)) + "\n")
+			default:
+				restart = true
 				sb.WriteString(wizSuccessStyle.Render(fmt.Sprintf("✓ %s configured", r.tool)) + "\n")
 			}
 		}
 		sb.WriteString("\n")
-		sb.WriteString(wizBodyStyle.Width(w).Render(
-			"Restart your AI assistant to activate the Wendy MCP server.\n"+
-				"It will then have tools to list devices, manage containers,\n"+
-				"read telemetry, and more.") + "\n\n")
+		if restart {
+			sb.WriteString(wizBodyStyle.Width(w).Render(
+				"Restart your AI assistant to activate the Wendy MCP server.\n"+
+					"It will then have tools to list devices, manage containers,\n"+
+					"read telemetry, and more.") + "\n\n")
+		}
 		sb.WriteString(wizHintStyle.Render("Enter to continue"))
 	}
 	return sb.String()
@@ -1628,6 +1720,9 @@ func (m tourWizardModel) viewCloud(w int) string {
 		// Reached by skipping the sample-app deployment.
 		intro = "Your device is up and running."
 	}
+	if m.projectPath != "" {
+		sb.WriteString(wizBodyStyle.Width(w).Render("Your sample answered successfully at "+m.sampleURL()+".\n\nEdit app.py in "+m.projectPath+" and deploy again:\n  "+tourSampleRedeployCommand(runtime.GOOS, m.projectPath, m.foundAddr)+"\n\n") + "\n")
+	}
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		intro+"\n\n"+
 			"When you're ready to manage multiple devices remotely,\n"+
@@ -1643,6 +1738,14 @@ func (m tourWizardModel) viewCloud(w int) string {
 	return sb.String()
 }
 
+func tourSampleRedeployCommand(goos, projectPath, address string) string {
+	quote := shellQuoteArg
+	if goos == "windows" {
+		quote = powershellSingleQuote
+	}
+	return "wendy run --prefix " + quote(projectPath) + " --device " + quote(address) + " --detach"
+}
+
 func (m tourWizardModel) viewError(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizErrorStyle.Render("Something went wrong") + "\n\n")
@@ -1650,7 +1753,8 @@ func (m tourWizardModel) viewError(w int) string {
 		sb.WriteString(wizBodyStyle.Width(w).Render(m.err.Error()) + "\n\n")
 	}
 	sb.WriteString(wizBodyStyle.Width(w).Render("You can restart the tour at any time with:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy tour") + "\n\n")
+	sb.WriteString("  " + wizCodeStyle.Render("wendy tour --hardware") + "\n\n")
+	sb.WriteString(wizBodyStyle.Width(w).Render("If the image was already written, choose the already-installed option. For a failed sample, rerun wendy run from the project directory shown earlier.") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Press any key to exit"))
 	return sb.String()
 }
@@ -1710,18 +1814,51 @@ func (m tourWizardModel) cmdDiscoveryCheck() tea.Cmd {
 		target = strings.ToLower(m.hostname)
 	}
 	return func() tea.Msg {
-		time.Sleep(3 * time.Second)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if !m.discoveryStarted.IsZero() && time.Since(m.discoveryStarted) > 2*time.Minute {
+			return tourDiscoveryErrorMsg{err: fmt.Errorf("could not verify %q within two minutes; check power and networking, then run 'wendy discover' (accept USB setup on Linux) or 'wendy install verify --address <name-or-IP>'. Restart with 'wendy tour --hardware' and choose an already installed device", target)}
+		}
+		parent := m.ctx
+		if parent == nil {
+			parent = context.Background()
+		}
+		select {
+		case <-parent.Done():
+			return tourDiscoveryErrorMsg{err: ErrUserCancelled}
+		case <-time.After(time.Second):
+		}
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		defer cancel()
+		// A supplied address must work even when multicast discovery is blocked.
+		address := m.hostname
+		if address == "" && target != "" {
+			address = target + ".local"
+		}
+		if address != "" {
+			opts := onboarding.VerifyOptions{Address: address, Timeout: 3 * time.Second}
+			if m.installedByTour && m.selected != nil {
+				opts.OSVersion = m.selected.LatestVersion
+				opts.DeviceType = m.selected.Key
+			}
+			v, err := onboarding.Verify(ctx, opts, connectMCPDevice)
+			if err == nil && v.Verified {
+				return tourDiscoveryFoundMsg{addr: address, name: target}
+			}
+		}
 		devices, _ := discovery.DiscoverLAN(ctx, 5*time.Second)
 		for _, d := range devices {
 			name := strings.ToLower(d.DisplayName)
 			hostname := strings.ToLower(strings.TrimSuffix(d.Hostname, ".local"))
 			ipAddress := strings.ToLower(d.IPAddress)
 			if name == target || hostname == target || ipAddress == target {
-				return tourDiscoveryFoundMsg{
-					addr: preferredLANAddress(d),
-					name: d.DisplayName,
+				// Discovery is a candidate, not proof that the expected agent booted.
+				opts := onboarding.VerifyOptions{Address: preferredLANAddress(d), Timeout: 3 * time.Second}
+				if m.installedByTour && m.selected != nil {
+					opts.OSVersion = m.selected.LatestVersion
+					opts.DeviceType = m.selected.Key
+				}
+				v, e := onboarding.Verify(parent, opts, connectMCPDevice)
+				if e == nil && v.Verified {
+					return tourDiscoveryFoundMsg{addr: opts.Address, name: d.DisplayName}
 				}
 			}
 		}
@@ -1754,9 +1891,10 @@ func (m tourWizardModel) cmdRunOSInstall() tea.Cmd {
 		args = append(args, "--no-wifi")
 	}
 
-	cmd := exec.Command(exePath, args...)
+	cmd := exec.CommandContext(m.ctx, exePath, args...)
+	cmd.Env = append(os.Environ(), "WENDY_TELEMETRY_ATTEMPT_ID="+analytics.AttemptID(m.ctx), "WENDY_TELEMETRY_ENTRYPOINT=tour")
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return tourOSInstallDoneMsg{err: err}
+		return tourOSInstallDoneMsg{err: tourChildError(m.ctx, err)}
 	})
 }
 
@@ -1779,10 +1917,11 @@ func (m tourWizardModel) cmdRunProject() tea.Cmd {
 		}
 	}
 
-	cmd := exec.Command(exePath, "run", "--device", deviceAddr)
+	cmd := exec.CommandContext(m.ctx, exePath, "run", "--device", deviceAddr, "--detach")
+	cmd.Env = append(os.Environ(), "WENDY_TELEMETRY_ATTEMPT_ID="+analytics.AttemptID(m.ctx), "WENDY_TELEMETRY_ENTRYPOINT=tour")
 	cmd.Dir = m.projectPath
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return tourRunDoneMsg{err: err}
+		return tourRunDoneMsg{err: tourChildError(m.ctx, err)}
 	})
 }
 
@@ -1918,7 +2057,7 @@ func (m *tourWizardModel) createProjectFromTemplate() error {
 		}
 	}
 
-	if err := renderAndWriteTemplate(m.templateFiles, dir, appID, m.selectedTemplate, vals); err != nil {
+	if err := renderAndWriteTemplate(m.templateFiles, dir, appID, m.selectedTemplate, vals, false); err != nil {
 		return fmt.Errorf("writing template files: %w", err)
 	}
 
@@ -2017,18 +2156,96 @@ func validateDeviceNameTour(name string) error {
 // ─── command entry point ──────────────────────────────────────────────────────
 
 func newTourCmd() *cobra.Command {
-	return &cobra.Command{
+	var simulator, hardware bool
+	var project string
+	cmd := &cobra.Command{
 		Use:   "tour",
-		Short: "Interactive guided setup tour for new users",
-		Long:  "Walk through device setup, OS install, sample project deployment, and first steps.",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Short: "Walk and program a simulated robot or set up your first physical device",
+		Long:  "Watch a simulated Go2 walk, then follow an interactive guide to edit, deploy, and try your own robot app. You can also choose the physical-device setup wizard. The simulator downloads and builds its runtime on first use; subsequent runs reuse it.",
+		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
+			restoreHints := suppressTourProgressHints()
+			defer restoreHints()
+			if simulator && hardware {
+				return errors.New("choose either --simulator or --hardware")
+			}
+			if project != "" && hardware {
+				return errors.New("--project applies to --simulator")
+			}
+			if !simulator && !hardware {
+				if !isInteractiveTerminal() {
+					return errors.New("choose 'wendy tour --simulator' or run 'wendy tour --hardware' in an interactive terminal")
+				}
+				route, err := pickFromItems("What would you like to do?", []tui.PickerItem{
+					{Name: "Walk a simulated robot (recommended)", Description: "A real Go2 simulation in your browser; no hardware or cloud account", Value: "simulator", SortKey: "0"},
+					{Name: "Set up a physical device", Description: "Install WendyOS or connect an existing device", Value: "hardware", SortKey: "1"},
+				})
+				if err != nil {
+					return err
+				}
+				simulator = route == "simulator"
+			}
+			if simulator {
+				return runRobotTour(cmd, project)
+			}
 			if !isInteractiveTerminal() {
 				return fmt.Errorf("wendy tour requires an interactive terminal")
 			}
+			ctx, cancel := context.WithCancel(analytics.WithEntrypoint(analytics.WithAttempt(cmd.Context()), "tour"))
+			defer cancel()
+			step := "prepare"
+			tourStage(ctx, "physical", "journey_started", "started", nil, "prepare")
+			defer func() { tourStage(ctx, "physical", "journey_completed", tourOutcome(runErr), runErr, step) }()
 			m := newTourWizardModel()
 			m.root = cmd.Root()
-			_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
-			return err
+			m.ctx = ctx
+			final, err := tui.RunProgram(tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)))
+			if result, ok := final.(tourWizardModel); ok && result.diagnosticStep != "" {
+				step = result.diagnosticStep
+			}
+			if err != nil {
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return ErrUserCancelled
+				}
+				return err
+			}
+			return tourModelResult(final)
 		},
 	}
+	cmd.Flags().BoolVar(&simulator, "simulator", false, "Create or reuse a local Go2 VM, verify a bounded walk, and open its viewer")
+	cmd.Flags().BoolVar(&hardware, "hardware", false, "Set up a physical device without commanding robot motion")
+	cmd.Flags().StringVar(&project, "project", "", "Robot tour starter directory (default ~/Documents/wendy-robot-tour)")
+	return cmd
+}
+
+func tourPhaseDiagnosticStep(phase tourPhase) string {
+	switch phase {
+	case phaseLoadDevices, phaseDeviceList, phaseOSInstalled, phaseExistingDeviceScan, phaseExistingDevicePicker, phaseEnterHostname:
+		return "select_target"
+	case phaseAptInstall, phaseStorageGuide, phaseDriveWait, phaseDeviceName, phaseWifiDetect, phaseWifiQuestion, phaseWifiScanLoading, phaseWifiNetworkPicker, phaseWifiPassword, phaseWifiManualSSID, phaseReadyToInstall, phaseInstalling, phaseNativeInstall:
+		return "provision"
+	case phaseBootInstructions, phaseDiscovering, phaseDeviceFound:
+		return "first_boot"
+	case phaseCreateProjectPrompt, phaseTemplateLoading, phaseTemplatePicker, phaseTemplateDownloading, phaseCreateProject:
+		return "project"
+	case phaseRunProject:
+		return "deploy"
+	case phaseSampleReadiness, phaseCloud, phaseDone:
+		return "readiness"
+	default:
+		return "prepare"
+	}
+}
+
+func tourModelResult(final tea.Model) error {
+	result, ok := final.(tourWizardModel)
+	if !ok {
+		return fmt.Errorf("unexpected tour result %T", final)
+	}
+	if result.err != nil {
+		return result.err
+	}
+	if result.phase != phaseCloud && result.phase != phaseDone {
+		return ErrUserCancelled
+	}
+	return nil
 }

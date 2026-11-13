@@ -308,7 +308,7 @@ var errNoIdentity = errors.New("data transfer worker: the agent holds no enrolle
 // chain and key that provisioning persists: StartACMEProvisioning enrols the
 // device against pki-core over Automatic Certificate Management Environment
 // (ACME) with an External Account Binding and hands the result to
-// persistProvisioning, which writes device.pem, ca.pem and device-key.pem and
+// persistProvisioning, which writes provisioning.json and device-key.pem and
 // holds the same triple in memory; ProvisioningCerts is the read side. The
 // legacy Cloud enrolment path fills the same three fields, so a device on
 // either path presents whatever certificate it actually enrolled with and the
@@ -366,6 +366,13 @@ func (w *DataTransferWorker) Run(ctx context.Context) {
 	if w.factory == nil || w.manager == nil {
 		return
 	}
+	// Uploads are optional. Report missing configuration once, even before
+	// enrollment, and leave sealed episodes queued in the quota-bounded store.
+	if w.ingestHost == "" {
+		w.logger.Info("data transfer worker: WENDY_DATA_INGEST_URL is not set; " +
+			"episode uploads are disabled and sealed episodes stay queued on the device")
+		return
+	}
 	if w.provisioningSvc != nil {
 		for {
 			if _, _, _, enrolled := w.provisioningSvc.ProvisioningInfo(); enrolled {
@@ -377,16 +384,6 @@ func (w *DataTransferWorker) Run(ctx context.Context) {
 				return
 			}
 		}
-	}
-
-	// No endpoint means no uploads. Said once, at error level, and then the
-	// worker stops rather than dialling a host that cannot serve it: sealed
-	// episodes stay queued on the device (bounded by the store's quota and its
-	// eviction order) until the endpoint is configured and the agent restarts.
-	if w.ingestHost == "" {
-		w.logger.Error("data transfer worker: WENDY_DATA_INGEST_URL is not set; " +
-			"episode uploads are disabled and sealed episodes stay queued on the device")
-		return
 	}
 
 	wait := w.wait
@@ -529,13 +526,15 @@ func (w *DataTransferWorker) runPass(ctx context.Context) error {
 func (w *DataTransferWorker) resolveShouldUpload(mf data.Manifest) (bool, string) {
 	when := "always"
 	if name := mf.Trigger.CampaignName; name != "" {
-		if c, err := w.manager.Campaign(name); err == nil {
+		if c, err := w.manager.CampaignForUpload(name); err == nil {
 			if c.Upload.When != "" {
 				when = c.Upload.When
 			}
 		} else {
-			// Campaign plan gone (deleted after capture). The episode was queued
-			// for upload, so default to uploading it rather than stranding data.
+			// No plan and no record of one. `wendy data campaign remove` keeps a
+			// removed plan's upload policy, so this is a plan deleted by hand.
+			// The episode was queued for upload, so default to uploading it
+			// rather than stranding data.
 			w.logger.Warn("data transfer worker: campaign plan not found, defaulting to always",
 				zap.String("episode", mf.ID), zap.String("campaign", name), zap.Error(err))
 		}
@@ -565,7 +564,7 @@ func (w *DataTransferWorker) resolveShouldUpload(mf data.Manifest) (bool, string
 // episode, or 0 (unlimited) when there is no campaign or no configured cap.
 func (w *DataTransferWorker) uploadRate(mf data.Manifest) int64 {
 	if name := mf.Trigger.CampaignName; name != "" {
-		if c, err := w.manager.Campaign(name); err == nil {
+		if c, err := w.manager.CampaignForUpload(name); err == nil {
 			return c.UploadMaxRateBytes()
 		}
 	}

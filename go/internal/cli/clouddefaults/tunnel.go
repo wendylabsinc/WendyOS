@@ -2,6 +2,7 @@ package clouddefaults
 
 import (
 	"context"
+	"errors"
 	"net"
 
 	"google.golang.org/grpc"
@@ -35,10 +36,21 @@ func dialTunnel(ctx context.Context, open func(context.Context) (net.Conn, error
 		if conn != nil {
 			_ = conn.Close()
 		}
-		return nil, err
+		return nil, &tunnelDialError{reason: err}
 	}
 	return &tunnelConn{Conn: conn, cancel: cancel}, nil
 }
+
+// A tunnel authorization RPC can return a status that gRPC forbids its picker
+// from returning. Keep the reason, but hide its status from errors.As so a
+// failed dial becomes Unavailable rather than an "illegal status" Internal.
+// Like TunnelClosedError, this deliberately has no Unwrap method.
+type tunnelDialError struct {
+	reason error
+}
+
+func (e *tunnelDialError) Error() string        { return e.reason.Error() }
+func (e *tunnelDialError) Is(target error) bool { return errors.Is(e.reason, target) }
 
 type tunnelConn struct {
 	net.Conn

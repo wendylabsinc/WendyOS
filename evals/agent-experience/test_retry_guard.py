@@ -9,6 +9,9 @@ from retry_guard import RetryGuard
 
 
 ERROR = '✗ unknown command "ros2" for "wendy"'
+ENVELOPE = json.dumps({"error": {
+    "code": "cli_usage", "exit": 2, "message": 'unknown command "ros2" for "wendy"',
+    "retryable": False, "next_steps": ["Run 'wendy --help' for usage."]}})
 
 
 class RetryGuardTests(unittest.TestCase):
@@ -44,6 +47,23 @@ class RetryGuardTests(unittest.TestCase):
             path = Path(directory) / "network-events"
             path.write_text("\n".join(json.dumps({"type": "tool_result", "id": str(i),
                 "text": "connection refused: waiting for first boot"}) for i in range(10)) + "\n")
+            self.assertIsNone(RetryGuard(path, 1)())
+
+    def test_json_error_envelopes_count_like_text_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events"
+            path.write_text("\n".join(json.dumps({"type": "tool_result", "id": str(i),
+                "text": "Exit code 2\n" + ENVELOPE}) for i in range(3)) + "\n")
+            reason = RetryGuard(path)()
+            self.assertIsNotNone(reason)
+            self.assertEqual(reason["error"], 'unknown command "ros2" for "wendy"')
+            self.assertEqual(reason["completed_tools"], 3)
+            # A transient failure reported as an envelope still never trips.
+            path = Path(directory) / "network-events"
+            network = json.dumps({"error": {"code": "device_unreachable", "exit": 5,
+                "message": "Could not connect to device at 127.0.0.1:1.", "retryable": True, "next_steps": []}})
+            path.write_text("\n".join(json.dumps({"type": "tool_result", "id": str(i), "text": network})
+                for i in range(5)) + "\n")
             self.assertIsNone(RetryGuard(path, 1)())
 
     def test_runner_terminates_repeated_failures_without_steering(self):

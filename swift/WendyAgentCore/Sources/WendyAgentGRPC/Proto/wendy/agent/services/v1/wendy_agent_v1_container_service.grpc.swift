@@ -215,6 +215,19 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
                 type: .unary
             )
         }
+        /// Namespace for "GetNetworkStats" metadata.
+        public enum GetNetworkStats: Sendable {
+            /// Request type for "GetNetworkStats".
+            public typealias Input = Wendy_Agent_Services_V1_GetNetworkStatsRequest
+            /// Response type for "GetNetworkStats".
+            public typealias Output = Wendy_Agent_Services_V1_NetworkStats
+            /// Descriptor for "GetNetworkStats".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "GetNetworkStats",
+                type: .unary
+            )
+        }
         /// Namespace for "GetContainerPorts" metadata.
         public enum GetContainerPorts: Sendable {
             /// Request type for "GetContainerPorts".
@@ -280,6 +293,32 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
                 type: .unary
             )
         }
+        /// Namespace for "PrepareImage" metadata.
+        public enum PrepareImage: Sendable {
+            /// Request type for "PrepareImage".
+            public typealias Input = Wendy_Agent_Services_V1_RunContainerLayersRequest
+            /// Response type for "PrepareImage".
+            public typealias Output = Wendy_Agent_Services_V1_PrepareImageResponse
+            /// Descriptor for "PrepareImage".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "PrepareImage",
+                type: .unary
+            )
+        }
+        /// Namespace for "ValidateContainer" metadata.
+        public enum ValidateContainer: Sendable {
+            /// Request type for "ValidateContainer".
+            public typealias Input = Wendy_Agent_Services_V1_CreateContainerRequest
+            /// Response type for "ValidateContainer".
+            public typealias Output = Wendy_Agent_Services_V1_ValidateContainerResponse
+            /// Descriptor for "ValidateContainer".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyContainerService"),
+                method: "ValidateContainer",
+                type: .unary
+            )
+        }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyContainerService" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
             ListLayers.descriptor,
@@ -297,11 +336,14 @@ public enum Wendy_Agent_Services_V1_WendyContainerService: Sendable {
             RemoveVolume.descriptor,
             ListContainerStats.descriptor,
             GetResourceStats.descriptor,
+            GetNetworkStats.descriptor,
             GetContainerPorts.descriptor,
             StreamMCP.descriptor,
             QueryChunks.descriptor,
             WriteChunks.descriptor,
-            QueryLayers.descriptor
+            QueryLayers.descriptor,
+            PrepareImage.descriptor,
+            ValidateContainer.descriptor
         ]
     }
 }
@@ -544,6 +586,24 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_GetResourceStatsResponse>
 
+        /// Handle the "GetNetworkStats" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Lightweight network-only sample; does not scan containers or GPUs.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_GetNetworkStatsRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_NetworkStats` messages.
+        func getNetworkStats(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_NetworkStats>
+
         /// Handle the "GetContainerPorts" method.
         ///
         /// - Parameters:
@@ -620,6 +680,52 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_QueryLayersRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_QueryLayersResponse>
+
+        /// Handle the "PrepareImage" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+        /// > before RunContainer. The CLI starts this RPC before uploading missing
+        /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+        /// > RunContainer remains the source of truth and repeats these idempotent
+        /// > operations, so callers can fall back safely when this RPC is unavailable.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_RunContainerLayersRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_PrepareImageResponse` messages.
+        func prepareImage(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse>
+
+        /// Handle the "ValidateContainer" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > ValidateContainer makes the checks CreateContainer makes before it
+        /// > replaces an existing container of the same name (image availability,
+        /// > entitlement refusals, env, resource limits, the spec) without creating
+        /// > or replacing anything. A multi-service deploy validates every service
+        /// > before it replaces any, so one failing service leaves the whole app on
+        /// > its previous version. Agents without it return UNIMPLEMENTED, and
+        /// > callers then create service by service as before.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_CreateContainerRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_ValidateContainerResponse` messages.
+        func validateContainer(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>
     }
 
     /// Service protocol for the "wendy.agent.services.v1.WendyContainerService" service.
@@ -847,6 +953,24 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetResourceStatsResponse>
 
+        /// Handle the "GetNetworkStats" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Lightweight network-only sample; does not scan containers or GPUs.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetNetworkStatsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_NetworkStats` message.
+        func getNetworkStats(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_NetworkStats>
+
         /// Handle the "GetContainerPorts" method.
         ///
         /// - Parameters:
@@ -923,6 +1047,52 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_QueryLayersRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_QueryLayersResponse>
+
+        /// Handle the "PrepareImage" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+        /// > before RunContainer. The CLI starts this RPC before uploading missing
+        /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+        /// > RunContainer remains the source of truth and repeats these idempotent
+        /// > operations, so callers can fall back safely when this RPC is unavailable.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_RunContainerLayersRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_PrepareImageResponse` message.
+        func prepareImage(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse>
+
+        /// Handle the "ValidateContainer" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > ValidateContainer makes the checks CreateContainer makes before it
+        /// > replaces an existing container of the same name (image availability,
+        /// > entitlement refusals, env, resource limits, the spec) without creating
+        /// > or replacing anything. A multi-service deploy validates every service
+        /// > before it replaces any, so one failing service leaves the whole app on
+        /// > its previous version. Agents without it return UNIMPLEMENTED, and
+        /// > callers then create service by service as before.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_ValidateContainerResponse` message.
+        func validateContainer(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>
     }
 
     /// Simple service protocol for the "wendy.agent.services.v1.WendyContainerService" service.
@@ -1156,6 +1326,24 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_GetResourceStatsResponse
 
+        /// Handle the "GetNetworkStats" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Lightweight network-only sample; does not scan containers or GPUs.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_GetNetworkStatsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_NetworkStats` to respond with.
+        func getNetworkStats(
+            request: Wendy_Agent_Services_V1_GetNetworkStatsRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_NetworkStats
+
         /// Handle the "GetContainerPorts" method.
         ///
         /// - Parameters:
@@ -1233,6 +1421,52 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             request: Wendy_Agent_Services_V1_QueryLayersRequest,
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_QueryLayersResponse
+
+        /// Handle the "PrepareImage" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+        /// > before RunContainer. The CLI starts this RPC before uploading missing
+        /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+        /// > RunContainer remains the source of truth and repeats these idempotent
+        /// > operations, so callers can fall back safely when this RPC is unavailable.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_RunContainerLayersRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_PrepareImageResponse` to respond with.
+        func prepareImage(
+            request: Wendy_Agent_Services_V1_RunContainerLayersRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_PrepareImageResponse
+
+        /// Handle the "ValidateContainer" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > ValidateContainer makes the checks CreateContainer makes before it
+        /// > replaces an existing container of the same name (image availability,
+        /// > entitlement refusals, env, resource limits, the spec) without creating
+        /// > or replacing anything. A multi-service deploy validates every service
+        /// > before it replaces any, so one failing service leaves the whole app on
+        /// > its previous version. Agents without it return UNIMPLEMENTED, and
+        /// > callers then create service by service as before.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_ValidateContainerResponse` to respond with.
+        func validateContainer(
+            request: Wendy_Agent_Services_V1_CreateContainerRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_ValidateContainerResponse
     }
 }
 
@@ -1406,6 +1640,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.StreamingServiceProtocol
             }
         )
         router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.GetNetworkStats.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_GetNetworkStatsRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_NetworkStats>(),
+            handler: { request, context in
+                try await self.getNetworkStats(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
             forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.GetContainerPorts.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_GetContainerPortsRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_GetContainerPortsResponse>(),
@@ -1455,6 +1700,28 @@ extension Wendy_Agent_Services_V1_WendyContainerService.StreamingServiceProtocol
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_QueryLayersResponse>(),
             handler: { request, context in
                 try await self.queryLayers(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.PrepareImage.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_RunContainerLayersRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_PrepareImageResponse>(),
+            handler: { request, context in
+                try await self.prepareImage(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyContainerService.Method.ValidateContainer.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_CreateContainerRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_ValidateContainerResponse>(),
+            handler: { request, context in
+                try await self.validateContainer(
                     request: request,
                     context: context
                 )
@@ -1598,6 +1865,17 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
         return GRPCCore.StreamingServerResponse(single: response)
     }
 
+    public func getNetworkStats(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_NetworkStats> {
+        let response = try await self.getNetworkStats(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
     public func getContainerPorts(
         request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_GetContainerPortsRequest>,
         context: GRPCCore.ServerContext
@@ -1636,6 +1914,28 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_QueryLayersResponse> {
         let response = try await self.queryLayers(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func prepareImage(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse> {
+        let response = try await self.prepareImage(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func validateContainer(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse> {
+        let response = try await self.validateContainer(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -1873,6 +2173,19 @@ extension Wendy_Agent_Services_V1_WendyContainerService.SimpleServiceProtocol {
         )
     }
 
+    public func getNetworkStats(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_NetworkStats> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_NetworkStats>(
+            message: try await self.getNetworkStats(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
     public func getContainerPorts(
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetContainerPortsRequest>,
         context: GRPCCore.ServerContext
@@ -1935,6 +2248,32 @@ extension Wendy_Agent_Services_V1_WendyContainerService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_QueryLayersResponse> {
         return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_QueryLayersResponse>(
             message: try await self.queryLayers(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func prepareImage(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse>(
+            message: try await self.prepareImage(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func validateContainer(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>(
+            message: try await self.validateContainer(
                 request: request.message,
                 context: context
             ),
@@ -2244,6 +2583,29 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_GetResourceStatsResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
 
+        /// Call the "GetNetworkStats" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Lightweight network-only sample; does not scan containers or GPUs.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetNetworkStatsRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetNetworkStatsRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_NetworkStats` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getNetworkStats<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_NetworkStats>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_NetworkStats>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
         /// Call the "GetContainerPorts" method.
         ///
         /// - Parameters:
@@ -2344,6 +2706,62 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_QueryLayersResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_QueryLayersResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "PrepareImage" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+        /// > before RunContainer. The CLI starts this RPC before uploading missing
+        /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+        /// > RunContainer remains the source of truth and repeats these idempotent
+        /// > operations, so callers can fall back safely when this RPC is unavailable.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_RunContainerLayersRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_RunContainerLayersRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_PrepareImageResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func prepareImage<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_PrepareImageResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_PrepareImageResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ValidateContainer" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > ValidateContainer makes the checks CreateContainer makes before it
+        /// > replaces an existing container of the same name (image availability,
+        /// > entitlement refusals, env, resource limits, the spec) without creating
+        /// > or replacing anything. A multi-service deploy validates every service
+        /// > before it replaces any, so one failing service leaves the whole app on
+        /// > its previous version. Agents without it return UNIMPLEMENTED, and
+        /// > callers then create service by service as before.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_CreateContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ValidateContainerResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func validateContainer<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ValidateContainerResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -2804,6 +3222,40 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             )
         }
 
+        /// Call the "GetNetworkStats" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Lightweight network-only sample; does not scan containers or GPUs.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetNetworkStatsRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetNetworkStatsRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_NetworkStats` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getNetworkStats<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_NetworkStats>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_NetworkStats>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.GetNetworkStats.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
         /// Call the "GetContainerPorts" method.
         ///
         /// - Parameters:
@@ -2952,6 +3404,84 @@ extension Wendy_Agent_Services_V1_WendyContainerService {
             try await self.client.unary(
                 request: request,
                 descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.QueryLayers.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "PrepareImage" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+        /// > before RunContainer. The CLI starts this RPC before uploading missing
+        /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+        /// > RunContainer remains the source of truth and repeats these idempotent
+        /// > operations, so callers can fall back safely when this RPC is unavailable.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_RunContainerLayersRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_RunContainerLayersRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_PrepareImageResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func prepareImage<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_PrepareImageResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_PrepareImageResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.PrepareImage.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ValidateContainer" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > ValidateContainer makes the checks CreateContainer makes before it
+        /// > replaces an existing container of the same name (image availability,
+        /// > entitlement refusals, env, resource limits, the spec) without creating
+        /// > or replacing anything. A multi-service deploy validates every service
+        /// > before it replaces any, so one failing service leaves the whole app on
+        /// > its previous version. Agents without it return UNIMPLEMENTED, and
+        /// > callers then create service by service as before.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_CreateContainerRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ValidateContainerResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func validateContainer<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_CreateContainerRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_ValidateContainerResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyContainerService.Method.ValidateContainer.descriptor,
                 serializer: serializer,
                 deserializer: deserializer,
                 options: options,
@@ -3330,6 +3860,35 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
         )
     }
 
+    /// Call the "GetNetworkStats" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Lightweight network-only sample; does not scan containers or GPUs.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetNetworkStatsRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getNetworkStats<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_NetworkStats>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getNetworkStats(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_GetNetworkStatsRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_NetworkStats>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
     /// Call the "GetContainerPorts" method.
     ///
     /// - Parameters:
@@ -3455,6 +4014,74 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_QueryLayersRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_QueryLayersResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "PrepareImage" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+    /// > before RunContainer. The CLI starts this RPC before uploading missing
+    /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+    /// > RunContainer remains the source of truth and repeats these idempotent
+    /// > operations, so callers can fall back safely when this RPC is unavailable.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_RunContainerLayersRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func prepareImage<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_PrepareImageResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.prepareImage(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_RunContainerLayersRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_PrepareImageResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ValidateContainer" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > ValidateContainer makes the checks CreateContainer makes before it
+    /// > replaces an existing container of the same name (image availability,
+    /// > entitlement refusals, env, resource limits, the spec) without creating
+    /// > or replacing anything. A multi-service deploy validates every service
+    /// > before it replaces any, so one failing service leaves the whole app on
+    /// > its previous version. Agents without it return UNIMPLEMENTED, and
+    /// > callers then create service by service as before.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_CreateContainerRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func validateContainer<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.validateContainer(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_CreateContainerRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_ValidateContainerResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -3893,6 +4520,39 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
         )
     }
 
+    /// Call the "GetNetworkStats" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Lightweight network-only sample; does not scan containers or GPUs.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getNetworkStats<Result>(
+        _ message: Wendy_Agent_Services_V1_GetNetworkStatsRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_NetworkStats>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getNetworkStats(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
     /// Call the "GetContainerPorts" method.
     ///
     /// - Parameters:
@@ -4039,6 +4699,82 @@ extension Wendy_Agent_Services_V1_WendyContainerService.ClientProtocol {
             metadata: metadata
         )
         return try await self.queryLayers(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "PrepareImage" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > PrepareImage assembles chunk-backed layers and unpacks their snapshots
+    /// > before RunContainer. The CLI starts this RPC before uploading missing
+    /// > chunks, allowing device-side assembly/unpack to overlap the transfer.
+    /// > RunContainer remains the source of truth and repeats these idempotent
+    /// > operations, so callers can fall back safely when this RPC is unavailable.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func prepareImage<Result>(
+        _ message: Wendy_Agent_Services_V1_RunContainerLayersRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_PrepareImageResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.prepareImage(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ValidateContainer" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > ValidateContainer makes the checks CreateContainer makes before it
+    /// > replaces an existing container of the same name (image availability,
+    /// > entitlement refusals, env, resource limits, the spec) without creating
+    /// > or replacing anything. A multi-service deploy validates every service
+    /// > before it replaces any, so one failing service leaves the whole app on
+    /// > its previous version. Agents without it return UNIMPLEMENTED, and
+    /// > callers then create service by service as before.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func validateContainer<Result>(
+        _ message: Wendy_Agent_Services_V1_CreateContainerRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_ValidateContainerResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_CreateContainerRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.validateContainer(
             request: request,
             options: options,
             onResponse: handleResponse

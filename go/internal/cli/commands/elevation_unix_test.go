@@ -5,8 +5,12 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 )
 
 func TestThorElevationDecision(t *testing.T) {
@@ -86,14 +90,32 @@ func TestErrThorNeedsRoot(t *testing.T) {
 	if !strings.Contains(msg, "sudo wendy install --device-type "+thorDeviceType) {
 		t.Errorf("error should give the exact re-run command: %q", msg)
 	}
+	if strings.Contains(msg, "usb-setup") {
+		t.Errorf("error must not point at usb-setup, which does not install the Jetson rule: %q", msg)
+	}
+	if runtime.GOOS == "linux" && !strings.Contains(msg, cliupdate.InstallCommand("linux")) {
+		t.Errorf("linux error should point at installing the package: %q", msg)
+	}
+	if strings.Contains(msg, "udev") || strings.Contains(msg, "tee") {
+		t.Errorf("error must not ask the user to write a rule: %q", msg)
+	}
 }
 
 func TestThorElevationReason(t *testing.T) {
 	if !strings.Contains(thorElevationReason("darwin"), "root on macOS") {
 		t.Errorf("darwin reason should mention macOS root: %q", thorElevationReason("darwin"))
 	}
-	if !strings.Contains(thorElevationReason("linux"), "wendy device usb-setup") {
-		t.Errorf("linux reason should mention the udev-setup tip: %q", thorElevationReason("linux"))
+	linux := thorElevationReason("linux")
+	if !strings.Contains(linux, cliupdate.InstallCommand("linux")) {
+		t.Errorf("linux reason should point at installing the package: %q", linux)
+	}
+	if strings.Contains(linux, "udev") || strings.Contains(linux, "tee") {
+		t.Errorf("linux reason must not ask the user to write a rule: %q", linux)
+	}
+	// `wendy device usb-setup` configures the USB-C network link, not the
+	// Jetson recovery rule, so the hint must not send people there.
+	if strings.Contains(linux, "usb-setup") {
+		t.Errorf("linux reason must not point at usb-setup: %q", linux)
 	}
 }
 
@@ -126,6 +148,71 @@ func TestBuildSudoReexecArgs(t *testing.T) {
 	got = buildSudoReexecArgs(self, []string{"install", "--device-type=" + thorDeviceType})
 	if n := strings.Count(strings.Join(got, " "), "--device-type"); n != 1 {
 		t.Errorf("device-type duplicated for equals form: %v", got)
+	}
+}
+
+// sudo's env_reset drops variables it isn't told to keep. Losing
+// WENDY_ANALYTICS made the elevated run treat an opted-out user as a first run:
+// it sent analytics and wrote a root-owned ~/.wendy/config.json. Losing
+// WENDY_CONFIG_DIR sent its writes to $HOME/.wendy instead.
+func TestThorSudoPreserveEnvKeepsWendySettings(t *testing.T) {
+	kept := strings.Split(strings.TrimPrefix(thorSudoPreserveEnv, "--preserve-env="), ",")
+	for _, want := range []string{"WENDY_ANALYTICS", "WENDY_CONFIG_DIR", "WENDY_TELEMETRY_ATTEMPT_ID", "WENDY_TELEMETRY_ENTRYPOINT", "WENDY_DESKTOP_INSTALLER"} {
+		found := false
+		for _, k := range kept {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s is not preserved through sudo: %q", want, thorSudoPreserveEnv)
+		}
+	}
+}
+
+func TestThorTelemetryEnvPreservesAttemptAcrossElevation(t *testing.T) {
+	for _, inherited := range [][]string{
+		{"HOME=/home/alice", "WENDY_TELEMETRY_ENTRYPOINT=tour"},
+		{"HOME=/home/alice", "WENDY_TELEMETRY_ENTRYPOINT=tour", "WENDY_TELEMETRY_ATTEMPT_ID=invalid"},
+		{"HOME=/home/alice", "WENDY_TELEMETRY_ENTRYPOINT=tour", "WENDY_TELEMETRY_ATTEMPT_ID=invalid", "WENDY_TELEMETRY_ATTEMPT_ID=duplicate"},
+	} {
+		got := thorTelemetryEnv(inherited)
+		if !containsEnv(got, "HOME=/home/alice") || !containsEnv(got, "WENDY_TELEMETRY_ENTRYPOINT=tour") {
+			t.Fatalf("unrelated environment was changed: %v", got)
+		}
+		attempts := 0
+		for _, entry := range got {
+			if strings.HasPrefix(entry, "WENDY_TELEMETRY_ATTEMPT_ID=") {
+				attempts++
+				if want := "WENDY_TELEMETRY_ATTEMPT_ID=" + analytics.AttemptID(nil); entry != want {
+					t.Errorf("attempt env = %q, want %q", entry, want)
+				}
+			}
+		}
+		if attempts != 1 {
+			t.Errorf("expected one attempt ID, got %d in %v", attempts, got)
+		}
+	}
+}
+
+// The elevated run hands what it creates back to the user when it exits, but
+// not if it's killed. The directories it writes into are created beforehand, as
+// the user, so a killed flash can't leave ~/.cache itself root-owned.
+func TestCreateElevatedRunDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	base, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createElevatedRunDirs()
+
+	for _, dir := range []string{filepath.Join(base, "wendy", "os-images"), filepath.Join(base, "wendy", "logs")} {
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			t.Errorf("%s was not created before elevating: %v", dir, err)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -12,6 +13,7 @@ import (
 type InterfaceType string
 
 const (
+	InterfaceMesh      InterfaceType = "mesh"
 	InterfaceUSB       InterfaceType = "usb"
 	InterfaceEthernet  InterfaceType = "ethernet"
 	InterfaceLAN       InterfaceType = "lan"
@@ -47,12 +49,23 @@ func (d USBDevice) HumanReadable() string {
 	return strings.TrimSpace(s)
 }
 
+// ProbeFailure is a diagnostic from this scan, never persisted in discovery's
+// address cache. Code is machine-readable; message and next steps are safe to
+// display without exposing raw transport errors.
+type ProbeFailure struct {
+	Code      string   `json:"code"`
+	Message   string   `json:"message"`
+	NextSteps []string `json:"next_steps,omitempty"`
+}
+
 // LANDevice represents a device discovered via mDNS on the local network.
 type LANDevice struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Hostname    string `json:"hostname"`
-	IPAddress   string `json:"ipAddress,omitempty"`
+	Mesh         bool          `json:"mesh,omitempty"`
+	ProbeFailure *ProbeFailure `json:"probeFailure,omitempty"`
+	ID           string        `json:"id"`
+	DisplayName  string        `json:"displayName"`
+	Hostname     string        `json:"hostname"`
+	IPAddress    string        `json:"ipAddress,omitempty"`
 	// Addresses is the union of every IP this device was seen at across
 	// interfaces and sightings (e.g. a WiFi IPv4, a USB link-local, an IPv6),
 	// IPAddress-first. It lets the dial ladder try every reachable path when
@@ -61,15 +74,24 @@ type LANDevice struct {
 	Addresses []string `json:"addresses,omitempty"`
 	Port      int      `json:"port"`
 	IsMTLS    bool     `json:"isMTLS,omitempty"`
-	// AssetID is the cloud asset ID from the assetid TXT record; 0 when the
-	// device is unprovisioned or pre-mesh.
+	// WiredAddresses are the cable addresses from the device's wired TXT
+	// record that have answered mDNS as the device, in this discovery session
+	// or an earlier one; a one-off browse carries the record as advertised.
+	WiredAddresses []string `json:"wiredAddresses,omitempty"`
+	// AssetID is the legacy cloud asset ID from the assetid TXT record; 0 when
+	// absent, including devices enrolled directly with a PKI identity.
 	AssetID int32 `json:"assetId,omitempty"`
 	// MeshName is the device's friendly mesh name from the `name` TXT record
 	// (e.g. "brave-dolphin"); empty when unadvertised or pre-mesh.
 	MeshName string `json:"meshName,omitempty"`
-	// OrgID is the device's cloud organization id from the `orgid` TXT record;
-	// 0 when unprovisioned or pre-mesh.
+	// OrgID is the legacy cloud organization id from the `orgid` TXT record;
+	// 0 when absent, including devices enrolled directly with a PKI identity.
 	OrgID int32 `json:"orgId,omitempty"`
+	// TenantUUID is the advertised PKI tenant. It is a discovery hint, not a
+	// verified identity; authenticate the certificate before authorizing access.
+	TenantUUID string `json:"tenantUuid,omitempty"`
+	// PrincipalURI is the advertised device identity. TLS must verify it.
+	PrincipalURI string `json:"principalUri,omitempty"`
 	// Sensorlink is true when Caps contains "sensors" (from the `caps=` TXT
 	// record, or the legacy `sensorlink=true` TXT record it supersedes),
 	// meaning the device can act as a remote sensor source for pairing.
@@ -179,6 +201,8 @@ func (d EthernetInterface) HumanReadable() string {
 
 // DevicesCollection holds all discovered devices across interface types.
 type DevicesCollection struct {
+	MeshDevices        []MeshDevice        `json:"meshDevices,omitempty"`
+	MeshDiscovery      *MeshDiscoveryState `json:"meshDiscovery,omitempty"`
 	USBDevices         []USBDevice         `json:"usbDevices"`
 	LANDevices         []LANDevice         `json:"lanDevices"`
 	BluetoothDevices   []BluetoothDevice   `json:"bluetoothDevices"`
@@ -211,10 +235,13 @@ type DiscoveredDevice struct {
 	// IsMTLS is copied from LAN.IsMTLS when a LAN sighting is merged in; false
 	// when the device has no LAN sighting.
 	IsMTLS bool
-	// AssetID and OrgID are copied from the LAN sighting's cloud asset/org TXT
-	// records; zero when the device has no LAN sighting or is unprovisioned.
+	// AssetID and OrgID are copied from the LAN sighting's legacy cloud
+	// asset/org TXT records; zero when those records are absent.
 	AssetID int32
 	OrgID   int32
+	// TenantUUID is copied from the LAN sighting's advertised PKI tenant.
+	TenantUUID   string
+	PrincipalURI string
 	// IPAddress is copied from the LAN sighting; empty when the device has no
 	// LAN sighting.
 	IPAddress string
@@ -224,6 +251,7 @@ type DiscoveredDevice struct {
 	// may try.
 	Addresses []string
 
+	Mesh      *MeshDevice
 	LAN       *LANDevice
 	Bluetooth *BluetoothDevice
 	Externals []*ExternalDevice
@@ -233,18 +261,28 @@ type DiscoveredDevice struct {
 // e.g. "LAN", "BLE", "USB", "LAN, BLE", "LAN, USB", ...
 func (d *DiscoveredDevice) ConnectionTypes() string {
 	var types []string
+	if d.Mesh != nil {
+		if d.Mesh.Platform == "Lite" {
+			types = append(types, "WendyNet (Lite)")
+		} else {
+			types = append(types, "WendyNet")
+		}
+	}
 	if d.LAN != nil {
-		types = append(types, "LAN")
+		if d.LAN.Mesh {
+			types = append(types, "Mesh")
+		} else {
+			types = append(types, "LAN")
+		}
 	}
 	if d.Bluetooth != nil {
-		if d.Bluetooth.IsWendyAgent() {
-			types = append(types, "BLE")
-		} else {
-			types = append(types, "BLE (Lite)")
-		}
+		types = append(types, "BLE")
 	}
 	for _, ext := range d.Externals {
 		if ct := ext.ConnectionType(); ct != "" {
+			if ct == "Mesh" {
+				ct = "WendyNet"
+			}
 			if ext.ProviderKey == "wendy-lite" {
 				types = append(types, ct+" (Lite)")
 			} else {
@@ -255,10 +293,26 @@ func (d *DiscoveredDevice) ConnectionTypes() string {
 	return strings.Join(types, ", ")
 }
 
+// DisplayOS identifies Lite devices even when discovery supplies no OS metadata.
+func (d *DiscoveredDevice) DisplayOS() string {
+	if d.WendyLite || (d.LAN != nil && d.LAN.WendyLite) || (d.Bluetooth != nil && !d.Bluetooth.IsWendyAgent()) {
+		return "Wendy Lite"
+	}
+	for _, ext := range d.Externals {
+		if ext.ProviderKey == "wendy-lite" {
+			return "Wendy Lite"
+		}
+	}
+	return d.OS
+}
+
 // Address returns the best available address for display purposes.
 // Prefers the LAN IP/hostname over the BLE address.
 func (d *DiscoveredDevice) Address() string {
 	if d.LAN != nil {
+		if d.LAN.Mesh {
+			return d.LAN.Hostname
+		}
 		if d.LAN.IPAddress != "" {
 			return d.LAN.IPAddress
 		}
@@ -271,6 +325,9 @@ func (d *DiscoveredDevice) Address() string {
 		if ip := ext.ConnectionInfo["ip"]; ip != "" {
 			return ip
 		}
+	}
+	if d.Mesh != nil {
+		return "-"
 	}
 	if d.Bluetooth != nil {
 		return d.Bluetooth.Address
@@ -297,10 +354,12 @@ func normalizeHostKey(s string) string {
 }
 
 // MergedDevices returns a deduplicated slice of DiscoveredDevice by merging LAN,
-// Bluetooth, and wendy-lite entries that refer to the same physical device. Two
-// transports match when they share a normalized hostname (the stable identity
-// BLE and mDNS both carry) or, failing that, a case-insensitive DisplayName. LAN
-// metadata takes precedence; other transports backfill missing fields.
+// Bluetooth, and wendy-lite entries that refer to the same physical device. LAN
+// and Bluetooth entries match when they share a normalized hostname (the stable
+// identity BLE and mDNS both carry) or, failing that, a case-insensitive
+// DisplayName. wendy-lite entries match only each other, by
+// ExternalDevice.LiteDedupID — the same key the device picker dedups them on.
+// LAN metadata takes precedence; other transports backfill missing fields.
 func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 	// A device is indexed under every key it can be matched by (hostname and
 	// display name), so a later transport finds it regardless of which key it
@@ -342,6 +401,8 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 			IsMTLS:          d.IsMTLS,
 			AssetID:         d.AssetID,
 			OrgID:           d.OrgID,
+			TenantUUID:      d.TenantUUID,
+			PrincipalURI:    d.PrincipalURI,
 			IPAddress:       d.IPAddress,
 			Addresses:       d.Addresses,
 			LAN:             d,
@@ -386,14 +447,21 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 		order = append(order, merged)
 	}
 
-	// Merge wendy-lite external devices by name. These represent the same
-	// physical Wendy Lite hardware discovered via mDNS (WiFi) instead of BLE.
+	// Merge wendy-lite external devices that are one board seen over USB, LAN
+	// and BLE. The key is LiteDedupID, compared exactly, not the display name:
+	// two boards can share a name.
+	// The prefix keeps it from ever matching a LAN or BLE key. A row with no id
+	// (an unflashed board) is keyed by its connection so it stands alone.
 	for i := range c.ExternalDevices {
 		d := &c.ExternalDevices[i]
 		if d.ProviderKey != "wendy-lite" {
 			continue
 		}
-		if existing := lookup(strings.ToLower(d.DisplayName)); existing != nil {
+		key := "wendy-lite-connection:" + d.ID
+		if id := d.LiteDedupID(); id != "" {
+			key = "wendy-lite:" + id
+		}
+		if existing := lookup(key); existing != nil {
 			existing.Externals = append(existing.Externals, d)
 			sort.Slice(existing.Externals, func(i, j int) bool {
 				return existing.Externals[i].Rank() > existing.Externals[j].Rank()
@@ -408,10 +476,48 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 			CPUArchitecture: d.CPUArchitecture,
 			Externals:       []*ExternalDevice{d},
 		}
-		register(merged, strings.ToLower(d.DisplayName))
+		register(merged, key)
 		order = append(order, merged)
 	}
 
+	// Mesh never matches an unsigned display name, hostname, or bare UUID.
+	for i := range c.MeshDevices {
+		mesh := &c.MeshDevices[i]
+		principal := CanonicalDevicePrincipal(mesh.Principal)
+		if principal == "" {
+			continue
+		}
+		var existing *DiscoveredDevice
+		for _, d := range order {
+			if CanonicalDevicePrincipal(d.PrincipalURI) == principal {
+				existing = d
+				break
+			}
+			for _, ext := range d.Externals {
+				if ext.ConnectionInfo["tenantId"] == mesh.Tenant && ext.LiteDedupID() == mesh.Device {
+					existing = d
+					break
+				}
+			}
+			if existing != nil {
+				break
+			}
+		}
+		if existing == nil {
+			existing = &DiscoveredDevice{DisplayName: mesh.Name, PrincipalURI: principal, TenantUUID: mesh.Tenant}
+			if existing.DisplayName == "" {
+				existing.DisplayName = mesh.Device
+			}
+			order = append(order, existing)
+		}
+		existing.Mesh = mesh
+		existing.Caps = append([]string(nil), mesh.Caps...)
+		existing.Sensorlink = slices.Contains(mesh.Caps, "sensors")
+		if existing.LAN == nil {
+			existing.WendyLite = mesh.Platform == "Lite"
+			existing.IsMTLS = mesh.Transport == "mtls-v1"
+		}
+	}
 	result := make([]DiscoveredDevice, 0, len(order))
 	for _, d := range order {
 		result = append(result, *d)
@@ -421,7 +527,7 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 
 // IsEmpty returns true if no devices were found across any interface.
 func (c *DevicesCollection) IsEmpty() bool {
-	return len(c.USBDevices) == 0 &&
+	return len(c.MeshDevices) == 0 && len(c.USBDevices) == 0 &&
 		len(c.LANDevices) == 0 &&
 		len(c.BluetoothDevices) == 0 &&
 		len(c.EthernetInterfaces) == 0 &&

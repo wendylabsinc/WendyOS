@@ -11,6 +11,11 @@ in one place.
 
 ## Quick start
 
+Building the CLI requires Node.js 22 and npm on the CLI machine's `PATH` for
+the embedded UI. CI installs them on the runner. If `WENDY_E2E_CLI_ADDRESS`
+selects a remote CLI host, install them there and make them available to its
+SSH login shell. The harness checks this before building.
+
 From `swift/`:
 
 ```bash

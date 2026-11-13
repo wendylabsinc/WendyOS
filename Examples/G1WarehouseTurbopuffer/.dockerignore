@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+tests/
+# Fetched and verified inside the image instead (assets.lock.json).
+warehouse/static/three/
+models/g1/*
+!models/g1/UPSTREAM.md
+!models/g1/NOTICE

@@ -19,14 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WendyWiFiService_ListWiFiNetworks_FullMethodName         = "/wendy.agent.services.v2.WendyWiFiService/ListWiFiNetworks"
-	WendyWiFiService_ConnectToWiFi_FullMethodName            = "/wendy.agent.services.v2.WendyWiFiService/ConnectToWiFi"
-	WendyWiFiService_GetWiFiStatus_FullMethodName            = "/wendy.agent.services.v2.WendyWiFiService/GetWiFiStatus"
-	WendyWiFiService_DisconnectWiFi_FullMethodName           = "/wendy.agent.services.v2.WendyWiFiService/DisconnectWiFi"
-	WendyWiFiService_ListKnownWiFiNetworks_FullMethodName    = "/wendy.agent.services.v2.WendyWiFiService/ListKnownWiFiNetworks"
-	WendyWiFiService_SetWiFiNetworkPriority_FullMethodName   = "/wendy.agent.services.v2.WendyWiFiService/SetWiFiNetworkPriority"
-	WendyWiFiService_ReorderKnownWiFiNetworks_FullMethodName = "/wendy.agent.services.v2.WendyWiFiService/ReorderKnownWiFiNetworks"
-	WendyWiFiService_ForgetWiFiNetwork_FullMethodName        = "/wendy.agent.services.v2.WendyWiFiService/ForgetWiFiNetwork"
+	WendyWiFiService_ListWiFiNetworks_FullMethodName           = "/wendy.agent.services.v2.WendyWiFiService/ListWiFiNetworks"
+	WendyWiFiService_ConnectToWiFi_FullMethodName              = "/wendy.agent.services.v2.WendyWiFiService/ConnectToWiFi"
+	WendyWiFiService_GetWiFiStatus_FullMethodName              = "/wendy.agent.services.v2.WendyWiFiService/GetWiFiStatus"
+	WendyWiFiService_DisconnectWiFi_FullMethodName             = "/wendy.agent.services.v2.WendyWiFiService/DisconnectWiFi"
+	WendyWiFiService_DisconnectWiFiAcknowledged_FullMethodName = "/wendy.agent.services.v2.WendyWiFiService/DisconnectWiFiAcknowledged"
+	WendyWiFiService_ListKnownWiFiNetworks_FullMethodName      = "/wendy.agent.services.v2.WendyWiFiService/ListKnownWiFiNetworks"
+	WendyWiFiService_SetWiFiNetworkPriority_FullMethodName     = "/wendy.agent.services.v2.WendyWiFiService/SetWiFiNetworkPriority"
+	WendyWiFiService_ReorderKnownWiFiNetworks_FullMethodName   = "/wendy.agent.services.v2.WendyWiFiService/ReorderKnownWiFiNetworks"
+	WendyWiFiService_GetWiFiRegulatory_FullMethodName          = "/wendy.agent.services.v2.WendyWiFiService/GetWiFiRegulatory"
+	WendyWiFiService_RequestWiFiCountry_FullMethodName         = "/wendy.agent.services.v2.WendyWiFiService/RequestWiFiCountry"
+	WendyWiFiService_ForgetWiFiNetwork_FullMethodName          = "/wendy.agent.services.v2.WendyWiFiService/ForgetWiFiNetwork"
 )
 
 // WendyWiFiServiceClient is the client API for WendyWiFiService service.
@@ -37,9 +40,18 @@ type WendyWiFiServiceClient interface {
 	ConnectToWiFi(ctx context.Context, in *ConnectToWiFiRequest, opts ...grpc.CallOption) (*ConnectToWiFiResponse, error)
 	GetWiFiStatus(ctx context.Context, in *GetWiFiStatusRequest, opts ...grpc.CallOption) (*GetWiFiStatusResponse, error)
 	DisconnectWiFi(ctx context.Context, in *DisconnectWiFiRequest, opts ...grpc.CallOption) (*DisconnectWiFiResponse, error)
+	// Send begin, receive ready, then send confirm. A valid begin commits the
+	// device to attempting the disconnect. Ready acknowledges that commitment;
+	// confirm permits immediate execution. If confirmation is missing or the
+	// stream is lost, the device still proceeds within a bounded grace period.
+	// Only completed confirms the outcome; losing its reply leaves it unknown.
+	// The legacy unary RPC is unchanged.
+	DisconnectWiFiAcknowledged(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DisconnectWiFiControl, DisconnectWiFiEvent], error)
 	ListKnownWiFiNetworks(ctx context.Context, in *ListKnownWiFiNetworksRequest, opts ...grpc.CallOption) (*ListKnownWiFiNetworksResponse, error)
 	SetWiFiNetworkPriority(ctx context.Context, in *SetWiFiNetworkPriorityRequest, opts ...grpc.CallOption) (*SetWiFiNetworkPriorityResponse, error)
 	ReorderKnownWiFiNetworks(ctx context.Context, in *ReorderKnownWiFiNetworksRequest, opts ...grpc.CallOption) (*ReorderKnownWiFiNetworksResponse, error)
+	GetWiFiRegulatory(ctx context.Context, in *GetWiFiRegulatoryRequest, opts ...grpc.CallOption) (*WiFiRegulatoryStatus, error)
+	RequestWiFiCountry(ctx context.Context, in *RequestWiFiCountryRequest, opts ...grpc.CallOption) (*WiFiRegulatoryStatus, error)
 	ForgetWiFiNetwork(ctx context.Context, in *ForgetWiFiNetworkRequest, opts ...grpc.CallOption) (*ForgetWiFiNetworkResponse, error)
 }
 
@@ -91,6 +103,19 @@ func (c *wendyWiFiServiceClient) DisconnectWiFi(ctx context.Context, in *Disconn
 	return out, nil
 }
 
+func (c *wendyWiFiServiceClient) DisconnectWiFiAcknowledged(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DisconnectWiFiControl, DisconnectWiFiEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WendyWiFiService_ServiceDesc.Streams[0], WendyWiFiService_DisconnectWiFiAcknowledged_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DisconnectWiFiControl, DisconnectWiFiEvent]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WendyWiFiService_DisconnectWiFiAcknowledgedClient = grpc.BidiStreamingClient[DisconnectWiFiControl, DisconnectWiFiEvent]
+
 func (c *wendyWiFiServiceClient) ListKnownWiFiNetworks(ctx context.Context, in *ListKnownWiFiNetworksRequest, opts ...grpc.CallOption) (*ListKnownWiFiNetworksResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListKnownWiFiNetworksResponse)
@@ -121,6 +146,26 @@ func (c *wendyWiFiServiceClient) ReorderKnownWiFiNetworks(ctx context.Context, i
 	return out, nil
 }
 
+func (c *wendyWiFiServiceClient) GetWiFiRegulatory(ctx context.Context, in *GetWiFiRegulatoryRequest, opts ...grpc.CallOption) (*WiFiRegulatoryStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WiFiRegulatoryStatus)
+	err := c.cc.Invoke(ctx, WendyWiFiService_GetWiFiRegulatory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyWiFiServiceClient) RequestWiFiCountry(ctx context.Context, in *RequestWiFiCountryRequest, opts ...grpc.CallOption) (*WiFiRegulatoryStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WiFiRegulatoryStatus)
+	err := c.cc.Invoke(ctx, WendyWiFiService_RequestWiFiCountry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *wendyWiFiServiceClient) ForgetWiFiNetwork(ctx context.Context, in *ForgetWiFiNetworkRequest, opts ...grpc.CallOption) (*ForgetWiFiNetworkResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ForgetWiFiNetworkResponse)
@@ -139,9 +184,18 @@ type WendyWiFiServiceServer interface {
 	ConnectToWiFi(context.Context, *ConnectToWiFiRequest) (*ConnectToWiFiResponse, error)
 	GetWiFiStatus(context.Context, *GetWiFiStatusRequest) (*GetWiFiStatusResponse, error)
 	DisconnectWiFi(context.Context, *DisconnectWiFiRequest) (*DisconnectWiFiResponse, error)
+	// Send begin, receive ready, then send confirm. A valid begin commits the
+	// device to attempting the disconnect. Ready acknowledges that commitment;
+	// confirm permits immediate execution. If confirmation is missing or the
+	// stream is lost, the device still proceeds within a bounded grace period.
+	// Only completed confirms the outcome; losing its reply leaves it unknown.
+	// The legacy unary RPC is unchanged.
+	DisconnectWiFiAcknowledged(grpc.BidiStreamingServer[DisconnectWiFiControl, DisconnectWiFiEvent]) error
 	ListKnownWiFiNetworks(context.Context, *ListKnownWiFiNetworksRequest) (*ListKnownWiFiNetworksResponse, error)
 	SetWiFiNetworkPriority(context.Context, *SetWiFiNetworkPriorityRequest) (*SetWiFiNetworkPriorityResponse, error)
 	ReorderKnownWiFiNetworks(context.Context, *ReorderKnownWiFiNetworksRequest) (*ReorderKnownWiFiNetworksResponse, error)
+	GetWiFiRegulatory(context.Context, *GetWiFiRegulatoryRequest) (*WiFiRegulatoryStatus, error)
+	RequestWiFiCountry(context.Context, *RequestWiFiCountryRequest) (*WiFiRegulatoryStatus, error)
 	ForgetWiFiNetwork(context.Context, *ForgetWiFiNetworkRequest) (*ForgetWiFiNetworkResponse, error)
 	mustEmbedUnimplementedWendyWiFiServiceServer()
 }
@@ -165,6 +219,9 @@ func (UnimplementedWendyWiFiServiceServer) GetWiFiStatus(context.Context, *GetWi
 func (UnimplementedWendyWiFiServiceServer) DisconnectWiFi(context.Context, *DisconnectWiFiRequest) (*DisconnectWiFiResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DisconnectWiFi not implemented")
 }
+func (UnimplementedWendyWiFiServiceServer) DisconnectWiFiAcknowledged(grpc.BidiStreamingServer[DisconnectWiFiControl, DisconnectWiFiEvent]) error {
+	return status.Error(codes.Unimplemented, "method DisconnectWiFiAcknowledged not implemented")
+}
 func (UnimplementedWendyWiFiServiceServer) ListKnownWiFiNetworks(context.Context, *ListKnownWiFiNetworksRequest) (*ListKnownWiFiNetworksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListKnownWiFiNetworks not implemented")
 }
@@ -173,6 +230,12 @@ func (UnimplementedWendyWiFiServiceServer) SetWiFiNetworkPriority(context.Contex
 }
 func (UnimplementedWendyWiFiServiceServer) ReorderKnownWiFiNetworks(context.Context, *ReorderKnownWiFiNetworksRequest) (*ReorderKnownWiFiNetworksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReorderKnownWiFiNetworks not implemented")
+}
+func (UnimplementedWendyWiFiServiceServer) GetWiFiRegulatory(context.Context, *GetWiFiRegulatoryRequest) (*WiFiRegulatoryStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWiFiRegulatory not implemented")
+}
+func (UnimplementedWendyWiFiServiceServer) RequestWiFiCountry(context.Context, *RequestWiFiCountryRequest) (*WiFiRegulatoryStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestWiFiCountry not implemented")
 }
 func (UnimplementedWendyWiFiServiceServer) ForgetWiFiNetwork(context.Context, *ForgetWiFiNetworkRequest) (*ForgetWiFiNetworkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForgetWiFiNetwork not implemented")
@@ -270,6 +333,13 @@ func _WendyWiFiService_DisconnectWiFi_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyWiFiService_DisconnectWiFiAcknowledged_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(WendyWiFiServiceServer).DisconnectWiFiAcknowledged(&grpc.GenericServerStream[DisconnectWiFiControl, DisconnectWiFiEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WendyWiFiService_DisconnectWiFiAcknowledgedServer = grpc.BidiStreamingServer[DisconnectWiFiControl, DisconnectWiFiEvent]
+
 func _WendyWiFiService_ListKnownWiFiNetworks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListKnownWiFiNetworksRequest)
 	if err := dec(in); err != nil {
@@ -320,6 +390,42 @@ func _WendyWiFiService_ReorderKnownWiFiNetworks_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WendyWiFiServiceServer).ReorderKnownWiFiNetworks(ctx, req.(*ReorderKnownWiFiNetworksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyWiFiService_GetWiFiRegulatory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWiFiRegulatoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyWiFiServiceServer).GetWiFiRegulatory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyWiFiService_GetWiFiRegulatory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyWiFiServiceServer).GetWiFiRegulatory(ctx, req.(*GetWiFiRegulatoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyWiFiService_RequestWiFiCountry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestWiFiCountryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyWiFiServiceServer).RequestWiFiCountry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyWiFiService_RequestWiFiCountry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyWiFiServiceServer).RequestWiFiCountry(ctx, req.(*RequestWiFiCountryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -378,10 +484,25 @@ var WendyWiFiService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WendyWiFiService_ReorderKnownWiFiNetworks_Handler,
 		},
 		{
+			MethodName: "GetWiFiRegulatory",
+			Handler:    _WendyWiFiService_GetWiFiRegulatory_Handler,
+		},
+		{
+			MethodName: "RequestWiFiCountry",
+			Handler:    _WendyWiFiService_RequestWiFiCountry_Handler,
+		},
+		{
 			MethodName: "ForgetWiFiNetwork",
 			Handler:    _WendyWiFiService_ForgetWiFiNetwork_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "DisconnectWiFiAcknowledged",
+			Handler:       _WendyWiFiService_DisconnectWiFiAcknowledged_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "wendy/agent/services/v2/wifi_service.proto",
 }

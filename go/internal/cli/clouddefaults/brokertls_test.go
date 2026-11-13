@@ -1,6 +1,7 @@
 package clouddefaults
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,10 +9,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
+	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/credentials"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -190,48 +195,108 @@ func TestBrokerTLSConfig_PublicCA_NoPinning(t *testing.T) {
 	}
 }
 
-// TestBrokerTLSConfig_NonStandardPort_PinsWendyCA covers the local/on-prem
-// broker path: since these endpoints present a cert signed by the Wendy CA
-// rather than a public CA, hostname verification is skipped in favor of
-// pinning the chain to cert.PemCertificateChain via VerifyConnection. This
-// drives that callback directly with real certificates rather than mocking
-// it, so it also exercises the actual x509 chain-verification logic.
-func TestBrokerTLSConfig_NonStandardPort_PinsWendyCA(t *testing.T) {
+// serverCert mints a server-auth leaf signed by ca for the given SANs, as the
+// tls.Certificate a broker would present.
+func (ca *testCA) serverCert(t *testing.T, serial int64, dnsNames []string, ips []net.IP) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen server key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: "broker"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     dnsNames,
+		IPAddresses:  ips,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// brokerHandshake runs a real TLS handshake from cfg, through gRPC's TLS
+// credentials (which set ServerName from the dial target exactly as a broker
+// dial does), against a local server presenting serverCert.
+func brokerHandshake(t *testing.T, cfg *tls.Config, serverCert tls.Certificate) error {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{serverCert}, NextProtos: []string{"h2"}})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_ = c.(*tls.Conn).Handshake()
+	}()
+
+	addr := ln.Addr().String()
+	raw, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer raw.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := credentials.NewTLS(cfg).ClientHandshake(ctx, addr, raw)
+	if err == nil {
+		conn.Close()
+	}
+	return err
+}
+
+// TestBrokerTLSConfig_NonStandardPort_VerifiesHostname covers the
+// local/on-prem broker path (WDY-3756): the chain must reach the Wendy CA in
+// cert.PemCertificateChain AND the leaf must be issued for the dialed host.
+// Before, non-:443 ports skipped hostname verification, so any Wendy-CA leaf
+// (e.g. another device's or service's) could stand in for the broker.
+func TestBrokerTLSConfig_NonStandardPort_VerifiesHostname(t *testing.T) {
 	certInfo, ca := testCertInfo(t)
 
-	cfg, err := BrokerTLSConfig(certInfo, "localhost:50052")
+	cfg, err := BrokerTLSConfig(certInfo, "127.0.0.1:50052")
 	if err != nil {
 		t.Fatalf("BrokerTLSConfig() error = %v, want nil", err)
 	}
-
-	if !cfg.InsecureSkipVerify {
-		t.Error("InsecureSkipVerify = false, want true for a non-standard-port broker (hostname verification is intentionally skipped)")
+	if cfg.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify = true, want standard verification on every port")
 	}
-	if cfg.VerifyConnection == nil {
-		t.Fatal("VerifyConnection is nil, want a pinning callback for a non-standard-port broker")
+	if cfg.VerifyConnection != nil {
+		t.Error("VerifyConnection is set, want standard chain + hostname verification only")
+	}
+	if cfg.RootCAs == nil {
+		t.Fatal("RootCAs is nil, want the Wendy CA pool for a non-:443 broker")
 	}
 
-	t.Run("same-CA leaf verifies", func(t *testing.T) {
-		serverLeaf := ca.leaf(t, "broker.internal", 3, x509.ExtKeyUsageServerAuth)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{serverLeaf}})
+	t.Run("trusted CA, leaf for dialed host is accepted", func(t *testing.T) {
+		err := brokerHandshake(t, cfg, ca.serverCert(t, 3, nil, []net.IP{net.ParseIP("127.0.0.1")}))
 		if err != nil {
-			t.Errorf("VerifyConnection() error = %v, want nil for a leaf signed by the pinned CA", err)
+			t.Errorf("handshake error = %v, want nil", err)
 		}
 	})
 
-	t.Run("other-CA leaf is rejected", func(t *testing.T) {
+	t.Run("trusted CA, leaf for unrelated host is rejected", func(t *testing.T) {
+		err := brokerHandshake(t, cfg, ca.serverCert(t, 4, []string{"other-device.wendy.local"}, nil))
+		var hostErr x509.HostnameError
+		if !errors.As(err, &hostErr) {
+			t.Errorf("handshake error = %v, want x509.HostnameError", err)
+		}
+	})
+
+	t.Run("untrusted CA, leaf for dialed host is rejected", func(t *testing.T) {
 		otherCA := newTestCA(t, "Unrelated CA", 10)
-		otherLeaf := otherCA.leaf(t, "broker.impostor", 11, x509.ExtKeyUsageServerAuth)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{otherLeaf}})
-		if err == nil {
-			t.Error("VerifyConnection() error = nil, want an error for a leaf signed by an untrusted CA")
-		}
-	})
-
-	t.Run("no peer certificates", func(t *testing.T) {
-		err := cfg.VerifyConnection(tls.ConnectionState{})
-		if err == nil || !strings.Contains(err.Error(), "broker presented no TLS certificate") {
-			t.Errorf("VerifyConnection() error = %v, want it to contain %q", err, "broker presented no TLS certificate")
+		err := brokerHandshake(t, cfg, otherCA.serverCert(t, 11, nil, []net.IP{net.ParseIP("127.0.0.1")}))
+		var authErr x509.UnknownAuthorityError
+		if !errors.As(err, &authErr) {
+			t.Errorf("handshake error = %v, want x509.UnknownAuthorityError", err)
 		}
 	})
 }
@@ -280,6 +345,7 @@ func TestDialBroker_NoCertificates(t *testing.T) {
 // TLS assembly (pinning vs WebPKI) is correct.
 func TestDialBroker_ReturnsLazyConn(t *testing.T) {
 	certInfo, _ := testCertInfo(t)
+	certInfo.UserID = "test-user"
 	auth := &config.AuthConfig{
 		CloudGRPC:    "localhost:50051",
 		Certificates: []config.CertificateInfo{certInfo},

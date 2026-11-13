@@ -10,6 +10,7 @@ import (
 	bubbleTable "github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // displayAddress strips a trailing numeric port from an address for display in
@@ -107,6 +108,8 @@ func formatOSNameVersion(os, version string) string {
 
 // PickerItem represents a selectable row in the device picker.
 type PickerItem struct {
+	// IdentityKey optionally joins distinct discovery paths by an exact canonical identity.
+	IdentityKey string
 	// Display columns rendered in the table.
 	Name         string
 	Description  string // optional secondary text rendered dimmed
@@ -189,6 +192,12 @@ type PickerSetMsg struct {
 // matches Key, case-insensitively like every other key comparison here. It is
 // how a discovery source takes a row back -- a LAN sighting that turned out to
 // be a local VM. An unknown key is a no-op.
+// PickerMapMsg reconciles one path owned by a discovery source without
+// deleting the other paths of merged rows. It runs synchronously on the UI owner.
+type PickerMapMsg struct {
+	Map func(PickerItem) (PickerItem, bool)
+}
+
 type PickerRemoveMsg struct {
 	Key string
 }
@@ -209,9 +218,10 @@ type PickerModel struct {
 	// If nil, 'd' is ignored.
 	OnSetDefault func(item PickerItem) (string, error)
 
-	// OnUnsetDefault is called when the user presses 'x'.
+	// OnUnsetDefault is called when the user presses 'd' on the row that is
+	// already the default, so one key both sets and clears the marker.
 	// An error preserves the previous default marker and is displayed to the user.
-	// If nil, 'x' is ignored.
+	// If nil, 'd' on the default row sets it again.
 	OnUnsetDefault func() (string, error)
 
 	// OnRemoveItem is called when the user presses 'r' on the highlighted item.
@@ -221,6 +231,14 @@ type PickerModel struct {
 	// If replacement is nil and isError is true, the row is kept unchanged.
 	// If nil, 'r' is ignored.
 	OnRemoveItem func(item PickerItem) (string, bool, *PickerItem)
+
+	// RemoveConfirmation, when set, returns the question 'r' asks before
+	// OnRemoveItem runs, such as "Remove sim and its disk? [y/N]". Only y
+	// confirms; any other key answers no. An empty question removes at once,
+	// for a row whose removal is refused or destroys nothing.
+	RemoveConfirmation func(item PickerItem) string
+	confirmText        string
+	confirmItem        *PickerItem
 
 	// OnCreateItem is called when the user presses 'c'. Returning quit=true
 	// closes the picker, which an action needing the terminal to itself must
@@ -234,9 +252,15 @@ type PickerModel struct {
 	// If nil, 'e' is ignored. Filterable pickers use 'e' as filter text instead.
 	OnEnrollItem func(item PickerItem) (flash string, quit bool)
 
-	// OnStopItem runs asynchronously when the user presses 's'. It must not
+	// OnStartItem is called when the user presses 's' on the highlighted item.
+	// Returning quit=true closes the picker, which starting a VM must do: the
+	// boot and the robot build draw their own progress, and two Bubble Tea
+	// programs cannot share a terminal. If nil, 's' is ignored.
+	OnStartItem func(item PickerItem) (flash string, isError, quit bool)
+
+	// OnStopItem runs asynchronously when the user presses 'x'. It must not
 	// mutate the model, and should honor its owner's cancellation context.
-	// Returns (flash message, isError). If nil, 's' is ignored.
+	// Returns (flash message, isError). If nil, 'x' is ignored.
 	OnStopItem   func(item PickerItem) (string, bool)
 	stoppingName string
 
@@ -252,7 +276,7 @@ type PickerModel struct {
 	OnCopyItem func(item PickerItem) string
 
 	// flashMessage is the transient status line shown below the table after
-	// an action (d/x/r/enter). Cleared on the next navigation key.
+	// an action (d/s/x/r/enter). Cleared on the next navigation key.
 	flashMessage string
 	flashIsError bool
 
@@ -266,7 +290,7 @@ type PickerModel struct {
 	// (case-insensitive), backspace edits the query, and esc clears it (esc
 	// and ctrl+c quit when the query is empty). Matched characters are
 	// highlighted in the Name column. Enabling this retargets the plain
-	// 'q'/'d'/'x' hotkeys into the filter query, so only use it for pickers
+	// 'q'/'d'/'s'/'x' hotkeys into the filter query, so only use it for pickers
 	// whose items are free-form text (e.g. WiFi SSIDs).
 	Filterable bool
 
@@ -401,6 +425,23 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyMsg:
 		key := msg.String()
+		if m.confirmItem != nil {
+			// A pending removal owns the keyboard, like the confirm line in
+			// `wendy device apps`. The prompt says [y/N]: only y removes.
+			item := *m.confirmItem
+			m.confirmItem, m.confirmText = nil, ""
+			switch key {
+			case "y", "Y":
+				m.removeItem(item)
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			default:
+				// The question's line is free again.
+				m.refreshTable()
+			}
+			return m, nil
+		}
 		switch {
 		case key == "enter":
 			visible := m.visibleItems()
@@ -409,6 +450,7 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.OnCopyItem != nil {
 					m.flashMessage = m.OnCopyItem(item)
 					m.flashIsError = false
+					m.refreshTable()
 					return m, nil
 				}
 				m.selected = &item
@@ -419,33 +461,15 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				visible := m.visibleItems()
 				if idx := m.itemIndexForRow(m.table.Cursor()); idx >= 0 && idx < len(visible) {
 					item := visible[idx]
-					dk := strings.ToLower(item.DedupKey)
-					if dk == "" {
-						dk = strings.ToLower(item.Name)
-					}
-					var err error
-					m.flashMessage, err = m.OnSetDefault(item)
-					m.flashIsError = err != nil
-					if err != nil {
-						m.flashMessage = err.Error()
+					// A toggle: 'd' on the row the marker is already on
+					// clears it, so there is no second key to learn.
+					if m.OnUnsetDefault != nil && pickerItemMatchesDefaultKey(item, m.DefaultKey) {
+						m.unsetDefault()
 					} else {
-						m.DefaultKey = dk
+						m.setDefault(item)
 					}
 					m.refreshTable()
 				}
-			}
-			return m, nil
-		case key == "x" && !m.Filterable:
-			if m.OnUnsetDefault != nil {
-				var err error
-				m.flashMessage, err = m.OnUnsetDefault()
-				m.flashIsError = err != nil
-				if err != nil {
-					m.flashMessage = err.Error()
-				} else {
-					m.DefaultKey = ""
-				}
-				m.refreshTable()
 			}
 			return m, nil
 		case key == "c" && !m.Filterable:
@@ -453,18 +477,34 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				flash, quit := m.OnCreateItem()
 				m.flashMessage = flash
 				m.flashIsError = false
+				m.refreshTable()
 				if quit {
 					return m, tea.Quit
 				}
 			}
 			return m, nil
 		case key == "s" && !m.Filterable:
+			if m.OnStartItem != nil {
+				visible := m.visibleItems()
+				if idx := m.itemIndexForRow(m.table.Cursor()); idx >= 0 && idx < len(visible) {
+					flash, isError, quit := m.OnStartItem(visible[idx])
+					m.flashMessage = flash
+					m.flashIsError = isError
+					m.refreshTable()
+					if quit {
+						return m, tea.Quit
+					}
+				}
+			}
+			return m, nil
+		case key == "x" && !m.Filterable:
 			if m.OnStopItem != nil && m.stoppingName == "" {
 				visible := m.visibleItems()
 				if idx := m.itemIndexForRow(m.table.Cursor()); idx >= 0 && idx < len(visible) {
 					item, stop := visible[idx], m.OnStopItem
 					m.stoppingName = item.Name
 					m.flashMessage = ""
+					m.refreshTable()
 					return m, func() tea.Msg {
 						flash, isError := stop(item)
 						return pickerStopResultMsg{flash: flash, isError: isError}
@@ -479,6 +519,7 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					flash, quit := m.OnEnrollItem(visible[idx])
 					m.flashMessage = flash
 					m.flashIsError = false
+					m.refreshTable()
 					if quit {
 						return m, tea.Quit
 					}
@@ -490,51 +531,15 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				visible := m.visibleItems()
 				if idx := m.itemIndexForRow(m.table.Cursor()); idx >= 0 && idx < len(visible) {
 					item := visible[idx]
-					flash, isError, replacement := m.OnRemoveItem(item)
-					m.flashMessage = flash
-					m.flashIsError = isError
-					if replacement != nil {
-						// Replace the item in the list (e.g. moved to a new section).
-						dedupKey := strings.ToLower(item.DedupKey)
-						if dedupKey == "" {
-							dedupKey = strings.ToLower(item.Name)
+					if m.RemoveConfirmation != nil {
+						if question := m.RemoveConfirmation(item); question != "" {
+							m.confirmItem, m.confirmText = &item, question
+							m.flashMessage = ""
+							m.refreshTable()
+							return m, nil
 						}
-						for i := range m.items {
-							k := strings.ToLower(m.items[i].DedupKey)
-							if k == "" {
-								k = strings.ToLower(m.items[i].Name)
-							}
-							if k == dedupKey {
-								newKey := strings.ToLower(replacement.DedupKey)
-								if newKey == "" {
-									newKey = strings.ToLower(replacement.Name)
-								}
-								delete(m.seenIdx, dedupKey)
-								m.items[i] = *replacement
-								m.seenIdx[newKey] = i
-								break
-							}
-						}
-					} else if !isError {
-						// No replacement and not an error: remove the row.
-						dedupKey := strings.ToLower(item.DedupKey)
-						if dedupKey == "" {
-							dedupKey = strings.ToLower(item.Name)
-						}
-						filtered := m.items[:0]
-						for _, it := range m.items {
-							k := strings.ToLower(it.DedupKey)
-							if k == "" {
-								k = strings.ToLower(it.Name)
-							}
-							if k != dedupKey {
-								filtered = append(filtered, it)
-							}
-						}
-						m.items = filtered
-						delete(m.seenIdx, dedupKey)
 					}
-					m.refreshTable()
+					m.removeItem(item)
 				}
 			}
 			return m, nil
@@ -583,8 +588,9 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.snapCursorToSelectable(dir)
 			// Clear any flash message when the user navigates.
-			if m.table.Cursor() != prev {
+			if m.table.Cursor() != prev && m.flashMessage != "" {
 				m.flashMessage = ""
+				m.refreshTable()
 			}
 			return m, cmd
 		}
@@ -606,7 +612,16 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if idx, ok := m.seenIdx[key]; ok {
+			idx, ok := m.seenIdx[key]
+			if !ok && item.IdentityKey != "" {
+				for i, existing := range m.items {
+					if existing.IdentityKey == item.IdentityKey {
+						idx, ok = i, true
+						break
+					}
+				}
+			}
+			if ok {
 				if m.MergeItem != nil {
 					m.MergeItem(&m.items[idx], item)
 					changed = true
@@ -624,6 +639,20 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PickerDoneMsg:
 		m.scanning = false
 
+	case PickerMapMsg:
+		cursorKey := m.currentCursorKey()
+		var items []PickerItem
+		for _, item := range m.items {
+			if updated, keep := msg.Map(item); keep {
+				items = append(items, updated)
+			}
+		}
+		m.items = items
+		m.seenIdx = make(map[string]int, len(items))
+		for i, item := range items {
+			m.seenIdx[strings.ToLower(pickerItemKey(item))] = i
+		}
+		m.refreshTableWithCursorKey(cursorKey)
 	case PickerRemoveMsg:
 		cursorKey := m.currentCursorKey()
 		if m.removeItemByKey(strings.ToLower(msg.Key)) {
@@ -651,60 +680,97 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *PickerModel) setDefault(item PickerItem) {
+	var err error
+	m.flashMessage, err = m.OnSetDefault(item)
+	m.flashIsError = err != nil
+	if err != nil {
+		m.flashMessage = err.Error()
+		return
+	}
+	m.DefaultKey = strings.ToLower(pickerItemKey(item))
+}
+
+func (m *PickerModel) unsetDefault() {
+	var err error
+	m.flashMessage, err = m.OnUnsetDefault()
+	m.flashIsError = err != nil
+	if err != nil {
+		m.flashMessage = err.Error()
+		return
+	}
+	m.DefaultKey = ""
+}
+
+// removeItem runs OnRemoveItem for item and applies its verdict to the rows.
+func (m *PickerModel) removeItem(item PickerItem) {
+	flash, isError, replacement := m.OnRemoveItem(item)
+	m.flashMessage = flash
+	m.flashIsError = isError
+	dedupKey := strings.ToLower(pickerItemKey(item))
+	if replacement != nil {
+		// Replace the item in the list (e.g. moved to a new section).
+		for i := range m.items {
+			if strings.ToLower(pickerItemKey(m.items[i])) == dedupKey {
+				delete(m.seenIdx, dedupKey)
+				m.items[i] = *replacement
+				m.seenIdx[strings.ToLower(pickerItemKey(*replacement))] = i
+				break
+			}
+		}
+	} else if !isError {
+		// No replacement and not an error: remove the row.
+		filtered := m.items[:0]
+		for _, it := range m.items {
+			if strings.ToLower(pickerItemKey(it)) != dedupKey {
+				filtered = append(filtered, it)
+			}
+		}
+		m.items = filtered
+		delete(m.seenIdx, dedupKey)
+	}
+	m.refreshTable()
+}
+
+// SetFlash shows msg on the status line until the next navigation key, so an
+// action that had to leave the picker can report its outcome on return.
+func (m *PickerModel) SetFlash(msg string, isError bool) {
+	m.flashMessage, m.flashIsError = msg, isError
+}
+
 var (
 	pickerTitle    = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	pickerHint     = lipgloss.NewStyle().Foreground(ColorDim)
 	pickerScanning = lipgloss.NewStyle().Foreground(ColorPrimary)
 	pickerInsecure = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ef4444"))
+	pickerConfirm  = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 )
 
 func (m PickerModel) View() string {
+	view := strings.TrimRight(m.viewContent(), "\n")
+	if m.height > 0 {
+		if excess := lipgloss.Height(view) - m.height; excess > 0 {
+			m.table.SetHeight(max(2, m.table.Height()-excess))
+			view = strings.TrimRight(m.viewContent(), "\n")
+		}
+	}
+	return FitView(view, m.height)
+}
+
+func (m PickerModel) viewContent() string {
 	if m.quitting || m.selected != nil {
 		return ""
 	}
 
 	var sb strings.Builder
 
-	scrollHint := ""
-	if m.canScrollTable() {
-		scrollHint = ", ←/→ scroll"
+	// The keys get their own lines under the title: sharing the title's line,
+	// a picker with every action cut off at "c create, s" at 100 columns.
+	sb.WriteString(m.viewLine(pickerTitle.Render(m.Title)) + "\n")
+	for _, line := range pickerKeyHintLines(m.keyHints(), m.width) {
+		sb.WriteString(m.viewLine(pickerHint.Render(line)) + "\n")
 	}
-	enterAction := "enter select"
-	if m.OnCopyItem != nil {
-		enterAction = "enter copy"
-	}
-	hint := " (↑/↓ navigate" + scrollHint + ", " + enterAction + ", q quit)"
-	if m.Filterable {
-		hint = " (type to filter, ↑/↓ navigate" + scrollHint + ", " + enterAction + ", esc quit)"
-	}
-	if m.OnSetDefault != nil || m.OnUnsetDefault != nil || m.OnRemoveItem != nil ||
-		m.OnCreateItem != nil || m.OnStopItem != nil || (m.OnEnrollItem != nil && !m.Filterable) {
-		extras := ""
-		if m.OnSetDefault != nil {
-			extras += ", d set default"
-		}
-		if m.OnUnsetDefault != nil {
-			extras += ", x clear default"
-		}
-		if m.OnEnrollItem != nil && !m.Filterable {
-			extras += ", e enroll"
-		}
-		if m.OnCreateItem != nil {
-			extras += ", c create"
-		}
-		if m.OnStopItem != nil {
-			extras += ", s stop"
-		}
-		if m.OnRemoveItem != nil {
-			label := m.RemoveHint
-			if label == "" {
-				label = "remove creds"
-			}
-			extras += ", r " + label
-		}
-		hint = " (↑/↓ navigate" + scrollHint + ", " + enterAction + extras + ", q quit)"
-	}
-	sb.WriteString(m.viewLine(pickerTitle.Render(m.Title)+pickerHint.Render(hint)) + "\n\n")
+	sb.WriteString("\n")
 
 	if m.Filterable && m.filter != "" {
 		// The query is sanitized as it is typed; strip again here so this
@@ -727,17 +793,24 @@ func (m PickerModel) View() string {
 		return sb.String()
 	}
 
+	selectedHint := ""
+	if hint := m.selectedHint(); hint != "" {
+		selectedHint = WrapHint("  "+hint, m.width)
+	}
+
 	sb.WriteString(colorizeSectionHeaders(ColorizeProbeGlyphs(m.tableView()), m.sectionLabels()) + "\n")
 
 	if m.stoppingName != "" {
 		sb.WriteString(m.viewLine("  Stopping "+m.stoppingName+"… (waiting for guest shutdown)") + "\n")
 	}
-	if m.flashMessage != "" {
+	if m.confirmItem != nil {
+		sb.WriteString(m.viewLine(pickerConfirm.Render(WrapHint("  "+m.confirmText, m.width))) + "\n")
+	} else if m.flashMessage != "" {
 		style := lipgloss.NewStyle().Foreground(ColorPrimary)
 		if m.flashIsError {
 			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
 		}
-		sb.WriteString(m.viewLine(style.Render("  "+m.flashMessage)) + "\n")
+		sb.WriteString(m.viewLine(style.Render(WrapHint("  "+m.flashMessage, m.width))) + "\n")
 	}
 
 	if m.deviceLegend {
@@ -752,14 +825,92 @@ func (m PickerModel) View() string {
 		sb.WriteString("\n" + m.viewLine(pickerScanning.Render("  Scanning for more results...")) + "\n")
 	}
 
-	if hint := m.selectedHint(); hint != "" {
+	if selectedHint != "" {
 		if !m.scanning {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(m.viewLine(pickerHint.Render("  "+hint)) + "\n")
+		sb.WriteString(pickerHint.Render(selectedHint) + "\n")
 	}
 
 	return sb.String()
+}
+
+// keyHints lists the keys this picker answers to, one entry per key, in the
+// order `wendy device apps` uses where the two overlap. Letter keys are filter
+// text in a filterable picker, so they are only offered when they work.
+func (m PickerModel) keyHints() []string {
+	var keys []string
+	if m.Filterable {
+		keys = append(keys, "type to filter")
+	}
+	keys = append(keys, "↑/↓ navigate")
+	if m.canScrollTable() {
+		keys = append(keys, "←/→ scroll")
+	}
+	if m.OnCopyItem != nil {
+		keys = append(keys, "enter copy")
+	} else {
+		keys = append(keys, "enter select")
+	}
+	if !m.Filterable {
+		if m.OnSetDefault != nil {
+			if m.OnUnsetDefault != nil {
+				keys = append(keys, "d toggle default")
+			} else {
+				keys = append(keys, "d set default")
+			}
+		}
+		if m.OnEnrollItem != nil {
+			keys = append(keys, "e enroll")
+		}
+		if m.OnCreateItem != nil {
+			keys = append(keys, "c create")
+		}
+		if m.OnStartItem != nil {
+			keys = append(keys, "s start")
+		}
+		if m.OnStopItem != nil {
+			keys = append(keys, "x stop")
+		}
+		if m.OnRemoveItem != nil {
+			label := m.RemoveHint
+			if label == "" {
+				label = "remove creds"
+			}
+			keys = append(keys, "r "+label)
+		}
+	}
+	if m.Filterable {
+		return append(keys, "esc quit")
+	}
+	return append(keys, "q quit")
+}
+
+// pickerKeyHintIndent lines the key hints up with the table's first column.
+const pickerKeyHintIndent = "  "
+
+// pickerKeyHintLines wraps keys to width, breaking only between entries so a
+// key never lands on a different line from its action. width <= 0 (no window
+// size yet) keeps them on one line.
+func pickerKeyHintLines(keys []string, width int) []string {
+	var lines []string
+	line := pickerKeyHintIndent
+	for i, key := range keys {
+		entry := key
+		if i < len(keys)-1 {
+			entry += ","
+		}
+		if line != pickerKeyHintIndent {
+			if width > 0 && ansi.StringWidth(line+" "+entry) > width {
+				lines = append(lines, line)
+				line = pickerKeyHintIndent
+			} else {
+				line += " "
+			}
+		}
+		line += entry
+	}
+	return append(lines, line)
 }
 
 func (m PickerModel) selectedHint() string {
@@ -1124,7 +1275,25 @@ func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 	}
 
 	m.table.SetWidth(PickerTableWidth(m.table.Columns()))
-	m.table.SetHeight(PickerTableHeight(len(rows), m.height))
+	height := m.height
+	if height > 0 {
+		// The key hints sit on lines of their own under the title, and wrap
+		// on a narrow window: the table gives up that many rows.
+		height = max(1, height-len(pickerKeyHintLines(m.keyHints(), m.width)))
+	}
+	if hintHeight := PickerHintHeight(visible, m.width, "  "); height > 0 && hintHeight > 0 {
+		height = max(1, height-hintHeight-2)
+	}
+	// The status line under the table: a pending [y/N] question takes the
+	// flash's place, so it needs the same room.
+	status := m.flashMessage
+	if m.confirmItem != nil {
+		status = m.confirmText
+	}
+	if height > 0 && status != "" {
+		height = max(1, height-lipgloss.Height(WrapHint("  "+status, m.width)))
+	}
+	m.table.SetHeight(PickerTableHeight(len(rows), height))
 }
 
 func pickerItemKey(item PickerItem) string {
@@ -1342,6 +1511,13 @@ func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string, h
 	return rows
 }
 
+// PickerItemIsDefault reports whether item renders the ✦ marker for
+// defaultKey, so a view with its own key handling can toggle the default with
+// 'd' exactly as the picker does.
+func PickerItemIsDefault(item PickerItem, defaultKey string) bool {
+	return pickerItemMatchesDefaultKey(item, defaultKey)
+}
+
 func pickerItemMatchesDefaultKey(item PickerItem, defaultKey string) bool {
 	defaultKey = strings.ToLower(strings.TrimSpace(defaultKey))
 	if defaultKey == "" {
@@ -1407,4 +1583,17 @@ func (m PickerModel) tableViewportWidth() int {
 		return width
 	}
 	return PickerTableWidth(m.table.Columns())
+}
+
+// PickerHintHeight reserves enough space for any visible row's hint. Keeping
+// that reservation stable while navigating lets rendering and cursor movement
+// share one viewport, including when adjacent rows have different hint lengths.
+func PickerHintHeight(items []PickerItem, width int, prefix string) int {
+	height := 0
+	for _, item := range items {
+		if hint := strings.TrimSpace(item.Hint); hint != "" {
+			height = max(height, lipgloss.Height(WrapHint(prefix+hint, width)))
+		}
+	}
+	return height
 }

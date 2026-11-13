@@ -24,7 +24,7 @@ func (s *mcpServer) registerCameraTools(srv *server.MCPServer) {
 		mcpgo.WithDescription("List the cameras attached to the connected device, with the id each control tool takes. Online means detected or reachable; a camera may still be in use by another application or fail to stream."),
 	}
 	listOpts = append(listOpts, readOnly()...)
-	listOpts = append(listOpts, localOnly()...)
+	listOpts = append(listOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("camera_list", listOpts...), s.handleCameraList)
 
 	ctrlOpts := []mcpgo.ToolOption{
@@ -35,7 +35,7 @@ func (s *mcpServer) registerCameraTools(srv *server.MCPServer) {
 		),
 	}
 	ctrlOpts = append(ctrlOpts, readOnly()...)
-	ctrlOpts = append(ctrlOpts, localOnly()...)
+	ctrlOpts = append(ctrlOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("camera_controls", ctrlOpts...), s.handleCameraControls)
 
 	setOpts := []mcpgo.ToolOption{
@@ -57,12 +57,12 @@ func (s *mcpServer) registerCameraTools(srv *server.MCPServer) {
 			mcpgo.Description("Re-apply on stream reconnect and reboot (default true)"),
 		),
 	}
-	// Mutating rather than destructive: it changes how the camera captures and
-	// that is durable, but nothing is removed and reset/reset_all undo it.
-	// Idempotent -- setting the same value twice lands the same camera state.
-	setOpts = append(setOpts, mutating()...)
+	// Destructive: it overwrites persisted controls (reset_all clears them);
+	// that reset can undo it does not make it non-destructive. Idempotent --
+	// setting the same value twice lands the same camera state.
+	setOpts = append(setOpts, destructive()...)
 	setOpts = append(setOpts, idempotent()...)
-	setOpts = append(setOpts, localOnly()...)
+	setOpts = append(setOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("camera_set_control", setOpts...), s.handleCameraSetControl)
 }
 

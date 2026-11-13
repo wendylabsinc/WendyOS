@@ -71,6 +71,7 @@ var (
 	procWinUsbQueryInterfaceSettings = modwinusb.NewProc("WinUsb_QueryInterfaceSettings")
 	procWinUsbQueryPipe              = modwinusb.NewProc("WinUsb_QueryPipe")
 	procWinUsbGetAssociatedInterface = modwinusb.NewProc("WinUsb_GetAssociatedInterface")
+	procWinUsbGetDescriptor          = modwinusb.NewProc("WinUsb_GetDescriptor")
 )
 
 // spDeviceInterfaceData is SP_DEVICE_INTERFACE_DATA.

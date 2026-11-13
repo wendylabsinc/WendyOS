@@ -18,25 +18,31 @@ import (
 func registerToolAnalytics(srv *server.MCPServer) {
 	builtins := srv.ListTools()
 	srv.Use(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
-		return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return func(ctx context.Context, req mcpgo.CallToolRequest) (result *mcpgo.CallToolResult, err error) {
 			name := req.Params.Name
 			if _, ok := builtins[name]; !ok {
 				name = "container_tool"
 			}
+			ctx = analytics.WithEntrypoint(analytics.NewAttempt(ctx), "mcp")
 			start := time.Now()
-			result, err := next(ctx, req)
-			props := map[string]string{
-				"command_name": "wendy mcp " + name,
-				"command_root": "mcp",
-				"duration_ms":  strconv.FormatInt(time.Since(start).Milliseconds(), 10),
-				"success":      strconv.FormatBool(err == nil && result != nil && !result.IsError),
-				"is_dev_build": strconv.FormatBool(version.IsDev(version.Version)),
-			}
-			if class := toolErrorClass(result, err); class != "" {
-				props["error_class"] = class
-			}
-			analytics.Track("command_executed", props)
-			return result, err
+			// A panic leaves result nil, so it records a bounded failure before
+			// propagating unchanged to the SDK's recovery. Never inspect its value.
+			defer func() {
+				props := map[string]string{
+					"command_name": "wendy mcp " + name,
+					"attempt_id":   analytics.AttemptID(ctx),
+					"entrypoint":   "mcp",
+					"command_root": "mcp",
+					"duration_ms":  strconv.FormatInt(time.Since(start).Milliseconds(), 10),
+					"success":      strconv.FormatBool(err == nil && result != nil && !result.IsError),
+					"is_dev_build": strconv.FormatBool(version.IsDev(version.Version)),
+				}
+				if class := toolErrorClass(result, err); class != "" {
+					props["error_class"] = class
+				}
+				analytics.Track("command_executed", props)
+			}()
+			return next(ctx, req)
 		}
 	})
 }
@@ -58,8 +64,9 @@ func toolErrorClass(result *mcpgo.CallToolResult, err error) string {
 		code, _ := content["error_code"].(string)
 		switch errorCode(code) {
 		case errCodeNotConnected, errCodeInvalidArgument, errCodeDeviceUnreachable,
-			errCodeEntitlementDenied, errCodeMultipleSessions, errCodeNotFound,
-			errCodeTimeout, errCodeUnsupported, errCodeInternal:
+			errCodeEntitlementDenied, errCodeAuthRequired, errCodeMultipleSessions,
+			errCodeNotFound, errCodeTimeout, errCodeCancelled, errCodeUnsupported,
+			errCodeInternal, errCodeConfirmationRequired:
 			return strings.ToLower(code)
 		}
 	}

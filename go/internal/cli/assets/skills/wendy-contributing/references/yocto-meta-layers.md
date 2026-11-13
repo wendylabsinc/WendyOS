@@ -63,9 +63,10 @@ installation guide.
 
 ### Raspberry Pi (`meta-rpi-extensions`)
 
-- **Board ids**: `rpi3-sd`, `rpi4-sd`, `rpi5-sd`, `rpi5-nvme`
+- **Board ids**: `rpi3`, `rpi4`, `rpi5`. One image per board boots from SD or a USB
+  disk (Pi 3/4) or from SD or NVMe (Pi 5)
 - **Features**: I2C, SPI, serial console, USB gadget, A/B OTA
-- **Output**: `.sdimg` / `.wic` plus `.wic.bmap`
+- **Output**: `.wic` plus `.wic.bmap`
 
 ## Common Recipes
 

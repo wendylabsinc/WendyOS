@@ -1,0 +1,50 @@
+{
+  "tool": "simulator_list",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"simulators\": []}"
+        }
+      ],
+      "structuredContent": {
+        "simulators": []
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  },
+  "after": {
+    "actions": [
+      "tool:simulator_create",
+      "cli:vm create"
+    ],
+    "replies": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"simulators\": [{\"name\": \"dog-lab\", \"device\": \"vm:dog-lab\", \"state\": \"stopped\", \"profile\": \"go2\", \"version\": \"0.19.5\", \"source\": \"release\", \"disk_bytes\": 17179869184}]}"
+          }
+        ],
+        "structuredContent": {
+          "simulators": [
+            {
+              "name": "dog-lab",
+              "device": "vm:dog-lab",
+              "state": "stopped",
+              "profile": "go2",
+              "version": "0.19.5",
+              "source": "release",
+              "disk_bytes": 17179869184
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

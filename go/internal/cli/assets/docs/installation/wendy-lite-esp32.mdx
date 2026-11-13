@@ -19,17 +19,16 @@ Swift and other WebAssembly apps remain available through the optional Wendy Lit
   **Supported targets:** ESP32-C5, ESP32-C6, ESP32-C61, ESP32-P4, and ESP32-S3. When the installer offers multiple firmware variants, choose one labeled **native app support**. ESP32-P4 support is available for the boards listed by the installer.
 </Callout>
 
-## What You'll Need
+## What you'll need
 
 - A supported ESP32 development board
 - A USB data cable
-- The Wendy CLI ([install it](/docs/#1-install-the-wendy-cli))
-- The [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/dl/eim/). On macOS, install it with `brew install espressif/eim/eim`
+- The Wendy CLI ([install it](/docs/installation/cli))
 - An existing ESP-IDF project, or a new project created with the standard ESP-IDF tooling
 
-Wendy uses `eim` to run ESP-IDF 5.5.4. If that version is not installed, the first `wendy run` installs it for you.
+Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/dl/eim/) to run ESP-IDF 6.0.3. If `eim` is missing, `wendy run` offers to install it with Homebrew (`brew install espressif/eim/eim`); without Homebrew, install it yourself. If ESP-IDF 6.0.3 is not installed, the first `wendy run` installs it for you.
 
-## Install the Wendy Firmware
+## Install the Wendy firmware
 
 <Steps>
   <Step>
@@ -51,7 +50,9 @@ Wendy uses `eim` to run ESP-IDF 5.5.4. If that version is not installed, the fir
 
     Select the target that matches your chip, then choose your board. For generic ESP32-C5, ESP32-C6, and ESP32-S3 boards, select the variant labeled **native app support**.
 
-    The CLI detects the USB serial port, verifies the chip model, downloads the correct Wendy firmware, and flashes it directly. No separate `esptool` installation is required.
+    If multiple ESP32 USB candidates are connected, choose the device to flash from the serial port picker. Each entry shows its port path and whether it uses native USB or a USB-UART bridge. A single candidate is selected automatically.
+
+    The CLI verifies the chip model before writing and flashes the downloaded Wendy firmware directly. No separate `esptool` installation is required. Flash retries keep your selected port; if it disappears, the CLI asks you to select a device again.
   </Step>
 
   <Step>
@@ -69,7 +70,32 @@ Wendy uses `eim` to run ESP-IDF 5.5.4. If that version is not installed, the fir
   </Step>
 </Steps>
 
-## Use a Regular ESP-IDF Project
+## ESP-Mosaico
+
+Mosaico uses an ESP32-S31 and a dedicated 16 MB firmware layout. Select
+**ESP-Mosaico** in the `wendy install` picker once that firmware has
+been published. From the powered-off state, hold BOOT, briefly press POWER, then
+release BOOT with USB connected. The installer resets the S31 through its
+watchdog after the flash completes.
+
+The running dashboard exposes two USB CDC ports. Use the first for Wendy
+management and native deployment; the second carries independent diagnostics.
+From `samples/mosaico_dashboard` in the firmware checkout:
+
+```sh
+wendy run --device wendy-lite:PORT --yes --detach
+```
+
+The sample's `wendy-idf.json` selects a digest-pinned ESP-IDF container, target
+`esp32s31`, `preview: true`, and `workspaceRoot: "../.."` so the build can access
+shared firmware components. Docker must be running. The workspace root is
+relative to the project and must contain it. The CLI mounts that workspace at
+`/project`, builds, uploads the app into the inactive OTA slot, and reboots.
+Projects without this file continue to use the EIM toolchain. Native app uploads
+require an existing compatible partition layout; use `wendy install` for the
+first installation.
+
+## Use a regular ESP-IDF project
 
 Wendy recognizes the standard ESP-IDF project markers: a top-level `CMakeLists.txt` that includes `project.cmake`, or an `sdkconfig`/`sdkconfig.defaults` file. Keep the normal ESP-IDF layout and add a small `wendy.json` manifest:
 
@@ -140,7 +166,7 @@ void app_main(void)
 
 `wendy_core` is what makes the device manageable by the Wendy CLI and reachable through Wendy Cloud. Apart from that, your app code uses normal ESP-IDF components and APIs — no other custom SDK or wrapper is required. See [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for the full walkthrough, including which peripherals (USB, Wi-Fi, BLE) Wendy Lite owns and your app must not configure itself.
 
-### Start from a Template
+### Start from a template
 
 The quickest way to start is from a template instead of building this by hand:
 
@@ -164,15 +190,22 @@ Wendy:
 1. Detects the project as ESP-IDF.
 2. Reads the target from the connected device.
 3. Runs `idf.py set-target` when the project is configured for a different chip.
-4. Builds the project with ESP-IDF 5.5.4.
+4. Builds the project with ESP-IDF 6.0.3.
 5. Uploads the native application firmware, reboots the ESP32, and reconnects.
 6. Streams the ESP-IDF console output back to your terminal.
 
-## Optional WASM Apps
+## Optional: manage the board through Wendy Cloud
+
+For remote access, connect the board over USB, configure its Wi-Fi, and
+[enroll it in Wendy Cloud](/docs/advanced/cli/lite-enrollment). The enrollment
+guide walks through sign-in, board selection, and checking that it comes online.
+You can keep developing locally without Cloud enrollment.
+
+## Optional WASM apps
 
 Wendy Lite can also run Swift and other WebAssembly guests on firmware variants with WASM support. This path is useful when application portability is more important than direct access to the complete ESP-IDF API. See the [Wendy Lite reference](/docs/advanced/wendy-lite) for the WASM SDK, host API, and deployment details.
 
-## Next Steps
+## Next steps
 
 - Read [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for more details
 - Read the [`wendy run` reference](/docs/advanced/clients/wendy-cli/commands/run)

@@ -128,12 +128,17 @@ has_gpu_entitlement() {
 discover_device() {
     local wendy_bin="$1"
     echo -e "${BOLD}==> Auto-discovering device...${RESET}"
-    local discover_json
-    discover_json=$("$wendy_bin" discover --json --timeout 5s 2>&1)
+    local discover_json discover_err discover_errf
+    # stderr stays out of the jq input: in JSON mode it can carry notices or
+    # the error envelope.
+    discover_errf=$(mktemp)
+    discover_json=$("$wendy_bin" discover --json --timeout 5s 2>"$discover_errf")
+    discover_err=$(cat "$discover_errf"); rm -f "$discover_errf"
     HOSTNAME=$(echo "$discover_json" | jq -r '.lanDevices[0].hostname // empty' 2>/dev/null)
     if [[ -z "$HOSTNAME" ]]; then
         echo -e "${RED}ERROR: No LAN device found via 'wendy discover --json --timeout 5s'${RESET}"
         echo "    Output: $(echo "$discover_json" | head -5)"
+        echo "    Stderr: $(echo "$discover_err" | head -5)"
         echo ""
         echo "Hint: pass -h <hostname> to skip auto-discovery."
         return 1

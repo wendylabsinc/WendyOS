@@ -256,6 +256,38 @@ func TestROS2Service_EchoTopic_ClientCancelIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestROS2Service_StreamDeadlineIsReported(t *testing.T) {
+	for _, command := range []string{"echo", "hz"} {
+		t.Run(command, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			rt := &fakeROS2Runtime{
+				sidecar: ROS2Sidecar{Name: "sc", Distro: "humble", DomainID: 5},
+				execFn: func(ectx context.Context, opts ROS2ExecOptions, stdout, _ io.Writer) (int, error) {
+					if strings.Join(opts.Args, " ") == "topic list" {
+						_, _ = io.WriteString(stdout, "/lidar\n")
+						return 0, nil
+					}
+					<-ectx.Done()
+					return 130, ectx.Err()
+				},
+			}
+			svc := newTestROS2Service(t, rt, t.TempDir())
+			err := withDeadline(t, func() error {
+				if command == "echo" {
+					return svc.EchoTopic(&agentpbv2.EchoROS2TopicRequest{Topic: "/lidar"},
+						&fakeServerStream[agentpbv2.ROS2Message]{ctx: ctx})
+				}
+				return svc.MonitorHz(&agentpbv2.MonitorROS2HzRequest{Topic: "/lidar"},
+					&fakeServerStream[agentpbv2.ROS2HzSample]{ctx: ctx})
+			})
+			if status.Code(err) != codes.DeadlineExceeded {
+				t.Fatalf("expired observation must report its deadline, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestROS2Service_SubscriptionFailurePreservesDiagnostics(t *testing.T) {
 	for _, command := range []string{"echo", "hz"} {
 		t.Run(command, func(t *testing.T) {

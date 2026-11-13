@@ -6,7 +6,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 // Sessions may be long-lived because an active Companion port forward is
@@ -63,7 +63,7 @@ type deviceFrameStream struct {
 	stream agentpbv2.WendyTunnelService_DatagramTunnelServer
 }
 
-func (d *deviceFrameStream) Send(msg *cloudpb.TunnelData) error {
+func (d *deviceFrameStream) Send(msg *cloudpbv2.TunnelData) error {
 	frame := &agentpbv2.DeviceDatagramFrame{}
 	switch {
 	case msg.GetDatagram() != nil:
@@ -88,29 +88,29 @@ func (d *deviceFrameStream) Send(msg *cloudpb.TunnelData) error {
 	return d.stream.Send(frame)
 }
 
-func (d *deviceFrameStream) Recv() (*cloudpb.TunnelData, error) {
+func (d *deviceFrameStream) Recv() (*cloudpbv2.TunnelData, error) {
 	frame, err := d.stream.Recv()
 	if err != nil {
 		return nil, err
 	}
 
-	msg := &cloudpb.TunnelData{}
+	msg := &cloudpbv2.TunnelData{}
 	switch content := frame.GetContent().(type) {
 	case *agentpbv2.DeviceDatagramFrame_Datagram:
-		msg.Datagram = &cloudpb.TunnelDatagram{
+		msg.Datagram = &cloudpbv2.TunnelDatagram{
 			FlowId:  content.Datagram.GetFlowId(),
 			Port:    content.Datagram.GetPort(),
 			Payload: content.Datagram.GetPayload(),
 		}
 	case *agentpbv2.DeviceDatagramFrame_IcmpRequest:
-		msg.IcmpRequest = &cloudpb.IcmpEchoRequest{
+		msg.IcmpRequest = &cloudpbv2.IcmpEchoRequest{
 			Identifier:      content.IcmpRequest.GetIdentifier(),
 			Sequence:        content.IcmpRequest.GetSequence(),
 			Payload:         content.IcmpRequest.GetPayload(),
 			OriginateUnixNs: content.IcmpRequest.GetOriginateUnixNs(),
 		}
 	case *agentpbv2.DeviceDatagramFrame_IcmpReply:
-		msg.IcmpReply = &cloudpb.IcmpEchoReply{
+		msg.IcmpReply = &cloudpbv2.IcmpEchoReply{
 			Identifier:      content.IcmpReply.GetIdentifier(),
 			Sequence:        content.IcmpReply.GetSequence(),
 			Payload:         content.IcmpReply.GetPayload(),

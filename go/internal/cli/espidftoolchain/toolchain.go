@@ -12,13 +12,23 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 )
 
 // DefaultVersion is the ESP-IDF version used to build Wendy Lite native apps,
 // named as eim (the ESP-IDF Installation Manager) names it.
-const DefaultVersion = "v5.5.4"
+const DefaultVersion = "v6.0.3"
+
+// EIMFormula is Espressif's Homebrew formula for eim, which has macOS and Linux
+// builds. It is tap-qualified so a formula of the same name in another tap
+// cannot stand in for it.
+const EIMFormula = "espressif/eim/eim"
+
+// ErrEIMNotInstalled reports that eim is not on PATH, so EnsureVersion cannot
+// check or install the toolchain. The CLI offers to install eim when it sees it.
+var ErrEIMNotInstalled = errors.New("eim (ESP-IDF Installation Manager) is not installed")
 
 var execCommandContext = exec.CommandContext
 
@@ -194,7 +204,7 @@ func parseSdkconfigValue(value string) any {
 
 // EnsureVersion verifies that eim is installed and that the DefaultVersion
 // ESP-IDF toolchain is available, installing the toolchain via eim when it
-// is missing.
+// is missing. Without eim it returns an error wrapping ErrEIMNotInstalled.
 func EnsureVersion(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -205,8 +215,7 @@ func EnsureVersion(ctx context.Context) error {
 	checkCmd.Stderr = io.Discard
 	if err := checkCmd.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return errors.New("eim (ESP-IDF Installation Manager) is not installed; " +
-				"install it via 'brew install espressif/eim/eim' or see https://dl.espressif.com/dl/eim/")
+			return fmt.Errorf("%w; %s", ErrEIMNotInstalled, eimInstallHint(runtime.GOOS))
 		}
 		return fmt.Errorf("running 'eim --version': %w", err)
 	}
@@ -243,6 +252,14 @@ func EnsureVersion(ctx context.Context) error {
 		return fmt.Errorf("installing ESP-IDF %s via eim: %w", DefaultVersion, err)
 	}
 	return nil
+}
+
+// eimInstallHint names the package-manager command that installs eim on goos.
+func eimInstallHint(goos string) string {
+	if goos == "windows" {
+		return "install it via 'winget install --id Espressif.EIM-CLI --exact --source winget' or see https://dl.espressif.com/dl/eim/"
+	}
+	return "install it via 'brew install " + EIMFormula + "' or see https://dl.espressif.com/dl/eim/"
 }
 
 // parseInstalledVersions extracts the version names from 'eim list' output,

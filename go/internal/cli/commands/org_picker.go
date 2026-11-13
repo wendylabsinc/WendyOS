@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -180,8 +179,8 @@ func buildOrgPickerItems(orgs []*cloudpb.Organization, credIDs map[int32]bool) [
 //
 // Key bindings:
 //
-//   - d: mark highlighted org as the persisted default.
-//   - x: clear the default.
+//   - d: mark highlighted org as the persisted default; on the current
+//     default, clear it.
 //   - r: remove stored credentials for the highlighted org (if any).
 //   - enter: select the highlighted org and close the picker.
 //   - q / esc / ctrl+c: quit without selecting.
@@ -285,13 +284,13 @@ func newOrgPicker(orgs []*cloudpb.Organization, cfg *config.Config, copyOnEnter 
 func pickOrgInteractive(orgs []*cloudpb.Organization, cfg *config.Config, copyOnEnter bool) (int32, string, error) {
 	picker, items := newOrgPicker(orgs, cfg, copyOnEnter)
 
-	p := tea.NewProgram(picker)
+	p := tui.NewProgram(picker)
 	go func() {
 		p.Send(tui.PickerAddMsg{Items: items})
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return 0, "", fmt.Errorf("picker: %w", err)
 	}
@@ -356,7 +355,11 @@ func resolveOrgWithConfig(ctx context.Context, cfg *config.Config, auth *config.
 		if len(auth.Certificates) > 0 {
 			certOrgID = int32(auth.Certificates[0].OrganizationID)
 		}
-		return OrgResolution{ID: certOrgID, Name: fmt.Sprintf("org %d", certOrgID)}, nil
+		name := cachedCloudOrganizationName(auth)
+		if name == "" {
+			name = fmt.Sprintf("org %d", certOrgID)
+		}
+		return OrgResolution{ID: certOrgID, Name: name}, nil
 	}
 
 	if len(orgs) == 0 {
@@ -411,10 +414,10 @@ func nonInteractiveOrgErr(orgs []*cloudpb.Organization, defaultOrgID int32) erro
 		if i > 0 {
 			avail += ", "
 		}
-		avail += fmt.Sprintf("%d (%s)", o.GetId(), o.GetName())
+		avail += fmt.Sprintf("%s (%d)", o.GetName(), o.GetId())
 	}
 	if defaultOrgID != 0 {
-		return fmt.Errorf("default organization %d is not one of your organizations [%s]; pass --org <id> (where supported) or set a valid default with 'wendy auth list-orgs' in an interactive terminal", defaultOrgID, avail)
+		return fmt.Errorf("default organization %s is not one of your organizations [%s]; pass --org <id> (where supported) or set a valid default with 'wendy auth list-orgs' in an interactive terminal", orgLabel("", defaultOrgID), avail)
 	}
 	return fmt.Errorf("cannot select an organization non-interactively: your account belongs to multiple organizations [%s]; pass --org <id> (where supported) or set a default with 'wendy auth list-orgs' in an interactive terminal", avail)
 }

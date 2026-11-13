@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -61,6 +62,16 @@ func TestDeviceLogsHasNoKernelFlags(t *testing.T) {
 		if flags.Lookup(name) != nil {
 			t.Errorf("device logs should not have --%s flag; use `device os-logs`", name)
 		}
+	}
+}
+
+func TestDeviceLogsNoFollowFlag(t *testing.T) {
+	f := newDeviceLogsCmd().Flags().Lookup("no-follow")
+	if f == nil {
+		t.Fatal("device logs needs --no-follow for a finite log sample")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("--no-follow default = %q, want false", f.DefValue)
 	}
 }
 
@@ -143,6 +154,29 @@ func TestMaybeCheckOSUpdateSkips(t *testing.T) {
 			}
 			if outcome.applied || outcome.online {
 				t.Fatalf("maybeCheckOSUpdate() outcome = %+v, want zero (skipped)", outcome)
+			}
+		})
+	}
+}
+
+func TestMaybeCheckOSUpdateExplicitArtifactFailsClosed(t *testing.T) {
+	strp := func(s string) *string { return &s }
+	const artifact = "https://example.com/image.wendy"
+	tests := []struct {
+		name    string
+		version *agentpb.GetAgentVersionResponse
+		want    string
+	}{
+		{"missing version", nil, "device version is unavailable"},
+		{"non-WendyOS host", &agentpb.GetAgentVersionResponse{Os: "darwin", OsVersion: strp("14.4")}, "not a WendyOS OTA target"},
+		{"missing OTA backend", &agentpb.GetAgentVersionResponse{OsVersion: strp("WendyOS-0.19.3")}, "not a WendyOS OTA target with an update backend"},
+		{"reconnect unavailable", &agentpb.GetAgentVersionResponse{OsVersion: strp("WendyOS-0.19.3"), Featureset: []string{"wendyos-update"}}, "reconnecting for the requested OS update"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := maybeCheckOSUpdate(context.Background(), tc.version, nil, false, true, artifact, 0)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("explicit artifact error = %v, want %q", err, tc.want)
 			}
 		})
 	}

@@ -295,11 +295,16 @@ func (l *Loopback) warnUnavailable(cause error) {
 	})
 }
 
-// EnsureNodes creates a v4l2loopback node for every registered camera that
-// does not already have one. It is idempotent — nodes that already exist are
-// left alone — and it never fails the caller over a missing module: if the
-// module is unavailable it returns nil, having already logged that once via
-// Available.
+// EnsureNodes creates a v4l2loopback node for every paired camera (one with a
+// stored login) that does not already have one. It is idempotent — nodes that
+// already exist are left alone — and it never fails the caller over a missing
+// module: if the module is unavailable it returns nil, having already logged
+// that once via Available.
+//
+// An unpaired camera is someone else's camera on a shared network, so it gets
+// no node, and a node an older agent created for one is removed so the next
+// entitled container does not have it mounted. Such a camera never has a pump:
+// reconcile requires a stored login.
 func (l *Loopback) EnsureNodes(ctx context.Context) error {
 	if err := l.Available(); err != nil {
 		return nil
@@ -308,11 +313,42 @@ func (l *Loopback) EnsureNodes(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := l.EnsureNode(ctx, cam.ID, fmt.Sprintf("Wendy IP camera %d", cam.ID)); err != nil {
+		if !l.creds.Has(cam.MAC) {
+			if l.deps.nodeExists(int(cam.ID)) {
+				if err := l.deps.removeNode(int(cam.ID)); err != nil {
+					l.logger.Warn("removing v4l2loopback node of an unpaired camera",
+						zap.Uint32("cameraId", cam.ID), zap.Error(err))
+				}
+			}
+			continue
+		}
+		if err := l.EnsureNode(ctx, cam.ID, ipCameraNodeLabel(cam.ID)); err != nil {
 			l.logger.Warn("creating v4l2loopback node", zap.Uint32("cameraId", cam.ID), zap.Error(err))
 		}
 	}
 	return nil
+}
+
+// RemoveLeftoverNodes deletes the nodes of network cameras the registry no
+// longer holds, given their IDs: the unpaired records Registry.PruneUnconfirmed
+// drops at startup. An older agent created a node for every registered camera,
+// and since EnsureNodes only visits registered ones, such a node would stay
+// mounted into entitled containers until reboot. Only existing nodes in the
+// network-camera band are touched, so this never loads the module.
+func (l *Loopback) RemoveLeftoverNodes(ids []uint32) {
+	for _, id := range ids {
+		if id < IDBandStart || id > IDBandEnd || !l.deps.nodeExists(int(id)) {
+			continue
+		}
+		if err := l.deps.removeNode(int(id)); err != nil {
+			l.logger.Warn("removing v4l2loopback node of a dropped camera record",
+				zap.Uint32("cameraId", id), zap.Error(err))
+		}
+	}
+}
+
+func ipCameraNodeLabel(id uint32) string {
+	return fmt.Sprintf("Wendy IP camera %d", id)
 }
 
 // EnsureNode creates one Wendy-managed v4l2loopback device. It is shared by
@@ -466,6 +502,11 @@ func (l *Loopback) SetContainerConsumers(names []string) {
 // reconciling, since demand is unchanged) re-resolves credentials fresh — and
 // a camera that is demanded but has no running pump because it previously
 // lacked credentials is started now.
+//
+// A camera that was unpaired has no node (see EnsureNodes). If an entitled
+// container is running, the node is created here so that container, which binds
+// the host /dev live, sees the camera without a restart. With no such container
+// the next container start creates it, as for any other camera.
 func (l *Loopback) CredentialsChanged(camID uint32) {
 	l.mu.Lock()
 	cp, running := l.pumps[camID]
@@ -477,10 +518,18 @@ func (l *Loopback) CredentialsChanged(camID uint32) {
 			cp.idleCancel = nil
 		}
 	}
+	containersRunning := len(l.containerOwners) > 0
 	l.mu.Unlock()
 
 	if supCancel != nil {
 		supCancel()
+	}
+	if containersRunning {
+		if cam, ok := l.reg.Get(camID); ok && l.creds.Has(cam.MAC) && l.Available() == nil {
+			if err := l.EnsureNode(l.ctx, cam.ID, ipCameraNodeLabel(cam.ID)); err != nil {
+				l.logger.Warn("creating v4l2loopback node", zap.Uint32("cameraId", cam.ID), zap.Error(err))
+			}
+		}
 	}
 	// Covers the pending case directly (no supervisor was running, so nothing
 	// above will reconcile on its own). For the bounce case this is usually a

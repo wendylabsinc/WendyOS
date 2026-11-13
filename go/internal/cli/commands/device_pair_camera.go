@@ -27,8 +27,9 @@ type cameraPairClient interface {
 }
 
 type cameraPairHandler struct {
-	ctx    context.Context
-	client cameraPairClient
+	ctx       context.Context
+	client    cameraPairClient
+	preflight func(context.Context) error
 }
 
 type cameraPairScanMsg struct {
@@ -44,11 +45,18 @@ type cameraPairOpMsg struct {
 
 func (h *cameraPairHandler) scan() tea.Cmd {
 	return func() tea.Msg {
+		if h.preflight != nil {
+			if err := h.preflight(h.ctx); err != nil {
+				return cameraPairScanMsg{err: err}
+			}
+		}
 		ctx, cancel := context.WithTimeout(h.ctx, 15*time.Second)
 		defer cancel()
+		// Pairing is where a camera without a login gets one. RefreshCameras
+		// always lists those, and the ListVideoDevices fallback asks for them.
 		resp, err := h.client.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{})
 		if status.Code(err) == codes.Unimplemented {
-			listed, listErr := h.client.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
+			listed, listErr := h.client.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 			return cameraPairScanMsg{devices: listed.GetDevices(), err: listErr}
 		}
 		return cameraPairScanMsg{devices: resp.GetDevices(), err: err}

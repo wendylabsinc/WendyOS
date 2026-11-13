@@ -38,7 +38,7 @@ func runHILCommand(ctx context.Context, opts runOptions, peerName string) error 
 	if opts.detach || opts.deploy || opts.service != "" || len(opts.fleetDevices) != 0 {
 		return fmt.Errorf("HIL requires an attached, single-app run; omit --detach, --deploy and --service")
 	}
-	name, err := resolveHILSimulator(ctx, deviceFlag, opts.yes)
+	name, err := resolveHILSimulator(ctx, hilDeviceSelector(), opts.yes)
 	if err != nil {
 		return err
 	}

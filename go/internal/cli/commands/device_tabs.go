@@ -25,6 +25,10 @@ const (
 	// devicePickerCreateVM quits the view so the image download can own the
 	// terminal; the caller creates the VM and re-enters.
 	devicePickerCreateVM
+
+	// devicePickerStartVM quits the view so the boot and the robot build can
+	// own the terminal; the caller starts the VM and re-enters.
+	devicePickerStartVM
 )
 
 // deviceTabOrder is the strip both device views show, left to right. One

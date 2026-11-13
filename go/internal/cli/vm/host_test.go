@@ -4,9 +4,75 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestFindQEMUOnWindows(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ProgramFiles", root)
+	path := filepath.Join(root, "qemu", "qemu-system-aarch64.exe")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := vmLookPath
+	t.Cleanup(func() { vmLookPath = saved })
+	vmLookPath = func(string) (string, error) { return "", fs.ErrNotExist }
+	if _, err := FindQEMU("windows"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing binary: %v", err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FindQEMU("windows"); err == nil {
+		t.Fatal("accepted a directory as QEMU")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := FindQEMU("windows"); err != nil || got != path {
+		t.Fatalf("got %q, %v; want %q", got, err, path)
+	}
+	if _, err := FindQEMU("linux"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("used Windows fallback on Linux: %v", err)
+	}
+	preferred := filepath.Join(t.TempDir(), "qemu-system-aarch64.exe")
+	vmLookPath = func(string) (string, error) { return preferred, nil }
+	if got, err := FindQEMU("windows"); err != nil || got != preferred {
+		t.Fatalf("PATH did not take precedence: %q, %v", got, err)
+	}
+}
+
+func TestWindowsFirmwareFollowsQEMUInstallation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ProgramFiles", root)
+	saved := vmLookPath
+	t.Cleanup(func() { vmLookPath = saved })
+	for _, fromPath := range []bool{false, true} {
+		dir := filepath.Join(root, "qemu")
+		vmLookPath = func(string) (string, error) { return "", fs.ErrNotExist }
+		if fromPath {
+			dir = t.TempDir()
+			vmLookPath = func(string) (string, error) { return filepath.Join(dir, "qemu-system-aarch64.exe"), nil }
+		}
+		firmware := filepath.Join(dir, "share", "edk2-aarch64-code.fd")
+		stubFirmware(t, map[string]int64{firmware: pflashBytes})
+		if got, err := FindFirmware("windows", ""); err != nil || got != firmware {
+			t.Fatalf("firmware=%q err=%v want %q", got, err, firmware)
+		}
+	}
+	// A PATH shim need not have firmware beside it. Keep the default install
+	// as a fallback even when the executable lives elsewhere.
+	firmware := filepath.Join(root, "qemu", "share", "edk2-aarch64-code.fd")
+	stubFirmware(t, map[string]int64{firmware: pflashBytes})
+	if got, err := FindFirmware("windows", ""); err != nil || got != firmware {
+		t.Fatalf("default firmware fallback=%q err=%v want %q", got, err, firmware)
+	}
+}
 
 // stubKVM controls whether the fake host has a usable /dev/kvm.
 func stubKVM(t *testing.T, present bool) {

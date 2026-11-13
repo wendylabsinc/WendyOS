@@ -25,7 +25,6 @@ func acmeProvisionRequest() *agentpbv2.StartACMEProvisioningRequest {
 
 func stubACMEEnroll(t *testing.T, fn func(context.Context, acmeenroll.Config, string, []byte) (string, string, error)) {
 	t.Helper()
-	t.Setenv("WENDY_EXPERIMENTAL_ACME_ENROLLMENT", "1")
 	old := acmeEnrollDevice
 	acmeEnrollDevice = fn
 	t.Cleanup(func() { acmeEnrollDevice = old })
@@ -87,14 +86,13 @@ func TestACMEProvisioningPersistsIdentityWithoutCredentials(t *testing.T) {
 	if string(key) != string(deviceKey) {
 		t.Fatal("device key was lost")
 	}
-	if _, err := reloaded.Unprovision(context.Background(), &agentpb.UnprovisionRequest{}); err != nil {
-		t.Fatal(err)
+	if _, err := reloaded.Unprovision(context.Background(), &agentpb.UnprovisionRequest{}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("legacy reset must refuse direct PKI enrollment: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "acme-account-key.pem")); !os.IsNotExist(err) {
-		t.Fatal("unprovision retained the ACME account key")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "acme-account-key.pem.d")); !os.IsNotExist(err) {
-		t.Fatal("unprovision retained scoped ACME account keys")
+	for _, name := range []string{"acme-account-key.pem", "acme-account-key.pem.d", "device-key.pem", "provisioning.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("unsafe reset removed recovery material %s: %v", name, err)
+		}
 	}
 }
 
@@ -158,22 +156,40 @@ func TestACMEProvisioningStateFailureDoesNotCommit(t *testing.T) {
 	}
 }
 
-func TestACMEProvisioningRequiresExplicitOptIn(t *testing.T) {
+func TestACMEEnrollmentCapabilityIsReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	svc := NewProvisioningServiceV2(NewProvisioningService(zap.NewNop(), dir))
+	resp, err := svc.IsProvisioned(context.Background(), &agentpbv2.IsProvisionedRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := resp.GetNotProvisioned()
+	if state == nil || state.AcmeEnrollmentSupported == nil || !state.GetAcmeEnrollmentSupported() {
+		t.Fatal("agent must advertise direct ACME support by default")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("read-only capability wrote provisioning material")
+	}
+}
+
+func TestACMEProvisioningRejectsInvalidConfigBeforeSpendingEAB(t *testing.T) {
 	dir := t.TempDir()
 	svc := NewProvisioningService(zap.NewNop(), dir)
 	stubACMEEnroll(t, func(context.Context, acmeenroll.Config, string, []byte) (string, string, error) {
-		t.Fatal("disabled enrollment must not spend EAB credentials")
+		t.Fatal("invalid enrollment must not spend EAB credentials")
 		return "", "", nil
 	})
-	t.Setenv("WENDY_EXPERIMENTAL_ACME_ENROLLMENT", "")
-	_, err := NewProvisioningServiceV2(svc).StartACMEProvisioning(context.Background(), acmeProvisionRequest())
-	if status.Code(err) != codes.FailedPrecondition {
+	req := acmeProvisionRequest()
+	req.DirectoryUrl = "http://untrusted.invalid/acme/directory"
+	_, err := NewProvisioningServiceV2(svc).StartACMEProvisioning(context.Background(), req)
+	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unexpected result: %v", err)
 	}
 	if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled {
-		t.Fatal("disabled enrollment committed state")
+		t.Fatal("invalid enrollment committed state")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "device-key.pem")); !os.IsNotExist(err) {
-		t.Fatal("disabled enrollment generated a key")
+		t.Fatal("invalid enrollment generated a key")
 	}
 }

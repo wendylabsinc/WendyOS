@@ -40,6 +40,7 @@ type Entry struct {
 	OrgID           int32     `json:"orgId,omitempty"`
 	MeshName        string    `json:"meshName,omitempty"`
 	InterfaceName   string    `json:"interfaceName,omitempty"`
+	WiredAddresses  []string  `json:"wiredAddresses,omitempty"`
 	AgentVersion    string    `json:"agentVersion,omitempty"`
 	DeviceType      string    `json:"deviceType,omitempty"`
 	OS              string    `json:"os,omitempty"`
@@ -225,6 +226,9 @@ func mergeEntry(stored, incoming Entry) Entry {
 	if incoming.InterfaceName != "" {
 		result.InterfaceName = incoming.InterfaceName
 	}
+	if len(incoming.WiredAddresses) > 0 {
+		result.WiredAddresses = incoming.WiredAddresses
+	}
 	if incoming.AgentVersion != "" {
 		result.AgentVersion = incoming.AgentVersion
 	}
@@ -318,6 +322,7 @@ func EntryFromDevice(dev models.LANDevice) Entry {
 		OrgID:           dev.OrgID,
 		MeshName:        dev.MeshName,
 		InterfaceName:   dev.NetworkInterface,
+		WiredAddresses:  dev.WiredAddresses,
 		AgentVersion:    dev.AgentVersion,
 		DeviceType:      dev.DeviceType,
 		OS:              dev.OS,
@@ -343,6 +348,7 @@ func (e Entry) Device() models.LANDevice {
 		MeshName:         e.MeshName,
 		InterfaceType:    string(models.InterfaceLAN),
 		NetworkInterface: e.InterfaceName,
+		WiredAddresses:   e.WiredAddresses,
 		IsWendyDevice:    true,
 		AgentVersion:     e.AgentVersion,
 		DeviceType:       e.DeviceType,

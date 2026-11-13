@@ -218,7 +218,8 @@ func syncFiles(
 		}
 	}
 
-	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	progressOut := runProgressWriter(ctx)
+	isTTY := term.IsTerminal(int(os.Stdout.Fd())) && !detachedJSONRun(ctx)
 	fileCount := len(diff.contentTransfers)
 	fileIdx := 0
 	var sentBytes int64
@@ -283,7 +284,7 @@ func syncFiles(
 						f.Close()
 						return fmt.Errorf("sending chunk for %s: %w", agentPath, err)
 					}
-					printFileSyncProgress(isTTY, fileDisplayName, fileSent, entry.Size,
+					printFileSyncProgress(progressOut, isTTY, fileDisplayName, fileSent, entry.Size,
 						sentBytes, time.Since(transferStart), fileIdx+1, fileCount)
 					sequence++
 				}
@@ -333,7 +334,7 @@ func syncFiles(
 
 		fileIdx++
 		if isTTY && entry.Size > 0 {
-			fmt.Print("\n")
+			fmt.Fprintln(progressOut)
 		}
 	}
 
@@ -459,7 +460,7 @@ func buildCombinedManifest(entries []fileSyncEntry) (*agentpb.FileSyncManifest, 
 
 // printFileSyncProgress prints a single-line progress update for the current file.
 // On a TTY it overwrites the current line; otherwise it prints a new line.
-func printFileSyncProgress(isTTY bool, name string, fileSent, fileTotal, totalSent int64, elapsed time.Duration, fileIdx, fileCount int) {
+func printFileSyncProgress(out io.Writer, isTTY bool, name string, fileSent, fileTotal, totalSent int64, elapsed time.Duration, fileIdx, fileCount int) {
 	pct := 0.0
 	if fileTotal > 0 {
 		pct = float64(fileSent) / float64(fileTotal) * 100
@@ -482,9 +483,9 @@ func printFileSyncProgress(isTTY bool, name string, fileSent, fileTotal, totalSe
 	)
 
 	if isTTY {
-		fmt.Printf("\r\033[2K%s", line)
+		fmt.Fprintf(out, "\r\033[2K%s", line)
 	} else {
-		fmt.Println(line)
+		fmt.Fprintln(out, line)
 	}
 }
 

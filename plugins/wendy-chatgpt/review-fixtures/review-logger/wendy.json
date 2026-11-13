@@ -1,0 +1,13 @@
+{
+  "appId": "review-logger",
+  "version": "0.1.0",
+  "platform": "linux",
+  "language": "python",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "none"
+    }
+  ],
+  "python": {}
+}

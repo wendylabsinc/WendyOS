@@ -47,7 +47,7 @@ func newCloudPingCmd() *cobra.Command {
 		Long:  "Measures agent round-trip time through Wendy Cloud. PKI sessions use the agent version RPC over an authorized tunnel; legacy sessions use datagram echoes. A reply proves the device's agent is up and measures true end-to-end round-trip time. No ICMP sockets or privileges are involved.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cloudPingCommand(cmd.Context(), cloudGRPC, deviceName, brokerURL, count, interval)
+			return cloudPingCommandFn(cmd.Context(), cloudGRPC, effectiveDeviceName(deviceName), brokerURL, count, interval)
 		},
 	}
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (optional when a default session is set via 'wendy auth use')")
@@ -57,6 +57,12 @@ func newCloudPingCmd() *cobra.Command {
 	cmd.Flags().DurationVarP(&interval, "interval", "i", time.Second, "Time between echoes")
 	return cmd
 }
+
+// cloudPingCommandFn is a seam over cloudPingCommand for tests that need to
+// observe the device name `wendy cloud ping`'s RunE resolves — pickAuthEntry
+// and pickCloudDiscoveryDevice below need real config and network access, so a
+// test cannot reach past them without one.
+var cloudPingCommandFn = cloudPingCommand
 
 func cloudPingCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL string, count int, interval time.Duration) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -136,12 +142,16 @@ func cloudPingCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL stri
 func runPingLoop(ctx context.Context, session pingSession, target string, count int, interval time.Duration, out io.Writer) pingStats {
 	identifier := uint32(os.Getpid() & 0xFFFF)
 	type sentEcho struct{ originate time.Time }
+	type receivedEcho struct {
+		reply *cloudpb.IcmpEchoReply
+		at    time.Time
+	}
 	var (
 		stats     pingStats
 		pending   = map[uint32]sentEcho{} // keyed by sequence
 		total     time.Duration
 		done      = make(chan struct{})
-		replies   = make(chan *cloudpb.IcmpEchoReply, 16)
+		replies   = make(chan receivedEcho, 16)
 		lifeErrMu sync.Mutex
 		lifeErr   error // first transport error out of the recv loop, guarded by lifeErrMu
 	)
@@ -162,8 +172,11 @@ func runPingLoop(ctx context.Context, session pingSession, target string, count 
 				return
 			}
 			if r := msg.GetIcmpReply(); r != nil && r.GetIdentifier() == identifier {
+				// A synchronous agent RPC can block the send loop while earlier
+				// replies wait in this queue. Measure arrival, not queue drain.
+				received := receivedEcho{reply: r, at: time.Now()}
 				select {
-				case replies <- r:
+				case replies <- received:
 				case <-ctx.Done():
 					return
 				}
@@ -235,10 +248,11 @@ func runPingLoop(ctx context.Context, session pingSession, target string, count 
 
 	for {
 		select {
-		case r := <-replies:
+		case received := <-replies:
+			r := received.reply
 			if s, ok := pending[r.GetSequence()]; ok {
 				delete(pending, r.GetSequence())
-				rtt := time.Since(s.originate)
+				rtt := received.at.Sub(s.originate)
 				stats.Received++
 				total += rtt
 				if stats.Min == 0 || rtt < stats.Min {

@@ -98,7 +98,7 @@ Framework-level configuration, separate from `entitlements`. Where an entitlemen
       "domainId": 42,
       "rmw": "cyclonedds",
       "distro": "humble",
-      "discoveryScope": "host"
+      "scope": "peripherals"
     }
   }
 }
@@ -113,9 +113,23 @@ Every field is optional — `"frameworks": { "ros2": {} }` is a valid way to say
 | `domainId` | integer (0–232) | derived from `appId` | `ROS_DOMAIN_ID` for the app. Omit it to get a stable value hashed from the app ID, which keeps the domain constant across restarts without colliding with unrelated apps. |
 | `rmw` | string | `cyclonedds` | RMW middleware implementation. Accepts short names (`cyclonedds`, `fastrtps`/`fastdds`, `connextdds`, `gurumdds`) or full identifiers (`rmw_cyclonedds_cpp`, `rmw_fastrtps_cpp`, `rmw_connextdds`, `rmw_gurumdds_cpp`). |
 | `distro` | string | `humble` | ROS 2 distribution the app targets, e.g. `humble`, `iron`, `jazzy`. Lowercase letters and digits, starting with a letter. Selects the matching CLI sidecar image. Only the shape is enforced, not a fixed list, so a new ROS 2 release is usable before Wendy ships explicit support for it. |
-| `discoveryScope` | string | `app` | `app` restricts DDS discovery to the app group's own network namespace (`ROS_LOCALHOST_ONLY=1`), so unrelated apps and robots do not discover each other. `host` lets discovery use the device's host network — pair it with `{ "type": "network", "mode": "host" }`. |
+| `scope` | string | `device` | Who can see the app's topics. Each scope includes the ones before it; see the table below. |
+| `discoveryScope` | string | — | **Deprecated**, use `scope`. `app` behaves as scope `device`, `host` as scope `network`. If both are set, `scope` takes precedence and `discoveryScope` is only read by older agents, so it must not be wider than `scope`: pair `network` with `host`, and the other scopes with `app`. Setting both warns. |
 
-An out-of-range `domainId`, an unsupported `rmw`, a malformed `distro`, or an unknown `discoveryScope` is rejected when the config is parsed, rather than silently starting a container with no domain or middleware isolation.
+| `scope` | Who sees the topics | How |
+|---------|---------------------|-----|
+| `app` | Only this app (all its services) | Loopback discovery on the app's own domain, derived from `appId`. Do not set `domainId`. |
+| `device` | Every app on the device that uses the same domain | Loopback discovery (`ROS_LOCALHOST_ONLY=1`). |
+| `peripherals` | The device's apps and hardware attached to it, such as a robot or sensor on its own cable | Loopback reaches same-domain `device` apps; multicast discovery on the device's peripheral interfaces reaches physical wired interfaces other than the uplink that carries the default route. CycloneDDS only. On a device with nothing attached it behaves as `device`. |
+| `network` | Anything on the device's networks, and the device's own apps | Subnet discovery on the device's network interface, plus loopback so the app also reaches `device` apps on the same domain (with host networking). |
+
+Peripheral interfaces are detected, not configured: a robot on its own cable is found, but a robot on the same switch as the device's uplink, or one reached over Wi-Fi, is not; use `network` for those. A second ordinary network port without a default route counts as a peripheral interface.
+
+`device`, `peripherals`, and `network` connect apps through the device's loopback, so they require host networking. The current runtime provides it when the app has no `network` entitlement, or when that entitlement uses mode `host` or `host-admin`; isolated modes such as `bridge` are rejected. Apps that share a bus through `device`, `peripherals` or `network` set the same `domainId`; without one each app gets its own domain.
+
+> **CycloneDDS participant indexes:** Each CycloneDDS participant using `device`, `peripherals`, or `network` relies on the automatic participant-index range for its host and domain. CycloneDDS checks through `MaxAutoParticipantIndex` (default `9`). If one domain has enough participants to exhaust that range, split apps across explicit `domainId` values; Wendy does not yet expose this limit in its generated discovery config.
+
+An out-of-range `domainId`, an unsupported `rmw`, a malformed `distro`, or an unknown `scope` is rejected when the config is parsed, rather than silently starting a container with no domain or middleware isolation.
 
 For multi-service apps, declare `frameworks` per service under `services.<name>.frameworks` to give a service its own ROS 2 settings. A service without its own `frameworks` inherits the top-level one, so a stack of talker/listener services shares a domain by default.
 
@@ -125,12 +139,12 @@ For multi-service apps, declare `frameworks` per service under `services.<name>.
   "frameworks": { "ros2": { "rmw": "cyclonedds" } },
   "services": {
     "talker":   { "context": "./talker" },
-    "bridge":   { "context": "./bridge", "frameworks": { "ros2": { "discoveryScope": "host" } } }
+    "bridge":   { "context": "./bridge", "frameworks": { "ros2": { "scope": "network" } } }
   }
 }
 ```
 
-Use [`wendy init --framework ros2`](../clients/wendy-cli/commands/init.md#frameworks) to scaffold this block, or add it by hand — `wendy run` picks it up on the next deploy. See [Wendy for ROS 2](/docs/integrations/ros2) for inspecting and debugging the running system.
+Use [`wendy init --framework ros2`](/docs/advanced/clients/wendy-cli/commands/init#frameworks) to scaffold this block, or add it by hand — `wendy run` picks it up on the next deploy. See [Wendy for ROS 2](/docs/integrations/ros2) for inspecting and debugging the running system.
 
 ### `readiness`
 
@@ -150,7 +164,7 @@ Configures how the CLI determines when the app is ready after starting.
 | `tcpSocket.port` | integer (1–65535) | — | TCP port to probe |
 | `timeoutSeconds` | integer | `30` | How long to wait before giving up |
 
-For multi-service apps, declare `readiness` per service under `services.<name>.readiness` instead of (or in addition to) the top-level field. A top-level `readiness` becomes an app-level fallback that fires once after every service has started, rather than gating any single service — see [Readiness and lifecycle hooks](./wendy-services.md#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
+For multi-service apps, declare `readiness` per service under `services.<name>.readiness` instead of (or in addition to) the top-level field. A top-level `readiness` becomes an app-level fallback that fires once after every service has started, rather than gating any single service — see [Readiness and lifecycle hooks](/docs/advanced/apps/wendy-services#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
 
 ### `hooks`
 
@@ -177,7 +191,7 @@ Prefer `openURL` over a `cli` command that shells out to a platform-specific ope
 
 > **Note:** `hooks.postStart.agent` is executed directly on the device, not through a shell. Shell features such as pipes (`|`), redirects (`>`), command chaining (`;`, `&&`), and command substitution (`$(...)`) are **not** interpreted — they are passed through as literal arguments. If you need them, put the logic in a script file (e.g. `/app/post-start.sh`) and invoke that. `${WENDY_APP_ID}`, `${WENDY_HOSTNAME}`, `${WENDY_SERVICE_NAME}` (the declaring service's name; empty for single-container apps), and environment variables are still expanded.
 
-For multi-service apps, declare `hooks` per service under `services.<name>.hooks` instead of (or in addition to) the top-level field. A top-level `hooks` becomes an app-level fallback that fires once after every service has started; its `postStart.agent` is ignored for multi-service apps, since there is no single app-level container start to trigger it — `wendy run` warns about this when it loads `wendy.json`. See [Readiness and lifecycle hooks](./wendy-services.md#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
+For multi-service apps, declare `hooks` per service under `services.<name>.hooks` instead of (or in addition to) the top-level field. A top-level `hooks` becomes an app-level fallback that fires once after every service has started; its `postStart.agent` is ignored for multi-service apps, since there is no single app-level container start to trigger it — `wendy run` warns about this when it loads `wendy.json`. See [Readiness and lifecycle hooks](/docs/advanced/apps/wendy-services#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
 
 ### `python`
 
@@ -187,6 +201,30 @@ Python-specific settings.
 |-------|-------------|
 | `python.sourceRoot` | Path to the Python source root directory |
 | `python.container.sourceRoot` | Path to the Python source root inside the container image |
+
+### `mcu`
+
+An Arduino sketch for the board's microcontroller (Arduino UNO Q). `wendy run` compiles it, flashes the STM32, then deploys the app as usual. The layout matches Arduino App Lab: the `.ino` and a `sketch.yaml` in one folder.
+
+```json
+"mcu": { "sketch": "sketch" }
+```
+
+| Field | Description |
+|-------|-------------|
+| `mcu.sketch` | Sketch folder, relative to the project (required). It must hold a `sketch.yaml` that pins the platform, e.g. `arduino:zephyr (1.1.0)`. |
+| `mcu.profile` | `sketch.yaml` profile to build. Default: its `default_profile`. |
+
+- Wendy compiles with its own pinned `arduino-cli`, downloaded on first use. Your Arduino IDE setup is not touched.
+- Supported cores: `arduino:zephyr` 1.0 and 1.1. If the sketch talks to Linux, list `Arduino_RouterBridge` in the profile; the core does not bundle it.
+- The sketch is flashed before the container build. If the compile or the flash fails, the app is not deployed.
+- The board needs a WendyOS and agent that can flash it; otherwise `wendy run` stops and asks you to run `wendy device update`.
+- One board per run: `wendy run` refuses a project with `mcu` when `--device` lists several devices.
+- With `--watch`, the sketch is compiled and flashed again only when a file in the sketch folder changes.
+- The board holds one sketch. Deploying a second app with a sketch replaces the first app's sketch and stops that app. To go back, run `wendy run` in the first app's project again. `wendy device apps start <app>` never flashes: it is refused when the board does not hold that app's sketch. Removing an app also removes its sketch from the board. Stopping an app leaves its sketch running.
+- `wendy build` compiles the sketch too; it needs no device.
+- A `sketch.yaml` from Arduino App Lab works as it is. When it names no board, does not pin `arduino:zephyr`, or lists no libraries for a sketch that uses the Bridge, Wendy fills these in on a copy and prints a notice for each. Your file is not changed.
+- To talk to the sketch from the app, add the [`arduino-bridge`](#arduino-bridge) entitlement.
 
 ### `resources`
 
@@ -268,7 +306,7 @@ Optional URI pointing to the JSON Schema for editor autocompletion and validatio
 
 Entitlements grant the app access to hardware and system capabilities. Any capability not listed is unavailable to the app. They are code signed, preventing privilege escalation.
 
-Use `wendy project entitlements add` / `remove` to manage them, or edit `wendy.json` directly.
+Run `wendy project` for a guided editor, or use `wendy project add`, `edit`, and `remove` with explicit flags. `wendy project validate` checks the result. Direct editing of `wendy.json` is also supported. See the [project editor](/docs/advanced/clients/wendy-cli/commands/project).
 
 ### `network`
 
@@ -286,12 +324,57 @@ IP networking access.
 | `"host"` | Shares the host network stack (visibility: bind host ports, see interfaces). Does **not** grant the ability to reconfigure host networking. |
 | `"host-admin"` | Host networking **plus** `CAP_NET_ADMIN` — allows reconfiguring interfaces, routes, and netfilter. Only request this if your app genuinely manages the network; it is a high-privilege capability. |
 | `"none"` | Networking fully disabled — no namespace connectivity of any kind. |
-| `"bridge"` | Isolated network namespace with a private IP, outbound internet via NAT, and working DNS — but **no** host/LAN-published ports. Use this for apps that need to reach the internet without exposing anything locally. Cross-device access to a bridge app is via a `mesh` entitlement, not this one. |
-| `"mesh"` | Isolated network namespace chained into the wendy-mesh CNI, with a route to a `serviceCIDR` (required for this mode — a valid CIDR string) so the app can reach other meshed devices/services. Optionally set `ports` (host→container mappings) so mesh peers can dial in. |
+| `"bridge"` | Isolated network namespace with a private IP, outbound internet via NAT, and working DNS — but **no** host/LAN-published ports. Use this for apps that need to reach the internet without exposing anything locally. Use Wendy Net networking for cross-device app access. |
+| `"mesh"` | Private app networking through Wendy Net. Set `serviceCIDR` to `10.99.0.0/16`, the currently supported virtual service address range. `/16` fixes the first 16 address bits; this is not the device's LAN subnet. Publish incoming ports with `ports` to let apps on other devices connect. |
 
 > **Security note:** `CAP_NET_ADMIN` (host network reconfiguration) is granted only by `"host-admin"`, never by plain `"host"`. Apps that previously relied on `CAP_NET_ADMIN` under `"host"` must switch to `"host-admin"`.
 
 > **Deprecation notice:** an omitted `mode` maps to host networking today, and the agent logs a `WARN` at container create for any `network` entitlement without an explicit `mode`, flagging that its ports are publicly reachable. This default will change to isolated `"bridge"` networking in a future major release. If you want to keep host networking going forward, set `"mode": "host"` explicitly now; if you want isolated networking with outbound internet, opt in early with `"mode": "bridge"`.
+
+Wendy Net UDP services declare `protocol: "udp"` on each published port:
+
+```json
+{
+  "type": "network",
+  "mode": "mesh",
+  "serviceCIDR": "10.99.0.0/16",
+  "ports": [{ "host": 47777, "container": 7777, "protocol": "udp" }]
+}
+```
+
+The service listens on its container address (or `0.0.0.0:7777`). Other
+Wendy Net apps send to this device's service address on UDP port `47777`. TCP remains
+the default when `protocol` is omitted; TCP and UDP mappings with the same
+host port are independent. Only a running app's explicitly published UDP
+ports accept peer traffic. UDP DNS-SD announcements require a matching UDP
+mapping and use service types ending in `._udp`.
+
+#### mDNS service discovery
+
+With isolated mesh networking, apps advertise their container IPv4 address and
+container port using ordinary DNS-SD. Wendy projects the record with a local
+mesh service address and the mapped host port. Clients must use that resolved
+endpoint. Apps with their own mDNS sockets need no UDP 5353 mapping or `avahi`
+entitlement. Apps using Avahi's D-Bus API can add the private `avahi` entitlement.
+
+TXT values remain application data. IP addresses and extra ports embedded in
+TXT are not rewritten, and each additional incoming port needs its own mapping.
+See [service discovery](/docs/guides/wendy-net-services) and the
+[NVIDIA PAIR example](/docs/guides/nvidia-pair) for a multi-port application.
+
+#### UDP delivery limits
+
+UDP messages can contain zero through 65,507 bytes. Delivery is unreliable:
+applications must handle missing messages and retries. Large messages need more
+bandwidth and are delivered only when complete; loss or congestion can drop the
+whole message.
+Large local messages may require the application to allow IPv4 fragmentation
+on its own socket. Wendy Net does not change application DF policy or lower
+the container interface MTU. Devices must support the same UDP message
+protocol version; incompatible peers are rejected explicitly.
+A source/destination tuple expires after 30 seconds without an app request;
+its next request establishes a fresh authenticated flow. The first request after an idle period may take longer, especially over Bluetooth.
+Use a WendyOS image with Wendy Net UDP support.
 
 ### `gpu`
 
@@ -377,6 +460,84 @@ Bluetooth access.
 { "type": "bluetooth" }
 ```
 
+### `avahi`
+
+For complete publication and browsing examples, see
+[share and discover app services](/docs/guides/wendy-net-services).
+
+Provides a private Avahi DNS-SD service for an app with a private network
+namespace. For example, a single-container app with outbound networking can use:
+
+```json
+{
+  "entitlements": [
+    { "type": "network", "mode": "bridge" },
+    { "type": "avahi" }
+  ]
+}
+```
+
+Install the native Avahi or `avahi-compat` (`dns_sd.h`) client libraries in the
+app image. The agent mounts a filtered D-Bus endpoint at `/var/run/dbus` and sets
+`DBUS_SYSTEM_BUS_ADDRESS`; it prepares networking and waits for the private
+daemon before releasing the application entrypoint. Missing host binaries,
+missing IPv4 networking or a daemon readiness failure prevents startup. Host
+networking is refused. Net apps also need their usual `mesh` network entitlement
+and isolated network configuration.
+
+Avahi and Bluetooth entitlements cannot be combined in one container because
+both use `/var/run/dbus`. The current bridge supports root D-Bus clients, matching
+Wendy's application OCI identity. Applications that drop to a different UID must
+keep their Avahi client in a root process; non-root client authentication through
+this proxy is not supported.
+
+A daemon that exits during an app run is retried with a bounded restart budget.
+If that budget is exhausted, or its private bus/proxy exits, the app continues
+running with DNS-SD unavailable and the agent logs the failure. Restart the app
+to recreate its private service.
+
+After an agent restart, private discovery is rebuilt for surviving app containers;
+clients must reconnect to D-Bus. A redeploy rejected during validation preserves
+the running app's discovery. For an accepted replacement, the agent retires the
+old private service and prepares the new one before releasing the new entrypoint.
+
+DNS-SD hostnames and service names are discovery metadata, not authenticated device
+identities.
+
+### `nan`
+
+Let a trusted app manage its own Wi-Fi Aware discovery and direct connections.
+Ordinary Wendy Net networking does not need this entitlement. For direct control
+and IP traffic, include both grants:
+
+```json
+{
+  "entitlements": [
+    { "type": "nan" },
+    { "type": "network", "mode": "host" }
+  ]
+}
+```
+
+The agent prepares a separate Wi-Fi Aware data interface for the app. Your app
+must create and manage its own discovery and connection sessions.
+
+| Environment variable | Use |
+| --- | --- |
+| `WENDY_NAN_SOCKET` | Wi-Fi Aware control socket for commands and events. |
+| `WENDY_NAN_NDI` | App-specific data interface for IP traffic. |
+| `WENDY_NAN_CLIENT_DIR` | Shared directory where your control client must bind its reply socket. A private `/tmp` socket cannot receive replies from the host. |
+
+Only the Wi-Fi Aware socket is exposed, not the host's ordinary Wi-Fi controls.
+However, the grant does not filter commands: a read-only mount still allows radio
+control. Grant it only to trusted apps. Do not issue radio-wide start, stop, or
+reset commands while other apps or Wendy Net use the radio.
+
+If the Wi-Fi service restarts, the agent restarts monitored apps to refresh their
+socket access. Redeploy apps with restart policy `no` yourself. Stopping or deleting
+the app removes its private data interface while leaving shared Wi-Fi Aware
+available to other users.
+
 ### `persist`
 
 Persistent storage that survives container restarts.
@@ -439,9 +600,29 @@ GPIO pin access.
 |-------|-------------|
 | `pins` | Pin numbers to expose. Omit to grant access to all GPIO chips. |
 
+### `arduino-bridge`
+
+Talk to the microcontroller's sketch through Arduino's router (Arduino UNO Q). The agent mounts `/run/arduino-router` and sets `APP_SOCKET`, which Arduino's Python package `arduino-router-bridge` reads. A value you set in `env` wins.
+
+```json
+{ "type": "arduino-bridge" }
+```
+
+No fields. On other boards, and on older WendyOS, `wendy run` refuses it before building.
+
+```python
+import os
+from arduino.router_bridge import Bridge
+
+bridge = Bridge(os.environ["APP_SOCKET"])
+bridge.connect(timeout=5)
+bridge.provide("climate", lambda celsius, humidity: print(celsius, humidity))  # sketch: Bridge.notify("climate", c, h)
+bridge.call("buzz", 880, 200)                                                  # sketch: Bridge.provide_safe("buzz", buzz)
+```
+
 ### `spi`
 
-SPI device access via `spidev` (`/dev/spidev<bus>.<chipselect>`). Takes no options — grants the SPI subsystem as a whole. See the [SPI guide](../device/entitlements.md#spi).
+SPI device access via `spidev` (`/dev/spidev<bus>.<chipselect>`). Takes no options — grants the SPI subsystem as a whole. See the [SPI guide](/docs/advanced/device/entitlements#spi).
 
 ```json
 { "type": "spi" }
@@ -469,7 +650,7 @@ Registers the container as a [Model Context Protocol (MCP)](https://modelcontext
 |-------|------|-------------|
 | `port` | integer | TCP port on which the container's MCP server listens (required). |
 
-The container must serve the [MCP Streamable HTTP](https://modelcontextprotocol.io/specification) transport on `0.0.0.0:<port>`. See the [MCPExample](../Examples/MCPExample/README.md) for a complete Python reference implementation.
+The container must serve the [MCP Streamable HTTP](https://modelcontextprotocol.io/specification) transport on `0.0.0.0:<port>`. See the [MCPExample](/docs/advanced/Examples/MCPExample/) for a complete Python reference implementation.
 
 > **Note:** The `mcp` entitlement is typically combined with `{ "type": "network", "mode": "host" }` so that the agent can reach the container's MCP port over loopback.
 
@@ -487,6 +668,12 @@ Declares the app's primary HTTP port. The agent reports it over gRPC (`AppContai
 ```json
 { "type": "http", "port": 8080 }
 ```
+
+A detached agent deployment includes declared HTTP ports in its
+[reported endpoints](/docs/advanced/clients/wendy-cli/commands/run#detached-output), using
+host loopback forwarding for user-networked VMs. Reporting does not check HTTP
+health or open a browser. A TCP readiness port alone does not declare an HTTP
+endpoint; an explicit hostname-based HTTP(S) `openURL` can also supply one.
 
 > **Networking:** Browser reachability currently requires `{ "type": "network", "mode": "host" }`. Bridge mode provides outbound NAT only and does not publish host/LAN ports. A `network.ports` mapping in mesh mode serves mesh-peer traffic; it does not make the URL reachable from the developer's browser.
 
@@ -569,6 +756,33 @@ holding it can start recordings. The socket is restored from container labels
 after agent restart; the entitlement never exposes the administrative agent
 socket, and grants no sensor read access.
 
+To record custom payloads, declare named streams inside the entitlement:
+
+```json
+{
+  "type": "episode-write",
+  "streams": {
+    "temperature": {
+      "mode": "durable",
+      "mediaType": "application/json",
+      "storage": { "maxBytes": 67108864, "retentionSeconds": 86400 }
+    }
+  }
+}
+```
+
+The agent injects `WENDY_DATA_STREAM_DIR`; each stream uses
+`<directory>/<stream>.sock`. Lightweight streams accept native payload bytes.
+Durable streams use Protobuf envelopes, acknowledge after local storage sync,
+and retain records even when no episode is active. They reject new records
+when their journal is full, so producers must buffer and retry.
+
+See [Wendy Data](/docs/data#record-data-from-your-app) for the recording workflow,
+the [stream reference](/docs/advanced/clients/wendy-cli/commands/data#application-recording-streams)
+for retention and export, and the
+[WendyRecording examples](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyRecording)
+for time-series schemas and senders.
+
 ### `admin`
 
 Grants the container the wendy-agent's **full gRPC over a local unix socket** (`/run/wendy/agent.sock`, exposed as `WENDY_AGENT_SOCKET`) — with **no authentication**.
@@ -597,7 +811,7 @@ Grants `CAP_SYS_ADMIN` and un-denies the `unshare` / `clone(CLONE_NEWUSER)` sysc
 
 If your project uses a `docker-compose.yml` instead of a single container, you don't need a `wendy.json`. `wendy run` detects the compose file automatically and each service gets a generated app config derived from its `ports`, `network_mode`, and `volumes` declarations.
 
-See [Multi-Service Apps with Docker Compose](./compose.md) for details.
+See [Multi-Service Apps with Docker Compose](/docs/advanced/apps/compose) for details.
 
 ---
 

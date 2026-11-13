@@ -42,6 +42,10 @@
   ],
   "exclude": [
     "node_modules",
-    "examples"
+    "examples",
+    "dist-desktop",
+    "desktop-resources",
+    ".desktop-package",
+    "release"
   ]
 }

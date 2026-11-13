@@ -10,6 +10,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Linux applies O_EXCL without O_CREAT to block devices: refuse a mounted
+// disk (including its partitions) and prevent new mounts while writing.
+// Ordinary files remain usable by file-backed writer tests.
+const rawWriteFlags = os.O_RDWR | os.O_EXCL
+
 // blockDeviceSize returns the device's capacity in bytes (BLKGETSIZE64).
 func blockDeviceSize(dev *os.File) (int64, error) {
 	if info, err := dev.Stat(); err == nil && info.Mode().IsRegular() {

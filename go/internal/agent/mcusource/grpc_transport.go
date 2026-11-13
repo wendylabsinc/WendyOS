@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -31,9 +30,14 @@ type grpcTransport struct {
 	client    agentpbv2.WendySensorServiceClient
 }
 
-// NewGRPCTransport dials the source's mTLS agent endpoint, pinning its identity.
+// NewGRPCTransport dials the source's mTLS agent endpoint, pinning its
+// identity (paired principal, or legacy asset id in own tenant).
 func NewGRPCTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
-	tlsCfg, err := mtls.NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM, logger, strconv.Itoa(int(p.SourceAssetID)))
+	want, err := wantPeerIdentity(p, certPEM)
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg, err := mtls.NewClientTLSConfigExpectingIdentity(certPEM, chainPEM, keyPEM, logger, want)
 	if err != nil {
 		return nil, fmt.Errorf("mcusource: grpc tls: %w", err)
 	}

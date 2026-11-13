@@ -40,8 +40,8 @@ public nonisolated struct Wendy_Agent_Services_V1_ListContainersResponse: Sendab
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  public var container: AppContainer {
-    get {_container ?? AppContainer()}
+  public var container: Wendy_Agent_Services_V1_AppContainer {
+    get {_container ?? Wendy_Agent_Services_V1_AppContainer()}
     set {_container = newValue}
   }
   /// Returns true if `container` has been explicitly set.
@@ -53,7 +53,7 @@ public nonisolated struct Wendy_Agent_Services_V1_ListContainersResponse: Sendab
 
   public init() {}
 
-  fileprivate var _container: AppContainer? = nil
+  fileprivate var _container: Wendy_Agent_Services_V1_AppContainer? = nil
 }
 
 public nonisolated struct Wendy_Agent_Services_V1_ListLayersRequest: Sendable {
@@ -222,8 +222,8 @@ public nonisolated struct Wendy_Agent_Services_V1_RunContainerLayersRequest: Sen
   public var appConfig: Data = Data()
 
   /// Optional restart policy override for Docker runtime.
-  public var restartPolicy: RestartPolicy {
-    get {_restartPolicy ?? RestartPolicy()}
+  public var restartPolicy: Wendy_Agent_Services_V1_RestartPolicy {
+    get {_restartPolicy ?? Wendy_Agent_Services_V1_RestartPolicy()}
     set {_restartPolicy = newValue}
   }
   /// Returns true if `restartPolicy` has been explicitly set.
@@ -250,11 +250,22 @@ public nonisolated struct Wendy_Agent_Services_V1_RunContainerLayersRequest: Sen
   /// Agents predating this field ignore it and start the container without it.
   public var env: [String] = []
 
+  /// See CreateContainerRequest.release_id.
+  public var releaseID: String {
+    get {_releaseID ?? String()}
+    set {_releaseID = newValue}
+  }
+  /// Returns true if `releaseID` has been explicitly set.
+  public var hasReleaseID: Bool {self._releaseID != nil}
+  /// Clears the value of `releaseID`. Subsequent reads from it will return its default value.
+  public mutating func clearReleaseID() {self._releaseID = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 
-  fileprivate var _restartPolicy: RestartPolicy? = nil
+  fileprivate var _restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
+  fileprivate var _releaseID: String? = nil
 }
 
 public nonisolated struct Wendy_Agent_Services_V1_CreateContainerRequest: Sendable {
@@ -272,8 +283,8 @@ public nonisolated struct Wendy_Agent_Services_V1_CreateContainerRequest: Sendab
 
   public var workingDir: String = String()
 
-  public var restartPolicy: RestartPolicy {
-    get {_restartPolicy ?? RestartPolicy()}
+  public var restartPolicy: Wendy_Agent_Services_V1_RestartPolicy {
+    get {_restartPolicy ?? Wendy_Agent_Services_V1_RestartPolicy()}
     set {_restartPolicy = newValue}
   }
   /// Returns true if `restartPolicy` has been explicitly set.
@@ -288,14 +299,52 @@ public nonisolated struct Wendy_Agent_Services_V1_CreateContainerRequest: Sendab
   /// so Wendy vars always win.
   public var env: [String] = []
 
+  /// Cloud AppRelease id (a UUID) this deploy was recorded as, set only when
+  /// the operator opted into recording (`wendy run --record-release`). The
+  /// agent labels the container with it and reports it as the running
+  /// release. Unset: the deploy is not a recorded release. Agents predating
+  /// this field ignore it.
+  public var releaseID: String {
+    get {_releaseID ?? String()}
+    set {_releaseID = newValue}
+  }
+  /// Returns true if `releaseID` has been explicitly set.
+  public var hasReleaseID: Bool {self._releaseID != nil}
+  /// Clears the value of `releaseID`. Subsequent reads from it will return its default value.
+  public mutating func clearReleaseID() {self._releaseID = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 
-  fileprivate var _restartPolicy: RestartPolicy? = nil
+  fileprivate var _restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
+  fileprivate var _releaseID: String? = nil
 }
 
 public nonisolated struct Wendy_Agent_Services_V1_CreateContainerResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Digest of the image manifest the container was created from, as the
+  /// device holds it. The CLI records it on the release it created.
+  public var imageDigest: String {
+    get {_imageDigest ?? String()}
+    set {_imageDigest = newValue}
+  }
+  /// Returns true if `imageDigest` has been explicitly set.
+  public var hasImageDigest: Bool {self._imageDigest != nil}
+  /// Clears the value of `imageDigest`. Subsequent reads from it will return its default value.
+  public mutating func clearImageDigest() {self._imageDigest = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _imageDigest: String? = nil
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_ValidateContainerResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -413,8 +462,8 @@ public nonisolated struct Wendy_Agent_Services_V1_StartContainerRequest: Sendabl
   public var appName: String = String()
 
   /// Optional restart policy override. When unset the agent uses its default.
-  public var restartPolicy: RestartPolicy {
-    get {_restartPolicy ?? RestartPolicy()}
+  public var restartPolicy: Wendy_Agent_Services_V1_RestartPolicy {
+    get {_restartPolicy ?? Wendy_Agent_Services_V1_RestartPolicy()}
     set {_restartPolicy = newValue}
   }
   /// Returns true if `restartPolicy` has been explicitly set.
@@ -426,7 +475,7 @@ public nonisolated struct Wendy_Agent_Services_V1_StartContainerRequest: Sendabl
 
   public init() {}
 
-  fileprivate var _restartPolicy: RestartPolicy? = nil
+  fileprivate var _restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
 }
 
 /// AttachContainerRequest is the client-to-server message for AttachContainer.
@@ -710,9 +759,21 @@ public nonisolated struct Wendy_Agent_Services_V1_RunContainerLayersResponse: Se
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
 
+    /// See CreateContainerResponse.image_digest.
+    public var imageDigest: String {
+      get {_imageDigest ?? String()}
+      set {_imageDigest = newValue}
+    }
+    /// Returns true if `imageDigest` has been explicitly set.
+    public var hasImageDigest: Bool {self._imageDigest != nil}
+    /// Clears the value of `imageDigest`. Subsequent reads from it will return its default value.
+    public mutating func clearImageDigest() {self._imageDigest = nil}
+
     public var unknownFields = SwiftProtobuf.UnknownStorage()
 
     public init() {}
+
+    fileprivate var _imageDigest: String? = nil
   }
 
   public nonisolated struct ConsoleOutput: Sendable {
@@ -920,30 +981,161 @@ public nonisolated struct Wendy_Agent_Services_V1_GetResourceStatsResponse: Send
 
 /// HostStats carries cumulative host counters; the client computes percentages
 /// from deltas between consecutive samples.
-public nonisolated struct Wendy_Agent_Services_V1_HostStats: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_HostStats: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// sum of all fields on the /proc/stat "cpu" line
-  public var cpuTotalJiffies: UInt64 = 0
+  /// sum of user through steal; excludes duplicate guest counters
+  public var cpuTotalJiffies: UInt64 {
+    get {_storage._cpuTotalJiffies}
+    set {_uniqueStorage()._cpuTotalJiffies = newValue}
+  }
 
-  /// idle + iowait fields
-  public var cpuIdleJiffies: UInt64 = 0
+  /// non-executing time: idle + iowait + steal
+  public var cpuIdleJiffies: UInt64 {
+    get {_storage._cpuIdleJiffies}
+    set {_uniqueStorage()._cpuIdleJiffies = newValue}
+  }
 
   /// online logical CPUs
-  public var cpuCount: UInt32 = 0
+  public var cpuCount: UInt32 {
+    get {_storage._cpuCount}
+    set {_uniqueStorage()._cpuCount = newValue}
+  }
 
-  public var memTotalBytes: Int64 = 0
+  public var memTotalBytes: Int64 {
+    get {_storage._memTotalBytes}
+    set {_uniqueStorage()._memTotalBytes = newValue}
+  }
 
-  public var memAvailableBytes: Int64 = 0
+  public var memAvailableBytes: Int64 {
+    get {_storage._memAvailableBytes}
+    set {_uniqueStorage()._memAvailableBytes = newValue}
+  }
 
   /// empty when no GPU / no sampler tool present
-  public var gpus: [Wendy_Agent_Services_V1_GpuStats] = []
+  public var gpus: [Wendy_Agent_Services_V1_GpuStats] {
+    get {_storage._gpus}
+    set {_uniqueStorage()._gpus = newValue}
+  }
 
   /// Every readable thermal sensor on the device (CPU, GPU, SoC, junction, …),
   /// from /sys/class/thermal. Empty when no zones are readable.
-  public var thermalZones: [Wendy_Agent_Services_V1_ThermalZone] = []
+  public var thermalZones: [Wendy_Agent_Services_V1_ThermalZone] {
+    get {_storage._thermalZones}
+    set {_uniqueStorage()._thermalZones = newValue}
+  }
+
+  /// Aggregate system-battery state, from /sys/class/power_supply. Absent on
+  /// mains-powered devices, which is the overwhelming majority of them.
+  public var battery: Wendy_Agent_Services_V1_BatteryStats {
+    get {_storage._battery ?? Wendy_Agent_Services_V1_BatteryStats()}
+    set {_uniqueStorage()._battery = newValue}
+  }
+  /// Returns true if `battery` has been explicitly set.
+  public var hasBattery: Bool {_storage._battery != nil}
+  /// Clears the value of `battery`. Subsequent reads from it will return its default value.
+  public mutating func clearBattery() {_uniqueStorage()._battery = nil}
+
+  /// Absent on older agents. Missing counters mean unavailable, never zero.
+  public var network: Wendy_Agent_Services_V1_NetworkStats {
+    get {_storage._network ?? Wendy_Agent_Services_V1_NetworkStats()}
+    set {_uniqueStorage()._network = newValue}
+  }
+  /// Returns true if `network` has been explicitly set.
+  public var hasNetwork: Bool {_storage._network != nil}
+  /// Clears the value of `network`. Subsequent reads from it will return its default value.
+  public mutating func clearNetwork() {_uniqueStorage()._network = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _storage = _StorageClass.defaultInstance
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_GetNetworkStatsRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_NetworkStats: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var bootID: String = String()
+
+  /// CLOCK_BOOTTIME on the device, for rates unaffected by clock adjustments
+  /// or client/relay latency. Compare samples only within the same boot.
+  public var sampledAtBoottimeNs: UInt64 = 0
+
+  public var interfaces: [Wendy_Agent_Services_V1_NetworkInterfaceStats] = []
+
+  /// The agent's systemd service, including helper processes and IP loopback,
+  /// but excluding app containers. IP bytes, not Ethernet/wire bytes.
+  public var agent: Wendy_Agent_Services_V1_AgentNetworkStats {
+    get {_agent ?? Wendy_Agent_Services_V1_AgentNetworkStats()}
+    set {_agent = newValue}
+  }
+  /// Returns true if `agent` has been explicitly set.
+  public var hasAgent: Bool {self._agent != nil}
+  /// Clears the value of `agent`. Subsequent reads from it will return its default value.
+  public mutating func clearAgent() {self._agent = nil}
+
+  public var interfacesUnavailableReason: String = String()
+
+  public var agentUnavailableReason: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _agent: Wendy_Agent_Services_V1_AgentNetworkStats? = nil
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_NetworkInterfaceStats: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var name: String = String()
+
+  public var index: UInt32 = 0
+
+  public var receivedBytes: UInt64 = 0
+
+  public var sentBytes: UInt64 = 0
+
+  /// Virtual interfaces are listed but must not be summed with physical links.
+  public var virtual: Bool = false
+
+  /// Interface counters cover all traffic since interface creation/reset.
+  public var loopback: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_AgentNetworkStats: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var receivedBytes: UInt64 = 0
+
+  public var sentBytes: UInt64 = 0
+
+  /// Changes when service accounting restarts. Totals are since accounting
+  /// was enabled, and do not represent historical daily/monthly usage.
+  public var accountingID: String = String()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1078,6 +1270,16 @@ public nonisolated struct Wendy_Agent_Services_V1_MCPChunk: Sendable {
   // methods supported on all messages.
 
   public var data: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_PrepareImageResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1460,7 +1662,7 @@ nonisolated extension Wendy_Agent_Services_V1_LayerHeader: SwiftProtobuf.Message
 
 nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RunContainerLayersRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{1}layers\0\u{3}app_config\0\u{3}restart_policy\0\u{3}working_dir\0\u{3}user_args\0\u{3}image_config\0\u{3}image_signature\0\u{1}env\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{1}layers\0\u{3}app_config\0\u{3}restart_policy\0\u{3}working_dir\0\u{3}user_args\0\u{3}image_config\0\u{3}image_signature\0\u{1}env\0\u{3}release_id\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1479,6 +1681,7 @@ nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftPr
       case 9: try { try decoder.decodeSingularBytesField(value: &self.imageConfig) }()
       case 10: try { try decoder.decodeSingularBytesField(value: &self.imageSignature) }()
       case 11: try { try decoder.decodeRepeatedStringField(value: &self.env) }()
+      case 12: try { try decoder.decodeSingularStringField(value: &self._releaseID) }()
       default: break
       }
     }
@@ -1522,6 +1725,9 @@ nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftPr
     if !self.env.isEmpty {
       try visitor.visitRepeatedStringField(value: self.env, fieldNumber: 11)
     }
+    try { if let v = self._releaseID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 12)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1537,6 +1743,7 @@ nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftPr
     if lhs.imageConfig != rhs.imageConfig {return false}
     if lhs.imageSignature != rhs.imageSignature {return false}
     if lhs.env != rhs.env {return false}
+    if lhs._releaseID != rhs._releaseID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1544,7 +1751,7 @@ nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersRequest: SwiftPr
 
 nonisolated extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".CreateContainerRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{3}app_config\0\u{3}working_dir\0\u{3}restart_policy\0\u{3}user_args\0\u{1}env\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_name\0\u{3}app_name\0\u{1}cmd\0\u{3}app_config\0\u{3}working_dir\0\u{3}restart_policy\0\u{3}user_args\0\u{1}env\0\u{3}release_id\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1560,6 +1767,7 @@ nonisolated extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProto
       case 6: try { try decoder.decodeSingularMessageField(value: &self._restartPolicy) }()
       case 7: try { try decoder.decodeRepeatedStringField(value: &self.userArgs) }()
       case 8: try { try decoder.decodeRepeatedStringField(value: &self.env) }()
+      case 9: try { try decoder.decodeSingularStringField(value: &self._releaseID) }()
       default: break
       }
     }
@@ -1594,6 +1802,9 @@ nonisolated extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProto
     if !self.env.isEmpty {
       try visitor.visitRepeatedStringField(value: self.env, fieldNumber: 8)
     }
+    try { if let v = self._releaseID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 9)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1606,6 +1817,7 @@ nonisolated extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProto
     if lhs._restartPolicy != rhs._restartPolicy {return false}
     if lhs.userArgs != rhs.userArgs {return false}
     if lhs.env != rhs.env {return false}
+    if lhs._releaseID != rhs._releaseID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1613,6 +1825,40 @@ nonisolated extension Wendy_Agent_Services_V1_CreateContainerRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_CreateContainerResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".CreateContainerResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_digest\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._imageDigest) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._imageDigest {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerResponse, rhs: Wendy_Agent_Services_V1_CreateContainerResponse) -> Bool {
+    if lhs._imageDigest != rhs._imageDigest {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_ValidateContainerResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ValidateContainerResponse"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -1624,7 +1870,7 @@ nonisolated extension Wendy_Agent_Services_V1_CreateContainerResponse: SwiftProt
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Wendy_Agent_Services_V1_CreateContainerResponse, rhs: Wendy_Agent_Services_V1_CreateContainerResponse) -> Bool {
+  public static func ==(lhs: Wendy_Agent_Services_V1_ValidateContainerResponse, rhs: Wendy_Agent_Services_V1_ValidateContainerResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2224,18 +2470,33 @@ nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersResponse: SwiftP
 
 nonisolated extension Wendy_Agent_Services_V1_RunContainerLayersResponse.Started: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = Wendy_Agent_Services_V1_RunContainerLayersResponse.protoMessageName + ".Started"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}image_digest\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    // Load everything into unknown fields
-    while try decoder.nextFieldNumber() != nil {}
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._imageDigest) }()
+      default: break
+      }
+    }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._imageDigest {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_RunContainerLayersResponse.Started, rhs: Wendy_Agent_Services_V1_RunContainerLayersResponse.Started) -> Bool {
+    if lhs._imageDigest != rhs._imageDigest {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2676,7 +2937,152 @@ nonisolated extension Wendy_Agent_Services_V1_GetResourceStatsResponse: SwiftPro
 
 nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".HostStats"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cpu_total_jiffies\0\u{3}cpu_idle_jiffies\0\u{3}cpu_count\0\u{3}mem_total_bytes\0\u{3}mem_available_bytes\0\u{1}gpus\0\u{3}thermal_zones\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cpu_total_jiffies\0\u{3}cpu_idle_jiffies\0\u{3}cpu_count\0\u{3}mem_total_bytes\0\u{3}mem_available_bytes\0\u{1}gpus\0\u{3}thermal_zones\0\u{1}battery\0\u{1}network\0")
+
+  fileprivate class _StorageClass {
+    var _cpuTotalJiffies: UInt64 = 0
+    var _cpuIdleJiffies: UInt64 = 0
+    var _cpuCount: UInt32 = 0
+    var _memTotalBytes: Int64 = 0
+    var _memAvailableBytes: Int64 = 0
+    var _gpus: [Wendy_Agent_Services_V1_GpuStats] = []
+    var _thermalZones: [Wendy_Agent_Services_V1_ThermalZone] = []
+    var _battery: Wendy_Agent_Services_V1_BatteryStats? = nil
+    var _network: Wendy_Agent_Services_V1_NetworkStats? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _cpuTotalJiffies = source._cpuTotalJiffies
+      _cpuIdleJiffies = source._cpuIdleJiffies
+      _cpuCount = source._cpuCount
+      _memTotalBytes = source._memTotalBytes
+      _memAvailableBytes = source._memAvailableBytes
+      _gpus = source._gpus
+      _thermalZones = source._thermalZones
+      _battery = source._battery
+      _network = source._network
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularUInt64Field(value: &_storage._cpuTotalJiffies) }()
+        case 2: try { try decoder.decodeSingularUInt64Field(value: &_storage._cpuIdleJiffies) }()
+        case 3: try { try decoder.decodeSingularUInt32Field(value: &_storage._cpuCount) }()
+        case 4: try { try decoder.decodeSingularInt64Field(value: &_storage._memTotalBytes) }()
+        case 5: try { try decoder.decodeSingularInt64Field(value: &_storage._memAvailableBytes) }()
+        case 6: try { try decoder.decodeRepeatedMessageField(value: &_storage._gpus) }()
+        case 7: try { try decoder.decodeRepeatedMessageField(value: &_storage._thermalZones) }()
+        case 8: try { try decoder.decodeSingularMessageField(value: &_storage._battery) }()
+        case 9: try { try decoder.decodeSingularMessageField(value: &_storage._network) }()
+        default: break
+        }
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if _storage._cpuTotalJiffies != 0 {
+        try visitor.visitSingularUInt64Field(value: _storage._cpuTotalJiffies, fieldNumber: 1)
+      }
+      if _storage._cpuIdleJiffies != 0 {
+        try visitor.visitSingularUInt64Field(value: _storage._cpuIdleJiffies, fieldNumber: 2)
+      }
+      if _storage._cpuCount != 0 {
+        try visitor.visitSingularUInt32Field(value: _storage._cpuCount, fieldNumber: 3)
+      }
+      if _storage._memTotalBytes != 0 {
+        try visitor.visitSingularInt64Field(value: _storage._memTotalBytes, fieldNumber: 4)
+      }
+      if _storage._memAvailableBytes != 0 {
+        try visitor.visitSingularInt64Field(value: _storage._memAvailableBytes, fieldNumber: 5)
+      }
+      if !_storage._gpus.isEmpty {
+        try visitor.visitRepeatedMessageField(value: _storage._gpus, fieldNumber: 6)
+      }
+      if !_storage._thermalZones.isEmpty {
+        try visitor.visitRepeatedMessageField(value: _storage._thermalZones, fieldNumber: 7)
+      }
+      try { if let v = _storage._battery {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
+      } }()
+      try { if let v = _storage._network {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 9)
+      } }()
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_HostStats, rhs: Wendy_Agent_Services_V1_HostStats) -> Bool {
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._cpuTotalJiffies != rhs_storage._cpuTotalJiffies {return false}
+        if _storage._cpuIdleJiffies != rhs_storage._cpuIdleJiffies {return false}
+        if _storage._cpuCount != rhs_storage._cpuCount {return false}
+        if _storage._memTotalBytes != rhs_storage._memTotalBytes {return false}
+        if _storage._memAvailableBytes != rhs_storage._memAvailableBytes {return false}
+        if _storage._gpus != rhs_storage._gpus {return false}
+        if _storage._thermalZones != rhs_storage._thermalZones {return false}
+        if _storage._battery != rhs_storage._battery {return false}
+        if _storage._network != rhs_storage._network {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_GetNetworkStatsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetNetworkStatsRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_GetNetworkStatsRequest, rhs: Wendy_Agent_Services_V1_GetNetworkStatsRequest) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_NetworkStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".NetworkStats"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}boot_id\0\u{3}sampled_at_boottime_ns\0\u{1}interfaces\0\u{1}agent\0\u{3}interfaces_unavailable_reason\0\u{3}agent_unavailable_reason\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2684,51 +3090,145 @@ nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, 
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularUInt64Field(value: &self.cpuTotalJiffies) }()
-      case 2: try { try decoder.decodeSingularUInt64Field(value: &self.cpuIdleJiffies) }()
-      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.cpuCount) }()
-      case 4: try { try decoder.decodeSingularInt64Field(value: &self.memTotalBytes) }()
-      case 5: try { try decoder.decodeSingularInt64Field(value: &self.memAvailableBytes) }()
-      case 6: try { try decoder.decodeRepeatedMessageField(value: &self.gpus) }()
-      case 7: try { try decoder.decodeRepeatedMessageField(value: &self.thermalZones) }()
+      case 1: try { try decoder.decodeSingularStringField(value: &self.bootID) }()
+      case 2: try { try decoder.decodeSingularUInt64Field(value: &self.sampledAtBoottimeNs) }()
+      case 3: try { try decoder.decodeRepeatedMessageField(value: &self.interfaces) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._agent) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.interfacesUnavailableReason) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self.agentUnavailableReason) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if self.cpuTotalJiffies != 0 {
-      try visitor.visitSingularUInt64Field(value: self.cpuTotalJiffies, fieldNumber: 1)
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.bootID.isEmpty {
+      try visitor.visitSingularStringField(value: self.bootID, fieldNumber: 1)
     }
-    if self.cpuIdleJiffies != 0 {
-      try visitor.visitSingularUInt64Field(value: self.cpuIdleJiffies, fieldNumber: 2)
+    if self.sampledAtBoottimeNs != 0 {
+      try visitor.visitSingularUInt64Field(value: self.sampledAtBoottimeNs, fieldNumber: 2)
     }
-    if self.cpuCount != 0 {
-      try visitor.visitSingularUInt32Field(value: self.cpuCount, fieldNumber: 3)
+    if !self.interfaces.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.interfaces, fieldNumber: 3)
     }
-    if self.memTotalBytes != 0 {
-      try visitor.visitSingularInt64Field(value: self.memTotalBytes, fieldNumber: 4)
+    try { if let v = self._agent {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    if !self.interfacesUnavailableReason.isEmpty {
+      try visitor.visitSingularStringField(value: self.interfacesUnavailableReason, fieldNumber: 5)
     }
-    if self.memAvailableBytes != 0 {
-      try visitor.visitSingularInt64Field(value: self.memAvailableBytes, fieldNumber: 5)
-    }
-    if !self.gpus.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.gpus, fieldNumber: 6)
-    }
-    if !self.thermalZones.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.thermalZones, fieldNumber: 7)
+    if !self.agentUnavailableReason.isEmpty {
+      try visitor.visitSingularStringField(value: self.agentUnavailableReason, fieldNumber: 6)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Wendy_Agent_Services_V1_HostStats, rhs: Wendy_Agent_Services_V1_HostStats) -> Bool {
-    if lhs.cpuTotalJiffies != rhs.cpuTotalJiffies {return false}
-    if lhs.cpuIdleJiffies != rhs.cpuIdleJiffies {return false}
-    if lhs.cpuCount != rhs.cpuCount {return false}
-    if lhs.memTotalBytes != rhs.memTotalBytes {return false}
-    if lhs.memAvailableBytes != rhs.memAvailableBytes {return false}
-    if lhs.gpus != rhs.gpus {return false}
-    if lhs.thermalZones != rhs.thermalZones {return false}
+  public static func ==(lhs: Wendy_Agent_Services_V1_NetworkStats, rhs: Wendy_Agent_Services_V1_NetworkStats) -> Bool {
+    if lhs.bootID != rhs.bootID {return false}
+    if lhs.sampledAtBoottimeNs != rhs.sampledAtBoottimeNs {return false}
+    if lhs.interfaces != rhs.interfaces {return false}
+    if lhs._agent != rhs._agent {return false}
+    if lhs.interfacesUnavailableReason != rhs.interfacesUnavailableReason {return false}
+    if lhs.agentUnavailableReason != rhs.agentUnavailableReason {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_NetworkInterfaceStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".NetworkInterfaceStats"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{1}index\0\u{3}received_bytes\0\u{3}sent_bytes\0\u{1}virtual\0\u{1}loopback\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.index) }()
+      case 3: try { try decoder.decodeSingularUInt64Field(value: &self.receivedBytes) }()
+      case 4: try { try decoder.decodeSingularUInt64Field(value: &self.sentBytes) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.virtual) }()
+      case 6: try { try decoder.decodeSingularBoolField(value: &self.loopback) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 1)
+    }
+    if self.index != 0 {
+      try visitor.visitSingularUInt32Field(value: self.index, fieldNumber: 2)
+    }
+    if self.receivedBytes != 0 {
+      try visitor.visitSingularUInt64Field(value: self.receivedBytes, fieldNumber: 3)
+    }
+    if self.sentBytes != 0 {
+      try visitor.visitSingularUInt64Field(value: self.sentBytes, fieldNumber: 4)
+    }
+    if self.virtual != false {
+      try visitor.visitSingularBoolField(value: self.virtual, fieldNumber: 5)
+    }
+    if self.loopback != false {
+      try visitor.visitSingularBoolField(value: self.loopback, fieldNumber: 6)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_NetworkInterfaceStats, rhs: Wendy_Agent_Services_V1_NetworkInterfaceStats) -> Bool {
+    if lhs.name != rhs.name {return false}
+    if lhs.index != rhs.index {return false}
+    if lhs.receivedBytes != rhs.receivedBytes {return false}
+    if lhs.sentBytes != rhs.sentBytes {return false}
+    if lhs.virtual != rhs.virtual {return false}
+    if lhs.loopback != rhs.loopback {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentNetworkStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AgentNetworkStats"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}received_bytes\0\u{3}sent_bytes\0\u{3}accounting_id\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt64Field(value: &self.receivedBytes) }()
+      case 2: try { try decoder.decodeSingularUInt64Field(value: &self.sentBytes) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.accountingID) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.receivedBytes != 0 {
+      try visitor.visitSingularUInt64Field(value: self.receivedBytes, fieldNumber: 1)
+    }
+    if self.sentBytes != 0 {
+      try visitor.visitSingularUInt64Field(value: self.sentBytes, fieldNumber: 2)
+    }
+    if !self.accountingID.isEmpty {
+      try visitor.visitSingularStringField(value: self.accountingID, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_AgentNetworkStats, rhs: Wendy_Agent_Services_V1_AgentNetworkStats) -> Bool {
+    if lhs.receivedBytes != rhs.receivedBytes {return false}
+    if lhs.sentBytes != rhs.sentBytes {return false}
+    if lhs.accountingID != rhs.accountingID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2998,6 +3498,25 @@ nonisolated extension Wendy_Agent_Services_V1_MCPChunk: SwiftProtobuf.Message, S
 
   public static func ==(lhs: Wendy_Agent_Services_V1_MCPChunk, rhs: Wendy_Agent_Services_V1_MCPChunk) -> Bool {
     if lhs.data != rhs.data {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_PrepareImageResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".PrepareImageResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_PrepareImageResponse, rhs: Wendy_Agent_Services_V1_PrepareImageResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

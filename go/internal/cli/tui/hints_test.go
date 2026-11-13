@@ -68,6 +68,9 @@ func TestHintRotatorViewEmptyForNoHint(t *testing.T) {
 	if v := r.view(0); v != "" {
 		t.Fatalf("expected empty view for empty rotator, got %q", v)
 	}
+	if r.tick() != nil {
+		t.Fatal("empty rotator scheduled a tick")
+	}
 }
 
 // TestHintRotatorViewTruncatesToWidth verifies that a hint wider than the given

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -23,19 +24,21 @@ import (
 
 type discoveryV2Server struct {
 	cloudpbv2.UnimplementedAssetServiceServer
-	t     *testing.T
-	count int32
-	fail  bool
+	t            *testing.T
+	count        int32
+	fail         bool
+	organization string
 }
 
 func discoveryV2Auth(t *testing.T, count int32, fail bool) *config.AuthConfig {
 	t.Helper()
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer()
-	cloudpbv2.RegisterAssetServiceServer(srv, &discoveryV2Server{t: t, count: count, fail: fail})
+	cloudpbv2.RegisterAssetServiceServer(srv, &discoveryV2Server{t: t, count: count, fail: fail, organization: testOperatorTenant})
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	auth := oidcEnrollmentAuth(t)
@@ -67,7 +70,7 @@ func TestCloudDiscoverInteractiveV2(t *testing.T) {
 				t.Fatalf("unexpected view: %s", m.View())
 			}
 			id := m.devices[1].key
-			updated, _ = m.Update(cloudAssetVersionMsg{assetID: id, resp: &agentpb.GetAgentVersionResponse{Version: "9.9.9"}})
+			updated, _ = m.Update(discoverUpdateDoneMsg{cloudAssetKey: id, note: "Already at the latest release.", version: &agentpb.GetAgentVersionResponse{Version: "9.9.9"}})
 			m = updated.(cloudDiscoverModel)
 			if m.versions[m.devices[0].key] != nil || m.versions[id].GetVersion() != "9.9.9" {
 				t.Fatal("version results mixed device UUIDs")
@@ -97,7 +100,7 @@ func TestCloudDiscoverInteractiveV2(t *testing.T) {
 				t.Fatal("copy all lost devices or UUIDs")
 			}
 
-			// Subsequent refreshes must use the same version-aware fetcher.
+			// Subsequent refreshes must use the same Cloud API generation.
 			updated, _ = m.Update(m.scanCmd()())
 			m = updated.(cloudDiscoverModel)
 			if m.err != nil || len(m.devices) != 205 {
@@ -108,7 +111,51 @@ func TestCloudDiscoverInteractiveV2(t *testing.T) {
 			if _, exists := m.versions[id]; exists {
 				t.Fatal("updated device retained stale version")
 			}
+			updated, _ = m.Update(discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: wantName, version: &agentpb.GetAgentVersionResponse{Version: "10.0.0"}})
+			m = updated.(cloudDiscoverModel)
+			if m.versions[id].GetVersion() != "10.0.0" || !strings.Contains(m.View(), "10.0.0") {
+				t.Fatal("updated device did not reuse the restart probe's version")
+			}
 		})
+	}
+}
+
+// Opening a populated picker and receiving scan results must schedule only
+// another roster read, never a batch of per-device tunnel commands.
+func TestCloudDiscoverSchedulesOnlyRosterRefresh(t *testing.T) {
+	auth := discoveryV2Auth(t, 2, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	devices, err := fetchCloudDiscoveryDevices(ctx, auth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		name string
+		msg  tea.Msg
+	}
+	results := make(chan result, 6)
+	for _, picker := range []bool{false, true} {
+		m := newCloudDiscoverModel(ctx, auth, "", false, picker, nil)
+		m.devices, m.hasResults = devices, true
+		_, refresh := m.Update(cloudScanMsg{devices: devices})
+		_, failedRefresh := m.Update(cloudScanMsg{err: errors.New("roster unavailable")})
+		for name, cmd := range map[string]tea.Cmd{"open": m.Init(), "refresh": refresh, "failed refresh": failedRefresh} {
+			go func() { results <- result{fmt.Sprintf("picker=%t/%s", picker, name), cmd()} }()
+		}
+	}
+	for range 6 {
+		select {
+		case result := <-results:
+			scan, ok := result.msg.(cloudScanMsg)
+			if !ok {
+				t.Errorf("%s scheduled %T, want only a roster refresh", result.name, result.msg)
+			} else if scan.err != nil || len(scan.devices) != 2 {
+				t.Errorf("%s roster refresh: %v, %d devices", result.name, scan.err, len(scan.devices))
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for roster refresh")
+		}
 	}
 }
 
@@ -156,6 +203,14 @@ func TestDevicePickerSelectsV2UUID(t *testing.T) {
 }
 
 func TestCloudDiscoveryV2DoesNotUseRetiredRelay(t *testing.T) {
+	for _, udp := range []bool{false, true} {
+		for _, port := range []uint32{1, 3007, 50052, 65535} {
+			t.Run(fmt.Sprintf("udp=%t/port=%d", udp, port), func(t *testing.T) { testCloudDiscoveryV2Port(t, udp, port) })
+		}
+	}
+}
+
+func testCloudDiscoveryV2Port(t *testing.T, udp bool, port uint32) {
 	// The v2 relay path dials the live wendycloud.tunnel.v2 authorization
 	// service (cloudrelay.OpenTCP → RequestTunnel); it must never dial the
 	// retired wendycloud.v2.TunnelBrokerService. That retired server stub is
@@ -194,7 +249,11 @@ func TestCloudDiscoveryV2DoesNotUseRetiredRelay(t *testing.T) {
 	// operator credential is ML-DSA now, so signing succeeds and the call
 	// reaches the dial — the point guarded here: whatever it dials, never the
 	// retired relay.
-	_, err = d.openTunnel(ctx, nil, auth, 50052)
+	if udp {
+		_, err = d.openDatagram(ctx, nil, auth, port)
+	} else {
+		_, err = d.openTunnel(ctx, nil, auth, port)
+	}
 	if err == nil {
 		t.Fatal("expected the tunnel dial to fail against the stub cloud endpoint")
 	}
@@ -234,8 +293,9 @@ func (s *discoveryV2Server) ListAssets(req *cloudpbv2.ListAssetsRequest, stream 
 		}
 		if err := stream.Send(&cloudpbv2.ListAssetsResponse{
 			Asset: &cloudpbv2.Asset{
-				Id:   fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
-				Name: name, OsType: &osType, Architecture: &arch,
+				Id:             fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
+				OrganizationId: s.organization,
+				Name:           name, OsType: &osType, Architecture: &arch,
 			}, Total: s.count,
 		}); err != nil {
 			return err
@@ -288,7 +348,10 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 			if callErr != nil {
 				t.Fatal(callErr)
 			}
-			var infos []cloudDiscoverV2Info
+			var infos []struct {
+				cloudDiscoverV2Info
+				Selector string `json:"selector"`
+			}
 			if err := json.Unmarshal([]byte(out), &infos); err != nil {
 				t.Fatal(err)
 			}
@@ -304,6 +367,43 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 				if info.ID != wantID || info.Type != "macOS (arm64)" || info.Name != wantName {
 					t.Fatalf("unexpected info: %+v", info)
 				}
+				wantSelector := "cloud://" + auth.CloudGRPC + "/tenant/" + testOperatorTenant + "/asset/" + wantID
+				selector, matched, err := parseCloudDeviceSelector(info.Selector)
+				if info.Selector != wantSelector || err != nil || !matched || selector.String() != wantSelector {
+					t.Fatalf("discovery lost scoped UUID selector: %q, %v", info.Selector, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCloudDiscoveryJSONPreservesPKIDeviceBinding(t *testing.T) {
+	const assetID = "00000000-0000-4000-8000-000000000001"
+	const deviceID = "00000000-0000-4000-8000-000000000002"
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			asset := &cloudpbv2.Asset{Id: assetID, Name: "Cloud Thor"}
+			if bound {
+				deviceName := deviceID
+				asset.PkiDeviceName = &deviceName
+			}
+			row := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: assetID}
+			encoded, err := json.Marshal(row.info(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if fields["id"] != assetID {
+				t.Fatalf("PKI binding changed the Cloud routing ID: %s", encoded)
+			}
+			if bound && fields["pkiDeviceName"] != deviceID {
+				t.Fatalf("Cloud row lost its different PKI device identity: %s", encoded)
+			}
+			if !bound && fields["pkiDeviceName"] != nil {
+				t.Fatalf("older row invented an explicit PKI binding: %s", encoded)
 			}
 		})
 	}
@@ -335,12 +435,20 @@ func TestCloudDiscoverJSONLegacy(t *testing.T) {
 	if callErr != nil {
 		t.Fatal(callErr)
 	}
-	var infos []discoverDeviceInfo
+	var infos []struct {
+		discoverDeviceInfo
+		Selector string `json:"selector"`
+	}
 	if err := json.Unmarshal([]byte(out), &infos); err != nil {
 		t.Fatal(err)
 	}
 	if len(infos) != 1 || infos[0].ID != 77 {
 		t.Fatalf("unexpected legacy results: %s", out)
+	}
+	wantSelector := "cloud://" + auth.CloudGRPC + "/org/7/asset/77"
+	selector, matched, err := parseCloudDeviceSelector(infos[0].Selector)
+	if infos[0].Selector != wantSelector || err != nil || !matched || selector.String() != wantSelector {
+		t.Fatalf("discovery lost scoped legacy selector: %q, %v", infos[0].Selector, err)
 	}
 }
 
@@ -370,5 +478,24 @@ func TestCloudPickerUsesV2AndPreservesUUID(t *testing.T) {
 	}
 	if got, err := resolveCloudDiscoveryDevice(duplicates, selected.key); err != nil || got.key != selected.key {
 		t.Fatal("exact UUID did not resolve")
+	}
+}
+
+// The offline re-query only explains a miss. The legacy path skips seeding
+// there too (pickCloudDeviceFromRoster).
+func TestUUIDOfflineRequeryDoesNotSeedPins(t *testing.T) {
+	auth := discoveryV2Auth(t, 1, false)
+	if _, err := pickCloudDiscoveryDevice(context.Background(), auth, "offline-device", ""); !errors.Is(err, errDeviceOffline) {
+		t.Fatalf("want an offline device error, got %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.DevicePinFor("online-device"); !ok {
+		t.Fatal("online lookup did not seed its roster")
+	}
+	if pin, ok := cfg.DevicePinFor("offline-device"); ok {
+		t.Fatalf("offline re-query seeded a pin: %+v", pin)
 	}
 }

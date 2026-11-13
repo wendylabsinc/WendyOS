@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 var (
@@ -67,10 +68,23 @@ func BubbleTableStyles(interactive bool) bubbleTable.Styles {
 			Foreground(tableSelectedFg).
 			Background(tableSelectedBg).
 			Bold(true)
+		// Without colour the highlight renders as plain text.
+		if lipgloss.ColorProfile() == termenv.Ascii {
+			styles.Selected = lipgloss.NewStyle().Transform(markSelectedRow)
+		}
 	} else {
 		styles.Selected = lipgloss.NewStyle()
 	}
 	return styles
+}
+
+// markSelectedRow puts a cursor in the row's leading cell padding, so the
+// row keeps its width.
+func markSelectedRow(row string) string {
+	if rest, ok := strings.CutPrefix(row, " "); ok {
+		return ">" + rest
+	}
+	return row
 }
 
 type BubbleTable struct {
@@ -225,6 +239,11 @@ func (t BubbleTable) Height() int {
 
 func (t *BubbleTable) SetHeight(height int) {
 	t.model.SetHeight(height)
+	// bubbles recalculates the rendered rows on resize, but leaves the old
+	// scroll offset in place. Reconcile it without moving the selected row.
+	if t.model.Cursor() >= 0 {
+		t.model.MoveDown(0)
+	}
 }
 
 func (t BubbleTable) SelectedRow() bubbleTable.Row {
@@ -243,4 +262,47 @@ func CropANSIView(view string, offset, width int) string {
 		lines[i] = ansi.Cut(line, offset, offset+width)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// FitView keeps the last height lines of view, as Bubble Tea's renderer does
+// with a frame taller than the terminal. Rows and the cursor sit at the bottom
+// of a picker frame, so dropping titles first keeps the selection visible.
+// A height of 0 means the terminal size is not known yet.
+func FitView(view string, height int) string {
+	if height <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) <= height {
+		return view
+	}
+	return strings.Join(lines[len(lines)-height:], "\n")
+}
+
+// WrapHint preserves recovery instructions that would otherwise be cropped at
+// the terminal edge. A zero width means the terminal size is not known yet.
+func WrapHint(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	// Break only at whitespace: splitting at hyphens makes commands such as
+	// sync-time and hostname arguments ambiguous when copied from the view.
+	var lines []string
+	for _, paragraph := range strings.Split(text, "\n") {
+		line, rest := "", paragraph
+		for _, word := range strings.Fields(paragraph) {
+			index := strings.Index(rest, word)
+			separator := rest[:index]
+			rest = rest[index+len(word):]
+			if line != "" && ansi.StringWidth(line+separator+word) > width {
+				lines = append(lines, line)
+				line = word
+			} else {
+				line += separator + word
+			}
+		}
+		lines = append(lines, line)
+	}
+	// Unusually long tokens still have to fit inside the terminal viewport.
+	return ansi.Hardwrap(strings.Join(lines, "\n"), width, true)
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/legacycertproof"
 )
 
 // DefaultBrokerPort is the tunnel broker's gRPC port used when brokerURL is
@@ -34,16 +35,22 @@ const (
 )
 
 // UsesPublicCA reports whether addr targets a public-CA endpoint (the production
-// :443 convention). WebPKI verification applies there; installing the Wendy-CA
-// VerifyConnection pin instead causes x509 failures (WDY-2434).
+// :443 convention). It picks the broker's trust roots and address, never
+// whether TLS or hostname verification applies: WebPKI roots there; installing
+// the Wendy CA alone instead causes x509 failures (WDY-2434).
 func UsesPublicCA(addr string) bool {
 	return strings.HasSuffix(addr, ":443")
 }
 
 // BrokerTLSConfig builds the client mTLS config for dialing the tunnel broker.
-// Non-:443 (local/on-prem): skip hostname verification, pin the chain to the
-// Wendy CA in cert.PemCertificateChain via VerifyConnection. :443: leave
-// standard WebPKI verification in place.
+// Standard verification applies on every port: the chain must reach a trusted
+// root AND the leaf's DNS/IP SAN must match the dialed host (gRPC sets
+// ServerName from the dial target). Only the root set differs: :443 uses the
+// system WebPKI roots; local/on-prem brokers use the Wendy CA in
+// cert.PemCertificateChain, so their certificate must be issued for the host
+// the CLI dials (e.g. a localhost or LAN-IP SAN). Trusting the Wendy CA alone
+// was never broker identity: before WDY-3756 non-:443 ports skipped the
+// hostname check and accepted any Wendy-CA leaf.
 func BrokerTLSConfig(cert config.CertificateInfo, brokerURL string) (*tls.Config, error) {
 	keyPEM, err := cert.PrivateKeyPEM()
 	if err != nil {
@@ -60,29 +67,11 @@ func BrokerTLSConfig(cert config.CertificateInfo, brokerURL string) (*tls.Config
 	}
 
 	if !UsesPublicCA(brokerURL) {
-		// For non-standard ports (local/on-prem broker) the server presents a cert
-		// signed by the Wendy CA, not a public CA. Skip hostname verification but
-		// validate the chain against the stored Wendy CA bundle.
 		caPool := x509.NewCertPool()
 		if certs.AppendChainToPool(caPool, cert.PemCertificateChain) == 0 {
 			return nil, fmt.Errorf("no valid CA certificates in PemCertificateChain")
 		}
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // Hostname verification is intentionally skipped for non-standard broker endpoints; VerifyConnection validates the chain against the Wendy CA.
-		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("broker presented no TLS certificate")
-			}
-			intermediates := x509.NewCertPool()
-			for _, c := range cs.PeerCertificates[1:] {
-				intermediates.AddCert(c)
-			}
-			_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
-				Roots:         caPool,
-				Intermediates: intermediates,
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			})
-			return err
-		}
+		tlsCfg.RootCAs = caPool
 	}
 
 	return tlsCfg, nil
@@ -112,9 +101,24 @@ func DialBroker(auth *config.AuthConfig, brokerURL string, extra ...grpc.DialOpt
 	if err != nil {
 		return nil, err
 	}
+	privateKeyPEM, err := cert.PrivateKeyPEM()
+	if err != nil {
+		return nil, fmt.Errorf("loading broker proof private key: %w", err)
+	}
+	identityURI := ""
+	if cert.UserID != "" {
+		identityURI = fmt.Sprintf("urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
+	} else if cert.AssetID != 0 {
+		identityURI = fmt.Sprintf("urn:wendy:org:%d:asset:%d", cert.OrganizationID, cert.AssetID)
+	}
+	proofSigner, err := legacycertproof.New(identityURI, cert.PemCertificate, privateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("initializing broker certificate proof: %w", err)
+	}
 
 	opts := append([]grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithPerRPCCredentials(proofSigner),
 		grpc.WithInitialWindowSize(8 * 1024 * 1024),
 		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
 		grpc.WithReadBufferSize(256 * 1024),

@@ -98,15 +98,42 @@ func ros2DomainSourceID(sc ros2SC) string {
 }
 
 // ros2DomainSource describes the whole domain. Healthy is derived, never
-// asserted: see enumerate.
-func ros2DomainSource(sc ros2SC, healthy bool, detail string) data.Source {
-	return data.Source{
-		ID:          ros2DomainSourceID(sc),
-		Kind:        "ros2",
-		ClockDomain: ros2ClockDomain,
-		Healthy:     healthy,
-		Detail:      detail,
+// asserted: see enumerate. reason is the short form of why it is not healthy,
+// and is empty when it is.
+func ros2DomainSource(sc ros2SC, healthy bool, detail, reason string) data.Source {
+	name := fmt.Sprintf("Domain %d (%s)", sc.domainID, ros2RMWName(sc.rmw))
+	if healthy {
+		// The domain source records with `ros2 bag record -a`, so its name
+		// says it is every topic, not one of them.
+		name += ", all topics"
 	}
+	return data.Source{
+		ID:             ros2DomainSourceID(sc),
+		Kind:           "ros2",
+		ClockDomain:    ros2ClockDomain,
+		Healthy:        healthy,
+		Detail:         detail,
+		Name:           name,
+		UnusableReason: reason,
+	}
+}
+
+// ros2RMWName is the middleware as people call it rather than as the
+// RMW_IMPLEMENTATION variable spells it.
+func ros2RMWName(rmw string) string {
+	switch rmw {
+	case "":
+		return "default middleware"
+	case "rmw_fastrtps_cpp", "rmw_fastrtps_dynamic_cpp":
+		return "Fast DDS"
+	case "rmw_cyclonedds_cpp":
+		return "Cyclone DDS"
+	case "rmw_connextdds":
+		return "Connext DDS"
+	case "rmw_zenoh_cpp":
+		return "Zenoh"
+	}
+	return rmw
 }
 
 // ros2TopicSource describes one topic. Detail is the message type because that
@@ -132,6 +159,7 @@ func ros2TopicSource(sc ros2SC, topic *agentpbv2.ROS2Topic) data.Source {
 		ClockDomain: ros2ClockDomain,
 		Healthy:     true,
 		Detail:      detail,
+		Name:        topic.GetName(),
 	}
 }
 
@@ -181,7 +209,7 @@ func (a *ros2DataAdapter) enumerate(ctx context.Context, sc ros2SC) []data.Sourc
 		return []data.Source{ros2DomainSource(sc, false, fmt.Sprintf(
 			"%s DDS domain %d: listing topics failed: %s",
 			a.rmwLabel(sc), sc.domainID, truncateROS2Detail(err.Error()),
-		))}
+		), "topic listing failed")}
 	}
 	topics := parseROS2TopicList(out)
 	sources := make([]data.Source, 0, len(topics)+1)
@@ -191,7 +219,7 @@ func (a *ros2DataAdapter) enumerate(ctx context.Context, sc ros2SC) []data.Sourc
 	// source list) would start one rosbag2 process per topic instead of one.
 	sources = append(sources, ros2DomainSource(sc, true, fmt.Sprintf(
 		"%s DDS domain %d, %d topics", a.rmwLabel(sc), sc.domainID, len(topics),
-	)))
+	), ""))
 	// `ros2 topic list -t` should not repeat a name, but a duplicate would mint
 	// two sources with the same id, and selectSources would then match one
 	// campaign entry against both.

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"golang.org/x/sys/windows"
 )
 
@@ -87,6 +88,10 @@ func relaunchElevated(extraArgs ...string) error {
 		}
 	}
 
+	// The caller exits after a successful launch, bypassing main's cleanup.
+	// Flush before UAC so declining or closing the prompt cannot lose the start.
+	// Leave analytics usable so a failed launch can report its final error.
+	analytics.Flush()
 	const swNormal int32 = 1
 	if err := windows.ShellExecute(0, verbPtr, exePtr, paramsPtr, nil, swNormal); err != nil {
 		// User clicking "No" on the UAC consent prompt surfaces here.

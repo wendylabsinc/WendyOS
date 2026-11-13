@@ -1,0 +1,2 @@
+# Optional local microphone capture. Demo and WAV input only need requirements.txt.
+sounddevice==0.5.1

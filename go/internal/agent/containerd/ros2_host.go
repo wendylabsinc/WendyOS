@@ -86,7 +86,7 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 			return services.ROS2Sidecar{}, fmt.Errorf("preparing standalone ROS 2 inspector image %q (first use requires downloading the image): %w", ros2HostImage, err)
 		}
 	}
-	unpacked, err := image.IsUnpacked(ctx, "")
+	unpacked, err := c.imageUnpacked(ctx, image)
 	if err != nil {
 		return services.ROS2Sidecar{}, fmt.Errorf("checking host inspector image: %w", err)
 	}

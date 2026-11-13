@@ -77,6 +77,7 @@ type entitlementQuestion struct {
 type initOptions struct {
 	appID               string
 	here                bool
+	force               bool
 	target              string
 	language            string
 	template            string
@@ -96,6 +97,7 @@ type initOptions struct {
 	ros2DomainID        int
 	ros2RMW             string
 	ros2Distro          string
+	ros2Scope           string
 	ros2DiscoveryScope  string
 
 	appIDSet              bool
@@ -113,6 +115,7 @@ type initOptions struct {
 	ros2DomainIDSet       bool
 	ros2RMWSet            bool
 	ros2DistroSet         bool
+	ros2ScopeSet          bool
 	ros2DiscoveryScopeSet bool
 }
 
@@ -142,7 +145,7 @@ func newInitCmd() *cobra.Command {
 			"scaffold into the current directory instead (with no app ID, --here infers one from the current " +
 			"directory's name).\n\n" +
 			"wendy.json also supports a separate, top-level \"frameworks\" key for framework-level config " +
-			"(currently ROS 2: domain ID, RMW middleware, discovery scope). Enable it with --framework " +
+			"(currently ROS 2: domain ID, RMW middleware, and scope). Enable it with --framework " +
 			"(see the ROS 2 example below), through the interactive prompt on a WendyOS target, or by hand-editing " +
 			"\"frameworks\" in wendy.json afterwards.",
 		Example: `  # Interactive wizard
@@ -220,14 +223,14 @@ func newInitCmd() *cobra.Command {
     --assistant claude \
     --install-claude-skills
 
-  # ROS 2 app: enable the "frameworks" key with the ros2 framework
+  # ROS 2 app that talks to hardware attached to the device
   wendy init \
-    --app-id go2-network-bridge \
+    --app-id go2-robot-app \
     --target wendyos \
     --language swift \
     --framework ros2 \
     --ros2-rmw cyclonedds \
-    --ros2-discovery-scope host \
+    --ros2-scope peripherals \
     --assistant skip`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -246,6 +249,7 @@ func newInitCmd() *cobra.Command {
 			opts.ros2DomainIDSet = cmd.Flags().Changed("ros2-domain-id")
 			opts.ros2RMWSet = cmd.Flags().Changed("ros2-rmw")
 			opts.ros2DistroSet = cmd.Flags().Changed("ros2-distro")
+			opts.ros2ScopeSet = cmd.Flags().Changed("ros2-scope")
 			opts.ros2DiscoveryScopeSet = cmd.Flags().Changed("ros2-discovery-scope")
 
 			err := runInitWizard(args, opts)
@@ -261,6 +265,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos (writes \"linux\" to wendy.json), wendy-lite, or darwin")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, cpp, or mojo")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().BoolVar(&opts.force, "force", false, "Overwrite template files in an existing directory (requires --template)")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
@@ -277,7 +282,11 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.ros2DomainID, "ros2-domain-id", -1, fmt.Sprintf("ROS 2 domain ID, %d-%d (default: derived from the app ID)", appconfig.ROS2DomainIDMin, appconfig.ROS2DomainIDMax))
 	cmd.Flags().StringVar(&opts.ros2RMW, "ros2-rmw", "", "ROS 2 middleware implementation: cyclonedds (default), fastrtps, connextdds, or gurumdds")
 	cmd.Flags().StringVar(&opts.ros2Distro, "ros2-distro", "", fmt.Sprintf("ROS 2 distribution (default: %s)", appconfig.ROS2DefaultDistro))
-	cmd.Flags().StringVar(&opts.ros2DiscoveryScope, "ros2-discovery-scope", "", fmt.Sprintf("ROS 2 discovery scope: %s (default, isolated) or %s (shared with the device's host network)", appconfig.ROS2DiscoveryScopeApp, appconfig.ROS2DiscoveryScopeHost))
+	cmd.Flags().StringVar(&opts.ros2Scope, "ros2-scope", "", fmt.Sprintf("Who can see the app's ROS 2 topics: %s (only this app), %s (default, every app on the device), %s (the device and attached hardware such as a robot), or %s (the network)",
+		appconfig.ROS2ScopeApp, appconfig.ROS2ScopeDevice, appconfig.ROS2ScopePeripherals, appconfig.ROS2ScopeNetwork))
+	cmd.Flags().StringVar(&opts.ros2DiscoveryScope, "ros2-discovery-scope", "", fmt.Sprintf("Deprecated: use --ros2-scope (%s is scope %s, %s is scope %s)",
+		appconfig.ROS2DiscoveryScopeApp, appconfig.ROS2ScopeDevice, appconfig.ROS2DiscoveryScopeHost, appconfig.ROS2ScopeNetwork))
+	_ = cmd.Flags().MarkDeprecated("ros2-discovery-scope", "use --ros2-scope")
 
 	// Allow bare `--template` (no value) by rewriting os.Args before cobra
 	// parses flags. When --template appears as the last arg or is followed by
@@ -314,6 +323,23 @@ func runInitWizard(args []string, opts initOptions) error {
 
 	if err := validateInitAssistantOptions(opts); err != nil {
 		return err
+	}
+	if opts.force && !opts.templateSet {
+		return fmt.Errorf("--force requires --template; manual initialization does not support forced overwrites")
+	}
+
+	// An explicit template and destination can be checked before contacting
+	// the registry. Refusal must not depend on network availability.
+	templateName := normalizeInitChoice(opts.template)
+	hasDestination := opts.here || opts.appIDSet || len(args) > 0
+	if !opts.force && opts.templateSet && templateName != "" && templateName != bareTemplatePickSentinel && hasDestination {
+		destDir, _, err := resolveInitDestAndID(cwd, args, opts)
+		if err != nil {
+			return err
+		}
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
 	}
 
 	// Steps 1-2: target and template resolve together — a concrete --template
@@ -387,6 +413,12 @@ func runInitWizard(args []string, opts initOptions) error {
 		cfg.Python = &appconfig.PythonConfig{}
 	}
 
+	// Interactive choices must satisfy the same cross-field rules as flags and
+	// hand-written manifests (for example, peripherals requires CycloneDDS).
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("validating generated wendy.json: %w", err)
+	}
+
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
@@ -399,13 +431,14 @@ func runInitWizard(args []string, opts initOptions) error {
 
 	cliSuccess("\nCreated wendy.json for %s", appID)
 	if frameworks != nil && frameworks.ROS2 != nil {
-		cliLogln("  Framework: ros2 (edit the \"frameworks\" key in wendy.json to change domain ID, RMW, or discovery scope)")
+		cliLogln("  Framework: ros2 (edit the \"frameworks\" key in wendy.json to change domain ID, RMW, or scope)")
 	}
 
 	// Step 5: Scaffold project files.
 	if err := scaffoldProject(cwd, appID, target, language); err != nil {
 		return err
 	}
+	scaffoldInitAgentsFiles(cwd, appID, target, language)
 
 	// Step 6: Offer AI assistant session.
 	if err := resolveInitAssistant(appID, target, language, entitlements, opts); err != nil {
@@ -436,6 +469,18 @@ func resolveInitTargetAndTemplate(opts initOptions) (string, string, *repoMeta, 
 			}
 			return target, name, meta, nil
 		}
+	}
+
+	// Browse deployment groups inside the platform tabs before choosing a
+	// project. Explicit templates and manual setup flags keep their own flow.
+	manual := opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements
+	if !opts.targetSet && isInteractiveTerminal() && (opts.templateSet || !manual) {
+		meta, err := fetchRepoMetaWithUI(opts.branch)
+		if err != nil {
+			return "", "", nil, err
+		}
+		target, tmpl, err := pickInitProject(meta, "", !opts.templateSet)
+		return target, tmpl, meta, err
 	}
 
 	target, err := resolveInitTarget(opts)
@@ -549,12 +594,8 @@ func templateItemsForTarget(target string, meta *repoMeta) []tui.PickerItem {
 
 // pickTemplateNameForTarget shows a picker with templates available for the given target.
 func pickTemplateNameForTarget(target string, meta *repoMeta) (string, error) {
-	fmt.Println()
-	items := templateItemsForTarget(target, meta)
-	if len(items) == 0 {
-		return "", fmt.Errorf("no templates available for %s", target)
-	}
-	return pickFromItems("Choose a template", items)
+	_, name, err := pickInitProject(meta, target, false)
+	return name, err
 }
 
 // resolveBareTemplatePick handles a bare `--template` (rewritten to the
@@ -582,26 +623,10 @@ func resolveBareTemplatePick(target string, meta *repoMeta) (string, error) {
 	return pickTemplateNameForTarget(target, meta)
 }
 
-// pickTemplateOrSkipForTarget shows templates for the given target plus a "No template" option.
+// pickTemplateOrSkipForTarget groups projects by deployment and allows manual setup.
 func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) {
-	fmt.Println()
-	var items []tui.PickerItem
-	for _, t := range meta.Templates {
-		if templateTargetMatch(t, target) {
-			items = append(items, tui.PickerItem{
-				Name:        t.Name,
-				Description: t.Description,
-				Value:       t.Name,
-			})
-		}
-	}
-	items = append(items, tui.PickerItem{
-		Name:        "No template",
-		Description: "Configure target, language, and entitlements manually",
-		Value:       "",
-		SortKey:     "~",
-	})
-	return pickFromItems("Start from a template?", items)
+	_, name, err := pickInitProject(meta, target, true)
+	return name, err
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
@@ -704,7 +729,7 @@ var fetchRepoMetaWithUI = func(branch string) (*repoMeta, error) {
 		prog.Send(tui.SpinnerDoneMsg{Err: fetchErr})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-done
@@ -756,7 +781,7 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 		prog.Send(tui.ProgressDoneMsg{Err: dlErr})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-done
@@ -778,16 +803,33 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 	return files, manifest, dlErr
 }
 
+// validateTemplateDestination refuses an overlay before any scaffolding.
+func validateTemplateDestination(cwd, destDir string) error {
+	// Preserve the existing --here diagnostic for a Wendy project.
+	if filepath.Clean(destDir) == filepath.Clean(cwd) {
+		if _, err := os.Stat(filepath.Join(destDir, "wendy.json")); err == nil {
+			return fmt.Errorf("wendy.json already exists here; choose a new or empty directory, or use --force to overwrite template files")
+		}
+	}
+	// Templates write a complete project tree. Refuse populated destinations
+	// before any scaffolding, even when they do not contain a Wendy manifest.
+	entries, err := os.ReadDir(destDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reading project directory %s: %w", destDir, err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("project directory %s is not empty; choose a new or empty directory, or use --force to overwrite template files", destDir)
+	}
+
+	return nil
+}
+
 // runTemplateFlow handles init when a template is selected.
 // destDir is the resolved project directory (either cwd or a new subdir).
 func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
-	// Scaffolding into cwd (most commonly via --here, WDY-2439) must not
-	// silently clobber an existing project. Checked first, before any
-	// network calls or filesystem mutation, mirroring the non-template
-	// wizard's own wendy.json-exists guard.
-	if filepath.Clean(destDir) == filepath.Clean(cwd) {
-		if _, err := os.Stat(filepath.Join(destDir, "wendy.json")); err == nil {
-			return fmt.Errorf("wendy.json already exists here; run from an empty directory or remove it first")
+	if !opts.force {
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
 		}
 	}
 
@@ -841,12 +883,20 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		}
 	}
 
+	// Preparation may have taken time. Refuse files that arrived meanwhile;
+	// exclusive creation in the writer closes the remaining check/write race.
+	if !opts.force {
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
+	}
+
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("creating project directory: %w", err)
 	}
 
 	// Render and write all template files.
-	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals); err != nil {
+	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals, opts.force); err != nil {
 		return err
 	}
 
@@ -873,6 +923,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 	if len(addedEntitlements) > 0 {
 		cliLogln("  Entitlements added from flags: %s", strings.Join(addedEntitlements, ", "))
 	}
+	scaffoldInitAgentsFiles(destDir, appID, target, language)
 
 	// Offer git init.
 	if err := maybeGitInit(destDir, opts); err != nil {
@@ -1105,7 +1156,26 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 var initTargetItems = []tui.PickerItem{
 	{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS, SortKey: "0"},
 	{Name: "macOS", Description: "Native macOS app deployed to Wendy Agent for Mac", Value: targetDarwin, SortKey: "1"},
-	{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "2"},
+	{Name: "ESP32", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "2"},
+}
+
+func newInitTargetPickerModel(items []tui.PickerItem) tabbedPickerModel {
+	groups := []pickerGroup{
+		{label: "Linux"},
+		{label: "Mac"},
+		{label: "Microcontrollers"},
+	}
+	for _, item := range items {
+		group := 0
+		switch item.Value {
+		case targetDarwin:
+			group = 1
+		case targetWendyLite:
+			group = 2
+		}
+		groups[group].items = append(groups[group].items, item)
+	}
+	return newTabbedPickerModel("What is your target device?", groups)
 }
 
 // initTargetItemsFor filters the shared initTargetItems so a narrowed target
@@ -1149,7 +1219,7 @@ func resolveInitTarget(opts initOptions) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("What is your target device?", initTargetItems)
+	return runTabbedPicker(newInitTargetPickerModel(initTargetItems))
 }
 
 // resolveInitTargetForTemplate resolves the target when a concrete --template
@@ -1174,7 +1244,7 @@ func resolveInitTargetForTemplate(t repoMetaTemplate) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("What is your target device?", items)
+	return runTabbedPicker(newInitTargetPickerModel(items))
 }
 
 // printPickerItemsPlainText renders picker items as a plain-text list. Used
@@ -1273,6 +1343,10 @@ func pickInitLanguage(target string) (string, error) {
 				Value:       l.key,
 			})
 		}
+		if !isInteractiveTerminal() {
+			printPickerItemsPlainText("Available languages", items)
+			return "", fmt.Errorf("--language is required when running non-interactively (valid: %s, %s)", langSwift, langPython)
+		}
 		return pickFromItems("What language will you use?", items)
 	}
 }
@@ -1302,6 +1376,15 @@ var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitle
 			Description: q.description,
 			Value:       q.entitlement,
 		}
+	}
+
+	// The checklist needs a terminal; without one, say which flags answer it.
+	if !isInteractiveTerminal() {
+		names := make([]string, len(wendyOSEntitlementQuestions))
+		for i, q := range wendyOSEntitlementQuestions {
+			names[i] = q.entitlement
+		}
+		return nil, fmt.Errorf("--entitlement is required when running non-interactively: repeat it (or comma-separate) for each one the app needs (%s), or pass --no-extra-entitlements for network access only", strings.Join(names, ", "))
 	}
 
 	selected, err := tui.RunChecklist("What does your app need access to?", items)
@@ -1336,7 +1419,7 @@ var ros2RMWPickerItems = []tui.PickerItem{
 // askFrameworkQuestions interactively offers ROS 2 support for a WendyOS
 // app (WDY frameworks discoverability: `wendy init` gave no hint that a
 // separate top-level "frameworks" key exists in wendy.json). Domain ID and
-// discovery scope are surfaced; the distro is left at its default and can be
+// scope are surfaced; the distro is left at its default and can be
 // changed by hand afterwards.
 var askFrameworkQuestions = func() (*appconfig.FrameworksConfig, error) {
 	wantROS2, err := tui.Confirm("Does your app use ROS 2 (Robot Operating System)?")
@@ -1352,12 +1435,21 @@ var askFrameworkQuestions = func() (*appconfig.FrameworksConfig, error) {
 		return nil, err
 	}
 
-	scope, err := pickFromItems("ROS 2 discovery scope?", []tui.PickerItem{
-		{Name: "App-local (default)", Description: "Isolated to this app's own containers", Value: appconfig.ROS2DiscoveryScopeApp, SortKey: "0"},
-		{Name: "Host network", Description: "Discoverable across the device's host network", Value: appconfig.ROS2DiscoveryScopeHost, SortKey: "1"},
+	scope, err := pickFromItems("Who should see the app's ROS 2 topics?", []tui.PickerItem{
+		{Name: "Device (default)", Description: "Every app on this device", Value: appconfig.ROS2ScopeDevice, SortKey: "0"},
+		{Name: "Peripherals", Description: "This device and hardware attached to it, such as a robot", Value: appconfig.ROS2ScopePeripherals, SortKey: "1"},
+		{Name: "App", Description: "Only this app", Value: appconfig.ROS2ScopeApp, SortKey: "2"},
+		{Name: "Network", Description: "Anything on the device's networks", Value: appconfig.ROS2ScopeNetwork, SortKey: "3"},
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	ros2 := &appconfig.ROS2Config{RMW: rmw, Scope: scope}
+	if scope == appconfig.ROS2ScopeApp {
+		// Scope app always gets the app's own domain.
+		cliLogln("ROS 2 distro left at the default (%q) — edit \"frameworks.ros2.distro\" in wendy.json to change it.", appconfig.ROS2DefaultDistro)
+		return &appconfig.FrameworksConfig{ROS2: ros2}, nil
 	}
 
 	domainIDInput, err := tui.PromptText(
@@ -1382,7 +1474,6 @@ var askFrameworkQuestions = func() (*appconfig.FrameworksConfig, error) {
 		return nil, err
 	}
 
-	ros2 := &appconfig.ROS2Config{RMW: rmw, DiscoveryScope: scope}
 	if domainIDInput = strings.TrimSpace(domainIDInput); domainIDInput != "" {
 		domainID, err := strconv.Atoi(domainIDInput)
 		if err != nil {
@@ -1399,7 +1490,7 @@ var askFrameworkQuestions = func() (*appconfig.FrameworksConfig, error) {
 // initFrameworksProvided reports whether the user supplied any
 // --framework/--ros2-* flag, mirroring initEntitlementsProvided.
 func initFrameworksProvided(opts initOptions) bool {
-	return opts.frameworksSet || opts.ros2DomainIDSet || opts.ros2RMWSet || opts.ros2DistroSet || opts.ros2DiscoveryScopeSet
+	return opts.frameworksSet || opts.ros2DomainIDSet || opts.ros2RMWSet || opts.ros2DistroSet || opts.ros2ScopeSet || opts.ros2DiscoveryScopeSet
 }
 
 // buildInitFrameworksFromFlags resolves --framework/--ros2-* into a
@@ -1409,7 +1500,7 @@ func initFrameworksProvided(opts initOptions) bool {
 // --flag-specific message instead of surfacing later from `wendy run` or
 // `wendy device ros2`.
 func buildInitFrameworksFromFlags(target string, opts initOptions) (*appconfig.FrameworksConfig, error) {
-	ros2Requested := opts.ros2DomainIDSet || opts.ros2RMWSet || opts.ros2DistroSet || opts.ros2DiscoveryScopeSet
+	ros2Requested := opts.ros2DomainIDSet || opts.ros2RMWSet || opts.ros2DistroSet || opts.ros2ScopeSet || opts.ros2DiscoveryScopeSet
 
 	if opts.frameworksSet {
 		var unknown []string
@@ -1467,11 +1558,29 @@ func buildInitFrameworksFromFlags(target string, opts initOptions) (*appconfig.F
 		ros2.Distro = distro
 	}
 
+	if opts.ros2ScopeSet && opts.ros2DiscoveryScopeSet {
+		return nil, fmt.Errorf("use --ros2-scope only; --ros2-discovery-scope is deprecated")
+	}
 	if opts.ros2DiscoveryScopeSet {
-		ros2.DiscoveryScope = strings.TrimSpace(opts.ros2DiscoveryScope)
-		if ros2.ResolvedDiscoveryScope() == "" {
+		// Written as the scope that behaves the same, never as the deprecated key.
+		legacy := &appconfig.ROS2Config{DiscoveryScope: strings.TrimSpace(opts.ros2DiscoveryScope)}
+		if legacy.ResolvedDiscoveryScope() == "" {
 			return nil, fmt.Errorf("invalid --ros2-discovery-scope %q (valid: %s, %s)", opts.ros2DiscoveryScope, appconfig.ROS2DiscoveryScopeApp, appconfig.ROS2DiscoveryScopeHost)
 		}
+		ros2.Scope = legacy.ResolvedScope()
+	}
+	if opts.ros2ScopeSet {
+		ros2.Scope = strings.TrimSpace(opts.ros2Scope)
+		if ros2.ResolvedScope() == "" {
+			return nil, fmt.Errorf("invalid --ros2-scope %q (valid: %s)", opts.ros2Scope, strings.Join(appconfig.ROS2Scopes, ", "))
+		}
+		ros2.Scope = ros2.ResolvedScope()
+	}
+	if ros2.Scope == appconfig.ROS2ScopeApp && ros2.DomainID != nil {
+		return nil, fmt.Errorf("--ros2-scope %s gives the app its own domain; drop --ros2-domain-id or use --ros2-scope %s", appconfig.ROS2ScopeApp, appconfig.ROS2ScopeDevice)
+	}
+	if ros2.Scope == appconfig.ROS2ScopePeripherals && ros2.ResolvedRMW() != appconfig.ROS2DefaultRMW {
+		return nil, fmt.Errorf("--ros2-scope %s currently requires --ros2-rmw cyclonedds", appconfig.ROS2ScopePeripherals)
 	}
 
 	return &appconfig.FrameworksConfig{ROS2: ros2}, nil
@@ -1858,7 +1967,14 @@ dependencies = []
 
 [project.scripts]
 %s = "%s:main"
-`, appID, pkgName, pkgName)
+
+# A build system makes uv install the package, and with it the script above
+# that the Dockerfile's CMD runs. Without one, uv treats the project as
+# "virtual" and 'uv run %s' fails with "Failed to spawn".
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+`, appID, pkgName, pkgName, pkgName)
 
 		if err := os.WriteFile(pyprojectPath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("creating pyproject.toml: %w", err)
@@ -1909,15 +2025,21 @@ if __name__ == "__main__":
 
 WORKDIR /app
 
-# Install dependencies first for better caching
+# Install dependencies first for better caching. uv.lock is optional: with a
+# committed lock the build is reproducible (--frozen); without one (a fresh
+# scaffold), uv resolves from pyproject.toml. Run 'uv lock' and commit
+# uv.lock to pin dependency versions.
 COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-install-project
+RUN if [ -f uv.lock ]; then uv sync --frozen --no-install-project; else uv sync --no-install-project; fi
 
 # Copy application code
 COPY . .
-RUN uv sync --frozen
+RUN if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
-CMD ["uv", "run", "%s"]
+# --no-sync: the build above already installed the project. Without it, uv
+# re-checks the install on every container start, finds it stale (image
+# layers don't keep file ctimes) and rebuilds it, which needs network access.
+CMD ["uv", "run", "--no-sync", "%s"]
 `, pkgName)
 
 		if err := os.WriteFile(dockerPath, []byte(content), 0o644); err != nil {
@@ -1935,6 +2057,14 @@ func offerAIAssistant(appID, target, language string, entitlements []appconfig.E
 	hasCodex := isCommandAvailable("codex")
 
 	if !hasClaude && !hasCodex {
+		return nil
+	}
+
+	// The picker needs a terminal. Without one (an agent shell, CI, a pipe),
+	// the project is already scaffolded, so skip the offer rather than fail
+	// the whole command — a retry would only hit "wendy.json already exists".
+	if !isInteractiveTerminal() {
+		cliLogln("Not starting an AI assistant (no interactive terminal); pass --assistant claude, codex, or skip to choose explicitly.")
 		return nil
 	}
 
@@ -1967,56 +2097,24 @@ func offerAIAssistant(appID, target, language string, entitlements []appconfig.E
 	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, true)
 }
 
-const wendySkillsMarketplace = "wendylabsinc/claude-skills"
-const wendySkillsPluginName = "wendy@claude-skills"
-
-// installWendySkills checks if the Wendy skills plugin is installed and offers
-// to install it if missing. This gives Claude expert knowledge about Wendy
-// development.
+// installWendySkills installs the same end-user group as `wendy mcp setup`.
+// It does not depend on a marketplace or download engineering skills.
 func installWendySkills(autoInstall bool) error {
-	// Check if the plugin is already installed by looking at the plugin list output.
-	out, err := exec.Command("claude", "plugin", "list").Output()
+	home, err := os.UserHomeDir()
 	if err != nil {
+		return err
+	}
+	target := filepath.Join(home, ".claude", "skills")
+	if wendySkillsCurrent(target) {
 		return nil
 	}
-
-	if strings.Contains(string(out), "wendy@claude-skills") {
+	if !autoInstall && !confirmDefaultNoFn("Install Wendy end-user skills for Claude Code?") {
 		return nil
 	}
-
-	cliLogln("\nThe Wendy skills plugin gives Claude expert knowledge about")
-	cliLogln("building and deploying apps to WendyOS and Wendy Lite devices.")
-	fmt.Println()
-
-	if !autoInstall {
-		if !confirmDefaultNoFn("Install Wendy skills for Claude Code?") {
-			return nil
-		}
-
-		fmt.Println()
+	if err := installWendySkillDirs(target); err != nil {
+		return fmt.Errorf("installing Wendy end-user skills: %w", err)
 	}
-
-	// Add the marketplace if not already present.
-	addMarketplace := exec.Command("claude", "plugin", "marketplace", "add", wendySkillsMarketplace)
-	addMarketplace.Stdout = os.Stdout
-	addMarketplace.Stderr = os.Stderr
-	if err := addMarketplace.Run(); err != nil {
-		cliNotice("  Could not add marketplace: %v", err)
-		cliNotice("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
-		return nil
-	}
-
-	// Install the plugin.
-	installCmd := exec.Command("claude", "plugin", "install", wendySkillsPluginName)
-	installCmd.Stdout = os.Stdout
-	installCmd.Stderr = os.Stderr
-	if err := installCmd.Run(); err != nil {
-		cliNotice("  Could not install plugin: %v", err)
-		cliNotice("  You can install manually: claude plugin install " + wendySkillsPluginName)
-		return nil
-	}
-
-	cliSuccess("  Wendy skills installed successfully!")
+	cliSuccess("  Wendy end-user skills installed at %s", target)
 	return nil
 }
 

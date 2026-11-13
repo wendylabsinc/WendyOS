@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -193,5 +195,29 @@ func TestStartMCPProxy_CloseCancelsIdleStreams(t *testing.T) {
 	_ = tcpConn.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := tcpConn.Read(make([]byte, 1)); err != io.EOF {
 		t.Fatalf("idle connection was not closed: %v", err)
+	}
+}
+
+// An older agent can have ordinary container RPCs but no StreamMCP method.
+// Preserve that error instead of reporting only a local TCP connection reset.
+func TestConnectAppMCPReportsAgentTransportError(t *testing.T) {
+	ln := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	agentpb.RegisterWendyContainerServiceServer(srv, &agentpb.UnimplementedWendyContainerServiceServer{})
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Stop()
+	defer ln.Close()
+	cc, err := grpc.NewClient("passthrough:///fixture", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+		return ln.DialContext(ctx)
+	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = connectAppMCP(ctx, ctx, grpcclient.NewFromConn(cc), "companion")
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("lost remote StreamMCP error: %v", err)
 	}
 }

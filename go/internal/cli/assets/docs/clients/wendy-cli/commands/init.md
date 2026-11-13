@@ -1,6 +1,6 @@
 # `wendy init`
 
-Creates a new Wendy project: a [`wendy.json`](../../../apps/wendy.json.md), scaffolded source files, and optionally an AI assistant session.
+Creates a new Wendy project: a [`wendy.json`](/docs/reference/app-configuration), scaffolded source files, and optionally an AI assistant session.
 
 Run it with no arguments for an interactive wizard, or pass flags to script it end to end. Every prompt has a matching flag, so any wizard answer can be supplied up front.
 
@@ -27,17 +27,25 @@ wendy init \
 
 An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that name. With neither, the wizard offers to scaffold into the current directory instead. Pass `--here` to scaffold into the current directory directly instead of nesting a subdirectory — with an app ID it still writes that as `wendy.json`'s app ID; without one, it infers the app ID from the current directory's name.
 
+With a template, the destination must be a new or empty directory by default, including when using `--here`. A populated directory is rejected before scaffolding, even if it has no `wendy.json`. Use `--force` with `--template` to deliberately overlay an existing directory: template output files, including `wendy.json`, are replaced; unrelated files are retained. Scripts relying on the old implicit overlay behavior must add `--force`. Without it, files arriving during template download or prompts remain protected. A later failure can leave files already written; initialization does not provide whole-project rollback.
+
 ## What it produces
 
-1. Picks the **target**, so template and language choices can be filtered to what that target supports. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.
-2. Picks a **template** (`--template`), or continues with the plain wizard.
+1. Picks a **deployment group** within the Linux, Mac, or Microcontrollers tab. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.
+2. Shows the **projects** for that deployment group. Select a project template (`--template`), or choose **No template** to continue with manual setup.
 3. Picks the **language**. Skipped with a notice when the chosen template offers exactly one language.
-4. Collects **entitlements** — the capabilities the app needs. See [Entitlements](../../../apps/wendy.json.md#entitlements-1).
+4. Collects **entitlements** — the capabilities the app needs. See [Entitlements](/docs/reference/app-configuration#entitlements-1).
 5. Collects **framework** configuration — currently ROS 2. See [Frameworks](#frameworks).
-6. Writes `wendy.json` and scaffolds the project files.
+6. Writes `wendy.json` and scaffolds the project files, plus an `AGENTS.md` that gives coding agents the project's `wendy` commands and a docs index, and a `CLAUDE.md` containing `@AGENTS.md` so Claude Code loads it too. Neither replaces an existing file, and `CLAUDE.md` is only written alongside a new `AGENTS.md`.
 7. Optionally launches an AI assistant (`--assistant`).
 
 ## Targets
+
+The interactive picker has Linux, Mac, and Microcontrollers tabs, matching `wendy install`. Press Tab or Shift+Tab to switch tabs. Under Linux, choose Edge AI, Unitree G1, Unitree Go2, or ROSMaster to see that group's projects. Edge AI contains general Linux edge applications. Robot groups appear when the catalog has projects for them. Mac and Microcontrollers offer macOS and ESP32 projects.
+
+Press Enter to open a group, then select a project. **Back to deployment groups** returns to the group picker. **No template** starts manual setup. A bare `--template` also uses the groups, with projects limited to `--target` when supplied. A concrete `--template <name>` skips group browsing.
+
+Catalog authors can set a Linux template's optional `deployment` field in `meta.json` to `edge-ai`, `unitree-g1`, `unitree-go2`, or `rosmaster`. Existing catalogs work without this field: `g1-*` and `go2-*` projects go into their robot groups, `rc-car` and `rosmaster-*` projects go into ROSMaster, and other Linux projects go into Edge AI.
 
 | `--target` | `platform` written to `wendy.json` | Languages |
 |---|---|---|
@@ -69,6 +77,7 @@ For ESP32, regular native ESP-IDF projects are recommended. Create them with the
 |---|---|
 | `--template [<name>]` | Scaffold from a template. Passing it **without** a value opens a picker filtered by target, auto-selecting when only one template exists for the target. With a value, `--target` becomes optional: it is inferred when the template's metadata maps to exactly one target. |
 | `--branch <name>` | Branch of the templates repo to read templates from. |
+| `--force` | Allow template files to replace existing files in the destination. Requires `--template`. Unrelated files are retained. |
 | `--var KEY=VALUE` | Override a template variable. Repeatable. |
 
 ### Entitlement flags
@@ -93,7 +102,8 @@ Passing any entitlement flag suppresses the interactive entitlement prompts enti
 | `--ros2-domain-id <n>` | ROS 2 domain ID, `0`–`232`. Default: derived as a stable hash of the app ID. |
 | `--ros2-rmw <impl>` | ROS 2 middleware: `cyclonedds` (default), `fastrtps`, `connextdds`, or `gurumdds`. |
 | `--ros2-distro <name>` | ROS 2 distribution, e.g. `humble` (default) or `jazzy`. Lowercase letters and digits, starting with a letter. |
-| `--ros2-discovery-scope <scope>` | `app` (default, isolated to this app's containers) or `host` (discoverable across the device's host network). |
+| `--ros2-scope <scope>` | Who can see the app's topics: `app` (only this app), `device` (default, every app on the device), `peripherals` (the device and hardware attached to it, such as a robot), or `network` (the device's networks). |
+| `--ros2-discovery-scope <scope>` | Deprecated, use `--ros2-scope`. `app` writes scope `device`, `host` writes scope `network`. |
 
 See [Frameworks](#frameworks) below.
 
@@ -106,7 +116,7 @@ See [Frameworks](#frameworks) below.
 
 ## Frameworks
 
-`wendy.json` has a top-level [`frameworks`](../../../apps/wendy.json.md#frameworks) key, separate from `entitlements`, for framework-level configuration. ROS 2 is the only framework today.
+`wendy.json` has a top-level [`frameworks`](/docs/reference/app-configuration#frameworks) key, separate from `entitlements`, for framework-level configuration. ROS 2 is the only framework today.
 
 `wendy init` fills it in three ways:
 
@@ -119,7 +129,7 @@ wendy init \
   --language swift \
   --framework ros2 \
   --ros2-rmw cyclonedds \
-  --ros2-discovery-scope host \
+  --ros2-scope peripherals \
   --assistant skip
 ```
 
@@ -130,7 +140,7 @@ This writes:
   "frameworks": {
     "ros2": {
       "rmw": "cyclonedds",
-      "discoveryScope": "host"
+      "scope": "peripherals"
     }
   }
 }
@@ -138,7 +148,7 @@ This writes:
 
 Values are validated against the same rules `wendy.json` itself enforces, so a typo fails immediately at `init` rather than surfacing later from `wendy run` or `wendy device ros2`.
 
-**Interactively.** On a `wendyos` target, when no entitlement flags and no framework flags were passed, the wizard asks whether the app uses ROS 2 and then walks through middleware, discovery scope, and domain ID. The distro is left at its default; edit `frameworks.ros2.distro` in `wendy.json` to change it.
+**Interactively.** On a `wendyos` target, when no entitlement flags and no framework flags were passed, the wizard asks whether the app uses ROS 2 and then walks through middleware, scope, and domain ID (not asked for scope `app`, which uses the app's own domain). The distro is left at its default; edit `frameworks.ros2.distro` in `wendy.json` to change it.
 
 **By hand.** Add the `frameworks` key to `wendy.json` yourself at any point; `wendy run` picks it up on the next deploy.
 
@@ -169,7 +179,7 @@ $ wendy init
 Available targets:
   WendyOS - Full Linux-based edge device (Jetson, Raspberry Pi, ...)
   macOS - Native macOS app deployed to Wendy Agent for Mac
-  Wendy Lite - Microcontroller running WASM (ESP32)
+  ESP32 - Microcontroller running WASM (ESP32)
 Error: --target is required when running non-interactively (valid: wendyos, darwin, wendy-lite)
 
 $ wendy init --app-id my-app --target wendyos --template
@@ -249,14 +259,14 @@ wendy init \
   --template mac-llm \
   --assistant skip
 
-# ROS 2 app on a shared host DDS domain
+# ROS 2 app that talks to a robot attached to the device
 wendy init \
-  --app-id go2-network-bridge \
+  --app-id go2-robot-app \
   --target wendyos \
   --language swift \
   --framework ros2 \
   --ros2-rmw cyclonedds \
-  --ros2-discovery-scope host \
+  --ros2-scope peripherals \
   --assistant skip
 
 # Start Claude in the new project with the Wendy skills installed
@@ -271,7 +281,7 @@ wendy init \
 
 ## Related
 
-- [`wendy.json`](../../../apps/wendy.json.md) — every field `wendy init` can write.
-- [`wendy project entitlements add`](project/entitlements/add.md) — add entitlements after init.
+- [`wendy.json`](/docs/reference/app-configuration) — every field `wendy init` can write.
+- [`wendy project entitlements add`](./project/entitlements/add.md) — add entitlements after init.
 - [Wendy for ROS 2](/docs/integrations/ros2) — inspect and debug the ROS 2 app you just scaffolded.
-- [`wendy run`](run.md) — build and deploy the new project to a device.
+- [`wendy run`](./run.md) — build and deploy the new project to a device.

@@ -1,6 +1,6 @@
 ---
-title: Simple Web Server with Mojo 1.0
-description: Start a Python HTTP server from a compiled Mojo entry point on WendyOS
+title: Simple web server with Mojo 1.0
+description: Start a Python HTTP server from a compiled Mojo entry point
 language: mojo
 ---
 
@@ -8,7 +8,7 @@ Create a long-running app that starts in Mojo and responds to HTTP requests on y
 
 ## Prerequisites
 
-1. Install the [Wendy CLI](/docs/#1-install-the-wendy-cli) on your development machine.
+1. Install the [Wendy CLI](/docs/installation/cli) on your development machine.
 2. Install and start Docker on your development machine.
 3. Connect a 64-bit ARM WendyOS device, such as an NVIDIA Jetson Orin Nano, over USB or your network.
 4. Ensure the build machine has internet access to download the base image and packages.
@@ -192,6 +192,6 @@ wendy device apps stop mojo-simple-web-server
 
 ## Next steps
 
+- Follow [MAX graph](/docs/guides/tutorials/mojo/max-graph) and [MAX inference service](/docs/guides/tutorials/mojo/max-inference-service) to run graphs and serve text embeddings from your device.
 - Change the message in `main.mojo` and run the deployment command again.
 - Add routes in `http_bridge.py` using the same response pattern.
-- Follow [MAX Graph](/docs/guides/tutorials/mojo/max-graph) and [MAX Inference Service](/docs/guides/tutorials/mojo/max-inference-service) to run graphs and serve text embeddings from your device.

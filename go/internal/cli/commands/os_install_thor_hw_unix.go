@@ -54,9 +54,8 @@ func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevi
 		devs, err := scan()
 		switch {
 		case errors.Is(err, rcm.ErrUSBAccess) && len(devs) == 0:
-			fmt.Println("\n" + usbAccessHintBox())
-			fmt.Print("Press Enter to rescan, or 'q' to quit: ")
-			if readQuit() {
+			fmt.Println("\n" + usbAccessDeniedLine("Jetson"))
+			if promptRescan("Press Enter to rescan, or 'q' to quit: ") {
 				return rcm.RecoveryDevice{}, fmt.Errorf("cannot open the Jetson's USB device: permission denied")
 			}
 			continue
@@ -78,6 +77,9 @@ func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevi
 		case 1:
 			return devs[0], nil
 		default:
+			if err := requireRecoveryChoice(len(devs), hints.label); err != nil {
+				return rcm.RecoveryDevice{}, err
+			}
 			var items []tui.PickerItem
 			byKey := make(map[string]rcm.RecoveryDevice, len(devs))
 			for _, d := range devs {
@@ -142,6 +144,7 @@ func thorStageOne(fp *flashpack.Flashpack, dev thorDevice, out io.Writer) error 
 		MemBCT:          fp.MemBCT(),
 		DevicePath:      dev.PathKey,
 		ExpectedProduct: uint16(rcm.ProductThor),
+		ExpectedECID:    dev.ExpectedECID,
 		SendOrder:       fp.Manifest.Stage1SendOrder,
 		Out:             out,
 	})
@@ -157,7 +160,13 @@ func thorOpenGadget(dev thorDevice, out io.Writer) (flashengine.Transport, func(
 	deadline := time.Now().Add(60 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		d, err := adb.Open()
+		var d *adb.Device
+		var err error
+		if dev.ExpectedECID != "" {
+			d, err = adb.OpenAt(dev.PathKey)
+		} else {
+			d, err = adb.Open()
+		}
 		if err == nil {
 			return d, func() { d.Close() }, nil
 		}

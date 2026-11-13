@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +114,7 @@ func testPort(t *testing.T, ln net.Listener) int {
 }
 
 func TestWaitForReadiness_NilConfig(t *testing.T) {
-	err := waitForReadiness(context.Background(), nil, "localhost")
+	err := waitForReadiness(context.Background(), nil, "localhost", 0)
 	if err != nil {
 		t.Fatalf("expected nil error for nil config, got %v", err)
 	}
@@ -119,7 +122,7 @@ func TestWaitForReadiness_NilConfig(t *testing.T) {
 
 func TestWaitForReadiness_NilTCPSocket(t *testing.T) {
 	cfg := &appconfig.ReadinessConfig{}
-	err := waitForReadiness(context.Background(), cfg, "localhost")
+	err := waitForReadiness(context.Background(), cfg, "localhost", 0)
 	if err != nil {
 		t.Fatalf("expected nil error for nil tcpSocket, got %v", err)
 	}
@@ -140,7 +143,7 @@ func TestWaitForReadiness_PortAlreadyListening(t *testing.T) {
 	}
 
 	start := time.Now()
-	err = waitForReadiness(context.Background(), cfg, "127.0.0.1")
+	err = waitForReadiness(context.Background(), cfg, "127.0.0.1", 0)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -148,6 +151,59 @@ func TestWaitForReadiness_PortAlreadyListening(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("took %v, expected near-instant for already listening port", elapsed)
+	}
+}
+
+func TestWaitForReadiness_HTTPProbeCompletesRequest(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Clone(context.Background())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	port := testPort(t, server.Listener)
+	cfg := &appconfig.ReadinessConfig{
+		TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
+		TimeoutSeconds: 5,
+	}
+	if err := waitForReadiness(context.Background(), cfg, "127.0.0.1", port); err != nil {
+		t.Fatalf("HTTP readiness failed: %v", err)
+	}
+
+	select {
+	case req := <-requests:
+		if req.Method != http.MethodHead {
+			t.Errorf("readiness method = %q, want HEAD", req.Method)
+		}
+		if !req.Close {
+			t.Error("HTTP readiness must request connection close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP readiness did not reach the server")
+	}
+}
+
+func TestCloudHTTPReadinessPort(t *testing.T) {
+	const port = 8000
+	readiness := &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: port}}
+	appCfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementHTTP, Port: port},
+	}}
+	const meshHost = "device-1.mesh.wendy.internal"
+	cloud := &grpcclient.AgentConnection{Reconnect: neverReconnect, MeshHost: meshHost}
+	if got := cloudHTTPReadinessPort(cloud, appCfg, readiness, meshHost); got != port {
+		t.Errorf("cloud HTTP readiness port = %d, want %d", got, port)
+	}
+	if got := cloudHTTPReadinessPort(cloud, appCfg, readiness, "192.168.1.20"); got != 0 {
+		t.Errorf("cloud device probed on its LAN address: HTTP readiness port = %d, want 0", got)
+	}
+	if got := cloudHTTPReadinessPort(&grpcclient.AgentConnection{}, appCfg, readiness, "192.168.1.20"); got != 0 {
+		t.Errorf("direct connection HTTP readiness port = %d, want 0", got)
+	}
+	readiness.TCPSocket.Port = 9000
+	if got := cloudHTTPReadinessPort(cloud, appCfg, readiness, meshHost); got != 0 {
+		t.Errorf("mismatched explicit readiness port = %d, want 0", got)
 	}
 }
 
@@ -176,7 +232,7 @@ func TestWaitForReadiness_PortBecomesAvailable(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err = waitForReadiness(context.Background(), cfg, "127.0.0.1")
+	err = waitForReadiness(context.Background(), cfg, "127.0.0.1", 0)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -202,7 +258,7 @@ func TestWaitForReadiness_Timeout(t *testing.T) {
 	}
 
 	start := time.Now()
-	err = waitForReadiness(context.Background(), cfg, "127.0.0.1")
+	err = waitForReadiness(context.Background(), cfg, "127.0.0.1", 0)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -234,7 +290,7 @@ func TestWaitForReadiness_ContextCancelled(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err = waitForReadiness(ctx, cfg, "127.0.0.1")
+	err = waitForReadiness(ctx, cfg, "127.0.0.1", 0)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -387,11 +443,24 @@ func TestRunPostStartIfReady_IPv6FallbackIsBracketed(t *testing.T) {
 
 // TestResolveHookHost is a pure table test of the host-resolution logic:
 // LAN connections pass conn.Host through unchanged regardless of what the
-// agent reports; an IPv6-literal Host and a cloud connection (conn.Reconnect
-// != nil) both swap in the agent-reported IP when one is available; and a
-// cloud connection with no reported IP reports ok=false so the caller can
-// skip host-side probes/hooks instead of dialing a dead asset name.
+// agent reports; an IPv6-literal Host swaps in the agent-reported IP; an
+// active desktop mesh VPN supplies a cloud route; without one, a cloud
+// connection (conn.Reconnect != nil) swaps in the agent-reported IP only when
+// the device's agent answers on that LAN address in the one quick
+// reachability check; and a cloud connection with no reported IP, or whose
+// LAN address does not answer, reports ok=false so the caller can skip
+// host-side probes/hooks instead of dialing an address this machine cannot
+// reach.
 func TestResolveHookHost(t *testing.T) {
+	originalLookup := osLookupHostFn
+	t.Cleanup(func() { osLookupHostFn = originalLookup })
+	osLookupHostFn = func(_ context.Context, host string) ([]string, error) {
+		if host == "device-42.mesh.wendy.internal" {
+			return []string{"10.99.0.42"}, nil
+		}
+		return nil, errors.New("mesh DNS unavailable")
+	}
+
 	appCfgWithHook := func() *appconfig.AppConfig {
 		return &appconfig.AppConfig{
 			AppID: "resolve-host-app",
@@ -402,10 +471,15 @@ func TestResolveHookHost(t *testing.T) {
 	}
 
 	cases := []struct {
-		name     string
-		conn     *grpcclient.AgentConnection
-		wantHost string
-		wantOK   bool
+		name string
+		conn *grpcclient.AgentConnection
+		// lanReachable is what the stubbed lanAddressReachable answers;
+		// wantChecked is the LAN IP it must have been asked about ("" =
+		// never asked: only cloud connections with a reported IP check).
+		lanReachable bool
+		wantChecked  string
+		wantHost     string
+		wantOK       bool
 	}{
 		{
 			name: "LAN passthrough regardless of reported IP",
@@ -430,16 +504,52 @@ func TestResolveHookHost(t *testing.T) {
 			wantOK:   true,
 		},
 		{
-			name: "cloud connection swapped for reported IP",
+			name: "active mesh VPN preferred over cloud-reported IP",
 			conn: &grpcclient.AgentConnection{
 				Host:      "cctv",
+				MeshHost:  "device-42.mesh.wendy.internal",
 				Reconnect: neverReconnect,
 				AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
 					NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.10.10.10"}}},
 				}},
 			},
-			wantHost: "10.10.10.10",
+			wantHost: "device-42.mesh.wendy.internal",
 			wantOK:   true,
+		},
+		{
+			// WDY-2440: the mesh VPN is not active, but the developer is on
+			// the device's LAN, so the reported IP answers and replaces the
+			// unresolvable asset name.
+			name: "inactive mesh VPN uses the reported IP when its LAN address answers",
+			conn: &grpcclient.AgentConnection{
+				Host:      "cctv",
+				MeshHost:  "device-43.mesh.wendy.internal",
+				Reconnect: neverReconnect,
+				AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+					NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.10.10.10"}}},
+				}},
+			},
+			lanReachable: true,
+			wantChecked:  "10.10.10.10",
+			wantHost:     "10.10.10.10",
+			wantOK:       true,
+		},
+		{
+			// The reported IP is the device's LAN address, which a machine
+			// using the cloud tunnel from elsewhere cannot reach.
+			name: "inactive mesh VPN rejects an unreachable cloud-reported LAN IP",
+			conn: &grpcclient.AgentConnection{
+				Host:      "cctv",
+				MeshHost:  "device-43.mesh.wendy.internal",
+				Reconnect: neverReconnect,
+				AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+					NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.10.10.10"}}},
+				}},
+			},
+			lanReachable: false,
+			wantChecked:  "10.10.10.10",
+			wantHost:     "",
+			wantOK:       false,
 		},
 		{
 			name: "cloud connection with no reported IP is not ok",
@@ -455,19 +565,142 @@ func TestResolveHookHost(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			checked := stubLANAddressReachable(t, tc.lanReachable)
 			host, ok := resolveHookHost(context.Background(), tc.conn, appCfgWithHook())
 			if host != tc.wantHost || ok != tc.wantOK {
 				t.Errorf("resolveHookHost() = (%q, %v), want (%q, %v)", host, ok, tc.wantHost, tc.wantOK)
+			}
+			if tc.wantChecked == "" && len(*checked) != 0 {
+				t.Errorf("lanAddressReachable asked about %v, want never", *checked)
+			}
+			if tc.wantChecked != "" && (len(*checked) != 1 || (*checked)[0] != tc.wantChecked) {
+				t.Errorf("lanAddressReachable asked about %v, want exactly [%s]", *checked, tc.wantChecked)
 			}
 		})
 	}
 }
 
+// stubLANAddressReachable makes the cloud LAN reachability check answer
+// reachable (or not) without dialing, and records every LAN IP it was asked
+// about.
+func stubLANAddressReachable(t *testing.T, reachable bool) *[]string {
+	t.Helper()
+	original := lanAddressReachable
+	t.Cleanup(func() { lanAddressReachable = original })
+	var mu sync.Mutex
+	var checked []string
+	lanAddressReachable = func(_ context.Context, ip string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		checked = append(checked, ip)
+		return reachable
+	}
+	return &checked
+}
+
+// TestLANAddressReachable pins the cloud LAN reachability check: it dials the
+// device agent's ports on the LAN address — the mTLS port a provisioned
+// (cloud) agent serves and the plaintext one — and only a completed connect
+// counts. A refused connection (nothing listens there) is not reachable, and
+// neither is a dial that times out.
+func TestLANAddressReachable(t *testing.T) {
+	if want := []int{defaultAgentPort + agentMTLSPortOffset, defaultAgentPort}; fmt.Sprint(cloudLANAgentPorts) != fmt.Sprint(want) {
+		t.Fatalf("cloudLANAgentPorts = %v, want the agent's mTLS and plaintext ports %v", cloudLANAgentPorts, want)
+	}
+	original := cloudLANAgentPorts
+	t.Cleanup(func() { cloudLANAgentPorts = original })
+
+	// Listeners on ephemeral ports stand in for the agent's ports.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := testPort(t, closed)
+	closed.Close()
+
+	cloudLANAgentPorts = []int{closedPort, testPort(t, ln)}
+	if !lanAddressReachable(context.Background(), "127.0.0.1") {
+		t.Error("an agent port that accepts connections did not count as reachable")
+	}
+	cloudLANAgentPorts = []int{closedPort}
+	if lanAddressReachable(context.Background(), "127.0.0.1") {
+		t.Error("a refused connection counted as reachable")
+	}
+
+	// TEST-NET-1 (RFC 5737) is never routed: the dial times out or fails
+	// with no route. The context's deadline bounds the wait.
+	cloudLANAgentPorts = original
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if lanAddressReachable(ctx, "192.0.2.1") {
+		t.Error("an unroutable address counted as reachable")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("took %v, want about the 300ms deadline", elapsed)
+	}
+}
+
+// TestRunPostStartIfReady_ActiveMeshVPNUsesMeshHostname covers cloud runs where
+// the agent's LAN IP is absent or unreachable. Resolving the stable mesh name
+// into 10.99/16 proves the desktop VPN is active, so the host-side postStart
+// hook must fire with that name rather than being suppressed.
+func TestRunPostStartIfReady_ActiveMeshVPNUsesMeshHostname(t *testing.T) {
+	originalLookup := osLookupHostFn
+	originalOpen := browserOpen
+	t.Cleanup(func() {
+		osLookupHostFn = originalLookup
+		browserOpen = originalOpen
+	})
+	osLookupHostFn = func(_ context.Context, host string) ([]string, error) {
+		if host != "device-215.mesh.wendy.internal" {
+			t.Fatalf("mesh lookup host = %q, want device-215.mesh.wendy.internal", host)
+		}
+		return []string{"10.99.0.215"}, nil
+	}
+	var opened string
+	browserOpen = func(url string) error {
+		opened = url
+		return nil
+	}
+
+	appCfg := &appconfig.AppConfig{
+		AppID: "cloud-mesh-app",
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:9999"},
+		},
+	}
+	agentClient := &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{}}
+	conn := &grpcclient.AgentConnection{
+		Host:         "cctv",
+		MeshHost:     "device-215.mesh.wendy.internal",
+		Reconnect:    neverReconnect,
+		AgentService: agentClient,
+	}
+
+	if cmd := runPostStartIfReady(context.Background(), context.Background(), conn, appCfg, runOptions{}); cmd != nil {
+		t.Errorf("expected nil cmd for openURL-only hook, got %v", cmd)
+	}
+	if opened != "http://device-215.mesh.wendy.internal:9999" {
+		t.Errorf("openURL = %q, want mesh-routed URL", opened)
+	}
+	if agentClient.calls != 0 {
+		t.Errorf("GetAgentVersion calls = %d, want 0 when active mesh DNS already supplies the route", agentClient.calls)
+	}
+}
+
 // TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP verifies the
-// core WDY-2440 fix: when the CLI connected via the cloud tunnel, conn.Host
-// is the cloud ASSET NAME (cloud_tunnel.go: agentConn.Host =
-// asset.GetName()), which does not resolve from this machine. The postStart
-// hook must target the agent-reported IP instead of dialing the dead name.
+// core WDY-2440 fix, kept when the device's LAN address answers from this
+// machine: when the CLI connected via the cloud tunnel, conn.Host is the cloud
+// ASSET NAME (cloud_tunnel.go: agentConn.Host = asset.GetName()), which does
+// not resolve from this machine. The postStart hook must target the
+// agent-reported IP instead of dialing the dead name — after one quick check
+// that the device's agent answers on the reported IP.
 func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 	original := browserOpen
 	t.Cleanup(func() { browserOpen = original })
@@ -476,6 +709,7 @@ func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 		opened = url
 		return nil
 	}
+	checked := stubLANAddressReachable(t, true)
 
 	appCfg := &appconfig.AppConfig{
 		AppID: "cloud-app",
@@ -496,6 +730,51 @@ func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 	}
 	if opened != "http://10.20.30.40:9999" {
 		t.Errorf("openURL = %q, want the cloud-reported IP URL, not the unresolvable asset name %q", opened, conn.Host)
+	}
+	if len(*checked) != 1 || (*checked)[0] != "10.20.30.40" {
+		t.Errorf("lanAddressReachable asked about %v, want exactly [10.20.30.40]", *checked)
+	}
+}
+
+// TestRunPostStartIfReady_CloudUnreachableLANSkipsHostSideLifecycle: through
+// the cloud tunnel, conn.Host is the asset name and the agent-reported IP is
+// the device's LAN address. When that address does not answer from this
+// machine, the run must not print it as "App reachable at" or open it; it says
+// why the host-side hook is skipped instead.
+func TestRunPostStartIfReady_CloudUnreachableLANSkipsHostSideLifecycle(t *testing.T) {
+	original := browserOpen
+	t.Cleanup(func() { browserOpen = original })
+	opened := ""
+	browserOpen = func(url string) error {
+		opened = url
+		return nil
+	}
+	stubLANAddressReachable(t, false)
+
+	appCfg := &appconfig.AppConfig{
+		AppID: "cloud-app",
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:9999"},
+		},
+	}
+	agentClient := &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+		NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.20.30.40"}}},
+	}}
+	conn := &grpcclient.AgentConnection{Host: "cctv", Reconnect: neverReconnect, AgentService: agentClient}
+
+	out := captureStderr(t, func() {
+		if cmd := runPostStartIfReady(context.Background(), context.Background(), conn, appCfg, runOptions{}); cmd != nil {
+			t.Errorf("expected nil cmd, got %v", cmd)
+		}
+	})
+	if opened != "" {
+		t.Errorf("opened %q from a cloud-tunnel run", opened)
+	}
+	if strings.Contains(out, "App reachable at") || strings.Contains(out, "10.20.30.40") {
+		t.Errorf("announced the LAN address for a cloud-tunnel run:\n%s", out)
+	}
+	if !strings.Contains(out, "Wendy Cloud") {
+		t.Errorf("missing the cloud skip notice:\n%s", out)
 	}
 }
 
@@ -549,6 +828,7 @@ func TestRunPostStartIfReady_CloudReadinessDialsReportedIP(t *testing.T) {
 	}
 	defer ln.Close()
 	port := testPort(t, ln)
+	stubLANAddressReachable(t, true) // no agent listens on 127.0.0.1 here
 
 	original := browserOpen
 	t.Cleanup(func() { browserOpen = original })
@@ -589,6 +869,49 @@ func TestRunPostStartIfReady_CloudReadinessDialsReportedIP(t *testing.T) {
 	}
 	if opened != "http://127.0.0.1:3001" {
 		t.Errorf("openURL = %q, want the reported-IP URL", opened)
+	}
+}
+
+// TestRunPostStartIfReady_CloudUnreachableLANIsNeverProbed: when a cloud
+// device's LAN address does not answer the quick reachability check, the
+// readiness probe must not dial it either — from outside that LAN it only
+// burns the whole probe timeout.
+func TestRunPostStartIfReady_CloudUnreachableLANIsNeverProbed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener: %v", err)
+	}
+	defer ln.Close()
+	dialed := make(chan struct{}, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			dialed <- struct{}{}
+			c.Close()
+		}
+	}()
+	stubLANAddressReachable(t, false)
+
+	appCfg := &appconfig.AppConfig{
+		AppID:     "cloud-readiness-app",
+		Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: testPort(t, ln)}, TimeoutSeconds: 5},
+	}
+	conn := &grpcclient.AgentConnection{
+		Host:      "cloud-asset-does-not-resolve.invalid",
+		Reconnect: neverReconnect,
+		AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+			NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"127.0.0.1"}}},
+		}},
+	}
+
+	start := time.Now()
+	runPostStartIfReady(context.Background(), context.Background(), conn, appCfg, runOptions{})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v; a cloud run must skip the host-side probe, not wait on it", elapsed)
+	}
+	select {
+	case <-dialed:
+		t.Error("probed the agent-reported LAN address after it failed the reachability check")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -900,5 +1223,40 @@ func TestRunPostStartIfReady_ExplicitHookNotOverriddenByHTTPEntitlement(t *testi
 	runPostStartIfReady(context.Background(), context.Background(), conn, appCfg, runOptions{})
 	if opened != "http://127.0.0.1:9999/custom" {
 		t.Errorf("opened = %q, want the explicit hook URL unchanged", opened)
+	}
+}
+
+func TestDefaultPostStartBrowserAllowed(t *testing.T) {
+	previousInteractive, previousJSON := isInteractiveTerminalFn, jsonOutput
+	t.Cleanup(func() { isInteractiveTerminalFn, jsonOutput = previousInteractive, previousJSON })
+	for _, tc := range []struct {
+		interactive, json, want bool
+	}{
+		{interactive: true, json: false, want: true},
+		{interactive: true, json: true, want: false},
+		{interactive: false, json: false, want: false},
+		{interactive: false, json: true, want: false},
+	} {
+		isInteractiveTerminalFn = func() bool { return tc.interactive }
+		jsonOutput = tc.json
+		if got := defaultPostStartBrowserAllowed(); got != tc.want {
+			t.Errorf("interactive=%v json=%v: allowed = %v, want %v", tc.interactive, tc.json, got, tc.want)
+		}
+	}
+}
+
+func TestStartPostStartHook_NoBrowserWithoutInteractiveTerminal(t *testing.T) {
+	previousAllowed, previousOpen := postStartBrowserAllowed, browserOpen
+	t.Cleanup(func() { postStartBrowserAllowed, browserOpen = previousAllowed, previousOpen })
+	postStartBrowserAllowed = func() bool { return false }
+	opened := false
+	browserOpen = func(string) error { opened = true; return nil }
+	cfg := &appconfig.AppConfig{AppID: "app", Hooks: &appconfig.HooksConfig{PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:8080"}}}
+	out := captureStderr(t, func() { startPostStartHook(context.Background(), cfg, "192.168.1.20", "") })
+	if opened {
+		t.Fatal("opened a browser without an interactive terminal")
+	}
+	if !strings.Contains(out, "http://192.168.1.20:8080") {
+		t.Fatalf("the URL was not printed instead: %q", out)
 	}
 }

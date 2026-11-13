@@ -29,4 +29,11 @@ const (
 	Status        = "status"
 	Address       = "address"
 	Output        = "output"
+
+	// Bluetooth link fields (WDY-3189).
+	Adapter                       = "adapter"
+	LinkType                      = "link_type"
+	ReasonCode                    = "reason_code"
+	SupervisionTimeoutMS          = "supervision_timeout_ms"
+	RequestedSupervisionTimeoutMS = "requested_supervision_timeout_ms"
 )

@@ -93,7 +93,7 @@ struct `'wendy build'` {
             try await cli.sh("wendy build --builder nonsense") { result in
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
-                #expect(result.stderr.contains("invalid value \"nonsense\" for --builder"))
+                #expect(result.readableStderr.contains("invalid value \"nonsense\" for --builder"))
             }
             try await cli.sh("wendy build --dockerfile Dockerfile.prod --build-type swift") {
                 result in

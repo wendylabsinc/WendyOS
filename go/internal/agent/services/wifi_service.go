@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -13,8 +14,12 @@ import (
 
 type WiFiService struct {
 	agentpbv2.UnimplementedWendyWiFiServiceServer
-	logger         *zap.Logger
-	networkManager NetworkManager
+	logger                        *zap.Logger
+	networkManager                NetworkManager
+	regulatoryCommand             func(context.Context, ...string) ([]byte, error)
+	disconnectPhaseTimeout        time.Duration
+	disconnectConfirmationTimeout time.Duration
+	disconnectExecutionTimeout    time.Duration
 }
 
 func NewWiFiService(logger *zap.Logger, nm NetworkManager) *WiFiService {

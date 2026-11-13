@@ -25,11 +25,17 @@ import (
 // rejected artifact reports a richer reject code (exit 3). A verify failure
 // surfaces as exit 4 from `commit` (not install), handled by the gate.
 type wendyOSUpdater struct {
-	logger *zap.Logger
+	logger        *zap.Logger
+	prepareRootfs func(context.Context) error
 }
 
 func newWendyOSUpdater(logger *zap.Logger) wendyOSUpdater {
-	return wendyOSUpdater{logger: logger}
+	return wendyOSUpdater{
+		logger: logger,
+		prepareRootfs: func(ctx context.Context) error {
+			return prepareJetsonRootfsAB(ctx, logger)
+		},
+	}
 }
 
 func (w wendyOSUpdater) name() string { return updaterNameWendyOS }
@@ -75,6 +81,15 @@ func (w wendyOSUpdater) install(ctx context.Context, artifactURL string, onProgr
 	binary, found := resolveWendyOSBinary()
 	if !found {
 		return errors.New("wendyos-update binary not found")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := w.prepareRootfs(ctx); err != nil {
+		return fmt.Errorf("OS update preparation failed: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	stale, err := w.runInstall(ctx, binary, artifactURL, onProgress)

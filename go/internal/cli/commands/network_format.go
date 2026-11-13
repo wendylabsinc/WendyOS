@@ -13,23 +13,56 @@ import (
 )
 
 // formatNetworkInterfaces renders the device's network interfaces and their IP
-// addresses as an aligned block suitable for printing under `wendy device info`.
-// The returned string ends with a trailing newline. Interfaces with no
-// addresses are skipped.
+// addresses as an aligned block suitable for printing under `wendy device info`,
+// followed by the interface's uplink notes when the agent reports them. The
+// returned string ends with a trailing newline. Interfaces with no addresses
+// are skipped.
 func formatNetworkInterfaces(ifaces []*agentpb.NetworkInterface) string {
-	var b strings.Builder
-	b.WriteString("Network:\n")
-
-	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	var rows strings.Builder
+	tw := tabwriter.NewWriter(&rows, 0, 0, 2, ' ', 0)
 	for _, iface := range ifaces {
 		if len(iface.GetIpAddresses()) == 0 {
 			continue
 		}
-		fmt.Fprintf(tw, "  %s\t%s\n", iface.GetName(), strings.Join(iface.GetIpAddresses(), ", "))
+		fmt.Fprintf(tw, "  %s\t%s\t%s\n", iface.GetName(), strings.Join(iface.GetIpAddresses(), ", "), uplinkNotes(iface))
 	}
 	tw.Flush()
 
+	var b strings.Builder
+	b.WriteString("Network:\n")
+	// Rows without notes would otherwise end in column padding.
+	for _, line := range strings.SplitAfter(rows.String(), "\n") {
+		if line != "" {
+			b.WriteString(strings.TrimRight(line, " \n") + "\n")
+		}
+	}
 	return b.String()
+}
+
+// uplinkNotes describes an interface's role in reaching the internet, e.g.
+// "default route, metric 100, internet: full". Empty for agents that report
+// none of it.
+func uplinkNotes(iface *agentpb.NetworkInterface) string {
+	var notes []string
+	if iface.GetIsDefaultRoute() {
+		notes = append(notes, "default route")
+	}
+	if iface.RouteMetric != nil {
+		notes = append(notes, fmt.Sprintf("metric %d", iface.GetRouteMetric()))
+	}
+	if c := connectivityLabel(iface.GetConnectivity()); c != "" {
+		notes = append(notes, "internet: "+c)
+	}
+	return strings.Join(notes, ", ")
+}
+
+// connectivityLabel is the lowercase connectivity state ("full", "limited",
+// "portal", "none"), or "" when unknown.
+func connectivityLabel(c agentpb.NetworkConnectivity) string {
+	if c == agentpb.NetworkConnectivity_NETWORK_CONNECTIVITY_UNKNOWN {
+		return ""
+	}
+	return strings.ToLower(strings.TrimPrefix(c.String(), "NETWORK_CONNECTIVITY_"))
 }
 
 // bestReachableIP picks the IP address most likely to be reachable from a

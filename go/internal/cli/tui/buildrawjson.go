@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 )
@@ -95,6 +96,7 @@ func (p *BuildParser) onRawVertex(rv rawJSONVertex) {
 		}
 		p.emitStart(rv.Digest, v)
 	}
+	v.recordRun(rv.Started, rv.Completed)
 	if v.terminal {
 		return
 	}
@@ -104,12 +106,55 @@ func (p *BuildParser) onRawVertex(rv rawJSONVertex) {
 	case rv.Cached:
 		p.emitStatus(rv.Digest, v, BuildStepCached, 0)
 	case rv.Completed != nil:
-		var dur time.Duration
-		if rv.Started != nil {
-			dur = rv.Completed.Sub(*rv.Started)
-		}
-		p.emitStatus(rv.Digest, v, BuildStepDone, dur)
+		p.emitStatus(rv.Digest, v, BuildStepDone, v.runDuration())
 	}
+}
+
+// vertexRun is one run of a vertex; stop is zero while it is still running.
+type vertexRun struct{ start, stop time.Time }
+
+// recordRun notes one vertex record. BuildKit reports a vertex once per run,
+// keyed by its start time, and a vertex can run several times: a lazily pulled
+// base image resolves, finishes, then runs again for each stretch of layer
+// pulling and unpacking.
+func (v *buildVertexState) recordRun(started, completed *time.Time) {
+	if completed != nil && completed.After(v.completedAt) {
+		v.completedAt = *completed
+	}
+	if started == nil {
+		return
+	}
+	if v.runs == nil {
+		v.runs = map[int64]vertexRun{}
+	}
+	r := vertexRun{start: *started}
+	if completed != nil {
+		r.stop = *completed
+	}
+	v.runs[started.UnixNano()] = r
+}
+
+// runDuration is the time spent in finished runs, overlaps counted once: the
+// figure BuildKit's own plain printer puts on its DONE line.
+func (v *buildVertexState) runDuration() time.Duration {
+	runs := make([]vertexRun, 0, len(v.runs))
+	for _, r := range v.runs {
+		if !r.stop.IsZero() {
+			runs = append(runs, r)
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool { return runs[i].start.Before(runs[j].start) })
+	var total time.Duration
+	for i := 0; i < len(runs); {
+		cur := runs[i]
+		for i++; i < len(runs) && !runs[i].start.After(cur.stop); i++ {
+			if runs[i].stop.After(cur.stop) {
+				cur.stop = runs[i].stop
+			}
+		}
+		total += cur.stop.Sub(cur.start)
+	}
+	return total
 }
 
 func (p *BuildParser) onRawStatus(rs rawJSONStatus) {
@@ -117,7 +162,14 @@ func (p *BuildParser) onRawStatus(rs rawJSONStatus) {
 		return
 	}
 	v := p.state(rs.Vertex)
-	if !v.named || v.kind == BuildVertexHidden || v.terminal {
+	if !v.named || v.kind == BuildVertexHidden {
+		return
+	}
+	// Still in progress and written after the vertex last finished: new work,
+	// not the tail of the finished run arriving a frame late.
+	open := rs.Completed == nil && (v.completedAt.IsZero() || rs.Timestamp.After(v.completedAt))
+	if strings.HasPrefix(rs.ID, "extracting ") {
+		p.onExtract(rs.Vertex, v, rs.ID, rs.Completed != nil, open)
 		return
 	}
 	if v.statuses == nil {
@@ -162,7 +214,10 @@ func (p *BuildParser) onRawStatus(rs rawJSONStatus) {
 			bp.Rate = float64(bp.Current) / secs
 		}
 	}
-	p.onBytes(rs.Vertex, v, bp)
+	// Only a sized transfer reopens a finished vertex: BuildKit sends unsized
+	// bookkeeping ("transferring dockerfile: 135B") after a setup step has
+	// already reported done, and that is not worth a second row.
+	p.onBytes(rs.Vertex, v, bp, open && rs.Total > 0)
 }
 
 func (p *BuildParser) onRawLog(rl rawJSONLog) {

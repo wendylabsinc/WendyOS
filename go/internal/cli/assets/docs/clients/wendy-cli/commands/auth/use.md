@@ -17,6 +17,10 @@ rename any of them with [`wendy auth rename`](./rename.md). Each context owns it
 own operator certificate; switching context switches the identity every command
 uses.
 
+Automatic certificate re-issuance through an OIDC sign-in only uses the current
+context. If a saved selector's certificate expires in another context, select
+that context first. See [certificate renewal](./refresh-certs.md).
+
 ## Usage
 
 ```sh
@@ -54,8 +58,7 @@ command that reaches the multi-context branch):
 |-----|--------|
 | `↑` / `↓` | Navigate contexts |
 | `enter` | Use this context for the current invocation only |
-| `d` | Switch to the highlighted context (equivalent to `wendy auth use`) |
-| `x` | Clear the current context |
+| `d` | Switch to the highlighted context (equivalent to `wendy auth use`); on the current context, clear it |
 | `q` / `Ctrl+C` | Cancel |
 
 The current context is marked with `✦`.

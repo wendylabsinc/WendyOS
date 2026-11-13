@@ -3,6 +3,7 @@ package discoverycache
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -212,5 +213,50 @@ func TestEntriesIncludesStale(t *testing.T) {
 	}
 	if got := len(c.Entries()); got != 2 {
 		t.Fatalf("Entries = %d, want 2 (stale included)", got)
+	}
+}
+
+// The connect path reads the device's cable addresses from here; they must
+// survive the trip to disk and back.
+func TestWiredAddressesSurviveTheCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := modelsLANFixture()
+	dev.WiredAddresses = []string{"10.0.0.5", "10.0.1.5"}
+	now := time.Now()
+	c.Replace(EntryFromDevice(dev), now)
+	if err := c.Flush(now); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := reloaded.Fresh(now)
+	if len(fresh) != 1 || !slices.Equal(fresh[0].Device().WiredAddresses, dev.WiredAddresses) {
+		t.Fatalf("wired addresses lost: %+v", fresh)
+	}
+}
+
+// A connect-success write knows nothing about cabling and must not erase it;
+// a fresh advertisement replaces it.
+func TestUpsertKeepsWiredAddressesUnlessReplaced(t *testing.T) {
+	c, err := LoadFrom(filepath.Join(t.TempDir(), "devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	c.Upsert(Entry{ID: "a", DisplayName: "pi", IP: "10.0.0.5", WiredAddresses: []string{"10.0.0.5"}}, now)
+	c.Upsert(Entry{ID: "a", DisplayName: "pi", IP: "192.168.2.9"}, now)
+	if got := c.Fresh(now)[0].WiredAddresses; !slices.Equal(got, []string{"10.0.0.5"}) {
+		t.Fatalf("upsert without cabling erased it: %v", got)
+	}
+	c.Upsert(Entry{ID: "a", DisplayName: "pi", WiredAddresses: []string{"10.0.0.6"}}, now)
+	if got := c.Fresh(now)[0].WiredAddresses; !slices.Equal(got, []string{"10.0.0.6"}) {
+		t.Fatalf("newer cabling not applied: %v", got)
 	}
 }

@@ -3,6 +3,8 @@ package containerd
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
@@ -42,11 +45,18 @@ type snapshotStatter interface {
 	Stat(ctx context.Context, key string) (snapshots.Info, error)
 }
 
-// statLayers checks which chain-ID snapshots already exist by fanning out
-// sn.Stat calls concurrently. Returns a bool slice indexed by layer position.
-// Any non-NotFound error from any goroutine is returned (first one wins).
-func statLayers(ctx context.Context, sn snapshotStatter, chainIDs []string) ([]bool, error) {
-	exists := make([]bool, len(chainIDs))
+// snapshotRemover is the subset of snapshots.Snapshotter used to discard
+// layer snapshots that cannot back a rootfs.
+type snapshotRemover interface {
+	Remove(ctx context.Context, key string) error
+}
+
+// statLayers stats every chain-ID snapshot by fanning out sn.Stat calls
+// concurrently. Returns the snapshot info indexed by layer position, nil where
+// the snapshot does not exist. Any non-NotFound error from any goroutine is
+// returned (first one wins).
+func statLayers(ctx context.Context, sn snapshotStatter, chainIDs []string) ([]*snapshots.Info, error) {
+	infos := make([]*snapshots.Info, len(chainIDs))
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
@@ -56,9 +66,9 @@ func statLayers(ctx context.Context, sn snapshotStatter, chainIDs []string) ([]b
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := sn.Stat(ctx, id)
+			info, err := sn.Stat(ctx, id)
 			if err == nil {
-				exists[i] = true
+				infos[i] = &info
 			} else if !errdefs.IsNotFound(err) {
 				mu.Lock()
 				if firstErr == nil {
@@ -69,7 +79,127 @@ func statLayers(ctx context.Context, sn snapshotStatter, chainIDs []string) ([]b
 		}()
 	}
 	wg.Wait()
-	return exists, firstErr
+	return infos, firstErr
+}
+
+// layerChainIDs returns the chain ID of each layer, base first.
+func layerChainIDs(diffIDs []digest.Digest) []string {
+	chainIDs := make([]string, len(diffIDs))
+	parent := ""
+	for i, diffID := range diffIDs {
+		chainIDs[i] = computeChainID(parent, diffID.String())
+		parent = chainIDs[i]
+	}
+	return chainIDs
+}
+
+// stackedLayers returns how many layers, from the base up, have a snapshot
+// whose recorded parent is the layer below. Only those can back a container
+// rootfs. A snapshot above them was committed under its chain ID without that
+// parent, as agents from 2026.08.13 did on containerd 1.7 (WDY-3799), or sits
+// on such a snapshot. Its rootfs would hold only some of the image's layers.
+func stackedLayers(chainIDs []string, infos []*snapshots.Info) int {
+	parent := ""
+	for i, info := range infos {
+		if info == nil || info.Parent != parent {
+			return i
+		}
+		parent = chainIDs[i]
+	}
+	return len(infos)
+}
+
+// removeLayerSnapshots removes the existing snapshots of the layers from
+// index from up, top first, so that each one is removed before its parent.
+// The chain IDs are then free for a correctly stacked unpack.
+func removeLayerSnapshots(ctx context.Context, sn snapshotRemover, chainIDs []string, infos []*snapshots.Info, from int) error {
+	for i := len(chainIDs) - 1; i >= from; i-- {
+		if infos[i] == nil {
+			continue
+		}
+		if err := sn.Remove(ctx, chainIDs[i]); err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("removing layer %d snapshot %s: %w", i, chainIDs[i], err)
+		}
+	}
+	return nil
+}
+
+// layerRepairBlockedError reports layer snapshots that UnpackImage had to
+// replace but could not, because something is stacked on them (WDY-3799).
+type layerRepairBlockedError struct {
+	// users are the containers and snapshots stacked on the layers, as
+	// snapshotUsers names them. Empty when they could not be determined.
+	users []string
+	err   error
+}
+
+func (e *layerRepairBlockedError) Error() string {
+	if len(e.users) == 0 {
+		return fmt.Sprintf("replacing layer snapshots that are not stacked on their parent layers: %v", e.err)
+	}
+	return fmt.Sprintf("layer snapshots that are not stacked on their parent layers are still used by %s; delete those containers and redeploy: %v",
+		strings.Join(e.users, ", "), e.err)
+}
+
+func (e *layerRepairBlockedError) Unwrap() error { return e.err }
+
+// onlyBlockedBy reports whether removing the named container could unblock
+// the repair: it is the only user, or the users are unknown.
+func (e *layerRepairBlockedError) onlyBlockedBy(containerID string) bool {
+	return len(e.users) == 0 || (len(e.users) == 1 && e.users[0] == containerID)
+}
+
+// snapshotUsers names what is stacked on the given layer snapshots, apart
+// from those snapshots themselves: the IDs of containers whose rootfs is
+// stacked on them, and the keys of any other snapshots, such as a rootfs
+// PrepareImage staged. It is best-effort, for error messages.
+func (c *Client) snapshotUsers(ctx context.Context, sn snapshots.Snapshotter, layers []string) []string {
+	filters := make([]string, len(layers))
+	for i, layer := range layers {
+		filters[i] = fmt.Sprintf("parent==%q", layer)
+	}
+	children := make(map[string]bool)
+	_ = sn.Walk(ctx, func(_ context.Context, info snapshots.Info) error {
+		children[info.Name] = true
+		return nil
+	}, filters...)
+	for _, layer := range layers {
+		delete(children, layer)
+	}
+
+	var users []string
+	if ctrs, err := c.client.ContainerService().List(ctx); err == nil {
+		for _, ctr := range ctrs {
+			if ctr.Snapshotter == c.snapshotter && children[ctr.SnapshotKey] {
+				users = append(users, ctr.ID)
+				delete(children, ctr.SnapshotKey)
+			}
+		}
+	}
+	for key := range children {
+		users = append(users, key)
+	}
+	slices.Sort(users)
+	return users
+}
+
+// imageUnpacked reports whether every layer of img has a snapshot stacked on
+// the layer below, ready for a container rootfs. Unlike containerd's
+// Image.IsUnpacked, which only checks that the top layer's snapshot exists,
+// it reports an image with unstacked snapshots as not unpacked, so that
+// UnpackImage repairs them.
+func (c *Client) imageUnpacked(ctx context.Context, img containerd.Image) (bool, error) {
+	ctx = c.withNamespace(ctx)
+	diffIDs, err := img.RootFS(ctx)
+	if err != nil {
+		return false, err
+	}
+	chainIDs := layerChainIDs(diffIDs)
+	infos, err := statLayers(ctx, c.client.SnapshotService(c.snapshotter), chainIDs)
+	if err != nil {
+		return false, err
+	}
+	return stackedLayers(chainIDs, infos) == len(chainIDs), nil
 }
 
 // UnpackImage unpacks an image's layers into the snapshotter so that the
@@ -138,23 +268,42 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 	}
 
 	// Pre-compute all chain IDs in a single pass, then check existence in parallel.
-	chainIDs := make([]string, len(diffIDs))
-	parent := ""
-	for i, diffID := range diffIDs {
-		chainIDs[i] = computeChainID(parent, diffID.String())
-		parent = chainIDs[i]
-	}
-
-	exists, err := statLayers(ctx, sn, chainIDs)
+	chainIDs := layerChainIDs(diffIDs)
+	infos, err := statLayers(ctx, sn, chainIDs)
 	if err != nil {
 		return fmt.Errorf("pre-checking layer snapshots: %w", err)
 	}
 
+	// Snapshots above the stacked layers occupy their chain IDs without
+	// holding the layers below. Remove them so the layers can be applied again.
+	stacked := stackedLayers(chainIDs, infos)
+	var unstacked []string
+	for i := stacked; i < len(infos); i++ {
+		if infos[i] != nil {
+			unstacked = append(unstacked, chainIDs[i])
+		}
+	}
+	if len(unstacked) > 0 {
+		c.logger.Warn("Replacing layer snapshots that are not stacked on their parent layers",
+			zap.String("image", img.Name()),
+			zap.Int("first_layer", stacked),
+		)
+		if err := removeLayerSnapshots(ctx, sn, chainIDs, infos, stacked); err != nil {
+			// Images built from identical layers share these snapshots, so the
+			// user may be another app's container rather than this image's.
+			if errdefs.IsFailedPrecondition(err) {
+				return &layerRepairBlockedError{users: c.snapshotUsers(ctx, sn, unstacked), err: err}
+			}
+			return fmt.Errorf("replacing layer snapshots that are not stacked on their parent layers: %w", err)
+		}
+	}
+
+	rebase := sync.OnceValue(func() bool { return c.snapshotterRebases(ctx) })
 	var parentChainID string
 	for i, layerDesc := range manifest.Layers {
 		chainID := chainIDs[i]
 
-		if exists[i] {
+		if i < stacked {
 			c.refreshSnapshotLabels(ctx, sn, chainID)
 			if progress != nil {
 				progress(UnpackProgress{
@@ -182,7 +331,7 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 			})
 		}
 
-		reused, err := c.applyLayerSnapshot(ctx, cleanupCtx, sn, img.Name(), i, layerDesc, diffIDs[i].String(), parentChainID, chainID)
+		reused, err := c.applyLayerSnapshot(ctx, cleanupCtx, sn, img.Name(), i, layerDesc, diffIDs[i].String(), parentChainID, chainID, rebase())
 		if err != nil {
 			return err
 		}
@@ -206,10 +355,29 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 	return nil
 }
 
+// snapshotterRebases reports whether the snapshotter advertises containerd's
+// "rebase" capability: committing a snapshot that was prepared without a
+// parent, passing snapshots.WithParent, stacks it on that parent. The
+// parent-independent apply and layer reuse paths depend on it. containerd 1.7
+// neither advertises it nor reads the parent of a Commit request, so on 1.7
+// those paths succeeded yet left every layer above the base without a parent
+// (WDY-3799). containerd's own unpacker checks the same capability before
+// unpacking layers in parallel.
+func (c *Client) snapshotterRebases(ctx context.Context) bool {
+	caps, err := c.client.GetSnapshotterCapabilities(ctx, c.snapshotter)
+	if err != nil {
+		c.logger.Debug("Could not read snapshotter capabilities; applying layers sequentially",
+			zap.String("snapshotter", c.snapshotter), zap.Error(err))
+		return false
+	}
+	return slices.Contains(caps, "rebase")
+}
+
 // applyLayerSnapshot materializes one layer descriptor and commits it above
 // parentChainID under the ordered chainID. The caller must hold a containerd
 // lease. Returning reused=true means either the immutable layer data or the
-// complete ordered chain was already available.
+// complete ordered chain was already available. rebase is the result of
+// snapshotterRebases; without it only the sequential apply stacks layers.
 func (c *Client) applyLayerSnapshot(
 	ctx, cleanupCtx context.Context,
 	sn snapshots.Snapshotter,
@@ -218,23 +386,25 @@ func (c *Client) applyLayerSnapshot(
 	layerDesc ocispec.Descriptor,
 	diffID string,
 	parentChainID, chainID string,
+	rebase bool,
 ) (reused bool, err error) {
-	if c.tryReuseLayerSnapshot(ctx, cleanupCtx, sn, imageName, layer, diffID, parentChainID, chainID) {
-		return true, nil
-	}
-	if c.snapshotter == "overlayfs" {
-		reused, err := c.applyLayerSnapshotAttempt(ctx, cleanupCtx, sn, imageName, layer, layerDesc, diffID, parentChainID, chainID, true)
-		if err == nil {
-			return reused, nil
+	if rebase {
+		if c.tryReuseLayerSnapshot(ctx, cleanupCtx, sn, imageName, layer, diffID, parentChainID, chainID) {
+			return true, nil
 		}
-		if ctx.Err() != nil {
-			return false, err
+		if c.snapshotter == "overlayfs" {
+			reused, err := c.applyLayerSnapshotAttempt(ctx, cleanupCtx, sn, imageName, layer, layerDesc, diffID, parentChainID, chainID, true)
+			if err == nil {
+				return reused, nil
+			}
+			if ctx.Err() != nil {
+				return false, err
+			}
+			// The commit can still reject WithParent despite the advertised
+			// capability. The sequential apply is always correct, only slower.
+			c.logger.Debug("Parent-independent layer apply unavailable; applying layer sequentially",
+				zap.Int("layer", layer), zap.String("diff_id", diffID), zap.Error(err))
 		}
-		// Overlay snapshotters running without the advertised rebase capability
-		// (notably some user namespaces) reject WithParent at commit. Preserve
-		// compatibility by replaying the canonical sequential apply path.
-		c.logger.Debug("Parent-independent layer apply unavailable; applying layer sequentially",
-			zap.Int("layer", layer), zap.String("diff_id", diffID), zap.Error(err))
 	}
 	return c.applyLayerSnapshotAttempt(ctx, cleanupCtx, sn, imageName, layer, layerDesc, diffID, parentChainID, chainID, false)
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,6 +24,28 @@ var (
 // oe-core's only firmware recipe, ovmf, is x86_64-only, so aarch64 firmware
 // always comes from the host's QEMU installation.
 var ErrFirmwareNotFound = errors.New("no ARM64 UEFI firmware found")
+
+// FindQEMU also checks the Windows installer's default directory, since the
+// installer does not add QEMU to PATH.
+func FindQEMU(goos string) (string, error) {
+	path, err := vmLookPath("qemu-system-aarch64")
+	if err == nil || goos != "windows" {
+		return path, err
+	}
+	path = filepath.Join(windowsQEMUDir(), "qemu-system-aarch64.exe")
+	if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
+		return path, nil
+	}
+	return "", err
+}
+
+func windowsQEMUDir() string {
+	root := os.Getenv("ProgramFiles")
+	if root == "" {
+		root = `C:\Program Files`
+	}
+	return filepath.Join(root, "qemu")
+}
 
 // pflashBytes is the size the virt machine's pflash unit maps, and therefore the
 // size both the firmware image and its variable store must be.
@@ -107,10 +130,14 @@ func FirmwareCandidates(goos, brewPrefix string) []string {
 			"/usr/local/share/qemu/edk2-aarch64-code.fd",
 		)
 	case "windows":
-		return []string{
-			`C:\Program Files\qemu\share\edk2-aarch64-code.fd`,
-			`C:\Program Files\qemu\edk2-aarch64-code.fd`,
+		dir := windowsQEMUDir()
+		candidates := []string{filepath.Join(dir, "share", "edk2-aarch64-code.fd"), filepath.Join(dir, "edk2-aarch64-code.fd")}
+		if binary, err := FindQEMU(goos); err == nil {
+			if installed := filepath.Dir(binary); installed != dir {
+				candidates = append([]string{filepath.Join(installed, "share", "edk2-aarch64-code.fd"), filepath.Join(installed, "edk2-aarch64-code.fd")}, candidates...)
+			}
 		}
+		return candidates
 	default:
 		return []string{
 			"/usr/share/AAVMF/AAVMF_CODE.fd",

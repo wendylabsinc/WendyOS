@@ -95,3 +95,85 @@ func TestHILSimulatorPickerSelectsStoppedVMAndCancels(t *testing.T) {
 		t.Fatal("picker did not cancel")
 	}
 }
+
+// WENDY_DEVICE usually names the real device — the --hil peer — so HIL takes
+// its simulator from the variable only when the variable names one. An
+// explicit --device keeps its meaning: HIL still refuses a non-simulator.
+func TestHILDeviceSelectorIgnoresANonSimulatorWENDY_DEVICE(t *testing.T) {
+	restoreDeviceGlobals(t)
+	for _, tc := range []struct {
+		name, flag, env, want string
+	}{
+		{"env names the real device", "", "wendyos-thor.local", ""},
+		{"env names a simulator", "", "vm:dev", "vm:dev"},
+		{"env names the simulator alias", "", "sim", "sim"},
+		{"env names a malformed simulator", "", "vm:bad/name", "vm:bad/name"},
+		{"explicit real device", "wendyos-thor.local", "", "wendyos-thor.local"},
+		{"explicit device outranks env", "wendyos-thor.local", "vm:dev", "wendyos-thor.local"},
+		{"explicit simulator", "vm:dev", "wendyos-thor.local", "vm:dev"},
+		{"neither", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deviceFlag = tc.flag
+			t.Setenv(deviceEnvVar, tc.env)
+			applyDeviceEnv()
+			if got := hilDeviceSelector(); got != tc.want {
+				t.Fatalf("hilDeviceSelector() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHILWithWENDY_DEVICEOpensTheSimulatorPicker(t *testing.T) {
+	restoreDeviceGlobals(t)
+	oldInteractive, oldPicker := isInteractiveTerminalFn, pickHILSimulatorFn
+	t.Cleanup(func() { isInteractiveTerminalFn, pickHILSimulatorFn = oldInteractive, oldPicker })
+	isInteractiveTerminalFn = func() bool { return true }
+	selected := false
+	pickHILSimulatorFn = func(context.Context) (string, error) { selected = true; return "g1-sim", nil }
+
+	run := func(t *testing.T, args ...string) error {
+		t.Helper()
+		cmd := newRunCmd()
+		cmd.SetArgs(append(args, "--prefix", t.TempDir()))
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		return cmd.Execute()
+	}
+
+	t.Run("real device in WENDY_DEVICE", func(t *testing.T) {
+		selected, deviceFlag = false, ""
+		t.Setenv(deviceEnvVar, "wendyos-thor.local")
+		applyDeviceEnv()
+		// An empty project stops execution after selection, before device access.
+		if err := run(t, "--hil=wendyos-thor.local"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected missing project after simulator selection, got %v", err)
+		}
+		if !selected || deviceFlag != "wendyos-thor.local" {
+			t.Fatalf("selected=%v target=%q", selected, deviceFlag)
+		}
+	})
+	t.Run("simulator in WENDY_DEVICE", func(t *testing.T) {
+		selected, deviceFlag = false, ""
+		t.Setenv(deviceEnvVar, "vm:dev")
+		applyDeviceEnv()
+		if err := run(t, "--hil=wendyos-thor.local"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected missing project after simulator selection, got %v", err)
+		}
+		if selected {
+			t.Fatal("opened the picker although WENDY_DEVICE names a simulator")
+		}
+	})
+	t.Run("explicit real device", func(t *testing.T) {
+		selected, deviceFlag = false, "wendyos-thor.local"
+		t.Setenv(deviceEnvVar, "")
+		applyDeviceEnv()
+		err := run(t, "--hil=wendyos-thor.local")
+		if err == nil || !strings.Contains(err.Error(), "HIL requires a simulator") {
+			t.Fatalf("explicit --device wendyos-thor.local: got %v", err)
+		}
+		if selected {
+			t.Fatal("opened the picker for an explicit --device")
+		}
+	})
+}

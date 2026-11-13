@@ -196,6 +196,92 @@ func TestRedactBuildArgsForLog(t *testing.T) {
 	}
 }
 
+// Non-interactive logOutput only surfaces through a 15s heartbeat (or, for
+// Compose, a failure-only buffer), so the wait notice must reach stderr
+// immediately instead — and must NOT also duplicate onto logOutput.
+func TestOCILayoutBuildWaitNoticeNonInteractiveGoesToStderr(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+
+	var logOutput bytes.Buffer
+	out := captureStderr(t, func() {
+		ociLayoutBuildWaitNotice(context.Background(), "app", &logOutput)()
+	})
+	if !strings.Contains(out, "Waiting for another wendy run of app to release the build cache") {
+		t.Fatalf("missing wait notice on stderr: %q", out)
+	}
+	if logOutput.Len() != 0 {
+		t.Fatalf("non-interactive notice also wrote to logOutput: %q", logOutput.String())
+	}
+}
+
+// Interactive single-app builds render logOutput live (newBuildSetupStepWriter
+// feeds it into the "preparing buildx builder" step), so the notice belongs
+// there, not on stderr.
+func TestOCILayoutBuildWaitNoticeInteractiveGoesToLogOutput(t *testing.T) {
+	restore := forceBuildProgressInteractive(true)
+	defer restore()
+
+	var logOutput bytes.Buffer
+	out := captureStderr(t, func() {
+		ociLayoutBuildWaitNotice(context.Background(), "app", &logOutput)()
+	})
+	if out != "" {
+		t.Fatalf("interactive notice unexpectedly wrote to stderr: %q", out)
+	}
+	if !strings.Contains(logOutput.String(), "Waiting for another wendy run of app to release the build cache") {
+		t.Fatalf("missing wait notice on logOutput: %q", logOutput.String())
+	}
+}
+
+// A quiet build (wendy watch's non-verbose mode, or a quiet Compose/
+// multi-service worker) routes logOutput into a failure-only buffer even at
+// an interactive terminal — buildProgressInteractive() alone can't see that,
+// so the notice must come from ctx (contextWithQuietBuildLog) instead and go
+// to stderr, exactly as the non-interactive case does. This is the fix for
+// round 2: round 1's interactivity-only check wrote into that buffer here,
+// silently losing the notice for `wendy watch` on a Compose/multi-service app
+// at an interactive terminal.
+func TestOCILayoutBuildWaitNoticeQuietInteractiveGoesToStderr(t *testing.T) {
+	restore := forceBuildProgressInteractive(true)
+	defer restore()
+
+	ctx := contextWithQuietBuildLog(context.Background(), true)
+	var logOutput bytes.Buffer
+	out := captureStderr(t, func() {
+		ociLayoutBuildWaitNotice(ctx, "app", &logOutput)()
+	})
+	if !strings.Contains(out, "Waiting for another wendy run of app to release the build cache") {
+		t.Fatalf("missing wait notice on stderr: %q", out)
+	}
+	if logOutput.Len() != 0 {
+		t.Fatalf("quiet notice also wrote to logOutput (would be silently lost there): %q", logOutput.String())
+	}
+}
+
+// Interactive Compose/multi-service builds that are NOT quiet are the
+// documented known gap: logOutput is a failure-only buffer there too (the
+// live multi-spinner doesn't render it), but ociLayoutBuildWaitNotice cannot
+// tell that case apart from "interactive single-app, where logOutput IS
+// live" — only quietBuildLogKey carries that distinction, and it is false
+// here, so behavior is unchanged from round 1: still routed to logOutput.
+func TestOCILayoutBuildWaitNoticeInteractiveNotQuietKnownGapStillUsesLogOutput(t *testing.T) {
+	restore := forceBuildProgressInteractive(true)
+	defer restore()
+
+	ctx := contextWithQuietBuildLog(context.Background(), false)
+	var logOutput bytes.Buffer
+	out := captureStderr(t, func() {
+		ociLayoutBuildWaitNotice(ctx, "app", &logOutput)()
+	})
+	if out != "" {
+		t.Fatalf("interactive non-quiet notice unexpectedly wrote to stderr: %q", out)
+	}
+	if !strings.Contains(logOutput.String(), "Waiting for another wendy run of app to release the build cache") {
+		t.Fatalf("missing wait notice on logOutput: %q", logOutput.String())
+	}
+}
+
 func TestAppleContainerPushSchemeRequiresLoopbackRegistry(t *testing.T) {
 	for _, image := range []string{
 		"127.0.0.1:5000/test-app:latest",
@@ -565,6 +651,42 @@ func (s *signalingWriter) Write(p []byte) (int, error) {
 		s.once.Do(func() { close(s.seen) })
 	}
 	return len(p), nil
+}
+
+// The builder container lives on the Docker daemon, shared by every account
+// using it, but buildx registers builders per user. Another account's running
+// container must not take the fast path: this user's `--builder` would fail
+// with `no builder "<name>" found` (seen with root and wendy sharing a daemon).
+func TestOCIBuilderFastPathNeedsThisUsersRegistration(t *testing.T) {
+	oldCommand := imageBuilderCommandContext
+	t.Cleanup(func() { imageBuilderCommandContext = oldCommand })
+	inspects := 0
+	imageBuilderCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		inspects++
+		return exec.CommandContext(ctx, "echo", "true") // the container is running
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DOCKER_CONFIG", "")
+	t.Setenv("BUILDX_CONFIG", "")
+
+	if ociBuilderRunningForUser(context.Background(), "wendy-oci") {
+		t.Fatal("took the fast path for a builder this user never created")
+	}
+	if inspects != 0 {
+		t.Fatalf("inspected the container %d times before checking this user's registration", inspects)
+	}
+
+	instances := filepath.Join(home, ".docker", "buildx", "instances")
+	if err := os.MkdirAll(instances, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instances, "wendy-oci"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !ociBuilderRunningForUser(context.Background(), "wendy-oci") {
+		t.Fatal("a registered, running builder missed the fast path")
+	}
 }
 
 // TestBootstrapOCIBuilderTimesOut proves bootstrapOCIBuilder bounds the

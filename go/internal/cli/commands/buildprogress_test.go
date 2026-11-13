@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	containerdlog "github.com/containerd/log"
 	"github.com/sirupsen/logrus"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
@@ -114,6 +115,61 @@ func TestRunBuildWithProgressCtrlCCancelsAndJoinsBuilder(t *testing.T) {
 	case <-exited:
 	default:
 		t.Fatal("runBuildWithProgress returned before the cancelled builder exited")
+	}
+}
+
+func TestRunBuildWithProgressLeavesTipsOutOfSimulatorSetup(t *testing.T) {
+	// The managed robot's build runs under withoutProgressHints; an ordinary
+	// build keeps its tips.
+	restoreInteractive := forceBuildProgressInteractive(true)
+	defer restoreInteractive()
+	originalProgram := buildProgressProgram
+	defer func() { buildProgressProgram = originalProgram }()
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		tips bool
+	}{
+		{"ordinary build", context.Background(), true},
+		{"simulator setup", withoutProgressHints(context.Background()), false},
+	} {
+		var view string
+		buildProgressProgram = func(model tea.Model) *tea.Program {
+			view = model.View()
+			return tui.NewProgressProgram(model,
+				tea.WithInput(strings.NewReader("\x03")),
+				tea.WithOutput(io.Discard),
+			)
+		}
+		_ = runBuildWithProgress(tc.ctx, "Building image...", dumpRawAlways, func(ctx context.Context, _, _ io.Writer) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		if got := strings.Contains(view, "💡"); got != tc.tips {
+			t.Errorf("%s: tip shown = %t, want %t: %q", tc.name, got, tc.tips, view)
+		}
+	}
+}
+
+func TestSimulatorBootWaitShowsNoTips(t *testing.T) {
+	origInteractive, origSpinner := isInteractiveTerminalFn, runAgentConnectionSpinner
+	t.Cleanup(func() { isInteractiveTerminalFn, runAgentConnectionSpinner = origInteractive, origSpinner })
+	isInteractiveTerminalFn = func() bool { return true }
+	var hintsOff bool
+	runAgentConnectionSpinner = func(ctx context.Context, _ string, _ func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+		hintsOff = progressHintsOff(ctx)
+		return &grpcclient.AgentConnection{}, nil
+	}
+	if _, err := awaitSimulatorWith(context.Background(), "sim", "127.0.0.1:50051", true,
+		func(context.Context) (*grpcclient.AgentConnection, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !hintsOff {
+		t.Fatal("the simulator boot spinner rotates tips")
+	}
+	if progressHintsOff(context.Background()) {
+		t.Fatal("tips are off without being asked")
 	}
 }
 
@@ -310,6 +366,69 @@ func TestRunBuildWithProgressPrintsRawOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(saved, "bootstrapping builder") || !strings.Contains(saved, "could not find a version") {
 		t.Errorf("full raw and setup logs not retained:\n%s", saved)
+	}
+}
+
+// The error a failed build returns — the run's final ✗ line — names the
+// failing step and its cause; the details block above it keeps the rest.
+func TestRunBuildWithProgressReturnsTheStepAndCause(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+	var out strings.Builder
+	restoreOut := setBuildProgressOut(&out)
+	defer restoreOut()
+	originalPersist := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = originalPersist }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-test.log", nil }
+
+	buildErr := &imageBuildFailedError{errors.New("docker buildx build (OCI export) failed: exit status 1")}
+	err := runBuildWithProgress(context.Background(), "Building image (OCI layout)...", shouldDumpChunkDiffBuildLog(chunkingAuto), func(_ context.Context, stream, _ io.Writer) error {
+		io.WriteString(stream, readBuildFailureFixture(t, "go-compile.log"))
+		return buildErr
+	})
+	if got, want := fmt.Sprint(err), "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"; got != want {
+		t.Fatalf("err = %q, want %q", got, want)
+	}
+	if !errors.Is(err, buildErr) || !isImageBuildFailure(err) || ErrorClass(err) != "build_failed" {
+		t.Fatalf("err %q lost its build failure (class %q)", err, ErrorClass(err))
+	}
+	for _, want := range []string{
+		"Build failure details",
+		"  Step: build 4/4 — RUN go build -o /out/app .",
+		// The builder's error stays in the output; CI's OCI-export retry
+		// (go/scripts/test-ci.sh) greps for it.
+		"  Error: docker buildx build (OCI export) failed: exit status 1",
+		"  Build log: /tmp/wendy-build-image-test.log",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("details block missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// --chunking=force renders every chunk-diff build failure, builder-setup ones
+// included; those keep the builder's message as the run's error.
+func TestRunBuildWithProgressKeepsABuilderSetupFailure(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+	var out strings.Builder
+	restoreOut := setBuildProgressOut(&out)
+	defer restoreOut()
+	originalPersist := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = originalPersist }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-test.log", nil }
+
+	setupErr := classifyCommandError(errBuilderUnavailable, errors.New(`bootstrapping buildx builder "wendy-oci": exit status 1`))
+	err := runBuildWithProgress(context.Background(), "Building image (OCI layout)...", shouldDumpChunkDiffBuildLog(chunkingForce), func(_ context.Context, stream, logw io.Writer) error {
+		io.WriteString(logw, "[buildx] bootstrapping builder \"wendy-oci\"\n")
+		io.WriteString(stream, "#1 [internal] booting buildkit\n#1 ERROR: error while pulling image moby/buildkit: toomanyrequests\n")
+		return setupErr
+	})
+	if err != setupErr || ErrorClass(err) != "builder_unavailable" {
+		t.Fatalf("err = %q (class %q), want the builder's own error", err, ErrorClass(err))
+	}
+	if !strings.Contains(out.String(), "Build failure details") || !strings.Contains(out.String(), "toomanyrequests") {
+		t.Errorf("details block missing:\n%s", out.String())
 	}
 }
 

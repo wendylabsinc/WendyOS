@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 func TestRootCommand_HasAllSubcommands(t *testing.T) {
@@ -139,4 +142,47 @@ func TestTourCommandIsVisible(t *testing.T) {
 		}
 	}
 	t.Fatal("tour command not registered on root")
+}
+
+func TestRootCommand_DeviceFlagDocumentsWENDY_DEVICE(t *testing.T) {
+	f := NewRootCmd().PersistentFlags().Lookup("device")
+	if f == nil || !strings.Contains(f.Usage, "WENDY_DEVICE") {
+		t.Fatalf("--device usage does not mention WENDY_DEVICE: %+v", f)
+	}
+}
+
+// End to end through cobra: the root pre-run applies WENDY_DEVICE before any
+// command runs, and an explicit --device still wins.
+func TestRootAppliesWENDY_DEVICEBeforeCommandsRun(t *testing.T) {
+	restoreDeviceGlobals(t)
+	setTempConfig(t, &config.Config{DefaultDevice: "saved.local"})
+	t.Setenv("WENDY_ANALYTICS", "false")
+	t.Setenv(deviceEnvVar, "env-device.local")
+
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		want    string
+		fromEnv bool
+	}{
+		{"env when no flag", []string{"probe-device"}, "env-device.local", true},
+		{"flag beats env", []string{"--device", "flag-device.local", "probe-device"}, "flag-device.local", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := NewRootCmd()
+			var got string
+			var gotEnv bool
+			root.AddCommand(&cobra.Command{Use: "probe-device", RunE: func(*cobra.Command, []string) error {
+				got, gotEnv = deviceFlag, deviceChosenByEnv()
+				return nil
+			}})
+			root.SetArgs(tc.args)
+			if err := root.Execute(); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if got != tc.want || gotEnv != tc.fromEnv {
+				t.Fatalf("deviceFlag = %q (fromEnv=%v), want %q (fromEnv=%v)", got, gotEnv, tc.want, tc.fromEnv)
+			}
+		})
+	}
 }

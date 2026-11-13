@@ -1,0 +1,4 @@
+Unitree Go2 visual meshes from MuJoCo Menagerie, revision 4d038b3feae26ec82b46a4d586379114012a8ac7.
+https://github.com/google-deepmind/mujoco_menagerie/tree/4d038b3feae26ec82b46a4d586379114012a8ac7/unitree_go2
+Copied from the warehouse-demo reference. Original BSD-3-Clause license is in LICENSE.txt.
+model.json contains the visual hierarchy extracted from go2.xml.

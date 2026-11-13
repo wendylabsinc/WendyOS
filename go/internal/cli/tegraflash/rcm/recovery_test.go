@@ -1,9 +1,31 @@
 package rcm
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestVerifyChipIDRequiresTheObservedChipOnClaimedHandle(t *testing.T) {
+	read := func() (string, error) { return "ab12CD34", nil }
+	if err := VerifyChipID("AB12cd34", read); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"11223344", "7&WINDOWS-LOCATION"} {
+		if err := VerifyChipID(expected, read); err == nil {
+			t.Fatalf("accepted different/invalid chip %q", expected)
+		}
+	}
+	if err := VerifyChipID("ab12cd34", func() (string, error) { return "", nil }); err == nil {
+		t.Fatal("accepted missing claimed-handle identity")
+	}
+	if err := VerifyChipID("ab12cd34", func() (string, error) { return "", errors.New("USB gone") }); err == nil {
+		t.Fatal("accepted unreadable claimed-handle identity")
+	}
+	if err := VerifyChipID("", func() (string, error) { t.Fatal("optional pin changed existing interactive behavior"); return "", nil }); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // The T234 family enumerates one recovery PID per module SKU (0x7<module>23).
 // Detection must accept all of them — matching only the AGX Orin PID made an

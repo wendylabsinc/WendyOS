@@ -4,9 +4,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"os"
 	"path/filepath"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 // Config represents the top-level CLI configuration.
@@ -14,6 +16,9 @@ type Config struct {
 	Auth          []AuthConfig     `json:"auth,omitempty"`
 	Analytics     *AnalyticsConfig `json:"analytics,omitempty"`
 	DefaultDevice string           `json:"defaultDevice,omitempty"`
+	// SessionBrokerIdleTimeout controls the grace period after the final user
+	// lease/operation ends. Empty uses five minutes; housekeeping is not a lease.
+	SessionBrokerIdleTimeout string `json:"sessionBrokerIdleTimeout,omitempty"`
 	// DefaultBuildHost is the device `wendy run` delegates the image
 	// build to when --build-host is not passed. Per-developer rather than
 	// per-project: the right build host depends on which network the developer is
@@ -22,9 +27,21 @@ type Config struct {
 	// DefaultCloudGRPC is a pre-context auth-selection field, read once by
 	// ensureContexts to seed CurrentContext during migration and no longer
 	// written (see CurrentContext).
-	DefaultCloudGRPC   string `json:"defaultCloudGRPC,omitempty"`
-	LastCLIUpdateCheck string `json:"lastCLIUpdateCheck,omitempty"` // RFC3339
+	DefaultCloudGRPC     string `json:"defaultCloudGRPC,omitempty"`
+	LastCLIUpdateCheck   string `json:"lastCLIUpdateCheck,omitempty"`   // last successful check, RFC3339
+	LastCLIUpdateAttempt string `json:"lastCLIUpdateAttempt,omitempty"` // includes failed attempts, RFC3339
+	// LatestCLIRelease is independent of the checking process's version, so an
+	// older MCP process still knows to restart after the on-disk CLI is updated.
+	LatestCLIRelease   string `json:"latestCLIRelease,omitempty"`
 	AvailableCLIUpdate string `json:"availableCLIUpdate,omitempty"` // tag of a newer release, if any
+	// CLIUpdateNoticeShown is the AvailableCLIUpdate tag whose non-interactive
+	// update notice has already been printed, so scripts and agents see it
+	// once per release instead of after every command.
+	CLIUpdateNoticeShown string `json:"cliUpdateNoticeShown,omitempty"`
+	// CLIUpdatePromptVersion is no longer read; it is still written so older
+	// CLIs, whose snooze applied to this release only, honor a deferral.
+	CLIUpdatePromptVersion string `json:"cliUpdatePromptVersion,omitempty"`
+	CLIUpdatePromptedAt    string `json:"cliUpdatePromptedAt,omitempty"` // snoozes all interactive update prompts for 24h, RFC3339
 	// LastMCPSetupVersion records the CLI version that last ran `wendy mcp
 	// setup`. It lets the root command detect when an upgrade should refresh
 	// the MCP server config and bundled skills. Empty means the user has never
@@ -93,6 +110,23 @@ type AuthConfig struct {
 	RefreshToken   string            `json:"refreshToken,omitempty"`
 	DPoPPrivateKey string            `json:"dpopPrivateKey,omitempty"`
 	Certificates   []CertificateInfo `json:"certificates,omitempty"`
+	// LiteCertificate is the session's P-256 Lite operator leaf (leaf first,
+	// then chain), issued over the ML-DSA session and used only on the Lite
+	// lane. LitePrivateKey is its key.
+	LiteCertificate string `json:"liteCertificate,omitempty"`
+	LitePrivateKey  string `json:"litePrivateKey,omitempty"`
+	// RegistryPrivateKey is this machine's registry encryption key for the
+	// session's operator (base64 of the ML-KEM-768 + X25519 private key): one
+	// key per operator device (sem 2026-10-20 21:29). Wraps to it open on this
+	// machine only.
+	RegistryPrivateKey string `json:"registryPrivateKey,omitempty"`
+	// RegistryKeyID is the key_id Cloud acknowledged for RegistryPrivateKey.
+	// Empty or different means the key is unbound and registration is retried.
+	RegistryKeyID string `json:"registryKeyId,omitempty"`
+	// ServiceAccount is the wendy-auth service-account sub of a headless
+	// session. Its token is re-minted from DPoPPrivateKey; there is no
+	// refresh token.
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
 // CertificateInfo holds certificate material for mTLS authentication.
@@ -266,11 +300,45 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writeConfigFile(path, data); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
 	return nil
+}
+
+// writeConfigFile replaces path with data without ever exposing a partial
+// file: a crash or a concurrent reader sees the old config or the new one,
+// never the truncated file os.WriteFile leaves mid-write. The file is always
+// 0600 — it holds credentials. A symlinked config.json (a dotfiles repo) is
+// written through to its target — including a dangling target that does not
+// exist yet — so the link survives the rename. The write preserves the
+// existing owner (or, for a fresh config.json, its directory's owner)
+// instead of leaving it root-owned, since `wendy` re-execs itself under sudo
+// with the invoking user's HOME for some operations.
+//
+// Before writing, it probes the target for write permission and fails
+// without touching the file if that probe fails. A rename replaces a file
+// regardless of that file's own permissions — only the containing
+// directory's permissions matter — so without this probe Save would silently
+// override a config.json the user deliberately made read-only (e.g. chmod
+// 444 to stop `wendy` from rewriting a hand-edited or generated config).
+// os.WriteFile respected that mode by construction; this preserves the same
+// behavior under the new rename-based write path.
+func writeConfigFile(path string, data []byte) error {
+	resolved, err := atomicfile.ResolveWritePath(path)
+	if err != nil {
+		return err
+	}
+	path = resolved
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		_ = f.Close()
+	}
+	return atomicfile.WritePreservingOwner(path, data, 0o600)
 }
 
 // authEntryOrgID returns the organization ID from the first certificate in an
@@ -291,6 +359,7 @@ func (c *Config) AddAuth(auth AuthConfig) {
 		if existing.CloudDashboard == auth.CloudDashboard &&
 			existing.CloudGRPC == auth.CloudGRPC &&
 			existing.OAuthIssuer == auth.OAuthIssuer &&
+			existing.ServiceAccount == auth.ServiceAccount &&
 			existing.OrganizationKey() == incomingOrg {
 			c.Auth[i] = auth
 			return

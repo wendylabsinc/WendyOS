@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/assets"
 )
 
 func TestProfilesAndToolRestrictions(t *testing.T) {
@@ -166,6 +170,127 @@ func TestSkillsDoNotExpandSensorToolPermissions(t *testing.T) {
 		if camera != tc.camera {
 			t.Fatalf("unexpected camera access for %s under %s", tc.profile.Name, tc.parent.Name)
 		}
+	}
+}
+
+func TestWendyDataSkillAvailableThroughProfileTools(t *testing.T) {
+	const skillRoot = "skills/wendy-data"
+	files := map[string]string{}
+	err := fs.WalkDir(assets.FS, skillRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".md") {
+			body, err := assets.FS.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			files[strings.TrimPrefix(path, "skills/")] = string(body)
+		}
+		return nil
+	})
+	if err != nil || files["wendy-data/SKILL.md"] == "" {
+		t.Fatalf("Wendy Data skill is missing from the embedded bundle: %v", err)
+	}
+
+	for _, tc := range []struct {
+		profile string
+		allowed bool
+	}{
+		{"general", true},
+		{"developer", true},
+		{"debugger", true},
+		{"simulation", true},
+		{"device-sensors", true},
+		{"fleet", false},
+		{"device-reasoning", false},
+		{"device-control", false},
+	} {
+		t.Run(tc.profile, func(t *testing.T) {
+			profile, err := ResolveProfile(tc.profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tools := &ProfileTools{Profile: profile}
+			listed, err := tools.Execute(context.Background(), ToolCall{Name: "profile_skill", Arguments: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for path, expected := range files {
+				if slices.Contains(strings.Split(listed, "\n"), path) != tc.allowed {
+					t.Errorf("unexpected listing for %s", path)
+				}
+				arguments, err := json.Marshal(map[string]string{"path": path})
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := tools.Execute(context.Background(), ToolCall{Name: "profile_skill", Arguments: arguments})
+				if !tc.allowed {
+					if err == nil {
+						t.Errorf("read restricted skill %s", path)
+					}
+					continue
+				}
+				if err != nil || body != expected {
+					t.Errorf("could not read the embedded content of %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestWendyDataSkillPreservesWorkspacePermissions(t *testing.T) {
+	for _, tc := range []struct {
+		profile   string
+		parent    string
+		workspace bool
+	}{
+		{"general", "", true},
+		{"developer", "general", true},
+		{"debugger", "general", true},
+		{"simulation", "general", true},
+		{"device-sensors", "general", false},
+		{"developer", "device-sensors", false},
+	} {
+		t.Run(tc.profile+"/"+tc.parent, func(t *testing.T) {
+			profile, err := ResolveProfile(tc.profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := &engineTestExecutor{tools: []Tool{{Name: "workspace_exec", RequiresApproval: true}}}
+			tools := &ProfileTools{Base: base, Profile: profile}
+			if tc.parent != "" {
+				parent, err := ResolveProfile(tc.parent)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tools.Parent = &parent
+			}
+			if _, err := tools.Execute(context.Background(), ToolCall{Name: "profile_skill", Arguments: json.RawMessage(`{"path":"wendy-data/SKILL.md"}`)}); err != nil {
+				t.Fatal(err)
+			}
+			listed, err := tools.ListTools(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, tool := range listed {
+				if tool.Name == "workspace_exec" {
+					found = true
+					if !tool.RequiresApproval {
+						t.Fatal("CLI fallback lost its shell approval requirement")
+					}
+				}
+			}
+			if found != tc.workspace {
+				t.Fatalf("unexpected workspace_exec availability: %t", found)
+			}
+			if !tc.workspace {
+				if _, err := tools.Execute(context.Background(), ToolCall{Name: "workspace_exec", Arguments: json.RawMessage(`{"command":"wendy data --help"}`)}); err == nil || len(base.calls) != 0 {
+					t.Fatal("reading the Data skill bypassed the workspace tool restriction")
+				}
+			}
+		})
 	}
 }
 

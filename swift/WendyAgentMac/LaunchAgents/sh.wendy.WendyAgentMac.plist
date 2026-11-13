@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>sh.wendy.WendyAgentMac</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/WendyAgentMac</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<string>sh.wendy.WendyAgentMac</string>
+	<!-- Lets the app tell the instance launchd supervises apart from one opened in Finder, by Homebrew or by the update relauncher. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>WENDY_AGENT_LAUNCHD</key>
+		<string>1</string>
+	</dict>
+	<!-- Restart after a crash or failure exit; Quit and self-update exit cleanly and stay stopped. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<!-- Deployed native apps and the update relauncher must outlive the agent process. -->
+	<key>AbandonProcessGroup</key>
+	<true/>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+</dict>
+</plist>

@@ -10,6 +10,9 @@
     "stagefile",
     "multi-app-deployments",
     "fleet-deployment",
-    "llm-integration"
+    "wendy-net",
+    "wendy-net-services",
+    "offline-protocol-services",
+    "nvidia-pair"
   ]
 }

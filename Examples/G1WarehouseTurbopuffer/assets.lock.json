@@ -1,0 +1,375 @@
+{
+  "comment": "Third-party files fetched at build time by `python -m warehouse.assets`. Each is pinned by an immutable commit URL and checked against its SHA-256.",
+  "sources": {
+    "g1": "NVlabs/GR00T-WholeBodyControl commit b042411fae38ee4d1af9aac82a37a1f8d14d6dd0: Unitree G1 MJCF and meshes (Apache-2.0), GR00T WBC Balance and Walk policies (NVIDIA Open Model License)",
+    "three.js": "three.js r180, commit 0af9729d0c143a86a1d725d6e2c3ad83301f3f34 (MIT)"
+  },
+  "files": [
+    {
+      "path": "models/g1/g1_gear_wbc.xml",
+      "url": "https://raw.githubusercontent.com/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.xml",
+      "sha256": "3b0b5a1c8299fda85cf328cc2a8df53ccc765ce37f20030175295049947b1a19",
+      "bytes": 38507
+    },
+    {
+      "path": "models/g1/g1_gear_wbc.yaml",
+      "url": "https://raw.githubusercontent.com/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.yaml",
+      "sha256": "31226a224ca8450e89d9ce17d5cb31c052192a9cbfedc8d145f1cb95627ac7a2",
+      "bytes": 1011
+    },
+    {
+      "path": "models/g1/README.md",
+      "url": "https://raw.githubusercontent.com/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/README.md",
+      "sha256": "881f2db615b183cd4c4c99ab4f7062ba5ca29d73a8a99266a1ac04ff9b0b27c0",
+      "bytes": 2034
+    },
+    {
+      "path": "models/g1/LICENSE",
+      "url": "https://raw.githubusercontent.com/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/LICENSE",
+      "sha256": "24ab66be50d1aca4fc5e029ef76ce4ceaac6557ea21665caf4b140695a76ffee",
+      "bytes": 8886
+    },
+    {
+      "path": "models/g1/policy/GR00T-WholeBodyControl-Balance.onnx",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Balance.onnx",
+      "sha256": "f645da599d4ca3d29ed273c8f4712620bb680d34977469ca3aeabe5bb9631c18",
+      "bytes": 1886682
+    },
+    {
+      "path": "models/g1/policy/GR00T-WholeBodyControl-Walk.onnx",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Walk.onnx",
+      "sha256": "7c82255b6905ffcc4468fa7f8ddcf7b70db168cf1042107ccab887cb6a8e5407",
+      "bytes": 1886682
+    },
+    {
+      "path": "models/g1/policy/NVIDIA Open Model License",
+      "url": "https://raw.githubusercontent.com/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/NVIDIA%20Open%20Model%20License",
+      "sha256": "a0c4f6a35dd2c858c86069d84140052831820e78f3074a2fb758bb4156b66994",
+      "bytes": 10125
+    },
+    {
+      "path": "models/g1/meshes/pelvis.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/pelvis.STL",
+      "sha256": "5ba6bbc888e630550140d3c26763f10206da8c8bd30ed886b8ede41c61f57a31",
+      "bytes": 1060884
+    },
+    {
+      "path": "models/g1/meshes/pelvis_contour_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/pelvis_contour_link.STL",
+      "sha256": "5cc5c2c7a312329e3feeb2b03d3fc09fc29705bd01864f6767e51be959662420",
+      "bytes": 1805184
+    },
+    {
+      "path": "models/g1/meshes/left_hip_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hip_pitch_link.STL",
+      "sha256": "4725168105ee768ee31638ef22b53f6be2d7641bfd7cfefe803488d884776fa4",
+      "bytes": 181684
+    },
+    {
+      "path": "models/g1/meshes/left_hip_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hip_roll_link.STL",
+      "sha256": "91f25922ee8a7c3152790051bebad17b4d9cd243569c38fe340285ff93a97acf",
+      "bytes": 192184
+    },
+    {
+      "path": "models/g1/meshes/left_hip_yaw_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hip_yaw_link.STL",
+      "sha256": "a16d88aa6ddac8083aa7ad55ed317bea44b1fa003d314fba88965b7ed0f3b55b",
+      "bytes": 296284
+    },
+    {
+      "path": "models/g1/meshes/left_knee_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_knee_link.STL",
+      "sha256": "8d92b9e3d3a636761150bb8025e32514c4602b91c7028d523ee42b3e632de477",
+      "bytes": 854884
+    },
+    {
+      "path": "models/g1/meshes/left_ankle_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_ankle_pitch_link.STL",
+      "sha256": "d49e3abc6f5b12e532062cd575b87b5ef40cd2a3fc18f54a1ca5bba4f773d51d",
+      "bytes": 71184
+    },
+    {
+      "path": "models/g1/meshes/left_ankle_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_ankle_roll_link.STL",
+      "sha256": "c4092af943141d4d9f74232f3cfa345afc6565f46a077793b8ae0e68b39dc33f",
+      "bytes": 653384
+    },
+    {
+      "path": "models/g1/meshes/right_hip_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hip_pitch_link.STL",
+      "sha256": "e4f3c99d7f4a7d34eadbef9461fc66e3486cb5442db1ec50c86317d459f1a9c6",
+      "bytes": 181284
+    },
+    {
+      "path": "models/g1/meshes/right_hip_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hip_roll_link.STL",
+      "sha256": "4c254ef66a356f492947f360dd931965477b631e3fcc841f91ccc46d945d54f6",
+      "bytes": 192684
+    },
+    {
+      "path": "models/g1/meshes/right_hip_yaw_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hip_yaw_link.STL",
+      "sha256": "e479c2936ca2057e9eb2f7dff6c189b7419d7b8484dea0b298cbb36a2a6aa668",
+      "bytes": 296284
+    },
+    {
+      "path": "models/g1/meshes/right_knee_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_knee_link.STL",
+      "sha256": "63c4008449c9bbe701a6e2b557b7a252e90cf3a5abcf54cee46862b9a69f8ec8",
+      "bytes": 852284
+    },
+    {
+      "path": "models/g1/meshes/right_ankle_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_ankle_pitch_link.STL",
+      "sha256": "15be426539ec1be70246d4d82a168806db64a41301af8b35c197a33348c787a9",
+      "bytes": 71184
+    },
+    {
+      "path": "models/g1/meshes/right_ankle_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_ankle_roll_link.STL",
+      "sha256": "4b66222ea56653e627711b56d0a8949b4920da5df091da0ceb343f54e884e3a5",
+      "bytes": 653784
+    },
+    {
+      "path": "models/g1/meshes/waist_yaw_link_rev_1_0.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/waist_yaw_link_rev_1_0.STL",
+      "sha256": "ec6db442b11f25eed898b5add07940c85d804f300de24dcbd264ccd8be7d554c",
+      "bytes": 619984
+    },
+    {
+      "path": "models/g1/meshes/waist_roll_link_rev_1_0.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/waist_roll_link_rev_1_0.STL",
+      "sha256": "b67c347a05abc3e8ddae600d98a082bee273bb39f8e651647708b0a7140a8a97",
+      "bytes": 85884
+    },
+    {
+      "path": "models/g1/meshes/torso_link_rev_1_0.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/torso_link_rev_1_0.STL",
+      "sha256": "11ddb46f2098efbbd8816b1d65893632d8e78be936376c7cdcd6771899ccc723",
+      "bytes": 2570584
+    },
+    {
+      "path": "models/g1/meshes/logo_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/logo_link.STL",
+      "sha256": "8571a0a19bc4916fa55f91449f51d5fdefd751000054865a842449429d5f155b",
+      "bytes": 243384
+    },
+    {
+      "path": "models/g1/meshes/head_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/head_link.STL",
+      "sha256": "005fb67fbd3eff94aa8bf4a6e83238174e9f91b6721f7111594322f223724411",
+      "bytes": 932784
+    },
+    {
+      "path": "models/g1/meshes/left_shoulder_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_shoulder_pitch_link.STL",
+      "sha256": "f0d1cfd02fcf0d42f95e678eeca33da3afbcc366ffba5c052847773ec4f31d52",
+      "bytes": 176784
+    },
+    {
+      "path": "models/g1/meshes/left_shoulder_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_shoulder_roll_link.STL",
+      "sha256": "fb9df21687773522598dc384f1a2945c7519f11cbc8bd372a49170316d6eee88",
+      "bytes": 400284
+    },
+    {
+      "path": "models/g1/meshes/left_shoulder_yaw_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_shoulder_yaw_link.STL",
+      "sha256": "1aa97e9748e924336567992181f78c7cd0652fd52a4afcca3df6b2ef6f9e712e",
+      "bytes": 249184
+    },
+    {
+      "path": "models/g1/meshes/left_elbow_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_elbow_link.STL",
+      "sha256": "fa752198accd104d5c4c3a01382e45165b944fbbc5acce085059223324e5bed3",
+      "bytes": 88784
+    },
+    {
+      "path": "models/g1/meshes/left_wrist_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_wrist_roll_link.STL",
+      "sha256": "edc387c9a0ba8c2237e9b296d32531426fabeb6f53e58df45c76106bca74148c",
+      "bytes": 356184
+    },
+    {
+      "path": "models/g1/meshes/left_wrist_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_wrist_pitch_link.STL",
+      "sha256": "b251d8e05047f695d0f536cd78c11973cfa4e78d08cfe82759336cc3471de3a9",
+      "bytes": 85984
+    },
+    {
+      "path": "models/g1/meshes/left_wrist_yaw_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_wrist_yaw_link.STL",
+      "sha256": "83f8fb3a726bf9613d65dd14f0f447cb918c3c95b3938042a0c9c09749267d3b",
+      "bytes": 318684
+    },
+    {
+      "path": "models/g1/meshes/left_hand_palm_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_palm_link.STL",
+      "sha256": "23a486b75bd78a9bf03cec25d84d87f97f3dae038cf21a743b6d469b337e4004",
+      "bytes": 2140184
+    },
+    {
+      "path": "models/g1/meshes/left_hand_thumb_0_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_thumb_0_link.STL",
+      "sha256": "a90c721661c0622685488a3c74d1e122c7da89242d3a1daef75edb83422d05e0",
+      "bytes": 8884
+    },
+    {
+      "path": "models/g1/meshes/left_hand_thumb_1_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_thumb_1_link.STL",
+      "sha256": "445c54a45bc13ce36001556f66bc0f49c83cb40321205ae4d676bb2874325684",
+      "bytes": 475984
+    },
+    {
+      "path": "models/g1/meshes/left_hand_thumb_2_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_thumb_2_link.STL",
+      "sha256": "3d8dbe5085acfc213d21aa8b0782e89cd79084e9678f3a85fc7b04a86b029db5",
+      "bytes": 1521784
+    },
+    {
+      "path": "models/g1/meshes/left_hand_middle_0_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_middle_0_link.STL",
+      "sha256": "6b35f2f77211d5a366f0b9a4e47c4ee35e536731266f1a34e9efa12db579b892",
+      "bytes": 475984
+    },
+    {
+      "path": "models/g1/meshes/left_hand_middle_1_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_middle_1_link.STL",
+      "sha256": "9e315ebc8a7a0cb98e033985b586b20d81cf8aa761181ae61ce56fcb14077a06",
+      "bytes": 1521784
+    },
+    {
+      "path": "models/g1/meshes/left_hand_index_0_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_index_0_link.STL",
+      "sha256": "6b35f2f77211d5a366f0b9a4e47c4ee35e536731266f1a34e9efa12db579b892",
+      "bytes": 475984
+    },
+    {
+      "path": "models/g1/meshes/left_hand_index_1_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/left_hand_index_1_link.STL",
+      "sha256": "9e315ebc8a7a0cb98e033985b586b20d81cf8aa761181ae61ce56fcb14077a06",
+      "bytes": 1521784
+    },
+    {
+      "path": "models/g1/meshes/right_shoulder_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_shoulder_pitch_link.STL",
+      "sha256": "24cdb387e0128dfe602770a81c56cdce3a0181d34d039a11d1aaf8819b7b8c02",
+      "bytes": 176784
+    },
+    {
+      "path": "models/g1/meshes/right_shoulder_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_shoulder_roll_link.STL",
+      "sha256": "962b97c48f9ce9e8399f45dd9522e0865d19aa9fd299406b2d475a8fc4a53e81",
+      "bytes": 401884
+    },
+    {
+      "path": "models/g1/meshes/right_shoulder_yaw_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_shoulder_yaw_link.STL",
+      "sha256": "a0b76489271da0c72461a344c9ffb0f0c6e64f019ea5014c1624886c442a2fe5",
+      "bytes": 249984
+    },
+    {
+      "path": "models/g1/meshes/right_elbow_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_elbow_link.STL",
+      "sha256": "1be925d7aa268bb8fddf5362b9173066890c7d32092c05638608126e59d1e2ab",
+      "bytes": 88784
+    },
+    {
+      "path": "models/g1/meshes/right_wrist_roll_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_wrist_roll_link.STL",
+      "sha256": "a7ee9212ff5b94d6cb7f52bb1bbf3f352194d5b598acff74f4c77d340c5b344f",
+      "bytes": 356084
+    },
+    {
+      "path": "models/g1/meshes/right_wrist_pitch_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_wrist_pitch_link.STL",
+      "sha256": "d22f8f3b3127f15a63e5be1ee273cd5075786c3142f1c3d9f76cbf43d2a26477",
+      "bytes": 79584
+    },
+    {
+      "path": "models/g1/meshes/right_wrist_yaw_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_wrist_yaw_link.STL",
+      "sha256": "bc9dece2d12509707e0057ba2e48df8f3d56db0c79410212963a25e8a50f61a6",
+      "bytes": 341484
+    },
+    {
+      "path": "models/g1/meshes/right_hand_palm_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_palm_link.STL",
+      "sha256": "86c0b231cc44477d64a6493e5a427ba16617a00738112dd187c652675b086fb9",
+      "bytes": 2140184
+    },
+    {
+      "path": "models/g1/meshes/right_hand_thumb_0_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_thumb_0_link.STL",
+      "sha256": "544298d0ea1088f5b276a10cc6a6a9e533efdd91594955fdc956c46211d07f83",
+      "bytes": 8884
+    },
+    {
+      "path": "models/g1/meshes/right_hand_thumb_1_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_thumb_1_link.STL",
+      "sha256": "0a9a820da8dd10f298778b714f1364216e8a5976f4fd3a05689ea26327d44bf6",
+      "bytes": 475984
+    },
+    {
+      "path": "models/g1/meshes/right_hand_thumb_2_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_thumb_2_link.STL",
+      "sha256": "3f1bfb37668e8f61801c8d25f171fa1949e08666be86c67acad7e0079937cc45",
+      "bytes": 1521784
+    },
+    {
+      "path": "models/g1/meshes/right_hand_middle_0_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_middle_0_link.STL",
+      "sha256": "12ab4300c95e437e834f9aef772b3b431c671bf34338930b52ad11aef73bbd0d",
+      "bytes": 475984
+    },
+    {
+      "path": "models/g1/meshes/right_hand_middle_1_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_middle_1_link.STL",
+      "sha256": "c9c34efce4563cacdcfd29fc838a982976d40f5442c71219811dcbbf3923a33d",
+      "bytes": 1521784
+    },
+    {
+      "path": "models/g1/meshes/right_hand_index_0_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_index_0_link.STL",
+      "sha256": "12ab4300c95e437e834f9aef772b3b431c671bf34338930b52ad11aef73bbd0d",
+      "bytes": 475984
+    },
+    {
+      "path": "models/g1/meshes/right_hand_index_1_link.STL",
+      "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/b042411fae38ee4d1af9aac82a37a1f8d14d6dd0/decoupled_wbc/sim2mujoco/resources/robots/g1/meshes/right_hand_index_1_link.STL",
+      "sha256": "c9c34efce4563cacdcfd29fc838a982976d40f5442c71219811dcbbf3923a33d",
+      "bytes": 1521784
+    },
+    {
+      "path": "warehouse/static/three/three.module.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/build/three.module.js",
+      "sha256": "c8211c69345d2e9949dc7a8ac969380497aa0600a5a8ac6a459c8cd02dd9cb8a",
+      "bytes": 603113
+    },
+    {
+      "path": "warehouse/static/three/three.core.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/build/three.core.js",
+      "sha256": "eb077d2417f61d3e6d9264c317cabc4ea35769ed6b0ab533067292a550784c20",
+      "bytes": 1403455
+    },
+    {
+      "path": "warehouse/static/three/addons/controls/OrbitControls.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/examples/jsm/controls/OrbitControls.js",
+      "sha256": "b97879c748170baadeb3fb84cea1ffdf4674e283dc06042f34e2acb95a76042c",
+      "bytes": 38703
+    },
+    {
+      "path": "warehouse/static/three/addons/utils/BufferGeometryUtils.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/examples/jsm/utils/BufferGeometryUtils.js",
+      "sha256": "fda7e946b8e0b5ab39b779206589e7a1079a22eb24efb89d7223e03fdfb1f751",
+      "bytes": 35539
+    },
+    {
+      "path": "warehouse/static/three/LICENSE",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/0af9729d0c143a86a1d725d6e2c3ad83301f3f34/LICENSE",
+      "sha256": "bfe119ea4fd413f5f7ca3fcd63adb0c4a073ed39daa2fe7d3e6b769e21272601",
+      "bytes": 1081
+    }
+  ]
+}

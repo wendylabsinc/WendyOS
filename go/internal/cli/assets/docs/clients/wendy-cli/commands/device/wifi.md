@@ -1,13 +1,13 @@
 # `wendy device wifi`
 
-Manages WiFi **on the connected WendyOS device**, through the device's agent.
-Run with no subcommand for an interactive session.
+Manages WiFi on the connected WendyOS or Wendy Lite device.
+Run with no subcommand to open the WiFi management table on WendyOS, or start
+the interactive connection flow on Wendy Lite.
 
-The one exception is the host-scan fallback: a Wendy Lite device reached over
-BLE, or a device behind a provider that manages WiFi itself, cannot scan from
-the device, so those are offered the networks visible from the host machine
-instead. The [Platform behavior](#platform-behavior) section below describes
-that host-side scan only.
+Wendy Lite devices reached over BLE, and devices behind providers that manage
+WiFi themselves, use the networks visible from the host machine because they
+cannot scan from the device. The [Platform behavior](#platform-behavior)
+section below describes that host-side scan.
 
 ## Subcommands
 
@@ -29,6 +29,23 @@ wendy device wifi connect [--ssid <name>]
 
 Pass `--ssid` to skip the interactive network picker.
 
+### Unenrolled devices
+
+Before first-boot enrollment completes, a device has no identity the CLI can
+verify. If you are signed in, the Wi-Fi commands still reach a device that has
+no saved binding and reports that it is unprovisioned. The connection is
+unencrypted, though, and any host answering the selected name receives the
+Wi-Fi password. The CLI asks before it sends one, and the interactive table asks
+once when it opens. Non-interactive and `--json` runs refuse unless you pass
+`--allow-unverified-device`:
+
+```sh
+wendy device wifi connect --device wendyos-robot.local --ssid Home --password '<password>' --allow-unverified-device
+```
+
+Scanning, status, ranking and forgetting networks send no credentials and do
+not ask.
+
 ### `wendy device wifi status`
 
 Shows the device's current WiFi connection.
@@ -44,6 +61,16 @@ Shows or adjusts the device's network priority order.
 ### `wendy device wifi forget`
 
 Removes a saved network from the device.
+
+### `wendy device wifi regulatory`
+
+Shows the country and available channels on a Linux WendyOS device. See
+[check Wi-Fi country and available channels](#check-wi-fi-country-and-available-channels).
+
+### `wendy device wifi regulatory set-country`
+
+Requests a temporary country hint for the device's physical location. Query the
+regulatory state again to verify the result.
 
 ---
 
@@ -83,13 +110,11 @@ Keychain lookup is not supported. Windows has no equivalent of macOS's auto-stor
 
 ## Wendy Lite devices
 
-Running `wendy device wifi` in interactive mode against a Wendy Lite device is not supported. The command exits immediately with:
+Running `wendy device wifi` against a Wendy Lite device starts the same
+interactive connection flow as `wendy device wifi connect`: select a network
+visible from the host machine, enter its password, and connect the device.
 
-```
-selected device does not support full Wi-Fi management; use 'wendy device wifi connect' and 'wendy device wifi disconnect' instead
-```
-
-Use the explicit subcommands instead:
+You can also use the explicit subcommands:
 
 ```sh
 wendy device wifi connect --ssid <network>
@@ -97,3 +122,40 @@ wendy device wifi disconnect
 ```
 
 > **Note:** `wendy device wifi connect` and `wendy device wifi disconnect` stop the running app on the device before applying the new Wi-Fi configuration. If no app is currently running, this step is skipped silently — no warning is printed.
+
+
+## Check Wi-Fi country and available channels
+
+On a Linux WendyOS device, inspect the current country and channel restrictions.
+This requires a device running the agent; local and Docker providers do not
+support the command.
+
+Inspect the current state:
+
+```sh
+wendy device wifi regulatory --device <device>
+```
+
+To request the country where the device is physically located, use its two-letter
+country code. For example, for a device in the United Kingdom:
+
+```sh
+wendy device wifi regulatory set-country GB --device <device>
+wendy device wifi regulatory --device <device>
+```
+
+This submits a temporary country hint; it does not override the radio's firmware
+or guarantee more channels become available. Changes can take time, so query
+again to check the result. The hint does not survive a reboot and does not restart
+Wi-Fi, Wi-Fi Aware, or the agent. Devices need `iw` installed; older or non-Linux
+agents may report that this operation is unsupported.
+
+### Detailed output and automation
+
+Add `--json` for the full channel report. It includes the kernel's country and
+per-radio restrictions, maximum transmit power, permitted widths, and radar-related
+restrictions where available. Use `globalCountry` for the kernel hint and
+`phys[].country` and `phys[].selfManaged` to distinguish each radio's own state.
+A self-managed radio may keep a different country from the kernel hint. `no IR` means the radio cannot initiate transmission
+on that channel. Raw output is retained as `rawRegulatory`, `rawPhy` and
+`rawChannels` for diagnosis.

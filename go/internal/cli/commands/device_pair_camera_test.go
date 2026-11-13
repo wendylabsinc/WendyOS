@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -14,16 +15,17 @@ import (
 )
 
 type cameraPairTestClient struct {
-	devices    []*agentpb.VideoDevice
-	scans      int
-	saved      *agentpb.SetCameraCredentialsRequest
-	forgot     uint32
-	err        error
-	refreshErr error
-	lists      int
+	devices      []*agentpb.VideoDevice
+	scans        int
+	saved        *agentpb.SetCameraCredentialsRequest
+	forgot       uint32
+	err          error
+	refreshErr   error
+	lists        int
+	listUnpaired bool
 }
 
-func (c *cameraPairTestClient) RefreshCameras(context.Context, *agentpb.RefreshCamerasRequest, ...grpc.CallOption) (*agentpb.RefreshCamerasResponse, error) {
+func (c *cameraPairTestClient) RefreshCameras(_ context.Context, _ *agentpb.RefreshCamerasRequest, _ ...grpc.CallOption) (*agentpb.RefreshCamerasResponse, error) {
 	c.scans++
 	if c.refreshErr != nil {
 		return nil, c.refreshErr
@@ -31,8 +33,9 @@ func (c *cameraPairTestClient) RefreshCameras(context.Context, *agentpb.RefreshC
 	return &agentpb.RefreshCamerasResponse{Devices: c.devices}, c.err
 }
 
-func (c *cameraPairTestClient) ListVideoDevices(context.Context, *agentpb.ListVideoDevicesRequest, ...grpc.CallOption) (*agentpb.ListVideoDevicesResponse, error) {
+func (c *cameraPairTestClient) ListVideoDevices(_ context.Context, req *agentpb.ListVideoDevicesRequest, _ ...grpc.CallOption) (*agentpb.ListVideoDevicesResponse, error) {
 	c.lists++
+	c.listUnpaired = req.GetIncludeUnpaired()
 	return &agentpb.ListVideoDevicesResponse{Devices: c.devices}, c.err
 }
 
@@ -43,7 +46,43 @@ func TestCameraPairDiscoveryFallsBackForOlderAgents(t *testing.T) {
 	if msg.err != nil || len(msg.devices) != 1 || c.scans != 1 || c.lists != 1 {
 		t.Fatalf("discovery fallback failed: %+v", msg)
 	}
+	if !c.listUnpaired {
+		t.Fatal("pairing fallback did not ask ListVideoDevices for unpaired cameras")
+	}
 }
+
+// Pairing is where a camera without a login gets one, so the scan must list the
+// cameras the agent otherwise hides. RefreshCameras always includes them, so the
+// scan must use it and not ListVideoDevices' default listing.
+func TestCameraPairScanListsUnpairedCameras(t *testing.T) {
+	c := &cameraPairTestClient{devices: []*agentpb.VideoDevice{{Id: 201, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP}}}
+	h := &cameraPairHandler{ctx: context.Background(), client: c}
+	if msg := h.scan()().(cameraPairScanMsg); msg.err != nil || len(msg.devices) != 1 {
+		t.Fatalf("scan = %+v", msg)
+	}
+	if c.scans != 1 || c.lists != 0 {
+		t.Fatalf("pairing scan made %d RefreshCameras and %d ListVideoDevices calls, want 1 and 0", c.scans, c.lists)
+	}
+}
+
+func TestCameraPairSwiftMacExplainsUnsupportedNetworkCameras(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	h := &cameraPairHandler{ctx: ctx, client: conn.VideoService, preflight: func(ctx context.Context) error {
+		return cameraServicePreflight(ctx, conn, cameraNetworkManagement)
+	}}
+	model, _ := cameraPairUpdate(newCameraPairModel(h), h.scan()())
+	if !strings.Contains(model.message, "not supported") || strings.Contains(model.message, "wendy device enroll") {
+		t.Fatalf("camera pair message = %q, want unsupported network camera operation", model.message)
+	}
+}
+
 func (c *cameraPairTestClient) SetCameraCredentials(_ context.Context, req *agentpb.SetCameraCredentialsRequest, _ ...grpc.CallOption) (*agentpb.SetCameraCredentialsResponse, error) {
 	c.saved = req
 	return &agentpb.SetCameraCredentialsResponse{}, c.err
@@ -87,7 +126,9 @@ func TestDevicePairCameraTabCredentialFormAndBackgroundResults(t *testing.T) {
 		{Id: 42, Name: "Door camera", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP, Online: true},
 	}}
 	m := newDevicePairModel(&pairTestBluetooth{}, pairTestHandler(&pairTestClient{}), &cameraPairHandler{ctx: context.Background(), client: c})
-	// Shift+Tab wraps from Bluetooth to the last tab.
+	// Shift+Tab wraps through Unitree and USB Arms before reaching IP Cameras.
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, scan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.active != pairCameraTab || scan == nil || c.scans != 0 {
 		t.Fatal("camera tab did not start lazy discovery")
@@ -111,14 +152,18 @@ func TestDevicePairCameraTabCredentialFormAndBackgroundResults(t *testing.T) {
 		t.Fatal("submitting credentials did not clear the password or start saving")
 	}
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.active != pairBluetoothTab {
-		t.Fatal("Tab did not wrap from camera to Bluetooth")
+		t.Fatal("Tab did not wrap through USB Arms and Unitree to Bluetooth")
 	}
 	m, _ = pairUpdate(m, save())
 	if c.saved == nil || c.saved.DeviceId != 42 || c.saved.Username != "admin" || c.saved.Password != secret || !m.camera.devices[0].HasCredentials || m.active != pairBluetoothTab {
 		t.Fatal("camera save result was not routed to its background tab")
 	}
 	// Revisit, edit and cancel without exiting the surrounding picker.
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, rescan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, _ = pairUpdate(m, rescan())
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyEnter})

@@ -5,12 +5,14 @@ package commands
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // drive represents an external disk suitable for image writing.
@@ -187,25 +189,46 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 	return info, nil
 }
 
+// unmountTimeout bounds each diskutil unmount: a wedged FAT driver makes
+// diskutil wait forever rather than fail.
+const unmountTimeout = 30 * time.Second
+
 // unmountDisk unmounts all volumes on a disk before writing.
-// Falls back to force-unmount if the normal unmount fails.
+// Falls back to force-unmount if the normal unmount fails or hangs.
 func unmountDisk(devPath string) error {
-	cmd := exec.Command("sudo", "diskutil", "unmountDisk", devPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Retry with force unmount.
-		forceCmd := exec.Command("sudo", "diskutil", "unmountDisk", "force", devPath)
-		if forceOut, forceErr := forceCmd.CombinedOutput(); forceErr != nil {
-			return fmt.Errorf("unmounting %s: %s\nClose Finder windows, Disk Utility, or any apps using the disk, then retry", devPath, string(forceOut)+string(out))
-		}
+	return unmountDarwinDisk(devPath, runWithTimeout)
+}
+
+func unmountDarwinDisk(devPath string, run preparationCommand) error {
+	out, err := run(unmountTimeout, "/usr/bin/sudo", "-n", "/usr/sbin/diskutil", "unmountDisk", devPath)
+	if err == nil {
+		return nil
 	}
-	return nil
+	forceOut, forceErr := run(unmountTimeout, "/usr/bin/sudo", "-n", "/usr/sbin/diskutil", "unmountDisk", "force", devPath)
+	if forceErr == nil {
+		return nil
+	}
+	if errors.Is(forceErr, errCommandTimedOut) {
+		return fmt.Errorf("unmounting %s: %w\n%s", devPath, forceErr, "Close apps using the card, remove and reinsert it, then retry.")
+	}
+	return fmt.Errorf("unmounting %s: %s\nClose Finder windows, Disk Utility, or any apps using the disk, then retry", devPath, string(forceOut)+string(out))
+}
+
+// unmountBeforeWrite releases the disk before the progress bar starts, so a
+// hung unmount is reported as one instead of as a write stuck at 0%.
+func unmountBeforeWrite(d drive) error {
+	fmt.Printf("Preparing %s for writing...\n", d.DevicePath)
+	if err := stopTargetIndexing(d.DevicePath, runWithTimeout); err != nil {
+		fmt.Printf("Note: could not stop Spotlight on %s: %v\n", d.DevicePath, err)
+	}
+	return unmountDisk(d.DevicePath)
 }
 
 // writeImageWithBmap flashes the image to d using the block map. It re-execs
 // this binary as `sudo wendy __bmap-write`, streaming the decompressed image to
 // the helper's stdin; the helper seeks and writes only mapped ranges as root.
 // progressFn receives cumulative uncompressed bytes fed to the helper.
-func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, progressFn func(written int64)) error {
+func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, fit imageFit, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
@@ -213,7 +236,7 @@ func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, 
 	if err != nil {
 		return fmt.Errorf("locating wendy binary: %w", err)
 	}
-	cmd := exec.Command("sudo", self, "__bmap-write", "--device", d.RawPath, "--bmap", bmapPath)
+	cmd := exec.Command("sudo", append([]string{self, "__bmap-write", "--device", d.RawPath, "--bmap", bmapPath}, fit.bmapWriteArgs()...)...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -250,14 +273,14 @@ func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, 
 	}
 	_ = totalSize
 	exec.Command("sync").Run() //nolint:errcheck
-	return nil
+	return finishImageWrite(d, fit)
 }
 
 // writeImageWithBmapSeekable flashes via the seekable source: it re-execs
 // `sudo wendy __bmap-write --source <zst> --bmap <bmap> --device <dev>`; the
 // helper reads the source itself and writes mapped ranges as root. progressFn
 // receives cumulative mapped bytes (scanned from the helper's stdout).
-func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, progressFn func(int64)) error {
+func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, fit imageFit, progressFn func(int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
@@ -265,9 +288,9 @@ func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, progressFn
 	if err != nil {
 		return fmt.Errorf("locating wendy binary: %w", err)
 	}
-	cmd := exec.Command("sudo", self, "__bmap-write",
+	cmd := exec.Command("sudo", append([]string{self, "__bmap-write",
 		"--device", d.RawPath, "--bmap", bmapPath, "--source", sourcePath,
-		"--writers", strconv.Itoa(writersForStorage(d.StorageType)))
+		"--writers", strconv.Itoa(writersForStorage(d.StorageType))}, fit.bmapWriteArgs()...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
@@ -285,10 +308,10 @@ func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, progressFn
 		return fmt.Errorf("bmap write failed: %w", err)
 	}
 	exec.Command("sync").Run() //nolint:errcheck
-	return nil
+	return finishImageWrite(d, fit)
 }
 
-func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, fit imageFit, progressFn func(written int64)) error {
 	if err := unmountDisk(d.DevicePath); err != nil {
 		return err
 	}
@@ -304,7 +327,7 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 	}
 
 	cmd := exec.Command("sudo", ddArgs...)
-	cmd.Stdin = r
+	cmd.Stdin = fit.limitReader(r)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -335,11 +358,14 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 	// Sync to flush any remaining writes.
 	exec.Command("sync").Run() //nolint:errcheck
 
-	return nil
+	return finishImageWrite(d, fit)
 }
 
-// ejectDisk ejects the disk so macOS shows the safe-to-remove notification.
-// Called by the caller after all post-flash operations are complete.
-func ejectDisk(d drive) {
-	exec.Command("diskutil", "eject", d.DevicePath).Run() //nolint:errcheck
+// ejectDisk ejects the disk once all post-flash operations are complete. A nil
+// error means every volume is unmounted and the drive is safe to remove.
+func ejectDisk(d drive) error {
+	diskutil := func(args ...string) ([]byte, error) {
+		return runWithTimeout(diskutilTimeout, "/usr/sbin/diskutil", args...)
+	}
+	return ejectWithDiskutil(d.DevicePath, diskutil, time.Sleep, func() bool { return drivePresent(d) }, os.Stdout)
 }

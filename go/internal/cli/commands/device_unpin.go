@@ -1,8 +1,11 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,8 +65,8 @@ func newDeviceUnpinCmd() *cobra.Command {
 		Hidden: true,
 		Use:    "unpin <hostname|identity>",
 		Short:  "Clear the recorded identity pin for a device",
-		Long: "Clear the recorded identity pin for a device, so the next connection to it\n" +
-			"records a fresh identity instead of being challenged against the old one.\n" +
+		Long: "Clear the recorded identity pin for a device. Refresh the binding from trusted\n" +
+			"Cloud inventory or enrollment before connecting to an enrolled device again.\n" +
 			"Accepts either the hostname you connect to or the identity a refusal\n" +
 			"prints (spiffe://wendy.sh/tenant/<uuid>/device/<id>, or the legacy\n" +
 			"urn:wendy:org:<org>:asset:<id>).\n" +
@@ -73,30 +76,28 @@ func newDeviceUnpinCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := strings.TrimSpace(args[0])
-
-			cfg, err := config.Load()
-			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
-			}
+			// Derived outside the config lock: it may read the VM store.
+			pinKey := unpinPinKey(target)
 
 			var cleared []clearedPin
-			// Detect the identity form by parsing it, not by guessing at its
-			// shape: a hostname is never a spiffe:// URI nor six colon-separated
-			// fields beginning "urn:wendy:org", and certs owns what a well-formed
-			// identity is.
-			if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
-				cleared = clearPinsForIdentity(cfg, identity)
-			} else {
-				// pinKeyForAddr, not the raw argument: a pin recorded via
-				// `--device host.local:50051` files under "host.local" (the port
-				// stripped), and a user unpinning must be able to hand back exactly
-				// what they used to connect. This is the same bug fixed in
-				// set-default in Task 6 — do not reintroduce it here.
-				cleared = clearPinsGoverning(cfg, pinKeyForAddr(target))
-			}
-
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("saving config: %w", err)
+			if err := config.Update(func(cfg *config.Config) (bool, error) {
+				// Detect the identity form by parsing it, not by guessing at its
+				// shape: a hostname is never a spiffe:// URI nor six colon-separated
+				// fields beginning "urn:wendy:org", and certs owns what a well-formed
+				// identity is.
+				if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
+					cleared = clearPinsForIdentity(cfg, identity)
+				} else {
+					// The pin key, not the raw argument: a pin recorded via
+					// `--device host.local:50051` files under "host.local" (the port
+					// stripped), and a user unpinning must be able to hand back exactly
+					// what they used to connect. This is the same bug fixed in
+					// set-default in Task 6 — do not reintroduce it here.
+					cleared = clearPinsGoverning(cfg, pinKey)
+				}
+				return true, nil
+			}); err != nil {
+				return fmt.Errorf("unpinning %q: %w", target, err)
 			}
 
 			// A prepared session broker may retain an authenticated transport
@@ -108,10 +109,23 @@ func newDeviceUnpinCmd() *cobra.Command {
 			_ = sessionbroker.InvalidateAll()
 
 			printClearedPins(cmd.OutOrStdout(), cleared)
-			fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %q. The next connection to it will record a fresh identity.\n", target)
+			fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %q. Use trusted Cloud inventory or enrollment to save its expected identity again.\n", target)
 			return nil
 		},
 	}
+}
+
+// unpinPinKey is the pin key `wendy device unpin <target>` clears: the key a
+// dial of target is checked under. A host:port target is re-aimed first, as a
+// dial of it is (vmForwardDialAddr), so a running VM's mTLS forward,
+// 127.0.0.1:AgentPort+1, names that VM, not the bare 127.0.0.1 pin every other
+// loopback port shares. A bare host is never re-aimed and never names a VM:
+// `wendy device unpin 127.0.0.1` clears the shared pin.
+func unpinPinKey(target string) string {
+	if _, _, err := net.SplitHostPort(target); err == nil {
+		return pinKeyForAddr(vmForwardDialAddr(target))
+	}
+	return pinKeyForAddr(target)
 }
 
 // printClearedPins reports every entry an unpin removed, one line each.
@@ -131,6 +145,43 @@ func printClearedPins(w io.Writer, cleared []clearedPin) {
 	}
 }
 
+// forgetResetDeviceIdentity is `wendy device unpin <identity>` run on the
+// user's behalf by `wendy device unenroll`, once the device has confirmed that
+// it erased identity. From then on every pin naming it describes a certificate
+// the device can never present again, so keeping them only refuses each later
+// connection to the now-unprovisioned device (WDY-3974).
+//
+// Call it only after the device's own reset. A Cloud-only unenrollment leaves
+// the device holding and presenting its certificate, and its pin is still the
+// binding the next connection must be judged against.
+//
+// It clears by identity, as unpin does when handed a URN: the identity is
+// exact, so no discovery-derived alias is consulted, and pins the device
+// collected under other names go with it rather than refusing the next dial
+// under those names. One identity can be filed under more than one key — a
+// numeric enrollment's urn:wendy URN and the tenant SPIFFE principal its
+// certificate also carries — so the caller passes every key it knows. What it
+// cleared goes to stderr, as clearDevicePinForRepin's does — stdout may be
+// carrying the command's JSON.
+//
+// Unlike unpin it reports an SPKI store it could not update: unenroll reports
+// any error with its result (the legacy path adds the unpin commands that
+// finish the clear), and a half-done clear that said nothing would read as a
+// clean reset.
+func forgetResetDeviceIdentity(identityKeys ...string) error {
+	var cleared []clearedPin
+	var spkiErr error
+	err := config.Update(func(cfg *config.Config) (bool, error) {
+		cleared, spkiErr = clearPinsForIdentityKeys(cfg, identityKeys)
+		return clearedAnyConfigPin(cleared), nil
+	})
+	// A broker may still hold an authenticated session to the identity just
+	// erased; see the unpin command.
+	_ = sessionbroker.InvalidateAll()
+	printClearedPins(os.Stderr, cleared)
+	return errors.Join(err, spkiErr)
+}
+
 // clearPinsForIdentity clears everything filed under one certificate identity:
 // the SPKI entry keyed by that URN, plus any config pin that derives the same
 // URN. Both halves matter — clearing only the SPKI entry would leave the config
@@ -142,13 +193,24 @@ func printClearedPins(w io.Writer, cleared []clearedPin) {
 // identity, so "every pin naming this identity" is exactly the right blast
 // radius and no discovery-derived data is consulted at all.
 func clearPinsForIdentity(cfg *config.Config, identity certs.WendyIdentity) []clearedPin {
-	key := identity.IdentityKey()
+	// Best-effort on the SPKI half, as removeSPKIPins explains.
+	cleared, _ := clearPinsForIdentityKeys(cfg, []string{identity.IdentityKey()})
+	return cleared
+}
+
+// clearPinsForIdentityKeys is clearPinsForIdentity for every key in
+// identityKeys. It returns what it removed and, unlike removeSPKIPins, why the
+// SPKI store could not be updated.
+func clearPinsForIdentityKeys(cfg *config.Config, identityKeys []string) ([]clearedPin, error) {
 	var cleared []clearedPin
-	for _, host := range configPinKeysForIdentity(cfg, key) {
-		cfg.ClearDevicePin(host)
-		cleared = append(cleared, clearedPin{store: clearedConfigPin, key: host, identity: key})
+	for _, key := range identityKeys {
+		for _, host := range configPinKeysForIdentity(cfg, key) {
+			cfg.ClearDevicePin(host)
+			cleared = append(cleared, clearedPin{store: clearedConfigPin, key: host, identity: key})
+		}
 	}
-	return append(cleared, removeSPKIPins([]string{key})...)
+	spki, err := removeSPKIPinsReporting(identityKeys)
+	return append(cleared, spki...), err
 }
 
 // configPinKeysForIdentity lists the config pin keys whose pin names
@@ -314,21 +376,29 @@ func cachedIdentityKey(pinKey string) string {
 // Best-effort: an unopenable store leaves the config side of the unpin done,
 // which is strictly better than failing the command outright.
 func removeSPKIPins(identityKeys []string) []clearedPin {
+	cleared, _ := removeSPKIPinsReporting(identityKeys)
+	return cleared
+}
+
+// removeSPKIPinsReporting is removeSPKIPins that also returns why an entry
+// could not be removed. It still removes every key it can.
+func removeSPKIPinsReporting(identityKeys []string) ([]clearedPin, error) {
 	if len(identityKeys) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Same config-directory resolution as openPinStore, but that helper returns
 	// certs.PinChecker, which only exposes CheckAndUpdate — not Remove. Open the
 	// concrete store directly.
 	dir, err := config.ConfigDir()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("opening the certificate key pin store: %w", err)
 	}
 	store, err := devicepin.Open(dir)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("opening the certificate key pin store: %w", err)
 	}
 	var cleared []clearedPin
+	var errs []error
 	seen := map[string]bool{}
 	for _, key := range identityKeys {
 		if key == "" || seen[key] {
@@ -342,11 +412,12 @@ func removeSPKIPins(identityKeys []string) []clearedPin {
 			continue
 		}
 		if err := store.Remove(key); err != nil {
+			errs = append(errs, fmt.Errorf("removing certificate key pin %q: %w", key, err))
 			continue
 		}
 		cleared = append(cleared, clearedPin{store: clearedIdentityPin, key: key, identity: key})
 	}
-	return cleared
+	return cleared, errors.Join(errs...)
 }
 
 // clearedAnyConfigPin reports whether a clear touched the config store, which

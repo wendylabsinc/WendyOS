@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 // ---------- mock containerd client ----------
 
 type mockContainerdClient struct {
+	startedNames          map[string]bool
+	resolvedIDs           map[string][]string
 	containers            []*agentpb.AppContainer
 	listErr               error
 	stopErr               error
@@ -59,6 +62,9 @@ type mockContainerdClient struct {
 	declaredVolumesErr    error
 	assembleImageCalls    int
 	createReqs            []*agentpb.CreateContainerRequest
+	validateErr           error
+	validateReqs          []*agentpb.CreateContainerRequest
+	validateCfgs          []*appconfig.AppConfig
 }
 
 type stoppedByUserCall struct {
@@ -112,6 +118,11 @@ func (m *mockContainerdClient) CreateContainer(_ context.Context, req *agentpb.C
 	m.createReqs = append(m.createReqs, req)
 	return m.createErr
 }
+func (m *mockContainerdClient) ValidateContainer(_ context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	m.validateReqs = append(m.validateReqs, req)
+	m.validateCfgs = append(m.validateCfgs, appCfg)
+	return m.validateErr
+}
 func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error {
 	if onProgress != nil {
 		for _, phase := range m.progressPhases {
@@ -120,17 +131,25 @@ func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, 
 	}
 	return m.CreateContainer(ctx, req, appCfg)
 }
-func (m *mockContainerdClient) StartContainer(_ context.Context, _ string, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
+func (m *mockContainerdClient) StartContainer(_ context.Context, name string, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
+	if m.startedNames == nil {
+		m.startedNames = map[string]bool{}
+	}
+	m.startedNames[name] = true
 	return m.startOutputCh, nil
 }
 
-func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, _ string, _ io.Reader, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
+func (m *mockContainerdClient) StartContainerWithStdin(_ context.Context, name string, _ io.Reader, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
+	if m.startedNames == nil {
+		m.startedNames = map[string]bool{}
+	}
+	m.startedNames[name] = true
 	return m.startOutputCh, nil
 }
 func (m *mockContainerdClient) GetContainerStats(_ context.Context) ([]*agentpb.ContainerStats, error) {
@@ -181,6 +200,9 @@ func (m *mockContainerdClient) ResolveAppContainerIDs(_ context.Context, name st
 	if m.resolveErr != nil {
 		return nil, m.resolveErr
 	}
+	if ids, ok := m.resolvedIDs[name]; ok {
+		return ids, nil
+	}
 	// Rule 1 wins globally, so scan all apps for an ID match first.
 	for _, c := range m.containers {
 		for _, id := range mockContainerIDs(c) {
@@ -193,6 +215,9 @@ func (m *mockContainerdClient) ResolveAppContainerIDs(_ context.Context, name st
 		if c.GetAppName() == name {
 			return mockContainerIDs(c), nil
 		}
+	}
+	if m.startedNames[name] {
+		return []string{name}, nil
 	}
 	return nil, fmt.Errorf("%w: no app or service named %q", errdefs.ErrNotFound, name)
 }
@@ -529,6 +554,66 @@ type drainlessMockContainerdClient struct {
 func (m *drainlessMockContainerdClient) WriteLayer(_ context.Context, digest string, _ io.Reader, _ int64) error {
 	m.writtenDigest = digest
 	return nil
+}
+
+// WDY-3850: ValidateContainer hands the request and its parsed config to
+// containerd's validation, and never creates the container.
+func TestValidateContainerValidatesWithoutCreating(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ValidateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app_api",
+		AppConfig: []byte(`{"appId":"test-app","serviceName":"api"}`),
+	})
+	if err != nil {
+		t.Fatalf("ValidateContainer: %v", err)
+	}
+	if len(mock.validateReqs) != 1 || mock.validateReqs[0].GetAppName() != "test-app_api" {
+		t.Fatalf("validated requests = %v, want the one sent", mock.validateReqs)
+	}
+	if cfg := mock.validateCfgs[0]; cfg.AppID != "test-app" || cfg.ServiceName != "api" {
+		t.Fatalf("validated config = %+v, want appId test-app, service api", cfg)
+	}
+	if len(mock.createReqs) != 0 {
+		t.Fatalf("ValidateContainer created %d containers, want none", len(mock.createReqs))
+	}
+}
+
+// A request the create would refuse is FailedPrecondition, so the CLI can
+// tell it from an agent without the RPC (Unimplemented).
+func TestValidateContainerReportsRefusal(t *testing.T) {
+	mock := &mockContainerdClient{validateErr: errors.New(`env key "LD_PRELOAD" is reserved`)}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ValidateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app",
+	})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "LD_PRELOAD") {
+		t.Fatalf("ValidateContainer error = %v, want FailedPrecondition naming the cause", err)
+	}
+}
+
+func TestValidateContainerRejectsInvalidAppConfig(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ValidateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app",
+		AppConfig: []byte(`{`),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ValidateContainer error = %v, want InvalidArgument", err)
+	}
+	if len(mock.validateReqs) != 0 {
+		t.Fatal("an unparseable app config reached containerd")
+	}
 }
 
 func TestCreateContainerWithProgress(t *testing.T) {
@@ -1589,6 +1674,15 @@ func (m *groupMock) ContainerIDsForApp(_ context.Context, _ string) ([]string, e
 	return m.containerIDs, nil
 }
 
+func (m *groupMock) ResolveAppContainerIDs(ctx context.Context, name string) ([]string, error) {
+	for _, id := range m.containerIDs {
+		if id == name {
+			return []string{id}, nil
+		}
+	}
+	return m.mockContainerdClient.ResolveAppContainerIDs(ctx, name)
+}
+
 func (m *groupMock) StartContainer(_ context.Context, name, _ string, _ *agentpb.RestartPolicy) (<-chan ContainerOutput, error) {
 	m.startedNames = append(m.startedNames, name)
 	ch := make(chan ContainerOutput, 1)
@@ -1639,6 +1733,45 @@ func TestStartContainer_GroupStartsAllServices(t *testing.T) {
 	}
 
 	// ClearExplicitStop must be called once per service.
+	if len(mon.clearStopCalls) != 2 {
+		t.Fatalf("ClearExplicitStop call count = %d; want 2", len(mon.clearStopCalls))
+	}
+}
+
+func TestAttachContainer_GroupStartsAllServices(t *testing.T) {
+	mc := &groupMock{
+		containerIDs: []string{"com.example.robot_camera", "com.example.robot_detector"},
+	}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	stream, err := client.AttachContainer(context.Background())
+	if err != nil {
+		t.Fatalf("AttachContainer: %v", err)
+	}
+	if err := stream.Send(&agentpb.AttachContainerRequest{
+		RequestType: &agentpb.AttachContainerRequest_AppName{AppName: "com.example.robot"},
+	}); err != nil {
+		t.Fatalf("send app_name: %v", err)
+	}
+
+	// A group attach starts every service and ends after one Started response,
+	// rather than failing with "has multiple service containers".
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if resp.GetStarted() == nil {
+		t.Fatalf("expected Started response, got %T", resp.GetResponseType())
+	}
+	if _, err = stream.Recv(); err != io.EOF {
+		t.Fatalf("expected EOF after Started, got %v", err)
+	}
+
+	if len(mc.startedNames) != 2 {
+		t.Fatalf("expected 2 StartContainer calls, got %d: %v", len(mc.startedNames), mc.startedNames)
+	}
 	if len(mon.clearStopCalls) != 2 {
 		t.Fatalf("ClearExplicitStop call count = %d; want 2", len(mon.clearStopCalls))
 	}
@@ -1762,5 +1895,108 @@ func TestRunContainer_ForwardsEnv(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("env[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+// The live RCA: start accepted the bare app name, while stop resolved app_relay.
+// The monitor must receive the same identity and persist the same stop label.
+func TestStartStopSingleServiceUsesResolvedIdentity(t *testing.T) {
+	for _, requested := range []string{"demo", "demo_relay"} {
+		t.Run(requested, func(t *testing.T) {
+			ch := make(chan ContainerOutput, 1)
+			ch <- ContainerOutput{Done: true}
+			close(ch)
+			mc := &mockContainerdClient{startOutputCh: ch, restartPolicyLabel: "unless-stopped",
+				resolvedIDs: map[string][]string{"demo": {"demo_relay"}, "demo_relay": {"demo_relay"}}}
+			mon := &mockMonitorRegistrar{}
+			client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+			defer cleanup()
+			stream, err := client.StartContainer(context.Background(), &agentpb.StartContainerRequest{AppName: requested})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for {
+				_, err = stream.Recv()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = client.StopContainer(context.Background(), &agentpb.StopContainerRequest{AppName: "demo_relay"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(mon.registerCalls) != 1 || mon.registerCalls[0].appName != "demo_relay" {
+				t.Fatalf("register=%v", mon.registerCalls)
+			}
+			if len(mon.clearStopCalls) != 1 || mon.clearStopCalls[0] != "demo_relay" {
+				t.Fatalf("clear=%v", mon.clearStopCalls)
+			}
+			if len(mon.explicitStopCalls) != 1 || mon.explicitStopCalls[0] != "demo_relay" {
+				t.Fatalf("stop=%v", mon.explicitStopCalls)
+			}
+			if len(mc.stoppedByUserCalls) != 2 || mc.stoppedByUserCalls[0] != (stoppedByUserCall{"demo_relay", false}) || mc.stoppedByUserCalls[1] != (stoppedByUserCall{"demo_relay", true}) {
+				t.Fatalf("labels=%v", mc.stoppedByUserCalls)
+			}
+			if requested == "demo" && (len(mon.unregisterCalls) != 1 || mon.unregisterCalls[0] != "demo") {
+				t.Fatalf("stale alias not retired: %v", mon.unregisterCalls)
+			}
+		})
+	}
+}
+
+func TestStartBookkeepingDoesNotRegisterUnresolvedAlias(t *testing.T) {
+	mc := &mockContainerdClient{resolveErr: fmt.Errorf("lookup failed")}
+	mon := &mockMonitorRegistrar{}
+	svc := NewContainerService(zap.NewNop(), mc, WithMonitor(mon))
+	svc.recordContainerStart(context.Background(), "demo", &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED})
+	if len(mon.registerCalls)+len(mon.clearStopCalls)+len(mon.unregisterCalls)+len(mc.stoppedByUserCalls) != 0 {
+		t.Fatal("bookkeeping changed on failed resolution")
+	}
+}
+
+func TestAttachSingleServiceUsesResolvedIdentity(t *testing.T) {
+	ch := make(chan ContainerOutput, 1)
+	ch <- ContainerOutput{Done: true}
+	close(ch)
+	mc := &mockContainerdClient{startOutputCh: ch, restartPolicyLabel: "unless-stopped", resolvedIDs: map[string][]string{"demo": {"demo_relay"}}}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+	stream, err := client.AttachContainer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = stream.Send(&agentpb.AttachContainerRequest{RequestType: &agentpb.AttachContainerRequest_AppName{AppName: "demo"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = stream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, err = stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(mon.registerCalls) != 1 || mon.registerCalls[0].appName != "demo_relay" {
+		t.Fatalf("register=%v", mon.registerCalls)
+	}
+	if len(mc.stoppedByUserCalls) != 1 || mc.stoppedByUserCalls[0] != (stoppedByUserCall{"demo_relay", false}) {
+		t.Fatalf("labels=%v", mc.stoppedByUserCalls)
+	}
+}
+
+func TestNoRestartClearsAliasAndResolvedRegistration(t *testing.T) {
+	mc := &mockContainerdClient{resolvedIDs: map[string][]string{"demo": {"demo_relay"}}}
+	mon := &mockMonitorRegistrar{}
+	svc := NewContainerService(zap.NewNop(), mc, WithMonitor(mon))
+	svc.recordContainerStart(context.Background(), "demo", &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_NO})
+	if len(mon.registerCalls) != 0 || len(mon.unregisterCalls) != 2 || mon.unregisterCalls[0] != "demo" || mon.unregisterCalls[1] != "demo_relay" {
+		t.Fatalf("register=%v unregister=%v", mon.registerCalls, mon.unregisterCalls)
 	}
 }

@@ -35,20 +35,31 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,55}[a-z0-9])?$`)
 const (
 	EntitlementNetwork   = "network"
 	EntitlementBluetooth = "bluetooth"
-	EntitlementVideo     = "video"
-	EntitlementGPU       = "gpu"
-	EntitlementNPU       = "npu"
-	EntitlementPersist   = "persist"
-	EntitlementAudio     = "audio"
-	EntitlementCamera    = "camera"
-	EntitlementUSB       = "usb"
-	EntitlementI2C       = "i2c"
-	EntitlementGPIO      = "gpio"
-	EntitlementSPI       = "spi"
-	EntitlementInput     = "input"
-	EntitlementSerial    = "serial"
-	EntitlementMCP       = "mcp"
-	EntitlementDisplay   = "display"
+	// EntitlementAvahi grants an app its own Avahi mDNS stack: the agent
+	// runs a per-container avahi-daemon inside the app network namespace
+	// and exposes only that instance over a filtered D-Bus socket. Apps use
+	// stock avahi-compat (dns_sd.h) or native Avahi clients with no special
+	// socket handling; the daemon multicasts on the app bridge exactly like
+	// any other speaker, so the existing catalog bridge picks publications
+	// up transparently.
+	EntitlementAvahi = "avahi"
+	// EntitlementNAN grants direct control of the host's NAN management socket.
+	// Network access for NDP traffic is a separate entitlement.
+	EntitlementNAN     = "nan"
+	EntitlementVideo   = "video"
+	EntitlementGPU     = "gpu"
+	EntitlementNPU     = "npu"
+	EntitlementPersist = "persist"
+	EntitlementAudio   = "audio"
+	EntitlementCamera  = "camera"
+	EntitlementUSB     = "usb"
+	EntitlementI2C     = "i2c"
+	EntitlementGPIO    = "gpio"
+	EntitlementSPI     = "spi"
+	EntitlementInput   = "input"
+	EntitlementSerial  = "serial"
+	EntitlementMCP     = "mcp"
+	EntitlementDisplay = "display"
 	// EntitlementEpisodeWrite grants write access to the device's episode
 	// recorder through the app-private episode event socket, and nothing else.
 	// The app pushes its own event and prediction records into whatever
@@ -76,12 +87,17 @@ const (
 	// declares the app's primary HTTP port so clients (wendy run, remote
 	// management apps) can discover and open it. See entitlements.md.
 	EntitlementHTTP = "http"
+	// EntitlementArduinoBridge reaches the microcontroller's sketch through
+	// Arduino's router: the agent mounts its socket directory and sets APP_SOCKET.
+	EntitlementArduinoBridge = "arduino-bridge"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
 var ValidEntitlementTypes = []string{
 	EntitlementNetwork,
 	EntitlementBluetooth,
+	EntitlementAvahi,
+	EntitlementNAN,
 	EntitlementVideo,
 	EntitlementGPU,
 	EntitlementNPU,
@@ -101,6 +117,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementAdmin,
 	EntitlementBuild,
 	EntitlementHTTP,
+	EntitlementArduinoBridge,
 }
 
 // FrameworkROS2 is the "ros2" key under wendy.json's "frameworks" object.
@@ -120,6 +137,8 @@ var deprecatedEntitlementReplacements = map[string]string{
 var allowedKeys = map[string][]string{
 	EntitlementNetwork:       {"type", "mode", "ports", "serviceCIDR"},
 	EntitlementBluetooth:     {"type", "mode"},
+	EntitlementAvahi:         {"type"},
+	EntitlementNAN:           {"type"},
 	EntitlementVideo:         {"type", "mode", "allowlist"},
 	EntitlementGPU:           {"type"},
 	EntitlementNPU:           {"type"},
@@ -139,6 +158,7 @@ var allowedKeys = map[string][]string{
 	EntitlementAdmin:         {"type"},
 	EntitlementBuild:         {"type"},
 	EntitlementHTTP:          {"type", "port"},
+	EntitlementArduinoBridge: {"type"},
 }
 
 // Platform constants identify the target hardware family.
@@ -178,9 +198,13 @@ type ROS2Config struct {
 	// "jazzy"). The agent uses it to pick the matching CLI sidecar image.
 	// Defaults to "humble".
 	Distro string `json:"distro,omitempty"`
-	// DiscoveryScope controls whether ROS 2 discovery is restricted to the
-	// app group's network namespace ("app", the default) or may use the
-	// device's host network ("host").
+	// Scope says who can see the app's ROS 2 topics: only the app ("app"),
+	// every app on the device ("device", the default), the device plus its
+	// directly attached hardware ("peripherals"), or the network ("network").
+	Scope string `json:"scope,omitempty"`
+	// DiscoveryScope is the deprecated predecessor of Scope: "app" behaves as
+	// scope "device" and "host" as scope "network". When both are set, scope
+	// wins; discoveryScope is only read by agents that predate scope.
 	DiscoveryScope string `json:"discoveryScope,omitempty"`
 }
 
@@ -190,9 +214,36 @@ type FrameworksConfig struct {
 	ROS2 *ROS2Config `json:"ros2,omitempty"`
 }
 
+// SimulationConfig selects an app-authored backend only on a matching managed
+// robot VM. Entitlements replace the hardware grants; Env overlays service Env.
+// It does not claim USB/firmware emulation.
+type SimulationConfig struct {
+	Profile      string            `json:"profile"`
+	Entitlements []Entitlement     `json:"entitlements"`
+	Env          map[string]string `json:"env,omitempty"`
+}
+
+func (sim *SimulationConfig) validate(prefix string) error {
+	if sim == nil {
+		return nil
+	}
+	if sim.Profile != "rosmaster-r2" && sim.Profile != "go2" && sim.Profile != "g1" && sim.Profile != "so101" {
+		return fmt.Errorf("%s.profile: expected rosmaster-r2, go2, g1 or so101", prefix)
+	}
+	if len(sim.Entitlements) == 0 {
+		return fmt.Errorf("%s.entitlements: explicitly declare the simulator grants", prefix)
+	}
+	if err := validateEntitlements(sim.Entitlements, prefix+".entitlement"); err != nil {
+		return err
+	}
+	return ValidateEnv(prefix+".env", sim.Env)
+}
+
 // ServiceConfig holds the per-service build and runtime configuration for a
 // multi-service wendy.json (the services map).
 type ServiceConfig struct {
+	Simulation *SimulationConfig `json:"simulation,omitempty"`
+
 	// Context is the build context directory, relative to wendy.json.
 	// Required for standalone multi-service apps; omitted in compose companion files.
 	Context      string            `json:"context"`
@@ -265,18 +316,20 @@ type AppConfig struct {
 	// ServiceName is set when this AppConfig describes a single service within
 	// a multi-service app.  When non-empty the agent uses the
 	// {appId}_{serviceName} container naming convention (WDY-878).
-	ServiceName  string           `json:"serviceName,omitempty"`
-	Version      string           `json:"version,omitempty"`
-	Platform     string           `json:"platform,omitempty"`
-	Language     string           `json:"language,omitempty"`
-	Xcode        *XcodeConfig     `json:"xcode,omitempty"`
-	Run          *RunConfig       `json:"run,omitempty"`
-	Entitlements []Entitlement    `json:"entitlements,omitempty"`
-	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
-	Hooks        *HooksConfig     `json:"hooks,omitempty"`
-	Python       *PythonConfig    `json:"python,omitempty"`
-	Debug        bool             `json:"debug,omitempty"`
-	Files        []FileSyncEntry  `json:"files,omitempty"`
+	ServiceName string `json:"serviceName,omitempty"`
+	Version     string `json:"version,omitempty"`
+	// RestartPolicy supplies the default for wendy run; explicit CLI flags win.
+	RestartPolicy string           `json:"restartPolicy,omitempty"`
+	Platform      string           `json:"platform,omitempty"`
+	Language      string           `json:"language,omitempty"`
+	Xcode         *XcodeConfig     `json:"xcode,omitempty"`
+	Run           *RunConfig       `json:"run,omitempty"`
+	Entitlements  []Entitlement    `json:"entitlements,omitempty"`
+	Readiness     *ReadinessConfig `json:"readiness,omitempty"`
+	Hooks         *HooksConfig     `json:"hooks,omitempty"`
+	Python        *PythonConfig    `json:"python,omitempty"`
+	Debug         bool             `json:"debug,omitempty"`
+	Files         []FileSyncEntry  `json:"files,omitempty"`
 	// Brewfile is an optional Homebrew Bundle manifest path for native Darwin
 	// deployments. It is relative to wendy.json and synced to the target Mac
 	// before the agent runs `brew bundle --file`.
@@ -297,6 +350,8 @@ type AppConfig struct {
 	// key by key. Values may reference host env vars via ${VAR}, expanded by
 	// `wendy run` at deploy time (see ServiceConfig.Env).
 	Env map[string]string `json:"env,omitempty"`
+	// MCU is the Arduino sketch flashed to the board's microcontroller.
+	MCU *MCUConfig `json:"mcu,omitempty"`
 }
 
 // ContainerName returns the container identifier for this app config.
@@ -387,6 +442,8 @@ type PythonConfig struct {
 type PortMapping struct {
 	Host      uint16 `json:"host"`
 	Container uint16 `json:"container"`
+	// Empty is TCP for compatibility with existing app manifests.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.
@@ -526,6 +583,14 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			} else if e.ServiceCIDR != "" {
 				return fmt.Errorf("%s[%d]: network serviceCIDR is only valid with mode \"mesh\", got mode %q", prefix, i, e.Mode)
 			}
+			for _, pm := range e.Ports {
+				if pm.Host == 0 || pm.Container == 0 || (pm.Protocol != "" && pm.Protocol != "tcp" && pm.Protocol != "udp") {
+					return fmt.Errorf("%s[%d]: invalid network port mapping", prefix, i)
+				}
+				if pm.Protocol == "udp" && e.Mode != "mesh" {
+					return fmt.Errorf("%s[%d]: UDP port mappings require network mode \"mesh\"", prefix, i)
+				}
+			}
 		case EntitlementPersist:
 			if e.Name == "" {
 				return fmt.Errorf("%s[%d]: persist entitlement requires a name", prefix, i)
@@ -557,6 +622,7 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
+		case EntitlementArduinoBridge:
 		case EntitlementMCP:
 			if e.Port < 1 || e.Port > 65535 {
 				return fmt.Errorf("%s[%d]: mcp port must be between 1 and 65535, got %d", prefix, i, e.Port)
@@ -616,6 +682,15 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 	}
 	if adminCount > 1 {
 		return fmt.Errorf("at most one admin entitlement is allowed in %s, found %d", prefix, adminCount)
+	}
+	nanCount := 0
+	for _, e := range entitlements {
+		if e.Type == EntitlementNAN {
+			nanCount++
+		}
+	}
+	if nanCount > 1 {
+		return fmt.Errorf("at most one nan entitlement is allowed in %s, found %d", prefix, nanCount)
 	}
 
 	return nil
@@ -716,6 +791,11 @@ func ValidateReadiness(prefix string, r *ReadinessConfig) error {
 
 // Validate checks the AppConfig for required fields and valid entitlement types.
 func (c *AppConfig) Validate() error {
+	switch c.RestartPolicy {
+	case "", "no", "on-failure", "unless-stopped":
+	default:
+		return fmt.Errorf("restartPolicy must be no, on-failure, or unless-stopped")
+	}
 	if c.Run != nil {
 		if err := c.validateNativeRun(); err != nil {
 			return err
@@ -732,6 +812,10 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if err := validateEntitlements(c.Entitlements, "entitlement"); err != nil {
+		return err
+	}
+
+	if err := validateMCU(c.MCU); err != nil {
 		return err
 	}
 
@@ -770,7 +854,7 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if c.Frameworks != nil {
-		if err := validateROS2Config("frameworks.ros2", c.Frameworks.ROS2); err != nil {
+		if err := validateROS2Config("frameworks.ros2", c.Frameworks.ROS2, c.Entitlements); err != nil {
 			return err
 		}
 	}
@@ -792,10 +876,17 @@ func (c *AppConfig) Validate() error {
 		if cleaned := filepath.Clean(svc.Context); strings.HasPrefix(cleaned, "..") {
 			return fmt.Errorf("services[%q]: context must not contain '..' components", name)
 		}
+		// IsAbs alone accepts drive-relative and root-relative Windows paths.
+		if !filepath.IsLocal(svc.Context) {
+			return fmt.Errorf("services[%q]: context must be a relative path within the project", name)
+		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := c.Services[dep]; !ok {
 				return fmt.Errorf("services[%q]: dependsOn references unknown service %q", name, dep)
 			}
+		}
+		if err := svc.Simulation.validate(fmt.Sprintf("services[%q].simulation", name)); err != nil {
+			return err
 		}
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
 			return err
@@ -806,10 +897,8 @@ func (c *AppConfig) Validate() error {
 		if err := ValidateEnv(fmt.Sprintf("services[%q].env", name), svc.Env); err != nil {
 			return err
 		}
-		if svc.Frameworks != nil {
-			if err := validateROS2Config(fmt.Sprintf("services[%q].frameworks.ros2", name), svc.Frameworks.ROS2); err != nil {
-				return err
-			}
+		if err := c.validateServiceROS2(name, svc); err != nil {
+			return err
 		}
 		if err := svc.Resources.validate(fmt.Sprintf("services[%q].resources", name)); err != nil {
 			return err
@@ -875,6 +964,10 @@ func (m *FleetManifest) Validate() error {
 		}
 		if cleaned := filepath.Clean(comp.Path); strings.HasPrefix(cleaned, "..") {
 			return fmt.Errorf("components[%q]: path must not contain '..' components", name)
+		}
+		// IsAbs alone accepts drive-relative and root-relative Windows paths.
+		if !filepath.IsLocal(comp.Path) {
+			return fmt.Errorf("components[%q]: path must be a relative path within the project", name)
 		}
 		if len(comp.Tags) == 0 {
 			return fmt.Errorf("components[%q]: at least one tag is required (the devices to deploy to)", name)
@@ -989,39 +1082,86 @@ func LoadComposeCompanion(dir string) (*AppConfig, []string, error) {
 		return nil, nil, fmt.Errorf("parsing companion wendy.json: %w", err)
 	}
 
-	if err := ValidateAppID(cfg.AppID); err != nil {
+	if err := cfg.ValidateComposeCompanion(); err != nil {
 		return nil, nil, err
 	}
+	return &cfg, ValidateJSON(data), nil
+}
 
-	if err := validateEntitlements(cfg.Entitlements, "entitlement"); err != nil {
-		return nil, nil, err
+// ValidateComposeCompanion validates a manifest accompanying a Compose file.
+// Compose owns build contexts and dependencies, so those need not be repeated.
+func (c *AppConfig) ValidateComposeCompanion() error {
+	if err := ValidateAppID(c.AppID); err != nil {
+		return err
 	}
 
-	if err := ValidateReadiness("readiness", cfg.Readiness); err != nil {
-		return nil, nil, err
+	if err := validateEntitlements(c.Entitlements, "entitlement"); err != nil {
+		return err
 	}
 
-	if err := ValidateEnv("env", cfg.Env); err != nil {
-		return nil, nil, err
+	if err := ValidateReadiness("readiness", c.Readiness); err != nil {
+		return err
 	}
 
-	for name, svc := range cfg.Services {
+	if err := ValidateEnv("env", c.Env); err != nil {
+		return err
+	}
+
+	for name, svc := range c.Services {
 		if svc == nil {
-			return nil, nil, fmt.Errorf("services[%q]: must not be null", name)
+			return fmt.Errorf("services[%q]: must not be null", name)
+		}
+		if err := svc.Simulation.validate(fmt.Sprintf("services[%q].simulation", name)); err != nil {
+			return err
 		}
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
-			return nil, nil, err
+			return err
 		}
 		if err := ValidateReadiness(fmt.Sprintf("services[%q].readiness", name), svc.Readiness); err != nil {
-			return nil, nil, err
+			return err
 		}
 		if err := ValidateEnv(fmt.Sprintf("services[%q].env", name), svc.Env); err != nil {
-			return nil, nil, err
+			return err
 		}
 	}
 
-	warnings := ValidateJSON(data)
-	return &cfg, warnings, nil
+	if c.Frameworks != nil {
+		if err := validateROS2Config("frameworks.ros2", c.Frameworks.ROS2, c.Entitlements); err != nil {
+			return err
+		}
+	}
+	if err := c.Resources.validate("resources"); err != nil {
+		return err
+	}
+	for name, svc := range c.Services {
+		if err := c.validateServiceROS2(name, svc); err != nil {
+			return err
+		}
+		if err := svc.Resources.validate(fmt.Sprintf("services[%q].resources", name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateServiceROS2 validates the ROS 2 config a service runs with: its own,
+// or the app's when it has none.
+func (c *AppConfig) validateServiceROS2(name string, svc *ServiceConfig) error {
+	ros2 := c.GetROS2Config()
+	if svc.Frameworks != nil && svc.Frameworks.ROS2 != nil {
+		ros2 = svc.Frameworks.ROS2
+	}
+	if ros2 == nil {
+		return nil
+	}
+	// Multi-service containers receive both app-level and service-level
+	// entitlements, so validate the effective network mode rather than the
+	// service slice alone. This also catches a service that isolates an
+	// inherited device/peripherals scope from the host network.
+	entitlements := make([]Entitlement, 0, len(c.Entitlements)+len(svc.Entitlements))
+	entitlements = append(entitlements, c.Entitlements...)
+	entitlements = append(entitlements, svc.Entitlements...)
+	return validateROS2Config(fmt.Sprintf("services[%q].frameworks.ros2", name), ros2, entitlements)
 }
 
 // isValidI2CDevice reports whether device is a safe I2C device name (i2c-N).
@@ -1094,6 +1234,10 @@ func ValidateJSON(data []byte) []string {
 	warnings = append(warnings, validateHooksJSON(raw["hooks"], "hooks")...)
 	warnings = append(warnings, validateReadinessJSON(raw["readiness"], "readiness")...)
 	warnings = append(warnings, validateFrameworksJSON(raw["frameworks"], "frameworks")...)
+	var mcuRaw map[string]json.RawMessage
+	if json.Unmarshal(raw["mcu"], &mcuRaw) == nil {
+		warnings = append(warnings, unknownKeyWarnings(mcuRaw, "mcu", jsonFieldNames(reflect.TypeOf(MCUConfig{})))...)
+	}
 
 	// Validate service-level entitlements, frameworks, and hooks when a
 	// services map is present. Unmarshal into map[string]json.RawMessage first
@@ -1234,7 +1378,18 @@ func validateFrameworksJSON(frameworksRaw json.RawMessage, prefix string) []stri
 	if err := json.Unmarshal(ros2Raw, &ros2); err != nil {
 		return warnings
 	}
-	allowed := map[string]bool{"domainId": true, "rmw": true, "distro": true, "discoveryScope": true}
+	if _, ok := ros2["discoveryScope"]; ok {
+		var scope string
+		_ = json.Unmarshal(ros2["discoveryScope"], &scope)
+		if _, both := ros2["scope"]; both {
+			warnings = append(warnings, fmt.Sprintf("%s.%s.discoveryScope is deprecated and ignored by agents that support \"scope\", which takes precedence; it is only read by older agents", prefix, FrameworkROS2))
+		} else if replacement := ros2DiscoveryScopeReplacement(scope); replacement != "" {
+			warnings = append(warnings, fmt.Sprintf("%s.%s.discoveryScope is deprecated; use \"scope\": %q, which behaves the same", prefix, FrameworkROS2, replacement))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("%s.%s.discoveryScope is deprecated; use \"scope\"", prefix, FrameworkROS2))
+		}
+	}
+	allowed := map[string]bool{"domainId": true, "rmw": true, "distro": true, "scope": true, "discoveryScope": true}
 	var unknown []string
 	for k := range ros2 {
 		if !allowed[k] {
@@ -1245,7 +1400,7 @@ func validateFrameworksJSON(frameworksRaw json.RawMessage, prefix string) []stri
 		return warnings
 	}
 	sort.Strings(unknown)
-	warnings = append(warnings, fmt.Sprintf("Unknown key(s) in %s.%s: %s. Allowed keys are: discoveryScope, distro, domainId, rmw", prefix, FrameworkROS2, strings.Join(unknown, ", ")))
+	warnings = append(warnings, fmt.Sprintf("Unknown key(s) in %s.%s: %s. Allowed keys are: distro, domainId, rmw, scope", prefix, FrameworkROS2, strings.Join(unknown, ", ")))
 	return warnings
 }
 

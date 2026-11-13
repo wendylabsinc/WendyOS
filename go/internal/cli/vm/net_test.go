@@ -166,18 +166,37 @@ func TestFindSocketVMNetErrorExplainsTheOneTimeSetup(t *testing.T) {
 	}
 }
 
-func TestCheckHostPortAcceptsAFreePort(t *testing.T) {
-	// Bind and release to find a port that is genuinely free right now.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+func TestCheckHostPortAcceptsAFreePortSpan(t *testing.T) {
+	// A VM uses adjacent plaintext and mTLS ports. Reserve the whole span
+	// before releasing it; one free ephemeral port says nothing about its neighbour.
+	for range 100 {
+		first, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := first.Addr().(*net.TCPAddr).Port
+		listeners := []net.Listener{first}
+		for offset := 1; offset < AgentPortSpan && port+offset <= 65535; offset++ {
+			listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port+offset))
+			if err != nil {
+				break
+			}
+			listeners = append(listeners, listener)
+		}
+		for _, listener := range listeners {
+			if err := listener.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(listeners) != AgentPortSpan {
+			continue
+		}
+		if err := CheckHostPort(port); err != nil {
+			t.Errorf("CheckHostPort(%d) on a free span = %v, want nil", port, err)
+		}
+		return
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-
-	if err := CheckHostPort(port); err != nil {
-		t.Errorf("CheckHostPort(%d) on a free port = %v, want nil", port, err)
-	}
+	t.Fatal("could not reserve an available host port span")
 }
 
 func TestCheckHostPortReportsAConflictAndNamesTheFlag(t *testing.T) {

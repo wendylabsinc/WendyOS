@@ -86,6 +86,19 @@ func TestSchemaJSON_HasFrameworksAndServices(t *testing.T) {
 	if len(discoveryEnum) != 2 || discoveryEnum[0] != ROS2DiscoveryScopeApp || discoveryEnum[1] != ROS2DiscoveryScopeHost {
 		t.Errorf("schema discoveryScope enum = %v, want [%q %q]", discoveryEnum, ROS2DiscoveryScopeApp, ROS2DiscoveryScopeHost)
 	}
+	if discoveryScope["deprecated"] != true {
+		t.Error("schema discoveryScope should be marked deprecated")
+	}
+	scope, _ := ros2Props["scope"].(map[string]any)
+	scopeEnum, _ := scope["enum"].([]any)
+	if len(scopeEnum) != len(ROS2Scopes) {
+		t.Fatalf("schema scope enum = %v, want %v", scopeEnum, ROS2Scopes)
+	}
+	for i, v := range scopeEnum {
+		if v != ROS2Scopes[i] {
+			t.Errorf("schema scope enum = %v, want %v", scopeEnum, ROS2Scopes)
+		}
+	}
 }
 
 func TestSchemaJSON_HasResources(t *testing.T) {

@@ -65,7 +65,7 @@ func TestNativeCommandWatchDetectsLaunchAndFileChanges(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "launch.py"), []byte("#!/usr/bin/python3\n"), 0755)
 	os.WriteFile(filepath.Join(dir, "wendy.json"), []byte(`{"appId":"sh.wendy.Watch"}`), 0644)
 	cfg := &appconfig.AppConfig{AppID: "sh.wendy.Watch", Platform: "darwin", Run: &appconfig.RunConfig{Command: "launch.py"}}
-	state := &fakeMacRunState{}
+	state := &fakeMacRunState{sendStarted: true}
 	conn, cleanup := startFakeMacRunServer(t, state)
 	defer cleanup()
 	version := &agentpb.GetAgentVersionResponse{Os: "darwin", Featureset: []string{"native-process"}}

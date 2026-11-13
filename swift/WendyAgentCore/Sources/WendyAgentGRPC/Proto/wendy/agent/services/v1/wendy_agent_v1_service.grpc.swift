@@ -280,6 +280,32 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
                 type: .unary
             )
         }
+        /// Namespace for "GetPowerMode" metadata.
+        public enum GetPowerMode: Sendable {
+            /// Request type for "GetPowerMode".
+            public typealias Input = Wendy_Agent_Services_V1_GetPowerModeRequest
+            /// Response type for "GetPowerMode".
+            public typealias Output = Wendy_Agent_Services_V1_GetPowerModeResponse
+            /// Descriptor for "GetPowerMode".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "GetPowerMode",
+                type: .unary
+            )
+        }
+        /// Namespace for "SetPowerMode" metadata.
+        public enum SetPowerMode: Sendable {
+            /// Request type for "SetPowerMode".
+            public typealias Input = Wendy_Agent_Services_V1_SetPowerModeRequest
+            /// Response type for "SetPowerMode".
+            public typealias Output = Wendy_Agent_Services_V1_SetPowerModeResponse
+            /// Descriptor for "SetPowerMode".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v1.WendyAgentService"),
+                method: "SetPowerMode",
+                type: .unary
+            )
+        }
         /// Descriptors for all methods in the "wendy.agent.services.v1.WendyAgentService" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
             RunContainer.descriptor,
@@ -301,7 +327,9 @@ public enum Wendy_Agent_Services_V1_WendyAgentService: Sendable {
             UpdateOS.descriptor,
             DumpKernelLog.descriptor,
             GetOSUpdateStatus.descriptor,
-            SetHostname.descriptor
+            SetHostname.descriptor,
+            GetPowerMode.descriptor,
+            SetPowerMode.descriptor
         ]
     }
 }
@@ -673,6 +701,46 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_SetHostnameRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_SetHostnameResponse>
+
+        /// Handle the "GetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+        /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+        /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_GetPowerModeRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_GetPowerModeResponse` messages.
+        func getPowerMode(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>
+
+        /// Handle the "SetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+        /// > the agent never reboots unless the request asks for it. Fails with
+        /// > UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `Wendy_Agent_Services_V1_SetPowerModeRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `Wendy_Agent_Services_V1_SetPowerModeResponse` messages.
+        func setPowerMode(
+            request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>
     }
 
     /// Service protocol for the "wendy.agent.services.v1.WendyAgentService" service.
@@ -1029,6 +1097,46 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_SetHostnameRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetHostnameResponse>
+
+        /// Handle the "GetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+        /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+        /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetPowerModeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_GetPowerModeResponse` message.
+        func getPowerMode(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>
+
+        /// Handle the "SetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+        /// > the agent never reboots unless the request asks for it. Fails with
+        /// > UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetPowerModeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `Wendy_Agent_Services_V1_SetPowerModeResponse` message.
+        func setPowerMode(
+            request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>
     }
 
     /// Simple service protocol for the "wendy.agent.services.v1.WendyAgentService" service.
@@ -1388,6 +1496,46 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             request: Wendy_Agent_Services_V1_SetHostnameRequest,
             context: GRPCCore.ServerContext
         ) async throws -> Wendy_Agent_Services_V1_SetHostnameResponse
+
+        /// Handle the "GetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+        /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+        /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_GetPowerModeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_GetPowerModeResponse` to respond with.
+        func getPowerMode(
+            request: Wendy_Agent_Services_V1_GetPowerModeRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_GetPowerModeResponse
+
+        /// Handle the "SetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+        /// > the agent never reboots unless the request asks for it. Fails with
+        /// > UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A `Wendy_Agent_Services_V1_SetPowerModeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `Wendy_Agent_Services_V1_SetPowerModeResponse` to respond with.
+        func setPowerMode(
+            request: Wendy_Agent_Services_V1_SetPowerModeRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> Wendy_Agent_Services_V1_SetPowerModeResponse
     }
 }
 
@@ -1615,6 +1763,28 @@ extension Wendy_Agent_Services_V1_WendyAgentService.StreamingServiceProtocol {
                 )
             }
         )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.GetPowerMode.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_GetPowerModeRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_GetPowerModeResponse>(),
+            handler: { request, context in
+                try await self.getPowerMode(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.SetPowerMode.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_SetPowerModeRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_SetPowerModeResponse>(),
+            handler: { request, context in
+                try await self.setPowerMode(
+                    request: request,
+                    context: context
+                )
+            }
+        )
     }
 }
 
@@ -1802,6 +1972,28 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_SetHostnameResponse> {
         let response = try await self.setHostname(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getPowerMode(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_GetPowerModeResponse> {
+        let response = try await self.getPowerMode(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func setPowerMode(
+        request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Agent_Services_V1_SetPowerModeResponse> {
+        let response = try await self.setPowerMode(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -2085,6 +2277,32 @@ extension Wendy_Agent_Services_V1_WendyAgentService.SimpleServiceProtocol {
     ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetHostnameResponse> {
         return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetHostnameResponse>(
             message: try await self.setHostname(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getPowerMode(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetPowerModeResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>(
+            message: try await self.getPowerMode(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func setPowerMode(
+        request: GRPCCore.ServerRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetPowerModeResponse> {
+        return GRPCCore.ServerResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>(
+            message: try await self.setPowerMode(
                 request: request.message,
                 context: context
             ),
@@ -2547,6 +2765,56 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
             deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_SetHostnameResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetHostnameResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+        /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+        /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetPowerModeRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetPowerModeRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetPowerModeResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getPowerMode<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_GetPowerModeResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "SetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+        /// > the agent never reboots unless the request asks for it. Fails with
+        /// > UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetPowerModeRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetPowerModeRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetPowerModeResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        func setPowerMode<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_SetPowerModeResponse>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -3222,6 +3490,78 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
                 onResponse: handleResponse
             )
         }
+
+        /// Call the "GetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+        /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+        /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetPowerModeRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetPowerModeRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetPowerModeResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getPowerMode<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_GetPowerModeResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.GetPowerMode.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "SetPowerMode" method.
+        ///
+        /// > Source IDL Documentation:
+        /// >
+        /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+        /// > the agent never reboots unless the request asks for it. Fails with
+        /// > UNAVAILABLE on devices that are not a Jetson.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetPowerModeRequest` message.
+        ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetPowerModeRequest` messages.
+        ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetPowerModeResponse` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func setPowerMode<Result>(
+            request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Agent_Services_V1_SetPowerModeResponse>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: Wendy_Agent_Services_V1_WendyAgentService.Method.SetPowerMode.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
     }
 }
 
@@ -3780,6 +4120,68 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_SetHostnameRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_SetHostnameResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetPowerMode" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+    /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+    /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetPowerModeRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getPowerMode<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getPowerMode(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_GetPowerModeRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_GetPowerModeResponse>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SetPowerMode" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+    /// > the agent never reboots unless the request asks for it. Fails with
+    /// > UNAVAILABLE on devices that are not a Jetson.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetPowerModeRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func setPowerMode<Result>(
+        request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.setPowerMode(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V1_SetPowerModeRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V1_SetPowerModeResponse>(),
             options: options,
             onResponse: handleResponse
         )
@@ -4423,6 +4825,76 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
             metadata: metadata
         )
         return try await self.setHostname(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetPowerMode" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+    /// > modes it offers. Modes are the device's own names and IDs, untranslated.
+    /// > Fails with UNAVAILABLE on devices that are not a Jetson.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getPowerMode<Result>(
+        _ message: Wendy_Agent_Services_V1_GetPowerModeRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_GetPowerModeResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getPowerMode(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SetPowerMode" method.
+    ///
+    /// > Source IDL Documentation:
+    /// >
+    /// > Switch the Jetson power mode. Some modes only take effect after a reboot;
+    /// > the agent never reboots unless the request asks for it. Fails with
+    /// > UNAVAILABLE on devices that are not a Jetson.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func setPowerMode<Result>(
+        _ message: Wendy_Agent_Services_V1_SetPowerModeRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendy_Agent_Services_V1_SetPowerModeResponse>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.setPowerMode(
             request: request,
             options: options,
             onResponse: handleResponse

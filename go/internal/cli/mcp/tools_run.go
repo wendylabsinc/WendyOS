@@ -1,0 +1,400 @@
+package mcp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+)
+
+// Explicit selectors override the session. Never let a child choose a different
+// default device, or lose the cloud organization and broker of a live session.
+func (s *mcpServer) runTarget(req mcpgo.CallToolRequest) (commandTarget, error) {
+	device, cloud := stringParam(req, "device"), stringParam(req, "device_name")
+	endpoint, broker := stringParam(req, "cloud_grpc"), stringParam(req, "broker_url")
+	for _, value := range []string{device, cloud, endpoint, broker} {
+		if value != "" && strings.TrimSpace(value) == "" {
+			return commandTarget{}, fmt.Errorf("device and cloud selectors cannot be whitespace")
+		}
+	}
+	if strings.Contains(device, ",") || strings.Contains(cloud, ",") {
+		return commandTarget{}, fmt.Errorf("device names one device; wendy run would deploy to every device in a comma-separated list")
+	}
+	if device != "" {
+		if cloud != "" || endpoint != "" || broker != "" {
+			return commandTarget{}, fmt.Errorf("device cannot be combined with device_name, cloud_grpc, or broker_url")
+		}
+		return commandTarget{Device: device, Transport: "selector"}, nil
+	}
+	if cloud != "" {
+		return commandTarget{Device: cloud, Transport: "cloud", CloudGRPC: endpoint, BrokerURL: broker}, nil
+	}
+	_, _, target := s.connectionSnapshot()
+	if target.Device == "" {
+		return target, fmt.Errorf("pass device or device_name, or connect to a replayable device target first")
+	}
+	if endpoint != "" || broker != "" {
+		return commandTarget{}, fmt.Errorf("cloud endpoint overrides require an explicit device_name; omit them to reuse the connected target")
+	}
+	return target, nil
+}
+
+// localDeviceSelector names the device this server runs on when it is inside
+// an admin-entitled container and reaches the agent over WENDY_AGENT_SOCKET.
+const localDeviceSelector = "local"
+
+// inDeviceContainer reports whether the agent socket is set, so every
+// connection and `wendy run` goes to the local agent.
+func inDeviceContainer() bool {
+	return os.Getenv("WENDY_AGENT_SOCKET") != ""
+}
+
+// isLocalSelector reports whether device names the local agent.
+func isLocalSelector(device string) bool {
+	switch strings.ToLower(strings.TrimSpace(device)) {
+	case localDeviceSelector, "localhost", "127.0.0.1":
+		return true
+	}
+	hostname := os.Getenv("WENDY_DEVICE_HOSTNAME")
+	return hostname != "" && strings.EqualFold(strings.TrimSpace(device), hostname)
+}
+
+// localRunTarget is the run target inside a device container. The agent socket
+// silently overrides any --device, so a request naming another device is
+// refused rather than deployed to the wrong place.
+func (s *mcpServer) localRunTarget(req mcpgo.CallToolRequest) (commandTarget, error) {
+	if device := stringParam(req, "device"); device != "" && !isLocalSelector(device) {
+		return commandTarget{}, fmt.Errorf("run inside a device container deploys only to the local device; the agent socket would override %q", device)
+	}
+	for _, key := range []string{"device_name", "cloud_grpc", "broker_url"} {
+		if stringParam(req, key) != "" {
+			return commandTarget{}, fmt.Errorf("run inside a device container deploys only to the local device; the agent socket would override %s", key)
+		}
+	}
+	return commandTarget{Device: localDeviceSelector, Transport: "socket"}, nil
+}
+
+func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	projectPath := stringParam(req, "project_path")
+	if projectPath == "" {
+		return errResult(errCodeInvalidArgument, "project_path is required"), nil
+	}
+	projectPath, err := filepath.Abs(projectPath)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	// The CLI validates the project itself: compose projects have no
+	// wendy.json, and `wendy run --yes` sets up a first deploy.
+	if info, err := os.Stat(projectPath); err != nil || !info.IsDir() {
+		return errResult(errCodeInvalidArgument, "project_path must be an existing project directory"), nil
+	}
+	var target commandTarget
+	if inDeviceContainer() {
+		target, err = s.localRunTarget(req)
+		if err != nil {
+			return errResult(errCodeUnsupported, err.Error()), nil
+		}
+	} else {
+		target, err = s.runTarget(req)
+		if err != nil {
+			return s.runTargetErrResult(req, err), nil
+		}
+	}
+	timeout, err := ros2Int(req, "timeout_seconds", 300, 1, 3600)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	maxBytes, err := ros2Int(req, "max_bytes", 16384, 1, 1000000)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	start := true
+	if value, present := req.GetArguments()["start"]; present {
+		var ok bool
+		start, ok = value.(bool)
+		if !ok {
+			return errResult(errCodeInvalidArgument, "start must be a boolean"), nil
+		}
+		if legacy, present := req.GetArguments()["deploy"]; present && legacy != !start {
+			return errResult(errCodeInvalidArgument, "start conflicts with legacy deploy"), nil
+		}
+	} else {
+		start = !req.GetBool("deploy", false)
+	}
+	// Started deployments wait by default where the CLI can (see
+	// waitReadyByDefault); create-only requests have no running process to
+	// check. An explicit true still rejects a create-only request.
+	_, waitRequested := req.GetArguments()["wait_ready"]
+	_, deadlineRequested := req.GetArguments()["readiness_timeout_seconds"]
+	waitReady, err := runBoolean(req, "wait_ready", start)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	includeOutput, err := runBoolean(req, "include_output", false)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	service := stringParam(req, "service")
+	if value, exists := req.GetArguments()["service"]; exists {
+		if _, ok := value.(string); !ok || appconfig.ValidateServiceName(service) != nil {
+			return errResult(errCodeInvalidArgument, "service must be a valid service name"), nil
+		}
+	}
+	readinessTimeout := 0
+	if _, exists := req.GetArguments()["readiness_timeout_seconds"]; exists {
+		readinessTimeout, err = ros2Int(req, "readiness_timeout_seconds", 0, 1, 3600)
+		if err != nil || !waitReady || readinessTimeout > timeout {
+			return errResult(errCodeInvalidArgument, "readiness_timeout_seconds requires wait_ready and must be 1..timeout_seconds"), nil
+		}
+	}
+	if waitReady && !start {
+		return errResult(errCodeInvalidArgument, "wait_ready requires start=true"), nil
+	}
+	// An attached run waits for readiness, opens a browser on this host, runs
+	// postStart hooks and streams logs until stopped, so it could only time
+	// out here. run always detaches; telemetry_logs reads the app's output.
+	if value, present := req.GetArguments()["detach"]; present && value != true {
+		return errResult(errCodeInvalidArgument, "run always detaches; read application logs with telemetry_logs"), nil
+	}
+	selector := target.Device
+	if target.Selector != "" {
+		selector = target.Selector
+	}
+	cloudRun := target.Transport == "cloud" && target.Selector == ""
+	if waitReady && !waitRequested && !deadlineRequested {
+		waitReady = s.waitReadyByDefault(projectPath, stringParam(req, "build_type"), selector, cloudRun)
+	}
+	if waitReady && (selector == "docker" || selector == "podman") {
+		return errResult(errCodeUnsupported, "wait_ready requires a WendyOS target; set wait_ready=false for local Docker/Podman and check application readiness separately"), nil
+	}
+	if waitReady && cloudRun {
+		return errResult(errCodeUnsupported, "wait_ready is not supported for device_name deployments; set wait_ready=false, or connect with cloud_connect and run without device_name"), nil
+	}
+	args := []string{"run", "--prefix", projectPath, "--device", selector, "--yes"}
+	if cloudRun {
+		args = append([]string{"cloud"}, args...)
+		if target.CloudGRPC != "" {
+			args = append(args, "--cloud-grpc", target.CloudGRPC)
+		}
+		if target.BrokerURL != "" {
+			args = append(args, "--broker-url", target.BrokerURL)
+		}
+	}
+	for _, name := range []string{"build_type", "product"} {
+		if value := stringParam(req, name); value != "" {
+			args = append(args, "--"+strings.ReplaceAll(name, "_", "-"), value)
+		}
+	}
+	if !start {
+		args = append(args, "--deploy")
+	}
+	if req.GetBool("debug", false) {
+		args = append(args, "--debug")
+	}
+	if service != "" {
+		args = append(args, "--service", service)
+	}
+	args = append(args, "--detach", "--json")
+	if waitReady {
+		args = append(args, "--wait-ready")
+	}
+	if readinessTimeout != 0 {
+		args = append(args, "--readiness-timeout", fmt.Sprintf("%ds", readinessTimeout))
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+	runner := s.runCommandFn
+	if runner == nil {
+		runner = executeRunCommand
+	}
+	tok := progressToken(req)
+	reportProgress(ctx, tok, 0, 0, "building and deploying to "+target.Device)
+	if tok != nil {
+		runCtx = withRunProgress(runCtx, newRunProgress(func(progress float64, message string) { reportProgress(ctx, tok, progress, 0, message) }))
+	}
+	output, truncated, runErr := runner(runCtx, args, target, maxBytes)
+	receipt, output := decodeRunReceipt(output)
+	if receipt != nil && !waitReady {
+		receipt.Readiness = "not_checked"
+		if receipt.Status == "ready" {
+			receipt.Status = "started"
+		}
+	}
+	s.refreshContainerMCPTools()
+	result := map[string]any{
+		"target":    target,
+		"readiness": "not_checked",
+	}
+	if output != "" {
+		result["build_log_uri"] = s.saveRunLog(target, output, truncated)
+	}
+	if service != "" {
+		result["requested_service"] = service
+	}
+	if includeOutput || runErr != nil || runCtx.Err() != nil {
+		result["output"] = strings.TrimSpace(output)
+		result["truncated"] = truncated
+	}
+	if receipt != nil {
+		copyRunReceipt(result, receipt)
+	}
+	if receipt != nil && runErr == nil && (receipt.Status == "crashed" || receipt.Status == "not_ready" || receipt.Status == "failed") {
+		runErr = errors.New("deployment or readiness verification failed")
+		result["output"] = strings.TrimSpace(output)
+	}
+	if waitReady && (receipt == nil || receipt.Status == "started" || receipt.Status == "created") && runErr == nil && runCtx.Err() == nil {
+		runErr = errors.New("deployment returned no structured readiness result")
+		result["output"] = runErr.Error()
+	}
+	if runErr != nil || runCtx.Err() != nil {
+		result["truncated"] = truncated
+		code := runFailureCode(output)
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			code = errCodeTimeout
+		} else if runCtx.Err() != nil {
+			code = errCodeCancelled
+		}
+		result["error_code"] = string(code)
+		if receipt == nil || (receipt.Status != "crashed" && receipt.Status != "not_ready") {
+			result["status"] = "failed"
+			result["readiness"] = "not_checked"
+		}
+		refusalMessage, refusalNext, refused := runRefusal(output)
+		if refused {
+			result["message"] = refusalMessage
+			result["suggested_next_step"] = refusalNext
+		} else if result["message"] == nil {
+			result["message"] = "Deployment or readiness verification did not complete. Inspect device state before retrying; the command may already have created or started the container."
+		}
+		if output == "" && runErr != nil {
+			result["output"] = runErr.Error()
+		}
+		if next := runFailureNextStep(target, code); next != "" && !refused {
+			result["suggested_next_step"] = next
+		}
+		r := okResult(result)
+		r.IsError = true
+		return r, nil
+	}
+	if receipt == nil {
+		result["status"] = "started"
+	}
+	if !start {
+		result["status"] = "created"
+	}
+	result["suggested_next_step"] = "Connect to the returned target, check container_list and telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior."
+	if next := s.runNextStep(target); next != "" {
+		result["suggested_next_step"] = next
+	}
+	if receipt != nil && receipt.Readiness == "passed" {
+		result["suggested_next_step"] = "Configured TCP readiness passed. Verify application-specific behavior separately."
+	}
+	reportProgress(ctx, tok, 1, 1, "deployment command completed")
+	return okResult(result), nil
+}
+
+// waitReadyByDefault reports whether a started run that leaves wait_ready out
+// should wait. `wendy cloud run` has no --wait-ready, local Docker/Podman have
+// no readiness wait, and `wendy run` refuses the wait for some projects
+// (Compose, multi-service, Xcode, native commands, host-built Swift, a build
+// host); the project backend reports those with the CLI's own checks.
+func (s *mcpServer) waitReadyByDefault(projectPath, buildType, selector string, cloudRun bool) bool {
+	if cloudRun || selector == "docker" || selector == "podman" {
+		return false
+	}
+	s.mu.RLock()
+	unsupported := s.project.WaitReadyUnsupported
+	s.mu.RUnlock()
+	return unsupported == nil || unsupported(projectPath, buildType) == nil
+}
+
+// Keep the tail while the process runs, including on failure. A large compiler
+// log must not exhaust memory or hide the final diagnostic behind its prologue.
+type runTail struct {
+	mu        sync.Mutex
+	data      []byte
+	limit     int
+	truncated bool
+}
+
+func (w *runTail) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := len(p)
+	if len(w.data)+n > w.limit {
+		w.truncated = true
+		if n >= w.limit {
+			w.data = append(w.data[:0], p[n-w.limit:]...)
+		} else {
+			w.data = append(w.data[len(w.data)+n-w.limit:], p...)
+		}
+	} else {
+		w.data = append(w.data, p...)
+	}
+	return n, nil
+}
+
+func executeRunCommand(ctx context.Context, args []string, target commandTarget, limit int) (string, bool, error) {
+	bin, err := os.Executable()
+	if err != nil {
+		return "", false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	cmd := exec.Command(bin, args...)
+	configureRunProcess(cmd)
+	cmd.Env = runChildEnvironment(os.Environ(), target)
+	cmd.Env = append(cmd.Env, "WENDY_TELEMETRY_ATTEMPT_ID="+analytics.AttemptID(ctx), "WENDY_TELEMETRY_ENTRYPOINT=mcp")
+	// Bound pipe cleanup if a descendant build process outlives the CLI.
+	cmd.WaitDelay = 2 * time.Second
+	tail := &runTail{limit: limit}
+	stdout := &runTail{limit: 65536}
+	var out io.Writer = tail
+	if progress := runProgressFrom(ctx); progress != nil {
+		out = io.MultiWriter(tail, progress)
+	}
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(out, stdout), out
+	if err = cmd.Start(); err != nil {
+		return "", false, err
+	}
+	unpin := pinRunProcess(cmd)
+	release := stopRunOnCancel(ctx, cmd)
+	err = cmd.Wait()
+	release()
+	unpin()
+	if ctx.Err() != nil {
+		// Reap build descendants (docker, buildx, swift) the CLI left behind.
+		reapRunGroup(cmd)
+	} else if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		// The CLI succeeded; a descendant merely kept the output pipe open.
+		err = nil
+	}
+	data := tail.data
+	for len(data) > 0 && !utf8.RuneStart(data[0]) {
+		data = data[1:]
+	}
+	output := strings.ToValidUTF8(string(data), "�")
+	return encodeRunReceipt(stdout.data, output), tail.truncated, err
+}
+
+func runEnvironment(env []string, target commandTarget) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(strings.ToUpper(entry), "WENDY_BROKER_URL=") {
+			out = append(out, entry)
+		}
+	}
+	return append(out, "WENDY_BROKER_URL="+target.BrokerURL)
+}

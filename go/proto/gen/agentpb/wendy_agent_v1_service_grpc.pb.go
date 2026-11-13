@@ -39,6 +39,8 @@ const (
 	WendyAgentService_DumpKernelLog_FullMethodName                 = "/wendy.agent.services.v1.WendyAgentService/DumpKernelLog"
 	WendyAgentService_GetOSUpdateStatus_FullMethodName             = "/wendy.agent.services.v1.WendyAgentService/GetOSUpdateStatus"
 	WendyAgentService_SetHostname_FullMethodName                   = "/wendy.agent.services.v1.WendyAgentService/SetHostname"
+	WendyAgentService_GetPowerMode_FullMethodName                  = "/wendy.agent.services.v1.WendyAgentService/GetPowerMode"
+	WendyAgentService_SetPowerMode_FullMethodName                  = "/wendy.agent.services.v1.WendyAgentService/SetPowerMode"
 )
 
 // WendyAgentServiceClient is the client API for WendyAgentService service.
@@ -90,6 +92,14 @@ type WendyAgentServiceClient interface {
 	// first-boot device-name flow, no "wendyos-" prefix is derived: the hostname
 	// is applied exactly as given. The value is persisted so it survives reboots.
 	SetHostname(ctx context.Context, in *SetHostnameRequest, opts ...grpc.CallOption) (*SetHostnameResponse, error)
+	// Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+	// modes it offers. Modes are the device's own names and IDs, untranslated.
+	// Fails with UNAVAILABLE on devices that are not a Jetson.
+	GetPowerMode(ctx context.Context, in *GetPowerModeRequest, opts ...grpc.CallOption) (*GetPowerModeResponse, error)
+	// Switch the Jetson power mode. Some modes only take effect after a reboot;
+	// the agent never reboots unless the request asks for it. Fails with
+	// UNAVAILABLE on devices that are not a Jetson.
+	SetPowerMode(ctx context.Context, in *SetPowerModeRequest, opts ...grpc.CallOption) (*SetPowerModeResponse, error)
 }
 
 type wendyAgentServiceClient struct {
@@ -327,6 +337,26 @@ func (c *wendyAgentServiceClient) SetHostname(ctx context.Context, in *SetHostna
 	return out, nil
 }
 
+func (c *wendyAgentServiceClient) GetPowerMode(ctx context.Context, in *GetPowerModeRequest, opts ...grpc.CallOption) (*GetPowerModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPowerModeResponse)
+	err := c.cc.Invoke(ctx, WendyAgentService_GetPowerMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyAgentServiceClient) SetPowerMode(ctx context.Context, in *SetPowerModeRequest, opts ...grpc.CallOption) (*SetPowerModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetPowerModeResponse)
+	err := c.cc.Invoke(ctx, WendyAgentService_SetPowerMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendyAgentServiceServer is the server API for WendyAgentService service.
 // All implementations must embed UnimplementedWendyAgentServiceServer
 // for forward compatibility.
@@ -376,6 +406,14 @@ type WendyAgentServiceServer interface {
 	// first-boot device-name flow, no "wendyos-" prefix is derived: the hostname
 	// is applied exactly as given. The value is persisted so it survives reboots.
 	SetHostname(context.Context, *SetHostnameRequest) (*SetHostnameResponse, error)
+	// Report the NVIDIA Jetson power mode (nvpmodel) the device is in and the
+	// modes it offers. Modes are the device's own names and IDs, untranslated.
+	// Fails with UNAVAILABLE on devices that are not a Jetson.
+	GetPowerMode(context.Context, *GetPowerModeRequest) (*GetPowerModeResponse, error)
+	// Switch the Jetson power mode. Some modes only take effect after a reboot;
+	// the agent never reboots unless the request asks for it. Fails with
+	// UNAVAILABLE on devices that are not a Jetson.
+	SetPowerMode(context.Context, *SetPowerModeRequest) (*SetPowerModeResponse, error)
 	mustEmbedUnimplementedWendyAgentServiceServer()
 }
 
@@ -445,6 +483,12 @@ func (UnimplementedWendyAgentServiceServer) GetOSUpdateStatus(context.Context, *
 }
 func (UnimplementedWendyAgentServiceServer) SetHostname(context.Context, *SetHostnameRequest) (*SetHostnameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetHostname not implemented")
+}
+func (UnimplementedWendyAgentServiceServer) GetPowerMode(context.Context, *GetPowerModeRequest) (*GetPowerModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPowerMode not implemented")
+}
+func (UnimplementedWendyAgentServiceServer) SetPowerMode(context.Context, *SetPowerModeRequest) (*SetPowerModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetPowerMode not implemented")
 }
 func (UnimplementedWendyAgentServiceServer) mustEmbedUnimplementedWendyAgentServiceServer() {}
 func (UnimplementedWendyAgentServiceServer) testEmbeddedByValue()                           {}
@@ -780,6 +824,42 @@ func _WendyAgentService_SetHostname_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyAgentService_GetPowerMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPowerModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyAgentServiceServer).GetPowerMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyAgentService_GetPowerMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyAgentServiceServer).GetPowerMode(ctx, req.(*GetPowerModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyAgentService_SetPowerMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPowerModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyAgentServiceServer).SetPowerMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyAgentService_SetPowerMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyAgentServiceServer).SetPowerMode(ctx, req.(*SetPowerModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendyAgentService_ServiceDesc is the grpc.ServiceDesc for WendyAgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -846,6 +926,14 @@ var WendyAgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetHostname",
 			Handler:    _WendyAgentService_SetHostname_Handler,
+		},
+		{
+			MethodName: "GetPowerMode",
+			Handler:    _WendyAgentService_GetPowerMode_Handler,
+		},
+		{
+			MethodName: "SetPowerMode",
+			Handler:    _WendyAgentService_SetPowerMode_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

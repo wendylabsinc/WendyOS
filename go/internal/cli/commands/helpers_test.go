@@ -146,6 +146,24 @@ func TestLANAgentAddressesPrefersIPAddress(t *testing.T) {
 	}
 }
 
+func TestLANAgentAddressesUsesAdvertisedPort(t *testing.T) {
+	dev := models.LANDevice{
+		IPAddress: "192.168.1.23",
+		Hostname:  "wendyos-otter.local",
+		Port:      54321,
+	}
+
+	got := lanAgentAddresses(dev)
+	want := []string{
+		"192.168.1.23:54321",
+		"wendyos-otter.local:54321",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("lanAgentAddresses() = %v, want %v", got, want)
+	}
+}
+
 func TestExternalProviderPickerHint(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -465,14 +483,14 @@ func TestLANAddressProbeBudgetScalesWithOrgCount(t *testing.T) {
 	}
 }
 
-// setTempConfig points HOME at a temp dir and writes cfg via config.Save so
-// the test uses the same serialisation path as production code. t.Setenv
-// automatically restores the original HOME when the test finishes.
+// setTempConfig isolates both home-derived paths and the explicit config
+// override, then writes cfg through the production serialisation path.
 func setTempConfig(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// config.Save calls ConfigDir() which creates ~/.wendy and writes config.json.
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("WENDY_CONFIG_DIR", filepath.Join(tmp, ".wendy"))
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -755,7 +773,7 @@ func TestConnectResolvedAgent_NoAuthProvisionedAgentRequiresLogin(t *testing.T) 
 	}
 }
 
-func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
+func TestConnectResolvedAgent_ExpectedDevicePreservesMTLSError(t *testing.T) {
 	origInteractive := isInteractiveTerminalFn
 	origJSON := jsonOutput
 	defer func() {
@@ -766,6 +784,7 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 	isInteractiveTerminalFn = func() bool { return false }
 	jsonOutput = false
 	setTempConfig(t, &config.Config{
+		DevicePins: map[string]config.DevicePin{"127.0.0.1": {OrgID: 7, AssetID: "42"}},
 		Auth: []config.AuthConfig{
 			{
 				Certificates: []config.CertificateInfo{
@@ -789,13 +808,10 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 		conn.Close()
 		t.Fatal("connectResolvedAgent() returned a connection for an auth-only agent")
 	}
-	if !errors.Is(err, errProvisionedAgentUnauthorized) {
-		t.Fatalf("connectResolvedAgent() error = %v, want %v", err, errProvisionedAgentUnauthorized)
+	if !errors.Is(err, errNoAuthenticatedEndpoint) {
+		t.Fatalf("connectResolvedAgent() error = %v, want authenticated endpoint failure", err)
 	}
-	if errors.Unwrap(err) == nil {
-		t.Fatalf("connectResolvedAgent() error = %v, want wrapped mTLS cause", err)
-	}
-	if !strings.Contains(err.Error(), "Last mTLS error:") || !strings.Contains(err.Error(), "loading TLS cert") {
+	if !strings.Contains(err.Error(), "loading TLS cert") {
 		t.Fatalf("connectResolvedAgent() message = %q, want mTLS diagnostic", err.Error())
 	}
 }
@@ -1549,6 +1565,12 @@ func TestDialAgentLKGSkipsOnTCPPrecheckFailure(t *testing.T) {
 }
 
 func TestDialAgentLKGRotatesCertsAndDialsMTLSPort(t *testing.T) {
+	// The cached route must pass expired credentials through to the ladder's
+	// diagnosis too; transport filtering happens inside the ladder.
+	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{
+		{Certificates: []config.CertificateInfo{selfSignedCLICert(t, 1)}},
+		{Certificates: []config.CertificateInfo{selfSignedCLICertUntil(t, 2, time.Now().Add(-time.Hour))}},
+	}})
 	origTCP := tcpDialTimeoutFn
 	tcpDialTimeoutFn = func(network, addr string, timeout time.Duration) (net.Conn, error) {
 		c1, c2 := net.Pipe()
@@ -1566,14 +1588,9 @@ func TestDialAgentLKGRotatesCertsAndDialsMTLSPort(t *testing.T) {
 		}
 		return &grpcclient.AgentConnection{IsMTLS: true}, nil, nil
 	}
-	origCerts := loadAllCLICertsFn
-	loadAllCLICertsFn = func() []config.CertificateInfo {
-		return []config.CertificateInfo{{OrganizationID: 1}, {OrganizationID: 2}}
-	}
 	t.Cleanup(func() {
 		tcpDialTimeoutFn = origTCP
 		dialAgentLadderWithCertsFn = origLadder
-		loadAllCLICertsFn = origCerts
 	})
 
 	conn, _, outcome := dialAgentLKG(context.Background(), discoverycache.Entry{IP: "10.0.0.9", Port: 50052, MTLS: true, OrgID: 2}, "orin.local")
@@ -1602,12 +1619,12 @@ func TestDialAgentLKGFallsThroughOnPlaintextDowngrade(t *testing.T) {
 	dialAgentLadderWithCertsFn = func(ctx context.Context, target dialTarget, certs []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
 		return grpcclient.NewFromConn(nil), nil, nil // IsMTLS=false: ladder fell to plaintext
 	}
-	origCerts := loadAllCLICertsFn
-	loadAllCLICertsFn = func() []config.CertificateInfo { return []config.CertificateInfo{{OrganizationID: 1}} }
+	origCerts := loadStoredCLICertsFn
+	loadStoredCLICertsFn = func() []config.CertificateInfo { return []config.CertificateInfo{{OrganizationID: 1}} }
 	t.Cleanup(func() {
 		tcpDialTimeoutFn = origTCP
 		dialAgentLadderWithCertsFn = origLadder
-		loadAllCLICertsFn = origCerts
+		loadStoredCLICertsFn = origCerts
 	})
 
 	_, _, outcome := dialAgentLKG(context.Background(), discoverycache.Entry{IP: "10.0.0.9", Port: 50052, MTLS: true}, "orin.local")
@@ -1790,13 +1807,15 @@ func TestCacheConnectSuccessStoresActualEndpoint(t *testing.T) {
 	}
 }
 
-func TestProvisionedAgentUnauthorizedMentionsCLIUpgrade(t *testing.T) {
-	// A reachability timeout against an mTLS-advertised device should hint at
-	// both stale certs and a too-old CLI.
+func TestProvisionedAgentTimeoutDoesNotBlameCredentials(t *testing.T) {
 	err := newProvisionedAgentUnauthorizedError(errors.New("dial tcp 192.168.1.50:50051: i/o timeout"))
-	msg := err.Error()
-	if !strings.Contains(strings.ToLower(msg), "upgrade") || !strings.Contains(msg, "wendy auth refresh-certs") {
-		t.Fatalf("message should mention upgrading the CLI and refresh-certs, got: %q", msg)
+	for _, advice := range []string{"upgrade", "refresh-certs", "auth login", "Unauthorized"} {
+		if strings.Contains(err.Error(), advice) {
+			t.Fatalf("timeout gives speculative advice: %s", err)
+		}
+	}
+	if !strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("timeout lost: %s", err)
 	}
 }
 
@@ -2196,8 +2215,8 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		item := externalProviderPickerItem(prov, &dev)
 
-		if item.Type != "LAN (Lite)" {
-			t.Errorf("Type = %q, want %q", item.Type, "LAN (Lite)")
+		if item.Type != "LAN" {
+			t.Errorf("Type = %q, want %q", item.Type, "LAN")
 		}
 		if item.Address != "10.0.0.9" {
 			t.Errorf("Address = %q, want %q", item.Address, "10.0.0.9")
@@ -2211,9 +2230,40 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		// A LAN row carries no serial port, so it must not take part in the
 		// unflashed-row supersede at all.
-		if item.DedupKey != dev.ConnectionInfo["deviceId"] || item.Supersedes != "" {
+		if item.DedupKey != dev.LiteDedupID() || item.Supersedes != "" {
 			t.Errorf("DedupKey = %q, Supersedes = %q, want the device id and no supersede",
 				item.DedupKey, item.Supersedes)
+		}
+	})
+
+	// USB keeps the hardware id as deviceId after enrollment, while LAN and BLE
+	// publish the enrolled UUID there. Keying on LiteDedupID is what puts the
+	// enrolled board's USB and LAN sightings on one row.
+	t.Run("enrolled board's USB and LAN rows share a dedup key", func(t *testing.T) {
+		prov := &fakeProvider{key: "wendy-lite"}
+		const enrolled = "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90"
+		usb := models.ExternalDevice{
+			ID:          "wendy-lite:/dev/cu.usbmodem2101",
+			DisplayName: "Lite Board",
+			ProviderKey: "wendy-lite",
+			ConnectionInfo: map[string]string{
+				"type": "USB", "serialPort": "/dev/cu.usbmodem2101",
+				"deviceId": "a1b2c3d4e5f6", "enrolledDeviceId": enrolled,
+			},
+		}
+		lan := models.ExternalDevice{
+			ID:          "wendy-lite:lite-board.local.",
+			DisplayName: "Lite Board",
+			ProviderKey: "wendy-lite",
+			ConnectionInfo: map[string]string{
+				"type": "LAN", "ip": "10.0.0.9", "deviceId": enrolled, "enrolledDeviceId": enrolled,
+			},
+		}
+
+		usbItem := externalProviderPickerItem(prov, &usb)
+		lanItem := externalProviderPickerItem(prov, &lan)
+		if usbItem.DedupKey != enrolled || lanItem.DedupKey != enrolled {
+			t.Errorf("DedupKey USB = %q, LAN = %q, want both %q", usbItem.DedupKey, lanItem.DedupKey, enrolled)
 		}
 	})
 
@@ -2255,7 +2305,7 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		item := externalProviderPickerItem(prov, &dev)
 
-		if item.DedupKey != dev.ConnectionInfo["deviceId"] {
+		if item.DedupKey != dev.LiteDedupID() {
 			t.Errorf("DedupKey = %q, want the device id so LAN/USB rows still merge", item.DedupKey)
 		}
 		if want := unflashedLiteDedupKey("/dev/cu.usbmodem2101"); item.Supersedes != want {

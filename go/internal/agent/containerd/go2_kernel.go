@@ -58,12 +58,14 @@ func prepareGo2KernelModules(ctx context.Context, labels map[string]string, spec
 	if deps.goos != "linux" || labels[labelKeyServiceName] != "" || spec == nil || spec.Process == nil {
 		return nil
 	}
-	var robot, prefix, otherPrefix string
+	var robot, prefix string
 	switch labels[labelKeyAppID] {
 	case go2RuntimeAppID:
-		robot, prefix, otherPrefix = "Go2", "GO2_", "G1_"
+		robot, prefix = "Go2", "GO2_"
 	case g1RuntimeAppID:
-		robot, prefix, otherPrefix = "G1", "G1_", "GO2_"
+		robot, prefix = "G1", "G1_"
+	case "sh.wendy.simulator.rosmaster-r2":
+		robot, prefix = "ROSMASTER R2", "R2_"
 	default:
 		return nil
 	}
@@ -73,8 +75,10 @@ func prepareGo2KernelModules(ctx context.Context, labels map[string]string, spec
 			env[key] = value // OCI environment uses the last occurrence.
 		}
 	}
-	if env[otherPrefix+"VM_NAME"] != "" || env[otherPrefix+"SOURCE_DIGEST"] != "" {
-		return fmt.Errorf("managed %s runtime has another robot's VM/source identity", robot)
+	for _, otherPrefix := range []string{"GO2_", "G1_", "R2_"} {
+		if otherPrefix != prefix && (env[otherPrefix+"VM_NAME"] != "" || env[otherPrefix+"SOURCE_DIGEST"] != "") {
+			return fmt.Errorf("managed %s runtime has another robot's VM/source identity", robot)
+		}
 	}
 	if env[prefix+"VM_NAME"] == "" && env[prefix+"SOURCE_DIGEST"] == "" {
 		return nil // An unmanaged development runtime has no host preparation.

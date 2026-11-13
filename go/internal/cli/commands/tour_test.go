@@ -111,10 +111,14 @@ func TestTourAIStepTransitions(t *testing.T) {
 	})
 }
 
-func TestTourDeployGoesToCloud(t *testing.T) {
+func TestTourDeployWaitsForReadiness(t *testing.T) {
 	m := newTourWizardModel()
 	m.phase = phaseRunProject
 	m, _ = stepTour(t, m, tourRunDoneMsg{})
+	if m.phase != phaseSampleReadiness {
+		t.Fatalf("phase = %v, want phaseSampleReadiness", m.phase)
+	}
+	m, _ = stepTour(t, m, tourSampleReadyMsg{})
 	if m.phase != phaseCloud {
 		t.Fatalf("phase = %v, want phaseCloud", m.phase)
 	}

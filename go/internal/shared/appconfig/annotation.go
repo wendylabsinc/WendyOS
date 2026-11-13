@@ -68,6 +68,9 @@ func EntitlementAnnotationValue(e Entitlement) string {
 		pmStrs := make([]string, len(e.Ports))
 		for i, pm := range e.Ports {
 			pmStrs[i] = strconv.Itoa(int(pm.Host)) + ":" + strconv.Itoa(int(pm.Container))
+			if pm.Protocol == "udp" {
+				pmStrs[i] = "udp/" + pmStrs[i]
+			}
 		}
 		parts = append(parts, "ports="+strings.Join(pmStrs, ","))
 	}
@@ -116,6 +119,10 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 			}
 		case "ports":
 			for _, pm := range strings.Split(val, ",") {
+				protocol := ""
+				if strings.HasPrefix(pm, "udp/") {
+					protocol, pm = "udp", strings.TrimPrefix(pm, "udp/")
+				}
 				halves := strings.SplitN(pm, ":", 2)
 				if len(halves) != 2 {
 					continue
@@ -125,7 +132,7 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 				if err1 != nil || err2 != nil {
 					continue
 				}
-				ent.Ports = append(ent.Ports, PortMapping{Host: uint16(h), Container: uint16(c)})
+				ent.Ports = append(ent.Ports, PortMapping{Host: uint16(h), Container: uint16(c), Protocol: protocol})
 			}
 		case "servicecidr":
 			ent.ServiceCIDR = val

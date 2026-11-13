@@ -1,0 +1,39 @@
+---
+title: Test imperfect sensor data
+description: Keep simulator truth out of policy inputs and test noise, bias, latency, and dropped observations before hardware transfer.
+---
+
+A simulator can report an exact distance at regular intervals. A real sensor can fluctuate, drift, miss samples, or arrive late. Cameras also encounter blur, exposure changes, occlusion, and calibration error. A policy that succeeds only on perfect observations may fail on the real robot.
+
+## Keep the app's view realistic
+
+The Go2/G1 workflow runs an app against documented sensor and command interfaces. Use those interfaces rather than reading the physics engine's full state or the observer scene. Current profiles also expose diagnostic ground-truth topics; reserve these for evaluation, not policy inputs. This is an application contract, not an absolute anti-cheating boundary.
+
+The [G1 profile](https://github.com/wendylabsinc/WendyOS/tree/main/go/simulator/g1) documents biased odometry separately from exact pose. That does not mean every simulated sensor reproduces its physical counterpart's errors.
+
+## Inject one fault at a time
+
+Save this as `sensor_faults.py` and run `python3 sensor_faults.py`. It needs no robot or extra packages:
+
+```python
+import random
+
+rng = random.Random(7)
+for step in range(8):
+    capture_s = step * 0.1
+    arrival_s = capture_s + (0.3 if step == 5 else 0.02)
+    value_m = None if step == 3 else 1.0 + 0.05 + rng.gauss(0, 0.01)
+    age_s = arrival_s - capture_s
+    usable = value_m is not None and age_s < 0.15
+    print(step, value_m, round(age_s, 2), usable)
+```
+
+Expect readings near 1.05 m for a true distance of 1 m. The 0.05 m bias survives averaging. Step 3 is missing; step 5 is delayed. Both should print `False`. These are illustrative faults, not measured sensor specifications.
+
+## Apply the check to your app
+
+In the [sensor dashboard walkthrough](/docs/integrations/sim-to-real), pause a sensor and verify that the app marks its observations stale. Missing data must not become zero, and processing must not replace the original capture timestamp.
+
+Then collect physical readings with motion disabled. Compare raw values, capture times, observed arrival times, and a known reference. Record bias, variation, dropouts, and latency before choosing randomization ranges. Use [recordings](/docs/data) to preserve raw inputs alongside the app's decisions.
+
+A filter can reduce noise while adding delay. It cannot repair a reversed axis or wrong calibration. Randomized simulation helps expose weaknesses; it does not replace hardware validation. Compare task success and stopping behavior under faults before progressing through the [sim-to-real checks](/docs/integrations/sim-to-real).

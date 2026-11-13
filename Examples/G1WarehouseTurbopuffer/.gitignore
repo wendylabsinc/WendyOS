@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+# Fetched by `python -m warehouse.assets` (see assets.lock.json).
+warehouse/static/three/
+models/g1/*
+!models/g1/UPSTREAM.md
+!models/g1/NOTICE

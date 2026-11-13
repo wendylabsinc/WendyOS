@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G1 warehouse · turbopuffer</title>
+<style>
+  :root {
+    --slate: #171c23;
+    --cream: #f1eee7;
+    --muted: #a9b0ba;
+    --faint: rgba(241, 238, 231, 0.12);
+    --font: Geist, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--slate); color: var(--cream); font-family: var(--font); overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  .hud { position: fixed; pointer-events: none; font-weight: 500; letter-spacing: -0.01em; }
+  [hidden] { display: none !important; }
+  .panel { background: rgba(23, 28, 35, 0.8); border: 1px solid var(--faint); padding: 16px 20px; backdrop-filter: blur(6px); }
+  .muted { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
+  #title { top: 24px; left: 24px; }
+  #title h1 { margin: 0; font-size: 26px; font-weight: 500; }
+  #title p { margin: 4px 0 0; font-size: 17px; color: var(--muted); }
+  #link { top: 24px; right: 24px; text-align: right; font-size: 16px; color: var(--muted); }
+  #task { bottom: 24px; left: 24px; max-width: min(560px, calc(100vw - 48px)); }
+  #task .label { font-size: 16px; color: var(--muted); }
+  #task-title { font-size: 34px; line-height: 1.1; margin-top: 2px; }
+  #task-detail { font-size: 19px; color: var(--muted); margin-top: 6px; }
+  #memory { top: 96px; right: 24px; width: 470px; }
+  #memory header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  #memory-backend { font-size: 22px; }
+  #memory-latency { font-size: 22px; }
+  #memory-detail { font-size: 14px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #memory-query { font-size: 19px; line-height: 1.3; margin: 14px 0 10px; min-height: 25px; }
+  #memory-matches { list-style: none; margin: 0; padding: 0; }
+  #memory-matches li { display: grid; grid-template-columns: 22px 1fr auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--faint); }
+  #memory-matches .rank { color: var(--muted); font-size: 16px; }
+  #memory-matches .what { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #memory-matches .where { grid-column: 2; font-size: 14px; color: var(--muted); }
+  #memory-matches .dist { grid-row: 1 / span 2; grid-column: 3; align-self: center; text-align: right; font-size: 16px; }
+  #memory-matches .bar { display: block; height: 3px; margin-top: 5px; background: var(--cream); opacity: 0.7; }
+  #memory-matches li.best .what { color: var(--cream); }
+  #memory-matches li:not(.best) { opacity: 0.72; }
+  #memory-foot { font-size: 14px; color: var(--muted); margin-top: 10px; border-top: 1px solid var(--faint); padding-top: 10px; }
+  #memory-log { list-style: none; margin: 8px 0 0; padding: 0; font-size: 14px; color: var(--muted); }
+  #memory-log li { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  #memory-log li span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #memory-error { font-size: 14px; color: #e8a38a; margin-top: 8px; }
+  #status { position: fixed; inset: 0; display: grid; place-items: center; font-size: 20px; color: var(--muted); pointer-events: none; }
+  @media (max-width: 900px) {
+    #title { top: 14px; left: 14px; } #title h1 { font-size: 20px; } #title p { font-size: 14px; }
+    #link { display: none; }
+    #memory { top: auto; bottom: 14px; right: 14px; left: 14px; width: auto; padding: 10px 12px; }
+    #memory-log, #memory-foot, #memory-detail { display: none; }
+    #memory-query { font-size: 15px; margin: 6px 0; } #memory-matches li { padding: 4px 0; }
+    #memory-matches .where { display: none; } #memory-backend, #memory-latency { font-size: 17px; }
+    #task { top: 70px; bottom: auto; left: 14px; padding: 10px 12px; } #task-title { font-size: 20px; } #task-detail { font-size: 14px; }
+    .panel { padding: 10px 12px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Live 3D view of the warehouse. Drag to orbit, right-drag to pan, scroll to zoom."></canvas>
+<div id="status" role="status">Connecting to the simulator…</div>
+<div class="hud panel" id="title"><h1>Warehouse memory</h1><p>Unitree G1 · GR00T WBC · turbopuffer</p></div>
+<div class="hud num" id="link"><div id="link-mujoco">MuJoCo</div><div id="link-rtf">Real time</div></div>
+<div class="hud panel" id="memory" aria-live="polite">
+  <header><div id="memory-backend">turbopuffer</div><div class="num" id="memory-latency"></div></header>
+  <div id="memory-detail"></div>
+  <div id="memory-query" class="muted">Waiting for the first box</div>
+  <ol id="memory-matches"></ol>
+  <div id="memory-foot" class="num"></div>
+  <ul id="memory-log" class="num"></ul>
+  <div id="memory-error" hidden></div>
+</div>
+<div class="hud panel" id="task"><div class="label">Now</div><div id="task-title">Starting</div><div id="task-detail"></div></div>
+<script type="importmap">
+  { "imports": { "three": "./three/three.module.js", "three/addons/": "./three/addons/" } }
+</script>
+<script type="module">
+  import { WarehouseViewer } from './viewer.js';
+  const viewer = new WarehouseViewer(document.querySelector('#view'), document.querySelector('#status'));
+  window.viewer = viewer;
+  viewer.start();
+</script>
+</body>
+</html>

@@ -1,11 +1,19 @@
 ---
-title: Sim to real with Unitree
-description: Run a ROS 2 app on a Unitree VM, verify it in simulation, and deploy the same project to a physical robot.
+title: Sim to real with robot simulators
+description: Test apps on Unitree and ROSMASTER R2 VMs, then check their supported interfaces before deploying to physical robots.
 ---
 
 Start with a [Unitree Go2 or G1 simulator template](/docs/installation/unitree-simulators). ROS 2 and the simulated robot run inside the WendyOS VM. You deploy your app with `wendy run`, then select a physical target when you are ready to test on hardware.
 
+The [SO-101 follower simulator](/docs/installation/so101-simulator) has no ROS 2 interface, so this workflow does not apply to it.
+
 This walkthrough uses the Go2 sensor dashboard and browser teleoperation examples. They use the native interfaces shared by the simulated and physical Go2. The [G1 path](#using-the-g1-template) uses the same deployment workflow with G1-specific messages and control behavior.
+
+Your existing ROS nodes, message types, launch files, and Dockerfiles remain usable. Configure the supported interfaces and DDS settings for each target; do not replace ROS APIs with simulator-only shortcuts.
+
+The app should consume robot observations, not the browser's full scene or physics-engine state. Diagnostic ground-truth topics exist in the current profiles; keep them out of policy inputs. Sensor-shaped data can still be unrealistically clean. Test [noise, bias, delay, and missing samples](/docs/integrations/sensor-fidelity) before claiming transfer to hardware.
+
+Select the named simulator for simulator commands and the physical robot for hardware checks. Explicit selectors below distinguish those targets during transfer; ordinary single-device tutorials can use the interactive picker.
 
 ## 1. Read the simulated robot's sensors
 
@@ -108,6 +116,33 @@ G1 native motor messages use `unitree_hg`, not Go2's `unitree_go`. The simulator
 
 The separate [G1 Fruit Ninja example](/docs/guides/tutorials/python/g1-mujoco-simulation) is a simulation-only demo with a supported base. It is not the free-floating G1 VM profile or a deployable physical controller.
 
+## Using the ROSMASTER R2 template
+
+The `rosmaster-r2` VM profile provides an Ackermann car with lidar, odometry, IMU
+and RGB/depth cameras. Try the [R2 Explorer tutorial](/docs/guides/tutorials/python/r2-explorer)
+for an autonomous app with an observed map and timed runs.
+
+R2 ROS apps use ROS 2 Humble, CycloneDDS, domain 0 and `use_sim_time=false`. Publish
+`/cmd_vel` at 10 Hz or faster. `linear.x` is forward velocity and `angular.z` is
+yaw rate; the R2 must move to turn. Commands expire after 300 ms. Browser, app and
+ROS publishers have exclusive ownership. After a stop, pause or reset, explicitly
+select **Use ROS 2** or **Use app** in the viewer before continuing. The exploration
+sample's Start action explicitly selects and claims app control for a new run.
+
+The simulator does not emulate a USB depth camera's firmware or the STM32 serial
+protocol used by `Rosmaster_Lib`. A service that uses those hardware drivers must
+implement a simulator backend and declare a matching
+[`simulation` override](/docs/advanced/apps/wendy-services#simulation-backends). Wendy
+selects that override only for the managed VM and keeps the hardware configuration
+for physical targets. Removing a missing USB mount lets a container start; it
+does not create a camera or translate its SDK calls.
+
+The [R2 compatibility manifest](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/rosmaster_r2/compatibility.json)
+and [runtime reference](https://github.com/wendylabsinc/WendyOS/tree/main/go/simulator/rosmaster_r2)
+describe topics, HTTP app control, camera calibration and raw depth. Dimensions,
+camera optics and odometry are simulator approximations. R2 Explorer has no
+hardware fallback and must be adapted before it can control a physical robot.
+
 ## Unitree application templates
 
 The [`go2-rc`](https://github.com/wendylabsinc/templates/tree/main/python/go2-rc) and [`g1-rc`](https://github.com/wendylabsinc/templates/tree/main/python/g1-rc) catalog templates provide browser control, a motion service, and a camera service for physical robots:
@@ -128,3 +163,81 @@ These are hardware application templates, distinct from the `go2` and `g1` VM pr
 - **The browser does not connect:** use the URL printed by Wendy. Default user-mode VMs forward declared HTTP/readiness ports to loopback; physical targets use their reachable address.
 
 See [Unitree simulator setup](/docs/installation/unitree-simulators) for agent upgrades, runtime source-pin updates, and lifecycle commands, or [Wendy for ROS 2](/docs/integrations/ros2) for graph inspection and recording.
+
+
+## Wendy Lite on ESP32-C6
+
+The `wendy-lite` simulator profile runs real ESP32-C6 firmware with
+[Espressif's esp-emu](https://github.com/espressif/esp-emulator). On first start,
+Wendy offers `Do you want to install the ESP32 Emulator? [Y/n]`. Accept to
+install it for your user and continue immediately, without changing PATH.
+Automatic installation supports Apple Silicon macOS and x86_64/ARM64 Linux.
+Windows users must run Wendy inside WSL2; Intel macOS has no prebuilt emulator.
+An existing `esp-emu` on PATH takes precedence. Noninteractive sessions print
+manual installation instructions; `wendy vm --yes` accepts installation.
+This profile uses the firmware's WendyCom protocol
+and WAMR runtime to deploy and run Wendy Lite WASM apps.
+
+```sh
+wendy vm create esp32 --profile wendy-lite
+wendy --device vm:esp32 device info
+wendy run --device vm:esp32
+wendy vm stop esp32
+```
+
+Run `wendy run` from a Wendy Lite project. The device selector boots the
+simulator automatically. Creation downloads the stable `esp32c6` firmware;
+`--version` selects a published version. For a local build, provide the merged
+flash binary, including the bootloader and partition table:
+
+```sh
+wendy vm create esp32-dev --profile wendy-lite --image build/merged-binary.bin
+```
+
+Each simulator gets its own flash copy. Creation replaces the copy's
+`wendy_conf` partition with its simulator name and virtual Wi-Fi credentials,
+without cloud enrollment. The source image stays unchanged. A normal stop saves
+flash and NVS, including deployed apps; `--force` can lose those changes.
+Use `wendy vm logs esp32` to inspect firmware boot output and `wendy vm rm esp32`
+to delete a stopped simulator.
+
+The emulator normally forwards DNS to the host's configured resolver. If its
+user-network backend cannot reach that resolver, set `WENDY_LITE_DNS` to a
+reachable DNS server IP when starting the simulator. For example, if logs report
+IPv6 DNS connection failures:
+
+```sh
+WENDY_LITE_DNS=1.1.1.1 wendy vm start esp32 --detach
+```
+
+The Simulator picker and desktop simulator panel include this profile. MCP
+clients can use `simulator_create` with `profile: "wendy-lite"`, followed by
+`simulator_start`, `simulator_list`, `simulator_stop`, and `simulator_delete`.
+Start verifies a WendyCom handshake and ping. Deploy apps through the local CLI;
+WendyOS gRPC tools and robot scene viewers do not apply to this profile.
+
+This profile emulates an ESP32-C6 for application development. It does not
+simulate physical radio behavior or hardware timing. It runs an unenrolled
+firmware connection available only through your computer's local forwarding.
+
+### Native ESP-IDF apps
+
+Native apps need the `wendy-lite-native` profile. It uses published
+`esp32c6_native` firmware with two OTA app slots. Select **Wendy Lite native
+ESP-IDF (ESP32-C6)** in the simulator picker, or create one explicitly:
+
+```sh
+wendy vm create esp32-native --profile wendy-lite-native
+wendy run --device vm:esp32-native
+```
+
+Run the second command from your native ESP-IDF project. The existing Wendy
+Lite provider builds the app, uploads it to the inactive OTA slot, and reboots
+the emulated ESP32. Native projects must include `wendy_core` so the CLI can
+reconnect after deployment. A local `--image` for this profile must be merged
+native firmware with `ota_0`, `ota_1`, and `otadata` partitions.
+
+An existing `wendy-lite` simulator has the WASM partition layout and cannot
+accept native apps. Create a native simulator under a new name to preserve its
+flash and deployed WASM app. The two profiles share emulator installation and
+start/stop controls.

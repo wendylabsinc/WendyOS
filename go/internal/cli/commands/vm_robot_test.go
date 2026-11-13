@@ -63,7 +63,7 @@ func robotTestStatus(name string, p vm.RobotProfile) robotRuntimeStatus {
 	return robotRuntimeStatus{VMName: name, Simulation: true, ProfileVersion: p.Version,
 		RobotKind: p.Kind, SourceDigest: p.SourceDigest, PolicyBundle: p.PolicyBundle,
 		World: p.World, ClockMode: p.ClockMode, Seed: p.Seed, VisualDetail: p.VisualDetail,
-		DDSIsolation: "udp-rtps-loopback", Healthy: true, Ready: true, Mode: "standing"}
+		DDSIsolation: robotDDSIsolation(p.Kind), Healthy: true, Ready: true, Mode: "standing"}
 }
 
 func TestRobotStatusRejectsForeignRuntimeAndUnconfinedDDS(t *testing.T) {
@@ -190,7 +190,7 @@ func TestRobotROSAutoConfigurationPreservesManifestAndServices(t *testing.T) {
 		t.Fatal("normalization changed the source manifest")
 	}
 	for name, ros := range map[string]*appconfig.ROS2Config{"app": got.GetROS2Config(), "navigator": got.ResolveROS2ConfigForService("navigator"), "perception": got.ResolveROS2ConfigForService("perception")} {
-		if ros.DomainID == nil || *ros.DomainID != 0 || ros.ResolvedRMW() != "rmw_cyclonedds_cpp" || ros.ResolvedDistro() != "humble" || ros.ResolvedDiscoveryScope() != "app" {
+		if ros.DomainID == nil || *ros.DomainID != 0 || ros.ResolvedRMW() != "rmw_cyclonedds_cpp" || ros.ResolvedDistro() != "humble" || ros.Scope != "device" || ros.DiscoveryScope != "" {
 			t.Fatalf("%s resolved off the robot bus: %+v", name, ros)
 		}
 	}
@@ -210,6 +210,8 @@ func TestRobotROSRejectsExplicitConflictsBeforeBuild(t *testing.T) {
 		"distro":     func(c *appconfig.AppConfig) { c.Frameworks.ROS2.Distro = "jazzy" },
 		"middleware": func(c *appconfig.AppConfig) { c.Frameworks.ROS2.RMW = "fastdds" },
 		"discovery":  func(c *appconfig.AppConfig) { c.Frameworks.ROS2.DiscoveryScope = "invalid" },
+		"scope":      func(c *appconfig.AppConfig) { c.Frameworks.ROS2.Scope = "invalid" },
+		"scope app":  func(c *appconfig.AppConfig) { c.Frameworks.ROS2.Scope = "app" },
 		"network": func(c *appconfig.AppConfig) {
 			c.Entitlements = []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork, Mode: "bridge"}}
 		},
@@ -287,6 +289,23 @@ func TestRobotProvisionLockSerializesSameVMAndAllowsDifferentVMs(t *testing.T) {
 		t.Fatal(err)
 	}
 	last()
+}
+
+func TestRobotOpenNamesAMissingVMAsMissing(t *testing.T) {
+	// The profile is read before the port forward, so a mistyped name was
+	// reported as a VM without a robot profile rather than as no VM at all.
+	store := robotTestStore(t)
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	if err := runVMRobot(cmd, "open", "ghost"); err == nil || err.Error() != `no VM named "ghost"` {
+		t.Errorf("missing VM: %v", err)
+	}
+	if err := store.CreateFrom("generic", strings.NewReader("disk"), 4, 1024, vm.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runVMRobot(cmd, "open", "generic"); !errors.Is(err, vm.ErrRobotProfileMissing) {
+		t.Errorf("VM without a profile: %v", err)
+	}
 }
 
 func TestRobotStartAndUpdateRejectGenericVMWithoutBooting(t *testing.T) {
@@ -452,7 +471,7 @@ func TestRobotConfigureG1SelectsItsOwnBundleAndPreservesOtherVMs(t *testing.T) {
 }
 
 func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			runtime, err := robotRuntimeForKind(kind)
 			if err != nil {
@@ -463,7 +482,7 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 				t.Fatal(err)
 			}
 			profile.Seed, profile.VisualDetail = 42, "full"
-			prefix := map[string]string{"go2": "GO2_", "g1": "G1_"}[kind]
+			prefix := map[string]string{"go2": "GO2_", "g1": "G1_", "rosmaster-r2": "R2_", "so101": "SO101_"}[kind]
 			want := []string{prefix + "VM_NAME=robot", prefix + "SOURCE_DIGEST=" + profile.SourceDigest,
 				prefix + "WORLD=indoor", prefix + "SEED=42", prefix + "VISUAL_DETAIL=full"}
 			if got := runtime.environment("robot", profile); !reflect.DeepEqual(got, want) {
@@ -473,7 +492,7 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 			if err := state.matches("robot", profile); err != nil {
 				t.Fatal(err)
 			}
-			state.RobotKind = map[string]string{"go2": "g1", "g1": "go2"}[kind]
+			state.RobotKind = map[string]string{"go2": "g1", "g1": "go2", "rosmaster-r2": "go2", "so101": "go2"}[kind]
 			if err := state.matches("robot", profile); err == nil {
 				t.Fatal("accepted another robot kind with copied profile identity")
 			}
@@ -482,7 +501,7 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 }
 
 func TestRobotUpdateSelectsOnlyThePersistedKindsSource(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store := robotTestStore(t)
 			profile := robotTestProfileForKind(t, store, "robot", kind)
@@ -508,7 +527,7 @@ func TestRobotUpdateSelectsOnlyThePersistedKindsSource(t *testing.T) {
 }
 
 func TestRobotKindsReserveBothRuntimeIDsAndSelectOnlyTheirOwnContainer(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store := robotTestStore(t)
 			robotTestProfileForKind(t, store, "robot", kind)
@@ -516,7 +535,7 @@ func TestRobotKindsReserveBothRuntimeIDsAndSelectOnlyTheirOwnContainer(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, appID := range []string{go2RuntimeAppID, g1RuntimeAppID} {
+			for _, appID := range []string{go2RuntimeAppID, g1RuntimeAppID, r2RuntimeAppID, so101RuntimeAppID} {
 				conn := &grpcclient.AgentConnection{SimulatorName: "robot"}
 				cfg := &appconfig.AppConfig{AppID: appID}
 				if _, err := prepareRobotAppConfig(conn, cfg, nil); err == nil || !strings.Contains(err.Error(), "reserved") {
@@ -686,7 +705,7 @@ func (*robotStartedStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
 }
 
 func TestRobotRestartRecoversUnhealthyRuntimeAndSerializesProvisioning(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store := robotTestStore(t)
 			profile := robotTestProfileForKind(t, store, "robot", kind)
@@ -958,6 +977,17 @@ func TestRobotAgentMaintenanceBypassIsLimitedToExplicitAgentUpdateCommands(t *te
 	}
 }
 
+func TestRobotROSMapsPeripheralsToTheGuestBus(t *testing.T) {
+	cfg := &appconfig.AppConfig{AppID: "example.go2", Frameworks: &appconfig.FrameworksConfig{ROS2: &appconfig.ROS2Config{Scope: "peripherals"}}}
+	got, err := normalizeRobotROSConfig(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetROS2Config().Scope != "device" || cfg.GetROS2Config().Scope != "peripherals" {
+		t.Fatalf("scope = %q (source %q), want device on the guest bus and the source unchanged", got.GetROS2Config().Scope, cfg.GetROS2Config().Scope)
+	}
+}
+
 func TestRobotROSNormalizesHardwareDiscoveryWithoutChangingSource(t *testing.T) {
 	cfg := &appconfig.AppConfig{AppID: "example.go2", Frameworks: &appconfig.FrameworksConfig{ROS2: &appconfig.ROS2Config{DiscoveryScope: "host"}},
 		Services: map[string]*appconfig.ServiceConfig{"driver": {Context: "driver", Frameworks: &appconfig.FrameworksConfig{ROS2: &appconfig.ROS2Config{DiscoveryScope: "host"}}}}}
@@ -965,10 +995,10 @@ func TestRobotROSNormalizesHardwareDiscoveryWithoutChangingSource(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetROS2Config().ResolvedDiscoveryScope() != "app" || got.ResolveROS2ConfigForService("driver").ResolvedDiscoveryScope() != "app" {
+	if got.GetROS2Config().Scope != "device" || got.ResolveROS2ConfigForService("driver").Scope != "device" {
 		t.Fatal("hardware manifest escaped the guest loopback bus")
 	}
-	if cfg.GetROS2Config().ResolvedDiscoveryScope() != "host" || cfg.ResolveROS2ConfigForService("driver").ResolvedDiscoveryScope() != "host" {
+	if cfg.GetROS2Config().DiscoveryScope != "host" || cfg.ResolveROS2ConfigForService("driver").DiscoveryScope != "host" {
 		t.Fatal("source manifest was changed")
 	}
 }

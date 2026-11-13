@@ -3,13 +3,16 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -224,13 +227,120 @@ func registerTestCamera(t *testing.T, s *VideoService) ipcam.Camera {
 	return cam
 }
 
-// A registered camera appears in the listing with the IP transport and its
-// address, and reports that it has no credentials yet.
+// pairTestCamera stores a login for cam, which is what pairs a network camera.
+func pairTestCamera(t *testing.T, s *VideoService, cam ipcam.Camera) {
+	t.Helper()
+	if err := s.credentials.Set(cam.MAC, ipcam.Credential{Username: "admin", Password: "p"}); err != nil {
+		t.Fatalf("store login: %v", err)
+	}
+}
+
+// A network camera nobody has stored a login for may be a neighbour's camera on
+// a shared network (a Tapo C200 on a home LAN was the report). It is left out of
+// every listing an app, the Companion app, MCP or the data and two-plane camera
+// paths see. Only a pairing flow sees it: ListVideoDevices with include_unpaired,
+// or RefreshCameras (TestRefreshCamerasListsUnpairedCamerasForPairing).
+func TestListHidesUnpairedIPCameras(t *testing.T) {
+	s := newIPTestService(t)
+	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	paired := registerTestCamera(t, s)
+	pairTestCamera(t, s, paired)
+
+	ids := func(devices []*agentpb.VideoDevice) []uint32 {
+		var out []uint32
+		for _, d := range devices {
+			out = append(out, d.GetId())
+		}
+		return out
+	}
+	list, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	if err != nil {
+		t.Fatalf("ListVideoDevices: %v", err)
+	}
+	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("default listing = %v, want only the paired camera %d", got, paired.ID)
+	}
+	internal, err := s.listCameras(context.Background())
+	if err != nil {
+		t.Fatalf("listCameras: %v", err)
+	}
+	if got := ids(internal); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("listCameras = %v, want only the paired camera %d", got, paired.ID)
+	}
+
+	want := []uint32{stranger.ID, paired.ID}
+	list, err = s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
+	if err != nil {
+		t.Fatalf("ListVideoDevices: %v", err)
+	}
+	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing with unpaired = %v, want %v", got, want)
+	}
+}
+
+// RefreshCameras is the pairing scan: `wendy device pair` calls it to find
+// cameras to store a login for. A CLI from before include_unpaired existed sends
+// an empty request, and falls back to ListVideoDevices only when RefreshCameras
+// is unimplemented. So an empty request must still return unpaired cameras, or
+// an older CLI pairing against this agent finds nothing to pair.
+func TestRefreshCamerasListsUnpairedCamerasForPairing(t *testing.T) {
+	s := newIPTestService(t)
+	s.discoverer = nil // RefreshCameras would otherwise probe the real network.
+	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	paired := registerTestCamera(t, s)
+	pairTestCamera(t, s, paired)
+
+	refreshed, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
+	if err != nil {
+		t.Fatalf("RefreshCameras: %v", err)
+	}
+	var got []uint32
+	for _, d := range refreshed.GetDevices() {
+		got = append(got, d.GetId())
+	}
+	if want := []uint32{stranger.ID, paired.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("refresh from an older CLI = %v, want unpaired and paired cameras %v", got, want)
+	}
+}
+
+// Storing a login asks the camera for its stream paths straight away, with the
+// login already stored, so a stream started right after `camera login` (or the
+// login prompt in `camera view`) does not fall back to guessing paths until the
+// next discovery round.
+func TestSetCameraCredentialsLearnsStreamPaths(t *testing.T) {
+	s := newIPTestService(t)
+	cam := registerTestCamera(t, s)
+	var learned []ipcam.Camera
+	s.learnStreamPaths = func(_ context.Context, c ipcam.Camera) ipcam.Camera {
+		if !s.credentials.Has(c.MAC) {
+			t.Fatal("stream paths requested before the login was stored")
+		}
+		learned = append(learned, c)
+		return c
+	}
+	if _, err := s.SetCameraCredentials(context.Background(), &agentpb.SetCameraCredentialsRequest{
+		DeviceId: cam.ID, Username: "admin", Password: "hunter2",
+	}); err != nil {
+		t.Fatalf("SetCameraCredentials: %v", err)
+	}
+	if len(learned) != 1 || learned[0].MAC != cam.MAC {
+		t.Fatalf("learned stream paths for %+v, want camera %d once", learned, cam.ID)
+	}
+}
+
+// A registered camera appears in a listing that asks for unpaired cameras, with
+// the IP transport and its address, and reports that it has no credentials yet.
 func TestListIncludesIPCameras(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
 
-	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("ListVideoDevices: %v", err)
 	}
@@ -266,7 +376,7 @@ func TestListIPCameraWithoutModel(t *testing.T) {
 	if _, err := s.registry.Upsert(ipcam.Camera{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.98.0.7"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -652,6 +762,7 @@ func TestStreamVideoStreamsOfflineButReachableCamera(t *testing.T) {
 func TestListCameras_SkipsGlobNodesInIPCameraBand(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
+	pairTestCamera(t, s, cam)
 	nodePath := fmt.Sprintf("/dev/video%d", cam.ID)
 	s.globDevices = func() ([]string, error) { return []string{nodePath}, nil }
 	// The loopback node itself opens and reports VIDEO_CAPTURE like any other
@@ -699,6 +810,7 @@ func TestListCameras_ListsGlobNodesInMCUBand(t *testing.T) {
 func TestListIPCameras_PathFilledWhenLoopbackNodeExists(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
+	pairTestCamera(t, s, cam)
 	fake := s.loopback.(*fakeLoopback)
 	wantPath := fmt.Sprintf("/dev/video%d", cam.ID)
 	fake.nodePaths[cam.ID] = wantPath
@@ -716,7 +828,7 @@ func TestListIPCameras_PathFilledWhenLoopbackNodeExists(t *testing.T) {
 // node that does not exist yet.
 func TestListIPCameras_PathEmptyWithoutNode(t *testing.T) {
 	s := newIPTestService(t)
-	registerTestCamera(t, s)
+	pairTestCamera(t, s, registerTestCamera(t, s))
 	// s.loopback is the harness's default fakeLoopback, with no node recorded.
 
 	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
@@ -951,5 +1063,59 @@ func TestTestCameraCredentials_UnknownCameraNotFound(t *testing.T) {
 		&agentpb.TestCameraCredentialsRequest{DeviceId: ipcam.IDBandStart + 5})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("code = %v, want NotFound", status.Code(err))
+	}
+}
+
+func TestLoadNetworkCamerasCleanup(t *testing.T) {
+	for _, credentialFile := range []string{"missing", "valid", "invalid", "unreadable"} {
+		t.Run(credentialFile, func(t *testing.T) {
+			dir := t.TempDir()
+			registryPath := filepath.Join(dir, "cameras.json")
+			credentialPath := filepath.Join(dir, "credentials.json")
+			reg := ipcam.NewRegistry(registryPath)
+			cam, err := reg.Upsert(ipcam.Camera{MAC: "aa:bb:cc:dd:ee:ff", Model: "iPhone", Link: "eth0"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch credentialFile {
+			case "valid":
+				creds := ipcam.NewCredentialStore(credentialPath)
+				if err := creds.Set(cam.MAC, ipcam.Credential{Username: "admin"}); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid":
+				if err := os.WriteFile(credentialPath, []byte("invalid JSON"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable":
+				if err := os.Mkdir(credentialPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			core, logs := observer.New(zap.InfoLevel)
+			s := &VideoService{logger: zap.New(core), registry: ipcam.NewRegistry(registryPath), credentials: ipcam.NewCredentialStore(credentialPath)}
+			pruned := s.loadNetworkCameras()
+			wantKept := credentialFile != "missing"
+			if wantPruned := !wantKept; wantPruned != reflect.DeepEqual(pruned, []uint32{cam.ID}) || (wantKept && len(pruned) != 0) {
+				t.Fatalf("pruned IDs = %v, want camera %d pruned: %v", pruned, cam.ID, !wantKept)
+			}
+			cleanupLogs := logs.FilterMessage("removed unconfirmed network camera records").All()
+			if wantKept && len(cleanupLogs) != 0 {
+				t.Fatalf("logged removals despite keeping the camera: %+v", cleanupLogs)
+			}
+			if !wantKept && (len(cleanupLogs) != 1 || cleanupLogs[0].ContextMap()["count"] != int64(1)) {
+				t.Fatalf("cleanup logs = %+v, want count 1", cleanupLogs)
+			}
+			if _, ok := s.registry.Get(cam.ID); ok != wantKept {
+				t.Fatalf("kept = %v, want %v", ok, wantKept)
+			}
+			reloaded := ipcam.NewRegistry(registryPath)
+			if err := reloaded.Load(); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := reloaded.Get(cam.ID); ok != wantKept {
+				t.Fatalf("persisted kept = %v, want %v", ok, wantKept)
+			}
+		})
 	}
 }

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -273,13 +274,141 @@ func TestRemoveRefusesARunningVMAndSaysWhichKeyFixesIt(t *testing.T) {
 	if replacement == nil {
 		t.Error("the row was dropped even though the VM survived")
 	}
-	if !strings.Contains(flash, "press s") {
+	if !strings.Contains(flash, "press x") {
 		t.Errorf("flash = %q, want it to name the key that fixes this", flash)
 	}
 }
 
+func TestRemoveAsksBeforeDeletingAStoppedVM(t *testing.T) {
+	// r deleted a VM and its disk instantly. It now asks, defaulting to no,
+	// except where there is nothing to ask about.
+	saved := vmStatusFn
+	running := false
+	vmStatusFn = func(name string) (vm.Status, error) {
+		if running {
+			return runningVM(name, vm.NetUser, 50053), nil
+		}
+		return stoppedVM(name, ""), nil
+	}
+	t.Cleanup(func() { vmStatusFn = saved })
+
+	item := tui.PickerItem{Name: "sim", Value: &simulatorChoice{Name: "sim"}}
+	if got := removeSimulatorQuestion(item); got != "Remove sim and its disk? [y/N]" {
+		t.Errorf("stopped VM question = %q", got)
+	}
+	running = true
+	if got := removeSimulatorQuestion(item); got != "" {
+		t.Errorf("running VM question = %q, want none: the removal is refused at once", got)
+	}
+	create := tui.PickerItem{Name: "Simulator", Value: &simulatorChoice{Name: "sim", Create: true}}
+	if got := removeSimulatorQuestion(create); got != "" {
+		t.Errorf("placeholder row question = %q, want none", got)
+	}
+
+	// Wired into the picker: r shows the question, and n keeps the VM.
+	running = false
+	m, _ := simulatorViewFor(t, stoppedVM("sim", ""))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if !strings.Contains(m.View(), "Remove sim and its disk? [y/N]") {
+		t.Fatalf("r did not ask first: %q", m.View())
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if view := m.View(); strings.Contains(view, "[y/N]") || !strings.Contains(view, "sim") {
+		t.Fatalf("n did not keep the VM: %q", view)
+	}
+}
+
+func TestStartNamesTheVMOnlyWhenThereIsSomethingToStart(t *testing.T) {
+	saved := vmStatusFn
+	running := false
+	vmStatusFn = func(name string) (vm.Status, error) {
+		if running {
+			return runningVM(name, vm.NetUser, 50053), nil
+		}
+		return stoppedVM(name, ""), nil
+	}
+	t.Cleanup(func() { vmStatusFn = saved })
+
+	item := tui.PickerItem{Name: "sim", Value: &simulatorChoice{Name: "sim"}}
+	if flash, isErr, name := startSimulatorRow(item); name != "sim" || isErr || !strings.Contains(flash, "Starting sim") {
+		t.Errorf("stopped VM: flash=%q isErr=%t name=%q", flash, isErr, name)
+	}
+	running = true
+	if flash, isErr, name := startSimulatorRow(item); name != "" || isErr || !strings.Contains(flash, "already running") {
+		t.Errorf("running VM: flash=%q isErr=%t name=%q", flash, isErr, name)
+	}
+	create := tui.PickerItem{Name: "Simulator", Value: &simulatorChoice{Name: "sim", Create: true}}
+	if flash, isErr, name := startSimulatorRow(create); name != "" || isErr || !strings.Contains(flash, "press c") {
+		t.Errorf("placeholder row: flash=%q isErr=%t name=%q", flash, isErr, name)
+	}
+
+	// A status that cannot be read is an error, not a status line.
+	vmStatusFn = func(string) (vm.Status, error) { return vm.Status{}, errors.New("store unreadable") }
+	if flash, isErr, name := startSimulatorRow(item); name != "" || !isErr || flash != "store unreadable" {
+		t.Errorf("unreadable status: flash=%q isErr=%t name=%q", flash, isErr, name)
+	}
+}
+
+func TestStartWithoutDetachSupportSaysHowInsteadOfLeaving(t *testing.T) {
+	// On Windows only a foreground start works. Leaving the view to attempt a
+	// detached one tore discover down for an error; 'c' shows the commands.
+	savedStatus, savedDetach := vmStatusFn, vmDetachSupportedFn
+	vmStatusFn = func(name string) (vm.Status, error) { return stoppedVM(name, ""), nil }
+	vmDetachSupportedFn = func() bool { return false }
+	t.Cleanup(func() { vmStatusFn, vmDetachSupportedFn = savedStatus, savedDetach })
+
+	item := tui.PickerItem{Name: "sim", Value: &simulatorChoice{Name: "sim"}}
+	if flash, isErr, name := startSimulatorRow(item); name != "" || isErr || !strings.Contains(flash, "'wendy vm start sim'") {
+		t.Errorf("flash=%q isErr=%t name=%q, want the foreground commands and no start", flash, isErr, name)
+	}
+
+	m := newTestDiscoverTabsModel(0, 0)
+	m, _ = discoverTabTo(t, m, devicePickerSimulatorTab)
+	updated, _ := m.Update(discoverTabsSimulatorMsg{msg: simulatorVMsMsg{vms: []vm.Status{stoppedVM("sim", "")}}})
+	m = updated.(discoverTabsModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(discoverTabsModel)
+	if m.action != devicePickerNoAction || m.startVMName != "" {
+		t.Fatalf("s without detach support left discover: action=%v name=%q", m.action, m.startVMName)
+	}
+}
+
+func TestRunPickerStartSelectsTheVM(t *testing.T) {
+	// In the run picker a selection already boots a stopped VM, so s is enter
+	// with a clearer name: start this one, then deploy to it.
+	saved := vmStatusFn
+	vmStatusFn = func(name string) (vm.Status, error) { return stoppedVM(name, ""), nil }
+	t.Cleanup(func() { vmStatusFn = saved })
+
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false, devicePickerLocalTab)
+	m, _ = m.updateSimulator(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.updateSimulator(simulatorVMsMsg{vms: []vm.Status{stoppedVM("dev", "")}})
+	m.active = devicePickerSimulatorTab
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(devicePickerModel)
+	choice, ok := m.choice()
+	if cmd == nil || !ok || choice.Tab != devicePickerSimulatorTab || choice.Simulator == nil ||
+		choice.Simulator.Name != "dev" || choice.Simulator.Create {
+		t.Fatalf("s in the run picker: cmd=%v ok=%t choice=%+v", cmd != nil, ok, choice.Simulator)
+	}
+}
+
+func TestSimulatorPickerHintNamesTheNewKeys(t *testing.T) {
+	_, view := simulatorViewFor(t, stoppedVM("sim", ""))
+	for _, want := range []string{"s start", "x stop", "r remove", "c create", "d toggle default"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("simulator hint = %q, want %q", view, want)
+		}
+	}
+	for _, gone := range []string{"x clear default", "s stop"} {
+		if strings.Contains(view, gone) {
+			t.Errorf("simulator hint = %q still has %q", view, gone)
+		}
+	}
+}
+
 func TestStopOnAStoppedVMIsANoOpNotAnError(t *testing.T) {
-	// Stop-only: pressing s on the wrong row must never boot anything, and a
+	// Stop-only: pressing x on the wrong row must never boot anything, and a
 	// stopped VM is not an error worth colouring red.
 	saved := vmStatusFn
 	vmStatusFn = func(string) (vm.Status, error) { return vm.Status{Exists: true}, nil }

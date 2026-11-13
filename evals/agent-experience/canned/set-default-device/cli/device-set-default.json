@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "set-default"
+  ],
+  "stdout": "Default device set to: {{device}}\n",
+  "stderr": "Connecting to simulator {{vm_name}}...\nUsing default device {{device}}.\n",
+  "exit_code": 0
+}

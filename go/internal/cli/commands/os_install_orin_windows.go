@@ -67,6 +67,9 @@ func pickOrinRecoveryDevice(opts t234InstallOptions) (rcm.RecoveryDevice, error)
 			// best-effort (empty under USB redirection) and empty/duplicate keys
 			// would collapse picker rows, resolving a destructive selection to
 			// the wrong board.
+			if err := requireRecoveryChoice(len(recovery), opts.DeviceName); err != nil {
+				return rcm.RecoveryDevice{}, err
+			}
 			var items []tui.PickerItem
 			byKey := map[string]winusb.Device{}
 			for _, d := range recovery {
@@ -109,6 +112,10 @@ func ensureOrinDriver(d winusb.Device) error {
 // orinStageOne performs the stage-1 RCM boot over WinUSB with the file chain
 // declared by the flashpack manifest.
 func orinStageOne(fp *flashpack.Flashpack, dev rcm.RecoveryDevice, out io.Writer) error {
+	return orinStageOneVerified(fp, dev, out, "")
+}
+
+func orinStageOneVerified(fp *flashpack.Flashpack, dev rcm.RecoveryDevice, out io.Writer, expectedECID string) error {
 	order, memBCT, blob, err := t234RCMFiles(fp)
 	if err != nil {
 		return err
@@ -121,6 +128,7 @@ func orinStageOne(fp *flashpack.Flashpack, dev rcm.RecoveryDevice, out io.Writer
 		Location:        dev.PathKey,
 		Instance:        dev.Instance,
 		ExpectedProduct: dev.Product,
+		ExpectedECID:    expectedECID,
 		Out:             out,
 	})
 }

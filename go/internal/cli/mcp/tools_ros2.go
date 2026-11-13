@@ -41,19 +41,19 @@ func (s *mcpServer) registerROS2Tools(srv *server.MCPServer) {
 		}
 		opts := []mcpgo.ToolOption{
 			mcpgo.WithDescription(tool.description),
-			mcpgo.WithString("scope", mcpgo.Enum("app", "host"), mcpgo.Description("Inspection network: app (default) preserves app isolation; host explicitly observes the device/subnet DDS graph without a running ROS 2 app. Host requires domain_id and uses ROS Humble/FastRTPS with pinned unitree_go and unitree_api types; first use may download its inspector image.")),
-			mcpgo.WithNumber("domain_id", mcpgo.Description("Integer ROS_DOMAIN_ID (0..232), required for host scope; app scope otherwise uses the app configuration")),
-			mcpgo.WithNumber("duration_seconds", mcpgo.Description(fmt.Sprintf("Maximum total RPC duration including discovery, integer 1..60 (default %d)", defaultDuration))),
-			mcpgo.WithNumber("max_bytes", mcpgo.Description("Maximum serialized result bytes, integer 2048..100000 (default 32000); oversized samples are omitted whole")),
+			mcpgo.WithString("scope", mcpgo.Enum("app", "host"), mcpgo.DefaultString("app"), mcpgo.Description("app uses the running app DDS configuration; host inspects independently and requires domain_id. First host use may download an inspector image.")),
+			mcpgo.WithInteger("domain_id", mcpgo.Min(0), mcpgo.Max(232), mcpgo.Description("ROS_DOMAIN_ID; required for host scope")),
+			mcpgo.WithInteger("duration_seconds", mcpgo.Min(1), mcpgo.Max(60), mcpgo.DefaultNumber(defaultDuration), mcpgo.Description("Total time including discovery")),
+			mcpgo.WithInteger("max_bytes", mcpgo.Min(2048), mcpgo.Max(100000), mcpgo.DefaultNumber(32000), mcpgo.Description("Result byte limit; oversized samples omitted whole")),
 		}
 		if tool.topic {
 			opts = append(opts, mcpgo.WithString("topic", mcpgo.Required(), mcpgo.Description("Absolute ROS topic name from ros2_topics, at most 255 bytes")))
 		}
 		if tool.stream {
-			opts = append(opts, mcpgo.WithNumber("count", mcpgo.Description("Maximum samples/rate reports, integer 1..20 (default 3)")))
+			opts = append(opts, mcpgo.WithInteger("count", mcpgo.Min(1), mcpgo.Max(20), mcpgo.DefaultNumber(3), mcpgo.Description("Maximum samples or rate reports")))
 		}
 		opts = append(opts, readOnly()...)
-		opts = append(opts, localOnly()...)
+		opts = append(opts, openWorld()...)
 		srv.AddTool(mcpgo.NewTool(tool.name, opts...), tool.handler)
 	}
 }
@@ -182,6 +182,7 @@ func ros2Error(err error) *mcpgo.CallToolResult {
 	} else if status.Code(err) == codes.DeadlineExceeded || err == context.DeadlineExceeded {
 		code = errCodeTimeout
 	}
+	message = rewriteCLIHints(message)
 	// Error details can contain unbounded device command output.
 	if len(message) > 400 {
 		// Python tracebacks put the missing message/typesupport cause at the end.
@@ -376,7 +377,7 @@ func (s *mcpServer) handleROS2Stream(parent context.Context, req mcpgo.CallToolR
 			case parent.Err() != nil:
 				env["stop_reason"] = "cancelled"
 				err = parent.Err()
-			case ctx.Err() == context.DeadlineExceeded || status.Code(recvErr) == codes.DeadlineExceeded:
+			case ros2StreamReachedTimeLimit(ctx, recvErr):
 				// The peer can report the propagated RPC deadline before the
 				// local context timer fires. Both end the observation window.
 				env["stop_reason"] = "time_limit"
@@ -408,6 +409,18 @@ func (s *mcpServer) handleROS2Stream(parent context.Context, req mcpgo.CallToolR
 		env["error_code"], env["message"] = failure["error_code"], failure["message"]
 	}
 	return ros2Result(env, opts.maxBytes), nil
+}
+
+func ros2StreamReachedTimeLimit(ctx context.Context, err error) bool {
+	if ctx.Err() == context.DeadlineExceeded || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	// MonitorHz can return EOF when the device's propagated deadline fires.
+	// If the local timer callback is still waiting to run, the absolute
+	// deadline still ends our observation window. Preserve genuine early EOF
+	// and unrelated RPC errors instead of treating every close as a timeout.
+	deadline, ok := ctx.Deadline()
+	return err == io.EOF && ok && !time.Now().Before(deadline)
 }
 
 func ros2ValidHz(msg *agentpbv2.ROS2HzSample) bool {

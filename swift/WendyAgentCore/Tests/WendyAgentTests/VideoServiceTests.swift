@@ -216,6 +216,117 @@ struct VideoServiceAdapterTests {
     }
 
     @Test
+    func `camera control RPCs preserve IDs values persistence and reset names`() async throws {
+        let controls = VideoControlsProbe()
+        let uid = "0x1000000c456366"
+        let service = VideoService(
+            camera: FakeCameraManager(devices: [
+                CameraDeviceInfo(id: 0, uniqueID: uid, name: "USB Camera", isExternal: true)
+            ]),
+            controls: controls
+        )
+        let listed = try await service.getCameraControls(
+            request: ServerRequest(
+                metadata: [:],
+                message: Wendy_Agent_Services_V1_GetCameraControlsRequest()
+            ),
+            context: makeVideoContext(method: "GetCameraControls")
+        )
+        let metadata = try #require(listed.message.controls.first)
+        #expect(metadata.name == "gain" && metadata.minimum == 0 && metadata.maximum == 100)
+        #expect(metadata.defaultValue == 0 && metadata.mutable)
+        var setting = Wendy_Agent_Services_V1_CameraControlSetting()
+        setting.name = "gain"
+        setting.value = 20
+        var set = Wendy_Agent_Services_V1_SetCameraControlsRequest()
+        set.controls = [setting]
+        set.persist = true
+        let applied = try await service.setCameraControls(
+            request: ServerRequest(metadata: [:], message: set),
+            context: makeVideoContext(method: "SetCameraControls")
+        )
+        #expect(try applied.message.results.first?.applied == true)
+        var reset = Wendy_Agent_Services_V1_ResetCameraControlsRequest()
+        reset.names = ["gain"]
+        let restored = try await service.resetCameraControls(
+            request: ServerRequest(metadata: [:], message: reset),
+            context: makeVideoContext(method: "ResetCameraControls")
+        )
+        #expect(try restored.message.results.first?.name == "gain")
+        #expect(await controls.identities == [uid, uid, uid])
+        #expect(await controls.persist == true)
+        #expect(await controls.setValue == 20)
+        #expect(await controls.resetNames == ["gain"])
+    }
+
+    @Test
+    func `restores persisted controls at startup and once per reopened stream`() async throws {
+        let uid = "0x1000000c456366"
+        let camera = CameraDeviceInfo(id: 0, uniqueID: uid, name: "USB Camera", isExternal: true)
+        let frame = CameraFrame(
+            annexB: Data([0, 0, 0, 1, 0x67]),
+            isKeyframe: true,
+            timestampNanoseconds: 1
+        )
+        let controls = VideoControlsProbe()
+        let service = VideoService(
+            camera: FakeCameraManager(devices: [camera], frames: [uid: [frame, frame]]),
+            controls: controls
+        )
+        await service.restoreCameraControls()
+        for _ in 0..<2 {
+            let response = try await makeStreamResponse(service: service)
+            let writer = VideoCollectingWriter<Wendy_Agent_Services_V1_VideoFrame>()
+            _ = try await response.accepted.get().producer(RPCWriter(wrapping: writer))
+            #expect(writer.snapshot().count == 2)
+        }
+        #expect(await controls.restoredIdentities == [uid, uid, uid])
+    }
+
+    @Test
+    func
+        `controls reject built-in cameras missing IDs and ambiguous identities before backend access`()
+        async
+    {
+        let controls = VideoControlsProbe()
+        for devices in [
+            [],
+            [CameraDeviceInfo(id: 0, uniqueID: "built-in", name: "FaceTime", isExternal: false)],
+            [CameraDeviceInfo(id: 0, uniqueID: "unknown", name: "USB Camera", isExternal: true)],
+            [
+                CameraDeviceInfo(
+                    id: 0,
+                    uniqueID: "0x1000000c456366",
+                    name: "USB Camera",
+                    isExternal: true
+                ),
+                CameraDeviceInfo(
+                    id: 1,
+                    uniqueID: "0x1000000c456366",
+                    name: "USB Camera",
+                    isExternal: true
+                ),
+            ],
+        ] {
+            let service = VideoService(
+                camera: FakeCameraManager(devices: devices),
+                controls: controls
+            )
+            do {
+                _ = try await service.getCameraControls(
+                    request: ServerRequest(
+                        metadata: [:],
+                        message: Wendy_Agent_Services_V1_GetCameraControlsRequest()
+                    ),
+                    context: makeVideoContext(method: "GetCameraControls")
+                )
+                Issue.record("Expected unavailable camera controls")
+            } catch is RPCError {} catch { Issue.record("Expected RPCError") }
+        }
+        #expect(await controls.identities.isEmpty)
+    }
+
+    @Test
     func `maps camera access denial onto the stream`() async throws {
         let camera = CameraDeviceInfo(
             id: 0,
@@ -445,4 +556,39 @@ private func makeVideoContext(method: String) -> ServerContext {
         localPeer: "in-process:test",
         cancellation: .init()
     )
+}
+
+private actor VideoControlsProbe: CameraControlManaging {
+    var identities: [String] = []
+    var persist = false
+    var setValue: Int32?
+    var resetNames: [String] = []
+    var restoredIdentities: [String] = []
+    func list(uniqueID: String) -> [UVCCameraControl] {
+        identities.append(uniqueID)
+        return [
+            UVCCameraControl(
+                name: "gain",
+                value: 0,
+                minimum: 0,
+                maximum: 100,
+                step: 1,
+                defaultValue: 0,
+                mutable: true,
+                supportedModes: nil
+            )
+        ]
+    }
+    func set(uniqueID: String, values: [(String, Int32)], persist: Bool) -> [CameraControlOutcome] {
+        identities.append(uniqueID)
+        self.persist = persist
+        setValue = values.first?.1
+        return values.map { CameraControlOutcome(name: $0.0, applied: true, detail: "") }
+    }
+    func reset(uniqueID: String, names: [String]) -> [CameraControlOutcome] {
+        identities.append(uniqueID)
+        resetNames = names
+        return names.map { CameraControlOutcome(name: $0, applied: true, detail: "") }
+    }
+    func restore(uniqueID: String) { restoredIdentities.append(uniqueID) }
 }

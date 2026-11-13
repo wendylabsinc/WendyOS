@@ -5,229 +5,109 @@ description: Use when a developer wants to build, deploy, run, detach, stream lo
 
 # Wendy App Lifecycle Workflow
 
-Use this for normal operator/developer workflows around Wendy apps, not only debugging. Prefer explicit, reproducible CLI commands that work in agent/non-interactive contexts.
+Build, deploy, inspect and remove Wendy apps from an agent. Pass an explicit
+`--device <selector>` (host[:port], `vm:<name>` or `docker`) so a stale default
+cannot redirect the work, put the global `--json` flag first, and pass `--yes`
+to `wendy run`. With the Wendy MCP server connected, use the tools in the
+wendy skill's [MCP reference](../wendy/references/mcp.md) instead. Deploying an
+app does not deploy Wendy Data campaigns; use `wendy-data` for those.
 
-## Core rule for coding agents
-
-Avoid Bubble Tea pickers and dashboards unless the user explicitly wants an interactive terminal UI. Coding agents should generally use:
-
-- `--device <hostname>` or a configured default device.
-- `--json` for list/status/log records when supported.
-- `--yes` for `wendy run` when it may need to create `wendy.json` or accept prompts.
-- Explicit app names for `device apps start|stop|remove`.
-- Explicit cleanup flags for destructive commands.
-- A timeout or background process when intentionally streaming logs.
-
-`--json` is a global flag. Prefer putting it near the root command:
+## Deploy
 
 ```bash
-wendy --json device apps list --device <hostname>
+wendy --json run --device <selector> --detach --wait-ready --yes
 ```
 
-## Build
+The result is one JSON object. `status` is `ready` (probe passed), `running`
+(no probe; the app stayed up), `crashed`, `not_ready` (probe timed out, exit
+code 8) or `failed`. `readiness` is `passed`, `not_checked` or `failed`.
+Failures add `exit_code`, `termination_reason` and `message`. The probe is the
+`readiness.tcpSocket.port` in `wendy.json`, or else the `http` entitlement's port.
 
-Use `wendy build` when the developer wants to compile/build without deploying or starting the app.
+`--wait-ready` covers single-container projects on WendyOS devices and
+simulators. For multi-service and Compose projects, `--device docker`, or when
+the CLI rejects the flag, deploy with `--detach` alone. The result then reports
+`readiness: "not_checked"`: check the app list and a log sample before testing
+the app.
+
+| Need | Add |
+|---|---|
+| One service of a multi-service `wendy.json`, with its dependencies | `--service <name>` |
+| Project in another directory | `--prefix <dir>` |
+| Several build files apply | `--build-type docker` (or `compose`, `swift`, `python`) |
+| Create without starting | `--deploy`, instead of `--detach --wait-ready` |
+| Restart whenever the app exits | `--restart-unless-stopped` |
+| Arguments appended to the image entrypoint | `--user-args <arg>`, repeatable |
+
+Without `--build-type`, `wendy run` uses the first of: a Compose file, a
+Stagefile, a Dockerfile or Containerfile, a Swift package, a Python project.
+`--yes` writes a minimal `wendy.json` when none exists, using the directory name
+as `appId`. Only `appId` is required. A typical service adds environment
+variables, its HTTP port (forwarded from simulators) and a readiness probe:
+
+```json
+{
+  "appId": "my-app",
+  "version": "1.0.0",
+  "env": { "PORT": "8080" },
+  "entitlements": [{ "type": "network", "mode": "host" }, { "type": "http", "port": 8080 }],
+  "readiness": { "tcpSocket": { "port": 8080 }, "timeoutSeconds": 60 }
+}
+```
+
+Choose other entitlements with `wendy-entitlements`, read the
+[wendy.json reference](../wendy/references/wendy.json.md) only for fields not
+shown here, and check edits with `wendy json validate`.
+
+Do not run `wendy run` without `--detach` from an agent: it streams the app's
+output until the app exits, and interrupting it stops the app.
+
+`wendy build --device <selector>` builds without deploying. It prints text, not
+JSON, so rely on its exit status.
+
+## Verify the app
+
+Readiness means that something accepts connections on the probed port, not that
+the app works: an existing listener can pass the probe while the new app
+crashes. Check the requested behavior once, such as one HTTP request to the
+result's `url` that checks a field unique to this app.
+
+On a simulator, `url` is a host loopback forward such as
+`http://127.0.0.1:18880`. Do not use `vm:<name>` or the guest's `10.0.2.15` as a
+hostname. An app port is forwarded only when `wendy.json` declares it in an
+`http` entitlement. If `url` is missing, inspect the configuration and logs
+rather than constructing one.
+
+## Local Docker provider
+
+`wendy run --device docker --detach --yes` builds with Docker and starts the
+container on this computer. It prints Docker's build output and the container
+ID, not the JSON result. It publishes no ports and sets no restart policy: for
+host ports, a container name or a restart policy, write a `compose.yaml` and
+add `--build-type compose`. `wendy device logs` and `--wait-ready` do not
+support this provider, so use `docker logs --tail 50 <container>` and
+`docker inspect`.
+
+## Inspect and control apps
 
 ```bash
-wendy build --device <hostname>
+wendy --json device apps list --device <selector>
+wendy --json device logs --app <app-id> --tail 50 --no-follow --device <selector>
+wendy device apps start <app-id> --detach --device <selector>
+wendy device apps stop <app-id> --device <selector>
+wendy device apps remove <app-id> --force --device <selector>
 ```
 
-If multiple project markers exist, avoid interactive build pickers:
+- `--tail` counts stored log batches, which can include earlier runs of the
+  app. Narrow the sample with `--service <name>` and `--level warn`. Omit
+  `--no-follow` only to follow live output, bounded by a timeout or a
+  background process.
+- `apps start --detach` sets the `unless-stopped` restart policy. Without
+  `--detach` it attaches until the app exits.
+- `apps remove --cleanup` also deletes the image, and `--delete-volumes` deletes
+  persistent data. Delete volumes only when the user asked for data cleanup.
+  `wendy --json device volumes list` and
+  `wendy device volumes remove <name> --force` manage volumes.
 
-```bash
-wendy build --build-type docker --device <hostname>
-wendy build --build-type compose --device <hostname>
-wendy build --build-type swift --device <hostname>
-wendy build --build-type python --device <hostname>
-```
-
-Accepted build types are `docker`, `compose`, `swift`, and `python`. Current CLI help text may lag and omit `compose`, but the build/run code accepts it when a Compose file is present.
-
-Important: `wendy build` has a global `--json` flag available from the root command, but the build command does not currently produce structured JSON output. Do not rely on JSON parsing for build success. Use exit status and the text output.
-
-## Run and deploy
-
-Attached run, for foreground development and live stdout/stderr:
-
-```bash
-wendy run --yes --device <hostname>
-```
-
-Detached run, for long-running services where the agent should regain control:
-
-```bash
-wendy run --yes --detach --device <hostname>
-```
-
-Deploy only, create the container but do not start it:
-
-```bash
-wendy run --yes --deploy --device <hostname>
-```
-
-Force a build type:
-
-```bash
-wendy run --yes --build-type docker --device <hostname>
-wendy run --yes --build-type compose --device <hostname>
-wendy run --yes --build-type swift --device <hostname>
-wendy run --yes --build-type python --device <hostname>
-```
-
-Other useful flags:
-
-```bash
-wendy run --yes --prefix ./path/to/app --device <hostname>
-wendy run --yes --product MySwiftProduct --device <hostname>
-wendy run --yes --user-args foo,bar --device <hostname>
-wendy run --yes --user-args foo --user-args bar --device <hostname>
-wendy run --yes --debug --device <hostname>
-wendy run --yes --restart-unless-stopped --detach --device <hostname>
-wendy run --yes --restart-on-failure --detach --device <hostname>
-wendy run --yes --no-restart --device <hostname>
-wendy run --yes --chunking off --device <hostname>     # registry push only, skip chunk-diff
-wendy run --yes --chunking force --device <hostname>   # chunk-diff only, no fallback
-```
-
-Attached `wendy run` starts the container and streams output. Ctrl+C stops the container. Detached `wendy run --detach` starts the container, waits for readiness when configured, fires post-start hooks, and exits.
-
-`--deploy` creates the container but does not start it. To start that existing app later, use `wendy device apps start <app-id>`, knowing that the current agent-backed start path attaches to the app stream. There is no `wendy device apps start --detach` flag.
-
-`--user-args` is repeatable and also accepts comma-separated values. Prefer repeated flags when values could contain commas. The values are appended to the image's own entrypoint/`CMD`, not substituted for it, so `--user-args --port,8080` runs `<image entrypoint> --port 8080`.
-
-## Stream logs
-
-For app logs, prefer JSON records when the next step is machine analysis:
-
-```bash
-wendy --json device logs --app <app-id> --device <hostname>
-wendy --json device logs --app <app-id> --level info --device <hostname>
-wendy --json device logs --app <app-id> --service <service-name> --level warn --device <hostname>
-wendy --json device logs --app <app-id> --min-severity 9 --device <hostname>
-```
-
-`device logs` is a stream. When an agent needs a bounded sample, run it with a timeout:
-
-```bash
-timeout 20s wendy --json device logs --app <app-id> --device <hostname>
-```
-
-On macOS where GNU `timeout` may not exist, use a shell/background pattern or the surrounding agent tool timeout instead of leaving the stream open.
-
-For structured telemetry streams:
-
-```bash
-wendy device telemetry-stream --logs --app <app-id> --device <hostname>
-wendy device telemetry-stream --logs --metrics --app <app-id> --device <hostname>
-wendy device telemetry-stream --app <app-id> --service <service-name> --device <hostname>
-```
-
-`telemetry-stream` emits JSONL by design. It does not need `--json`. If none of `--logs`, `--metrics`, or `--traces` is set, the command enables all three streams.
-
-## Manage apps
-
-List apps without opening the interactive dashboard:
-
-```bash
-wendy --json device apps list --device <hostname>
-```
-
-Start an existing app by name:
-
-```bash
-wendy device apps start <app-id> --device <hostname>
-```
-
-Current behavior: `device apps start` attaches to the app output stream. For a long-running app where the agent must regain control, prefer `wendy run --detach` for a fresh deploy/start, or start the app in a bounded/background shell and then inspect logs.
-
-Stop an app:
-
-```bash
-wendy device apps stop <app-id> --device <hostname>
-```
-
-Remove an app without prompts:
-
-```bash
-wendy device apps remove <app-id> --force --device <hostname>
-```
-
-Remove an app and its image:
-
-```bash
-wendy device apps remove <app-id> --force --cleanup --device <hostname>
-```
-
-Remove an app, image, and persistent volumes:
-
-```bash
-wendy device apps remove <app-id> --force --cleanup --delete-volumes --device <hostname>
-```
-
-Do not delete volumes unless the user asked for data cleanup or the app data is disposable.
-
-## Manage volumes
-
-List volumes in JSON:
-
-```bash
-wendy --json device volumes list --device <hostname>
-```
-
-Remove a named volume without prompts:
-
-```bash
-wendy device volumes remove <volume-name> --force --device <hostname>
-```
-
-Volume removal is destructive. Confirm user intent unless the user already asked for cleanup.
-
-## Interactive vs JSON behavior
-
-Known non-interactive guidance:
-
-- `wendy --json device apps list` avoids the Bubble Tea apps dashboard.
-- `wendy --json device volumes list` prints JSON.
-- `wendy --json device logs` prints JSON log records, but still streams.
-- `wendy device telemetry-stream` prints JSONL without `--json`.
-- `wendy build` can still use Bubble Tea spinners in a TTY and does not currently provide structured JSON output.
-- `wendy run` uses progress UI in an interactive TTY and plain progress text otherwise. It does not currently provide structured JSON output.
-- `wendy run --yes` avoids app-config creation prompts where possible.
-- `--json` also prevents device picker fallback; if no device/default is configured, pass `--device` or set a default first.
-- `device apps start|stop|remove` and `device volumes remove` can prompt for a name if omitted; pass the app or volume name explicitly in agent workflows.
-
-## Operator flow
-
-For a typical coding-agent loop:
-
-1. Verify CLI and device:
-
-```bash
-wendy --version
-wendy discover --json
-```
-
-2. Build/deploy detached:
-
-```bash
-wendy run --yes --detach --device <hostname>
-```
-
-3. Confirm app state:
-
-```bash
-wendy --json device apps list --device <hostname>
-```
-
-4. Stream a bounded log sample:
-
-```bash
-timeout 20s wendy --json device logs --app <app-id> --device <hostname>
-```
-
-5. Stop or remove only when requested:
-
-```bash
-wendy device apps stop <app-id> --device <hostname>
-wendy device apps remove <app-id> --force --device <hostname>
-```
+For a port already in use, a debugger (`--debug`) or OpenTelemetry export, read
+[references/troubleshooting.md](references/troubleshooting.md).

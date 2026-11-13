@@ -22,6 +22,51 @@ struct TelemetryBroadcasterTests {
         #expect(first?.resourceLogs.first?.schemaURL == "live")
     }
 
+    @Test("no-follow replays the requested tail and finishes", .timeLimit(.minutes(1)))
+    func noFollowFinishesAfterHistory() async throws {
+        let broadcaster = TelemetryBroadcaster()
+        await broadcaster.broadcastLogs(logRequest(marker: "oldest"))
+        await broadcaster.broadcastLogs(logRequest(marker: "middle"))
+        await broadcaster.broadcastLogs(logRequest(marker: "newest"))
+
+        let service = TelemetryService(broadcaster: broadcaster)
+        let writer = RecordingTelemetryWriter()
+        var request = Wendy_Agent_Services_V1_StreamLogsRequest()
+        request.lastN = 2
+        request.noFollow = true
+        let finiteRequest = request
+        let completed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    try await service.streamLogs(
+                        request: finiteRequest,
+                        response: RPCWriter(wrapping: writer),
+                        context: makeTelemetryServerContext(method: "StreamLogs")
+                    )
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(500))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+
+        let responses = writer.snapshot()
+        #expect(completed)
+        #expect(
+            responses.compactMap { $0.logs.resourceLogs.first?.schemaURL } == ["middle", "newest"]
+        )
+        let allHistorical = responses.allSatisfy { $0.isHistory }
+        #expect(allHistorical)
+        #expect(await broadcaster.logSubscriberCountForTesting() == 0)
+    }
+
     @Test("canceling a log stream removes its broadcaster subscription", .timeLimit(.minutes(1)))
     func cancelingLogStreamRemovesSubscription() async throws {
         let broadcaster = TelemetryBroadcaster()
@@ -109,6 +154,23 @@ struct TelemetryBroadcasterTests {
         request.resourceLogs = [resourceLogs]
         return request
     }
+}
+
+private final class RecordingTelemetryWriter: RPCWriterProtocol, @unchecked Sendable {
+    typealias Element = Wendy_Agent_Services_V1_StreamLogsResponse
+
+    private let lock = NSLock()
+    private var responses: [Element] = []
+
+    func write(_ element: Element) async throws {
+        lock.withLock { responses.append(element) }
+    }
+
+    func write(contentsOf elements: some Sequence<Element>) async throws {
+        lock.withLock { responses.append(contentsOf: elements) }
+    }
+
+    func snapshot() -> [Element] { lock.withLock { responses } }
 }
 
 private final class SignalingTelemetryWriter: RPCWriterProtocol, @unchecked Sendable {

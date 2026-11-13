@@ -2,9 +2,9 @@ Runs your app on a Wendy-enabled device:
 
 1. [Selects a device](../device-selection.md)
 2. [Queries the platform and architecture](./device/version.md) of this device
-3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
+3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](/docs/advanced/debugging) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
-5. [Starts the app](./device/apps/start.md), then (attached runs only) waits for readiness and prints the reachable URL
+5. [Starts the app](./device/apps/start.md). Attached runs, and any run with `--wait-ready`, then wait for readiness and print the reachable URL; other detached agent deployments report configured HTTP endpoints as described in [Detached output](#detached-output).
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
 
 
@@ -15,13 +15,16 @@ Runs your app on a Wendy-enabled device:
 | Flag | Description |
 |------|-------------|
 | `--deploy` | Build and create the container but do not start it. |
-| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. |
+| `--detach` | Start the container and return without streaming logs or opening the app URL. Waits for readiness only with `--wait-ready`. Agent deployments report configured HTTP endpoints; see [Detached output](#detached-output). |
+| `--wait-ready` | Succeed only once the app is ready: its readiness probe passes or, without a probe this machine can reach, it stays running for 10 seconds (or a shorter `--readiness-timeout`). Fails if the app crashes or the probe times out. See [Waiting for readiness](#waiting-for-readiness---wait-ready). |
+| `--readiness-timeout <duration>` | Override the readiness deadline, from `1s` to `1h` in whole seconds. With `--detach` it requires `--wait-ready`. |
 | `--restart-unless-stopped` | Restart the container unless manually stopped. |
 | `--restart-on-failure` | Restart the container on failure. |
 | `--no-restart` | Do not restart the container on exit. |
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
-| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker` or `apple-container`. Cannot be combined with `--build-host`. |
+| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. Cannot be combined with `--build-host`. |
+| `--build-arg KEY=VALUE` | Repeatable build argument for container builds targeting WendyOS devices. Overrides device defaults and Compose build args for every built service; the last occurrence wins. See [Image build-args](#image-build-args) for examples and restrictions. |
 | `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
@@ -37,9 +40,145 @@ Runs your app on a Wendy-enabled device:
 | `--debounce <ms>` | Watch mode only: quiet period in milliseconds after the last change before redeploying (default `400`). |
 | `--verbose` | Watch mode only: always show build output. By default build output is hidden unless a build fails. |
 
+## Exit status
+
+An attached `wendy run` streams the app's logs until the app exits or you stop the run:
+
+| How the run ends | Exit status | The app afterwards |
+|------------------|-------------|--------------------|
+| The app exits with code 0 | 0 | As its restart policy leaves it |
+| The app crashes: non-zero exit, OOM kill, or crash loop | Non-zero. The error names the exit code and termination reason and points to `wendy device logs --app <app>`. | As its restart policy leaves it |
+| The container fails to start | Non-zero, with the start error the device reported | Not started |
+| Ctrl-C (SIGINT) | 0 | Stopped |
+| SIGTERM (a CI timeout, `kill`, a process supervisor) | Non-zero: `wendy run was terminated; app <app> was stopped` | Stopped |
+
+The table describes single-container runs on WendyOS devices. Multi-service, Compose and native Mac runs, and runs on local provider targets such as `--device docker` or `--device apple-container`, exit 0 on Ctrl-C and try to stop their apps, but can leave them running: their stop races the cancellation of the run and is skipped when the cancellation wins. On SIGTERM they exit non-zero and may leave their apps running.
+
+When nothing changed since the last deploy and the app is already running, `wendy run` only follows its logs. An interrupted run then leaves the app running, and the SIGTERM error says so. When the app is stopped instead, `wendy run` starts the existing container, unless the device reports it from another app `version` than `wendy.json` sets (`latest` when it sets none): that container is another deployment's, so `wendy run` deploys the project instead.
+
+An interrupt that comes after the app's output has ended, while `wendy run` checks how the app exited (see below) or waits for the verdict of `--wait-ready`, stops nothing: the app has already exited, and the device may be running another deployment's app by then. Ctrl-C still exits 0, and SIGTERM exits non-zero.
+
+The crash check reads the exit that the device agent records when the app stops, and re-checks the app for up to 3 seconds before it reports a crash (see below; it prints `Checking how <app> exited...` on stderr as the re-check starts): the device keeps an app's last recorded exit even after its restart policy restarted it, so a record alone does not prove the app just crashed. A clean exit (exit code 0) is reported at once, also when the device lists the app as crash-looping: once its restart policy has restarted an app, the device keeps that restart count until the app is next deployed or started, and lists a clean exit that the policy will restart that way. If the restart policy has already restarted the app by the time of the check, and the restart it counted still shows after that re-check, the exit status is gone: `wendy run` prints a notice and exits 0. Agents that predate exit reporting record no exit: every exit that stays for that re-check reads as a clean stop, and one that the restart policy recovered from reads as described in the known limitations below.
+
+When another deployment replaces the app (for example `wendy run --detach` from another terminal), the run usually exits 0 and prints `Application <app> was replaced by another deployment.` (a run that only follows the app prints a neutral notice instead; see below). To replace an app, the device kills it, removes its container, prepares the new image while no app is listed, and creates the new container, which it lists as stopped (or crash-looping) with no exit recorded until it starts it. The whole replace can take a fifth of a second. The device counts the kill as a restart, so it can briefly list the new app running with a restart counted before the start resets the count. It records the kill like a SIGKILL crash (exit code 137), but that record may come late, on the new container, or never, and the killed app can be listed with the exit it recorded before, such as a crash its restart policy recovered from:
+
+- Before it reports a crash or a restart by the restart policy — and when it finds no app, or an app stopped or crash-looping with no exit recorded — the run re-checks the app for up to 3 seconds. It reports the replacement as soon as the device lists a new container (after listing no app, or with no exit recorded after an app that was running or had an exit recorded), a restart count lower than the last one listed, the app running with no restart by its restart policy counted (once the device has shown that it reports exits or restarts; see the known limitations below), or an app from another version. It reports the crash (or the restart) only if the device still shows the app restarted by its restart policy, or the app stopped (or cannot be read), after all 3 seconds. The device can list an app as stopped before it records the exit, so an exit recorded during the re-check is the one reported.
+- When the 3 seconds end with no app listed, a run that started the app, whose output has ended, reports the replacement: the new image is probably still being prepared. An app still crash-looping with no exit recorded counts as a replacement, again once the device has shown that it reports exits or restarts. An app still stopped with no exit recorded does not, since that is also how the device lists an app stopped with `wendy device apps stop`: the run prints `Application <app> stopped.`.
+- A record from another app `version` (as set in `wendy.json`) counts as a replacement at once.
+- If a run that started the app finds, when its output ends, the new app already running from the same version, it prints `Application <app> stopped.` instead.
+- A run that only follows an app it did not start (see above) checks the app every second; while a check finds the app running, the run keeps following it. When a check finds the app stopped, the run re-checks it as above, but reports a crash (a non-zero exit) only if, after the 3 seconds, the app is still stopped with its exit recorded and nothing indicated a replacement. Otherwise (the app running again at any restart count, no app listed, or any sign of a replacement) it prints `Application <app> stopped; it may have been replaced by another deployment or restarted by its restart policy.` and exits 0, leaving the app as it is. A clean exit (exit code 0) prints `Application <app> stopped.` as before.
+- With `--wait-ready` and no `--detach`, the readiness check also ends as soon as the run's output does, and a replacement it finds is reported the same way: the run exits 0, leaves the new app running, and runs no postStart actions for it. It also counts as a replacement, once the output of a run that started the app has ended, the app running with no restart counted, on a device that has shown that it reports exits or restarts. A run that only follows the app ends its check the way it ends following above: a crash only when the app stays stopped with its exit recorded, otherwise the notice that it may have been replaced or restarted, and exit 0. An exit or a restart during the check, a clean exit included, is re-checked the same way before the check fails, and a failed check never stops an app the device does not list, or lists as stopped with no exit recorded.
+
+> **Known limitations:** a run that only follows an app it did not start cannot tell a crash that the restart policy recovered from apart from a replacement by another deployment: the device keeps the exit status of earlier exits, and the restart count the run started from may already include restarts. Such a run therefore reports that end neutrally and exits 0.
+>
+> Devices whose agent reports neither how apps exit nor restart counts (WendyOS agents that predate exit reporting, and the Mac agent) list an app that crashed and was restarted by its restart policy the way they list a replacement: stopped with no exit recorded, then running with no restart counted, or crash-looping with no restart counted. Until the run has seen a record with an exit recorded or a restart counted, it cannot tell the two apart: a run that started the app prints `Application <app> stopped; the device did not report how it exited, so it may have crashed and been restarted by its restart policy, or another deployment may have replaced it.` and exits 0, and with `--wait-ready` the check fails as `not_ready` and does not stop the app. A current device reads the same way when the run sees no exit or restart recorded during a fast replacement.
+
+When the image build fails, `wendy run` prints the build failure details, including the builder's own error and the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last informative line of the step's output, skipping generic closing lines such as make's `make: *** [...] Error 1` or pip's closing notes, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
+
+## Checks before the build
+
+Before it builds on this computer, `wendy run` checks the free space on the disks the build writes to: the one holding your user cache directory, where Wendy keeps the exported image and its build cache; on Linux, the one holding Docker's data directory (`/var/lib/docker`); and for Swift and Xcode projects, the one holding the project. With less than 3 GiB free on any of them, the run stops before building with the error class `disk_full`, names the disk, and lists ways to free space, such as `docker system prune`, `wendy cache clear` or `--build-host`. With less than 10 GiB free it warns and builds. A disk whose free space cannot be read is skipped.
+
+Runs that build nothing, because the app's image is already on the device, skip the check, and so do `--build-host` runs, which check the build host's disk instead. On macOS and Windows, Docker Desktop keeps its data in a virtual disk with a size limit of its own, which the check does not read.
+
+The device needs room for the image too. Before the build, the run stops with `disk_full` when the disk that holds the device's container images has less than 512 MiB free, and suggests `wendy device cache prune` and removing apps the device no longer needs. Above that, a device disk more than 85% full only prints a warning, since a re-deploy sends only the layers that changed. `--build-host` runs check the device too, because the build host delivers the image to it. After the build, the default chunked deploy asks the device which layers it lacks before sending any. It stops with `disk_full` when those layers' compressed size alone is more than the device's free space, and warns when their unpacked size, estimated at three times the compressed size, may be more. Registry pushes (Mac agents, `--chunking off`, `--deploy`) get only the check before the build. A Compose project with nothing to build, because its services are unchanged or use prebuilt images, skips the checks on both disks. These checks need an agent that reports where it keeps container images (`containerStorage` in `wendy device info`); older agents are not checked.
+
+If Docker has no Buildx plugin, the run stops when it first sets up its builder, with the error class `builder_unavailable` and a link to install Buildx.
+
+An agent ignores an entitlement type it does not know and starts the app without that access. When the device's agent reports the entitlement types it supports, the run checks every entitlement in `wendy.json` (each service's, for multi-service and Compose projects) against that list before building, including when the app's image is already on the device. On a type the agent does not support it stops with `project_target_mismatch` (exit status 4), names the type, and suggests `wendy device update`. Agents that predate this report are not checked.
+
+## Detached output
+
+For an ordinary single-device deployment to a Wendy agent, `--json --detach`
+emits one result on stdout after start is acknowledged (or the unchanged app is
+already running). Build progress and pre-start application output go to stderr:
+
+```sh
+wendy --json --device vm:dev run --yes --detach
+```
+
+```json
+{
+  "status": "started",
+  "app": "com.example.web",
+  "device": "vm:dev",
+  "readiness": "not_checked",
+  "url": "http://127.0.0.1:18880",
+  "endpoints": [
+    { "app": "com.example.web", "url": "http://127.0.0.1:18880" }
+  ]
+}
+```
+
+`readiness: "not_checked"` means no health probe or host `postStart` action ran.
+Verify the HTTP response separately. In text mode, URLs appear as
+`App URL (<app>): <url>` notices. With `--wait-ready`, the run checks the app
+and prints its outcome instead of this result; see
+[Waiting for readiness](#waiting-for-readiness---wait-ready).
+
+URLs come from [`http` entitlements](/docs/reference/app-configuration#http) and
+HTTP(S) `hooks.postStart.openURL` values that contain `WENDY_HOSTNAME`.
+`endpoints` contains distinct reported URLs, each with its app or service
+identifier; a service may have several URLs. `url` is the first entry
+and is omitted when `endpoints` is empty, including when routing cannot be
+determined. A TCP readiness probe alone does not declare an HTTP endpoint.
+
+For user-networked VMs, URLs use the connected VM's live forwarding on host
+loopback. See [VM HTTP verification](/docs/installation/simulator-management#reaching-an-app-you-deployed).
+Multi-service and Compose runs emit one group result after the selected services
+start. A partial deployment returns non-zero without a whole-group success
+result. Fleet runs, `--deploy`, watch mode, and local container providers do not
+produce this result.
+
+## Waiting for readiness: `--wait-ready`
+
+`--wait-ready` makes `wendy run` report whether the app actually came up:
+
+```sh
+wendy run --detach --wait-ready
+wendy --json run --detach --wait-ready --readiness-timeout 90s
+```
+
+After the device confirms the container started, `wendy run` does one of two checks:
+
+- It probes the app's readiness port from your machine (`readiness.tcpSocket.port`, or the `http` entitlement's port) until the port accepts a connection. The deadline is `--readiness-timeout`, else `readiness.timeoutSeconds`, else 30 seconds.
+- When the app declares no probe, the device is reached through Wendy Cloud without an active Wendy Mesh VPN and your machine cannot connect to the device's agent on its LAN address (`wendy run` checks once, for up to 1.5 seconds), or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds, or for `--readiness-timeout` when that is shorter.
+
+The run fails with a non-zero exit when, during the check, the app exits (even with exit code 0), is restarted by its restart policy, or is no longer reported by the device; when the probe deadline passes; or when, without a probe, the app's state cannot be read at the end of the window. A passed probe counts only once `wendy run` reads the app's state right after it and finds the app still running; until then it keeps probing, and if the state cannot be read before the deadline the check fails as `not_ready`.
+
+Restarts count from when `wendy run` starts the app, since the start resets the device's restart count: a restart before the check first looks at the app fails it too. When nothing changed since the last deploy and the app is already running, `wendy run` did not start it, so only restarts after it found the app count.
+
+With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is not a terminal), stdout carries exactly one JSON object, failures included, unless the run is interrupted or its command line does not parse (see below). It takes the place of the `started` result that `--detach` alone prints (see [Detached output](#detached-output)): `started` means only that the device acknowledged the start, while this object reports the check. Its `status` is one of five values:
+
+```json
+{"status":"ready","app":"my-app","device":"192.168.1.207","readiness":"passed","url":"http://192.168.1.207:8080"}
+{"status":"running","app":"my-app","device":"192.168.1.207","readiness":"not_checked"}
+{"status":"crashed","app":"my-app","device":"192.168.1.207","readiness":"not_checked","exit_code":3,"termination_reason":"crashed","message":"app my-app stopped unexpectedly (exit code 3, termination reason \"crashed\"); see its logs with `wendy device logs --app my-app`"}
+{"status":"not_ready","app":"my-app","device":"192.168.1.207","readiness":"failed","message":"app my-app did not pass its readiness probe within 30s"}
+{"status":"failed","app":"my-app","device":"192.168.1.207","readiness":"not_checked","message":"build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"}
+```
+
+| `status` | When | `readiness` | Fields besides `status`, `readiness`, `app` and `device` | Exit status |
+|----------|------|-------------|------------------|-------------|
+| `ready` | The readiness probe passed: the app's port accepted a connection from this machine. | `passed` | `url`, when the device reports an address for the app | 0 |
+| `running` | No probe could run from this machine (see the second check above), and the app stayed running without a restart for 10 seconds, or for a shorter `--readiness-timeout`. | `not_checked` | None | 0 |
+| `crashed` | During the check the app exited (even with exit code 0), stopped, crash-looped, was restarted by its restart policy, or was no longer reported by the device. | `failed` when a probe was running, else `not_checked` | `message`; `exit_code` and `termination_reason` when the device recorded the exit | Non-zero |
+| `not_ready` | The probe did not pass before its deadline, the app's state could not be read to confirm a passed probe before it, or, without a probe, the app's state could not be read at the end of the window. | `failed` with a probe, `not_checked` without | `message` | Non-zero |
+| `failed` | The run failed before the check started (see below). | `not_checked` | `message`: the run's error | Non-zero |
+
+`app` is the app ID from `wendy.json`. `device` is the address `wendy run` connected to: for a direct connection that is often an IP address rather than the `.local` name, and through Wendy Cloud it is the device's cloud name. On the device itself (`WENDY_AGENT_SOCKET`), `device` is omitted and readiness is never probed, so the outcome is `running`, `crashed`, `not_ready` or `failed`. A `failed` object also omits `app` and `device` until the run knows them, and it never carries `exit_code`, `termination_reason` or `url`.
+
+`failed` covers every error `wendy run` itself reports before the check: a flag value or combination it rejects (for example `--readiness-timeout 1500ms`, `--env FOO`, or `--wait-ready` with `--watch`, `--hil` or `--deploy`), a project or target `--wait-ready` does not support (listed at the end of this section), an invalid `wendy.json`, device selection, the build, the push, and the container start. The run also prints the error on stderr. Errors that stop the command before `wendy run` starts, such as an unknown flag, a malformed value like `--readiness-timeout abc`, or a CLI configuration that cannot be loaded, print only the error on stderr and no object. A run without `--wait-ready` prints no object when it fails, even when it is rejected (for example `--detach --readiness-timeout 30s`); a successful one prints the `started` result described in [Detached output](#detached-output). Ctrl-C (exit 0) or SIGTERM (non-zero exit) prints no object at any point; during the wait, both leave the app running.
+
+A detached check does not look for another deployment. If one replaces the app during the check, the outcome is whatever the polls see: `crashed` when a poll finds the old app stopped (the device records it like a SIGKILL crash, exit code 137) or the app missing or not yet started, or `ready` or `running` when the polls see only the new app running.
+
+Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check fails the run and stops the app, except when nothing changed since the last deploy and `wendy run` only follows the app that was already running: that run did not start the app, so it fails without stopping it, and it ends neutrally instead of failing when the app runs again or may have been replaced (see [Exit status](#exit-status)). If another deployment replaces the app during the check, the run reports the replacement and leaves the new app running; when the device does not report how the app exited, so the run cannot tell a replacement from a crash, the check fails as `not_ready` and does not stop the app (see [Exit status](#exit-status)). Host-side postStart actions run only after the check passes.
+
+`--wait-ready` currently supports single-container image projects (Dockerfile, Containerfile, Stagefile, or Python) on WendyOS devices. It is rejected for multi-service, Compose and Xcode projects, native Mac apps, Swift packages built without a Dockerfile, local provider targets such as `--device docker`, `--build-host`, `--watch`, `--hil`, and `--deploy`.
+
 ## Reachable app URLs
 
-After the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
+In attached mode after the app starts, and in a detached run with `--wait-ready` once its check passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
 
 ```text
 App reachable at http://192.168.123.222:3000
@@ -53,7 +192,18 @@ The CLI derives this URL from either:
 
 The printed URL uses a routable IP address reported by the device instead of the `.local` hostname, which makes it easier to open from browsers that do not resolve mDNS names reliably. If neither an `openURL` hook nor a TCP readiness port is configured, or if the device cannot report an IP address, `wendy run` skips this line.
 
-> **Note:** If the readiness probe fails (timeout or connection error), `wendy run` skips the `App reachable at` line and the `postStart` hook and prints a warning instead. This prevents opening a browser tab pointed at a container that has already exited.
+When the device is reached through Wendy Cloud and the Wendy Mesh VPN is active on your machine, the readiness check, the printed URL, and the `openURL` and `cli` postStart actions use the device's mesh hostname. Without an active mesh route, `wendy run` checks once, for up to 1.5 seconds, whether your machine can connect to the device's agent on its LAN address. If it can (you are on the device's network), those actions work as on a LAN connection. If it cannot, `wendy run` does not print, probe, or open that address. Instead, an attached run forwards the app's port through Wendy Cloud, the way `wendy cloud tunnel` does, from `localhost` on your machine (listening on 127.0.0.1 only):
+
+```text
+Forwarding http://localhost:3005 → camera-feed-yolo on Dev Kit through Wendy Cloud (closes when wendy run exits)
+App reachable at http://localhost:3005
+```
+
+The forwarded port is the one `wendy run` would show you: the port of an `openURL` that uses `WENDY_HOSTNAME`, otherwise the `http` entitlement's port, otherwise `readiness.tcpSocket.port`. It is forwarded only when a postStart action addresses the device (an `openURL` or `cli` action that uses `WENDY_HOSTNAME`, or an `http` entitlement). `wendy run` keeps the same port number on your machine when nothing there uses it, and picks a free one otherwise. The readiness check, the printed URL and the `openURL` go through the forward, and `WENDY_HOSTNAME` expands to `localhost`. Connecting to the local end of the forward always succeeds, so the readiness check asks the device's agent, over the existing connection, whether the app is listening on that port, as a TCP check on the device's network would. Once it is, one Wendy Cloud relay to the port confirms the forward works, and the app need not speak HTTP. In case the agent cannot see the app's socket, the check also sends an HTTP request through a relay every 5 to 30 seconds and passes on any reply. With an agent that cannot answer, those requests start 1 second apart and back off to every 5 seconds. If Wendy Cloud refuses a relay, because it does not authorize the tunnel or does not offer port tunnels, the check stops at once, the forward closes, and the `openURL` and `cli` postStart actions are skipped with a notice that gives the reason. When the port number changed, a `cli` action that uses `WENDY_HOSTNAME` is skipped and the local URL is printed instead. The forward closes when the attached run ends; `--watch` keeps one forward for the whole session. If the forward cannot be opened, the host-side readiness check and the `openURL` and `cli` postStart actions are skipped with a notice that gives the `wendy cloud tunnel <port>:<port> --device "<cloud name>"` command to run yourself. A detached run cannot keep a forward open, so it prints that command and the `localhost` URL to open instead.
+
+When an attached run's readiness probe times out but the app is still running, `wendy run` keeps checking every 5 seconds for up to ten probe timeouts in total (5 minutes with the default 30-second timeout), then warns. `--readiness-timeout` replaces the probe timeout and ends the wait at that deadline.
+
+> **Note:** An attached run prints the `App reachable at` line before its readiness probe finishes (with `--wait-ready`, only once the check passes). If the probe then fails (timeout or connection error), `wendy run` skips the `postStart` hook, including opening the browser, and prints a warning instead. This prevents opening a browser tab pointed at a container that has already exited.
 
 > **Note:** When `wendy.json` is absent, `wendy run` resolves the target device before prompting to create one. If the target is Headless Mac and the detected project type is unsupported, the project/target mismatch error is returned immediately without opening the config creation prompt.
 
@@ -65,7 +215,7 @@ Regular ESP-IDF projects are the recommended app model for ESP32 targets. Wendy 
 wendy run
 ```
 
-The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 5.5.4 is available through `eim`, runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
+The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 6.0.3 is available through `eim` (offering to install `eim` with Homebrew when it is missing), runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
 
 See [ESP32 installation](/docs/installation/wendy-lite-esp32) for setup and a minimal project layout.
 
@@ -87,7 +237,19 @@ The error explains the project/target mismatch and tells you to set `platform: "
 
 ## Image build-args
 
-When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as `--build-arg` values so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`:
+When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as build arguments so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`.
+
+Pass your own values with repeatable `--build-arg KEY=VALUE` flags:
+
+```sh
+wendy run --device my-wendy.local --build-arg WENDY_VERSION=2026.11.03-074612 --build-arg 'OPTIONS=a,b=c with spaces' --build-arg EMPTY=
+```
+
+Explicit values override device-reported defaults and Compose `build.args` for every built service. Repeating a key uses its last value. Arguments apply to single-container, multi-service and Compose builds on WendyOS devices, including supported `--build-host` builds. Changing an argument invalidates the build-input cache.
+
+Empty values are allowed, and commas, spaces and additional `=` characters stay in the value; quote shell arguments as needed. Keys must start with a letter or underscore and contain only letters, digits and underscores. Values cannot start with `-` or contain control characters. Invalid arguments fail before project setup without printing their values.
+
+`--build-arg` is incompatible with `--stagefile-backend=llb` (including when selected through `WENDY_STAGEFILE_BACKEND`); use `--stagefile-backend=dockerfile` instead. External provider targets such as `--device docker` or `--device apple-container`, native Swift builds, Xcode projects and `run.command` apps do not support this flag.
 
 On Apple silicon Macs with Apple's `container` runtime, Wendy tries
 Apple Container first when `--builder` is omitted. If Apple Container is
@@ -100,6 +262,14 @@ wendy --device my-wendy.local run
 ```
 
 Wendy automatically checks for the `container` CLI and offers to install it via Homebrew if missing, and starts the `system` and `builder` services if they are not running.
+
+For builds deployed to a WendyOS device, `--builder buildkit` uses buildctl and
+exports an OCI image for Wendy's existing deployment path. If you explicitly
+start the optional Local Build Service from the Wendy menu-bar app, the CLI
+discovers its private socket automatically. `WENDY_BUILDKIT_HOST`,
+`BUILDKIT_HOST`, and buildctl's normal local-daemon default remain supported.
+This service only solves and caches builds; Apple `container` continues to run
+local Mac applications.
 
 If Apple Container reports an empty build context for a project under `/tmp` or
 `/private/tmp`, Wendy returns an error with the known workaround: move the
@@ -182,7 +352,6 @@ Both the macOS-target and Linux-target Swift paths shell out to a host Swift too
 
 On a **Windows host**, `wendy run` returns an actionable error for Swift projects that would require the host toolchain. Providing a `Dockerfile` or `Containerfile` bypasses these restrictions — the build is routed through the image build path, which works on all platforms.
 
-
 ## Remote build host
 
 `--build-host` delegates the image build to another WendyOS device:
@@ -209,6 +378,11 @@ delivery receives a registry push instead, and the build log says so.
 Use a remote host for builds that need its GPU or CPU architecture, such as an
 arm64 build that would otherwise use QEMU emulation on an x86 development machine.
 
+A multi-service `wendy.json` builds remotely too: every selected service is
+built on the host and delivered to the target. See
+[Multi-service apps: remote build host](../../../apps/wendy-services.md#remote-build-host)
+for how it differs from a local build. Compose projects cannot use `--build-host`.
+
 Your machine does not need a container builder. With `--build-host`, the CLI
 does not start Docker, Apple Container, or a local BuildKit daemon. The
 `--builder` flag selects a local builder and cannot be combined with `--build-host`.
@@ -218,7 +392,7 @@ in the CLI config. The flag always wins over the default. This is a
 per-developer setting rather than a project one, because the right build host
 depends on which network you are on.
 
-For a complete example, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+For a complete example, follow [Build once, deploy to several devices](/docs/guides/fleet-deployment).
 
 ### Requirements
 
@@ -227,7 +401,7 @@ For a complete example, follow [Build Once, Deploy to Several Devices](/docs/gui
 - A user certificate in the build host's organisation.
 - A provisioned target device reachable from the build host over the mesh.
 
-See [`wendy device build-host`](device/build-host.md) for setup, access rules,
+See [`wendy device build-host`](./device/build-host.md) for setup, access rules,
 cache-space requirements, and how shared builds use the host.
 
 If a requirement is missing, `wendy run` fails and names the host. It does not
@@ -305,11 +479,11 @@ an app that reads stdin.
 
 ## Deploy path: `--chunking`
 
-`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push when it fails (`auto`, the default). Use `--chunking` to override this:
+`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push where supported when it fails (`auto`, the default). Use `--chunking` to override this:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Try chunk-diff; fall back to a registry push on failure. |
+| `auto` (default) | Try chunk-diff. Missing chunk capabilities on old Agents keep the registry fallback, including over Cloud v2. LAN and legacy Cloud retain their broader fallback; an unrecovered Cloud v2 transport drop exits 5. |
 | `force` | Use chunk-diff only. If chunk-diff fails the error is returned and no registry-push fallback is attempted. Cancellation still exits cleanly. |
 | `off` | Skip chunk-diff entirely; go straight to the registry push. |
 
@@ -321,12 +495,39 @@ an app that reads stdin.
 > route for every device, as build hosts delivered before chunked delivery
 > existed.
 
-> **Note:** When `--deploy` is also passed, `--chunking force` and `--chunking off` are no-ops — `--deploy` always uses the registry path because it must create the container without starting it.
+> **Note:** For single-service runs, `--deploy` uses the registry path because it must create the container without starting it; `--chunking force` and `--chunking off` do not change that path. This registry alternative does not apply to Compose or multi-service runs.
 
 > **Note:** The `postStart` hook fires on both the chunk-diff and registry-push
 > paths. The deploy path does not affect hook execution.
 
 Any value other than `auto`, `force`, or `off` is rejected with an error before the build starts.
+
+### Uploads over Cloud v2
+
+After a real Cloud v2 connection drop, automatic registry fallback is off for
+that failed deployment. The CLI reports the device (or its Cloud ID if unnamed)
+and bytes sent across resume attempts against the largest upload plan. Check
+that the device is online with `wendy cloud discover`, then retry. A single-service
+upload gets up to three attempts and skips chunks already staged on the device.
+An unrecovered connection loss during upload, a failed upload reconnect (including
+its deadline), or a disconnect while waiting for the app's start acknowledgement
+is `device_unreachable`: exit status 5, with `retryable: true` in JSON mode.
+
+In `auto` mode, an old Agent missing the required chunk RPCs still takes the
+existing authorized registry route. Image preparation refusals and other
+non-transport failures are reported separately. `force` keeps registry fallback
+off, including for missing capabilities; update the Agent to use that mode.
+
+The Compose and multi-service **chunk-upload path** supports `--builder docker` and `--builder buildkit`.
+Apple Container keeps its existing direct registry route in `auto`; existing
+Apple Container setups can also select it explicitly with
+`--builder apple-container --chunking=off`. This does not add BuildKit Compose
+registry support.
+
+`--chunking=off` explicitly uploads through the registry, subject to the usual
+registry authentication and Cloud authorization. Single-service `--deploy` is
+another registry alternative; it is not a Compose alternative. Set
+`WENDY_TLS_DEBUG=1` to log underlying upload and reconnect diagnostics.
 
 ## Environment variables
 
@@ -378,8 +579,8 @@ the app reports readiness. This applies to both registry-push and chunk-diff
 deploys. If readiness fails, Wendy skips these actions and prints a warning.
 
 `--detach` returns after the selected containers start and does not run
-readiness checks, `openURL`, or `cli`; `postStart.agent` still runs on the
-device. See [Readiness and lifecycle hooks](../../../apps/wendy-services.md#readiness-and-lifecycle-hooks)
+readiness checks (unless `--wait-ready` is set), `openURL`, or `cli`;
+`postStart.agent` still runs on the device. See [Readiness and lifecycle hooks](../../../apps/wendy-services.md#readiness-and-lifecycle-hooks)
 for multi-service details.
 `--deploy` creates the app without starting it, so no postStart action runs.
 
@@ -405,6 +606,8 @@ readiness check only. `--watch --detach` skips them; see [Watch mode](#watch-mod
 When `${WENDY_HOSTNAME}` is substituted and the device address is an IPv6 literal, `wendy run` automatically brackets it (e.g. `2001:db8::1` → `[2001:db8::1]`) so the resulting URL is parseable by browsers. Zone IDs are percent-escaped per RFC 6874. IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) are unmapped to plain IPv4. The `cli` hook receives the raw (unbracketed) address.
 
 If the browser cannot be opened, a warning is printed and `wendy run` continues normally. `openURL` is fire-and-forget and does not affect the process tracked by `wendy run`.
+
+`openURL` opens a browser only when `wendy run` runs in an interactive terminal without `--json`. In CI, from a coding agent, or with piped output, it prints the URL instead.
 
 ### `cli`
 
@@ -447,11 +650,15 @@ reported separately, in `npuBackends`. `containerStorage` identifies the filesys
 containerd; the existing disk scalar fields continue to describe the root filesystem.
 
 Attached runs keep observing slow startup after the initial readiness budget.
-If the relevant service is still running, the CLI reports “still starting” and
-checks every five seconds while streaming logs. Browser opening and host
-`postStart` commands run once readiness succeeds. Stopping the service,
-canceling the session, or replacing a watch deployment cancels its probes.
-Detached and create-only runs continue to skip host readiness and hooks.
+If the relevant service is still running when its probe timeout passes, the CLI
+reports “still starting” and checks every five seconds while streaming logs,
+for up to ten probe timeouts in total, then warns. `--readiness-timeout` is the
+whole deadline instead: no extended observation follows it. Browser opening and
+host `postStart` commands run once readiness succeeds. Stopping the service,
+canceling the session, or replacing a watch deployment cancels its probes. With
+`--wait-ready`, its own check replaces this observation. Detached and
+create-only runs skip host `postStart` commands; a detached run checks
+readiness only with `--wait-ready`.
 
 
 ## Native commands on Mac
@@ -515,3 +722,16 @@ grant it in Cloud app settings.
 Registration errors stop deployment. Use `--skip-cloud-registration` for an
 offline deployment, then deploy again without it to register later. Unenrolled
 devices skip registration automatically.
+
+## Recording a release
+
+`--record-release <tag>` records the deploy in Cloud as a release of the app:
+the CLI creates the release under the tag before the deploy, the device labels
+the container with it, and the CLI stores the image digest the device reports.
+It is off by default. Without it nothing is recorded, and the device still
+reports the app, which Cloud keeps as an unassigned app. It needs a
+single-container app and one WendyOS device enrolled with Wendy Cloud, checked
+before anything is built. It does not combine with `--watch`,
+`--skip-cloud-registration`, several devices in one run, Compose projects or
+provider targets such as `--device docker`. To record a release without
+deploying, use [`wendy app release`](./app/release.md).

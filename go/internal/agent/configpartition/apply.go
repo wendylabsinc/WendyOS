@@ -2,7 +2,9 @@ package configpartition
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +23,11 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/network"
+	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 )
 
@@ -180,13 +187,33 @@ func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 	return true
 }
 
-// applyWendyConf reads /config/wendy.conf, registers every `[wifi]` /
-// `[wifi.N]` profile via NetworkManager, activates the highest-priority one
-// that is in range, applies the device name from the `[device]` section if
-// present, then deletes the file regardless of outcome (bad values should
-// not be retried on every boot).
-func applyWendyConf(logger *zap.Logger, cfgDir string) {
-	confPath := cfgDir + "/wendy.conf"
+// Seams so applyWendyConf runs in tests without NetworkManager or /etc.
+var (
+	addProfileFn      = network.AddOrUpdateProfile
+	activateProfileFn = network.ActivateProfile
+	applyDeviceNameFn = applyDeviceName
+	sleepFn           = time.Sleep
+)
+
+const (
+	// wendyConfAttemptsFile lives in the agent config dir: a counter on /config
+	// would be lost with the file it counts.
+	wendyConfAttemptsFile = "wendy-conf-attempts"
+	maxWendyConfAttempts  = 5
+	// nmWaitBudget bounds the wait for NetworkManager across the whole file:
+	// Apply runs before the agent serves anything.
+	nmWaitBudget = 20 * time.Second
+	nmMaxBackoff = 5 * time.Second
+)
+
+// errInvalidDeviceName marks a name that no retry can apply.
+var errInvalidDeviceName = errors.New("invalid device name")
+
+// applyWendyConf applies the Wi-Fi networks and device name in wendy.conf. What
+// was rejected is dropped; what failed only because NetworkManager or /etc was
+// not ready is kept for a later boot.
+func applyWendyConf(logger *zap.Logger, cfgDir, configPath string) {
+	confPath := filepath.Join(cfgDir, "wendy.conf")
 	data, err := os.ReadFile(confPath)
 	if os.IsNotExist(err) {
 		return
@@ -194,41 +221,39 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 	if err != nil {
 		logger.Error("Failed to read wendy.conf from config partition",
 			zap.String("path", confPath), zap.Error(err))
-		if err := os.Remove(confPath); err != nil {
-			logger.Warn("Failed to remove wendy.conf after read error",
-				zap.String("path", confPath), zap.Error(err))
-		}
+		retainWendyConf(logger, confPath, configPath, nil, nil)
 		return
 	}
 
 	sections := parseINI(data)
 	creds := wendyconf.UnmarshalWiFi(sections)
+	var keptCreds []wendyconf.WifiCredential
 	if len(creds) == 0 {
 		logger.Warn("wendy.conf has no usable WiFi credentials, skipping WiFi provisioning")
 	} else {
 		ctx := context.Background()
+		var waited time.Duration
 		for _, c := range creds {
-			err := network.AddOrUpdateProfile(ctx, network.SavedCredential{
-				SSID:     c.SSID,
-				Password: c.Password,
-				Priority: c.Priority,
-				Hidden:   c.Hidden,
-				Security: c.Security,
-			})
-			if err != nil {
+			err := addProfileWaitingForNM(ctx, c, &waited)
+			switch {
+			case err == nil:
+				logger.Info("Registered WiFi profile from config partition",
+					zap.String("ssid", c.SSID),
+					zap.Int32("priority", c.Priority))
+			case network.NetworkManagerUnavailable(err):
+				logger.Warn("NetworkManager is unavailable, keeping WiFi profile for the next boot",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				keptCreds = append(keptCreds, c)
+			default:
 				logger.Error("Failed to register WiFi profile from config partition",
 					zap.String("ssid", c.SSID), zap.Error(err))
-				continue
 			}
-			logger.Info("Registered WiFi profile from config partition",
-				zap.String("ssid", c.SSID),
-				zap.Int32("priority", c.Priority))
 		}
 		// Try to bring up the first (highest-priority) credential so the
 		// device is online immediately when it's in range. Lower-priority
 		// profiles stay saved for future locations.
 		for _, c := range creds {
-			if err := network.ActivateProfile(ctx, c.SSID); err != nil {
+			if err := activateProfileFn(ctx, c.SSID); err != nil {
 				logger.Warn("Could not activate WiFi profile",
 					zap.String("ssid", c.SSID), zap.Error(err))
 				continue
@@ -238,17 +263,171 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 		}
 	}
 
+	var keptName string
 	if name := sections["device"]["name"]; name != "" {
-		if err := applyDeviceName(logger, name); err != nil {
+		if err := applyDeviceNameFn(logger, name); err != nil {
 			logger.Error("Failed to apply device name from config partition",
 				zap.String("name", name), zap.Error(err))
+			if !errors.Is(err, errInvalidDeviceName) {
+				keptName = name
+			}
 		}
 	}
 
-	if err := os.Remove(confPath); err != nil {
+	if len(keptCreds) == 0 && keptName == "" {
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+	retainWendyConf(logger, confPath, configPath, data, marshalWendyConf(keptCreds, keptName))
+}
+
+// addProfileWaitingForNM registers c, retrying while NetworkManager is
+// unavailable and the budget shared by the whole file (*waited) lasts.
+func addProfileWaitingForNM(ctx context.Context, c wendyconf.WifiCredential, waited *time.Duration) error {
+	cred := network.SavedCredential{
+		SSID:     c.SSID,
+		Password: c.Password,
+		Priority: c.Priority,
+		Hidden:   c.Hidden,
+		Security: c.Security,
+	}
+	for delay := time.Second; ; delay = min(2*delay, nmMaxBackoff) {
+		err := addProfileFn(ctx, cred)
+		// A missing nmcli will not appear within the budget; a later boot may still have it.
+		if err == nil || !network.NetworkManagerUnavailable(err) || errors.Is(err, network.ErrNMCLINotFound) ||
+			*waited+delay > nmWaitBudget {
+			return err
+		}
+		sleepFn(delay)
+		*waited += delay
+	}
+}
+
+// marshalWendyConf renders wendy.conf the way the CLI writes it.
+func marshalWendyConf(creds []wendyconf.WifiCredential, name string) []byte {
+	conf := wendyconf.Marshal(creds)
+	if name != "" {
+		if len(conf) > 0 {
+			conf = append(conf, '\n')
+		}
+		conf = append(conf, "[device]\nname = "+name+"\n"...)
+	}
+	return conf
+}
+
+// retainWendyConf leaves rest in wendy.conf for the next boot and counts the
+// attempt; data and rest are nil when the file could not be read.
+func retainWendyConf(logger *zap.Logger, confPath, configPath string, data, rest []byte) {
+	// The counter carries the hash of the file it counts, so one left behind by
+	// an earlier install does not shorten a new install's retries.
+	previous, sum := readWendyConfAttempts(configPath)
+	if data != nil && sum != wendyConfSum(data) {
+		previous = 0
+	}
+	attempts := previous + 1
+	if attempts >= maxWendyConfAttempts {
+		logger.Error("Giving up on wendy.conf after repeated boots could not apply it",
+			zap.String("path", confPath), zap.Int("attempts", attempts))
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+
+	if data != nil {
+		sum = wendyConfSum(data)
+		if err := replaceWendyConf(confPath, rest); err != nil {
+			logger.Warn("Could not rewrite wendy.conf; keeping it whole for the next boot",
+				zap.String("path", confPath), zap.Error(err))
+		} else {
+			sum = wendyConfSum(rest)
+		}
+	}
+	if err := writeWendyConfAttempts(configPath, attempts, sum); err != nil {
+		// An attempt that cannot be counted could repeat on every boot.
+		logger.Error("Could not record the wendy.conf attempt, dropping wendy.conf",
+			zap.String("configPath", configPath), zap.Error(err))
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+	logger.Warn("Kept the parts of wendy.conf that could not be applied for the next boot",
+		zap.String("path", confPath), zap.Int("attempt", attempts), zap.Int("maxAttempts", maxWendyConfAttempts))
+}
+
+// removeWendyConf deletes wendy.conf and its attempt counter; the counter goes
+// first so a crash in between re-applies the file instead of skipping it.
+func removeWendyConf(logger *zap.Logger, confPath, configPath string) {
+	counter := filepath.Join(configPath, wendyConfAttemptsFile)
+	if err := os.Remove(counter); err != nil && !os.IsNotExist(err) {
+		logger.Warn("Failed to remove the wendy.conf attempt counter",
+			zap.String("path", counter), zap.Error(err))
+	}
+	os.Remove(confPath + ".new") //nolint:errcheck
+	if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
 		logger.Warn("Failed to remove wendy.conf after applying",
 			zap.String("path", confPath), zap.Error(err))
 	}
+}
+
+// readWendyConfAttempts returns the stored attempt count and the hash of the
+// wendy.conf it counts; a missing or malformed counter reads as zero.
+func readWendyConfAttempts(configPath string) (int, string) {
+	raw, err := os.ReadFile(filepath.Join(configPath, wendyConfAttemptsFile))
+	if err != nil {
+		return 0, ""
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		return 0, ""
+	}
+	n, err := strconv.Atoi(fields[0])
+	if err != nil || n < 0 {
+		return 0, ""
+	}
+	return n, fields[1]
+}
+
+func writeWendyConfAttempts(configPath string, attempts int, sum string) error {
+	if sum == "" {
+		sum = "-"
+	}
+	if err := os.MkdirAll(configPath, 0o700); err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(configPath, wendyConfAttemptsFile),
+		[]byte(fmt.Sprintf("%d %s\n", attempts, sum)), 0o600)
+}
+
+func wendyConfSum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// replaceWendyConf swaps in the new content by rename, so a power cut leaves
+// either the old file or the new one. No chmod: /config may be FAT.
+func replaceWendyConf(confPath string, data []byte) error {
+	tmp := confPath + ".new"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, confPath)
+	}
+	if err != nil {
+		os.Remove(tmp) //nolint:errcheck
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(confPath)); err == nil {
+		d.Sync()  //nolint:errcheck
+		d.Close() //nolint:errcheck
+	}
+	return nil
 }
 
 // maxDeviceNameLen caps the device name so the hostname this package derives as
@@ -280,7 +459,7 @@ func validDeviceName(name string) bool {
 
 func applyDeviceName(logger *zap.Logger, name string) error {
 	if !validDeviceName(name) {
-		return fmt.Errorf("invalid device name %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", name)
+		return fmt.Errorf("%w %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", errInvalidDeviceName, name)
 	}
 
 	const deviceNamePath = "/etc/wendyos/device-name"
@@ -351,9 +530,19 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 // Use the absolute path: exec.Command resolves binaries from the calling
 // process's PATH, not from cmd.Env, so bare "systemctl" would not be found.
 func restartAvahiDaemon(logger *zap.Logger, env []string) bool {
-	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+	// Discovery is best-effort: a stuck service manager must not keep the
+	// setup listener from serving or prevent enrollment from completing.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", "avahi-daemon")
 	restart.Env = env
+	// Bound output-pipe cleanup too, in case a child inherits systemctl's
+	// stdout/stderr and survives cancellation of the command itself.
+	restart.WaitDelay = time.Second
 	if out, err := restart.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
 		return false
 	}
@@ -363,6 +552,9 @@ func restartAvahiDaemon(logger *zap.Logger, env []string) bool {
 // updateAvahiDeviceName rewrites the name/displayname/fqdn TXT records in the
 // avahi service file and reloads avahi-daemon so mDNS picks up the new name.
 func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+
 	const serviceFile = "/etc/avahi/services/wendyos-mdns.service"
 
 	data, err := os.ReadFile(serviceFile)
@@ -389,25 +581,43 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 }
 
 // UpdateAvahiForProvisioning rewrites the _wendyos._udp service block in the
-// avahi service file to advertise the mTLS port, a tls=true TXT record, and
-// (when assetID > 0 / orgID > 0) assetid=<N> and orgid=<N> TXT records, then
-// restarts avahi-daemon so the mDNS advertisement reflects that the device is
-// now provisioned.
-func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, assetID, orgID int32) {
-	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, assetID, orgID, func() bool {
+// avahi service file to advertise the mTLS port, a tls=true TXT record, and a
+// principal=<SPIFFE device URI> TXT record, then restarts avahi-daemon so the
+// mDNS advertisement reflects that the device is now provisioned. The
+// principal is what mesh peers dial: it is the full device identity, so a
+// sighting cannot be spoofed by re-advertising someone else's id.
+func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal string) {
+	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
 }
 
 // UpdateAvahiForUnprovisioning reverts the _wendyos._udp service block to
 // advertise the plaintext agent port, a tls=false TXT record, and removes the
-// assetid and orgid TXT records, then restarts avahi-daemon. It is the
-// inverse of UpdateAvahiForProvisioning, used when a device is unprovisioned
-// so it is rediscoverable for re-enrollment.
+// principal TXT record, then restarts avahi-daemon. It is the inverse of
+// UpdateAvahiForProvisioning, used when a device is unprovisioned so it is
+// rediscoverable for re-enrollment.
 func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
-	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, 0, 0, func() bool {
+	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, "", func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
+}
+
+// ApplyDiscoveryAccess hides or restores Wendy's avahi advertisements to match
+// the saved network access choice. Best-effort like the other discovery
+// updates: local mode binds only loopback anyway, so a read-only or
+// locked-down /etc is logged rather than stopping the agent.
+func ApplyDiscoveryAccess(logger *zap.Logger, policy networkaccess.Policy) {
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+
+	changed, err := policy.UpdateAdvertisements(defaultAvahiServiceDir)
+	if err != nil {
+		logger.Warn("Could not apply discovery access choice", zap.Error(err))
+	}
+	if changed {
+		restartAvahiDaemon(logger, nil)
+	}
 }
 
 // defaultAvahiServiceDir is the directory scanned for avahi service files on
@@ -415,7 +625,7 @@ func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
 const defaultAvahiServiceDir = "/etc/avahi/services"
 
 // updateAvahiService points the _wendyos._udp advertisement at the given port
-// and sets its tls and assetid TXT records. The service file name varies by
+// and sets its tls and principal TXT records. The service file name varies by
 // image (e.g. wendyos-mdns.service or wendy-agent.service), so we scan all
 // files in serviceDir and update the first one that contains a _wendyos._udp
 // block.
@@ -425,7 +635,10 @@ const defaultAvahiServiceDir = "/etc/avahi/services"
 // temporary directory, so every guard passes and the restart is reached for
 // real. Left un-injected it prompts for polkit authorization on a developer
 // machine and blocks the package's tests for the length of that timeout.
-func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, assetID, orgID int32, restartAvahi func() bool) {
+func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal string, restartAvahi func() bool) {
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+
 	entries, err := os.ReadDir(serviceDir)
 	if err != nil {
 		logger.Warn("Could not read avahi services dir", zap.String("path", serviceDir), zap.Error(err))
@@ -445,7 +658,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 			continue
 		}
 
-		content := updateWendyOSServicePort(string(data), port, tls, assetID, orgID)
+		content := updateWendyOSServicePort(string(data), port, tls, principal)
 		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
 			logger.Warn("Could not write avahi service file",
 				zap.String("path", serviceFile), zap.Error(err))
@@ -454,7 +667,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 
 		if restartAvahi() {
 			logger.Info("Updated avahi advertisement",
-				zap.String("file", e.Name()), zap.Int("port", port), zap.Bool("tls", tls), zap.Int32("assetId", assetID), zap.Int32("orgId", orgID))
+				zap.String("file", e.Name()), zap.Int("port", port), zap.Bool("tls", tls), zap.String("principal", principal))
 		}
 		return
 	}
@@ -463,11 +676,10 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 }
 
 // updateWendyOSServicePort finds the _wendyos._udp service block and updates
-// its port, tls TXT record, assetid TXT record, and orgid TXT record. Other
-// service blocks (SSH, HTTP, etc.) are left untouched. When assetID <= 0 or
-// orgID <= 0, the corresponding TXT record is removed (used on
-// unprovisioning).
-func updateWendyOSServicePort(content string, port int, tls bool, assetID, orgID int32) string {
+// its port, tls TXT record, and principal TXT record. Other service blocks
+// (SSH, HTTP, etc.) are left untouched. When principal is empty, the TXT
+// record is removed (used on unprovisioning).
+func updateWendyOSServicePort(content string, port int, tls bool, principal string) string {
 	const typeTag = "<type>_wendyos._udp</type>"
 	portRe := regexp.MustCompile(`<port>\d+</port>`)
 
@@ -506,55 +718,33 @@ func updateWendyOSServicePort(content string, port int, tls bool, assetID, orgID
 			"    <txt-record>tls="+tlsValue+"</txt-record>\n  </service>", 1)
 	}
 
-	block = updateAssetIDTXTRecord(block, assetID)
-	block = updateOrgIDTXTRecord(block, orgID)
+	block = updatePrincipalTXTRecord(block, principal)
 
 	return content[:serviceStart] + block + content[serviceEnd:]
 }
 
-// updateAssetIDTXTRecord adds, updates, or removes the assetid TXT record
-// within a single _wendyos._udp service block. assetID <= 0 removes the
-// record (used on unprovisioning, where the asset ID is no longer known).
-func updateAssetIDTXTRecord(block string, assetID int32) string {
-	assetIDRe := regexp.MustCompile(`\s*<txt-record>assetid=[^<]*</txt-record>`)
-	hasRecord := strings.Contains(block, "<txt-record>assetid=")
+// updatePrincipalTXTRecord adds, updates, or removes the principal TXT record
+// within a single _wendyos._udp service block. The record carries the device's
+// full SPIFFE principal — the identity mesh peers dial and pin TLS against.
+// An empty principal removes the record (used on unprovisioning, where no
+// identity is held).
+func updatePrincipalTXTRecord(block string, principal string) string {
+	block = regexp.MustCompile(`\s*<txt-record>(orgid|assetid)=[^<]*</txt-record>`).ReplaceAllString(block, "")
+	principalRe := regexp.MustCompile(`\s*<txt-record>principal=[^<]*</txt-record>`)
+	hasRecord := strings.Contains(block, "<txt-record>principal=")
 
-	if assetID <= 0 {
+	if principal == "" {
 		if hasRecord {
-			block = assetIDRe.ReplaceAllString(block, "")
+			block = principalRe.ReplaceAllString(block, "")
 		}
 		return block
 	}
 
-	value := fmt.Sprintf("%d", assetID)
 	if hasRecord {
-		return replaceTXTRecord(block, "assetid", value)
+		return replaceTXTRecord(block, "principal", principal)
 	}
 	return strings.Replace(block, "</service>",
-		"    <txt-record>assetid="+value+"</txt-record>\n  </service>", 1)
-}
-
-// updateOrgIDTXTRecord adds, updates, or removes the orgid TXT record within
-// a single _wendyos._udp service block. The mesh friendly-name resolver reads
-// this to filter LAN peers to the dialer's own org. orgID <= 0 removes the
-// record (used on unprovisioning, where the org is no longer known).
-func updateOrgIDTXTRecord(block string, orgID int32) string {
-	orgIDRe := regexp.MustCompile(`\s*<txt-record>orgid=[^<]*</txt-record>`)
-	hasRecord := strings.Contains(block, "<txt-record>orgid=")
-
-	if orgID <= 0 {
-		if hasRecord {
-			block = orgIDRe.ReplaceAllString(block, "")
-		}
-		return block
-	}
-
-	value := fmt.Sprintf("%d", orgID)
-	if hasRecord {
-		return replaceTXTRecord(block, "orgid", value)
-	}
-	return strings.Replace(block, "</service>",
-		"    <txt-record>orgid="+value+"</txt-record>\n  </service>", 1)
+		"    <txt-record>principal="+principal+"</txt-record>\n  </service>", 1)
 }
 
 // UpdateAvahiSensorlink adds or removes the sensorlink=true TXT record on the
@@ -563,6 +753,9 @@ func updateOrgIDTXTRecord(block string, orgID int32) string {
 // independently of provisioning state. Consumer devices in this plan never
 // call it; it exists so the source-role wiring and the picker agree on the key.
 func UpdateAvahiSensorlink(logger *zap.Logger, on bool) {
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+
 	entries, err := os.ReadDir(defaultAvahiServiceDir)
 	if err != nil {
 		logger.Warn("Could not read avahi services dir", zap.String("path", defaultAvahiServiceDir), zap.Error(err))
@@ -706,13 +899,17 @@ func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
 		return
 	}
 
-	if err := services.WritePEMFiles(configPath, state.KeyPEM, state.CertPEM, state.ChainPEM); err != nil {
-		logger.Error("Failed to write PEM files from config partition",
+	// Flashing is an explicit local reset. Valid first-boot provisioning may
+	// replace prior recovery state; it does not perform Cloud cleanup.
+	if err := services.WriteDeviceKey(configPath, []byte(state.KeyPEM)); err != nil {
+		logger.Error("Failed to write device key from config partition",
 			zap.String("configPath", configPath), zap.Error(err))
 		return
 	}
 
-	if err := os.WriteFile(filepath.Join(configPath, "provisioning.json"), data, 0o600); err != nil {
+	// The private key belongs only in device-key.pem. Commit enrollment after
+	// that file is durable, and preserve identical files if an import is retried.
+	if err := services.WriteProvisioningState(configPath, data); err != nil {
 		logger.Error("Failed to write provisioning.json from config partition", zap.Error(err))
 		return
 	}
@@ -747,7 +944,7 @@ func Apply(logger *zap.Logger, configPath string) {
 	if applyBinaryUpdate(logger, configDir, installPath) {
 		os.Exit(0)
 	}
-	applyWendyConf(logger, configDir)
+	applyWendyConf(logger, configDir, configPath)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
 	applyExtensions(logger, configDir)
@@ -889,4 +1086,107 @@ func linkNotReady(err error) bool {
 	var dnsErr *net.DNSError
 	var opErr *net.OpError
 	return errors.As(err, &dnsErr) || errors.As(err, &opErr)
+}
+
+// PersistDeviceUUID writes the enrolled certificate's device UUID to
+// /etc/wendyos/device-uuid and into the _wendyos._udp id= TXT record, so mDNS
+// advertises the same id the certificate proves (WDY-3919). It does not
+// restart avahi: call it before UpdateAvahiForProvisioning, which does. A
+// legacy asset certificate carries no device UUID and leaves both untouched.
+func PersistDeviceUUID(logger *zap.Logger, certPEM string) {
+	if err := persistDeviceUUID("/", defaultAvahiServiceDir, certPEM); err != nil {
+		logger.Warn("Could not persist the device UUID", zap.Error(err))
+	}
+}
+
+func persistDeviceUUID(root, serviceDir, certPEM string) error {
+	chain, err := certs.ParseCertsFromPEM([]byte(certPEM))
+	if err == nil && len(chain) == 0 {
+		err = errors.New("no certificate")
+	}
+	if err != nil {
+		return fmt.Errorf("parsing device certificate: %w", err)
+	}
+	device, err := meshid.DeviceFromCert(chain[0])
+	if err != nil {
+		return nil // legacy asset certificate: no device UUID to persist
+	}
+	id := device.UUID().String()
+	uuidPath := filepath.Join(root, "etc/wendyos/device-uuid")
+	if old, _ := os.ReadFile(uuidPath); strings.TrimSpace(string(old)) != id {
+		// generate-hostname.sh falls back to the device-uuid suffix when the
+		// device has no explicit hostname or device-name; pin the name it
+		// answers by now so the new UUID does not rename it at the next boot.
+		if err := pinCurrentHostname(root); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(uuidPath), 0o755); err != nil {
+			return err
+		}
+		if err := writeDeviceIdentityFile(uuidPath, []byte(id+"\n")); err != nil {
+			return err
+		}
+	}
+
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+	entries, err := os.ReadDir(serviceDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		serviceFile := filepath.Join(serviceDir, e.Name())
+		data, err := os.ReadFile(serviceFile)
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".service") || err != nil || !strings.Contains(string(data), "_wendyos._udp") {
+			continue
+		}
+		return writeDeviceIdentityFile(serviceFile, []byte(replaceTXTRecord(string(data), "id", id)))
+	}
+	return nil
+}
+
+func pinCurrentHostname(root string) error {
+	explicit := filepath.Join(root, "etc/wendy-agent/hostname")
+	for _, named := range []string{explicit, filepath.Join(root, "etc/wendyos/device-name")} {
+		info, err := os.Stat(named)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("hostname source %s is not a regular file", named)
+		}
+		data, err := os.ReadFile(named)
+		if err != nil {
+			return err
+		}
+		// The boot script ignores empty name files and derives a name from the
+		// UUID instead. Merely finding the file does not preserve that name.
+		if strings.TrimSpace(string(data)) != "" {
+			return nil
+		}
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(explicit), 0o755); err != nil {
+		return err
+	}
+	return writeDeviceIdentityFile(explicit, []byte(hostname+"\n"))
+}
+
+// Keep persistence links intact and make the hostname pin durable before the
+// device UUID changes. A torn hostname/UUID/XML write must not survive a reboot.
+func writeDeviceIdentityFile(path string, data []byte) error {
+	target, err := atomicfile.ResolveWritePath(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return err
+	}
+	return atomicfile.Write(target, data, 0644)
 }

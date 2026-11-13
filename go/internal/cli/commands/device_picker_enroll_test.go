@@ -34,7 +34,8 @@ func TestEnrollLocalPickerDeviceUsesHighlightedDevice(t *testing.T) {
 			deviceFlag, jsonOutput = "another-device.local", false
 			t.Cleanup(func() { deviceFlag, jsonOutput = oldDevice, oldJSON })
 
-			ctx, cancel := context.WithCancel(context.Background())
+			type selectionKey struct{}
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), selectionKey{}, "selected-device"))
 			defer cancel()
 			item := &tui.PickerItem{Name: "Highlighted device", Address: "192.0.2.10"}
 			auth := &config.AuthConfig{
@@ -54,14 +55,16 @@ func TestEnrollLocalPickerDeviceUsesHighlightedDevice(t *testing.T) {
 				calls = append(calls, "connect")
 				return &SelectedDevice{Agent: conn}, nil
 			}
-			promptPickerEnrollmentWifiFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection) {
-				if gotCtx != ctx || gotConn != conn || closed {
-					t.Fatal("WiFi prompt did not receive the live highlighted connection")
+			promptPickerEnrollmentWifiFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection) error {
+				target, _ := gotCtx.Value(wifiCredentialTargetKey{}).(*SelectedDevice)
+				if gotCtx.Value(selectionKey{}) != "selected-device" || gotCtx.Err() != ctx.Err() || target == nil || target.Agent != conn || gotConn != conn || closed {
+					t.Fatal("WiFi prompt did not receive the live highlighted connection and its selected target")
 				}
 				calls = append(calls, "wifi")
+				return nil
 			}
 			runPickerEnrollmentFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection, gotAuth *config.AuthConfig, name string, orgOverride int32, _ ...string) error {
-				if gotCtx != ctx || gotConn != conn || gotAuth != auth || name != "" || orgOverride != 0 || closed {
+				if gotCtx.Value(selectionKey{}) != "selected-device" || gotCtx.Err() != ctx.Err() || gotCtx.Value(enrollmentBindingRecorderKey{}) == nil || gotConn != conn || gotAuth != auth || name != "" || orgOverride != 0 || closed {
 					t.Fatal("enrollment did not receive the live highlighted connection and selected cloud session with normal name/org prompts")
 				}
 				calls = append(calls, "enroll")
@@ -107,8 +110,9 @@ func TestEnrollLocalPickerDeviceRejectsBluetoothFallback(t *testing.T) {
 	connectPickerEnrollmentFn = func(context.Context, *tui.PickerItem, bool) (*SelectedDevice, error) {
 		return &SelectedDevice{Bluetooth: &models.BluetoothDevice{DisplayName: "Highlighted device"}}, nil
 	}
-	promptPickerEnrollmentWifiFn = func(context.Context, *grpcclient.AgentConnection) {
+	promptPickerEnrollmentWifiFn = func(context.Context, *grpcclient.AgentConnection) error {
 		t.Fatal("prompted for WiFi on an unsupported enrollment transport")
+		return nil
 	}
 	runPickerEnrollmentFn = func(context.Context, *grpcclient.AgentConnection, *config.AuthConfig, string, int32, ...string) error {
 		t.Fatal("attempted enrollment on an unsupported transport")
@@ -118,5 +122,29 @@ func TestEnrollLocalPickerDeviceRejectsBluetoothFallback(t *testing.T) {
 	err := enrollLocalPickerDevice(context.Background(), &tui.PickerItem{Name: "Highlighted device"}, auth, false)
 	if err == nil || !strings.Contains(err.Error(), "requires a LAN connection") {
 		t.Fatalf("enrollLocalPickerDevice() error = %v, want a LAN requirement", err)
+	}
+}
+
+func TestEnrollLocalPickerDeviceStopsAfterWifiCancellation(t *testing.T) {
+	restorePickerEnrollmentFunctions(t)
+	closed := false
+	conn := &grpcclient.AgentConnection{Host: "device.local", ExtraClosers: []io.Closer{closeTracker{closed: &closed}}}
+	connectPickerEnrollmentFn = func(context.Context, *tui.PickerItem, bool) (*SelectedDevice, error) {
+		return &SelectedDevice{Agent: conn}, nil
+	}
+	promptPickerEnrollmentWifiFn = func(context.Context, *grpcclient.AgentConnection) error {
+		return ErrUserCancelled
+	}
+	runPickerEnrollmentFn = func(context.Context, *grpcclient.AgentConnection, *config.AuthConfig, string, int32, ...string) error {
+		t.Fatal("enrollment continued after WiFi cancellation")
+		return nil
+	}
+	auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{OrganizationID: 27}}}
+	err := enrollLocalPickerDevice(context.Background(), &tui.PickerItem{}, auth, true)
+	if !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("got %v, want cancellation", err)
+	}
+	if !closed {
+		t.Fatal("connection was not closed")
 	}
 }

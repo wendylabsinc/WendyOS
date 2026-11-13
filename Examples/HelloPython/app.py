@@ -4,13 +4,15 @@ Simple Hello World Python HTTP Server
 """
 
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import json
 import os
 import socket
 
 class HelloWorldHandler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
+    # Bound idle keep-alive connections and incomplete request headers/bodies.
+    timeout = 15
 
     def send_body(self, status, content_type, body):
         payload = body.encode('utf-8')
@@ -123,7 +125,7 @@ class HelloWorldHandler(BaseHTTPRequestHandler):
 
 def run_server(port=8000):
     server_address = ('0.0.0.0', port)
-    httpd = HTTPServer(server_address, HelloWorldHandler)
+    httpd = ThreadingHTTPServer(server_address, HelloWorldHandler)
     print(f"Starting server on {server_address[0]}:{server_address[1]}", flush=True)
     print(f"Visit http://localhost:{port} to see the Hello World page", flush=True)
     print(f"API endpoints available:", flush=True)

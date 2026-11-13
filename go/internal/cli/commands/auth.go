@@ -2,15 +2,15 @@ package commands
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/mldsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -24,21 +24,48 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/enrolltoken"
-	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 const defaultCloudDashboard = "https://cloud.wendy.sh"
 const defaultCloudGRPC = "wendy-cloud-services-114319063177.us-central1.run.app:443"
+const defaultProdAuthBase = "https://auth.wendy.dev"
+const defaultProdCloudDashboard = "https://cloud.wendy.dev"
+const defaultProdCloudGRPC = "api.wendy.dev:443"
+const defaultProdCloudResource = "https://cloud.wendy.dev/api"
+const defaultProdPKIIdentityEndpoint = "https://identity.pki.wendy.dev/v1/identity/certificate"
 const defaultDevAuthBase = "https://auth.dev.wendy.sh"
 const defaultDevCloudDashboard = "https://cloud.dev.wendy.sh"
 const defaultDevCloudGRPC = "api.dev.wendy.sh:443"
 const defaultDevCloudResource = "https://cloud.dev.wendy.sh/api"
 const defaultPKIIdentityResource = "https://pki.wendy.sh/identity"
 const defaultDevPKIIdentityEndpoint = "https://identity.dev.pki.wendy.sh/v1/identity/certificate"
+
+type cloudLoginTarget struct {
+	name             string
+	authBase         string
+	cloudDashboard   string
+	cloudGRPC        string
+	cloudResource    string
+	identityEndpoint string
+}
+
+var productionCloudLoginTarget = cloudLoginTarget{
+	name:             "production",
+	authBase:         defaultProdAuthBase,
+	cloudDashboard:   defaultProdCloudDashboard,
+	cloudGRPC:        defaultProdCloudGRPC,
+	cloudResource:    defaultProdCloudResource,
+	identityEndpoint: defaultProdPKIIdentityEndpoint,
+}
+
+var developmentCloudLoginTarget = cloudLoginTarget{
+	name:             "development",
+	authBase:         defaultDevAuthBase,
+	cloudDashboard:   defaultDevCloudDashboard,
+	cloudGRPC:        defaultDevCloudGRPC,
+	cloudResource:    defaultDevCloudResource,
+	identityEndpoint: defaultDevPKIIdentityEndpoint,
+}
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -55,6 +82,7 @@ func newAuthCmd() *cobra.Command {
 		newAuthRenameCmd(),
 		newAuthDefaultCmd(),
 		newAuthListOrgsCmd(),
+		newAuthServiceAccountCmd(),
 	)
 
 	return cmd
@@ -63,8 +91,6 @@ func newAuthCmd() *cobra.Command {
 func newAuthLoginCmd() *cobra.Command {
 	var cloudDashboard string
 	var cloudGRPC string
-	var apiKey string
-	var orgID int32
 	var issuer string
 	var email string
 	var authBase string
@@ -73,23 +99,61 @@ func newAuthLoginCmd() *cobra.Command {
 	var identityResource string
 	var identityEndpoint string
 	var printClaims bool
+	var production bool
+	var development bool
 	var legacy bool
+	var serviceAccount string
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in to Wendy Cloud or a local pki-core instance",
-		Long: "Signs in to Wendy Cloud. For now, defaults to the legacy dashboard login (cloud.wendy.sh). For the OIDC flow, pass --email to discover your realm (or --issuer to name it), sign in with authorization code + PKCE, obtain an operator certificate directly from pki-core, and save a refreshable Cloud API session.\n" +
-			"With --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.\n" +
-			"With --legacy: uses the old Wendy Cloud dashboard enrollment callback (cloud.wendy.sh). Kept for the previous cloud only.",
+		Short: "Sign in to Wendy Cloud",
+		Long: "Sign in to Wendy Cloud in your browser, choose your organization, then return to the terminal. Wendy saves the sign-in for later commands. Pass --email to supply your email first.\n" +
+			"For scripts, use --service-account <key-file> or " + serviceAccountKeyEnv + ": no browser or terminal is needed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Temporarily default to legacy login until the new cloud is ready.
-			// Explicit OIDC or local authentication options keep their existing behavior.
-			if !cmd.Flags().Changed("legacy") && email == "" && issuer == "" && apiKey == "" {
-				legacy = true
+			targetCount := 0
+			for _, selected := range []bool{production, development, legacy} {
+				if selected {
+					targetCount++
+				}
+			}
+			if targetCount > 1 {
+				return fmt.Errorf("--production, --development, and --legacy are mutually exclusive")
+			}
+
+			if serviceAccount != "" && (legacy || issuer != "" || email != "") {
+				return fmt.Errorf("--service-account selects headless service-account login and cannot be combined with --legacy, --issuer, or --email")
+			}
+			// An explicit login mode wins over a key in the environment. Target
+			// flags do not: they select the environment for that headless login.
+			otherMode := legacy || issuer != "" || email != ""
+			saKey, err := readServiceAccountKey(serviceAccount)
+			if err != nil {
+				return err
+			}
+			target := productionCloudLoginTarget
+			if development {
+				target = developmentCloudLoginTarget
+			}
+			if saKey != nil && !otherMode {
+				if cloudDashboard == "" {
+					cloudDashboard = target.cloudDashboard
+				}
+				if cloudGRPC == "" {
+					cloudGRPC = target.cloudGRPC
+				}
+				if resource == "" {
+					resource = target.cloudResource
+				}
+				return performServiceAccountLogin(cmd.Context(), serviceAccountLoginOptions{
+					KeyFile:   saKey,
+					CloudURL:  cloudDashboard,
+					CloudGRPC: cloudGRPC,
+					Resource:  resource,
+				})
 			}
 			if legacy {
-				if apiKey != "" || issuer != "" || email != "" {
-					return fmt.Errorf("--legacy selects the old cloud-dashboard login and cannot be combined with --api-key, --issuer, or --email")
+				if issuer != "" || email != "" {
+					return fmt.Errorf("--legacy selects the old cloud-dashboard login and cannot be combined with --issuer or --email")
 				}
 				if cloudDashboard == "" {
 					cloudDashboard = defaultCloudDashboard
@@ -100,75 +164,78 @@ func newAuthLoginCmd() *cobra.Command {
 				if !strings.HasPrefix(cloudDashboard, "http://") && !strings.HasPrefix(cloudDashboard, "https://") {
 					cloudDashboard = "https://" + cloudDashboard
 				}
-				return performLogin(cmd.Context(), cloudDashboard, cloudGRPC)
+				return performLoginFn(cmd.Context(), cloudDashboard, cloudGRPC)
 			}
 
-			// Self-hosted pki-core with a bearer key.
-			if apiKey != "" {
-				if issuer != "" || email != "" {
-					return fmt.Errorf("OIDC and --api-key select different login modes; pass only one")
-				}
-				if cloudGRPC == "" {
-					return fmt.Errorf("--cloud-grpc is required for local authentication")
-				}
-				return performLocalLogin(cmd.Context(), cloudGRPC, apiKey, orgID)
+			// A built-in Cloud target starts at wendy-auth's universal page so the
+			// browser collects the email and organization once. Explicit --email and
+			// --issuer retain their established discovery/direct-realm behavior.
+			if !cmd.Flags().Changed("auth") {
+				authBase = target.authBase
 			}
-
-			// OIDC login requires an email address or an explicit realm issuer.
-			if authBase == "" {
-				authBase = defaultDevAuthBase
-			}
-			if issuer == "" {
-				if email == "" {
-					return fmt.Errorf("provide --email to discover your realm, or --issuer to name it; use --legacy for the old cloud-dashboard login")
-				}
+			var loginHint string
+			if issuer == "" && email != "" {
 				var err error
-				issuer, err = discoverOIDCIssuer(cmd.Context(), authBase, email)
+				issuer, err = discoverOIDCIssuerFn(cmd.Context(), authBase, email)
 				if err != nil {
 					return err
 				}
+				if issuer == "" {
+					loginHint = email
+					fmt.Println(tui.InfoMessage(fmt.Sprintf("No organization is pinned for %s; continuing with the universal sign-in.", email)))
+				}
 			}
 			if cloudDashboard == "" {
-				cloudDashboard = defaultDevCloudDashboard
+				cloudDashboard = target.cloudDashboard
 			}
 			if cloudGRPC == "" {
-				cloudGRPC = defaultDevCloudGRPC
+				cloudGRPC = target.cloudGRPC
 			}
 			if resource == "" {
-				resource = defaultDevCloudResource
+				resource = target.cloudResource
 			}
 			if identityResource == "" {
 				identityResource = defaultPKIIdentityResource
 			}
-			if identityEndpoint == "" {
-				identityEndpoint = defaultDevPKIIdentityEndpoint
+			if !cmd.Flags().Changed("pki-identity-endpoint") {
+				identityEndpoint = target.identityEndpoint
 			}
-			return performOIDCLogin(cmd.Context(), oidcLoginOptions{
-				Issuer:           issuer,
-				ClientID:         clientID,
-				CloudResource:    resource,
-				IdentityResource: identityResource,
-				IdentityEndpoint: identityEndpoint,
-				CloudURL:         cloudDashboard,
-				CloudGRPC:        cloudGRPC,
-				PrintClaims:      printClaims,
+			return performOIDCLoginFn(cmd.Context(), oidcLoginOptions{
+				Issuer:            issuer,
+				AuthorizationBase: authBase,
+				LoginHint:         loginHint,
+				ClientID:          clientID,
+				CloudResource:     resource,
+				IdentityResource:  identityResource,
+				IdentityEndpoint:  identityEndpoint,
+				CloudURL:          cloudDashboard,
+				CloudGRPC:         cloudGRPC,
+				PrintClaims:       printClaims,
 			})
 		},
 	}
 
 	cmd.Flags().StringVar(&cloudDashboard, "cloud", "", "Cloud dashboard URL")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint, or local pki-core address (host:port) when using --api-key")
-	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for local pki-core authentication")
-	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID for --api-key local login. For Wendy Cloud, each login is stored as an auth context; switch with 'wendy auth use <context>'.")
-	cmd.Flags().StringVar(&issuer, "issuer", "", "wendy-auth realm issuer URL, e.g. https://auth.wendy.sh/realms/acme (enables OIDC login)")
-	cmd.Flags().StringVar(&email, "email", "", "Email address used to discover your organization and sign in with wendy-auth")
-	cmd.Flags().StringVar(&authBase, "auth", defaultDevAuthBase, "wendy-auth base URL used with --email")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud API endpoint")
+	cmd.Flags().StringVar(&issuer, "issuer", "", "wendy-auth realm issuer URL, e.g. https://auth.wendy.dev/realms/acme")
+	cmd.Flags().StringVar(&email, "email", "", "Email address for explicit organization discovery with wendy-auth")
+	cmd.Flags().StringVar(&authBase, "auth", defaultProdAuthBase, "wendy-auth base URL for browser login and --email discovery")
 	cmd.Flags().StringVar(&clientID, "client-id", "wendy-cli", "public DPoP OAuth client ID registered in wendy-auth")
 	cmd.Flags().StringVar(&resource, "resource", "", "RFC 8707 API resource indicator (used with OIDC login)")
-	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "RFC 8707 pki-core identity resource (used with OIDC login)")
-	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultDevPKIIdentityEndpoint, "pki-core operator identity CSR endpoint (used with OIDC login)")
+	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "Certificate service authentication audience for browser login")
+	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultProdPKIIdentityEndpoint, "Certificate service URL for personal sign-in")
 	cmd.Flags().BoolVar(&printClaims, "print-claims", false, "Print the decoded access-token claims after login (used with --issuer)")
-	cmd.Flags().BoolVar(&legacy, "legacy", false, "Use the old Wendy Cloud dashboard enrollment flow (cloud.wendy.sh) (the temporary default unless --email, --issuer, or --api-key is provided)")
+	cmd.Flags().StringVar(&serviceAccount, "service-account", "", "Service-account key file for headless login (or set "+serviceAccountKeyEnv+" to its contents)")
+	// Keep explicit environment selection and the legacy flow available without
+	// advertising them in CLI help.
+	cmd.Flags().BoolVar(&production, "production", false, "Use the production Wendy Cloud")
+	cmd.Flags().BoolVar(&development, "development", false, "Use the development Wendy Cloud")
+	cmd.Flags().BoolVar(&legacy, "legacy", false, "Use the old Wendy Cloud dashboard enrollment flow (cloud.wendy.sh)")
+	for _, name := range []string{"production", "development", "legacy"} {
+		if err := cmd.Flags().MarkHidden(name); err != nil {
+			panic(err)
+		}
+	}
 	return cmd
 }
 
@@ -177,210 +244,84 @@ type loginCallbackResult struct {
 	APIKey          string
 }
 
+// browserLoginTimeout bounds how long a login waits for the browser to call
+// back, for both the legacy dashboard flow and the OIDC flow. A var only so
+// tests can shrink it.
+var browserLoginTimeout = 5 * time.Minute
+
+// browserLoginTimeoutError is what both login flows return when no browser
+// finished the sign-in within browserLoginTimeout. It doesn't name `wendy auth
+// login`: the same flows run inside `cloud org switch`, org setup and device
+// enrollment.
+func browserLoginTimeoutError() error {
+	return fmt.Errorf("timed out after %s: no browser finished the sign-in; run the command again and complete it in the browser", browserLoginTimeout)
+}
+
+// printLoginURLForManualOpen is used instead of opening a browser when no
+// person is at the terminal (see humanPresent): an agent or script driving the
+// CLI can't use a browser window it didn't ask for, but can relay a URL. The URL goes alone on
+// its own line so it can be copied verbatim.
+func printLoginURLForManualOpen(loginURL string) {
+	fmt.Println("Open this URL in a browser on this machine to sign in:")
+	fmt.Println(loginURL)
+}
+
 func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
-	// Step 1: Start a local HTTP server to receive the OAuth callback.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	session, err := beginLegacyLogin(ctx, cloudDashboard, cloudGRPC)
 	if err != nil {
-		return fmt.Errorf("starting local callback server: %w", err)
+		return err
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
 
-	// Channel to receive the enrollment token and PAT from the callback.
-	tokenCh := make(chan loginCallbackResult, 1)
-	errCh := make(chan error, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/cli-callback", func(w http.ResponseWriter, r *http.Request) {
-		token := r.URL.Query().Get("token")
-		if token == "" {
-			http.Error(w, "missing token parameter", http.StatusBadRequest)
-			errCh <- fmt.Errorf("callback received without token")
-			return
-		}
-		apiKey := r.URL.Query().Get("api_key")
-		if !strings.HasPrefix(apiKey, "wnd_pat_") || len(apiKey) > 256 {
-			apiKey = ""
-		}
-
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Wendy – Authenticated</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: #f8f9fa;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    color: #1a1a1a;
-  }
-  .card {
-    background: #fff;
-    border-radius: 12px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-    padding: 48px;
-    text-align: center;
-    max-width: 420px;
-  }
-  .checkmark {
-    width: 56px;
-    height: 56px;
-    background: #e8f5e9;
-    border-radius: 50%%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 20px;
-    font-size: 28px;
-  }
-  h2 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
-  p { font-size: 15px; color: #666; line-height: 1.5; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <div class="checkmark">✓</div>
-    <h2>Authentication successful</h2>
-    <p>You can close this tab and return to the terminal.</p>
-  </div>
-</body>
-</html>`)
-		tokenCh <- loginCallbackResult{EnrollmentToken: token, APIKey: apiKey}
-	})
-
-	server := &http.Server{Handler: mux}
-	go func() {
-		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
-			errCh <- serveErr
-		}
-	}()
-	defer server.Close()
-
-	// Step 2: Open browser to login URL with callback port.
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
-	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	fmt.Println(tui.InfoMessage("Opening browser for authentication"))
-	fmt.Printf("  %s\n", loginURL)
-
-	if err := openBrowser(loginURL); err != nil {
-		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+	loginURL := session.URL()
+	if !humanPresent() {
+		printLoginURLForManualOpen(loginURL)
+	} else {
+		fmt.Println(tui.InfoMessage("Opening browser for authentication"))
 		fmt.Printf("  %s\n", loginURL)
+
+		if err := openBrowser(loginURL); err != nil {
+			fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+			fmt.Printf("  %s\n", loginURL)
+		}
 	}
 
-	// Show a QR code the user can scan with the Wendy iOS app to log in on their phone.
-	mobileRedirect := url.QueryEscape("wendy://cloud-login")
-	mobileLoginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, mobileRedirect)
-	if qr, qrErr := qrcode.New(mobileLoginURL, qrcode.Medium); qrErr == nil {
-		fmt.Println(tui.InfoMessage("Or scan with the Wendy iOS app:"))
-		fmt.Println(qr.ToSmallString(false))
+	// Show a QR code the user can scan with the Wendy iOS app to log in on
+	// their phone — only for a person at the terminal; for an agent it is
+	// noise around the one line it needs.
+	if humanPresent() {
+		if qr, qrErr := qrcode.New(session.MobileURL(), qrcode.Medium); qrErr == nil {
+			fmt.Println(tui.InfoMessage("Or scan with the Wendy iOS app:"))
+			fmt.Println(qr.ToSmallString(false))
+		}
 	}
 
 	fmt.Println(tui.InfoMessage("Waiting for authentication..."))
 
-	// Wait for the token and PAT.
-	var result loginCallbackResult
+	// The token arrives before the certificate is issued. When the session has
+	// already ended by the time we look, report the token only if it came.
 	select {
-	case result = <-tokenCh:
+	case <-session.TokenReceived():
 		fmt.Println(tui.SuccessMessage("Received enrollment token."))
-	case loginErr := <-errCh:
-		return fmt.Errorf("login failed: %w", loginErr)
-	case <-ctx.Done():
-		return ctx.Err()
+		<-session.Done()
+	case <-session.Done():
+		select {
+		case <-session.TokenReceived():
+			fmt.Println(tui.SuccessMessage("Received enrollment token."))
+		default:
+		}
 	}
-
-	// Step 3: Generate a key pair and CSR.
-	privateKeyPEM, err := certs.GenerateKeyPair()
-	if err != nil {
-		return fmt.Errorf("generating key pair: %w", err)
-	}
-
-	commonName, identityURIs, err := enrollmentTokenIdentity(result.EnrollmentToken)
-	if err != nil {
-		return fmt.Errorf("reading enrollment token identity: %w", err)
-	}
-	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), commonName, identityURIs)
-	if err != nil {
-		return fmt.Errorf("generating CSR: %w", err)
-	}
-
-	// Step 4: Issue certificate via cloud CertificateService.
-	// This is the bootstrap step: no client cert exists yet, so we cannot do
-	// mTLS. Non-:443 endpoints are local dev cloud; use plaintext because we
-	// have no CA cert to verify the server with at this point.
-	var bootstrapCreds grpc.DialOption
-	if strings.HasSuffix(cloudGRPC, ":443") {
-		bootstrapCreds = grpc.WithTransportCredentials(credentials.NewTLS(nil))
-	} else {
-		bootstrapCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	certConn, err := grpc.NewClient(cloudGRPC, bootstrapCreds)
-	if err != nil {
-		return fmt.Errorf("connecting to cloud: %w", err)
-	}
-	defer certConn.Close()
-
-	certClient := cloudpb.NewCertificateServiceClient(certConn)
-	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
-		PemCsr:          csrPEM,
-		EnrollmentToken: result.EnrollmentToken,
-	})
-	if err != nil {
-		return fmt.Errorf("issuing certificate: %w", err)
-	}
-
-	if issueResp.GetError() != nil {
-		return fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
-	}
-
-	cert := issueResp.GetCertificate()
-	if cert == nil {
-		return fmt.Errorf("no certificate returned from cloud")
-	}
-
-	// Step 5: Save certificates to config.
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	certInfo := config.CertificateInfo{
-		PemCertificate:      cert.GetPemCertificate(),
-		PemCertificateChain: cert.GetPemCertificateChain(),
-		PemPrivateKey:       privateKeyPEM,
-		OrganizationID:      int(issueResp.GetOrganizationId()),
-		UserID:              issueResp.GetUserId(),
-	}
-
-	authEntry := config.AuthConfig{
-		CloudDashboard: cloudDashboard,
-		CloudGRPC:      cloudGRPC,
-		APIKey:         result.APIKey,
-		Certificates:   []config.CertificateInfo{certInfo},
-	}
-
-	cfg.AddAuth(authEntry)
-	// Name the new session as a context; the first login becomes "default" and
-	// current. A later login does not change the current context.
-	cfg.EnsureContexts()
-	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("saving config: %w", err)
+	if err := session.Err(); err != nil {
+		return err
 	}
 
 	fmt.Println(tui.SuccessMessage("Authentication successful. Certificates saved."))
-	clitimesync.CacheProof(ctx)
-
-	if len(issueResp.GetWarnings()) > 0 {
+	fmt.Println(sessionKeyLine(session.KeyAlgorithm(), "legacy"))
+	if warnings := session.Warnings(); len(warnings) > 0 {
 		fmt.Println(tui.WarningMessage("Warnings:"))
-		for _, w := range issueResp.GetWarnings() {
+		for _, w := range warnings {
 			fmt.Printf("  - %s\n", w)
 		}
 	}
-
 	return nil
 }
 
@@ -432,89 +373,6 @@ func enrollmentTokenIdentity(token string) (commonName string, identityURIs []st
 	}
 }
 
-func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int32) error {
-	cloudConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
-	if err != nil {
-		return fmt.Errorf("connecting to pki-core: %w", err)
-	}
-	defer cloudConn.Close()
-
-	authCtx := metadata.NewOutgoingContext(ctx,
-		metadata.Pairs("authorization", "Bearer "+apiKey))
-
-	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-
-	tokenResp, err := certClient.CreateAssetEnrollmentToken(authCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
-		OrganizationId: orgID,
-		Name:           "cli-user",
-		TtlSeconds:     120,
-	})
-	if err != nil {
-		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
-	}
-	// Reconstruct the device_id that pki-core stored in the token.
-	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
-	identityURIs := []string{certs.AssetURN(tokenResp.GetOrganizationId(), tokenResp.GetAssetId())}
-	if spiffeURI, ok := enrolltoken.TenantSPIFFEURIFromToken(tokenResp.GetEnrollmentToken()); ok {
-		identityURIs = append(identityURIs, spiffeURI)
-	}
-
-	privateKeyPEM, err := certs.GenerateKeyPair()
-	if err != nil {
-		return fmt.Errorf("generating key pair: %w", err)
-	}
-	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), deviceID, identityURIs)
-	if err != nil {
-		return fmt.Errorf("generating CSR: %w", err)
-	}
-
-	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
-		PemCsr:          csrPEM,
-		EnrollmentToken: tokenResp.GetEnrollmentToken(),
-	})
-	if err != nil {
-		return fmt.Errorf("issuing certificate: %w", err)
-	}
-	if issueResp.GetError() != nil {
-		return fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
-	}
-	cert := issueResp.GetCertificate()
-	if cert == nil {
-		return fmt.Errorf("no certificate returned from pki-core")
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	certInfo := config.CertificateInfo{
-		PemCertificate:      cert.GetPemCertificate(),
-		PemCertificateChain: cert.GetPemCertificateChain(),
-		PemPrivateKey:       privateKeyPEM,
-		OrganizationID:      int(issueResp.GetOrganizationId()),
-		AssetID:             int(issueResp.GetAssetId()),
-	}
-	authEntry := config.AuthConfig{
-		CloudGRPC:    cloudGRPC,
-		APIKey:       apiKey,
-		Certificates: []config.CertificateInfo{certInfo},
-	}
-
-	cfg.AddAuth(authEntry)
-	cfg.EnsureContexts()
-
-	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("saving config: %w", err)
-	}
-
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Local authentication successful (org=%d, device=%s). Certificates saved.",
-		issueResp.GetOrganizationId(), deviceID)))
-	clitimesync.CacheProof(ctx)
-
-	return nil
-}
-
 func newAuthLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
@@ -553,15 +411,18 @@ func newAuthLogoutCmd() *cobra.Command {
 }
 
 func newAuthRefreshCertsCmd() *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "refresh-certs",
-		Short: "Refresh mTLS certificates",
-		Long:  "Generates a new key pair and CSR, then issues new certificates using existing credentials.",
+		Short: "Renew the current sign-in certificate",
+		Long:  "Generates a new key pair and CSR, then issues new certificates using existing credentials. Only the current auth context (see 'wendy auth use') is refreshed unless --all asks for every stored context.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			err := refreshAllCerts(ctx)
-			if err == nil {
-				return nil
+			err := refreshCerts(ctx, all)
+			if err == nil || all {
+				// --all has no single session to log back into; each context's
+				// outcome is already printed.
+				return err
 			}
 			// An expired/absent session cannot be fixed by refreshing (there is no
 			// valid identity to refresh with) — offer to log in again instead, which
@@ -573,13 +434,18 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "Refresh every stored auth context")
+	return cmd
 }
 
-// refreshAllCerts re-issues certificates for every stored auth entry and
-// saves the updated config. It returns an error when not logged in or when
-// no entry could be refreshed, so callers that retry a connection afterwards
-// do not retry with the same stale certificates.
-func refreshAllCerts(ctx context.Context) error {
+// refreshCerts re-issues certificates and saves the updated config. It renews
+// the current context, or the only stored session; with all set it renews
+// every stored context, and one failing does not stop the rest. A context that was not selected is never touched: an OIDC refresh
+// consumes the session's rotating refresh token (WDY-3864). It returns an
+// error when nothing was refreshed, or under all when any context failed, so
+// callers that retry a connection afterwards do not retry with the same stale
+// certificates.
+func refreshCerts(ctx context.Context, all bool) error {
 	// OIDC certificate refresh consumes the same rotating token family as API
 	// refresh. Keep the lock through the final Save, including partial failures.
 	unlock, err := acquireAuthRefreshLock(ctx)
@@ -595,34 +461,59 @@ func refreshAllCerts(ctx context.Context) error {
 	if len(cfg.Auth) == 0 {
 		return fmt.Errorf("not logged in; run 'wendy auth login' first")
 	}
-	for i := range cfg.Auth {
-		cfg.Auth[i].InvalidateCachedSecrets()
+
+	var targets []*config.AuthConfig
+	if all {
+		for i := range cfg.Auth {
+			targets = append(targets, &cfg.Auth[i])
+		}
+	} else {
+		current, err := config.ResolveAuth(cfg, "", nil)
+		if errors.Is(err, config.ErrMultipleSessions) {
+			return fmt.Errorf("no current auth context; run 'wendy auth use <context>' or pass --all")
+		}
+		if err != nil {
+			return err
+		}
+		targets = append(targets, current)
 	}
 
 	refreshed := 0
+	var failed []error
 	var lastErr error
-	for i, auth := range cfg.Auth {
+	for _, auth := range targets {
+		auth.InvalidateCachedSecrets()
+		label := fmt.Sprintf("context %q (%s)", auth.Name, auth.CloudDashboard)
 		if len(auth.Certificates) == 0 {
-			fmt.Println(tui.WarningMessage(fmt.Sprintf("Skipping %s: no certificates to refresh", auth.CloudDashboard)))
+			fmt.Println(tui.WarningMessage(fmt.Sprintf("Skipping %s: no certificates to refresh", label)))
 			continue
 		}
 
-		fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshing certificates for %s...", auth.CloudDashboard)))
+		fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshing certificates for %s...", label)))
 
-		if err := refreshCertsForAuth(ctx, &cfg.Auth[i]); err != nil {
-			fmt.Println(tui.ErrorMessage(fmt.Sprintf("Failed to refresh for %s: %v", auth.CloudDashboard, err)))
+		if err := refreshCertsForAuthFn(ctx, auth); err != nil {
+			fmt.Println(tui.ErrorMessage(fmt.Sprintf("Failed to refresh for %s: %v", label, err)))
+			failed = append(failed, fmt.Errorf("context %q: %w", auth.Name, err))
 			lastErr = err
 			continue
 		}
 
 		refreshed++
-		fmt.Println(tui.SuccessMessage(fmt.Sprintf("Certificates refreshed for %s.", auth.CloudDashboard)))
+		fmt.Println(tui.SuccessMessage(fmt.Sprintf("Certificates refreshed for %s.", label)))
 	}
 
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
+	if all {
+		fmt.Println(tui.InfoMessage(fmt.Sprintf("Refreshed %d of %d auth contexts.", refreshed, len(targets))))
+		if len(failed) > 0 {
+			// Keep each cause in the chain so errors.Is (e.g. context.Canceled
+			// after Ctrl-C) and the error class still see it.
+			return fmt.Errorf("failed to refresh %d auth context(s): %w", len(failed), errors.Join(failed...))
+		}
+	}
 	if refreshed == 0 {
 		// Preserve the underlying failure (e.g. an unauthorized CertificateError)
 		// so the caller can detect an expired session and offer re-login.
@@ -632,6 +523,60 @@ func refreshAllCerts(ctx context.Context) error {
 		return fmt.Errorf("no certificates were refreshed")
 	}
 	return nil
+}
+
+// switchContextStep is the advice for a certificate rejected by a device in
+// org when renewing the current context would not fix it, so recovery says
+// what to do instead of spending the wrong session's refresh token
+// (WDY-3864). It names the stored context holding the org's certificate,
+// preferring the operator session over a legacy one as config.preferAuth
+// does. When org is unknown and several contexts hold certificates, it names
+// them all rather than guessing. It returns "" when renewing the current
+// context is the fix.
+func switchContextStep(org int32) string {
+	cfg, err := config.Load()
+	if err != nil {
+		return ""
+	}
+	current, _ := config.ResolveAuth(cfg, "", nil)
+	var holder *config.AuthConfig
+	var names []string
+	for i := range cfg.Auth {
+		a := &cfg.Auth[i]
+		if len(a.Certificates) == 0 {
+			continue
+		}
+		name := a.Name
+		if current != nil && a.Name == current.Name {
+			name += " (current)"
+		}
+		names = append(names, name)
+		if org == 0 || a.Certificates[0].OrganizationID != int(org) {
+			continue
+		}
+		if current != nil && a.Name == current.Name {
+			return ""
+		}
+		if holder == nil || (holder.OAuthIssuer == "" && a.OAuthIssuer != "") {
+			holder = a
+		}
+	}
+	if holder != nil {
+		return fmt.Sprintf("Run 'wendy auth use %s', then 'wendy auth refresh-certs', then retry.", holder.Name)
+	}
+	if org != 0 || len(names) == 0 || (len(names) == 1 && current != nil) {
+		return ""
+	}
+	return fmt.Sprintf("The device's organization is unknown, so its certificate may be held by any of these contexts: %s. Run 'wendy auth use <context>' for the device's organization if it is not the current one, then 'wendy auth refresh-certs', then retry.", strings.Join(names, ", "))
+}
+
+// refreshCertsStep is the advice for renewing a rejected certificate:
+// switchStep from switchContextStep, or a plain refresh of the current context.
+func refreshCertsStep(switchStep string) string {
+	if switchStep != "" {
+		return switchStep
+	}
+	return "Run 'wendy auth refresh-certs', then retry."
 }
 
 // firstAuthEntryForRelogin returns the stored auth entry a re-login should target
@@ -698,7 +643,11 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 		return fmt.Errorf("no existing certificates")
 	}
 	if auth.OAuthIssuer != "" {
-		return refreshOIDCCertificate(ctx, auth)
+		if err := refreshOIDCCertificate(ctx, auth, false); err != nil {
+			return err
+		}
+		registerRegistryKeyAfterMint(ctx, auth)
+		return nil
 	}
 
 	current := auth.Certificates[0]
@@ -746,6 +695,7 @@ type authStatusCert struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 	Expired      bool      `json:"expired"`
 	ExpiringSoon bool      `json:"expiringSoon"`
+	KeyAlgorithm string    `json:"keyAlgorithm"`
 }
 
 // authStatusSession is one stored cloud session in `auth status --json`. It
@@ -758,7 +708,44 @@ type authStatusSession struct {
 	UserID         string          `json:"userId,omitempty"`
 	OrganizationID int             `json:"organizationId,omitempty"`
 	PrincipalURI   string          `json:"principalUri,omitempty"`
+	LoginPath      string          `json:"loginPath"`
 	Certificate    *authStatusCert `json:"certificate,omitempty"`
+}
+
+// keyAlgorithmName names a session key's algorithm for the operator. No silent
+// algorithm downgrade (RULINGS 2026-10-04): a classical session is shown as
+// one, never left unsaid.
+func keyAlgorithmName(pub crypto.PublicKey) string {
+	switch k := pub.(type) {
+	case *mldsa.PublicKey:
+		return k.Parameters().String()
+	case *ecdsa.PublicKey:
+		return "ECDSA " + k.Curve.Params().Name
+	}
+	return fmt.Sprintf("%T", pub)
+}
+
+// sessionLoginPath names the login that minted a session: an OIDC session
+// records its issuer; bare `wendy auth login` and --local do not.
+func sessionLoginPath(auth config.AuthConfig) string {
+	if auth.OAuthIssuer != "" {
+		return "OIDC"
+	}
+	return "legacy"
+}
+
+// privateKeyAlgorithm names the algorithm of a key a login just generated.
+func privateKeyAlgorithm(privateKeyPEM string) string {
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return "unreadable key"
+	}
+	return keyAlgorithmName(key.Public())
+}
+
+// sessionKeyLine is the line every login prints naming the key it minted.
+func sessionKeyLine(algorithm, path string) string {
+	return tui.InfoMessage(fmt.Sprintf("Session key: %s (%s login).", algorithm, path))
 }
 
 type authStatusJSON struct {
@@ -786,6 +773,7 @@ func authStatusCertInfo(pemCert string, now time.Time) *authStatusCert {
 		ExpiresAt:    expiry,
 		Expired:      now.After(expiry),
 		ExpiringSoon: !now.After(expiry) && expiry.Sub(now) < certExpiryWindow,
+		KeyAlgorithm: keyAlgorithmName(x509Cert.PublicKey),
 	}
 }
 
@@ -853,6 +841,7 @@ func newAuthStatusCmd() *cobra.Command {
 				}
 
 				if info := authStatusCertInfo(cert.PemCertificate, time.Now()); info != nil {
+					fmt.Fprintf(out, "  Key:  %s (%s login)\n", info.KeyAlgorithm, sessionLoginPath(auth))
 					expiryStr := info.ExpiresAt.Format("2006-01-02 15:04 UTC")
 					switch {
 					case info.Expired:
@@ -884,6 +873,7 @@ func writeAuthStatusJSON(w io.Writer, cfg *config.Config, now time.Time) error {
 			Current:   auth.Name != "" && auth.Name == cfg.CurrentContext,
 			Cloud:     authStatusEndpoint(auth),
 			CloudGRPC: auth.CloudGRPC,
+			LoginPath: sessionLoginPath(auth),
 		}
 		if len(auth.Certificates) > 0 {
 			cert := auth.Certificates[0]
@@ -967,8 +957,8 @@ func matchAuthSelector(cfg *config.Config, selector string) (*config.AuthConfig,
 // gives the exact command that fixes it.
 func noSessionMatchError(cfg *config.Config, selector string) error {
 	var b strings.Builder
-	if orgID, err := strconv.Atoi(selector); err == nil {
-		fmt.Fprintf(&b, "not logged in to org %d on this machine", orgID)
+	if _, err := strconv.Atoi(selector); err == nil {
+		fmt.Fprintf(&b, "not logged in to org %s on this machine", config.OrganizationLabel("", selector))
 	} else {
 		fmt.Fprintf(&b, "no auth session matches %q", selector)
 	}

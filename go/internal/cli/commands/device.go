@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -31,6 +33,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
@@ -39,8 +42,7 @@ import (
 	"golang.org/x/term"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
+	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -69,6 +71,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceOSLogsCmd(),
 		newDeviceDashboardCmd(),
 		newTopCmd(),
+		newComputeStatusCmd(),
 	)
 	addToGroup("apps",
 		newAppsCmd(),
@@ -91,12 +94,16 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceSetupCmd(),
 		newDeviceEnrollCmd(),
 		newDeviceUnenrollCmd(),
+		newDeviceEnrollmentStatusCmd(),
 		newDeviceRenameCmd(),
+		newDevicePowerModeCmd(),
 		newDeviceUpdateCmd(),
+		newLegacyDeviceLocalMeshCmd(),
 		newDeviceSyncTimeCmd(),
 	)
 	addToGroup("hardware",
 		newDevicePairCmd(),
+		newDeviceSensorsCmd(),
 		newDeviceUnpairCmd(),
 		newWifiCmd(),
 		newBluetoothCmd(),
@@ -197,6 +204,12 @@ func newDevicePushAgentCmd() *cobra.Command {
 	return cmd
 }
 
+var resolveDeviceInfoTargetFn = resolveTarget
+
+// Reading the persisted update record should not delay basic device info when
+// an older or overloaded agent cannot answer this optional request.
+const deviceInfoOSUpdateTimeout = 2 * time.Second
+
 func newDeviceInfoCmd() *cobra.Command {
 	return newDeviceInfoLikeCmd("info", false)
 }
@@ -208,6 +221,7 @@ func newDeprecatedDeviceVersionCmd() *cobra.Command {
 func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 	var checkUpdates bool
 	var prerelease bool
+	var readOnly bool
 
 	cmd := &cobra.Command{
 		Use:    use,
@@ -223,7 +237,15 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				}
 			}
 
-			target, err := resolveTarget(ctx, IncludeBluetooth())
+			var target *SelectedDevice
+			var err error
+			if readOnly {
+				var conn *grpcclient.AgentConnection
+				conn, err = connectToAgent(ctx, ReadOnlyMonitoring())
+				target = &SelectedDevice{Agent: conn}
+			} else {
+				target, err = resolveDeviceInfoTargetFn(ctx, IncludeBluetooth())
+			}
 			if err != nil {
 				return err
 			}
@@ -243,6 +265,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			// nil for mains-powered devices, for agents predating the field,
 			// and for the BLE/provider paths that never report one.
 			var battery *agentpb.BatteryStats
+			// nil off Jetson, on agents predating the field, and on the
+			// BLE/provider paths.
+			var powerMode *agentpb.PowerMode
 
 			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
 				cliLogln("Connecting to %s via Bluetooth...", tui.Device(target.Bluetooth.DisplayName))
@@ -260,9 +285,16 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				osVersion = bleResp.GetOsVersion()
 				cpuArch = bleResp.GetCpuArchitecture()
 			} else if target.Agent != nil {
-				resp, respErr := target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-				if respErr != nil {
-					return fmt.Errorf("getting agent version: %w", respErr)
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				resp, cached := target.Agent.CachedAgentVersion()
+				if !cached {
+					var respErr error
+					resp, respErr = target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+					if respErr != nil {
+						return fmt.Errorf("getting agent version: %w", respErr)
+					}
 				}
 				agentVersion = resp.GetVersion()
 				osName = resp.GetOs()
@@ -287,6 +319,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				gpuCapabilities = resp.GetGpuCapabilities()
 				netInterfaces = resp.GetNetworkInterfaces()
 				battery = resp.GetBattery()
+				powerMode = resp.GetPowerMode()
 			} else if target.External != nil && target.Provider != nil {
 				info, infoErr := target.Provider.GetDeviceInfo(ctx, *target.External)
 				if infoErr != nil {
@@ -305,15 +338,17 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				return fmt.Errorf("selected device does not support this command")
 			}
 
-			// Best-effort OS-update status (wendyos-update slots + last update
-			// outcome). Older agents answer Unimplemented and OTA-less devices
-			// have nothing to report — device info must keep working either way.
+			// Read only the persisted update outcome. A live engine scan can mount
+			// inactive partitions and probe boot firmware; it belongs to the explicit
+			// `wendy os update-status` command. Older agents may not support this RPC.
 			var osUpdateStatus *agentpb.GetOSUpdateStatusResponse
 			if target.Agent != nil {
-				if resp, err := target.Agent.AgentService.GetOSUpdateStatus(ctx,
-					&agentpb.GetOSUpdateStatusRequest{IncludeEngineStatus: true}); err == nil {
+				statusCtx, cancel := context.WithTimeout(ctx, deviceInfoOSUpdateTimeout)
+				if resp, err := target.Agent.AgentService.GetOSUpdateStatus(statusCtx,
+					&agentpb.GetOSUpdateStatusRequest{}); err == nil {
 					osUpdateStatus = resp
 				}
+				cancel()
 			}
 
 			organization := deviceOrganization(ctx, target.Agent)
@@ -407,15 +442,30 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
 					for i, iface := range netInterfaces {
-						ifaces[i] = map[string]any{
+						entry := map[string]any{
 							"name":        iface.GetName(),
 							"ipAddresses": iface.GetIpAddresses(),
 						}
+						// Absent rather than false/unknown: older agents
+						// report none of these.
+						if iface.GetIsDefaultRoute() {
+							entry["isDefaultRoute"] = true
+						}
+						if iface.RouteMetric != nil {
+							entry["routeMetric"] = iface.GetRouteMetric()
+						}
+						if c := connectivityLabel(iface.GetConnectivity()); c != "" {
+							entry["connectivity"] = c
+						}
+						ifaces[i] = entry
 					}
 					out["networkInterfaces"] = ifaces
 				}
 				if b := batteryJSON(battery); b != nil {
 					out["battery"] = b
+				}
+				if powerMode != nil {
+					out["powerMode"] = powerModeJSON(powerMode)
 				}
 				if osUpdate := osUpdateJSON(osUpdateStatus); osUpdate != nil {
 					out["osUpdate"] = osUpdate
@@ -450,6 +500,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			}
 			if battery != nil {
 				fmt.Printf("%s %s\n", tui.Dim("Battery:"), tui.Value(formatBatterySummary(battery)))
+			}
+			if powerMode != nil {
+				fmt.Printf("%s %s\n", tui.Dim("Power Mode:"), tui.Value(powerModeLabel(powerMode)))
 			}
 			if deviceType != "" {
 				fmt.Printf("%s %s\n", tui.Dim("Device Type:"), tui.Value(deviceType))
@@ -530,6 +583,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 
 	cmd.Flags().BoolVar(&checkUpdates, "check-updates", false, "Check for available agent updates on GitHub")
 	cmd.Flags().BoolVar(&prerelease, "prerelease", false, "Include prerelease (nightly) builds when checking for updates")
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "Observe an existing agent without starting VMs or managing updates")
 
 	return cmd
 }
@@ -548,11 +602,18 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 		Short:  "Set a local, cloud or simulator device as the default",
 		Args:   cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var device string
+			device := ""
 			if len(args) > 0 {
-				device = args[0]
-			} else {
-				sel, err := pickDeviceForDefault(cmd.Context())
+				device = strings.TrimSpace(args[0])
+			}
+			if device == "" {
+				// The picker needs a terminal. Without one it fails with "could
+				// not open a new TTY"; say what to run instead. A blank argument
+				// lands here too rather than silently clearing the default.
+				if jsonOutput || !isInteractiveTerminal() {
+					return setDefaultNeedsDeviceError()
+				}
+				sel, err := pickDeviceForDefaultFn(cmd.Context())
 				if err != nil {
 					return err
 				}
@@ -562,21 +623,20 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 			if selectorErr != nil {
 				return selectorErr
 			}
-
-			cfg, err := config.Load()
-			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
+			if !isCloud {
+				if err := rejectNumericDeviceName(device); err != nil {
+					return err
+				}
 			}
 
-			cfg.DefaultDevice = device
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("saving config: %w", err)
+			if err := saveDefaultDevice(device); err != nil {
+				return err
 			}
 
 			fmt.Printf("Default device set to: %s\n", tui.Device(device))
 			// Cloud identity is scoped by endpoint, organization and asset ID.
 			// It has no LAN hostname pin to clear or repopulate.
-			if isCloud {
+			if isCloud || strings.HasPrefix(device, "mesh:") {
 				return nil
 			}
 
@@ -586,20 +646,27 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 			// identity changed a way back (otherwise this connect would hit the
 			// same refusal and never re-pin).
 			//
-			// pinKeyForAddr, not the raw argument: `set-default my-mac.local:50051`
-			// is a legal default, and enforcement keys that host under
-			// "my-mac.local". Clearing "my-mac.local:50051" would drop nothing,
-			// leaving a host:port default with no way out of a refusal at all.
-			clearDevicePinForRepin(pinKeyForAddr(device))
+			// dialPinKeyForDevice, not the raw argument: `set-default
+			// my-mac.local:50051` is a legal default, and enforcement keys that
+			// host under "my-mac.local"; `set-default 127.0.0.1` is dialled as
+			// 127.0.0.1:50051, which is checked under vm:<name> while a running VM
+			// forwards that port. Clearing any other key would leave the refusal
+			// with no way out.
+			clearDevicePinForRepin(dialPinKeyForDevice(device))
 
 			// WDY-1149: pin the device's (organisation, cloud host, asset)
 			// identity now if it is reachable, so later connections detect a
 			// swapped device or MITM. Best-effort and non-interactive: an offline
 			// device is pinned instead on its first successful connection. The pin
 			// itself is established inside connectToAgent's default-device path.
-			if conn, connErr := connectToAgent(cmd.Context(), SuppressProvisioningHint(), SuppressUpdateCheck(), NonInteractive()); connErr == nil {
-				_ = conn.Close()
-			}
+			//
+			// Without --device and WENDY_DEVICE: this confirms the device just
+			// saved, which an override in effect would otherwise replace.
+			withoutDeviceOverride(func() {
+				if conn, connErr := connectToAgent(cmd.Context(), SuppressProvisioningHint(), SuppressUpdateCheck(), NonInteractive()); connErr == nil {
+					_ = conn.Close()
+				}
+			})
 			return nil
 		},
 	}
@@ -688,14 +755,8 @@ func newDeviceUnsetDefaultCmd() *cobra.Command {
 		Use:   "unset-default",
 		Short: "Clear the default device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
-			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
-			}
-
-			cfg.DefaultDevice = ""
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("saving config: %w", err)
+			if err := saveDefaultDevice(""); err != nil {
+				return err
 			}
 
 			fmt.Println("Default device cleared.")
@@ -728,14 +789,14 @@ func newDeviceSetupCmd() *cobra.Command {
 
 			if provResp.GetProvisioned() != nil {
 				prov := provResp.GetProvisioned()
-				fmt.Printf("Device is already enrolled (org: %d, asset: %d, cloud: %s).\n",
-					prov.GetOrganizationId(), prov.GetAssetId(), prov.GetCloudHost())
+				fmt.Printf("Device is already enrolled (org: %s, asset: %d, cloud: %s).\n",
+					orgLabel(prov.GetCloudHost(), prov.GetOrganizationId()), prov.GetAssetId(), prov.GetCloudHost())
 			} else {
 				fmt.Println("Device is not enrolled.")
 				if loadCLICert() == nil {
 					fmt.Println("You are not logged in to Wendy Cloud.")
 					if confirmFn("Log in now?") {
-						if loginErr := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); loginErr != nil {
+						if loginErr := relogin(ctx, firstAuthEntryForRelogin()); loginErr != nil {
 							return fmt.Errorf("login failed: %w", loginErr)
 						}
 					}
@@ -811,12 +872,13 @@ func newDeviceEnrollCmd() *cobra.Command {
 	var cloudGRPC string
 	var orgID int32
 	var acmeDirectoryURL string
+	var liteOptions liteEnrollmentOptions
 
 	cmd := &cobra.Command{
-		Use:    "enroll",
-		Short:  "Enroll this device with Wendy Cloud or a local pki-core",
-		Long:   "Enrolls the connected device using your stored auth session. OIDC accounts use direct PKI enrollment through Cloud's enrollment relay; legacy accounts use Cloud enrollment. Run 'wendy auth login' first.",
-		Hidden: true,
+		Use:         "enroll",
+		Annotations: map[string]string{localEnrollmentAnnotation: "true"},
+		Short:       "Enroll this device in Wendy Cloud",
+		Long:        "Add the selected device to your organization using your saved sign-in. Run 'wendy cloud login' first. For Wendy Lite, connect over USB and keep it connected while the board reboots and completes enrollment.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -829,74 +891,110 @@ func newDeviceEnrollCmd() *cobra.Command {
 				return err
 			}
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
-
-			promptWifiIfNeeded(ctx, conn)
-
-			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
+			return runWithEnrollmentTarget(ctx, func() (*SelectedDevice, error) {
+				return resolveTarget(ctx, SuppressProvisioningHint(), SuppressPickerEnroll(), func(c *resolveConfig) {
+					c.enrollmentTrustRecovery = true
+				})
+			}, func(target *SelectedDevice) error {
+				return runSelectedDeviceEnrollment(cmd, target, auth, name, orgID, acmeDirectoryURL, liteOptions)
+			})
 		},
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Device name")
 	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
 	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use; limits the organization picker to this endpoint")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud API endpoint of the saved sign-in to use")
+	cmd.Flags().StringVar(&liteOptions.brokerHost, "broker-host", "", "WendyCom broker TLS hostname (defaults to the Lite relay for the selected Cloud session)")
+	cmd.Flags().Uint32Var(&liteOptions.brokerPort, "broker-port", 5055, "WendyCom broker TLS port for Wendy Lite")
+	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
+	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "RFC 3161 signed-time endpoint for Wendy Lite (defaults to Sigstore)")
+	cmd.Flags().StringVar(&liteOptions.caCertsURL, "ca-certs-url", "", "HTTPS CA-discovery URL for Wendy Lite (defaults to the selected PKI instance's EST endpoint)")
+	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (also requires --https-roots)")
+	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Signed-time PEM CA bundle (Sigstore's TSA root is bundled for the default endpoint)")
+	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over USB")
 	return cmd
 }
 
-// promptWifiIfNeeded checks whether the device is connected to WiFi, and if
-// not, offers an interactive flow to connect before enrollment. Errors from the
-// status check are silently ignored so the function degrades gracefully on
-// devices that don't support WiFi (e.g. local, docker).
-func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) {
+var confirmEnrollmentWifiFn = func() (bool, error) {
+	return tui.ConfirmDefaultYes("Set up WiFi before enrolling?")
+}
+
+var pickEnrollmentWifiFn = pickWifiNetwork
+
+// promptWifiIfNeeded offers WiFi setup when an adapter is disconnected.
+// Status failures are optional; cancelling setup aborts enrollment.
+func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !isInteractiveTerminal() {
-		return
+		return nil
 	}
 
 	statusResp, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
-	if err != nil || statusResp.GetConnected() {
-		return
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil || statusResp == nil || statusResp.GetErrorMessage() != "" || statusResp.GetConnected() {
+		return nil
 	}
 
 	fmt.Println("No WiFi connection detected on the device.")
-	if !confirmFn("Set up WiFi before enrolling?") {
-		return
+	accepted, err := confirmEnrollmentWifiFn()
+	if err != nil {
+		return enrollmentWifiError(err)
+	}
+	if !accepted {
+		return nil
 	}
 
 	target := &SelectedDevice{Agent: conn}
-	ssid, pickErr := pickWifiNetwork(ctx, target)
-	if pickErr != nil {
-		if !errors.Is(pickErr, ErrUserCancelled) {
-			fmt.Printf("WiFi setup failed: %v\n", pickErr)
-		}
-		return
+	ssid, err := pickEnrollmentWifiFn(ctx, target)
+	if err != nil {
+		return enrollmentWifiError(err)
 	}
 
-	fmt.Print("Password (leave empty for open networks): ")
-	passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if readErr != nil {
-		fmt.Printf("Failed to read password: %v\n", readErr)
-		return
+	password, err := promptWifiPassword(ssid)
+	if err != nil {
+		return enrollmentWifiError(err)
 	}
-	password := strings.TrimSpace(string(passwordBytes))
+	if selected, _ := ctx.Value(wifiCredentialTargetKey{}).(*SelectedDevice); selected != nil && password != "" {
+		if err := confirmUnverifiedWiFiCredentials(selected); errors.Is(err, errUnverifiedWiFiDeclined) {
+			// Declining Wi-Fi is not declining enrollment, as above.
+			fmt.Println("WiFi credentials were not sent.")
+			return nil
+		} else if err != nil {
+			return enrollmentWifiError(err)
+		}
+	}
 
 	fmt.Printf("Connecting to %s...\n", ssid)
-	wifiResp, connectErr := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
-		Ssid:     ssid,
-		Password: password,
+	wifiResp, err := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
+		Ssid: ssid, Password: password,
 	})
-	if connectErr != nil {
-		fmt.Printf("WiFi connection failed: %v\n", connectErr)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return enrollmentWifiError(err)
 	} else if !wifiResp.GetSuccess() {
 		fmt.Printf("WiFi connection failed: %s\n", wifiResp.GetErrorMessage())
 	} else {
 		fmt.Printf("Connected to %s.\n", ssid)
 	}
+	return nil
+}
+
+func enrollmentWifiError(err error) error {
+	if errors.Is(err, ErrUserCancelled) || errors.Is(err, tui.ErrCancelled) {
+		return ErrUserCancelled
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	fmt.Printf("WiFi setup failed: %v\n", err)
+	return nil
 }
 
 // defaultEnrollmentName derives a device name from the connected host,
@@ -914,8 +1012,12 @@ func defaultEnrollmentName(host string) string {
 }
 
 func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
+	return enrollmentName(conn.Host, name)
+}
+
+func enrollmentName(host, name string) (string, error) {
 	if name == "" {
-		defaultName := defaultEnrollmentName(conn.Host)
+		defaultName := defaultEnrollmentName(host)
 		if !isInteractiveTerminal() {
 			if defaultName != "" {
 				name = defaultName
@@ -952,64 +1054,58 @@ func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
+	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	if err != nil {
+		return err
+	}
+	next, err := verifyAndSaveEnrollment(ctx, conn, auth, identity, name)
+	if next != nil && next != conn {
+		next.Close()
+	}
+	return err
+}
+
+func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return validateEnrollmentCertificate(auth)
+		return nil, validateEnrollmentCertificate(auth)
 	}
 	acmeDirectoryURL := ""
 	if len(acmeDirectoryURLs) > 0 {
 		acmeDirectoryURL = acmeDirectoryURLs[0]
 	}
 	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
-		return fmt.Errorf("--acme-directory-url requires an OIDC login session")
+		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
-		return err
+		return nil, err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
 	// and legacy sessions retain the Cloud enrollment contract.
 	if auth.OAuthIssuer != "" {
-		return runOIDCEnrollDevice(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
+		return runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
 	}
 
 	name, err := enrollmentDeviceName(conn, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	cert := auth.Certificates[0]
 
-	var cloudTransport grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		keyPEM, err := cert.PrivateKeyPEM()
-		if err != nil {
-			return fmt.Errorf("loading client key: %w", err)
-		}
-		tlsCfg, err := certs.LoadTLSConfig(
-			cert.PemCertificate,
-			cert.PemCertificateChain,
-			keyPEM,
-			"",
-		)
-		if err != nil {
-			return fmt.Errorf("loading TLS config: %w", err)
-		}
-		cloudTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	dialOptions, err := withCloudRequestSigning(auth, cloudTransport)
+	cloudCreds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(cloudCreds)}, dpopDialOptions(auth)...)
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
-		return fmt.Errorf("connecting to cloud: %w", err)
+		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// The selected session already identifies the enrollment organization.
@@ -1026,10 +1122,10 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		TtlSeconds:     600,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+		return nil, fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
 	}
 	if err != nil {
-		return fmt.Errorf("creating enrollment token: %w", err)
+		return nil, fmt.Errorf("creating enrollment token: %w", err)
 	}
 
 	fmt.Println("Enrolling device...")
@@ -1040,12 +1136,12 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
-		return fmt.Errorf("enrolling device: %w", err)
+		return nil, fmt.Errorf("enrolling device: %w", err)
 	}
 
-	fmt.Printf("Device enrolled (org: %d, asset: %d).\n",
-		tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
-	return nil
+	fmt.Printf("Device enrolled (org: %s, asset: %d).\n",
+		orgLabel(auth.CloudGRPC, tokenResp.GetOrganizationId()), tokenResp.GetAssetId())
+	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
@@ -1053,11 +1149,25 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Renew while the certificate is still valid. This shared picker has no
-	// caller context; renewal applies its own request timeout. Enrollment uses
-	// prepareEnrollmentAuth instead so expiry can trigger login before work.
-	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+	// Keep pre-expiry renewal first; OIDC operators can then re-issue through
+	// their current sign-in session. This picker has no caller context, so
+	// both network paths impose their own timeout.
+	var before string
+	if len(auth.Certificates) > 0 {
+		before = auth.Certificates[0].PemCertificate
+	}
+	if auth.OAuthIssuer != "" && auth.ServiceAccount == "" {
+		if err := prepareDefaultCloudCertificate(context.Background(), auth); err != nil {
+			return nil, err
+		}
+	} else if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
 		reportStaleCertificate(rerr)
+	}
+	// A renewal is a certificate refresh: retry an unbound registry key, as
+	// 'wendy auth refresh-certs' does. Here, not in the pre-flight itself,
+	// whose other callers hold the auth refresh lock this needs.
+	if auth.OAuthIssuer != "" && len(auth.Certificates) > 0 && auth.Certificates[0].PemCertificate != before {
+		retryRegistryKey(auth)
 	}
 	return auth, nil
 }
@@ -1089,10 +1199,16 @@ func resolveAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 // connection error carries better context than a guess made here.
 func reportStaleCertificate(err error) {
 	if jsonOutput {
+		plainNotice("warning: %s. Sign in again to get a new one: wendy auth login", err.Error())
 		return
 	}
-	fmt.Fprintln(os.Stderr, tui.WarningMessage(capitalizeFirst(err.Error())+"."))
-	fmt.Fprintln(os.Stderr, "  Sign in again to get a new one: wendy auth login")
+	fmt.Fprintln(os.Stderr, staleCertificateWarning(err))
+}
+
+// staleCertificateWarning is the styled warning and remedy, also shown inside
+// views that own the terminal.
+func staleCertificateWarning(err error) string {
+	return tui.WarningMessage(capitalizeFirst(err.Error())+".") + "\n  Sign in again to get a new one: wendy auth login"
 }
 
 // capitalizeFirst upper-cases the first rune so an error string reads as a
@@ -1108,70 +1224,164 @@ func capitalizeFirst(s string) string {
 func newDeviceUnenrollCmd() *cobra.Command {
 	var assumeYes bool
 	var cloudGRPC string
+	var uuidAssetID string
+	var checkOnly bool
+	var cloudOnly bool
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "unenroll",
+		Args:  cobra.NoArgs,
 		Short: "Unenroll a device and remove it from Wendy Cloud",
-		Long: "Reverses 'wendy device enroll': deletes the device's enrollment certificates and " +
-			"provisioning state (the agent restarts into unprovisioned mode), then revokes the " +
-			"device's certificates and deletes its asset record in Wendy Cloud.",
+		Long: "Reverses 'wendy device enroll'. For a UUID/direct PKI device reached over direct LAN mTLS, Cloud revokes " +
+			"its certificate and deletes the asset, then the device verifies Cloud's signed reset authorization and erases its credentials; " +
+			"it can then enroll again. Agents without Cloud-authenticated reset support are refused before any change. " +
+			"If Cloud has no record of such a device, --force clears only its local enrollment over that connection; this needs Agent local-reset support, " +
+			"refuses a device Cloud still lists, and does not revoke certificates or delete Cloud records. " +
+			"Numeric legacy enrollment retains its separate cleanup path. " +
+			"For Wendy Lite over USB, removes the cloud enrollment, clears the board's identity and reboots it while preserving Wi-Fi and apps. Requires firmware with enrollment reset support. " +
+			"Use --cloud-only or 'wendy cloud device unenroll' to remove an offline device by asset ID or name without contacting it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			runCloud := func(selector string) error {
+				if uuidAssetID != "" || checkOnly || force {
+					return fmt.Errorf("--asset-id, --check and --force require a directly connected WendyOS device with v2 UUID enrollment")
+				}
+				return runCloudDeviceUnenroll(cmd, cloudGRPC, selector, "", assumeYes)
+			}
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			selector, cloudMode, err := cloudUnenrollTarget(cmd, cloudOnly)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			if cloudMode {
+				return runCloud(selector)
+			}
+			target, err := resolveUnenrollTargetFn(ctx, SuppressProvisioningHint(), SuppressPickerEnroll(), SuppressUpdateCheck(), DisableSessionBroker())
+			if err != nil {
+				if completionErr := recoverCompletedV2Unenroll(ctx, cloudGRPC, uuidAssetID); completionErr == nil {
+					return nil
+				} else {
+					return fmt.Errorf("%w; prior-reset reconciliation: %v", err, completionErr)
+				}
+			}
+			defer target.Close()
+			if _, scoped, parseErr := parseCloudDeviceSelector(target.DefaultSelector); scoped {
+				if parseErr != nil {
+					return parseErr
+				}
+				return runCloud(target.DefaultSelector)
+			}
+			if target.External != nil && target.External.ProviderKey == "wendy-lite" {
+				if uuidAssetID != "" || checkOnly || force {
+					return fmt.Errorf("--asset-id, --check and --force require a directly connected WendyOS device with v2 UUID enrollment")
+				}
+				if target.External.ConnectionType() == "Cloud" {
+					selector := target.DefaultSelector
+					if selector == "" {
+						info := target.External.ConnectionInfo
+						selector = (cloudDeviceSelector{Endpoint: info["cloud"], TenantUUID: info["tenantId"], AssetUUID: info["assetId"]}).String()
+					}
+					return runCloud(selector)
+				}
+				return runLiteDeviceUnenroll(cmd, *target.External, cloudGRPC, assumeYes)
+			}
+			conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: true})
+			if err != nil {
+				if completionErr := recoverCompletedV2Unenroll(ctx, cloudGRPC, uuidAssetID); completionErr == nil {
+					return nil
+				} else {
+					return fmt.Errorf("%w; prior-reset reconciliation: %v", err, completionErr)
+				}
+			}
 
 			// Determine the device's current enrollment so we know which cloud
-			// asset to clean up afterwards.
-			provResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+			// asset to clean up afterwards. The peer is the certificate a numeric
+			// legacy reset forgets the pins of.
+			var provPeer grpcpeer.Peer
+			provResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{}, grpc.Peer(&provPeer))
 			if err != nil {
 				return fmt.Errorf("checking provisioning status: %w", err)
 			}
 			prov := provResp.GetProvisioned()
 			if prov == nil {
-				return fmt.Errorf("device is not provisioned")
+				v2State, readErr := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
+				if readErr == nil && len(v2State.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 {
+					return reconcileCompletedV2Unenroll(ctx, v2State.GetNotProvisioned().GetUnenrollmentCompletion(), cloudGRPC, uuidAssetID)
+				}
+				return fmt.Errorf("device is not provisioned; no authenticated unenrollment completion evidence")
 			}
 			cloudHost := prov.GetCloudHost()
 			orgID := prov.GetOrganizationId()
 			assetID := prov.GetAssetId()
 
+			// Numeric Cloud v1 keeps its original RPC path and caller context;
+			// it must not depend on a v2 Agent endpoint or the new timeout.
+			if !isLegacyCloudEnrollment(orgID, assetID) {
+				v2Ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+				defer cancel()
+				var verifiedPeer grpcpeer.Peer
+				v2State, v2Err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(v2Ctx, &agentpbv2.IsProvisionedRequest{}, grpc.Peer(&verifiedPeer))
+				if v2Err == nil && v2State.GetProvisioned().GetPrincipalUri() != "" {
+					return runV2DeviceUnenroll(v2Ctx, conn, v2State.GetProvisioned(), &verifiedPeer, cloudGRPC, uuidAssetID, assumeYes, checkOnly, force)
+				}
+				return fmt.Errorf("cannot safely identify this enrollment; refusing numeric legacy cleanup; update the Agent for v2 unenrollment")
+			}
+			if uuidAssetID != "" || checkOnly || force {
+				return fmt.Errorf("--asset-id, --check and --force are for v2 UUID enrollments only")
+			}
+
 			if !assumeYes {
 				if !isInteractiveTerminal() {
 					return fmt.Errorf("unenroll is destructive; pass --yes to confirm when not running interactively")
 				}
-				fmt.Printf("This will unenroll the device (org: %d, asset: %d) and delete its asset in Wendy Cloud.\n", orgID, assetID)
+				fmt.Printf("This will unenroll the device (org: %s, asset: %d) and delete its asset in Wendy Cloud.\n", orgLabel(cloudHost, orgID), assetID)
 				if !confirmDefaultNoFn("Continue?") {
 					fmt.Println("Aborted.")
 					return nil
 				}
 			}
 
-			// Step 1: reset the device. The agent deletes its state and restarts,
-			// so the connection may drop right after the response — tolerate that.
-			if _, err := conn.ProvisioningService.Unprovision(ctx, &agentpb.UnprovisionRequest{}); err != nil {
-				if status.Code(err) == codes.Unavailable {
-					cliLogln("Device connection closed (agent is restarting).")
-				} else {
-					return fmt.Errorf("unprovisioning device: %w", err)
-				}
+			cloudConn, cloudCtx, cloudAuth, err := dialLegacyUnenrollCloudFn(ctx, cloudGRPC, cloudHost)
+			if err != nil {
+				return fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
 			}
+			defer cloudConn.Close()
 
-			// Step 2: clean up the cloud asset. Best-effort — a failure here leaves
-			// a dangling asset that can be removed from the dashboard, but the
-			// device itself is already reset.
-			certsRevoked, assetDeleted, cloudErr := cloudUnenrollCleanup(ctx, cloudGRPC, cloudHost, assetID)
+			result, cloudErr := performLegacyDeviceUnenroll(cloudCtx, cloudConn, orgID, assetID, cloudAuth.Certificates[0].UserID, func() error {
+				_, err := conn.ProvisioningService.Unprovision(ctx, &agentpb.UnprovisionRequest{})
+				return err
+			})
+			if !result.DeviceReset {
+				return cloudErr
+			}
+			// The reset erased the device's enrolled identity whether or not
+			// Cloud cleanup then succeeded, so forget it now: a pin left behind
+			// refuses every later connection to the unprovisioned device
+			// (WDY-3974). The Cloud retry below never contacts the device.
+			identityKeys := legacyResetIdentityKeys(conn, &provPeer, orgID, assetID)
+			pinErr := forgetResetDeviceIdentity(identityKeys...)
+			if pinErr != nil {
+				pinErr = fmt.Errorf("device reset, but clearing this CLI's saved identity for it failed: %w; run %s", pinErr, unpinCommandsFor(identityKeys))
+			}
+			retrySelector := (cloudDeviceSelector{Endpoint: cloudConn.Target(), OrgID: orgID, AssetID: assetID}).String()
+			retryCommand := "wendy cloud device unenroll --device " + shellQuoteArg(retrySelector)
 
 			if jsonOutput {
 				out := map[string]any{
-					"deviceReset":  true,
-					"certsRevoked": certsRevoked,
-					"assetDeleted": assetDeleted,
+					"deviceReset":    result.DeviceReset,
+					"certsRevoked":   result.CertificatesRevoked,
+					"assetDeleted":   result.AssetDeleted,
+					"organizationId": orgID,
+					"assetId":        assetID,
+					"cloud":          cloudConn.Target(),
 				}
 				if cloudErr != nil {
 					out["cloudError"] = cloudErr.Error()
+					out["retryCommand"] = retryCommand
+				}
+				if pinErr != nil {
+					out["pinError"] = pinErr.Error()
 				}
 				data, marshalErr := json.MarshalIndent(out, "", "  ")
 				if marshalErr != nil {
@@ -1181,121 +1391,69 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			} else {
 				fmt.Println("Device reset to unprovisioned state.")
 				if cloudErr != nil {
-					fmt.Printf("Warning: cloud cleanup failed: %v\n", cloudErr)
-					fmt.Printf("Delete asset %d from the Wendy Cloud dashboard to finish.\n", assetID)
+					fmt.Printf("Cloud cleanup is incomplete for org %d, asset %d in %s.\n", orgID, assetID, cloudConn.Target())
+					fmt.Printf("Retry cloud cleanup: %s\n", retryCommand)
+					fmt.Printf("If the legacy Cloud API remains unavailable, remove asset %d from organization %d in that Cloud dashboard.\n", assetID, orgID)
+					// The pins just cleared come back while the asset is listed:
+					// Cloud's roster is authority for seedPinsFromCloudAssets, and
+					// the Cloud-only retry deliberately keeps pins.
+					fmt.Printf("Until then, commands that read Cloud's device list, such as 'wendy cloud discover', pin this device again; if a later connection is refused, run 'wendy device unpin %s'.\n", shellQuoteArg(certs.AssetURN(orgID, assetID)))
 				} else {
-					fmt.Printf("Revoked %d certificate(s) and deleted asset %d from Wendy Cloud.\n", certsRevoked, assetID)
+					fmt.Printf("Revoked %d certificate(s) and deleted asset %d from Wendy Cloud.\n", result.CertificatesRevoked, assetID)
 				}
 			}
 
-			if cloudErr != nil {
-				return cloudErr
+			if pinErr != nil {
+				return errors.Join(cloudErr, pinErr)
 			}
-			return nil
+			return cloudErr
 		},
 	}
 
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Skip the confirmation prompt")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint to use for cleanup (defaults to the device's enrolled cloud host)")
+	cmd.Flags().StringVar(&uuidAssetID, "asset-id", "", "Exact Cloud asset UUID to unenroll or reconcile (v2 UUID enrollments only); must match the device's Cloud binding")
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only verify the Cloud binding and the Agent's authenticated-reset support, or with --force its local-reset support; change nothing (v2 UUID enrollments only)")
+	cmd.Flags().BoolVar(&cloudOnly, "cloud-only", false, "Remove the cloud enrollment without contacting or resetting the device; --device accepts an asset ID, name, or PKI device ID")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint for cleanup (cloud-only uses the selected auth session; local WendyOS uses its enrolled cloud host)")
+	cmd.Flags().BoolVar(&force, "force", false, "Clear only the local enrollment of a device Cloud has no record of; does not revoke its certificate or delete a Cloud record (v2 UUID enrollments over direct LAN only)")
+	cmd.MarkFlagsMutuallyExclusive("force", "asset-id")
+	cmd.MarkFlagsMutuallyExclusive("force", "cloud-only")
 	return cmd
 }
 
-// cloudUnenrollCleanup revokes the asset's active certificates and then
-// deletes the asset record in Wendy Cloud. It authenticates with the user's
-// stored session for the device's cloud host (or cloudGRPC if provided).
 // dialCloud opens an authenticated gRPC connection to Wendy Cloud using the
 // user's stored session for target (or deviceCloudHost when target is empty).
-// It returns the connection and a context carrying the auth token; the caller
-// must Close the connection.
-func dialCloud(ctx context.Context, target, deviceCloudHost string) (*grpc.ClientConn, context.Context, error) {
+// It returns the connection, a context carrying the auth token, and the selected
+// session. The caller must Close the connection.
+func dialCloud(ctx context.Context, target, deviceCloudHost string) (*grpc.ClientConn, context.Context, *config.AuthConfig, error) {
 	if target == "" {
 		target = deviceCloudHost
 	}
 	auth, err := pickAuthEntry(target)
 	if err != nil {
-		return nil, nil, fmt.Errorf("selecting cloud auth session: %w", err)
+		return nil, nil, nil, fmt.Errorf("selecting cloud auth session: %w", err)
 	}
 	if len(auth.Certificates) == 0 {
-		return nil, nil, fmt.Errorf("auth session has no certificates; re-run 'wendy auth login'")
+		return nil, nil, nil, fmt.Errorf("auth session has no certificates; re-run 'wendy auth login'")
 	}
 	cert := auth.Certificates[0]
 
-	var transport grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		keyPEM, keyErr := cert.PrivateKeyPEM()
-		if keyErr != nil {
-			return nil, nil, fmt.Errorf("loading client key: %w", keyErr)
-		}
-		tlsCfg, tlsErr := certs.LoadTLSConfig(
-			cert.PemCertificate,
-			cert.PemCertificateChain,
-			keyPEM,
-			"",
-		)
-		if tlsErr != nil {
-			return nil, nil, fmt.Errorf("loading TLS config: %w", tlsErr)
-		}
-		transport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
+	creds, credsErr := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
+	if credsErr != nil {
+		return nil, nil, nil, credsErr
 	}
 
-	dialOptions, dialErr := withCloudRequestSigning(auth, transport)
-	if dialErr != nil {
-		return nil, nil, dialErr
-	}
+	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, dpopDialOptions(auth)...)
 	cloudConn, dialErr := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if dialErr != nil {
-		return nil, nil, fmt.Errorf("connecting to cloud: %w", dialErr)
+		return nil, nil, nil, fmt.Errorf("connecting to cloud: %w", dialErr)
 	}
 	cloudCtx, ctxErr := cloudContext(ctx, auth)
 	if ctxErr != nil {
 		cloudConn.Close()
-		return nil, nil, ctxErr
+		return nil, nil, nil, ctxErr
 	}
-	return cloudConn, cloudCtx, nil
-}
-
-func cloudUnenrollCleanup(ctx context.Context, cloudGRPC, deviceCloudHost string, assetID int32) (certsRevoked int, assetDeleted bool, err error) {
-	cloudConn, tokenCtx, err := dialCloud(ctx, cloudGRPC, deviceCloudHost)
-	if err != nil {
-		return 0, false, err
-	}
-	defer cloudConn.Close()
-
-	// Revoke the asset's active certificates first so a stale identity cannot be
-	// reused, then delete the asset record.
-	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-	stream, listErr := certClient.ListCertificates(tokenCtx, &cloudpb.ListCertificatesRequest{AssetId: assetID})
-	if listErr != nil {
-		return 0, false, fmt.Errorf("listing certificates: %w", listErr)
-	}
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			return certsRevoked, false, fmt.Errorf("listing certificates: %w", recvErr)
-		}
-		c := resp.GetCertificate()
-		if c == nil || c.GetStatus() != cloudpb.CertificateStatus_CERTIFICATE_STATUS_ACTIVE {
-			continue
-		}
-		if _, revErr := certClient.RevokeCertificate(tokenCtx, &cloudpb.RevokeCertificateRequest{
-			CertificateId: c.GetId(),
-			Reason:        "device unprovisioned",
-		}); revErr != nil {
-			return certsRevoked, false, fmt.Errorf("revoking certificate %d: %w", c.GetId(), revErr)
-		}
-		certsRevoked++
-	}
-
-	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	if _, delErr := assetClient.DeleteAsset(tokenCtx, &cloudpb.DeleteAssetRequest{Id: assetID}); delErr != nil {
-		return certsRevoked, false, fmt.Errorf("deleting asset %d: %w", assetID, delErr)
-	}
-	return certsRevoked, true, nil
+	return cloudConn, cloudCtx, auth, nil
 }
 
 // scanWiFiNetworks queries the agent for available WiFi networks.
@@ -1340,18 +1498,24 @@ func formatKernelLogRecord(rec *agentpb.KernelLogRecord) string {
 
 func newDeviceLogsCmd() *cobra.Command {
 	var appName string
+	var readOnly bool
 	var serviceName string
 	var minSeverity int32
 	var level string
 	var tail int32
+	var noFollow bool
 
 	cmd := &cobra.Command{
 		Use:   "logs [app]",
-		Short: "Stream logs from containers on the device",
-		Long: "Stream logs from containers on the device.\n\n" +
+		Short: "Stream WendyOS logs or the Wendy Lite firmware console",
+		Long: "Stream logs from containers on WendyOS or the firmware console on Wendy Lite.\n\n" +
+			"Wendy Lite streams buffered and live console output over USB, LAN, or BLE.\n" +
+			"App/service/severity filters, --tail, and --no-follow apply to WendyOS only.\n\n" +
 			"Pass an app name (positionally or with --app) to see only that app's\n" +
 			"logs. Without a filter, logs from every container and the agent itself\n" +
 			"are streamed, which can include agent lifecycle messages.\n\n" +
+			"Pass --no-follow (usually with --tail N) to print the recent logs the\n" +
+			"device replays and exit instead of following new output.\n\n" +
 			"To inspect the device kernel ring buffer (dmesg), use `wendy device os-logs`.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -1368,7 +1532,21 @@ func newDeviceLogsCmd() *cobra.Command {
 				appName = args[0]
 			}
 
-			conn, err := connectToAgent(ctx)
+			target, err := resolveTarget(ctx, append(monitoringOptions(readOnly), SuppressPickerEnroll())...)
+			if err != nil {
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return nil
+				}
+				return err
+			}
+			if target.External != nil && target.External.ProviderKey == "wendy-lite" {
+				return runLiteDeviceLogs(cmd, target, appName)
+			}
+			cfg := resolveConfig{}
+			for _, option := range monitoringOptions(readOnly) {
+				option(&cfg)
+			}
+			conn, err := connectFromSelectedDevice(target, cfg)
 			if err != nil {
 				return err
 			}
@@ -1383,7 +1561,7 @@ func newDeviceLogsCmd() *cobra.Command {
 				}
 			}
 
-			req := &agentpb.StreamLogsRequest{}
+			req := &agentpb.StreamLogsRequest{NoFollow: noFollow}
 			if appName != "" {
 				req.AppName = &appName
 			}
@@ -1401,8 +1579,15 @@ func newDeviceLogsCmd() *cobra.Command {
 			if tail > 0 {
 				req.LastN = &tail
 			}
-			stream, err := conn.TelemetryService.StreamLogs(ctx, req)
+			// Cancelled when RunE returns so a --no-follow exit also stops the
+			// background receive (see consumeLogStream).
+			streamCtx, cancelStream := context.WithCancel(ctx)
+			defer cancelStream()
+			stream, err := conn.TelemetryService.StreamLogs(streamCtx, req)
 			if err != nil {
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return nil
+				}
 				return fmt.Errorf("starting log stream: %w", err)
 			}
 
@@ -1419,28 +1604,24 @@ func newDeviceLogsCmd() *cobra.Command {
 				case serviceName != "":
 					target = serviceName
 				}
-				if tail > 0 {
+				if noFollow && tail > 0 {
+					cliLogln("Showing up to %d recent log batches from %s.", tail, target)
+				} else if noFollow {
+					cliLogln("Showing recent logs from %s.", target)
+				} else if tail > 0 {
 					cliLogln("Streaming logs from %s — replaying up to %d recent, then live. Press Ctrl-C to stop.", target, tail)
 				} else {
 					cliLogln("Streaming logs from %s. Waiting for new logs — press Ctrl-C to stop.", target)
 				}
 			}
 
-			liveSeparatorPrinted := tail == 0
+			liveSeparatorPrinted := tail == 0 || noFollow
 			seenHistory := false
 
-			for {
-				resp, err := stream.Recv()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return fmt.Errorf("receiving logs: %w", err)
-				}
-
+			res, err := consumeLogStream(streamCtx, stream, !noFollow, func(resp *agentpb.StreamLogsResponse) {
 				logs := resp.GetLogs()
 				if logs == nil {
-					continue
+					return
 				}
 
 				// Track whether any history was received.
@@ -1468,8 +1649,16 @@ func newDeviceLogsCmd() *cobra.Command {
 						}
 					}
 				}
+			})
+			if err != nil {
+				return err
 			}
-
+			if noFollow {
+				// On stderr in every mode: stdout stays pure log lines.
+				if hint := noFollowHint(res, tail); hint != "" {
+					cliLogln("%s", hint)
+				}
+			}
 			return nil
 		},
 	}
@@ -1478,7 +1667,9 @@ func newDeviceLogsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&serviceName, "service", "", "Filter by service name")
 	cmd.Flags().Int32Var(&minSeverity, "min-severity", 0, "Minimum log severity number")
 	cmd.Flags().StringVar(&level, "level", "", "Minimum log level (trace, debug, info, warn, error, fatal)")
-	cmd.Flags().Int32Var(&tail, "tail", 0, "Request the last N stored log batches matching the filters before following new output (default 0)")
+	cmd.Flags().Int32Var(&tail, "tail", 0, "Request the last N stored log batches matching the filters (default 0); continue live unless --no-follow")
+	cmd.Flags().BoolVar(&noFollow, "no-follow", false, "Print the logs the device replays (see --tail) and exit instead of following new output; device agents released before 2026-08-19 replay history only with --tail")
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "Observe an existing device without starting VMs or managing updates")
 
 	return cmd
 }
@@ -2178,7 +2369,7 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if addr == "" {
 		addr = hostPort(conn.Host, defaultAgentPort)
 	}
-	return waitForAgentRestart(ctx, addr)
+	return waitForAgentRestartKeyed(ctx, addr, conn.DevicePinKey)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the
@@ -2206,20 +2397,24 @@ type osUpdateOutcome struct {
 // device_type/storage_medium/os_version used for the decision are re-read from
 // the agent we just installed — a newer agent can report a corrected
 // device_type, so the pre-update snapshot may be stale. Non-WendyOS targets and
-// devices without an OTA backend are skipped silently, and any failure to
-// re-read or look up the OS is reported but non-fatal — `device update` still
-// succeeds as an agent-only update. Exception: when prNumber > 0 the OS
-// artifact resolves from that wendyos-builder PR's manifest, the already-current
-// skip is suppressed (a PR tag is constant across rebuilds), and failures on
-// the way to the install are hard errors instead — the PR OS install is the
-// explicitly requested outcome, so it must not degrade to an agent-only
-// success. The returned outcome reports whether an OTA was actually applied and
-// whether the device came back online in this run.
+// devices without an OTA backend are skipped silently for automatic updates,
+// and any failure to re-read or look up an automatic OS update is reported but
+// non-fatal. An explicit --artifact-url or --pr is different: failure before
+// the OS install is an error, so the command cannot claim agent-only success
+// when the requested OS artifact was never applied. The returned outcome
+// reports whether an OTA was applied and whether the device came back online.
 func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentVersionResponse, priorConn *grpcclient.AgentConnection, nightly, assumeYes bool, artifactURLOverride string, prNumber int) (osUpdateOutcome, error) {
+	explicitOS := artifactURLOverride != "" || prNumber > 0
 	if preUpdateVersion == nil {
+		if explicitOS {
+			return osUpdateOutcome{}, fmt.Errorf("cannot apply the requested OS artifact: device version is unavailable")
+		}
 		return osUpdateOutcome{}, nil
 	}
 	if !isWendyOSUpdateTarget(preUpdateVersion) || !hasOTABackend(preUpdateVersion) {
+		if explicitOS {
+			return osUpdateOutcome{}, fmt.Errorf("cannot apply the requested OS artifact: device is not a WendyOS OTA target with an update backend")
+		}
 		return osUpdateOutcome{}, nil
 	}
 	// A pre-0.17.0 device cannot apply the new OTA artifact format and must be
@@ -2237,8 +2432,8 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 	fmt.Println("Checking for OS updates...")
 	conn, err := reconnectAgentAfterRestart(ctx, priorConn)
 	if err != nil {
-		if prNumber > 0 {
-			return osUpdateOutcome{}, fmt.Errorf("reconnecting for the PR %d OS update: %w", prNumber, err)
+		if explicitOS {
+			return osUpdateOutcome{}, fmt.Errorf("reconnecting for the requested OS update: %w", err)
 		}
 		fmt.Printf("Could not check for OS updates: %v\n", err)
 		return osUpdateOutcome{}, nil
@@ -2262,8 +2457,7 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 		}
 		if !assumeYes {
 			if !isInteractiveTerminal() {
-				fmt.Printf("OS artifact specified (%s). Re-run with --yes to apply.\n", artifactURLOverride)
-				return osUpdateOutcome{}, nil
+				return osUpdateOutcome{}, fmt.Errorf("--artifact-url requires --yes when stdin is not a terminal")
 			}
 			if !confirmDefaultNoFn(fmt.Sprintf("Apply OS update from %s?", artifactURLOverride)) {
 				fmt.Println("Skipping OS update.")
@@ -2361,16 +2555,22 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 		otaURL = u
 	}
 
-	if err := streamOSUpdate(ctx, conn, otaURL, ""); err != nil {
-		return osUpdateOutcome{}, err
-	}
-
-	if _, isCloud := cloudDeviceConfigFromContext(ctx); isCloud {
+	if osUpdateThroughCloud(ctx, conn) {
+		if err := streamOSUpdate(ctx, conn, otaURL, ""); err != nil {
+			return osUpdateOutcome{}, err
+		}
 		fmt.Println("OS update applied; the device is rebooting. Reconnect once it is back online.")
 		return osUpdateOutcome{applied: true}, nil
 	}
+	baseline := readOSUpdateBaseline(ctx, conn)
+	baseline.preVersion = preUpdateOSVersion
+	recordCleared, err := applyOSUpdate(ctx, conn, otaURL)
+	baseline.recordCleared = recordCleared
+	if err != nil {
+		return osUpdateOutcome{}, err
+	}
 	fmt.Println("WendyOS update applied. Device is rebooting...")
-	if err := waitForDeviceOnline(ctx, priorConn.Host); err != nil {
+	if err := waitForDeviceOnline(ctx, conn); err != nil {
 		return osUpdateOutcome{applied: true}, err
 	}
 	fmt.Println("Device is back online.")
@@ -2378,7 +2578,7 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 	// also reboots and reconnects. Query the recorded outcome and surface a
 	// rollback as an error so `wendy device update` exits non-zero instead of
 	// silently reporting success (mirrors `wendy os update`).
-	if err := reportOSUpdateOutcome(ctx, priorConn.Host, preUpdateOSVersion); err != nil {
+	if err := reportOSUpdateOutcome(ctx, conn, preUpdateOSVersion, baseline); err != nil {
 		return osUpdateOutcome{applied: true, online: true}, err
 	}
 	return osUpdateOutcome{applied: true, online: true}, nil
@@ -2393,6 +2593,9 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 // agent, macOS target), an esc'd picker, or a failed join never blocks the
 // update prompt — a wired device is fine without WiFi.
 func ensureDeviceWiFiForOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection) {
+	if osUpdateThroughCloud(ctx, conn) || isLoopbackHost(conn.Host) {
+		return
+	}
 	status, err := conn.AgentService.GetWiFiStatus(ctx, &agentpb.GetWiFiStatusRequest{})
 	if err != nil || status.GetConnected() {
 		return
@@ -2452,6 +2655,22 @@ func shouldReapplyBinary(binaryProvided bool, outcome osUpdateOutcome) bool {
 	return binaryProvided && outcome.applied && outcome.online
 }
 
+// The root command enables JSON automatically when there is no terminal.
+// Device update's JSON path reports agent status and intentionally stops before
+// OS work, so an explicitly requested artifact must use the full update path.
+// An explicit --json request cannot be silently overridden; fail before any
+// agent upload instead. --json=false remains an explicit way to select text.
+func prepareExplicitDeviceOSOutput(cmd *cobra.Command, artifactURL string) error {
+	if artifactURL == "" || !jsonOutput {
+		return nil
+	}
+	if cmd.Root().PersistentFlags().Changed("json") {
+		return fmt.Errorf("--artifact-url cannot be combined with --json: device update JSON mode skips OS updates")
+	}
+	jsonOutput = false
+	return nil
+}
+
 func newDeviceUpdateCmd() *cobra.Command {
 	var binaryPath string
 	var nightly bool
@@ -2463,7 +2682,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 		Use:   "update",
 		Short: "Update the agent binary and WendyOS on the target device",
 		Long: "Updates the agent binary on the device (downloaded from GitHub, or --binary for a local file), then checks for a newer WendyOS image. " +
-			"When an OS update is available it prompts before applying (default no); use --yes to apply without prompting. Non-interactive runs report the available update without applying it. " +
+			"When an OS update is available it prompts before applying (default no); use --yes to apply without prompting. Non-interactive automatic updates report the available update without applying it. " +
 			"--nightly selects the nightly channel for both the agent and the OS. " +
 			"--artifact-url applies a specific OS update artifact instead of the manifest's latest; this works over the cloud tunnel (the device downloads the artifact directly from the URL). " +
 			"--pr N applies the OS image built by wendyos-builder PR #N instead of the manifest's latest — an unhardened debug build for testing PRs on hardware; it also works over the cloud tunnel. --pr cannot be combined with --artifact-url or --json. " +
@@ -2482,6 +2701,9 @@ func newDeviceUpdateCmd() *cobra.Command {
 					return fmt.Errorf("--pr cannot be combined with --json: the OS-update step is skipped in JSON mode")
 				}
 				fmt.Fprintln(cmd.ErrOrStderr(), tui.WarningMessage("PR images are unhardened debug builds (passwordless root, SSH on). Do not use in production."))
+			}
+			if err := prepareExplicitDeviceOSOutput(cmd, artifactURL); err != nil {
+				return err
 			}
 
 			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), SuppressUpdateCheck())
@@ -2634,11 +2856,12 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// update and to re-dial the SAME device after the reboot; passing nil
 				// here would nil-deref once the OS-update gate lets a device through.
 				reconnect := updatedAgentReconnectFunc(ctx, conn)
+				restartTimeout := agentRestartTimeoutForConn(conn, preUpdateVersion.GetOs())
 				if conn != nil {
 					_ = conn.Close()
 					conn = nil
 				}
-				conn, err = awaitAgentRestart(ctx, reconnect, preUpdateVersion.GetOs(), jsonOutput)
+				conn, err = awaitAgentRestart(ctx, reconnect, restartTimeout, jsonOutput)
 				if err != nil {
 					return err
 				}
@@ -2656,7 +2879,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				requireHash := strings.EqualFold(preUpdateVersion.GetOs(), "darwin")
 				verified, verifyErr := verifyAgentAfterUpdate(ctx, conn.AgentService, verificationSHA, expectedAgentVersion,
 					agentVerifyWaitOptions{
-						Timeout:     agentRestartTimeoutFor(preUpdateVersion.GetOs()),
+						Timeout:     restartTimeout,
 						RequireHash: requireHash,
 					})
 				if verifyErr != nil {
@@ -2844,6 +3067,25 @@ func isELFBinary(data []byte) bool {
 	return len(data) >= 4 && data[0] == 0x7f && data[1] == 'E' && data[2] == 'L' && data[3] == 'F'
 }
 
+// isMachOBinary reports the thin and universal Mach-O magic values. A local
+// macOS CLI executable is not a Linux agent binary; accepting it as a generic
+// non-ELF payload would install bytes that systemd cannot execute and strand
+// the device's agent.
+func isMachOBinary(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	switch string(data[:4]) {
+	case "\xfe\xed\xfa\xce", "\xce\xfa\xed\xfe", // 32-bit thin, big/little endian
+		"\xfe\xed\xfa\xcf", "\xcf\xfa\xed\xfe", // 64-bit thin, big/little endian
+		"\xca\xfe\xba\xbe", "\xbe\xba\xfe\xca", // 32-bit universal, big/little endian
+		"\xca\xfe\xba\xbf", "\xbf\xba\xfe\xca": // 64-bit universal, big/little endian
+		return true
+	default:
+		return false
+	}
+}
+
 // checkLocalAgentArtifact validates a --binary payload against the device OS,
 // so a mismatched artifact (a Linux ELF pushed to a Mac, or a macOS zip pushed
 // to a Linux box) is caught locally instead of failing deep inside the agent's
@@ -2862,6 +3104,13 @@ func checkLocalAgentArtifact(data []byte, deviceOS, deviceArch string) error {
 				"(build one with swift/Scripts/Build.sh), not a Linux agent binary", deviceArch)
 		}
 		return errors.New("this device runs macOS; --binary must be a wendy-agent-macos zip app bundle")
+	}
+	if isMachOBinary(data) {
+		osLabel := deviceOS
+		if osLabel == "" {
+			osLabel = "Linux"
+		}
+		return fmt.Errorf("--binary is a macOS Mach-O executable, but this device runs %s; provide the Wendy agent Linux ELF binary", osLabel)
 	}
 
 	if isZipArchive(data) {
@@ -2900,6 +3149,20 @@ func agentRestartTimeoutFor(osName string) time.Duration {
 	return defaultAgentRestartTimeout
 }
 
+// agentRestartTimeoutForConn is agentRestartTimeoutFor for the device that
+// conn reaches. A Cloud tunnel connection (one with a pinned Reconnect) gets at
+// least cloudAgentRestartTimeout, the window its own restart wait
+// (waitForCloudDeviceRestart) is built for. The Linux default is sized for a
+// LAN and would cut that wait short: through Cloud, the new agent must
+// register with the relay again before a tunnel can reach it.
+func agentRestartTimeoutForConn(conn *grpcclient.AgentConnection, osName string) time.Duration {
+	timeout := agentRestartTimeoutFor(osName)
+	if conn != nil && conn.Reconnect != nil && timeout < cloudAgentRestartTimeout {
+		return cloudAgentRestartTimeout
+	}
+	return timeout
+}
+
 // uploadAgentBinary uploads binaryData to the device, showing a spinner when
 // interactive and a plain status line otherwise (nothing extra in JSON mode).
 // It is the shared upload used by both `device update`'s initial agent update
@@ -2907,6 +3170,9 @@ func agentRestartTimeoutFor(osName string) time.Duration {
 func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServiceClient, binaryData []byte, sha256Hash string, jsonOutput bool) error {
 	if isInteractiveTerminal() && !jsonOutput {
 		s := tui.NewSpinner("Uploading agent binary...")
+		if progressHintsOff(ctx) {
+			s = s.WithoutHints()
+		}
 		p := tui.NewProgressProgram(s)
 
 		go func() {
@@ -2914,7 +3180,7 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 			p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 		}()
 
-		finalModel, runErr := p.Run()
+		finalModel, runErr := tui.RunProgram(p)
 		if runErr != nil {
 			return fmt.Errorf("TUI error: %w", runErr)
 		}
@@ -2930,13 +3196,12 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 	return deviceUpdateUpload(ctx, agentService, binaryData, sha256Hash)
 }
 
-// awaitAgentRestart waits for the agent to come back after an upload and returns
-// a live connection to it (showing a spinner when interactive). osName selects
-// the restart timeout via agentRestartTimeoutFor — pass "" when the device's OS
-// is unknown or irrelevant (e.g. it can never be darwin at that call site) to
-// get the default Linux timeout.
-func awaitAgentRestart(ctx context.Context, reconnect func(context.Context) (*grpcclient.AgentConnection, error), osName string, jsonOutput bool) (*grpcclient.AgentConnection, error) {
-	opts := agentRestartWaitOptions{Timeout: agentRestartTimeoutFor(osName)}
+// awaitAgentRestart waits up to timeout for the agent to come back after an
+// upload and returns a live connection to it (showing a spinner when
+// interactive). Callers pick timeout with agentRestartTimeoutForConn, from the
+// connection the upload went through and the device's reported OS.
+func awaitAgentRestart(ctx context.Context, reconnect func(context.Context) (*grpcclient.AgentConnection, error), timeout time.Duration, jsonOutput bool) (*grpcclient.AgentConnection, error) {
+	opts := agentRestartWaitOptions{Timeout: timeout}
 	if isInteractiveTerminal() && !jsonOutput {
 		return runAgentConnectionSpinner(ctx, "Waiting for agent to restart...", func(spinCtx context.Context) (*grpcclient.AgentConnection, error) {
 			return waitForUpdatedAgentReady(spinCtx, reconnect, opts)
@@ -2956,11 +3221,11 @@ func awaitAgentRestart(ctx context.Context, reconnect func(context.Context) (*gr
 // then waits once more for the re-applied dev agent to return, hash-verifies
 // that the uploaded binary is what runs, and returns the version it reports.
 // osName is
-// forwarded to awaitAgentRestart for its restart-timeout selection; in
+// forwarded to agentRestartTimeoutForConn for the restart-timeout selection; in
 // practice this path is unreachable for darwin (an OS update is refused on
 // Macs before reaching here), so osName is always a Linux-family value.
 func reapplyBinaryAfterOSUpdate(ctx context.Context, priorConn *grpcclient.AgentConnection, osName string, binaryData []byte, sha256Hash string, jsonOutput bool) (agentVerifyResult, error) {
-	conn, err := awaitAgentRestart(ctx, updatedAgentReconnectFunc(ctx, priorConn), osName, jsonOutput)
+	conn, err := awaitAgentRestart(ctx, updatedAgentReconnectFunc(ctx, priorConn), agentRestartTimeoutForConn(priorConn, osName), jsonOutput)
 	if err != nil {
 		return agentVerifyResult{}, err
 	}
@@ -2976,8 +3241,9 @@ func reapplyBinaryAfterOSUpdate(ctx context.Context, priorConn *grpcclient.Agent
 	}
 
 	reconnectAfter := updatedAgentReconnectFunc(ctx, conn)
+	restartTimeout := agentRestartTimeoutForConn(conn, osName)
 	_ = conn.Close()
-	readyConn, err := awaitAgentRestart(ctx, reconnectAfter, osName, jsonOutput)
+	readyConn, err := awaitAgentRestart(ctx, reconnectAfter, restartTimeout, jsonOutput)
 	if err != nil {
 		return agentVerifyResult{}, err
 	}

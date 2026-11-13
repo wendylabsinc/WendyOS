@@ -15,22 +15,21 @@ wendy run --device Woof --build-type docker --no-restart
 wendy run --device vm:<simulator-name> --build-type docker --no-restart
 ```
 
-The Docker command starts one route automatically after current observations
-show clear space. It sends an initial zero Unitree Move request. Managed Go2
+The Docker command waits for an explicit `/patrol/start` request and current
+observations showing clear space. It sends an initial zero Unitree Move request. Managed Go2
 simulators grant that new publisher control automatically. Standalone simulators
 using manual control require a grant in the sandbox.
 
 See the [shared interface and clock requirements](../README.md). In particular,
 Woof publishes body-frame point clouds and native odometry, not `/scan` or `/odom`.
-The Docker command temporarily uses `--ignore-capture-age` for boards with
-unsynchronized clocks. It accepts old or future capture timestamps and uses local
+The Docker command checks capture age and scan coverage. The optional
+`--ignore-capture-age` compatibility mode accepts old or future capture timestamps and uses local
 arrival time for the 350 ms sensor timeout. Missing streams, repeated or backward
 timestamps, invalid observations and obstacles still stop the patrol. Cloud and
 odometry timestamps must still be within 100 ms of each other. Delayed captures
 arriving now cannot be distinguished from current captures in this mode.
 
-Remove `--ignore-capture-age` from the Docker command to restore capture age
-checks. That mode requires synchronized clocks or an independently measured
+The default capture age checks require synchronized clocks or an independently measured
 `GO2_SENSOR_CLOCK_OFFSET_SECONDS`. Waiting logs identify the readiness blocker
 and the underlying sensor rejection. Repeated errors are suppressed; changing
 waiting conditions print at most once every five seconds. Old or future captures
@@ -57,10 +56,11 @@ and restart the app to create a new command publisher.
 In the image's ROS shell:
 
 ```sh
-python3 /app/ros_app.py --autostart --ignore-capture-age --allow-scan-gaps --waypoints '[[1.5,0],[1.5,1],[0,1],[0,0]]' --laps 2
+python3 /app/ros_app.py --waypoints '[[1.5,0],[1.5,1],[0,1],[0,0]]' --laps 2
 ```
 
-Omit `--autostart` to wait for `/patrol/start`. Use one Patrol instance at a time.
+The default waits for `/patrol/start`. Add `--autostart` only for an explicitly
+authorized automatic-motion test. Use one Patrol instance at a time.
 Routes allow 1 to 16 waypoints within 3 m of the start, 1 to 5 laps, and at most
 30 m of total travel. Include `[0,0]` to return to the start. Odometry and targets
 must remain within ±5 m on both odom axes. Each waypoint has a 45-second deadline;
@@ -70,11 +70,11 @@ Commands are bounded to 0.55 m/s forward and ±0.4 rad/s yaw. Patrol turns in pl
 before walking and accepts arrival within 25 cm. It requires more than 85 cm
 forward clearance and 55 cm elsewhere among measured returns.
 
-The Docker command temporarily enables `--allow-scan-gaps`. Sectors without a
+The optional `--allow-scan-gaps` flag relaxes the default coverage check. Sectors without a
 projected return may be skipped, but at least one usable return within 30 degrees
 of forward is required. Empty scans and invalid measurements still stop the route.
-This mode can miss obstacles in unobserved directions. Remove the flag to require
-usable returns in all 72 sectors again. Waiting logs report observed sector counts;
+This mode can miss obstacles in unobserved directions. By default, usable returns
+are required in all 72 sectors. Waiting logs report observed sector counts;
 `/patrol/status` includes `scan_coverage` and `allow_scan_gaps`.
 
 The app subscribes only to `/utlidar/cloud_base`. It does not combine separate

@@ -8,11 +8,12 @@ import (
 )
 
 // backoffSchedule is the delay sequence after a failed Roughtime query.
+// Cap waits at a minute so restored internet is discovered promptly even when
+// local interfaces and routes do not change.
 var backoffSchedule = []time.Duration{
 	5 * time.Second,
 	30 * time.Second,
-	5 * time.Minute,
-	30 * time.Minute,
+	time.Minute,
 }
 
 // resyncInterval is the wait after a query that disciplined the clock.
@@ -88,16 +89,21 @@ func (m *Manager) RunDirect(ctx context.Context) {
 			continue
 		}
 
-		attempt = 0
-		if m.logger != nil {
-			m.logger.Info("timesync: synced via Roughtime",
-				zap.Int("quorum", result.Quorum),
-				zap.String("confidence", result.Confidence),
-				zap.Duration("uncertainty", time.Duration((result.UpperOffsetNanos-result.LowerOffsetNanos)/2)))
+		if ctx.Err() != nil {
+			return
 		}
-		boot, _ := bootTimeNanos()
-		mid := result.LowerOffsetNanos + (result.UpperOffsetNanos-result.LowerOffsetNanos)/2
-		m.applyTime(time.Unix(0, boot+mid))
+		observation := m.applyDirect(result)
+		// A verified query is not a successful clock discipline when the
+		// write or its observation failed. Retry those failures on the same
+		// bounded schedule instead of leaving recovery stalled for six hours.
+		if !observation.ApplyAttempted || observation.ApplyError != nil || observation.ObservationError != nil {
+			if !m.waitBackoff(ctx, attempt) {
+				return
+			}
+			attempt++
+			continue
+		}
+		attempt = 0
 
 		if !m.wait(ctx, resyncInterval) {
 			return

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+
 	"go.uber.org/zap"
 
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -20,22 +22,24 @@ import (
 // a coarse tail bucket for outliers.
 var meshDialDurationBoundsMs = []float64{5, 10, 25, 50, 100, 250, 500, 1000, 2500}
 
-// meshConnKey identifies one mesh.connections timeseries.
+// meshConnKey identifies one mesh.connections timeseries. peer is the mesh
+// peer label: a device UUID for app-session flows, a legacy asset id for the
+// LAN-relay/build-delivery flows.
 type meshConnKey struct {
-	peer   int32
+	peer   string
 	mode   string
 	result string
 }
 
 // meshBytesKey identifies one mesh.bytes timeseries.
 type meshBytesKey struct {
-	peer int32
+	peer string
 	dir  string
 }
 
 // meshDialKey identifies one mesh.dial.duration_ms timeseries.
 type meshDialKey struct {
-	peer int32
+	peer string
 	mode string
 }
 
@@ -78,11 +82,22 @@ func NewMeshMetrics(pub TelemetryPublisher, logger *zap.Logger) *MeshMetrics {
 	}
 }
 
-// RecordDial records the outcome and wall-clock duration of one dial attempt
-// (either the LAN-direct leg or the broker-relay leg). Safe for concurrent
-// use; safe to call on a nil *MeshMetrics (a no-op), so callers that
-// construct a dialer without metrics wired up don't need extra nil checks.
-func (m *MeshMetrics) RecordDial(peer int32, mode, result string, durMs float64) {
+// RecordDial records the outcome and wall-clock duration of one app-session
+// dial attempt toward a device principal. Safe for concurrent use; safe to
+// call on a nil *MeshMetrics (a no-op), so callers that construct a dialer
+// without metrics wired up don't need extra nil checks.
+func (m *MeshMetrics) RecordDial(device meshid.Device, mode, result string, durMs float64) {
+	m.recordDial(device.UUID().String(), mode, result, durMs)
+}
+
+// RecordAssetDial records one dial attempt of the legacy asset-keyed paths
+// (LAN-direct MeshDial, cloud relay, build delivery), which address peers by
+// cloud asset id rather than device principal.
+func (m *MeshMetrics) RecordAssetDial(assetID int32, mode, result string, durMs float64) {
+	m.recordDial(strconv.Itoa(int(assetID)), mode, result, durMs)
+}
+
+func (m *MeshMetrics) recordDial(peer, mode, result string, durMs float64) {
 	if m == nil {
 		return
 	}
@@ -109,14 +124,15 @@ func (m *MeshMetrics) RecordDial(peer int32, mode, result string, durMs float64)
 }
 
 // RecordBytes accumulates n bytes transferred in direction dir ("tx"/"rx")
-// for peer. Safe for concurrent use; safe to call on a nil *MeshMetrics.
-func (m *MeshMetrics) RecordBytes(peer int32, dir string, n int64) {
+// with the device principal peer. Safe for concurrent use; safe to call on a
+// nil *MeshMetrics.
+func (m *MeshMetrics) RecordBytes(device meshid.Device, dir string, n int64) {
 	if m == nil || n <= 0 {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.bytes[meshBytesKey{peer: peer, dir: dir}] += n
+	m.bytes[meshBytesKey{peer: device.UUID().String(), dir: dir}] += n
 }
 
 // Collect flushes accumulated mesh metrics as one OTel export every 15s until
@@ -170,7 +186,7 @@ func (m *MeshMetrics) publish(resource *resourcepb.Resource, t time.Time) {
 		for k, v := range connsSnap {
 			dps = append(dps, &metricspb.NumberDataPoint{
 				Attributes: []*commonpb.KeyValue{
-					stringKV("mesh.peer", strconv.Itoa(int(k.peer))),
+					stringKV("mesh.peer", k.peer),
 					stringKV("mesh.mode", k.mode),
 					stringKV("mesh.result", k.result),
 				},
@@ -197,7 +213,7 @@ func (m *MeshMetrics) publish(resource *resourcepb.Resource, t time.Time) {
 		for k, v := range bytesSnap {
 			dps = append(dps, &metricspb.NumberDataPoint{
 				Attributes: []*commonpb.KeyValue{
-					stringKV("mesh.peer", strconv.Itoa(int(k.peer))),
+					stringKV("mesh.peer", k.peer),
 					stringKV("mesh.dir", k.dir),
 				},
 				StartTimeUnixNano: startNano,
@@ -224,7 +240,7 @@ func (m *MeshMetrics) publish(resource *resourcepb.Resource, t time.Time) {
 			sum := h.sum
 			dps = append(dps, &metricspb.HistogramDataPoint{
 				Attributes: []*commonpb.KeyValue{
-					stringKV("mesh.peer", strconv.Itoa(int(k.peer))),
+					stringKV("mesh.peer", k.peer),
 					stringKV("mesh.mode", k.mode),
 				},
 				StartTimeUnixNano: startNano,

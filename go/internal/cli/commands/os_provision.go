@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -21,8 +22,6 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // PreProvisionedState is written to the config partition during imaging.
@@ -58,25 +57,12 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 	}
 	cert := auth.Certificates[0]
 
-	var transportOpt grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		keyPEM, err := cert.PrivateKeyPEM()
-		if err != nil {
-			return nil, fmt.Errorf("loading client key: %w", err)
-		}
-		tlsCfg, err := certs.LoadTLSConfig(cert.PemCertificate, cert.PemCertificateChain, keyPEM, "")
-		if err != nil {
-			return nil, fmt.Errorf("loading TLS config: %w", err)
-		}
-		transportOpt = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		transportOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-
-	dialOptions, err := withCloudRequestSigning(auth, transportOpt)
+	creds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if err != nil {
 		return nil, err
 	}
+
+	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, dpopDialOptions(auth)...)
 	cloudConn, err := dialer(ctx, auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
@@ -186,7 +172,7 @@ func preEnrollDeviceACME(ctx context.Context, auth *config.AuthConfig, deviceNam
 		return nil, err
 	}
 	defer cloudConn.Close()
-	cfg, _, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, deviceName)
+	cfg, _, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, deviceName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -266,8 +252,21 @@ type configTarget interface {
 // dirTarget writes into a mounted config-partition directory.
 type dirTarget string
 
+// WriteFile syncs each file: on removable media the drive can be pulled the
+// moment the install says it is done.
 func (d dirTarget) WriteFile(name string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(filepath.Join(string(d), name), data, perm)
+	f, err := os.OpenFile(filepath.Join(string(d), name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, enrollmentJSON []byte) error {

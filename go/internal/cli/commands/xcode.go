@@ -53,9 +53,7 @@ func runXcodebuildAttempt(ctx context.Context, dir string, allowRecovery bool, a
 	fmt.Fprintf(logFile, "xcodebuild %s\n%s\n\n", strings.Join(args, " "), time.Now().Format(time.RFC3339))
 
 	hintStyle := lipgloss.NewStyle().Foreground(tui.ColorPrimary)
-	fmt.Println()
-	fmt.Println(hintStyle.Render("  tail -f .xcode/xcodebuild.log"))
-	fmt.Println()
+	fmt.Fprintf(runProgressWriter(ctx), "\n%s\n\n", hintStyle.Render("  tail -f .xcode/xcodebuild.log"))
 
 	var stderrBuf strings.Builder
 	cmd := execCommandContext(ctx, "xcodebuild", args...)
@@ -269,7 +267,7 @@ func xcodeSelectGuidance(ctx context.Context) error {
 
 	selectCmd := execCommandContext(ctx, "sudo", "xcode-select", "-s", developerDir)
 	selectCmd.Stdin = os.Stdin
-	selectCmd.Stdout = os.Stdout
+	selectCmd.Stdout = runProgressWriter(ctx)
 	selectCmd.Stderr = os.Stderr
 	if err := selectCmd.Run(); err != nil {
 		return fmt.Errorf("sudo xcode-select -s %s failed: %w", developerDir, err)
@@ -317,7 +315,7 @@ func pickXcodeAppInteractive(apps []string) (string, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return "", fmt.Errorf("picker: %w", err)
 	}
@@ -441,8 +439,9 @@ func xcodeEntrypoint(productPath string, isAppBundle bool) string {
 // container. Architecture and code-signing settings are taken from the project's
 // build settings; this function does not override them.
 func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
-	// Verify CPU architecture matches.
-	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	// Verify CPU architecture matches. runWithAgentRecorded has just fetched
+	// the version, so this reuses it instead of asking the device again.
+	versionResp, err := agentVersionForRun(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("querying device version: %w", err)
 	}
@@ -452,6 +451,12 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 	}
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+	}
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
 	}
 
 	// Find the .xcodeproj directory.

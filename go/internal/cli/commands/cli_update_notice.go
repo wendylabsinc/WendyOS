@@ -1,100 +1,238 @@
-// Package commands - the post-run CLI update notice.
+// Package commands - the CLI update reminder.
 package commands
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"os"
-	"os/exec"
 	"runtime"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
-// notifyCLIUpdate surfaces a pending CLI-update notice recorded by the
-// background update check. It returns whether a notice was shown (so callers can
-// avoid stacking other prompts on top) and any error from performing an
-// interactive update.
-func notifyCLIUpdate(cmd *cobra.Command) (shown bool, err error) {
-	// Load fresh config so we see any value written by the background
-	// goroutine (possibly from a previous invocation).
+var confirmCLIUpdate = func(cmd *cobra.Command, latest string) (bool, error) {
+	return tui.PromptCLIUpdate(version.Version, latest, tea.WithContext(cmd.Context()), tea.WithInput(cmd.InOrStdin()), tea.WithOutput(cmd.ErrOrStderr()))
+}
+var applyCLIUpdate = performCLIUpdate
+var detectCLIUpdate = cliupdate.Detect
+
+type cliUpdateNoticeEligible struct{}
+type postCommandFirstRun struct{}
+
+// FinishInvocation offers optional guidance after the command's outcome has
+// been recorded. Call it before closing analytics so update events still flush.
+// Its prompts and updates never change the original command's result.
+func FinishInvocation(cmd *cobra.Command, err error) {
+	if cmd == nil {
+		return
+	}
+	if err != nil {
+		var reported *ReportedExitError
+		if !errors.As(err, &reported) {
+			NotifyCLIUpdateAfterFailure(cmd)
+		}
+		return
+	}
+	ctx := cmd.Context()
+	if ctx == nil || runsAsForeignUser() {
+		return
+	}
+	// Presence means the successful command ran the normal post-run hook.
+	// Help, validation failures, and commands with their own hook stay exempt.
+	firstRun, eligible := ctx.Value(postCommandFirstRun{}).(bool)
+	if !eligible {
+		return
+	}
+	var updateShown bool
+	if ctx.Value(cliUpdateNoticeEligible{}) == true {
+		waitCLIUpdateCheck(ctx)
+		var updateErr error
+		updateShown, updateErr = notifyCLIUpdate(cmd)
+		if updateErr != nil {
+			cmd.PrintErrf("CLI update did not complete: %v\nYour command completed successfully. Retry with `wendy update`.\n", updateErr)
+		}
+	}
+	maybePromptInstallCompletions(cmd, firstRun, updateShown)
+}
+
+func backgroundCLIUpdatesDisabled() bool {
+	return cliupdate.BackgroundChecksDisabled()
+}
+
+// notifyCLIUpdate is best effort. The caller must preserve the outcome of the
+// command that finished, even when a separately accepted update fails.
+func notifyCLIUpdate(cmd *cobra.Command) (bool, error) {
+	return showCLIUpdateNotice(cmd, true)
+}
+
+func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
+	if backgroundCLIUpdatesDisabled() || runsAsForeignUser() || version.IsDev(version.Version) {
+		return false, nil
+	}
 	cfg, err := config.Load()
-	if err != nil || cfg.AvailableCLIUpdate == "" {
+	if err != nil {
 		return false, nil
 	}
-	// Double-check: user may have updated since the goroutine last ran.
-	if version.CompareVersions(cfg.AvailableCLIUpdate, version.Version) <= 0 {
+	latest := cfg.LatestCLIRelease
+	if latest == "" {
+		latest = cfg.AvailableCLIUpdate
+	}
+	if !validCLIReleaseTag(latest) || version.CompareVersions(latest, version.Version) <= 0 {
 		return false, nil
 	}
-	newVersion := cfg.AvailableCLIUpdate
 
-	var updateShellCmd string
-	switch runtime.GOOS {
-	case "windows":
-		updateShellCmd = "winget upgrade WendyLabs.Wendy"
-	case "darwin":
-		updateShellCmd = "brew update && brew install wendy"
-	default:
-		updateShellCmd = "curl -fsSL https://install.wendy.dev/cli.sh | bash"
+	// wendy update recognizes no updater for a CLI the Wendy plugin's
+	// launcher installed, so that CLI gets advice once per release and no
+	// update popup (see cliupdate.PluginAdvice).
+	managed := pluginManagedCLI()
+	interactive := allowPrompt && !jsonOutput && isInteractiveTerminal() && !managed
+	if interactive && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, time.Now()) {
+		return false, nil
 	}
-
-	if jsonOutput || !isInteractiveTerminal() {
-		msg := "\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n"
-		if runtime.GOOS == "darwin" {
-			msg += "  (if the tap is untrusted: brew trust wendylabsinc/tap)\n"
+	if !interactive && cfg.CLIUpdateNoticeShown == latest {
+		return false, nil
+	}
+	method := "unknown"
+	if interactive {
+		detectCtx, cancelDetect := context.WithTimeout(cmd.Context(), time.Second)
+		plan, detectErr := detectCLIUpdate(detectCtx)
+		cancelDetect()
+		if detectErr != nil {
+			interactive = false
 		}
-		cmd.PrintErrf(msg, newVersion, version.Version, updateShellCmd)
+		// Stable-release metadata cannot tell a nightly installation to change channels.
+		if detectErr == nil && plan.Channel == "nightly" {
+			return false, nil
+		}
+		if detectErr == nil {
+			method = plan.Method
+		}
+		if !plan.Supported {
+			interactive = false
+		}
+	}
+	if !interactive && cfg.CLIUpdateNoticeShown == latest {
+		return false, nil
+	}
+	advice := "Update with: " + cliupdate.Command(runtime.GOOS)
+	if managed {
+		advice = cliupdate.PluginAdvice(runtime.GOOS)
+	}
+	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\n%s\n", latest, version.Version, advice)
+	trackCLIUpdate(cmd, "cli_update_offered", "completed", "", method)
+	if !interactive {
+		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
+			current.CLIUpdateNoticeShown = latest
+		})
 		return true, nil
 	}
-
-	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\n", newVersion, version.Version)
-	confirmed, promptErr := tui.ConfirmDefaultYes("Update now?", tea.WithOutput(os.Stderr))
-
-	// Clear the stored version so the prompt doesn't reappear on the next
-	// command regardless of the user's choice; it'll re-surface after the
-	// next 24 h update check if still relevant.
-	cfg.AvailableCLIUpdate = ""
-	_ = config.Save(cfg)
-
+	confirmed, promptErr := confirmCLIUpdate(cmd, latest)
+	if promptDismissed(promptErr) {
+		// Closing or interrupting the dialog is not an answer. Offer it again
+		// next time rather than snoozing for a day.
+		trackCLIUpdate(cmd, "cli_update_dismissed", "cancelled", "user_cancelled", method)
+		return true, nil
+	}
 	if promptErr != nil || !confirmed {
-		cmd.PrintErrf("Run %q to update manually.\n", updateShellCmd)
+		// A dialog that cannot open would fail again after every command, so
+		// snooze it like a deferral: the notice above already showed the command.
+		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
+			current.CLIUpdatePromptVersion = latest
+			current.CLIUpdatePromptedAt = time.Now().UTC().Format(time.RFC3339)
+		})
+		if promptErr != nil {
+			trackCLIUpdate(cmd, "cli_update_dismissed", "failed", "other", method)
+			return true, nil
+		}
+		trackCLIUpdate(cmd, "cli_update_deferred", "cancelled", "user_cancelled", method)
+		cmd.PrintErrln("Remind you tomorrow. Run `wendy update` whenever you are ready.")
 		return true, nil
 	}
+	return true, applyCLIUpdate(cmd, latest)
+}
 
-	var runErr error
-	switch runtime.GOOS {
-	case "windows":
-		c := exec.Command("winget", "upgrade", "WendyLabs.Wendy")
-		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-		runErr = c.Run()
-	case "darwin":
-		for _, brewArgs := range [][]string{{"update"}, {"install", "wendy"}} {
-			c := exec.Command("brew", brewArgs...)
-			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-			if runErr = c.Run(); runErr != nil {
-				break
-			}
-		}
-	default:
-		// Pipe the installer script directly into bash without shell interpolation.
-		curl := exec.Command("curl", "-fsSL", "https://install.wendy.dev/cli.sh")
-		bash := exec.Command("bash")
-		curl.Stderr = os.Stderr
-		bash.Stdout, bash.Stderr = os.Stdout, os.Stderr
-		if bash.Stdin, runErr = curl.StdoutPipe(); runErr == nil {
-			if runErr = curl.Start(); runErr == nil {
-				if runErr = bash.Start(); runErr == nil {
-					_ = curl.Wait()
-					runErr = bash.Wait()
-				}
-			}
-		}
+// promptDismissed reports a user who closed or interrupted the update dialog,
+// as opposed to a dialog that could not run.
+func promptDismissed(err error) bool {
+	return errors.Is(err, tui.ErrCancelled) || errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled)
+}
+
+// Failed commands do not run Cobra's post-run hook. Give them the same cached
+// guidance without opening a prompt over the original error or cancellation.
+func NotifyCLIUpdateAfterFailure(cmd *cobra.Command) {
+	if cmd == nil || cmd.Context() == nil || cmd.Context().Value(cliUpdateNoticeEligible{}) != true {
+		return
 	}
-	if runErr != nil {
-		return true, fmt.Errorf("update failed: %w", runErr)
+	waitCLIUpdateCheck(cmd.Context())
+	_, _ = showCLIUpdateNotice(cmd, false)
+}
+
+func updateCLIState(ctx context.Context, change func(*config.Config)) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return true, nil
+	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	unlock, err := acquireAuthRefreshLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	deadline, _ := ctx.Deadline()
+	return config.UpdateWithTimeout(time.Until(deadline), func(cfg *config.Config) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		change(cfg)
+		return true, nil
+	})
+}
+
+func recordVerifiedCLIUpdate(verifiedVersion string) error {
+	if runsAsForeignUser() {
+		return nil
+	}
+	return updateCLIState(context.Background(), func(cfg *config.Config) {
+		// This is verified on-disk evidence, not merely a successful installer
+		// exit. Older MCP processes still need to compare against it.
+		if validCLIReleaseTag(verifiedVersion) && version.CompareVersions(verifiedVersion, cfg.LatestCLIRelease) > 0 {
+			cfg.LatestCLIRelease = verifiedVersion
+		}
+		if version.CompareVersions(cfg.AvailableCLIUpdate, verifiedVersion) <= 0 {
+			cfg.AvailableCLIUpdate = ""
+		}
+	})
+}
+
+func trackCLIUpdate(cmd *cobra.Command, event, outcome, errorClass, method string) {
+	switch method {
+	case "apt", "rpm", "pacman":
+		method = "package_manager"
+	}
+	analytics.TrackStage(cmd.Context(), event, "wendy update", outcome, errorClass, map[string]string{
+		"stage": "cli_update", "install_method": method,
+	})
+}
+
+// cliExecutable is os.Executable; a variable so tests can pose as a
+// plugin-managed install.
+var cliExecutable = os.Executable
+
+// pluginManagedCLI reports whether this binary is one the Wendy plugin's
+// launcher installed under the wendy config directory.
+func pluginManagedCLI() bool {
+	exe, err := cliExecutable()
+	if err != nil {
+		return false
+	}
+	dir, err := config.ConfigDir()
+	return err == nil && pluginmode.ManagedInstall(exe, dir)
 }

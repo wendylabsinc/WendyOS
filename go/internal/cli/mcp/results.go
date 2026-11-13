@@ -9,9 +9,9 @@ import (
 )
 
 // okResult returns a success result carrying v as structuredContent plus an
-// indented-JSON text fallback for hosts that do not render structured content.
+// compact JSON text fallback for hosts that do not render structured content.
 func okResult(v any) *mcpgo.CallToolResult {
-	b, err := json.MarshalIndent(v, "", "  ")
+	b, err := json.Marshal(v)
 	if err != nil {
 		return errResultf(errCodeInternal, "marshaling result: %s", err.Error())
 	}
@@ -36,7 +36,46 @@ func okList[T any](key string, items []T) *mcpgo.CallToolResult {
 
 // okListBounded is okList with okResultBounded's byte ceiling on the payload.
 func okListBounded[T any](key string, items []T, maxBytes int) *mcpgo.CallToolResult {
-	return okResultBounded(map[string]any{key: listOrEmpty(items)}, maxBytes)
+	return okRowsBounded(key, items, nil, maxBytes, len(items))
+}
+
+// okRowsBounded keeps complete rows and reports exactly how many collected rows
+// were omitted. It never claims to count records beyond the collection window.
+// Metadata must not contain key, omitted, returned, or truncated.
+func okRowsBounded[T any](key string, items []T, metadata map[string]any, maxBytes, maxRows int) *mcpgo.CallToolResult {
+	items = listOrEmpty(items)
+	maxRows = min(max(maxRows, 0), len(items))
+	envelope := func(count int) map[string]any {
+		out := make(map[string]any, len(metadata)+4)
+		for k, v := range metadata {
+			out[k] = v
+		}
+		out[key] = items[:count]
+		if count < len(items) {
+			out["truncated"] = true
+			out["returned"] = count
+			out["omitted"] = len(items) - count
+		}
+		return out
+	}
+	fits := func(count int) bool {
+		b, err := json.Marshal(envelope(count))
+		return err == nil && (maxBytes <= 0 || len(b) <= maxBytes)
+	}
+	if fits(maxRows) {
+		return okResult(envelope(maxRows))
+	}
+	// Find the largest complete prefix that fits, reserving truncation metadata.
+	lo, hi := 0, maxRows
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if fits(mid) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return okResultBounded(envelope(lo), maxBytes)
 }
 
 // listOrEmpty returns items, substituting an empty slice for nil so it
@@ -58,7 +97,7 @@ func okText(msg string) *mcpgo.CallToolResult {
 // not paginate — we return a truncation envelope telling the agent to narrow
 // the query. maxBytes <= 0 disables the cap (behaves as okResult).
 func okResultBounded(v any, maxBytes int) *mcpgo.CallToolResult {
-	b, err := json.MarshalIndent(v, "", "  ")
+	b, err := json.Marshal(v)
 	if err != nil {
 		return errResultf(errCodeInternal, "marshaling result: %s", err.Error())
 	}
@@ -69,7 +108,7 @@ func okResultBounded(v any, maxBytes int) *mcpgo.CallToolResult {
 			"bytes":     len(b),
 			"note":      "output exceeded max_bytes; narrow the query (reduce max_batches / max_chunks, add filters, or raise max_bytes)",
 		}
-		eb, _ := json.MarshalIndent(env, "", "  ")
+		eb, _ := json.Marshal(env)
 		return mcpgo.NewToolResultStructured(env, string(eb))
 	}
 	// Delegate so the under-budget path gets okResult's object guard too.

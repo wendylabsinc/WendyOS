@@ -21,9 +21,9 @@ func installPickerTestItems() []tui.PickerItem {
 	}
 }
 
-func updateInstallPicker(m installPickerModel, msg tea.Msg) installPickerModel {
+func updateInstallPicker(m tabbedPickerModel, msg tea.Msg) tabbedPickerModel {
 	updated, _ := m.Update(msg)
-	return updated.(installPickerModel)
+	return updated.(tabbedPickerModel)
 }
 
 func TestInstallPickerTabs(t *testing.T) {
@@ -88,7 +88,7 @@ func TestInstallPickerSelectsFromActiveTab(t *testing.T) {
 				}
 			}
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			m = updated.(installPickerModel)
+			m = updated.(tabbedPickerModel)
 			if m.selected == nil || m.selected.Value != tt.want {
 				t.Fatalf("selection = %+v, want %q", m.selected, tt.want)
 			}
@@ -118,7 +118,7 @@ func TestInstallPickerCancel(t *testing.T) {
 					m = updateInstallPicker(m, tea.KeyMsg{Type: tea.KeyTab})
 				}
 				updated, cmd := m.Update(key)
-				m = updated.(installPickerModel)
+				m = updated.(tabbedPickerModel)
 				if !m.cancelled || m.selected != nil || m.View() != "" || cmd == nil {
 					t.Fatal("cancel did not close the picker without a selection")
 				}

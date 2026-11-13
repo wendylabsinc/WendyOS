@@ -72,7 +72,7 @@ func TestListOrgsFromCloudPaginates(t *testing.T) {
 	addr := startFakeOrgServer(t, svc)
 
 	auth := &config.AuthConfig{
-		CloudGRPC:    addr, // not :443 -> dialed insecurely, no certs needed on the wire
+		CloudGRPC:    addr, // plaintext via WENDY_CLOUD_INSECURE (TestMain), no certs needed on the wire
 		Certificates: []config.CertificateInfo{{OrganizationID: 2, UserID: "test-user"}},
 	}
 

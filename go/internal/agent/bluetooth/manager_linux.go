@@ -84,17 +84,22 @@ var inputDeviceUniqGlob = "/sys/class/input/input*/uniq"
 // GetManagedObjects: object path → interface name → property name → value.
 type managedObjects = map[dbus.ObjectPath]map[string]map[string]dbus.Variant
 
-type BlueZManager struct {
-	logger *zap.Logger
+type bluezObjectClient interface {
+	Object(string, dbus.ObjectPath) dbus.BusObject
 }
 
-func newPlatformManager(logger *zap.Logger) Manager {
-	return &BlueZManager{logger: logger}
+type BlueZManager struct {
+	logger *zap.Logger
+	links  LinkReporter // nil: Scan reports no link timeouts
+}
+
+func newPlatformManager(logger *zap.Logger, o managerOptions) Manager {
+	return &BlueZManager{logger: logger, links: o.links}
 }
 
 // getManagedObjects enumerates every object BlueZ exposes (adapters, devices)
 // with their typed properties.
-func getManagedObjects(ctx context.Context, conn *dbus.Conn) (managedObjects, error) {
+func getManagedObjects(ctx context.Context, conn bluezObjectClient) (managedObjects, error) {
 	var managed managedObjects
 	root := conn.Object(bluezService, "/")
 	if err := root.CallWithContext(ctx, "org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).Store(&managed); err != nil {
@@ -348,17 +353,20 @@ func (m *BlueZManager) Scan(ctx context.Context) (<-chan []*agentpb.DiscoveredBl
 			m.logger.Warn("Failed to start Bluetooth discovery", zap.Error(call.Err))
 			return
 		}
+		defer m.stopDiscovery(conn, adapterPath)
 
 		// Send an early, partial batch after a short quick pass so a caller has
 		// something to show fast, while discovery keeps running underneath.
 		select {
 		case <-time.After(quickScanDuration):
 		case <-ctx.Done():
+			return
 		}
 		if quick := m.collectPeripherals(ctx, conn, adapterPath, preexisting); len(quick) > 0 {
 			select {
 			case ch <- quick:
 			case <-ctx.Done():
+				return
 			}
 		}
 
@@ -369,10 +377,9 @@ func (m *BlueZManager) Scan(ctx context.Context) (<-chan []*agentpb.DiscoveredBl
 		select {
 		case <-time.After(scanDuration - quickScanDuration):
 		case <-ctx.Done():
+			return
 		}
 		peripherals := m.collectPeripherals(ctx, conn, adapterPath, preexisting)
-
-		m.stopDiscovery(conn, adapterPath)
 
 		if len(peripherals) > 0 {
 			select {
@@ -389,10 +396,15 @@ func (m *BlueZManager) Scan(ctx context.Context) (<-chan []*agentpb.DiscoveredBl
 // and returns those belonging to the given adapter that either appeared
 // during this discovery or carry a presence marker (paired, connected,
 // trusted, or re-seen with RSSI).
-func (m *BlueZManager) collectPeripherals(ctx context.Context, conn *dbus.Conn, adapterPath string, preexisting map[dbus.ObjectPath]bool) []*agentpb.DiscoveredBluetoothPeripheral {
+func (m *BlueZManager) collectPeripherals(ctx context.Context, conn bluezObjectClient, adapterPath string, preexisting map[dbus.ObjectPath]bool) []*agentpb.DiscoveredBluetoothPeripheral {
+	if ctx.Err() != nil {
+		return nil
+	}
 	managed, err := getManagedObjects(ctx, conn)
 	if err != nil {
-		m.logger.Warn("Failed to enumerate Bluetooth devices", zap.Error(err))
+		if ctx.Err() == nil {
+			m.logger.Warn("Failed to enumerate Bluetooth devices", zap.Error(err))
+		}
 		return nil
 	}
 
@@ -408,7 +420,9 @@ func (m *BlueZManager) collectPeripherals(ctx context.Context, conn *dbus.Conn, 
 		if !shouldListPeripheral(props, preexisting[path]) {
 			continue
 		}
-		peripherals = append(peripherals, deviceFromProps(props))
+		p := deviceFromProps(props)
+		annotateLink(p, m.links)
+		peripherals = append(peripherals, p)
 	}
 	return peripherals
 }

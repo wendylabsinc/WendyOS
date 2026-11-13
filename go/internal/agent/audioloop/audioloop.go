@@ -52,10 +52,11 @@ type deps struct {
 // carries. SensorName is the source's descriptor name for the channel (today a
 // generic channel label like "mic0"; see the TODO on Allocate).
 type Mount struct {
-	Sub           int
-	SourceAssetID int32
-	ChannelID     uint32
-	SensorName    string
+	Sub                int
+	SourceAssetID      int32
+	SourcePrincipalURI string
+	ChannelID          uint32
+	SensorName         string
 }
 
 // alloc is one entry in Manager.subs: the subdevice index plus enough source
@@ -63,6 +64,7 @@ type Mount struct {
 type alloc struct {
 	sub        int
 	assetID    int32
+	principal  string
 	channelID  uint32
 	sensorName string
 }
@@ -116,7 +118,15 @@ func (m *Manager) EnsureModule(ctx context.Context) error {
 // real hardware name ("MacBook Pro Microphone") needs a new field on the
 // sensorlink SensorDescriptor proto, populated by the Swift SensorService.
 func (m *Manager) Allocate(sourceAssetID int32, channelID uint32, sensorName string) (int, error) {
-	key := fmt.Sprintf("%d:%d", sourceAssetID, channelID)
+	return m.allocate(fmt.Sprintf("asset:%d", sourceAssetID), sourceAssetID, "", channelID, sensorName)
+}
+
+func (m *Manager) AllocatePrincipal(principal string, channelID uint32, sensorName string) (int, error) {
+	return m.allocate(principal, 0, principal, channelID, sensorName)
+}
+
+func (m *Manager) allocate(sourceKey string, sourceAssetID int32, principal string, channelID uint32, sensorName string) (int, error) {
+	key := fmt.Sprintf("%s:%d", sourceKey, channelID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if a, ok := m.subs[key]; ok {
@@ -128,7 +138,7 @@ func (m *Manager) Allocate(sourceAssetID int32, channelID uint32, sensorName str
 	}
 	for sub := 0; sub < MaxSubdevices; sub++ {
 		if !used[sub] {
-			m.subs[key] = alloc{sub: sub, assetID: sourceAssetID, channelID: channelID, sensorName: sensorName}
+			m.subs[key] = alloc{sub: sub, assetID: sourceAssetID, principal: principal, channelID: channelID, sensorName: sensorName}
 			return sub, nil
 		}
 	}
@@ -141,7 +151,17 @@ func (m *Manager) ReleaseSource(sourceAssetID int32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, a := range m.subs {
-		if a.assetID == sourceAssetID {
+		if a.principal == "" && a.assetID == sourceAssetID {
+			delete(m.subs, key)
+		}
+	}
+}
+
+func (m *Manager) ReleasePrincipal(principal string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, a := range m.subs {
+		if a.principal == principal {
 			delete(m.subs, key)
 		}
 	}
@@ -155,7 +175,7 @@ func (m *Manager) Mounts() []Mount {
 	defer m.mu.Unlock()
 	out := make([]Mount, 0, len(m.subs))
 	for _, a := range m.subs {
-		out = append(out, Mount{Sub: a.sub, SourceAssetID: a.assetID, ChannelID: a.channelID, SensorName: a.sensorName})
+		out = append(out, Mount{Sub: a.sub, SourceAssetID: a.assetID, SourcePrincipalURI: a.principal, ChannelID: a.channelID, SensorName: a.sensorName})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Sub < out[j].Sub })
 	return out

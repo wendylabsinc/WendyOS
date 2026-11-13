@@ -1,0 +1,18 @@
+{
+  "appId": "g1-warehouse-turbopuffer",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8880 }
+  ],
+  "env": {
+    "TURBOPUFFER_API_KEY": "${TURBOPUFFER_API_KEY}",
+    "TURBOPUFFER_REGION": "${TURBOPUFFER_REGION}",
+    "TURBOPUFFER_NAMESPACE": "${TURBOPUFFER_NAMESPACE}"
+  },
+  "readiness": {
+    "tcpSocket": { "port": 8880 },
+    "timeoutSeconds": 120
+  }
+}

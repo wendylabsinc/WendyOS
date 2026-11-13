@@ -1,0 +1,224 @@
+// Package cloudunenroll removes a cloud device enrollment without contacting
+// the device. Cloud's DeleteAsset revokes the issued certificates and, for a
+// UUID-keyed device, its bootstrap credentials too; for a parked row, unused
+// bootstrap credentials are revoked here first.
+package cloudunenroll
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"github.com/wendylabsinc/wendy/go/proto/gen/pkicorepb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// Result records only operations acknowledged by Cloud. An error may accompany
+// partial progress; the caller must not report a completed unenrollment then.
+// AssetDeleted also means the device certificates are revoked: DeleteAsset
+// revokes them first and refuses to delete otherwise. It reports no count.
+// EnrollmentFenced means the deletion also revoked the device's enrollment
+// tokens and EAB keys, so none were revoked here.
+type Result struct {
+	CredentialsRevoked int
+	AssetDeleted       bool
+	EnrollmentFenced   bool
+}
+
+// DeviceID is the device UUID the asset's certificates name. Since cloud #873
+// that is the asset id. Older rows, and rows the re-key parked, record it as
+// pki_device_name instead, which then differs from the id.
+func DeviceID(asset *cloudpb.Asset) string {
+	if name := asset.GetPkiDeviceName(); name != "" {
+		return name
+	}
+	return asset.GetId()
+}
+
+// Remove validates the selected asset, revokes a parked row's unused bootstrap
+// credentials, then deletes the asset. No device connection is used. Cloud
+// revokes the issued certificates inside DeleteAsset under device:delete, which
+// members hold; a separate RevokePrincipalCertificates call would need
+// pki:cert-revoke, which only owners and admins hold (WDY-3939 #14).
+func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, asset *cloudpb.Asset) (result Result, err error) {
+	if auth == nil || len(auth.Certificates) == 0 || asset == nil {
+		return result, fmt.Errorf("an operator session and cloud asset are required")
+	}
+	tenant, deviceID, assetID := auth.Certificates[0].TenantUUID(), DeviceID(asset), asset.GetId()
+	if id, parseErr := uuid.Parse(assetID); parseErr != nil || id.String() != assetID || id == uuid.Nil {
+		return result, fmt.Errorf("asset ID must be a canonical nonzero UUID")
+	}
+	if tenant == "" || tenant != asset.GetOrganizationId() || deviceID == "" {
+		return result, fmt.Errorf("asset does not carry a device binding in the selected operator's tenant")
+	}
+	assets := cloudpb.NewAssetServiceClient(conn)
+	checkBinding := func() error {
+		current, lookupErr := assets.GetAsset(ctx, &cloudpb.GetAssetRequest{Id: assetID})
+		if lookupErr != nil {
+			return fmt.Errorf("checking cloud asset binding: %w", lookupErr)
+		}
+		if current.GetId() != assetID || current.GetOrganizationId() != tenant || DeviceID(current) != deviceID {
+			return fmt.Errorf("cloud asset binding changed; refusing to remove a different enrollment")
+		}
+		return nil
+	}
+	if err := checkBinding(); err != nil {
+		return result, err
+	}
+	// A device enrolled under its UUID (asset id == device id) is fenced by
+	// DeleteAsset itself, under device:delete alone: pki-core revokes its
+	// certificates, enrollment tokens and EAB keys in one transaction, and
+	// Cloud refuses to delete unless pki-core confirms (WDY-3910). Doing that
+	// here would need PKI administration permissions unenroll does not. A row
+	// the re-key parked keeps a former name Cloud cannot fence, so its unused
+	// credentials are still revoked here first, failing closed; DeleteAsset
+	// still revokes its certificates.
+	fenced := deviceID == assetID
+	if !fenced {
+		if result.CredentialsRevoked, err = revokeUnfenced(ctx, conn, auth, tenant, deviceID); err != nil {
+			return result, err
+		}
+		if err := checkBinding(); err != nil {
+			return result, err
+		}
+	}
+	deleted := &cloudpb.DeleteAssetResponse{}
+	if err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.AssetService_DeleteAsset_FullMethodName,
+		&cloudpb.DeleteAssetRequest{Id: assetID, ExpectedDeviceId: &deviceID}, deleted); err != nil {
+		return result, fmt.Errorf("deleting cloud asset: %w", err)
+	}
+	if !deleted.GetSuccess() {
+		return result, fmt.Errorf("cloud did not confirm asset deletion")
+	}
+	result.AssetDeleted, result.EnrollmentFenced = true, fenced
+	return result, nil
+}
+
+// revokeUnfenced revokes the unused bootstrap credentials of a device identity
+// DeleteAsset cannot fence, and returns how many Cloud acknowledged.
+func revokeUnfenced(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, deviceID string) (revoked int, err error) {
+	pki := cloudpb.NewPKIAdminServiceClient(conn)
+	tokens, err := enrollmentTokens(ctx, pki, tenant, deviceID)
+	if err != nil {
+		return revoked, err
+	}
+	keys, err := eabKeys(ctx, pki, tenant, deviceID)
+	if err != nil {
+		return revoked, err
+	}
+	for _, tokenID := range tokens {
+		err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.PKIAdminService_RevokeEnrollmentToken_FullMethodName,
+			&cloudpb.RevokeEnrollmentTokenRequest{OrganizationId: tenant, TokenId: tokenID}, &pkicorepb.RevokeEnrollmentTokenResponse{})
+		if err != nil {
+			return revoked, credentialRevocationError("enrollment token", err)
+		}
+		revoked++
+	}
+	for _, keyID := range keys {
+		err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.PKIAdminService_RevokeEABKey_FullMethodName,
+			&cloudpb.RevokeEABKeyRequest{OrganizationId: tenant, KeyId: keyID}, &pkicorepb.RevokeEABKeyResponse{})
+		if err != nil {
+			return revoked, credentialRevocationError("EAB credential", err)
+		}
+		revoked++
+	}
+	return revoked, nil
+}
+
+// Revoking an unused enrollment token or EAB key needs pki:enrollment-token-revoke
+// or pki:eab-revoke, which only owners and admins hold. Only a parked row is
+// revoked here, and one whose enrollment completed has none left, so this
+// refusal reaches a member only for a pending one.
+func credentialRevocationError(kind string, err error) error {
+	if status.Code(err) == codes.PermissionDenied {
+		return fmt.Errorf("the device still has an unused %s from an enrollment that never completed, and revoking it requires an owner or admin of the organization; the asset was not deleted, so ask an owner or admin to unenroll it: %w", kind, err)
+	}
+	return fmt.Errorf("revoking device %s: %w", kind, err)
+}
+
+// Complete both inventories before mutation. Bound pagination and reject a
+// repeated cursor instead of looping indefinitely against a faulty server.
+const maxCredentials = 10000
+
+func enrollmentTokens(ctx context.Context, pki cloudpb.PKIAdminServiceClient, tenant, deviceID string) ([]string, error) {
+	var ids []string
+	seenPages, seenIDs := map[string]bool{}, map[string]bool{}
+	page, count := "", 0
+	for {
+		if seenPages[page] {
+			return nil, fmt.Errorf("cloud repeated an enrollment-token page")
+		}
+		seenPages[page] = true
+		response, err := pki.ListEnrollmentTokens(ctx, &cloudpb.ListEnrollmentTokensRequest{
+			OrganizationId: tenant, PageSize: 200, PageToken: page, ShowConsumed: true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing device enrollment credentials: %w", err)
+		}
+		count += len(response.GetTokens())
+		if count > maxCredentials || len(seenPages) > maxCredentials {
+			return nil, fmt.Errorf("cloud enrollment-token inventory exceeds %d entries", maxCredentials)
+		}
+		for _, token := range response.GetTokens() {
+			if token.GetDeviceId() != deviceID || token.GetConsumed() || token.GetRevokedAt() != "" {
+				continue
+			}
+			id := token.GetTokenId()
+			if id == "" {
+				return nil, fmt.Errorf("cloud returned an enrollment credential without an ID")
+			}
+			if !seenIDs[id] {
+				ids = append(ids, id)
+				seenIDs[id] = true
+			}
+		}
+		page = response.GetNextPageToken()
+		if page == "" {
+			return ids, nil
+		}
+	}
+}
+
+func eabKeys(ctx context.Context, pki cloudpb.PKIAdminServiceClient, tenant, deviceID string) ([]string, error) {
+	var ids []string
+	seenPages, seenIDs := map[string]bool{}, map[string]bool{}
+	page, count := "", 0
+	for {
+		if seenPages[page] {
+			return nil, fmt.Errorf("cloud repeated an EAB-key page")
+		}
+		seenPages[page] = true
+		response, err := pki.ListEABKeys(ctx, &cloudpb.ListEABKeysRequest{
+			OrganizationId: tenant, PageSize: 200, PageToken: page,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing device EAB credentials: %w", err)
+		}
+		count += len(response.GetKeys())
+		if count > maxCredentials || len(seenPages) > maxCredentials {
+			return nil, fmt.Errorf("cloud EAB-key inventory exceeds %d entries", maxCredentials)
+		}
+		for _, key := range response.GetKeys() {
+			if key.GetDeviceId() != deviceID || key.GetStatus() == "consumed" || key.GetStatus() == "revoked" {
+				continue
+			}
+			if key.GetStatus() != "active" || key.GetKeyId() == "" {
+				return nil, fmt.Errorf("cloud returned a device EAB credential with unknown status or missing ID")
+			}
+			id := key.GetKeyId()
+			if !seenIDs[id] {
+				ids = append(ids, id)
+				seenIDs[id] = true
+			}
+		}
+		page = response.GetNextPageToken()
+		if page == "" {
+			return ids, nil
+		}
+	}
+}

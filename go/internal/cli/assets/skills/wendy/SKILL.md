@@ -1,171 +1,79 @@
 ---
 name: wendy
-description: 'Expert guidance on building and deploying apps to WendyOS edge devices. Use when developers mention: (1) Wendy or WendyOS, (2) wendy CLI commands, (3) wendy.json or entitlements, (4) deploying apps to edge devices, (5) remote debugging Swift on ARM64, (6) NVIDIA Jetson or Raspberry Pi apps, (7) cross-compiling Swift for ARM64.'
-references:
-  - wendy.json.md
+description: 'Build and deploy apps to WendyOS robots and edge devices, including NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and MuJoCo simulation. Configure Wendy Data campaigns, record sensors and application data, and retrieve episodes.'
 ---
 
 # WendyOS
 
-WendyOS is an Embedded Linux operating system for edge computing. It supports:
-- NVIDIA Jetson devices (production with OTA updates); target JetPack 7.2 or later
-- Raspberry Pi 4/5 (edge devices)
-- ARM64/AMD64 VMs (development)
+Wendy builds container apps and deploys them to WendyOS devices (NVIDIA Jetson
+on JetPack 7.2 or later, Raspberry Pi 4/5, x86), local simulators (`vm:<name>`)
+and the local Docker provider (`docker`).
 
-## Learning About Wendy
+## Choose the workflow
 
-Before helping with Wendy commands, explore the command tree with the built-in help:
+- Wendy MCP tools are connected (`wendy_status` is available): read
+  [references/mcp.md](references/mcp.md) and use the tools.
+- Build, deploy, logs, start, stop or remove with the CLI: use the commands
+  below, and `wendy-app-lifecycle` for result fields, variants and the Docker
+  provider.
+- New app from a template: `wendy-template-app`. Entitlements: `wendy-entitlements`.
+  Robots and ROS 2: `wendy-robot-deploy`. Sensor recording, camera detection,
+  and notifications such as "tell me when someone enters frame": `wendy-data`.
+  Wendy supports agent-managed detection campaigns on ordinary color video;
+  do not infer platform limitations from the camera-control tool list.
+- Device info, WiFi and agent updates: `wendy-device-ops`. A failure the deploy
+  result and logs do not explain: `wendy-device-debug`.
+- No CLI yet: `wendy-install`. First-time user: `wendy-onboarding`. New board
+  or empty discovery: `wendy-device-install`.
+- Host training jobs, compute checks, bounded progress and verified artifact
+  retrieval: `wendy-training`.
+- ESP32 boards run Wendy Lite: `wendy docs wendy-lite/getting-started`.
 
-```bash
-wendy --help
-wendy <command> --help
-```
+## CLI commands
 
-Whenever you invoke a wendy command, pass the persistent `--json` flag for structured output. This also prevents interactive dialogs and the errors they cause in a non-interactive session. (There is no `-j` shorthand.)
-
-## Common Tasks
-
-- Run an app: `wendy run`
-- Create a new project: `wendy init`
-- Discover devices: `wendy discover`
-- Update agent: `wendy device update`
-- Configure WiFi: `wendy device wifi connect`
-- Install WendyOS on an external drive: `wendy os install`
-- Set a device as default using `wendy device set-default`
-- Check the default device with `wendy device get-default`
-
-### `wendy init` — Create a New Wendy Lite Project
-
-Creates a new Wendy Lite project with the required scaffolding:
-
-```bash
-wendy init
-```
-
-This sets up a new project directory with a `wendy.json` configuration file and the necessary structure for building and deploying a Wendy Lite app.
-
-### `wendy run` — Run a Wendy Lite Project
-
-Builds, uploads, and runs a Wendy Lite project on a connected device:
+Pass `--device <selector>` to every command. Without a terminal the CLI prints
+JSON on stdout and progress on stderr. `--yes` accepts prompts and creates a
+minimal `wendy.json` when the project has none.
 
 ```bash
-wendy run
+wendy --json run --device <selector> --detach --wait-ready --yes
+wendy --json device apps list --device <selector>
+wendy --json device logs --app <app-id> --tail 50 --no-follow --device <selector>
+wendy json validate
+wendy discover --json
+wendy --json vm list
 ```
 
-This command handles the full development cycle: compiling the app, transferring the binary to the device, and starting execution. Use `--verbose` for detailed build output.
+Run `--help` only for a command this skill and `wendy-app-lifecycle` do not
+cover, or when one of these commands is rejected.
 
-### `wendy device wifi connect` — Set Up WiFi
+A deploy result shows that the app started and, with `--wait-ready`, that its
+port accepts connections. Then check the behavior the user asked for once, such
+as one HTTP request to the result's `url`, and report what you checked.
 
-Configures WiFi credentials on a connected device:
+Keep tool output small: print status, identity, errors and the relevant lines
+rather than full build logs, inspect objects or long JSON arrays.
 
-```bash
-wendy device wifi connect
-```
+## No device available
 
-This sends WiFi SSID and password to the device so it can connect to the local network. The device must be reachable over USB or an existing connection first.
+A simulator runs WendyOS with the same agent, containerd and entitlements as
+hardware. When no physical device is listed, use one for builds, deploys, app
+state, logs, HTTP endpoints, configuration, and ROS 2 apps on a robot profile
+(`go2`, `g1`, `rosmaster-r2`). A request to test "on the device" counts unless
+it needs the hardware listed below.
 
-## Setup and Configuration
+1. Use a connected or listed physical device when there is one.
+2. Otherwise use an existing simulator from `wendy --json vm list` or a
+   `simulator` row in MCP `device_list`. Tell the user which one and use it
+   without waiting for approval: `--device vm:<name>` or `device_connect` boots
+   a stopped one. Prefer a `generic` VM unless the task needs a robot profile.
+3. With no simulator, ask the user before creating one (`wendy vm create` or
+   MCP `simulator_create`): it downloads an image of a few hundred MB, and the
+   first boot can take minutes.
+4. Report results as verified on simulator `vm:<name>`, and say that the
+   user's hardware was not connected. Leave the VM running unless asked.
 
-Wendy CLI connects to a device over gRPC (TCP) port 50051. If Wendy CLI is not installed yet, run `curl -fsSL https://install.wendy.dev/cli.sh | bash`.
-
-Devices are discovered over USB or LAN. If a device is not found, ask the user to check the connection or to connect it over USB.
-If a device is not yet installed, use `wendy os install` to install the OS to an external drive. For NVIDIA Jetson devices, the OS is commonly installed to NVMe.
-
-## Development
-
-WendyOS is a Linux-based containerized operating system. It uses Linux containers to run your apps.
-
-WendyOS uses Swift.org as its flagship language. This uses Swift Package Manager and the Swift Container Plugin to build and run your app. Wendy CLI will cross compile Swift for you.
-
-Other programming languages are supported, but require the use of a Dockerfile or Containerfile to build your app.
-
-### Entitlements
-
-WendyOS uses an entitlement system, managed through `wendy.json`, to manage permissions for your app. This reflects how your container will be set up on the device.
-
-See `references/wendy.json.md` for detailed entitlement configuration.
-
-### Quick Start
-
-1. Create a new Swift project or navigate to an existing one
-2. Initialize wendy.json: `wendy init`
-3. Add required entitlements (e.g., for a web server): `wendy project entitlements add network` (the mode is chosen at the interactive prompt; there is no `--mode` flag)
-4. Run on device: `wendy run`
-
-### Common Entitlements
-
-| Entitlement | Use Case |
-|-------------|----------|
-| `network` (host mode) | Web servers, HTTP APIs, incoming connections |
-| `gpu` | ML inference/computer vision (Jetson), board telemetry (Raspberry Pi) |
-| `display` | Present to local monitor as Wayland client |
-| `camera` | Camera access, video capture |
-| `audio` | Microphone, speakers |
-| `bluetooth` | BLE devices, Bluetooth communication |
-
-## Remote Debugging
-
-`wendy run --debug` starts the app under a debugger.
-
-For **Python** apps the agent rewrites the entrypoint to run under `debugpy`.
-The CLI does **not** inject debugpy into the image, so the image must already
-bundle it — for Stagefile projects the CLI checks the pip requirements up front
-and fails fast rather than letting the app crash-loop with
-`No module named debugpy`.
-
-For **Swift** apps, attach with the WendyOS VS Code extension, which generates a
-debug configuration per executable target. See the
-[VS Code extension guide](../../docs/remote-debugging/vscode-extension.mdx) for
-the ports and prerequisites — the debugger wiring lives in that extension, not
-in this CLI.
-
-## Observability
-
-WendyOS runs a local OpenTelemetry collector on each device. Apps should report telemetry (logs, metrics, traces) to this local collector.
-
-### Configuration
-
-Use HTTP protocol (not gRPC) for OTel exports:
-
-```swift
-import OTel
-
-var config = OTel.Configuration.default
-config.traces.otlpExporter.protocol = .httpProtobuf
-config.traces.otlpExporter.endpoint = "http://localhost:4318"
-config.metrics.otlpExporter.protocol = .httpProtobuf
-config.metrics.otlpExporter.endpoint = "http://localhost:4318"
-config.logs.otlpExporter.protocol = .httpProtobuf
-config.logs.otlpExporter.endpoint = "http://localhost:4318"
-
-let observability = try OTel.bootstrap(configuration: config)
-```
-
-Or via environment variables:
-
-```bash
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-```
-
-The local collector handles forwarding telemetry to your backend infrastructure.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Device not found | Check USB/LAN connection, run `wendy discover`. On Linux with USB-C, the CLI offers to run its USB setup step automatically — accept that prompt. |
-| Network access denied | Add network entitlement with host mode |
-| GPU not detected | Add gpu entitlement (Jetson for CUDA, Raspberry Pi for board telemetry) |
-| Camera not found | Add camera entitlement, verify camera at `/dev/video0` (for CSI cameras also check `/run/udev` is present on host) |
-| Build fails | Check Swift version compatibility, try `wendy run --verbose` |
-
-## Reference Files
-
-Load these files as needed for specific topics:
-
-- **`references/wendy.json.md`** - App configuration, entitlements (network, gpu, display, camera, audio, bluetooth), common configurations, CLI commands
-
-## Further Reading
-
-WendyOS documentation at https://docs.wendy.dev/latest/
+Physical cameras, microphones, speakers, Bluetooth, GPU or CUDA, GPIO, USB and
+serial peripherals, OS installation, real network conditions, performance and
+physical motion still need hardware. Run what the simulator can and name what
+remains unverified.

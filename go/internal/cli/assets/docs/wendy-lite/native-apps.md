@@ -37,12 +37,13 @@ Before you start, you need:
   and deploys your application.
 - **EIM**, the ESP-IDF Installation Manager — Espressif's tool for managing the
   ESP-IDF development environment (toolchains, Python environment, SDK
-  versions). Wendy Lite supports **ESP-IDF 5.5**; the Wendy CLI manages this
-  environment for you, so you never need to pin a version yourself.
+  versions). Wendy Lite supports **ESP-IDF 6.0**; the Wendy CLI manages this
+  environment for you, so you never need to pin a version yourself. If EIM is
+  missing, `wendy run` offers to install it with Homebrew.
 - a device already flashed with Wendy Lite.
 
-[Getting Started with Wendy Lite](getting-started.md) walks through
-installing both tools and flashing a device.
+[Getting Started with Wendy Lite](./getting-started.md) walks through
+installing the CLI and flashing a device.
 
 When you install Wendy Lite on your device, ensure you pick the variant
 labeled **native app support**. If you are not sure whether your installed
