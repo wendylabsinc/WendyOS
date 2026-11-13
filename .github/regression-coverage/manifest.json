@@ -2002,10 +2002,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2049",
       "title": "Fix driver add-on status, live replacement, and removal",
       "package": "06",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover driver receipts, removal rollback and status parsing. They do not prove live kernel module/sysext replacement on target hardware.",
-      "required_follow_up": "Exercise install, replacement, rollback and removal in a disposable VM with a test driver.",
-      "evidence": []
+      "required_follow_up": "Run the real QEMU driver lifecycle gate and both regression controls in the existing containerd job. Require installed/replaced kernel code, real failure rollback, removal beside a broken neighbor and persistence across a fresh kernel boot before marking verified.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/driver_lifecycle_vm_linux_test.go",
+            ".github/scripts/test-driver-lifecycle-vm.py",
+            ".github/scripts/driver_lifecycle_vm_test.py"
+          ],
+          "result": "Added real DriverService Unix gRPC, hash-verified shipped Builder packing/apply scripts, matching Fedora kernel modules and squashfs sysext images. QEMU has no network or host directory/device access. Normal/removal-control binaries compile, portable admission/cleanup tests and ShellCheck pass. Both pinned Builder files are accessible without authentication and match recorded hashes. Full VM execution is pending hosted CI; local disk is below the 16GiB prerequisite. Registered once in the existing containerd job before ESP-IDF image preparation."
+        }
+      ]
     },
     {
       "key": "1905",
@@ -3164,7 +3173,14 @@
       "status": "open",
       "audit_finding": "Tests validate EFI values, safe failure and preflight ordering with test files. They cannot verify boot firmware behavior or rootfs rollback.",
       "required_follow_up": "Run an A/B OTA/rollback test on the affected Jetson firmware.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/wendyos_readiness_test.go"
+          ],
+          "result": "Confirmed and fixed a preflight mismatch: Agent rejects valid volatile-zero Orin rootfs state while the exact shipped updater Controller accepts its boot-chain A/B strategy. Delegation is limited to the typed legacy incompatibility after full validation and requires a bounded successful readiness response from the exact selected updater. Legacy repairs and invalid retry refusals remain. Root integrated targeted race suite passes in 11.290s; physical A/B update, reboot and rollback remain pending, as does stale-pending Orin recovery."
+        }
+      ]
     },
     {
       "key": "1998",
