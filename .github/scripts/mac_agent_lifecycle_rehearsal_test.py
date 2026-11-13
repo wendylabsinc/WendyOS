@@ -1,4 +1,8 @@
 """Offline admission only: synthetic bundle bytes, no app signing or execution."""
+import http.server
+import threading
+import urllib.error
+import os
 import importlib.util
 import json
 from pathlib import Path
@@ -139,6 +143,38 @@ class MacLifecyclePlans(unittest.TestCase):
             self.assertEqual(action.artifact(record),str(path.resolve()))
             path.write_text('changed')
             with self.assertRaises(ValueError):action.artifact(record)
+
+
+    def test_packaged_listener_refuses_wildcard_and_mixed_bindings(self):
+        spec=importlib.util.spec_from_file_location('mac_enrollment_listener',SCRIPT.with_name('mac-agent-enrollment.py'))
+        action=importlib.util.module_from_spec(spec);spec.loader.exec_module(action)
+        self.assertEqual(action.listener_pid('p123\nu503\nn127.0.0.1:50051\nn[::1]:50051',50051,503),'123')
+        for rows in ('p123\nu503\nn*:50051','p123\nu503\nn127.0.0.1:50051\nn*:50051','p123\nu504\nn127.0.0.1:50051','p123\nu503','p123\nu503\nn192.0.2.1:50051','p123\np456\nu503\nn127.0.0.1:50051'):
+            with self.subTest(rows=rows),self.assertRaises(ValueError):action.listener_pid(rows,50051,503)
+
+    def test_loopback_status_ignores_proxy_and_refuses_redirect(self):
+        spec=importlib.util.spec_from_file_location('mac_enrollment_status',SCRIPT.with_name('mac-agent-enrollment.py'))
+        action=importlib.util.module_from_spec(spec);spec.loader.exec_module(action)
+        calls=[]
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                calls.append(self.path)
+                if self.path=='/redirect':
+                    self.send_response(302);self.send_header('Location','/forbidden');self.end_headers()
+                else:
+                    self.send_response(200);self.end_headers();self.wfile.write(b'{"enrolled":1}')
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever);thread.start()
+        base='http://127.0.0.1:'+str(server.server_port)
+        try:
+            with patch.dict(os.environ,{'http_proxy':'http://127.0.0.1:1','HTTP_PROXY':'http://127.0.0.1:1','NO_PROXY':'','no_proxy':''}):
+                self.assertEqual(action.local_status(base+'/status'),{'enrolled':1})
+                with self.assertRaises(urllib.error.HTTPError):action.local_status(base+'/redirect')
+            self.assertEqual(calls,['/status','/redirect'])
+        finally:
+            server.shutdown();server.server_close();thread.join(3)
+            self.assertFalse(thread.is_alive())
 
 
 if __name__ == '__main__': unittest.main()
