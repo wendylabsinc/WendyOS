@@ -27,6 +27,7 @@ type changeFlags struct {
 	release, configFile, keepTrying, note, cloudGRPC       string
 	to                                                     int32
 	config, addDevices, removeDevices, addTags, removeTags []string
+	addSites, removeSites                                  []string
 	start, stop, move, yes                                 bool
 }
 
@@ -82,6 +83,8 @@ func deploymentChangeCmds() []*cobra.Command {
 			f.StringArrayVar(&c.removeDevices, "remove-device", nil, "Remove a device by name or id (repeatable)")
 			f.StringArrayVar(&c.addTags, "add-tag", nil, "Add every device with this tag (repeatable)")
 			f.StringArrayVar(&c.removeTags, "remove-tag", nil, "Stop selecting devices by this tag (repeatable)")
+			f.StringArrayVar(&c.addSites, "add-site", nil, "Add every device in this site, by name or id (repeatable)")
+			f.StringArrayVar(&c.removeSites, "remove-site", nil, "Stop selecting devices by this site (repeatable)")
 			f.StringVar(&c.keepTrying, "keep-trying", "", "How long offline devices keep trying: 7d, 30d, 60d or 1y")
 			note(cmd, c)
 			move(cmd, c)
@@ -175,7 +178,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 		return err
 	}
 	next := cur
-	if len(c.addDevices)+len(c.removeDevices)+len(c.addTags)+len(c.removeTags) > 0 {
+	if len(c.addDevices)+len(c.removeDevices)+len(c.addTags)+len(c.removeTags)+len(c.addSites)+len(c.removeSites) > 0 {
 		sel, err := op.currentSelection(ctx, d)
 		if err != nil {
 			return err
@@ -197,7 +200,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 			}
 			i := slices.Index(sel.TargetDeviceIds, id)
 			if i < 0 {
-				return usageErrorf("%s is not named in %s. If it is in through a tag, use --remove-tag.", n, name)
+				return usageErrorf("%s is not named in %s. If it is in through a tag or site, use --remove-tag or --remove-site.", n, name)
 			}
 			sel.TargetDeviceIds = slices.Delete(sel.TargetDeviceIds, i, i+1)
 		}
@@ -214,6 +217,33 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 			}
 			sel.TargetTags = slices.Delete(sel.TargetTags, i, i+1)
 		}
+		if len(c.addSites)+len(c.removeSites) > 0 {
+			sites, err := op.sites(ctx)
+			if err != nil {
+				return err
+			}
+			for _, n := range c.addSites {
+				s, err := findSite(sites, n)
+				if err != nil {
+					return err
+				}
+				if len(inSite(assets, s.GetId())) == 0 {
+					return usageErrorf("No device is in the site %s.", s.GetName())
+				}
+				sel.TargetSiteIds = append(sel.TargetSiteIds, s.GetId())
+			}
+			for _, n := range c.removeSites {
+				s, err := findSite(sites, n)
+				if err != nil {
+					return err
+				}
+				i := slices.Index(sel.TargetSiteIds, s.GetId())
+				if i < 0 {
+					return usageErrorf("%s does not select devices by the site %s.", name, s.GetName())
+				}
+				sel.TargetSiteIds = slices.Delete(sel.TargetSiteIds, i, i+1)
+			}
+		}
 		req.Devices = sel
 		next = resolveSelection(assets, sel)
 		review = append(review, "Devices: "+deviceDiff(assets, cur, next))
@@ -228,7 +258,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 		return err
 	}
 	if len(review) == 0 {
-		return usageErrorf("Nothing to change. Add --release, --config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag or --keep-trying.")
+		return usageErrorf("Nothing to change. Add --release, --config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag, --add-site, --remove-site or --keep-trying.")
 	}
 	content := req.AppReleaseId != nil || req.ConfigJson != nil || req.DesiredState != nil
 	get := next
@@ -604,6 +634,11 @@ func resolveSelection(assets []*cloudpb.Asset, sel *cloudpb.DeviceSelection) []s
 	}
 	for _, t := range sel.GetTargetTags() {
 		for _, d := range withTag(assets, t) {
+			set[d.GetId()] = true
+		}
+	}
+	for _, s := range sel.GetTargetSiteIds() {
+		for _, d := range inSite(assets, s) {
 			set[d.GetId()] = true
 		}
 	}

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -67,6 +69,29 @@ func TestUpdateSignsTheNextRevision(t *testing.T) {
 	}
 	if len(fake.removed) != 1 || fake.removed[0].GetRevision() != 5 {
 		t.Fatalf("removals %v", fake.removed)
+	}
+}
+
+// --add-site puts the site's devices in the selection sent as the new
+// revision, in union with the rest: with the tag removed the device stays
+// through its site. An unknown site is refused.
+func TestUpdateAddAndRemoveSite(t *testing.T) {
+	op, fake, _, _ := deployedFixture(t)
+	fake.sites = []*cloudpb.Site{{Id: "site-1", Name: "plant-a"}}
+	fake.assets[0].SiteId = proto.String("site-1")
+	ctx := context.Background()
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{addSites: []string{"site-1"}, removeTags: []string{"line-3"}, yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	upd := fake.signed(cloudpb.DeploymentService_UpdateDeployment_FullMethodName)
+	if got := upd[0].payload.(*cloudpb.UpdateDeploymentRequest).GetDevices().GetTargetSiteIds(); len(got) != 1 || got[0] != "site-1" {
+		t.Fatalf("selection sites %v", got)
+	}
+	if len(fake.removed) != 0 {
+		t.Fatalf("the site keeps packer-01, removed %v", fake.removed)
+	}
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{removeSites: []string{"nowhere"}, yes: true}, io.Discard, false); err == nil || !strings.Contains(err.Error(), `No site "nowhere"`) {
+		t.Fatalf("unknown site: %v", err)
 	}
 }
 

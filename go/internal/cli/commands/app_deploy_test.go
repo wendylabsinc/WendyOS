@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -112,6 +113,35 @@ func TestDeployWithAllFlagsAsksNothing(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// A site selects every device in it, by name or id; the review names each
+// resolved device before signing, and each gets its own statement. An
+// unknown site is refused.
+func TestDeployBySite(t *testing.T) {
+	op, fake, releaseID := stepsFixture(t)
+	fake.sites = []*cloudpb.Site{{Id: "site-1", Name: "plant-a"}}
+	fake.assets[0].SiteId = proto.String("site-1")
+	a := allFlags(releaseID)
+	a.tags, a.sites = nil, []string{"nowhere"}
+	if err := runDeploy(context.Background(), op, a, io.Discard, false); err == nil || !strings.Contains(err.Error(), `No site "nowhere"`) {
+		t.Fatalf("unknown site: %v", err)
+	}
+	a.sites = []string{"plant-a"}
+	var out bytes.Buffer
+	if err := runDeploy(context.Background(), op, a, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	req := fake.signed(cloudpbDeployV2)[0].payload.(*cloudpb.CreateDeploymentRequest)
+	if !slices.Equal(req.GetTargetSiteIds(), []string{"site-1"}) || len(req.GetTargetTags())+len(req.GetTargetDeviceIds()) != 0 {
+		t.Fatalf("request %v", req)
+	}
+	if !strings.Contains(out.String(), "Devices: packer-01\n") {
+		t.Fatalf("review:\n%s", out.String())
+	}
+	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) {
+		t.Fatalf("statements %v", fake.assigned)
 	}
 }
 
