@@ -498,6 +498,27 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
+    # Older Pi images disable memory cgroups; these two fixtures require them.
+    if [[ "$test_name" == "python-resources" || "$test_name" == "python-multiservice-resources" ]]; then
+        controllers=$("$WENDY" device shell --device "$HOSTNAME" -- sh -ec '
+            if test -e /sys/fs/cgroup/memory || test -L /sys/fs/cgroup/memory; then
+                test -r /sys/fs/cgroup/memory/memory.limit_in_bytes
+                controllers=memory
+            else
+                controllers=$(cat /sys/fs/cgroup/cgroup.controllers)
+            fi
+            printf "memory-controllers:%s\n" "$controllers"' </dev/null) || { echo "ERROR: cannot read host memory cgroup capability" >&2; exit 1; }
+        controllers=${controllers%$'\r'}
+        if ! [[ "$controllers" =~ ^memory-controllers:([a-z][a-z0-9_]*(\ [a-z][a-z0-9_]*)*)$ ]] ||
+            ! awk '{for (i=1; i<=NF; i++) if (seen[$i]++) exit 1}' <<<"${controllers#memory-controllers:}"; then
+            echo "ERROR: unknown host memory cgroup capability" >&2; exit 1
+        fi
+        if [[ " ${controllers#memory-controllers:} " != *" memory "* ]]; then
+            skip_test "$test_name" "memory cgroup controller absent on installed image; resource assertions unavailable"
+            continue
+        fi
+    fi
+
     if [[ "$test_name" == *"-gpu"* ]] && [[ -z "$DEVICE_GPU_FIXTURE_DOCKERFILE" ]]; then
         skip_test "$test_name" "CI GPU fixtures support sm_87, sm_110, and sm_121; device reports ${DEVICE_GPU_ARCH:-an unknown architecture}"
         continue
