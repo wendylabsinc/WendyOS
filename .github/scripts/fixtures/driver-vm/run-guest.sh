@@ -21,6 +21,11 @@ finish() {
   exit "$result"
 }
 trap finish EXIT
+# Keep this after the nonce guard and exit trap, before any driver operation.
+# A broken guest service must produce diagnostics, not consume the VM deadline.
+# shellcheck source=.github/scripts/fixtures/driver-vm/dbus.sh
+source /fixture/dbus.sh
+driver_vm_require_bus
 if [[ $control == omit-unload ]]; then
   cp /fixture/omit-unload.sh /usr/sbin/wendyos-sysext-apply.sh
 fi

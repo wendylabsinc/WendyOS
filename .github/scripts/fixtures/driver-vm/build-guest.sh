@@ -5,6 +5,9 @@ cd /fixture
 # shellcheck source=.github/scripts/fixtures/driver-vm/preflight.sh
 source /fixture/preflight.sh
 driver_vm_preflight /usr/src/kernels
+# shellcheck source=.github/scripts/fixtures/driver-vm/dbus.sh
+source /fixture/dbus.sh
+driver_vm_enable_bus /
 kver=$driver_vm_kernel_release
 printf '%s\n' "$kver" > kernel-release
 rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > packages.txt
