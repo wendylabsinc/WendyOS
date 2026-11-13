@@ -1166,7 +1166,18 @@ func (m tourWizardModel) View() string {
 		body = ""
 	}
 
-	return wizBorderStyle.Width(inner).Render(body) + "\n"
+	return wizBorderStyle.Width(inner).Render(body) + "\n" + m.viewCommands()
+}
+
+// viewCommands deliberately bypasses the box's styling and width so commands
+// remain complete plain logical lines even on a narrow terminal.
+func (m tourWizardModel) viewCommands() string {
+	switch m.phase {
+	case phaseWelcome:
+		return "\nRestart the tour:\nwendy tour\n"
+	default:
+		return ""
+	}
 }
 
 // ─── individual phase views ───────────────────────────────────────────────────
@@ -1180,8 +1191,7 @@ func (m tourWizardModel) viewWelcome(w int) string {
 			"  1. Flash WendyOS onto your device\n"+
 			"  2. Boot it and verify the connection\n"+
 			"  3. Deploy and open a working sample app\n\n"+
-			"If anything goes wrong you can restart at any time with:\n") + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy tour") + "\n\n")
+			"If anything goes wrong you can restart at any time with the command below the box.\n") + "\n")
 	sb.WriteString(wizHintStyle.Render("Press Enter to begin"))
 	return sb.String()
 }

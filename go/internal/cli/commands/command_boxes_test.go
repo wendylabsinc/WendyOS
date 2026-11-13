@@ -73,3 +73,11 @@ func TestOrinRetryCommandsBelowBox(t *testing.T) {
 		}
 	}
 }
+
+func TestTourWelcomeCommandBelowBox(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		m := newTourWizardModel()
+		m.phase, m.width = phaseWelcome, width
+		assertCommandBelowBox(t, m.View(), "wendy tour")
+	}
+}
