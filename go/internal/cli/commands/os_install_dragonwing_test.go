@@ -910,28 +910,6 @@ func TestCheckDragonwingDiskSpaceReflectsRealExpansion(t *testing.T) {
 	}
 }
 
-func TestEDLUdevRuleMatchesPackagedRule(t *testing.T) {
-	// The USB-access hint tells tarball users to install edlUdevRule verbatim,
-	// so it must be byte-identical to what the deb/rpm ships. Mirrors
-	// TestUsbUdevRuleMatchesPackagedRule for the Jetson rule.
-	body, err := os.ReadFile("../../../../packaging/linux/udev/70-wendy-qualcomm.rules")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rules []string
-	for _, line := range strings.Split(string(body), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			rules = append(rules, line)
-		}
-	}
-	if len(rules) != 1 || rules[0] != edlUdevRule {
-		t.Fatalf("packaged rule diverged from edlUdevRule:\npackaged: %q\nconst:    %q", rules, edlUdevRule)
-	}
-	if !strings.Contains(string(body), "05c6") {
-		t.Error("the packaged rule does not match the Qualcomm EDL vendor")
-	}
-}
-
 func TestManifestUnreachableExcludesMissingBuilds(t *testing.T) {
 	// The offline cache fallback is gated on ErrManifestUnreachable, so a
 	// manifest that was fetched fine but has no such build must not carry it —

@@ -70,6 +70,19 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 	defer os.RemoveAll(handoffDir)
 
+	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmOrinReady(opts); err != nil {
+		return err
+	}
+	dev, err := pickOrinRecoveryDevice(opts)
+	if err != nil {
+		return err
+	}
+
 	creds, err := resolveWiFiCredentialsList(opts.WiFi)
 	if err != nil {
 		return err
@@ -78,22 +91,11 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
-		return err
-	}
 	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-
-	if err := confirmOrinReady(opts); err != nil {
-		return err
-	}
-	dev, err := pickOrinRecoveryDevice(opts)
-	if err != nil {
-		return err
-	}
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target:   dev.Describe(),
 		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
@@ -437,15 +439,14 @@ func saveOrinDeviceLogs(out io.Writer, logPath string, st *t234.FinalStatus) {
 func confirmOrinReady(opts t234InstallOptions) error {
 	fmt.Println()
 	fmt.Println(tui.Header("Recovering " + opts.DeviceName + " with WendyOS " + opts.Version))
-	recoveryDetected := installRecoveryDetected(opts.DeviceType)
-	fmt.Println(orinRecoveryBriefingBox(opts, recoveryDetected))
+	fmt.Println(orinRecoveryBriefingBox(opts))
 	if note := orinMacFullDiskAccessNote(); note != "" {
 		fmt.Println(note)
 	}
 	if note := orinWinSetupNote(); note != "" {
 		fmt.Println(note)
 	}
-	if recoveryDetected || opts.Force {
+	if opts.Force {
 		return nil
 	}
 	fmt.Println()
@@ -494,38 +495,29 @@ func orinRecoveryHints(opts t234InstallOptions) recoveryWaitHints {
 	return hints
 }
 
-func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) string {
+func orinRecoveryBriefingBox(opts t234InstallOptions) string {
 	lines := []string{
 		briefMarker.Render("●") + " " + briefTitle.Render("Destructive full recovery"),
 		"  QSPI and " + briefKey.Render(strings.ToUpper(opts.Storage)) + " are updated together; all partitions, including /data, are erased.",
 		"",
+		briefMarker.Render("●") + " " + briefTitle.Render("USB-C cabling"),
+		"  Connect this computer to " + briefPort.Render(orinRecoveryPort(opts.DeviceType)) + ".",
+		"",
+		briefMarker.Render("●") + " " + briefTitle.Render("Entering recovery mode"),
 	}
-	if recoveryDetected {
+	if opts.DeviceType == orinNanoDeviceType {
 		lines = append(lines,
-			briefMarker.Render("●")+" "+briefTitle.Render("USB recovery detected"),
-			"  A "+opts.DeviceName+" is already in recovery mode. Keep its USB-C cable attached.",
+			"    "+briefNum.Render("1.")+" Disconnect power from the devkit (it has no buttons).",
+			"    "+briefNum.Render("2.")+" Bridge "+briefKey.Render("FC REC")+" to "+briefKey.Render("GND")+" — pins 9–10 on the button header under the module — with a jumper.",
+			"    "+briefNum.Render("3.")+" Connect power; the devkit boots straight into recovery mode. The jumper can then be removed.",
+			"    "+briefNum.Render("4.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
 		)
 	} else {
 		lines = append(lines,
-			briefMarker.Render("●")+" "+briefTitle.Render("USB-C cabling"),
-			"  Connect this computer to "+briefPort.Render(orinRecoveryPort(opts.DeviceType))+".",
-			"",
-			briefMarker.Render("●")+" "+briefTitle.Render("Entering recovery mode"),
+			"    "+briefNum.Render("1.")+" Power off the devkit and connect power.",
+			"    "+briefNum.Render("2.")+" Hold "+briefKey.Render("Force Recovery")+", tap "+briefKey.Render("Reset/Power")+", then release Force Recovery.",
+			"    "+briefNum.Render("3.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
 		)
-		if opts.DeviceType == orinNanoDeviceType {
-			lines = append(lines,
-				"    "+briefNum.Render("1.")+" Disconnect power from the devkit (it has no buttons).",
-				"    "+briefNum.Render("2.")+" Bridge "+briefKey.Render("FC REC")+" to "+briefKey.Render("GND")+" — pins 9–10 on the button header under the module — with a jumper.",
-				"    "+briefNum.Render("3.")+" Connect power; the devkit boots straight into recovery mode. The jumper can then be removed.",
-				"    "+briefNum.Render("4.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
-			)
-		} else {
-			lines = append(lines,
-				"    "+briefNum.Render("1.")+" Power off the devkit and connect power.",
-				"    "+briefNum.Render("2.")+" Hold "+briefKey.Render("Force Recovery")+", tap "+briefKey.Render("Reset/Power")+", then release Force Recovery.",
-				"    "+briefNum.Render("3.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
-			)
-		}
 	}
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,

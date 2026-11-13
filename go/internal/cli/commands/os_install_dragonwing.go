@@ -382,9 +382,30 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 		return err
 	}
 
+	if err := checkInstallConfirmable("flashing the "+humanReadableDeviceType(board.deviceType), force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
+		return err
+	}
+
+	dev, err := pickDragonwingEDLDevice(board)
+	if err != nil {
+		if isEDLAccessErr(err) {
+			if runtime.GOOS == "windows" {
+				fmt.Println("\n" + dragonwingUSBAccessHint())
+			} else {
+				fmt.Println("\n" + usbAccessDeniedLine("board"))
+			}
+		}
+		return err
+	}
+
 	// Resolve what the flash will write up front, as Thor does: the prompts
 	// must run before the flash UI takes over the terminal, and a bad flag
-	// should abort before the board is touched.
+	// should abort before the board is written.
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
@@ -393,26 +414,11 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	if err != nil {
 		return err
 	}
-	if err := checkInstallConfirmable("flashing the "+humanReadableDeviceType(board.deviceType), force); err != nil {
-		return err
-	}
 	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-
-	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
-		return err
-	}
-
-	dev, err := pickDragonwingEDLDevice(board)
-	if err != nil {
-		if isEDLAccessErr(err) {
-			fmt.Println("\n" + dragonwingUSBAccessHint())
-		}
-		return err
-	}
 
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target: dragonwingTargetLabel(dev),
@@ -819,13 +825,6 @@ func dragonwingTargetLabel(dev qdl.DeviceInfo) string {
 	return dev.String()
 }
 
-// edlUdevRule grants access to a Qualcomm SoC in EDL mode. The vendor-wide
-// match mirrors the Jetson rule: 05c6 devices expose this interface only while
-// in EDL, so the grant is bounded.
-const edlUdevRule = `SUBSYSTEM=="usb", ATTRS{idVendor}=="05c6", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
-
-const edlUdevRulePath = "/etc/udev/rules.d/70-wendy-qualcomm.rules"
-
 // isEDLAccessErr reports whether the OS refused access to the device rather
 // than there being none attached.
 func isEDLAccessErr(err error) bool {
@@ -841,16 +840,7 @@ func dragonwingUSBAccessHint() string {
 		"The board is in EDL mode, but the OS refused wendy access to its USB device.",
 	}
 	if runtime.GOOS == "linux" {
-		lines = append(lines,
-			"Grant access with a udev rule (one-time):",
-			"",
-			briefDim.Render("  echo '"+edlUdevRule+"' \\"),
-			briefDim.Render("    | sudo tee "+edlUdevRulePath),
-			briefDim.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
-			"",
-			"Add your user to the "+briefKey.Render("plugdev")+" group, replug the cable and retry,",
-			"or re-run the flash with sudo.",
-		)
+		lines = []string{lines[0], "", linuxUSBAccessStep("board", wendyPackagedRule("70-wendy-qualcomm.rules"))}
 	} else if runtime.GOOS == "windows" {
 		lines = append(lines, "Run the install command again to install or repair the Qualcomm EDL WinUSB binding.",
 			"Accept the administrator prompt, and close other flashing tools that may have the board open.")

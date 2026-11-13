@@ -158,7 +158,7 @@ func TestOrinRecoveryGuidanceIsDeviceSpecific(t *testing.T) {
 	nano := t234InstallOptions{DeviceType: orinNanoDeviceType, DeviceName: "Jetson Orin Nano", Storage: "nvme"}
 	for name, text := range map[string]string{
 		"wait hint": orinRecoveryHints(nano).buttonLine,
-		"briefing":  orinRecoveryBriefingBox(nano, false),
+		"briefing":  orinRecoveryBriefingBox(nano),
 	} {
 		if strings.Contains(text, "Force Recovery") || strings.Contains(text, "Reset") {
 			t.Errorf("Nano %s mentions buttons the devkit does not have: %q", name, text)
@@ -171,7 +171,7 @@ func TestOrinRecoveryGuidanceIsDeviceSpecific(t *testing.T) {
 	if bl := orinRecoveryHints(agx).buttonLine; !strings.Contains(bl, "Force Recovery") {
 		t.Errorf("AGX wait hint lost its button sequence: %q", bl)
 	}
-	if b := orinRecoveryBriefingBox(agx, false); !strings.Contains(b, "Force Recovery") || strings.Contains(b, "FC REC") {
+	if b := orinRecoveryBriefingBox(agx); !strings.Contains(b, "Force Recovery") || strings.Contains(b, "FC REC") {
 		t.Errorf("AGX briefing shows the wrong recovery entry: %q", b)
 	}
 }

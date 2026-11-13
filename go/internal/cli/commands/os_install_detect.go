@@ -24,24 +24,6 @@ type installUSBDevice struct {
 	vendor, product uint16
 }
 
-var scanRecoveryReadyUSBDevices = scanInstallUSBDevices
-
-// Check descriptors again at the readiness prompt, rather than trusting the
-// earlier picker scan. This proves recovery mode even without USB open access;
-// the later target picker still checks access and selects the physical board.
-func installRecoveryDetected(deviceType string) bool {
-	devices, err := scanRecoveryReadyUSBDevices()
-	if err != nil {
-		fmt.Println(tui.WarningMessage(fmt.Sprintf("Could not check USB recovery mode: %v", err)))
-	}
-	for _, d := range devices {
-		if installUSBTarget(d) == deviceType {
-			return true
-		}
-	}
-	return false
-}
-
 // installUSBTarget identifies only USB IDs specific to a supported recovery
 // mode. ESP32 Serial/JTAG (303a:1001), TinyUSB CDC (303a:4002), and UART bridges
 // also appear during normal operation, so they cannot prove download mode.
