@@ -94,6 +94,35 @@ def verify_archive(path, expected):
         raise ValueError(f"Ubuntu source checksum/size mismatch: {path.name}")
 
 
+
+def download_archive(output, name, expected, pin):
+    # Superseded source revisions disappear from the live pool while hosted
+    # runners still boot their matching kernel. Launchpad retains that exact
+    # primary-archive publication; neither location may change the pinned bytes.
+    bases = (
+        "https://archive.ubuntu.com/ubuntu/pool/main/l/" + pin["source"] + "/",
+        "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/"
+        + pin["source"] + "/" + pin["version"] + "/",
+    )
+    destination = output / name
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("Refusing to overwrite an existing source download")
+    for index, base in enumerate(bases):
+        try:
+            run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
+                 "--connect-timeout", "15", "--max-time", "180", "--output", str(destination), base + name])
+        except subprocess.CalledProcessError:
+            destination.unlink(missing_ok=True)
+            if index == len(bases) - 1:
+                raise
+            print("Live Ubuntu source download unavailable; trying its exact Launchpad publication", flush=True)
+            continue
+        # A successful transfer with incorrect content fails immediately. Do
+        # not hide a checksum mismatch by trying a different source location.
+        verify_archive(destination, expected)
+        return
+
+
 def extract_sound(archive, destination):
     with tarfile.open(archive) as source:
         members = []
@@ -185,11 +214,8 @@ def main():
     output = Path(tempfile.mkdtemp(prefix="wendy-audio-modules-", dir=os.environ["RUNNER_TEMP"]))
     print(f"Exact-source ALSA build evidence: {output}", flush=True)
     source_archives = archives(pin)
-    base = "https://archive.ubuntu.com/ubuntu/pool/main/l/" + pin["source"] + "/"
     for name, expected in source_archives.items():
-        run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
-             "--connect-timeout", "15", "--max-time", "180", "--output", str(output / name), base + name])
-        verify_archive(output / name, expected)
+        download_archive(output, name, expected, pin)
     sound = extract_sound(output / next(iter(source_archives)), output)
     diff = gzip.decompress((output / (pin["source"] + "_" + pin["version"] + ".diff.gz")).read_bytes()).decode()
     run(["patch", "--batch", "--forward", "-p1", "-d", str(sound.parent)], input=sound_patch(diff, pin))
