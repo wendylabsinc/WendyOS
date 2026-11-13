@@ -407,10 +407,23 @@ func decodeFoxgloveRuntimeString(data []byte, nonce string, previous int) (int, 
 		return 0, fmt.Errorf("unexpected CDR encapsulation")
 	}
 	size := uint64(binary.LittleEndian.Uint32(cdr[4:8]))
-	if size < 1 || uint64(len(cdr)) != 8+size || cdr[len(cdr)-1] != 0 {
-		return 0, fmt.Errorf("invalid CDR string bounds")
+	end := 8 + size
+	if size < 1 || end > uint64(len(cdr)) || cdr[end-1] != 0 {
+		return 0, fmt.Errorf("invalid CDR string bounds: bytes=%d declared=%d", len(cdr), size)
 	}
-	value := string(cdr[8 : len(cdr)-1])
+	// Humble's rmw_cyclonedds serdata_rmw::resize rounds the serialized
+	// buffer up to four bytes and zeroes that final padding. The String's
+	// declared length still ends at its own NUL, before those padding bytes.
+	// https://github.com/ros2/rmw_cyclonedds/blob/humble/rmw_cyclonedds_cpp/src/serdata.cpp
+	if uint64(len(cdr)) != end && uint64(len(cdr)) != (end+3)&^uint64(3) {
+		return 0, fmt.Errorf("invalid CDR trailing alignment: bytes=%d end=%d", len(cdr), end)
+	}
+	for _, pad := range cdr[end:] {
+		if pad != 0 {
+			return 0, fmt.Errorf("nonzero CDR trailing padding")
+		}
+	}
+	value := string(cdr[8 : end-1])
 	counter, err := strconv.Atoi(strings.TrimPrefix(value, nonce+":"))
 	if !strings.HasPrefix(value, nonce+":") || err != nil || counter <= previous {
 		return 0, fmt.Errorf("Foxglove delivered stale or foreign ROS bytes: %q previous=%d", value, previous)
@@ -434,7 +447,19 @@ func TestFoxgloveRuntimeMessageAdmission(t *testing.T) {
 	if got, err := decodeFoxgloveRuntimeString(good, nonce, 7); err != nil || got != 8 {
 		t.Fatalf("valid serialized ROS string: %d %v", got, err)
 	}
+	// Exercise every trailing alignment, including an already aligned string.
+	for _, counter := range []int{8, 80, 800, 8000} {
+		aligned := frame(fmt.Sprintf("%s:%d", nonce, counter))
+		padding := (4 - (len(aligned)-13)%4) % 4
+		aligned = append(aligned, make([]byte, padding)...)
+		if got, err := decodeFoxgloveRuntimeString(aligned, nonce, 7); err != nil || got != counter {
+			t.Fatalf("aligned serialized ROS string: padding=%d got=%d error=%v", padding, got, err)
+		}
+	}
 	cases := map[string][]byte{"short": good[:20], "stale": frame(nonce + ":7"), "foreign": frame("other:8"), "trailing-token": frame(nonce + ":8garbage"), "no-terminator": append([]byte(nil), good...), "wrong-subscription": append([]byte(nil), good...), "wrong-encoding": append([]byte(nil), good...), "zero-timestamp": append([]byte(nil), good...), "oversized-length": append([]byte(nil), good...)}
+	cases["nonzero-padding"] = append(append([]byte(nil), good...), 1)
+	cases["excess-padding"] = append(append([]byte(nil), good...), 0, 0, 0, 0, 0)
+	cases["incomplete-padding"] = append(frame(nonce+":800"), 0)
 	cases["no-terminator"][len(good)-1] = 1
 	cases["wrong-subscription"][1] = 0
 	cases["wrong-encoding"][14] = 0
