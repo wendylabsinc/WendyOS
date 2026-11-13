@@ -39,6 +39,7 @@ public actor WendyAgent {
     private let probesLinuxContainerRuntime: Bool
     private let stateDirectoryOverride: URL?
     private let makeVideoService: @Sendable () -> VideoService
+    private let makeProvisioningService: @Sendable (URL) -> ProvisioningService
 
     private var stateDirectory: URL {
         self.stateDirectoryOverride ?? WendyAgentPaths.stateDirectory
@@ -55,7 +56,10 @@ public actor WendyAgent {
         probesLinuxContainerRuntime: Bool,
         reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version },
         stateDirectory: URL? = nil,
-        makeVideoService: @escaping @Sendable () -> VideoService = { VideoService() }
+        makeVideoService: @escaping @Sendable () -> VideoService = { VideoService() },
+        makeProvisioningService: @escaping @Sendable (URL) -> ProvisioningService = {
+            ProvisioningService(configPath: $0)
+        }
     ) {
         self.configuration = configuration
         self.reportedVersion = reportedVersion
@@ -69,6 +73,7 @@ public actor WendyAgent {
             directory: registryRoot.appendingPathComponent("build-delivery"),
             images: registryStore
         )
+        self.makeProvisioningService = makeProvisioningService
     }
 
     public func start() async throws {
@@ -384,7 +389,7 @@ public actor WendyAgent {
         // handler *before* it returns; they MUST NOT await the server switch or
         // graceful shutdown would deadlock on the in-flight RPC. Each callback
         // therefore kicks off the switch in a detached task and returns at once.
-        let provisioningService = ProvisioningService(configPath: stateDirectory)
+        let provisioningService = self.makeProvisioningService(stateDirectory)
         self.provisioningService = provisioningService
         await provisioningService.setCallbacks(
             onProvisioned: { [weak self] _ in
