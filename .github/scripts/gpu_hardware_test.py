@@ -305,6 +305,8 @@ class DriverUpdateRehearsalTests(unittest.TestCase):
             update = commands["board"]["os-update"]
             self.assertIn("--binary", update)
             self.assertIn("--artifact-url", update)
+            self.assertIn("--json=false", update)
+            self.assertNotIn("--json", update)
             evidence["dirty_preview"] = False
             (out / "evidence.json").write_text(json.dumps(evidence))
             result = subprocess.run([sys.executable, str(out / "run-command.py"), "board", "os-update", "fixture"],
