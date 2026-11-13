@@ -1,0 +1,118 @@
+{
+  "audit_entry": "2022",
+  "overall": "partial",
+  "purpose": "Map the six mixed-merge fixes to actual behavior and explicit residuals; this is not a CI-pass or hardware-acceptance ledger.",
+  "entries": [
+    {
+      "commit": "441ab9ce1bbc4cd9fcae4812c8a40fee08368082",
+      "behaviors": [
+        {
+          "boundary": "Literal loopback control listeners; remote HIL requires a token before binding",
+          "proof": "test_transport_boundaries.py opens actual physical and FSM listeners, verifies socket address and HTTP bytes; historical wildcard defaults fail before the accept loop starts. Existing test_review_regressions.py checks HIL admission with real socket creation.",
+          "remaining": "Full Coke and inference listeners and authenticated remote HIL requests need the locked review/runtime gate; the existing HIL cases establish token preconditions, not a complete authenticated remote exchange."
+        },
+        {
+          "boundary": "Do not replay a side-effecting POST after losing its reply; retain deactivation identity until success",
+          "proof": "Actual HTTP peer receives the POST then closes before replying. Server receipts prove exactly one operation; explicit deactivation retry retains the same ID. GET still retries. Both pre-fix behaviors fail named controls.",
+          "remaining": null
+        },
+        {
+          "boundary": "Discard cached and in-flight embeddings when camera stream changes",
+          "proof": "Actual worker thread is held in an old encode while a new stream arrives; cached/admitted old snapshots fail, new bytes publish, old encode is discarded, worker joins. Historical stream-retention control fails.",
+          "remaining": "No camera driver/model accuracy claim."
+        },
+        {
+          "boundary": "Stop entry before further motion; propagate KeyboardInterrupt/SystemExit after disarm cleanup; reject frozen camera",
+          "proof": "Existing review tests cover stopped entry and stale readiness. Existing physical_io tests use recording backends.",
+          "remaining": "Robot hardware and actual middleware publisher teardown are not exercised by these fixtures. Inspect full physical_io tests before closing interruption cleanup."
+        },
+        {
+          "boundary": "Inference status omits session ID; error and unknown POST close the connection; active HTTP handlers drain",
+          "proof": "Existing locked review suite has real HTTP error/reconnect and unknown-POST checks, session expiration checks and actual inference/physical handler drain. New transport subset independently runs the physical drain; daemon-handler control fails.",
+          "remaining": "Locked inference-server suite is required hosted evidence; physical drain is a later lifecycle supplement, not a claim that its daemon flag appeared in this original commit."
+        },
+        {
+          "boundary": "Initialize base simulation without virtual reset; first scene epoch, default reference stepping and 43-joint effort field",
+          "proof": "No new complete scene initialization/replay proof in this batch.",
+          "remaining": "Real verified expert assets plus MuJoCo scene startup, stepping/reset and observation schema remain pending; mocked failed-scene startup is not sufficient."
+        },
+        {
+          "boundary": "Always extract DLA compiler from verified packaged artifact instead of trusting existing host file",
+          "proof": "No new packaged JetPack extraction proof in this batch.",
+          "remaining": "Pinned package corruption/existing-library substitution and actual extraction need a separate artifact fixture."
+        },
+        {
+          "boundary": "Local web assets and motion gating configuration",
+          "proof": "UI vendor changes are outside the requested non-UI focus.",
+          "remaining": "Example Docker/configuration deployment and physical motion admission are not inferred from HTTP tests."
+        }
+      ]
+    },
+    {
+      "commit": "95f6c1c52",
+      "behaviors": [
+        {
+          "boundary": "Production RTPS multicast socket only receives on joined interfaces",
+          "proof": "Existing TestParticipantRestrictsMulticastToJoinedInterfaces inspects the actual NewParticipant socket option.",
+          "remaining": "Actual distinct-interface multicast packet exclusion remains pending; getsockopt alone does not establish packet isolation."
+        },
+        {
+          "boundary": "Lifecycle observer uses host discovery scope; lidar interruption does not swallow SystemExit",
+          "proof": "Original source changes are mapped; no new observer-container or process-exit fixture in this batch.",
+          "remaining": "Actual observer host/container discovery and lidar process exit are still pending. Navigation motor and sensor dashboard changes in this commit are explanatory comments."
+        }
+      ]
+    },
+    {
+      "commit": "499da6870",
+      "behaviors": [
+        {
+          "boundary": "Patrol accepts positive-infinity scan gaps only with explicit opt-in and usable front data; rejects invalid capture timestamps even with arrival-time freshness opt-in",
+          "proof": "Existing test_patrol.py and test_admission.py exercise policy and callback adapters, including default strict behavior, NaN/negative infinity, advancing timestamps and malformed values.",
+          "remaining": "Actual ROS subscriptions, forwarded flags and velocity outputs through an offline simulator remain pending; callback adapters alone do not establish deployed behavior."
+        }
+      ]
+    },
+    {
+      "commit": "44be244bc",
+      "behaviors": [
+        {
+          "boundary": "macOS source-cache root stays writable through rename, then becomes read-only under the cache lock; cleanup retains ownership until protected",
+          "proof": "Existing TestMaterializeIdentity checks actual published bytes, read-only file/directory modes and inode-preserving reuse; Concurrent/RejectsModifiedCache/CleansOnlyOwnedTemporary/RejectsInvalidRoot cover filesystem lifecycle. Full G1 package passes locally on macOS with race enabled.",
+          "remaining": "No simulator boot, asset download or physical robot claim. Removing the pre-rename chmod0700 still passed TestMaterializeIdentity on the local macOS27 filesystem; this is not a discriminating historical control. Original macOS failure sensitivity remains unproven here."
+        }
+      ]
+    },
+    {
+      "commit": "0ce66ce4d",
+      "behaviors": [
+        {
+          "boundary": "Real voice WebSocket uses backend-compatible upgrade without Origin and with Bearer authentication; errors are bounded/redacted and cancellation closes reads",
+          "proof": "TestLiveWebSocketProtocolWithLocalServer exchanges actual WebSocket startup/audio/delegation/reply/close; TestLiveUpgrade* covers actual HTTP failure responses, redirect refusal and cancellation. Focused race tests pass locally; existing full Go unit jobs already execute the package.",
+          "remaining": "Live provider/account and physical audio are outside this software transport proof."
+        }
+      ]
+    },
+    {
+      "commit": "0937bbd02",
+      "behaviors": [
+        {
+          "boundary": "Delayed transcript survives beyond two seconds; metadata alone retains results; actual new speech invalidates corrections; interrupt prevents stale audio before and after backpressure",
+          "proof": "Existing TestLiveDelegationWaitsForTranscriptBeyondTwoSeconds/MetadataWithoutFreshSpeechKeepsCurrentResult/LateCorrectionInvalidatesOldReplyWhenSpeechArrives/PlaybackGuardRejectsWriteStartingAfterInterrupt plus TestVoiceAudioGuard* exercise real concurrent session/queue behavior. Focused race tests pass locally and package is in existing Go unit jobs.",
+          "remaining": "Physical speaker/microphone and third-party service timing are not claimed; TUI display changes excluded from non-UI scope."
+        }
+      ]
+    }
+  ],
+  "new_gates": {
+    "transport": "python .github/scripts/test-g1-coke-transports.py --output NEW_DIRECTORY; NumPy required; five real HTTP/thread cases and six source-bound controls, no skips.",
+    "locked_review": "uv run --project Examples/G1CokeDemo --frozen --group dev --python 3.12 python .github/scripts/test-g1-coke-review.py --output NEW_DIRECTORY; exact lock versions and all 40 current review/transport cases required.",
+    "runner": "Existing G1 simulator row can run the lightweight gate after shipped NumPy installation, then the separate exact Coke Python 3.12 runtime. It must retain the existing Python 3.10 simulator compatibility check. No additional job or matrix entry."
+  },
+  "not_claimed": [
+    "Physical robot/camera/motor access",
+    "Actual ROS network isolation from socket-policy assertions",
+    "Model or simulator accuracy from a controlled worker",
+    "Full audit closure from the required review suite alone"
+  ]
+}
