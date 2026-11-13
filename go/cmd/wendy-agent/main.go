@@ -25,7 +25,9 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
 	"github.com/wendylabsinc/wendy/go/internal/agent/bluetooth"
@@ -363,6 +365,18 @@ func main() {
 	// Before anything reads the store: devices updated from an older agent still
 	// have add-ons in the pre-keyed flat layout.
 	driverSvc.MigrateStore()
+	mcuSvc := services.NewMcuService(logger)
+	mcuSvc.SetAppStopper(func(ctx context.Context, appID string) error {
+		_, err := containerSvc.StopContainer(ctx, &agentpb.StopContainerRequest{AppName: appID})
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		return err
+	})
+	if ctrdClient != nil {
+		ctrdClient.SetSketchOwnership(mcuSvc)
+	}
+	containerSvc.SetSketchOwner(mcuSvc)
 	containerSvcV2 := services.NewContainerServiceV2(containerSvc)
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
@@ -881,6 +895,7 @@ func main() {
 		// local admin socket. The store and apply path require Linux.
 		if runtime.GOOS == "linux" {
 			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
+			agentpbv2.RegisterWendyArduinoMcuServiceServer(srv, mcuSvc)
 		}
 		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
 		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)

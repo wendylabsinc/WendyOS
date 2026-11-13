@@ -90,7 +90,7 @@ func (s *mcpServer) wifiConn(ctx context.Context, req mcpgo.CallToolRequest) (co
 		if conn == nil {
 			return nil, false, nil, errNotConnected()
 		}
-		return conn, false, func() {}, nil
+		return conn, conn.UnverifiedPlaintext(), func() {}, nil
 	}
 	// A relay client's reads skip confirmation, and a device argument would
 	// let them reach any host on this network (see hostTools).
@@ -110,7 +110,7 @@ func (s *mcpServer) wifiConn(ctx context.Context, req mcpgo.CallToolRequest) (co
 	if err != nil {
 		return nil, false, nil, errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", device, err.Error())
 	}
-	return conn, unverified, func() { conn.Close() }, nil
+	return conn, unverified || conn.UnverifiedPlaintext(), func() { conn.Close() }, nil
 }
 
 func (s *mcpServer) handleWiFiList(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

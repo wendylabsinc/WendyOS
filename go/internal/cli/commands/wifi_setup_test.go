@@ -145,7 +145,8 @@ func TestWiFiFirstBootSetup(t *testing.T) {
 					if service.connects.Load() != 1 {
 						t.Fatal("Wi-Fi credentials did not reach the setup device")
 					}
-					// A later ordinary command must not inherit the setup exception.
+					// A later ordinary command reaches the unenrolled device too,
+					// and its connection is still marked unverified.
 					ordinary, err := resolveTargetInner(ctx, func(c *resolveConfig) {
 						c.device = listener.Addr().String()
 						c.disableSessionBroker = true
@@ -154,8 +155,8 @@ func TestWiFiFirstBootSetup(t *testing.T) {
 					if ordinary != nil {
 						ordinary.Close()
 					}
-					if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-						t.Fatalf("ordinary management inherited Wi-Fi setup: %v", err)
+					if err != nil || !ordinary.Agent.UnverifiedPlaintext() {
+						t.Fatalf("ordinary management of an unenrolled device: %v", err)
 					}
 				}
 				after, err := config.Load()
@@ -209,18 +210,18 @@ func TestWiFiSetupKeepsOrdinaryResolution(t *testing.T) {
 		check     func(*testing.T, *SelectedDevice, error)
 	}{
 		{name: "logged in, unreachable", loggedIn: true, check: func(t *testing.T, _ *SelectedDevice, err error) {
-			if !errors.Is(err, certs.ErrExpectedDeviceIdentity) || !stopConnectionRecovery(err) {
-				t.Fatalf("unreachable device lost the typed identity refusal: %v", err)
+			if err == nil || errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+				t.Fatalf("unreachable device: want a connection failure, got %v", err)
 			}
 		}},
 		{name: "logged in, enrolled", loggedIn: true, state: "enrolled", check: func(t *testing.T, _ *SelectedDevice, err error) {
-			if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-				t.Fatalf("enrolled device lost the typed identity refusal: %v", err)
+			if !errors.Is(err, errEnrolledWithoutTLS) {
+				t.Fatalf("enrolled plaintext answer was not refused: %v", err)
 			}
 		}},
 		{name: "logged in, unknown state", loggedIn: true, state: "unknown", check: func(t *testing.T, _ *SelectedDevice, err error) {
-			if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-				t.Fatalf("unknown state lost the typed identity refusal: %v", err)
+			if !errors.Is(err, errEnrolledWithoutTLS) {
+				t.Fatalf("unknown state was not refused: %v", err)
 			}
 		}},
 		{name: "logged out, unprovisioned", state: "unprovisioned", check: func(t *testing.T, target *SelectedDevice, err error) {
@@ -427,7 +428,7 @@ func TestMCPWiFiDeviceReachesFirstBootDevice(t *testing.T) {
 				defer conn.Close()
 			}
 			if tc.wantIdentity {
-				if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+				if !errors.Is(err, errEnrolledWithoutTLS) {
 					t.Fatalf("enrolled device: %v", err)
 				}
 				return
@@ -435,12 +436,14 @@ func TestMCPWiFiDeviceReachesFirstBootDevice(t *testing.T) {
 			if err != nil || conn == nil || unverified != tc.wantUnverified {
 				t.Fatalf("conn=%v unverified=%v err=%v", conn, unverified, err)
 			}
-			// device_connect keeps refusing the same device.
-			if session, err := connectMCPDevice(ctx, addr); !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-				if session != nil {
-					session.Close()
-				}
-				t.Fatalf("device_connect inherited the Wi-Fi setup exception: %v", err)
+			// device_connect reaches it too, still marked unverified so the
+			// Wi-Fi tools ask before sending a password over it.
+			session, err := connectMCPDevice(ctx, addr)
+			if session != nil {
+				defer session.Close()
+			}
+			if err != nil || !session.UnverifiedPlaintext() {
+				t.Fatalf("device_connect: unverified=%v err=%v", session.UnverifiedPlaintext(), err)
 			}
 		})
 	}

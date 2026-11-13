@@ -144,6 +144,11 @@ server:
 ]
 ```
 
+With host networking, two apps cannot serve the same port. The device refuses
+to start an app whose `http` or `mcp` port another app or process already
+uses, and names the holder; `wendy run` stops before the build when it can
+confirm the clash.
+
 Ordinary detached agent deployments include HTTP URLs in their
 [endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
 checking application health. See the [full `http` reference](/docs/reference/app-configuration#http)
@@ -253,6 +258,34 @@ The container receives:
 Use `serial` for serial ports and `usb` for raw USB protocols — they expose different device majors. The SO-101's `/dev/ttyACM0` is reached with `serial`, not `usb`.
 
 > **Security note:** the cgroup rule is scoped to the named device's exact `major:minor`, so — unlike a whole-major grant — it never exposes other devices that share the major (e.g. other `ttyACM*`/`ttyUSB*` adapters on the host). The entitlement is USB-only, so it can never reach an on-board console UART. See *Replug behavior* above for why a reconnect needs a redeploy.
+
+## Arduino UNO Q microcontroller
+
+The UNO Q's STM32 runs an Arduino sketch next to WendyOS. Two `wendy.json` entries cover it:
+
+- **[`mcu`](/docs/apps/wendy.json#mcu)** names the sketch folder. `wendy run` compiles it with a pinned `arduino-cli`, then flashes it before the container deploy. If the compile or the flash fails, the app is not deployed.
+- **`arduino-bridge`** lets the app talk to the sketch through Arduino's router, the same Bridge that Arduino App Lab uses. Modulino modules sit on the microcontroller's Qwiic bus, so Linux reaches them only this way.
+
+```json
+{
+    "mcu": { "sketch": "sketch" },
+    "entitlements": [{ "type": "arduino-bridge" }]
+}
+```
+
+The container receives:
+- A bind mount of the host directory `/run/arduino-router`, which holds the router's socket. It is the directory, not the socket, so a router restart doesn't break the app.
+- The router's `arduino-router` group.
+- `APP_SOCKET=unix:///run/arduino-router/router.sock`, unless the app's `env` sets it.
+
+> The router starts at boot and tells the microcontroller that Linux is ready, so a sketch built with Arduino's default "wait for Linux" option starts after every reboot.
+
+> One Bridge message holds about 235 bytes (the buffer of Arduino_RPClite on the microcontroller). Send larger data in pieces.
+
+**Troubleshooting**
+- *"microcontroller is busy with another flash"*: another flash is still running after a 3-minute wait. Run again when it finishes.
+- *"cannot drive BOOT0 (GPIO 37) low"*: another app holds the microcontroller's GPIO lines, for example an old OpenOCD flasher app. Stop it and run again.
+- *"Warning: Arduino router is not running"*: the sketch was flashed, but it starts only once `wendyos-arduino-router` runs on the device.
 
 ## SPI
 
