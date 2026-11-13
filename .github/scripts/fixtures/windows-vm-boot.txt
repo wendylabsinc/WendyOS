@@ -50,7 +50,7 @@ the real Windows installation-path fallback, including spaces in the path.
 
 The CLI creates a private 16-GiB sparse VM from the pinned compressed image.
 Before boot, the exact original Spec.Binary PATH-only behavior is restored in a
-Go overlay and compiled. Its real CLI start must exit 1 at the named missing
+Go overlay and compiled. Its real CLI start must return structured tool_not_found exit 6 at the named missing
 executable lookup, not at download/build/firmware/port validation. No assertion
 or production source in the normal binary is altered.
 
@@ -101,3 +101,25 @@ artifact download, VM disk, QEMU installation or runner is introduced; the same
 25-minute overall deadline applies and must fail rather than skip an incomplete
 second boot. Windows automatic detached start/QMP app forwarding is explicitly
 unsupported in production; this does not pretend to exercise those Unix paths.
+
+Schema and restart observations
+
+Hosted job 131729254510 booted the exact pinned image and reached the Agent;
+collision-info-38.log reported osVersion WendyOS-0.20.2. The fixture then failed
+because it expected hostname/publicKey in CLI hardware JSON. Those fields are
+not emitted there, and the Linux Agent does not populate the optional publicKey
+RPC field. This correction does not claim a cryptographic device identity.
+
+The CLI hardware assertion uses its actual exact OS-version spelling. After
+checking the kernel listener owner, a separately built read-only helper calls
+GetAgentVersion for the persistent hostname and GetNetworkStats for the actual
+kernel boot ID and boot-time sample. The response must match the CLI's version,
+OS, architecture and device type. The listener owner is checked again afterward.
+The restarted guest must retain its hostname and the same owned disk file ID,
+path and size, keep the previously asserted VM metadata/port, and return a new
+nonzero kernel boot UUID and a new VM run timestamp. Both boots still require
+foreground-process drain and forwarded-port reclamation. The helper has a
+10-second RPC deadline and runs in the same retained Windows Job as the CLI.
+
+Portable real gRPC tests and Windows cross-compilation verify the helper without
+booting a VM. Full corrected native Windows lifecycle acceptance remains pending.

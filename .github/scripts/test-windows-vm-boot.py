@@ -157,10 +157,32 @@ def free_port_span():
 def validate_guest(info):
     if info.get('cpuArchitecture')!='arm64' or info.get('deviceType')!='vm-arm64' or not info.get('version'):
         raise ValueError('CLI did not observe an actual ARM64 WendyOS VM agent')
-    if not info.get('hostname') or not info.get('publicKey'):
-        raise ValueError('actual VM persistent hostname/public key missing')
-    if info.get('os')!='wendyos' or info.get('osVersion')!=PINS['guest']['version']:
+    if info.get('os')!='wendyos' or info.get('osVersion')!='WendyOS-'+PINS['guest']['version']:
         raise ValueError('guest OS/version does not match pinned image')
+
+
+def validate_identity(record,info,port,nonce):
+    if record.get('address')!='127.0.0.1:'+str(port) or record.get('nonce')!=nonce:
+        raise ValueError('identity receipt did not use the owned loopback forward')
+    for key in ('hostname',):
+        if not isinstance(record.get(key),str) or not record[key].strip():
+            raise ValueError('actual RPC persistent hostname missing')
+    try:boot_id=uuid.UUID(record.get('bootId',''))
+    except (ValueError,TypeError,AttributeError):raise ValueError('actual kernel boot identity missing or invalid')
+    if boot_id.int==0 or str(boot_id)!=record['bootId'] or type(record.get('bootTimeNs')) is not int or record['bootTimeNs']<=0:
+        raise ValueError('actual kernel boot identity/time missing or invalid')
+    for key in ('version','os','osVersion','cpuArchitecture','deviceType'):
+        if record.get(key)!=info.get(key):
+            raise ValueError('identity RPC disagrees with CLI device info: '+key)
+
+
+def validate_restart(state,identity,disk,first_state,first_identity,first_disk):
+    if not state.get('startedAt') or state['startedAt']==first_state.get('startedAt'):
+        raise ValueError('restart reused the previous VM run record')
+    if identity['hostname']!=first_identity['hostname'] or disk!=first_disk:
+        raise ValueError('same-disk restart changed hostname or owned disk identity')
+    if identity['bootId']==first_identity['bootId']:
+        raise ValueError('restart did not produce a new kernel boot ID')
 
 
 def validate_listener(record,state,qemu,port):
@@ -244,6 +266,10 @@ def execute(output):
         owner.run('build-control',[go,'build','-overlay='+str(mutant_overlay(output)),'-o',str(control),'./go/cmd/wendy'],300,build_env)
         lookup=output/'qemu-lookup.exe'
         owner.run('build-lookup',[go,'build','-o',str(lookup),'./go/internal/testfixture/windowsqemulookup'],120,build_env)
+        identity_probe=output/'vm-identity.exe'
+        owner.run('build-identity',[go,'build','-o',str(identity_probe),'./go/internal/testfixture/windowsvmidentity'],120,build_env)
+        evidence['identity_probe_sha256']=digest(identity_probe)
+        evidence['identity_probe_source_sha256']=digest(ROOT/'go/internal/testfixture/windowsvmidentity/main.go')
         evidence['lookup_sha256']=digest(lookup)
         evidence['lookup_source_sha256']=digest(ROOT/'go/internal/testfixture/windowsqemulookup/main.go')
         evidence['python']={'executable':sys.executable,'pointer_bits':struct.calcsize('P')*8,'machine':platform.machine()}
@@ -276,7 +302,8 @@ def execute(output):
         except BaseException:
             blocker.close();raise
         try:
-            first_state=None;first_info=None
+            first_state=None;first_identity=None;first_disk=None
+            identity_nonce=uuid.uuid4().hex
             for phase in ('collision','restart'):
                 boot=owner.start(phase+'-console',[cli,'vm','start',name,'--memory','2048','--cpus','2'],env)
                 info=None;boot_deadline=time.monotonic()+600;attempt=0
@@ -304,14 +331,23 @@ def execute(output):
                        +"@{pid=$p.Id;path=$p.Path;port=$r[0].LocalPort}|ConvertTo-Json -Compress")
                 listener=json.loads(owner.run(phase+'-listener',[powershell,'-NoProfile','-NonInteractive','-Command',query],20,env))
                 validate_listener(listener,state,qemu,port)
+                # device info has no hostname field. Read it and the actual
+                # kernel boot ID from read-only RPCs, only after kernel ownership
+                # has bound this literal loopback port to our packaged QEMU.
+                identity=json.loads(owner.run(phase+'-identity',[identity_probe,'127.0.0.1:'+str(port),identity_nonce],15,env))
+                validate_identity(identity,info,port,identity_nonce)
+                confirmed=json.loads(owner.run(phase+'-listener-after-identity',[powershell,'-NoProfile','-NonInteractive','-Command',query],20,env))
+                validate_listener(confirmed,state,qemu,port)
+                disk=vm_dir/'disk.img'
+                if disk.is_symlink():raise RuntimeError('owned VM disk was replaced by a symlink')
+                disk_stat=disk.stat()
+                if not disk.is_file() or disk_stat.st_ino<=0:raise RuntimeError('owned disk file identity unavailable')
+                disk_identity={'path':str(disk.resolve()),'device':disk_stat.st_dev,'inode':disk_stat.st_ino,'size':disk_stat.st_size}
                 if phase=='collision':
-                    first_state=state;first_info=info
+                    first_state=state;first_identity=identity;first_disk=disk_identity
                 else:
-                    if state['startedAt']==first_state['startedAt']:
-                        raise RuntimeError('restart reused the previous VM run record')
-                    if any(info[key]!=first_info[key] for key in ('hostname','publicKey')):
-                        raise RuntimeError('same-disk restart changed persistent guest identity')
-                evidence.setdefault('lifecycle',[]).append({'phase':phase,'guest':info,'state':state,'metadata':metadata,'listener':listener})
+                    validate_restart(state,identity,disk_identity,first_state,first_identity,first_disk)
+                evidence.setdefault('lifecycle',[]).append({'phase':phase,'guest':info,'identity':identity,'state':state,'metadata':metadata,'listener':listener,'listener_after_identity':confirmed,'disk_identity':disk_identity})
                 # Documented foreground console exit, only for this disposable
                 # owned disk. Stop/join before probing ports or restarting.
                 boot.stdin.write(b'\x01x');boot.stdin.flush()

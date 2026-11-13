@@ -112,7 +112,7 @@ class WindowsVMBootTests(unittest.TestCase):
                 VM.validate_lifecycle_port(phase,port,meta,first)
 
     def test_guest_and_listener_cannot_accept_an_unrelated_host_endpoint(self):
-        guest={'hostname':'fixture-vm','publicKey':'fixture-public-key','cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'0.20.2','version':'recorded agent'}
+        guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'WendyOS-0.20.2','version':'2026.11.12-135023'}
         VM.validate_guest(guest)
         for key in guest:
             with self.subTest(key=key),self.assertRaises(ValueError):VM.validate_guest(dict(guest,**{key:''}))
@@ -122,6 +122,40 @@ class WindowsVMBootTests(unittest.TestCase):
         VM.validate_listener(listener,state,qemu,12345)
         for key,value in (('pid',999),('port',54321),('path','/foreign/qemu.exe')):
             with self.subTest(key=key),self.assertRaises(ValueError):VM.validate_listener(dict(listener,**{key:value}),state,qemu,12345)
+
+    def test_identity_uses_actual_rpc_and_must_match_the_owned_cli_guest(self):
+        # Fields match actual collision-info-38.log from job131729254510.
+        # The public CLI hardware JSON does not contain hostname/publicKey.
+        guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos',
+               'osVersion':'WendyOS-0.20.2','version':'2026.11.12-135023'}
+        VM.validate_guest(guest)
+        nonce='0123456789abcdef0123456789abcdef'
+        identity=dict(guest,address='127.0.0.1:50053',nonce=nonce,hostname='owned-vm',bootId='11111111-2222-4333-8444-555555555555',bootTimeNs=1000000000)
+        VM.validate_identity(identity,guest,50053,nonce)
+        for key,value in (('address','127.0.0.1:50051'),('nonce','other'),('hostname',''),('bootId',''),('bootTimeNs',0),('bootTimeNs',True),
+                          ('version','other'),('cpuArchitecture','amd64'),('deviceType','foreign'),
+                          ('os','linux'),('osVersion','WendyOS-0.20.3')):
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                VM.validate_identity(dict(identity,**{key:value}),guest,50053,nonce)
+        for value in ('0.20.2','0.20.3','WendyOS-0.20.2-extra'):
+            with self.subTest(version=value),self.assertRaises(ValueError):
+                VM.validate_guest(dict(guest,osVersion=value))
+
+    def test_restart_requires_same_disk_hostname_and_a_new_kernel_boot(self):
+        disk={'path':'owned/disk.img','device':1,'inode':17,'size':16*1024**3}
+        before={'hostname':'owned-vm','bootId':'11111111-2222-4333-8444-555555555555'}
+        after=dict(before,bootId='22222222-2222-4333-8444-555555555555')
+        initial={'startedAt':'first'};restarted={'startedAt':'second'}
+        VM.validate_restart(restarted,after,disk,initial,before,disk)
+        for state,identity,current_disk in (
+            (initial,after,disk),({},after,disk),(restarted,before,disk),
+            (restarted,dict(after,hostname='foreign-vm'),disk),
+            (restarted,after,dict(disk,inode=18)),
+            (restarted,after,dict(disk,path='foreign/disk.img')),
+            (restarted,after,dict(disk,size=8*1024**3)),
+        ):
+            with self.subTest(state=state,identity=identity,disk=current_disk),self.assertRaises(ValueError):
+                VM.validate_restart(state,identity,current_disk,initial,before,disk)
 
     def test_private_environment_removes_case_variants_and_keeps_host_tools_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
