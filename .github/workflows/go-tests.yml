@@ -720,6 +720,14 @@ jobs:
           ref: 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4
           path: .ci-v4l2loopback
           persist-credentials: false
+      - name: Check out the exact Builder module candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: wendylabsinc/WendyOS-Builder
+          ref: 4828717a29aa3e7d3b183c6683155337957af39f
+          path: .ci-loopback-builder
+          sparse-checkout: recipes-kernel/v4l2loopback
+          persist-credentials: false
       - name: Build and load WendyOS loopback ABI
         id: loopback-module
         run: |
@@ -746,6 +754,21 @@ jobs:
           echo 'loaded=true' >> "$GITHUB_OUTPUT"
           sudo udevadm settle
           test -c /dev/v4l2loopback
+      - name: Require original failure and Builder candidate queue recovery
+        timeout-minutes: 8
+        env:
+          WENDY_LOOPBACK_JOB_OWNED: ${{ steps.loopback-module.outputs.loaded == 'true' && '1' || '0' }}
+        run: bash .github/scripts/test-v4l2-output-queue-module.sh .ci-v4l2loopback .ci-loopback-builder
+      - name: Preserve module comparison evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: v4l2-output-queue
+          path: |
+            ${{ runner.temp }}/wendy-output-queue.*/*.log
+            ${{ runner.temp }}/wendy-output-queue.*/*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Decode authenticated Lite camera frames through the kernel node
         run: bash .github/scripts/test-lite-camera-loopback.sh
       - name: Exercise the remove ioctl and require execution
