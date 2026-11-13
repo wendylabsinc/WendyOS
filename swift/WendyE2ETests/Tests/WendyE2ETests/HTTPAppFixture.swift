@@ -57,9 +57,22 @@ struct HTTPAppFixture: Sendable {
             WendyE2EEnvironment.isolation != .none,
             "HTTP app tests require an isolated HOME"
         )
-        return CLIAndAgentScenario(after: { cli, _ in
-            try await cli.sh(#"rm -f "$HOME/.wendy/config.json""#)
-        })
+        let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".github/ci-tests/http-app-loop/prepare_lan_auth.py").path
+        return CLIAndAgentScenario(
+            before: { cli, _ in
+                try #require(
+                    cli.machine.isLocal && cli.machine.os != .windows,
+                    "LAN fixture preparation requires a local POSIX CLI host"
+                )
+                try await cli.sh("python3 \(Self.quote(script))")
+            },
+            after: { cli, _ in
+                try await cli.sh(#"rm -f "$HOME/.wendy/config.json""#)
+            }
+        )
     }
 
     static func withApp(
