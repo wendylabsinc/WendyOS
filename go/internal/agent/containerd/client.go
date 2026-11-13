@@ -3893,7 +3893,19 @@ var _ services.GroupRestarter = (*Client)(nil)
 // restart through RestartGroup instead of an independent StartContainer, which
 // would leave a secondary attached to the primary's now-dead namespace.
 func (c *Client) GroupRestartAppID(ctx context.Context, appName string) (string, bool) {
-	appID, svcName, err := ParseContainerName(appName)
+	// Underscores are valid in app IDs, so a container name alone cannot
+	// distinguish a service from a single-container app. Use its persisted
+	// ownership and require those labels to reconstruct this exact name.
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return "", false
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return "", false
+	}
+	appID, svcName, err := containerOwnerFromLabels(appName, labels)
 	if err != nil || svcName == "" {
 		return "", false
 	}
