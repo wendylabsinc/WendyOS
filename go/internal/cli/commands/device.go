@@ -959,6 +959,15 @@ func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) e
 	if err != nil {
 		return enrollmentWifiError(err)
 	}
+	if selected, _ := ctx.Value(wifiCredentialTargetKey{}).(*SelectedDevice); selected != nil && password != "" {
+		if err := confirmUnverifiedWiFiCredentials(selected); errors.Is(err, errUnverifiedWiFiDeclined) {
+			// Declining Wi-Fi is not declining enrollment, as above.
+			fmt.Println("WiFi credentials were not sent.")
+			return nil
+		} else if err != nil {
+			return enrollmentWifiError(err)
+		}
+	}
 
 	fmt.Printf("Connecting to %s...\n", ssid)
 	wifiResp, err := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
@@ -1140,14 +1149,18 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Renew while the certificate is still valid. This shared picker has no
-	// caller context; renewal applies its own request timeout. Enrollment uses
-	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	// Keep pre-expiry renewal first; OIDC operators can then re-issue through
+	// their current sign-in session. This picker has no caller context, so
+	// both network paths impose their own timeout.
 	var before string
 	if len(auth.Certificates) > 0 {
 		before = auth.Certificates[0].PemCertificate
 	}
-	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+	if auth.OAuthIssuer != "" && auth.ServiceAccount == "" {
+		if err := prepareDefaultCloudCertificate(context.Background(), auth); err != nil {
+			return nil, err
+		}
+	} else if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
 		reportStaleCertificate(rerr)
 	}
 	// A renewal is a certificate refresh: retry an unbound registry key, as
@@ -3167,7 +3180,7 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 			p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 		}()
 
-		finalModel, runErr := p.Run()
+		finalModel, runErr := tui.RunProgram(p)
 		if runErr != nil {
 			return fmt.Errorf("TUI error: %w", runErr)
 		}

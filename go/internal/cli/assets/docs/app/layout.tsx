@@ -1,7 +1,7 @@
 import { Analytics } from '@/components/analytics';
 import { Provider } from '@/components/provider';
 import type { ReactNode } from 'react';
-import { ogImage } from '@/lib/shared';
+import { isPreviewDeploy, ogImage } from '@/lib/shared';
 import './global.css';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
@@ -17,6 +17,8 @@ export const metadata = {
     template: '%s | WendyOS Docs',
   },
   description: 'Developer documentation for WendyOS, wendy-agent, and the Wendy CLI.',
+  // Keep branch previews out of search indexes; they are deleted after a while.
+  ...(isPreviewDeploy ? { robots: { index: false, follow: false } } : {}),
   openGraph: {
     type: 'website',
     siteName: 'WendyOS Docs',

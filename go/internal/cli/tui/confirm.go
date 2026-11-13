@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // ConfirmModel is a Bubble Tea model for styled yes/no prompts.
@@ -127,13 +128,7 @@ func (m ConfirmModel) View() string {
 		)
 	}
 
-	yes := confirmInactive.Render("Yes")
-	no := confirmInactive.Render("No")
-	if m.choice {
-		yes = confirmActive.Render("Yes")
-	} else {
-		no = confirmActive.Render("No")
-	}
+	yes, no := confirmChoice("Yes", m.choice), confirmChoice("No", !m.choice)
 
 	return fmt.Sprintf(
 		"%s  %s %s  %s\n",
@@ -141,6 +136,18 @@ func (m ConfirmModel) View() string {
 		yes, no,
 		confirmHint.Render("(y/n)"),
 	)
+}
+
+// confirmChoice renders one option. Without colour the highlight is plain
+// text, so brackets take the place of its padding.
+func confirmChoice(label string, active bool) string {
+	switch {
+	case !active:
+		return confirmInactive.Render(label)
+	case lipgloss.ColorProfile() == termenv.Ascii:
+		return "[" + label + "]"
+	}
+	return confirmActive.Render(label)
 }
 
 // Confirmed returns true if the user selected Yes.
@@ -154,8 +161,8 @@ func (m ConfirmModel) Cancelled() bool {
 }
 
 func runConfirm(m ConfirmModel, programOpts []tea.ProgramOption) (bool, error) {
-	p := tea.NewProgram(m, programOpts...)
-	result, err := p.Run()
+	p := NewProgram(m, programOpts...)
+	result, err := RunProgram(p)
 	if err != nil {
 		return false, fmt.Errorf("confirm prompt: %w", err)
 	}

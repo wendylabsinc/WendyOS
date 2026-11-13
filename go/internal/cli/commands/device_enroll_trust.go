@@ -57,25 +57,49 @@ type enrollmentTrust struct {
 	pin       config.DevicePin
 }
 
-type enrollmentSelectionKey struct{}
+type unboundSetupSelectionKey struct{}
 
-// This scope is created only by explicit enrollment. It follows a picker
-// selection and its read-only discovery probes, and is never returned to an
-// ordinary management caller as permission to use an unbound connection.
-func withEnrollmentSelection(ctx context.Context) context.Context {
-	return context.WithValue(ctx, enrollmentSelectionKey{}, true)
+type unboundSetupScope int
+
+const (
+	unboundSetupNone unboundSetupScope = iota
+	unboundSetupEnrollment
+	unboundSetupWiFi
+)
+
+// Only explicit enrollment and Wi-Fi setup may use an unbound setup endpoint.
+// The scope follows picker selection and discovery probes, but does not enable
+// enrollment trust recovery or permit overriding any saved device binding.
+func withUnboundSetupSelection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unboundSetupSelectionKey{}, unboundSetupEnrollment)
 }
 
-func isEnrollmentSelection(ctx context.Context) bool {
-	allowed, _ := ctx.Value(enrollmentSelectionKey{}).(bool)
-	return allowed
+// withWiFiSetupSelection scopes the setup exception to Wi-Fi commands. Unlike
+// enrollment, Wi-Fi setup only adds a connection the ordinary resolver would
+// refuse; every other outcome is left to the ordinary resolver.
+func withWiFiSetupSelection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unboundSetupSelectionKey{}, unboundSetupWiFi)
 }
 
-// connectUnboundEnrollmentTarget is used only by explicit enrollment, before
-// the ordinary management dial. It never overrides a saved identity, including
-// an older incomplete pin, and never treats an enrolled or unknown state as a
-// setup endpoint. The connection stays scoped to the enrollment callback.
-func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string, extraCandidates ...string) (*SelectedDevice, bool, error) {
+func unboundSetupScopeFrom(ctx context.Context) unboundSetupScope {
+	scope, _ := ctx.Value(unboundSetupSelectionKey{}).(unboundSetupScope)
+	return scope
+}
+
+func isUnboundSetupSelection(ctx context.Context) bool {
+	return unboundSetupScopeFrom(ctx) != unboundSetupNone
+}
+
+// connectUnboundSetupTarget is used by enrollment and Wi-Fi setup before the
+// ordinary management dial. It never overrides a saved identity, including an
+// older incomplete pin, or treats an enrolled or unknown state as a setup endpoint.
+//
+// Enrollment reports every failure here (handled=true). Wi-Fi setup reports
+// handled=false unless it produced a connection, so the ordinary resolver keeps
+// its typed refusals, Cloud name fallback, recovery and Bluetooth fallback, and
+// a CLI without certificates keeps its existing plaintext behavior.
+func connectUnboundSetupTarget(ctx context.Context, pinKey, addr string, extraCandidates ...string) (*SelectedDevice, bool, error) {
+	wifi := unboundSetupScopeFrom(ctx) == unboundSetupWiFi
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, true, err
@@ -83,8 +107,15 @@ func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string, ex
 	if _, _, pinned := lookupPin(cfg, pinKey); pinned {
 		return nil, false, nil
 	}
+	if wifi && !hasStoredCLICerts(cfg) {
+		// The ordinary ladder already dials plaintext without certificates.
+		return nil, false, nil
+	}
 	conn, err := connectEnrollmentPlaintext(ctx, append(resolveAddrCandidates(ctx, addr), extraCandidates...))
 	if err != nil {
+		if wifi && ctx.Err() == nil {
+			return nil, false, nil
+		}
 		return nil, true, err
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
@@ -92,13 +123,26 @@ func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string, ex
 	state, err := deviceProvisioning(probeCtx, conn)
 	if err != nil || state.GetNotProvisioned() == nil {
 		conn.Close()
+		if wifi && ctx.Err() == nil {
+			return nil, false, nil
+		}
 		if err == nil {
 			err = fmt.Errorf("explicit setup requires an unprovisioned device; enrolled-device management requires a trusted expected identity")
 		}
 		return nil, true, err
 	}
 	conn.DevicePinKey = pinKey
-	return &SelectedDevice{Agent: conn}, true, nil
+	return &SelectedDevice{Agent: conn, unverifiedSetup: true}, true, nil
+}
+
+// hasStoredCLICerts mirrors loadStoredCLICerts for an already loaded config.
+func hasStoredCLICerts(cfg *config.Config) bool {
+	for _, auth := range cfg.Auth {
+		if len(auth.Certificates) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func recoverEnrollmentTrust(ctx context.Context, cause error) (*SelectedDevice, *enrollmentTrust, error) {

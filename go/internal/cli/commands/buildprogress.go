@@ -68,7 +68,7 @@ func runBuildProgressProgram(prog *tea.Program) (tea.Model, error) {
 		logger.SetOutput(out)
 		_, _ = out.Write(logs.Bytes())
 	}()
-	return prog.Run()
+	return tui.RunProgram(prog)
 }
 
 // maxRawBuildCapture bounds the raw buildx log retained for failure replay.

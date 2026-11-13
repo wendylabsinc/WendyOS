@@ -30,7 +30,7 @@ func validateDesktopPush(token []byte, topic string, environment int32) error {
 	if len(token) == 0 || len(token) > 4096 {
 		return errors.New("Apple did not provide a valid push token")
 	}
-	if topic != "dev.wendy.desktop" && topic != "dev.wendy.mobile" {
+	if topic != "dev.wendy.desktop" && topic != "dev.wendy.mobile" && topic != "dev.wendy.ccr" {
 		return errors.New("unsupported Wendy application")
 	}
 	if environment != 1 && environment != 2 {

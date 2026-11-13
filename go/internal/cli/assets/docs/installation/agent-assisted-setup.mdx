@@ -65,10 +65,22 @@ Review the drive path/model/capacity or the intended recovery board with the
 agent. Authorize erasing that target if you have not already done so. Then run
 the returned command through a terminal. The existing installer handles elevated
 access, artifact verification, progress and flash errors. MCP planning does not
-execute the write or hide administrator prompts.
+execute the write or hide administrator prompts. For supported image installs,
+the agent can instead run a resumable job with `os_install_start`,
+`os_install_resume` and `os_install_status` (CLI: `wendy install jobs`); it shows
+the target and asks for your erase authorization before writing.
 
 Choose a device name, networking and optional cloud enrollment before writing.
-Use `--device-name <name>`, WiFi preseed options, or `--no-wifi` for Ethernet.
+In a terminal, use `--device-name <name>`, `--wifi ssid=<name>,password=<pw>`
+(repeatable), or `--no-wifi` for Ethernet; without a terminal the installer
+needs one WiFi choice. A job takes the same choices as `device_name` and `wifi`,
+or `no_wifi`. Without them the job writes the published image unchanged, and
+the board boots with an auto-generated name and no WiFi. Jobs do not pre-enroll
+Cloud, and their results and logs never show WiFi passwords. A password you
+give the agent is part of the chat transcript; to keep it out, run
+`wendy install jobs start` with `--wifi` yourself and give the agent the
+returned job ID. Hosted chats refuse WiFi passwords.
+
 Use `--pre-enroll` only with the intended logged-in cloud session. Avoid placing
 credentials in shared transcripts. `--force` skips confirmations; it does not
 grant administrator privileges or bypass internal-drive protection.

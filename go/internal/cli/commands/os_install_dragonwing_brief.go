@@ -121,7 +121,8 @@ func confirmDragonwingReady(board dragonwingBoard, version string, force bool) e
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target board connected and in EDL mode (" + board.guide().ready + ")?")
+	ok, err := confirmInstallStep("flashing the "+humanReadableDeviceType(board.deviceType),
+		"Is the target board connected and in EDL mode ("+board.guide().ready+")?", false, force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}

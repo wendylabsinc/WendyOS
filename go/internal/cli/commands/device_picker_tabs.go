@@ -55,6 +55,7 @@ type devicePickerModel struct {
 	enroll       *errDevicePickerEnroll
 	cancelled    bool
 	windowWidth  int
+	windowHeight int
 }
 
 func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *config.AuthConfig, defaultOrg int32, disableEnroll bool, active devicePickerTab) devicePickerModel {
@@ -220,7 +221,8 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
-		msg.Height = max(1, msg.Height-strings.Count(m.purpose.header(msg.Width), "\n"))
+		m.windowHeight = msg.Height
+		msg.Height = max(1, msg.Height-strings.Count(m.header(), "\n")-2)
 		var cmds []tea.Cmd
 		local, localCmd := m.updateLocal(msg)
 		m = local
@@ -232,6 +234,7 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// before the second child when there was no cloud auth, which would
 		// leave the simulator table unsized.
 		if m.cloudAuth != nil {
+			msg.Height = max(1, msg.Height-2) // organization label and separator
 			cloud, cloudCmd := m.updateCloud(msg)
 			m = cloud
 			cmds = append(cmds, cloudCmd)
@@ -300,11 +303,30 @@ var (
 )
 
 func (m devicePickerModel) View() string {
+	view := strings.TrimRight(m.viewContent(), "\n")
+	if m.windowHeight > 0 {
+		// Warnings and status messages can grow between resize events. Give
+		// their rows back to the table before clipping the complete frame.
+		if excess := lipgloss.Height(view) - m.windowHeight; excess > 0 && m.active == devicePickerCloudTab && m.cloudAuth != nil {
+			m.cloud.table.SetHeight(max(2, m.cloud.table.Height()-excess))
+			view = strings.TrimRight(m.viewContent(), "\n")
+		}
+	}
+	return tui.FitView(tui.CropANSIView(view, 0, m.windowWidth), m.windowHeight)
+}
+
+// header is the purpose banner, collapsed when it would crowd out the table.
+// The 2 rows are the tab strip and the blank line under it.
+func (m devicePickerModel) header() string {
+	return m.purpose.fittedHeader(m.windowWidth, m.windowHeight, 2)
+}
+
+func (m devicePickerModel) viewContent() string {
 	if m.cancelled || m.action != devicePickerNoAction || m.hasChosen {
 		return ""
 	}
 
-	header := m.purpose.header(m.windowWidth) + deviceTabsHeader(m.active, m.tabOrder(), m.windowWidth)
+	header := m.header() + deviceTabsHeader(m.active, m.tabOrder(), m.windowWidth)
 
 	switch m.active {
 	case devicePickerLocalTab:

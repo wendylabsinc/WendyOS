@@ -70,7 +70,7 @@ func (m cliUpdateModel) View() string {
 // PromptCLIUpdate offers an immediate update or a one-day reminder.
 func PromptCLIUpdate(current, latest string, opts ...tea.ProgramOption) (bool, error) {
 	options := append([]tea.ProgramOption{tea.WithAltScreen()}, opts...)
-	result, err := tea.NewProgram(cliUpdateModel{current: current, latest: latest}, options...).Run()
+	result, err := RunProgram(tea.NewProgram(cliUpdateModel{current: current, latest: latest}, options...))
 	if err != nil {
 		return false, fmt.Errorf("CLI update prompt: %w", err)
 	}

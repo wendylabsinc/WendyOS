@@ -248,7 +248,7 @@ func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions, includeL
 		p.Send(work())
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -391,7 +391,7 @@ func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.Discove
 	// Alt screen: the table grows to fill the window, and the alternate
 	// buffer restores the user's terminal content when the TUI exits.
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

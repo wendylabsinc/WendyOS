@@ -68,6 +68,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Verify shared contract pin is on service-protos master
+        run: |
+          source Proto/shared-grpc-api-contracts.sh
+          check_shared_grpc_api_contracts_ancestry
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -132,9 +136,9 @@ jobs:
         # Keep the compiler's per-package concurrency workaround for race
         # builds, but let Go build and test packages in parallel. Vet has its
         # own required job, so do not repeat it in every race build.
-        # -timeout is per package: internal/cli/commands alone took 115s of
-        # the former 120s under -race on main (2026-10-06).
-        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
+        # -timeout is per package: internal/cli/commands alone took 296.146s
+        # of the former 300s under -race on main 08a9cb01 (2026-11-11).
+        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 600s
 
       - name: Fuzz stream boundaries and sparse flash ranges
         run: |
@@ -192,7 +196,8 @@ jobs:
         env:
           CONTAINERD_PACKAGE: ${{ matrix.package }}
         run: |
-          sudo apt-get update
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update --error-on=any
           mkdir -p "$RUNNER_TEMP/wendy-runtime"
           cd "$RUNNER_TEMP/wendy-runtime"
           apt-get download "$CONTAINERD_PACKAGE" runc busybox-static
@@ -470,6 +475,8 @@ jobs:
         run: bash .github/scripts/agent-package-scripts_test.sh
       - name: integration device selection tests
         run: python3 .github/scripts/integration-discover_test.py
+      - name: gate credential refresh tests
+        run: python3 .github/scripts/refresh-gate-auth_test.py
       - name: host sensor loopback CI tests
         run: |
           sh -n .github/ci-tests/host-sensor-loopback/check.sh

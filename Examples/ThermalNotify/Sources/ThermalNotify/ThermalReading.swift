@@ -15,6 +15,11 @@ struct ThermalReading: Sendable {
     let provenance: String
     let summaryIdentity: [UInt16]?
 
+    init(celsius: Double, x: Int, y: Int, provenance: String) {
+        self.celsius = celsius; self.x = x; self.y = y; self.provenance = provenance
+        summaryIdentity = nil
+    }
+
     init(frame: VideoFrame, now: Date = Date()) throws {
         let age = now.timeIntervalSince1970 - Double(frame.timestampNs) / 1_000_000_000
         guard frame.timestampNs > 0, age >= -2, age <= 5 else {
@@ -31,22 +36,28 @@ struct ThermalReading: Sendable {
             // Same default-mode metadata decoder as Wendy's desktop viewer:
             // go/internal/agent/data/thermal/summary.go. This scale applies to
             // the summary temperature codes, NEVER to the raw sensor plane.
-            guard layout.fourcc == "YUYV", layout.width == 256, layout.height == 392,
-                layout.bytesPerLine == 512, frame.data.count == 200704
+            guard layout.fourcc == "YUYV",
+                (layout.width == 256 && layout.height == 392 || layout.width == 96 && layout.height == 200),
+                layout.bytesPerLine == layout.width * 2,
+                frame.data.count == Int(layout.bytesPerLine * layout.height)
             else { throw MonitorError("Unsupported HIK temperature summary layout") }
+            let width = Int(layout.width), height = (Int(layout.height) - 8) / 2
+            let stride = Int(layout.bytesPerLine), header = (height + 1) * stride
+            let trailer = (Int(layout.height) - 4) * stride
             func word(_ offset: Int) -> UInt16 {
                 UInt16(frame.data[offset]) | UInt16(frame.data[offset + 1]) << 8
             }
-            let words = (0..<10).map { word(388 * 512 + $0 * 2) }
-            guard word(193 * 512) == 0xccdd, word(193 * 512 + 2) == 0xaabb,
+            let words = (0..<10).map { word(trailer + $0 * 2) }
+            guard word(header) == 0xccdd, word(header + 2) == 0xaabb,
+                width != 96 || (word(header + 8) == 96 && word(header + 10) == 0 && word(header + 12) == 96 && word(header + 14) == 0),
                 words[0] == 0xffff, words[1] == 0xeeee,
                 words[2] > 0, words[2] < 65535, words[5] > 0, words[5] < 65535,
                 words[2] >= words[5],
                 [3, 4, 6, 7].allSatisfy({ words[$0] <= 1000 })
             else { throw MonitorError("Invalid or uninitialized HIK temperature summary") }
             celsius = Double(words[2]) / 64 - 50
-            x = (Int(words[3]) * 255 + 500) / 1000
-            y = (Int(words[4]) * 191 + 500) / 1000
+            x = (Int(words[3]) * (width - 1) + 500) / 1000
+            y = (Int(words[4]) * (height - 1) + 500) / 1000
             provenance = "HIK camera-reported maximum, default-mode metadata, code / 64 - 50°C"
             summaryIdentity = words
             return

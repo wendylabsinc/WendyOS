@@ -199,6 +199,24 @@ func ackContinueUnenrolled() error {
 // settled before the mint and written back, so the device is given the name
 // Cloud reserved.
 func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
+	plan, err := planACMEPreEnrollment(cfg, opts, interactive, deviceName)
+	if err != nil || plan == nil {
+		return nil, err
+	}
+	return plan.mint(ctx, *deviceName)
+}
+
+// acmePreEnrollPlan is a settled choice to pre-enroll with auth; nothing has
+// been reserved in Cloud yet.
+type acmePreEnrollPlan struct {
+	auth        *config.AuthConfig
+	interactive bool
+}
+
+// planACMEPreEnrollment asks everything resolveACMEPreEnrollment asks and
+// settles a blank *deviceName, reading only the local config: Cloud is not
+// contacted. A nil plan means nothing will be baked.
+func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
 	switch opts.mode {
 	case preEnrollSkip:
 		return nil, nil
@@ -252,14 +270,20 @@ func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preE
 		}
 		*deviceName = name
 	}
+	return &acmePreEnrollPlan{auth: auth, interactive: interactive}, nil
+}
 
+// mint reserves deviceName in Cloud and returns the EAB credential to bake.
+// Without a terminal a failure ends the install; with one the person may
+// continue unenrolled, which returns nil.
+func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName string) (*acmeEnrollmentBake, error) {
 	fmt.Println("Pre-enrolling device with Wendy Cloud...")
-	state, enrollErr := preEnrollACMEFn(ctx, auth, *deviceName)
+	state, enrollErr := preEnrollACMEFn(ctx, p.auth, deviceName)
 	if enrollErr == nil {
 		fmt.Println("Cloud enrollment reserved; credential staged for first boot. Automatic ACME enrollment requires an image with a compatible agent; device enrollment and Cloud presence are not yet verified.")
 		return state, nil
 	}
-	if !interactive {
+	if !p.interactive {
 		return nil, fmt.Errorf("--pre-enroll: pre-enrollment failed: %w", enrollErr)
 	}
 	fmt.Printf("Pre-enrollment failed: %v\n", enrollErr)

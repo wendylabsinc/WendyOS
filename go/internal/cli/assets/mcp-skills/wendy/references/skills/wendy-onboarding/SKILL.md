@@ -144,7 +144,9 @@ For a supported image install through MCP:
 
 1. Call `os_install_plan`. For raw media, call `os_list_drives` and match the
    intended SD card or SSD by path, model, and capacity. Re-plan with that drive.
-2. Call `os_install_start` and retain its `job_id`. Show its physical instructions
+2. Ask for a device name and Wi-Fi, then call `os_install_start` with
+   `device_name` and `wifi` (or `no_wifi=true`; omitted means no Wi-Fi and an
+   auto-generated name). Retain its `job_id`. Show its physical instructions
    for cables, recovery mode, media, and power before continuing.
 3. After the user completes those steps, call `os_install_resume` to probe the
    target. Show the returned fingerprint and erase scope. Only after explicit

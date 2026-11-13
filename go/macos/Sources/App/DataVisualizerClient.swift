@@ -133,10 +133,11 @@ extension GoClient {
             }
         }
     }
-    func visualEpisode(session: UInt64, episode: String) async throws -> DataVisualSnapshot {
+    func visualEpisode(session: UInt64 = 0, episode: String, selector: String? = nil) async throws -> DataVisualSnapshot {
         try await Self.visualPerform {
             try Self.withCString(episode) { episode in
-                guard let p = WDVisualEpisodeLoad(session, episode) else { throw WendyError(message: "Missing episode data.") }
+                let result = selector.map { target in Self.withCString(target) { WDVisualEpisodeLoadAt($0, episode) } } ?? WDVisualEpisodeLoad(session, episode)
+                guard let p = result else { throw WendyError(message: "Missing episode data.") }
                 defer { WDVisualSnapshotFree(p) }
                 try Self.check(p.pointee.status)
                 let tracks = UnsafeBufferPointer(start: p.pointee.tracks, count: p.pointee.track_count).map {
