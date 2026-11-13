@@ -51,15 +51,17 @@ def generate(inventory, output):
         line(board[key])
     if not re.fullmatch(r"[a-z][a-z0-9-]{2,54}", board["device_name"]) or board["device_name"].endswith("-"):
         raise ValueError("require a unique valid provisioned device name")
+    addresses = []
     for key in ("usb_address_before", "usb_address_after"):
         address = line(board[key])
         # USB fallback must be a real link-local endpoint, not cloud/NAT/loopback.
         import ipaddress
         host, port = address.rsplit(":", 1)
         ip = ipaddress.ip_address(host.strip("[]"))
-        if not ip.is_link_local or port != "50051":
+        addresses.append(str(ip).split("%", 1)[0])
+        if not ip.is_link_local or port != "50051" or (ip.version == 6 and not host.startswith("[")):
             raise ValueError("require explicit link-local USB endpoint on port50051")
-    if board["usb_address_before"] == board["usb_address_after"]:
+    if addresses[0] == addresses[1]:
         raise ValueError("record distinct observed pre/post first-boot endpoints")
     for key in ("cli_source_commit", "agent_source_commit"):
         if not re.fullmatch(r"[a-f0-9]{40}", data[key]): raise ValueError("pin full candidate source commits")
