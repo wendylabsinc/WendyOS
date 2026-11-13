@@ -1181,6 +1181,12 @@ func (m tourWizardModel) viewCommands() string {
 			"curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -\n" +
 			`echo "deb https://apt.wendy.dev stable main" | sudo tee /etc/apt/sources.list.d/wendy.list` + "\n" +
 			"sudo apt update && sudo apt install -y wendy-agent\n"
+	case phaseCloud:
+		var commands string
+		if m.projectPath != "" {
+			commands = "\nDeploy your sample again:\n" + tourSampleRedeployCommand(runtime.GOOS, m.projectPath, m.foundAddr) + "\n"
+		}
+		return commands + "\nSign in to Wendy Cloud:\nwendy auth login\n"
 	default:
 		return ""
 	}
@@ -1731,13 +1737,12 @@ func (m tourWizardModel) viewCloud(w int) string {
 		intro = "Your device is up and running."
 	}
 	if m.projectPath != "" {
-		sb.WriteString(wizBodyStyle.Width(w).Render("Your sample answered successfully at "+m.sampleURL()+".\n\nEdit app.py in "+m.projectPath+" and deploy again:\n  "+tourSampleRedeployCommand(runtime.GOOS, m.projectPath, m.foundAddr)+"\n\n") + "\n")
+		sb.WriteString(wizBodyStyle.Width(w).Render("Your sample answered successfully at "+m.sampleURL()+".\n\nEdit app.py in "+m.projectPath+" and deploy again with the command below the box.\n\n") + "\n")
 	}
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		intro+"\n\n"+
 			"When you're ready to manage multiple devices remotely,\n"+
-			"Wendy Cloud can help:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy auth login") + "\n\n")
+			"Wendy Cloud can help. Sign in with the command below the box:") + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		"Wendy Cloud provides:\n"+
 			"  • Remote access to all your devices\n"+

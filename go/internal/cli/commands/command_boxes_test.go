@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -100,6 +101,22 @@ func TestTourLinuxInstallCommandsBelowBox(t *testing.T) {
 				t.Fatal("Linux install command order changed")
 			}
 			previous = index
+		}
+	}
+}
+
+func TestTourCompletionCommandsBelowBox(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		for _, project := range []string{"", "/tmp/sample 'quoted'"} {
+			m := newTourWizardModel()
+			m.phase, m.width, m.projectPath, m.foundAddr = phaseCloud, width, project, "sample.local"
+			output := m.View()
+			assertCommandBelowBox(t, output, "wendy auth login")
+			if project != "" {
+				assertCommandBelowBox(t, output, tourSampleRedeployCommand(runtime.GOOS, project, m.foundAddr))
+			} else if strings.Contains(output, "wendy run ") {
+				t.Fatal("skipped sample gained a redeploy command")
+			}
 		}
 	}
 }
