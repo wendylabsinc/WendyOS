@@ -340,6 +340,34 @@ jobs:
           done
       - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
         run: bash .github/scripts/test-containerd-versions.sh
+      - name: Prepare real ROS scope image and regression controls
+        run: |
+          python3 .github/scripts/ros_scope_runtime_test.py
+          python3 .github/scripts/prepare-ros-scope-runtime.py --output "$RUNNER_TEMP/ros-scopes"
+      - name: Require actual DDS visibility for network and peripheral scopes
+        run: |
+          runtime="$RUNNER_TEMP/wendy-runtime/current/root"
+          common="$RUNNER_TEMP/wendy-runtime/common/root"
+          runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$common/usr/bin:$common/usr/sbin:$common/bin:$common/sbin:$PATH"
+          for case_name in normal old-loopback fail-open-routes; do
+            binary="$RUNNER_TEMP/ros-scopes/$case_name.test"
+            if [[ $case_name == normal ]]; then binary="$RUNNER_TEMP/containerd.test"; fi
+            sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+              bash .github/scripts/test-ros-scope-runtime.sh "$binary" "$RUNNER_TEMP/ros-scopes" "$case_name"
+          done
+      - name: Preserve ROS scope visibility evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ros-scope-runtime
+          path: |
+            ${{ runner.temp }}/ros-scopes/*.log
+            ${{ runner.temp }}/ros-scopes/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove exported ROS fixture image and controls
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ros-scopes/ros-image.tar" "$RUNNER_TEMP/ros-scopes/old-loopback.test" "$RUNNER_TEMP/ros-scopes/fail-open-routes.test"
       - name: Require rootful ESP-IDF generated-file ownership
         timeout-minutes: 35
         run: python3 .github/scripts/test-esp-idf-ownership.py --output "$RUNNER_TEMP/esp-idf-ownership"
