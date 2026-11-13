@@ -46,7 +46,17 @@ for name,path,before,after in [
  source=Path(path).resolve();original=source.read_text()
  if original.count(before)!=1:raise SystemExit('mutation site changed: '+name)
  replacement=out/(name+'.go');replacement.write_text(original.replace(before,after))
- (out/(name+'.json')).write_text(json.dumps({'Replace':{str(source):str(replacement)}}))
+ replacements={str(source):str(replacement)}
+ if name=='empty-camera-label':
+  # The stack also retains a defensive marker at container-label persistence.
+  # Reproduce the historical empty persisted value through both layers.
+  helper=Path('go/internal/agent/containerd/helpers.go').resolve()
+  original_helper=helper.read_text()
+  if original_helper.count('v = "present=true"')!=1:raise SystemExit('container marker site changed')
+  changed_helper=out/'empty-camera-label-helpers.go'
+  changed_helper.write_text(original_helper.replace('v = "present=true"','v = ""'))
+  replacements[str(helper)]=str(changed_helper)
+ (out/(name+'.json')).write_text(json.dumps({'Replace':replacements}))
 PY
 if python3 .github/scripts/run-owned-media-test.py --timeout 180 -- \
   go test -race -overlay "$output/old-cdr.json" ./go/internal/agent/ros2camera -run '^Test(Go2ResolutionH264DecodesGeneratedPixels|RecordedGo2ReplayDecodesInterFrames)$' -v -count=1 > "$output/old-cdr.log" 2>&1; then
