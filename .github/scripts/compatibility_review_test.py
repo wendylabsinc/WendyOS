@@ -108,7 +108,7 @@ class EvidenceTests(unittest.TestCase):
                 api.prepare_review(metadata(), self.patch, REPO, [entry(**changes)])
 
     def test_standard_test_paths_never_supply_sole_runtime_caller(self):
-        for path in ('swift/WendyAgentCore/Tests/WendyAgentTests/TestPKI.swift', 'swift/Tests/Support/Fixture.swift', 'go/testdata/fixture.go'):
+        for path in ('swift/WendyAgentCore/Tests/WendyAgentTests/TestPKI.swift', 'swift/Tests/Support/Fixture.swift', 'go/testdata/fixture.go', '.github/scripts/api_review_test.py', 'tools/test_reader.py'):
             self.assertEqual(compat.source_kind(path), 'test_definition')
             extras=compat.context_catalog([entry(path=path,kind=compat.source_kind(path))])[0]
             finding=dict(self.finding,caller=[next(iter(extras))])

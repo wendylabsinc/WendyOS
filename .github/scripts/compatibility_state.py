@@ -13,6 +13,7 @@ import re
 import zlib
 
 from review_sources import ReviewError, valid_path, is_generated_path
+from compatibility_review import source_kind
 
 MARKER = re.compile(r"<!-- compatibility-finding:v1:([A-Za-z0-9_-]+) -->")
 STATES = {"open", "not_assessed", "addressed", "cancelled"}
@@ -46,6 +47,8 @@ def validate_records(records, *, public_only=True):
             raise ReviewError("Invalid prior compatibility classification")
         if not isinstance(resolution, dict) or set(resolution) != {"reason", "evidence"} or not isinstance(resolution["reason"], str) or len(resolution["reason"]) > 1600:
             raise ReviewError("Invalid prior compatibility resolution")
+        if any(not isinstance(finding[k], list) or not finding[k] for k in ("changed", "caller", "receiver")):
+            raise ReviewError("Prior compatibility finding is missing essential evidence")
         for refs in [finding[k] for k in ("changed", "caller", "receiver")] + [resolution["evidence"]]:
             if not isinstance(refs, list) or len(refs) > 8:
                 raise ReviewError("Invalid prior compatibility evidence")
@@ -57,6 +60,9 @@ def validate_records(records, *, public_only=True):
                         or type(ref.get("line")) is not int or type(ref.get("end_line")) is not int
                         or not 0 <= ref["line"] <= ref["end_line"]):
                     raise ReviewError("Invalid or private prior compatibility provenance")
+        for role in ("changed", "caller", "receiver"):
+            if not any(ref.get("kind") in {"source", "changed_source"} and source_kind(ref["path"]) == "source" for ref in finding[role]):
+                raise ReviewError("Prior compatibility concerns require runtime source evidence")
     return records
 
 

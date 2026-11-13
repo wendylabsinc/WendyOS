@@ -53,7 +53,7 @@ def source_kind(path):
             for part in PurePosixPath(path).parts[:-1])
             or path.endswith("_test.go")
             or (path.endswith(".swift") and re.search(r"(?:Test|Tests|Spec)\.swift$", path))
-            or (path.endswith(".py") and PurePosixPath(path).name.startswith("test_"))):
+            or (path.endswith(".py") and (PurePosixPath(path).name.startswith("test_") or path.endswith("_test.py")))):
         return "test_definition"
     return "source"
 DIRECTIONS = ("old_caller_new_peer", "new_caller_old_peer", "state_reader_writer")

@@ -157,6 +157,8 @@ class StatefulTests(unittest.TestCase):
         bad=copy.deepcopy(self.records);bad[0]['finding']['caller'][0]['visibility']='private'
         with self.assertRaises(compat.ReviewError):state.validate_records(bad)
         with self.assertRaises(compat.ReviewError):state.validate_records(self.records*2)
+        bad=copy.deepcopy(self.records);bad[0]['finding']['caller']=[]
+        with self.assertRaises(compat.ReviewError):state.validate_records(bad)
         payload=fixtures.response(dict(self.fixture.finding,prior_id='f'*64))
         with self.assertRaises(compat.ReviewError):self.resolved(payload,self.records)
 
