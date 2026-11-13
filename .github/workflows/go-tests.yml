@@ -233,6 +233,22 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Require actual serial disconnect and retry classification
+        timeout-minutes: 10
+        env:
+          GOFLAGS: '-gcflags=all=-c=1 -vet=off'
+        run: python3 .github/scripts/test-serial-disconnect.py "$RUNNER_TEMP/serial-disconnect"
+      - name: Retain serial disconnect evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: serial-disconnect
+          path: |
+            ${{ runner.temp }}/serial-disconnect/*.log
+            ${{ runner.temp }}/serial-disconnect/sources.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Require first-boot driver reconnect and target guards
         run: python3 .github/scripts/test-firstboot-driver-transport.py --output "$RUNNER_TEMP/firstboot-driver-transport"
       - name: Retain first-boot driver transport evidence
