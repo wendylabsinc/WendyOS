@@ -2088,6 +2088,13 @@
             ".github/scripts/test-watch-container.sh"
           ],
           "result": "Added actual CLI/Compose, ContainerService, telemetry and containerd journey with silent delayed HTTP services, initial timeout followed by readiness hooks, literal/empty last-value overrides, host/shared-network to separate private namespaces, cross-namespace connection refusal and production restart monitoring. Normal and three historical controls compile on Linux. Source peer review and offline admission pass. Registered in the existing containerd job; actual kernel execution remains pending."
+        },
+        {
+          "tests": [
+            "go/internal/agent/containerd/group_restart_owner_test.go"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068153",
+          "result": "Actual hosted CLI/Compose/containerd journey passed delayed readiness, service hooks, literal/empty environment overrides and host-network probes, then exposed a product defect at its initial shared-group precondition. GroupRestartAppID guessed ownership from an underscore-containing name, which the valid app-ID parser treats as a single app. New focused tests fail on original code and pass with exact validated persisted label ownership under the race detector. Independent review passes. The complete isolation-removal journey and its controls remain pending after this fix."
         }
       ]
     },
@@ -2096,9 +2103,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1736",
       "title": "WDY-2041: keep watch sessions attached",
       "package": "06",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover attachment mode, log ownership and lifecycle hooks. A full watch/redeploy session with real app streams and cancellation is not demonstrated across platforms.",
-      "required_follow_up": "Run the registered real macOS/native and Linux/Compose watch lifecycle gates in hosted CI, including their forced-detach and restarted-sibling controls.",
+      "required_follow_up": "Reconcile hosted macOS native watch execution in the existing Swift core job. The actual Linux Compose watch session and both controls have passed; no extra runner is required.",
       "evidence": [
         {
           "tests": [
@@ -2114,6 +2121,11 @@
             ".github/scripts/test-watch-container.sh"
           ],
           "result": "Added real CLI watch, file sync, ContainerService, ContainerLogManager and TelemetryService against private containerd. Checks changed-service replacement, unchanged sibling PID/log continuity, fresh process output and SIGINT cleanup with both apps retained. Linux CGO normal and both control CLIs compile, Linux/amd64 fixture compiles, portable admission and ShellCheck pass. Local namespace creation was denied; actual normal and control execution remains pending in the existing containerd job."
+        },
+        {
+          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068153",
+          "result": "Downloaded watch-container artifact14008013723. Normal real Compose/containerd watch passes changed-service replacement, retained healthy sibling, attached telemetry and interrupt cleanup. Forced-detach control fails at missing initial actual container output; restart-sibling control fails at unchanged sibling restart. Exact integrated fixture/coordinator source bytes match this head. The later separate multiapp1905 test failed its shared-group precondition, so the overall job is not green. macOS native watch has local real-runtime proof and still awaits hosted reconciliation."
         }
       ]
     },
