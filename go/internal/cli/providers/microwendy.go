@@ -93,16 +93,20 @@ func (p *MicroWendyProvider) DiscoverDevices(ctx context.Context) ([]models.Exte
 		}
 		devices = append(devices, p.mdnsExternalDevice(svc))
 	}
+	usable := len(devices)
 	for _, dev := range sd.WaitForIdle(serialCtx) {
+		if !dev.Busy {
+			usable++
+		}
 		devices = append(devices, p.serialExternalDevice(dev))
 	}
 
-	// An empty result here is ambiguous: it's indistinguishable from "nothing
-	// plugged in" even when a board is connected but its port is held open by
-	// something else (see ContendedPorts) — the exact shape of WDY-2319.
-	// Surface that distinctly instead of falling through to the generic "no
-	// Wendy Lite devices found".
-	if len(devices) == 0 {
+	// With nothing usable, a board that is connected but whose port is held
+	// open by something else (see ContendedPorts) is the whole story — the
+	// exact shape of WDY-2319. Say so, rather than hand a one-shot caller a
+	// lone busy row to auto-select. Next to usable devices the busy board
+	// stays in the list as its own row.
+	if usable == 0 {
 		if ports := sd.ContendedPorts(); len(ports) > 0 {
 			return nil, contendedPortsError(ports)
 		}
@@ -202,7 +206,25 @@ func connectableLiteMDNSService(svc discovery.MDNSService) bool {
 // is installed yet — is still surfaced rather than dropped, marked with
 // ConnectionInfo["needsInstall"] so `wendy run` can offer to flash Wendy Lite
 // onto it instead of silently ignoring the board.
+//
+// A busy device — its port is held by another process — is surfaced too, but
+// with ConnectionInfo["busy"] instead: nothing is known about its firmware, so
+// it must not be offered an install. Connecting to it retries the port and
+// reports who might be holding it (see connectSerialWithRetry).
 func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) models.ExternalDevice {
+	if dev.Busy {
+		return models.ExternalDevice{
+			ID:          fmt.Sprintf("wendy-lite:%s", dev.Port),
+			DisplayName: fmt.Sprintf("ESP32 (in use by another process) — %s", dev.Port),
+			ProviderKey: p.Key(),
+			ConnectionInfo: map[string]string{
+				"type":       "USB",
+				"serialPort": dev.Port,
+				"busy":       "true",
+			},
+			IsWendyDevice: true,
+		}
+	}
 	if !dev.Responsive {
 		return models.ExternalDevice{
 			ID:          fmt.Sprintf("wendy-lite:%s", dev.Port),

@@ -4336,7 +4336,9 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 			}},
 		}
 		if port := dev.ConnectionInfo["serialPort"]; port != "" {
-			if dev.ConnectionInfo["needsInstall"] == "true" {
+			// A busy port has no identity either; key it the same way so the
+			// row is replaced once the board can be opened and identifies itself.
+			if dev.ConnectionInfo["needsInstall"] == "true" || dev.ConnectionInfo["busy"] == "true" {
 				item.DedupKey = unflashedLiteDedupKey(port)
 				// The branch sets no SortKey, so ordering falls back to the
 				// dedup key; pin it to the name to keep the row's position.
