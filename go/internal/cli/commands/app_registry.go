@@ -912,6 +912,12 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 			return nil, fmt.Errorf("deployment %s: its sealed release key does not open: %w", deploymentID, err)
 		}
 		clear(contentKey)
+		// The digest signed must be the manifest of the release the deployment
+		// uses now, not only what the newest key was sealed for: a change can be
+		// recorded in Cloud before its key is.
+		if _, err := op.artifact(ctx, d.GetAppReleaseId(), sealed.GetManifestDigest()); err != nil {
+			return nil, fmt.Errorf("deployment %s: its key does not match release %s, so nothing was signed (%w). Update it to a release with wendy app deployment update --release <version> to make a key for that release", deploymentID, d.GetAppReleaseId(), err)
+		}
 		return &keyedDeployment{deployment: d, manifestDigest: sealed.GetManifestDigest(), key: key, sealed: sealed}, nil
 	}
 	return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
@@ -1053,7 +1059,7 @@ func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd 
 	if err != nil {
 		return err
 	}
-	expires, err := cloudrequest.ValidUntil(time.Now(), d.GetValidity().AsDuration())
+	expires, err := cloudrequest.ValidUntil(time.Now(), 0) // the stated default, never Cloud's echo
 	if err != nil {
 		return err
 	}
