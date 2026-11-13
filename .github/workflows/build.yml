@@ -1028,7 +1028,11 @@ jobs:
         with:
           name: linux-repository-consumer-evidence
           path: |
-            ${{ runner.temp }}/repository-consumer-evidence/*.json
+            ${{ runner.temp }}/repository-consumer-evidence/plan.json
+            ${{ runner.temp }}/repository-consumer-evidence/upload-receipts.json
+            ${{ runner.temp }}/repository-consumer-evidence/result.json
+            ${{ runner.temp }}/repository-consumer-evidence/deb-packages.json
+            ${{ runner.temp }}/repository-consumer-evidence/rpm-packages.json
             ${{ runner.temp }}/repository-consumer-evidence/*.log
             ${{ runner.temp }}/repository-consumer-evidence/*-dependencies.txt
             ${{ runner.temp }}/repository-consumer-evidence/*-helper-hashes.txt
