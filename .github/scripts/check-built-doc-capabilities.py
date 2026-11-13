@@ -112,9 +112,22 @@ def verify(directory, *, offline=False):
         results[key] = {'installed_files': len(files), 'connector': pin['connector'],
                         'persistent_journal_configuration': pin['persistent_journal'],
                         'source_bound_files': required, 'spdx_sha256': pin['sha256']}
-    check_configuration(DOC.read_text(), sources['journal'], sources['mount'])
+    documentation = DOC.read_text()
+    check_configuration(documentation, sources['journal'], sources['mount'])
+    original = PINS.parent / 'original-journal.ini'
+    require(sha(original) == pins['original_document']['journal_snippet_sha256'], 'historical documentation snippet changed')
+    old_documentation, replacements = re.subn(r'```ini\n\[Journal\]\n.*?\n```',
+        lambda _: '```ini\n' + original.read_text().rstrip('\n') + '\n```', documentation, flags=re.S)
+    require(replacements == 1, 'historical documentation boundary changed')
+    try:
+        check_configuration(old_documentation, sources['journal'], sources['mount'])
+    except RuntimeError as error:
+        require(str(error).startswith('DOC_PACKAGED_JOURNAL:'), 'original documentation failed outside Journal comparison')
+    else:
+        raise RuntimeError('original documentation unexpectedly matches the packaged journal')
     return {'status': 'passed', 'release': pins['release'], 'builder_revision': pins['builder_revision'],
             'images': results, 'documentation_sha256': sha(DOC),
+            'original_document_control': {**pins['original_document'], 'rejected_at': 'DOC_PACKAGED_JOURNAL'},
             'scope': 'Published rootfs membership and source-identical packaged configuration; no boot/OTA/reboot acceptance'}
 
 

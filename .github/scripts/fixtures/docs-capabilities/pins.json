@@ -40,5 +40,11 @@
       "persistent_journal": true,
       "config_source": "vm-config"
     }
+  },
+  "original_document": {
+    "revision": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+    "path": "go/internal/cli/assets/docs/wendyos/services/logging.md",
+    "sha256": "0c4ded514d358e1e2b64abfc70495039a9105c57df00ff139a65c1ae67d28f6a",
+    "journal_snippet_sha256": "7c1704d8e93a27a6e2b597ddb3f49b2a6a24bc8eafcc4e8feacc5c486cf644c2"
   }
 }
