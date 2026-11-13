@@ -2424,10 +2424,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2542",
       "title": "feat(data): readable wendy data sources, honest statuses, stable microphone IDs",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Stable microphone IDs and alias migration have direct tests. End-to-end capture after ALSA/PipeWire renumbering is not shown.",
-      "required_follow_up": "Record from the same physical microphone across renumbering and verify the source identity and stream.",
-      "evidence": []
+      "required_follow_up": "Execute both physical ALSA and PipeWire microphone renumbering procedures with unchanged stable source ID, changed numeric alias, serial mapping, distinct decoded PCM challenges and missing-device control.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.py",
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
+            ".github/scripts/linux_media_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics, stable microphone alias comparison and detailed per-driver/backend acceptance steps. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
+        }
+      ],
+      "resolution": "Detailed executable hardware procedure is prepared. Actual physical execution remains not_run."
     },
     {
       "key": "2401",
@@ -2572,10 +2582,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1954",
       "title": "agent: let the v4l2 driver pick its own encoder input format",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "A regression checks GStreamer argument construction leaves encoder input format selection to the driver. It does not execute v4l2h264enc on the affected driver.",
-      "required_follow_up": "Add a real pipeline negotiation test on the supported capture/encoder hardware.",
-      "evidence": []
+      "required_follow_up": "Execute actual camera/encoder negotiation on both bcm2835-codec and Qualcomm iris, retaining fixed negotiated input caps, fresh decoded H264 and the historical Qualcomm I420-only failure control.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.py",
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
+            ".github/scripts/linux_media_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics, stable microphone alias comparison and detailed per-driver/backend acceptance steps. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
+        }
+      ],
+      "resolution": "Detailed executable hardware procedure is prepared. Actual physical execution remains not_run."
     },
     {
       "key": "1858",
@@ -2635,9 +2655,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1739",
       "title": "Report contended cameras correctly and share already claimed cameras",
       "package": "08",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover camera-busy diagnosis, shared-source selection and PipeWire parsing. Real camera contention and shared capture can still differ by driver.",
-      "required_follow_up": "Retain portable shared-consumer/cancellation/incompatible-request assertions. Add actual native driver contention and busy-discovery coverage; synthetic owner/process identity does not establish hardware EBUSY behavior.",
+      "required_follow_up": "Execute the real native EBUSY, busy discovery, physical PipeWire/owner sharing, sibling continuity and final release procedure on an exclusive camera. Retain existing portable HTTP sharing coverage separately.",
       "evidence": [
         {
           "tests": [
@@ -2645,8 +2665,17 @@
             ".github/scripts/test-shared-camera-capture.sh"
           ],
           "result": "Actual owner HTTP JPEG feed flows through production shared capture, GStreamer and hub to two decoded pixel consumers. First cancellation preserves fresh changed frames for the second; final cancellation ends feed/encoder; incompatible requests are refused. Normal and race tests pass locally, and stale-pixel/reopen controls fail. Owner/process discovery seam is synthetic. Linux gate requires v4l2src and strace and rejects any physical-camera open; that hosted syscall evidence remains pending. Native hardware contention is not claimed."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.py",
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
+            ".github/scripts/linux_media_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics, stable microphone alias comparison and detailed per-driver/backend acceptance steps. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
         }
-      ]
+      ],
+      "resolution": "Detailed executable hardware procedure is prepared. Actual physical execution remains not_run."
     },
     {
       "key": "2011",
