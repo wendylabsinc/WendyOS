@@ -196,3 +196,29 @@ https://docs.cloud.google.com/sdk/gcloud/reference/artifacts/repositories/create
 https://docs.cloud.google.com/sdk/gcloud/reference/beta/artifacts/print-settings/apt
 https://docs.cloud.google.com/sdk/gcloud/reference/beta/artifacts/print-settings/yum
 https://dnf-plugins-core.readthedocs.io/en/latest/download.html
+
+Existing release-job acceptance alternative
+------------------------------------------
+The existing publish-linux-repos job now runs
+.github/scripts/publish-linux-repositories.py in its unchanged stable-release
+publication context. It preserves each native candidate's identity, byte hash,
+upload exit status and upload-log hash. After all eight uploads succeed, fresh
+APT and DNF4 configurations fetch the exact CLI/Agent versions for amd64 and
+arm64 and require the downloaded bytes to match those receipts. A wrong-hash
+control must fail. The job uses the existing action's short-lived WIF credentials
+with Google's real transport helpers; it does not provision a new identity.
+
+The native x86_64 clients run in owned pinned containers and select both package
+architectures. This is repository metadata/download evidence, not ARM execution
+or a second installation/upgrade test. The existing native installed-package
+gates retain responsibility for actual installation and service lifecycle.
+No Wendy package is installed in the release acceptance containers or host.
+
+The required result is repository-consumer-evidence/result.json with status
+passed, eight successful upload receipts, four successful consumer results and
+proven removal of both owned containers. The evidence includes candidate/source,
+helper and key hashes and native client/dependency versions. Credentials, caches
+and downloaded package copies are not uploaded as evidence. The job's existing
+if/needs conditions still govern publication; preparing this check does not run
+or authorize a release. Until an actual authorized release produces these
+receipts, external Artifact Registry acceptance remains pending.
