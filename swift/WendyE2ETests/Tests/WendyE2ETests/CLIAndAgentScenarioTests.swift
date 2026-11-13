@@ -36,7 +36,7 @@ struct `device cache fixtures` {
         }
     }
 
-    @Test
+    @Test(.enabled(if: WendyE2EEnvironment.isolation != .none))
     func `keeps ordinary and discovery scenarios cold by default`() async throws {
         try await CLIAndAgentScenario().run { cli, _ in
             try await cli.sh(

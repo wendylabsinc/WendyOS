@@ -587,7 +587,7 @@ resolve_cli_auth_config_path() {
 
 preflight_cli_auth_fixture() {
   if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" ]]; then
-    echo "==> Checking CLI auth and device address fixture"
+    echo "==> Checking device address hints against the saved target binding"
     CLI_DEVICE_CACHE_PATH="$CLI_RUN_DIR/device-cache.json"
     local cache_command
     cache_command="python3 $(shell_quote "$CLI_REPO_DIR/swift/Scripts/E2EDeviceCache.py") --cli $(shell_quote "$CLI_BIN_DIR/wendy") --auth-config $(shell_quote "$CLI_AUTH_CONFIG_PATH") --target $(shell_quote "$DEVICE_ADDRESS") --fixture $(shell_quote "$CLI_DEVICE_CACHE_FIXTURE") --output $(shell_quote "$CLI_DEVICE_CACHE_PATH")"
@@ -907,6 +907,9 @@ start_managed_agent() {
 }
 
 stop_managed_agent() {
+  if [[ "$MANAGED_AGENT" != "true" ]]; then
+    return
+  fi
   if managed_agent_is_macos; then
     local quit_log="$RUN_DIR/managed-agent/quit.log"
     if ! "$REPO_DIR/swift/Scripts/Quit.sh" >"$quit_log" 2>&1; then
