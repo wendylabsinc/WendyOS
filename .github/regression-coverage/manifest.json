@@ -3151,9 +3151,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2628",
       "title": "Support unenrolled driver installs over USB and after OS flashing",
       "package": "10",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Upload and driver reconnect fixtures cover USB/unprovisioned flows. First-boot address changes and driver activation still depend on a real flashing/install path.",
-      "required_follow_up": "Execute the registered first-boot driver gRPC gate and controls in CI; prepare and execute exact-target physical flashing/USB reconnect and actual driver activation procedure.",
+      "required_follow_up": "Run the exact Orin install--driver and unenrolled USB registry-upload procedure, including powered post-write disconnect/address change, real activation, second boot and incomplete first-boot timeout. Reconcile the registered real-gRPC reconnect/guard gate in CI; all physical cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -3161,6 +3161,14 @@
             ".github/scripts/test-firstboot-driver-transport.py"
           ],
           "result": "Real owned TCP/gRPC peers model lost transport and return at new endpoints with wrong hostname, wrong board and old kernel before the sole valid target. Production reconnect/check/upload preserves exact specification, signature and multi-chunk bytes. Normal and both removed-guard controls produce required outcomes locally under race checks. Cancellation retains deadline cause and performs zero writes. Full CLI flashing, USB discovery, automatic TLS choice and real module activation are not claimed by this protocol fixture; physical procedure is in progress."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/driver-firstboot-rehearsal.py",
+            ".github/regression-coverage/manual/driver-firstboot-rehearsal.txt",
+            ".github/scripts/driver_firstboot_rehearsal_test.py"
+          ],
+          "result": "Prepared candidate CLI/Agent, exact Orin developer-kit/serial/ECID/storage, public version/catalog/kernel/flashpack/raw hash and reviewed signature-policy binding. Pins actual wendyos-hello source and observes kernel module state, activation receipt, fresh load journal and second-boot persistence. Separate no-egress unenrolled USB registry upload and ten-minute incomplete-firstboot result are required. Three offline admission tests pass, including actual empty-key policy and rejection of cosmetic address changes. Generation performs no device operation or cryptographic signature verification. Every physical case is not_run."
         }
       ]
     },
