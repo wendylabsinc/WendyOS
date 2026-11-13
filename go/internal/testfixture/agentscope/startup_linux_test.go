@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -44,6 +45,16 @@ func TestAgentOwnScopeStartup(t *testing.T) {
 	if _, err := os.Stat("/.dockerenv"); err != nil {
 		t.Fatal("requires disposable Docker filesystem")
 	}
+	// No startup probe may use a destination in the kernel's ephemeral source
+	// range: before bind, a TCP connect can select that same port and self-connect.
+	ephemeral, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := admitScopePorts(string(ephemeral), scopeAgentPort); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("startup ports admitted: setup=%d mTLS=%d ephemeral=%s", scopeAgentPort, scopeAgentPort+1, bytes.TrimSpace(ephemeral))
 	scenario := os.Getenv("WENDY_SCOPE_CASE")
 	mode, identity := "strict", "unknown"
 	switch scenario {
@@ -132,7 +143,7 @@ func TestAgentOwnScopeStartup(t *testing.T) {
 	}
 	defer log.Close()
 	command := exec.Command("/scope-agent")
-	command.Env = append(os.Environ(), "WENDY_CONFIG_PATH="+config, "WENDY_AGENT_PORT=51051", "WENDY_LOCAL_SOCKET=off", "WENDY_CONTAINERD_ADDR=/tmp/absent-containerd.sock", "WENDY_MTLS_ORG_ENFORCEMENT="+mode)
+	command.Env = append(os.Environ(), "WENDY_CONFIG_PATH="+config, "WENDY_AGENT_PORT="+strconv.Itoa(scopeAgentPort), "WENDY_LOCAL_SOCKET=off", "WENDY_CONTAINERD_ADDR=/tmp/absent-containerd.sock", "WENDY_MTLS_ORG_ENFORCEMENT="+mode)
 	command.Stdout, command.Stderr = log, log
 	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := command.Start(); err != nil {
@@ -184,6 +195,7 @@ func TestAgentOwnScopeStartup(t *testing.T) {
 	}
 	deadline := time.Now().Add(75 * time.Second)
 	refusalSeen := time.Time{}
+	var lastRPCError error
 	for {
 		select {
 		case err := <-done:
@@ -195,12 +207,23 @@ func TestAgentOwnScopeStartup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		for _, failure := range []string{"Failed to listen on mTLS port", "Failed to create mTLS server", "Failed to parse agent port for mTLS"} {
+			if bytes.Contains(data, []byte(`"msg":"`+failure+`"`)) {
+				t.Fatalf("actual startup failed: %s; full Agent output follows in cleanup", failure)
+			}
+		}
 		refusedLog := bytes.Contains(data, []byte("cannot determine device identity scope; refusing to start mTLS server"))
 		if refusedLog && refusalSeen.IsZero() {
 			refusalSeen = time.Now()
 		}
+		// Wait for the actual listener or refusal before any TCP probe. This
+		// also avoids creating client sockets while the Agent is still binding.
+		probeAllowed := refusedLog || bytes.Contains(data, []byte(`"msg":"mTLS gRPC server listening"`))
 		address := ""
-		for _, candidate := range []string{"127.0.0.1:51052", "[::1]:51052"} {
+		for _, candidate := range []string{fmt.Sprintf("127.0.0.1:%d", scopeAgentPort+1), fmt.Sprintf("[::1]:%d", scopeAgentPort+1)} {
+			if !probeAllowed {
+				break
+			}
 			if connection, err := net.DialTimeout("tcp", candidate, 100*time.Millisecond); err == nil {
 				connection.Close()
 				address = candidate
@@ -213,20 +236,23 @@ func TestAgentOwnScopeStartup(t *testing.T) {
 					t.Fatal("UNKNOWN_SCOPE_STARTUP_EXPOSED actual mTLS Agent RPC succeeded")
 				}
 				break
-			} else if refused {
-				t.Fatalf("unknown-scope Agent exposed a listener: %v", err)
+			} else {
+				lastRPCError = err
+				if refused {
+					t.Fatalf("unknown-scope Agent exposed a listener: %v", err)
+				}
 			}
 		}
 		if refused && !refusalSeen.IsZero() && time.Since(refusalSeen) >= 3*time.Second {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("actual startup boundary absent: case=%s refusal=%v", scenario, refusedLog)
+			t.Fatalf("actual startup boundary absent: case=%s refusal=%v probeAllowed=%v lastRPCError=%v", scenario, refusedLog, probeAllowed, lastRPCError)
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
 	// The refusal must not silently reopen plaintext provisioning as recovery.
-	for _, address := range []string{"127.0.0.1:51051", "[::1]:51051"} {
+	for _, address := range []string{fmt.Sprintf("127.0.0.1:%d", scopeAgentPort), fmt.Sprintf("[::1]:%d", scopeAgentPort)} {
 		if connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond); err == nil {
 			connection.Close()
 			t.Fatal("enrolled Agent reopened plaintext setup")

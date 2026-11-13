@@ -94,7 +94,7 @@ def execute(args, cancellation):
                              '--mount', f'type=bind,src={admission},dst=/scope-admission,readonly',
                              '-e', 'WENDY_AGENT_SCOPE_FIXTURE=' + nonce, '-e', 'WENDY_SCOPE_CASE=' + case,
                              '--entrypoint', '/scope.test', image,
-                             '-test.v', '-test.run=^TestAgentOwnScopeStartup$', '-test.timeout=95s'], name='create')
+                             '-test.v', '-test.run=^Test(AgentOwnScopeStartup|ScopeStartupPortAdmission)$', '-test.timeout=95s'], name='create')
                     owned = True
                     status, log = run(['docker', 'start', '--attach', name], 110, variant + '-' + case)
                     if variant == 'normal':
@@ -127,7 +127,7 @@ def execute(args, cancellation):
                     if errors:
                         raise RuntimeError('; '.join(errors))
     finally:
-        paths = [source, ROOT / 'go/internal/testfixture/agentscope/startup_linux_test.go', agent, fixture, permissive]
+        paths = [source, ROOT / 'go/internal/testfixture/agentscope/startup_linux_test.go', ROOT / 'go/internal/testfixture/agentscope/ports_test.go', agent, fixture, permissive]
         (output / 'evidence.json').write_text(json.dumps({'audit': '1890', 'image_id': image, 'results': results,
             'commands': records, 'cleanup_errors': errors,
             'sha256': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()},
