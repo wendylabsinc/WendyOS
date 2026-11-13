@@ -4284,6 +4284,15 @@
             ".github/scripts/windows_vm_boot_test.py"
           ],
           "result": "Windows gate now holds its own default50051 listener, boots without explicit --port, verifies bounded fallback is persisted, drains the foreground VM, releases the blocker and restarts the same disk on the saved port. Actual Agent hostname/publicKey and kernel TCP listener ownership must agree across both boots. Eight portable tests pass. Runtime remains pending; the preceding published PATH-only control reached its intended structured tool_not_found/exit6 launch boundary but normal boot had not run."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254510",
+          "tests": [
+            ".github/scripts/test-windows-vm-boot.py",
+            "go/internal/testfixture/windowsvmidentity/main.go"
+          ],
+          "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim."
         }
       ]
     },
@@ -4308,6 +4317,15 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43364960395/job/131687685632",
           "head": "bbb14e431e81f3af15631359f0baff3cfdd5e4cc",
           "result": "Pinned Windows QEMU extraction/version execution and actual CLI sparse VM creation passed, but the historical control stopped at the earlier QEMU preflight rather than the required executable-launch failure. Exact source hashes match after Windows CRLF normalization. Owned cleanup passed; normal boot was not_run. Added a compiled production-FindQEMU probe in the same private environment/process chain, including expected file stat, observed ProgramFiles and process architecture. It must pass before the original unchanged control assertion. Diagnostic Windows binary compiles; next hosted execution is required to establish the cause."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254510",
+          "tests": [
+            ".github/scripts/test-windows-vm-boot.py",
+            "go/internal/testfixture/windowsvmidentity/main.go"
+          ],
+          "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim."
         }
       ]
     },
