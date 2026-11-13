@@ -54,6 +54,10 @@ struct HTTPAppFixture: Sendable {
 
     static func scenario() throws -> CLIAndAgentScenario {
         try #require(
+            (ProcessInfo.processInfo.environment["WENDY_AGENT_SOCKET"] ?? "").isEmpty,
+            "Unset WENDY_AGENT_SOCKET before a device test; it overrides --device"
+        )
+        try #require(
             WendyE2EEnvironment.isolation != .none,
             "HTTP app tests require an isolated HOME"
         )

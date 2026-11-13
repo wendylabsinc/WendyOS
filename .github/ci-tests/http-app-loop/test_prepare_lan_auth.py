@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import ssl
 import subprocess
 import tempfile
 import time
@@ -21,13 +22,18 @@ class LANAuthTests(unittest.TestCase):
             "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
             "-subj", "/CN=e2e-synthetic", "-keyout", str(cls.key), "-out", str(cls.cert),
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        date = subprocess.check_output(["openssl", "x509", "-noout", "-enddate", "-in", str(cls.cert)], text=True)
+        cls.expires = ssl.cert_time_to_seconds(date.strip().split("=", 1)[1])
 
     @classmethod
     def tearDownClass(cls):
         cls.material.cleanup()
 
     def setUp(self):
-        environment = patch.dict(os.environ, {"WENDY_CONFIG_DIR": ""})
+        environment = patch.dict(os.environ, {
+            "WENDY_CONFIG_DIR": "", "WENDY_AGENT_SOCKET": "",
+            "WENDY_E2E_TEST_TIMEOUT_SECONDS": "300",
+        })
         environment.start()
         self.addCleanup(environment.stop)
         self.sandbox = tempfile.TemporaryDirectory(prefix="e2e-lan-auth-test-")
@@ -71,6 +77,28 @@ class LANAuthTests(unittest.TestCase):
         with patch("prepare_lan_auth.time.time", return_value=time.time() - 86400):
             with self.assertRaisesRegex(LANFixtureError, "not yet valid"):
                 prepare_config(self.path)
+
+    def test_valid_certificate_near_renewal_margin_is_refused(self):
+        # Still valid, but it would cross the maximum renewal margin within
+        # the enforced test bound plus runner shutdown grace.
+        with patch("prepare_lan_auth.time.time", return_value=self.expires - 1259):
+            with self.assertRaisesRegex(LANFixtureError, "1260s signed validity"):
+                prepare_config(self.path)
+        self.assertNotIn("refreshToken", json.loads(self.path.read_text())["auth"][0])
+
+    def test_agent_socket_is_rejected_before_any_subprocess(self):
+        with patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/tmp/unrelated-agent.sock"}):
+            with patch("prepare_lan_auth.subprocess.run") as command:
+                with self.assertRaisesRegex(LANFixtureError, "overrides --device"):
+                    prepare_config(self.path)
+                command.assert_not_called()
+
+    def test_unbounded_or_excessive_timeout_is_refused(self):
+        for timeout in ["", "0", "301", "not-a-duration"]:
+            with self.subTest(timeout=timeout):
+                with patch.dict(os.environ, {"WENDY_E2E_TEST_TIMEOUT_SECONDS": timeout}):
+                    with self.assertRaisesRegex(LANFixtureError, "--test-timeout 300"):
+                        prepare_config(self.path)
 
     def test_config_override_cannot_bypass_sanitized_home(self):
         before = self.path.read_bytes()

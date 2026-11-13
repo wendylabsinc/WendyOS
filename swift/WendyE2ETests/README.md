@@ -94,8 +94,13 @@ any Wendy command, the fixture reduces the copied single-context auth config
 to its held certificate/key and saved device pins. It removes OAuth/API tokens,
 refresh tokens, DPoP/service-account material and renewal endpoints, then checks
 the actual X509 validity locally. Expired or not-yet-valid certificates fail
-before device access; no test refreshes a copied session. Private source auth
-files remain unchanged.
+before device access. Remaining signed validity must exceed the maximum
+15-minute CLI renewal margin plus the enforced test timeout and 60 seconds of
+runner shutdown grace. These fixtures require `--test-timeout` between 1 and
+300 seconds; the runner exports its actual normalized bound. An ambient
+`WENDY_AGENT_SOCKET` is refused before scenario setup because it overrides the
+explicit device. No test refreshes a copied session. Private source auth files
+remain unchanged.
 
 The prebuilt Compose cases pin a small official Python multiarch image by
 immutable digest, then run the HTTP payload through Compose's `command` array.
@@ -106,7 +111,7 @@ consent to changing the builder role.
 
 ```bash
 WENDY_E2E_HTTP_APP=true bash Scripts/E2ETest.sh \
-  --no-managed-agent --agent-os wendyos \
+  --no-managed-agent --agent-os wendyos --test-timeout 300 \
   --device-address my-device.local \
   --cli-auth-config /private/path/e2e-auth.json \
   --filter "prebuilt HTTP"

@@ -12,7 +12,19 @@ class LANFixtureError(ValueError):
     pass
 
 
+MAX_RENEWAL_MARGIN_SECONDS = 15 * 60
+MAX_TEST_SECONDS = 300
+# E2ETest.sh allows 30s after SIGTERM and another 30s after SIGKILL.
+RUNNER_SHUTDOWN_SECONDS = 60
+
+
 def prepare_config(path):
+    if os.environ.get("WENDY_AGENT_SOCKET"):
+        raise LANFixtureError("Unset WENDY_AGENT_SOCKET before a device test; it overrides --device")
+    timeout = os.environ.get("WENDY_E2E_TEST_TIMEOUT_SECONDS", "")
+    if not timeout.isdecimal() or not 1 <= int(timeout) <= MAX_TEST_SECONDS:
+        raise LANFixtureError("LAN tests require E2ETest.sh --test-timeout 300 (or a shorter positive enforced timeout); unlimited/longer runs are refused")
+    required_remaining = MAX_RENEWAL_MARGIN_SECONDS + int(timeout) + RUNNER_SHUTDOWN_SECONDS
     path = Path(path).resolve()
     sandbox = path.parent.parent
     if (path.name != "config.json" or path.parent.name != ".wendy"
@@ -66,6 +78,12 @@ def prepare_config(path):
     now = time.time()
     if not starts <= now < expires:
         raise LANFixtureError("LAN fixture held certificate is expired or not yet valid; stop and ask root")
+    if expires - now <= required_remaining:
+        raise LANFixtureError(
+            f"LAN fixture needs more than {required_remaining}s signed validity remaining "
+            f"(15min renewal margin + {timeout}s test bound + 60s shutdown). "
+            "Stop and ask root for a sufficiently long-lived held-certificate fixture; do not refresh a copied session"
+        )
 
 
 if __name__ == "__main__":
