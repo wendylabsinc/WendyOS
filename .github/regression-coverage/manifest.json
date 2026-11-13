@@ -3532,20 +3532,38 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1768",
       "title": "Harden ESP32 flashing and support CP210x UART ports",
       "package": "10",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "SLIP, reset sequencing, target validation and UART variants have tests. USB/UART reset behavior and first flash on CP210x are hardware-dependent.",
-      "required_follow_up": "Run a CP210x and native-USB flashing fixture with identity verification after reboot.",
-      "evidence": []
+      "required_follow_up": "Require actual Unix PTY discovery/retry journeys in the existing race job and finish Windows native driver/reset qualification. Execute exact CP210x/native USB flashing and same-command reinstall/recovery procedures on qualified boards.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-serial-disconnect.py",
+            ".github/scripts/fixtures/serial-disconnect.md",
+            ".github/regression-coverage/manual/serial-flash-rehearsal.py"
+          ],
+          "result": "Actual owned PTY open/flock/missing-path retry, handshake failure classification, disappearance/reappearance callbacks and exact bytes pass under local race detector. Both historical misclassification controls fail the intended assertions. Required existing race-job registration reuses its compiler flags. Three offline Unix physical-plan checks pass; no serial hardware or firmware flashing executed. Native Windows driver/reset qualification remains incomplete; full entry not closed."
+        }
+      ]
     },
     {
       "key": "1572",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1572",
       "title": "Wendy Lite: wendy run: offer Wendy Lite reinstall (part 1)",
       "package": "10",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests cover busy-port classification, picker cleanup and flash prompting. Actual disappearing serial ports and reinstall/reconnect behavior remain hardware-dependent.",
-      "required_follow_up": "Run a serial disconnect/reconnect fixture and assert ghost rows disappear and non-busy errors retain their cause.",
-      "evidence": []
+      "required_follow_up": "Require actual Unix PTY discovery/retry journeys in the existing race job and finish Windows native driver/reset qualification. Execute exact CP210x/native USB flashing and same-command reinstall/recovery procedures on qualified boards.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-serial-disconnect.py",
+            ".github/scripts/fixtures/serial-disconnect.md",
+            ".github/regression-coverage/manual/serial-flash-rehearsal.py"
+          ],
+          "result": "Actual owned PTY open/flock/missing-path retry, handshake failure classification, disappearance/reappearance callbacks and exact bytes pass under local race detector. Both historical misclassification controls fail the intended assertions. Required existing race-job registration reuses its compiler flags. Three offline Unix physical-plan checks pass; no serial hardware or firmware flashing executed. Native Windows driver/reset qualification remains incomplete; full entry not closed."
+        }
+      ]
     },
     {
       "key": "2483",
@@ -3643,6 +3661,14 @@
             ".github/scripts/run-installed-linux-package-guests.py"
           ],
           "result": "Audit correction: 2504 changed the packaging host to avoid Artifact Registry RPM rejection, not a glibc ABI problem. Fix 2521 already forced RPM format 4 and asserted the six-byte produced-artifact lead. Shared recipe retains that assertion and new artifact tests inspect actual packages. External GCP acceptance remains unverified."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/artifact-registry-rehearsal.py",
+            ".github/regression-coverage/manual/artifact-registry-rehearsal.txt",
+            ".github/scripts/artifact_registry_rehearsal_test.py"
+          ],
+          "result": "Seven offline procedure/admission tests pass, including real native DEB parsing and wrong-version rejection. Prepared exact eight-package/native-transaction-hash acceptance binds an authorized release or owner-reserved GCP repositories to four native APT/DNF consumers. It performs no external upload or VM operation during preparation. Actual authenticated repository upload/index/download remains not_run and is not replaced by offline proof."
         }
       ]
     },
@@ -3662,6 +3688,14 @@
             ".github/scripts/run-installed-linux-package-guests.py"
           ],
           "result": "Audit correction: 2504 changed the packaging host to avoid Artifact Registry RPM rejection, not a glibc ABI problem. Fix 2521 already forced RPM format 4 and asserted the six-byte produced-artifact lead. Shared recipe retains that assertion and new artifact tests inspect actual packages. External GCP acceptance remains unverified."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/artifact-registry-rehearsal.py",
+            ".github/regression-coverage/manual/artifact-registry-rehearsal.txt",
+            ".github/scripts/artifact_registry_rehearsal_test.py"
+          ],
+          "result": "Seven offline procedure/admission tests pass, including real native DEB parsing and wrong-version rejection. Prepared exact eight-package/native-transaction-hash acceptance binds an authorized release or owner-reserved GCP repositories to four native APT/DNF consumers. It performs no external upload or VM operation during preparation. Actual authenticated repository upload/index/download remains not_run and is not replaced by offline proof."
         }
       ]
     },
@@ -4383,10 +4417,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2048",
       "title": "WASM Web Support",
       "package": "15",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "The mixed PR includes browser authentication, refresh serialization and CI review repairs. WASM, Go and Python tests cover different portions; not every script/UI path is a required check.",
       "required_follow_up": "Run the browser storage/refresh tests and automation helper suites independently, including concurrent process refresh.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/auth_picker_callbacks_test.go",
+            "go/internal/cli/commands/auth_refresh_lock_test.go"
+          ],
+          "result": "Actual OAuth child-process refresh/checkpoint, Cloud discovery, picker and VM identity selections pass locally in11.942s. New production callback test proves context set/clear reaches disk and malformed configuration returns an error without altering original bytes. Historical silent-clear control fails its named assertion. Native ACME/browserauth/grpcclient packages pass; opt-in live Cloud execution is not claimed. Seven-original-fix mapping and MCU/browser runtime reconciliation remain in progress."
+        }
+      ]
     },
     {
       "key": "2015",
