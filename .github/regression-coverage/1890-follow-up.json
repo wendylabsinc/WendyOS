@@ -2,7 +2,7 @@
   "audit_key": "1890",
   "original_merge": "284058dfdfb7abdc586884d33a5556f6c1cf35ed",
   "reviewed_root": "2debcbb5aad06e78d332dee33a167cc632614931",
-  "method": "Original fourteen-behavior decomposition reconciled against exact hosted runtime artifacts and scoped persistence/protocol tests. All software corrections covered; physical two-camera/published-model/restart acceptance has an executable procedure and remains not_run.",
+  "method": "Original commit/source decomposition and per-behavior runtime/protocol/persistence evidence. Kernel sample identity and managed campaign passed at8b59c8dce; TLS/sensor identity plus complete services/commands/acmeenroll/cloudrequest race packages passed at50ce4945a; seven actual Agent startup containers and historical controls passed at2debcbb5. Physical published-model/two-camera acceptance remains not_run with an executable reserved-target procedure.",
   "items": [
     {
       "original_commit": "b42fdde4c",
@@ -33,7 +33,7 @@
       "behavior": "Unknown own identity cannot disable mTLS enforcement",
       "status": "verified_hosted_runtime",
       "tests": "go/internal/testfixture/agentscope/startup_linux_test.go; .github/scripts/test-agent-own-scope.py; .github/scripts/agent_own_scope_test.py; go/internal/agent/interceptor/mtls_test.go; rpc_authorization_test.go",
-      "scope": "Actual seven-container Agent startup matrix passes at2debcbb5a. Five normal cases verify exact-leaf authenticated RPC or the intended unknown-scope refusal with no listener. Both historical permissive controls actually serveRPC before failing the named assertion. Artifact14015198249 has matching source hashes and empty cleanup_errors. No deployed host, public PKI or physical acceptance claim.",
+      "scope": "Required startup job131729254125 at2debcbb5 ran the actual Agent executable in seven separate network-none/cap-drop containers with private signed provisioning state. Legacy and SPIFFE strict plus unknown-scope explicit-off cases served real mTLS GetAgentVersion with the exact seeded leaf. Unknown-scope strict and grace logged the production refusal, stayed alive and exposed neither mTLS nor plaintext setup. Both historical actual-main downgrade controls served RPC before failing UNKNOWN_SCOPE_STARTUP_EXPOSED. Artifact14015198249 records all five normal passes, two intended failures and empty cleanup_errors; main.go and fixture source hashes independently match the tested commit and current source. No installed-host, mesh-ingress, public PKI or Cloud claim.",
       "related_entries": [
         "2596"
       ],
@@ -77,7 +77,9 @@
       "tests": "go/internal/cli/commands/certrenew_test.go:TestPersistRenewedCertificateSelectsExactSession",
       "scope": "Real private config persistence/reload with two issuer/tenant collisions and legacy org cases; certificate values supplied by test. Does not prove remote renewal lifecycle.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
+      ]
     },
     {
       "original_commit": "3dda11ee3",
@@ -86,7 +88,9 @@
       "tests": "go/internal/agent/services/provisioning_acme_test.go",
       "scope": "Current production no longer has historical env gate. Current capability-readonly/config-before-EAB/durable-key guards supersede that initial rollout restriction; do not restore obsolete flag.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
+      ]
     },
     {
       "original_commit": "4ba4a3f61",
@@ -95,7 +99,9 @@
       "tests": "go/internal/cli/commands/auth_refresh_lock_test.go:TestOAuthRefreshAcrossProcesses/TestOAuthCheckpointSerializesWithConfigUpdateAcrossProcesses/TestOAuthRefreshPersistsOnlySelectedSession",
       "scope": "Real child-process barrier and local rotating OAuth HTTP endpoint assert one refresh, durable checkpoint and selected-session isolation; required full commands race suite executes. No live account required.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
+      ]
     },
     {
       "original_commit": "08e263576",
@@ -104,7 +110,9 @@
       "tests": "go/internal/cli/commands/cloud_discover_v2_test.go:TestCloudDiscoverJSONV2/TestCloudDiscoveryV2DoesNotUseRetiredRelay/TestCloudDiscoveryJSONPreservesPKIDeviceBinding",
       "scope": "Real loopback gRPC ListAssets covers205-item pagination, online/all, empty, streaming failure, bounds and UUID binding. Actual method capture rejects retired relay. Request server is controlled; not deployed Cloud availability.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
+      ]
     },
     {
       "original_commit": "2647087d8",
@@ -142,7 +150,9 @@
       "tests": "go/internal/cli/commands/auth_picker_test.go",
       "scope": "Compile correction plus default callback tests; user requests non-UI focus, no GUI acceptance needed.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
+      ]
     },
     {
       "original_commit": "510f1bcd2/e94ff095b",
@@ -151,7 +161,9 @@
       "tests": "go/internal/cli/commands/vm_identity_test.go; go/internal/agent/cdi/qualcomm_test.go",
       "scope": "Changes repair expected fixtures after merge; not independent production defects.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
+      ]
     },
     {
       "original_commit": "1890 inference",
@@ -168,5 +180,15 @@
         "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219364"
       ]
     }
-  ]
+  ],
+  "conclusion": {
+    "software_boundaries": "All fourteen mapped behaviors have focused executable coverage, a superseded-contract reconciliation, or compile/test-only proof matched to the original change. Whole-package success is supporting execution evidence, not the sole coverage argument.",
+    "physical_acceptance": "not_run",
+    "recommended_status": "human_script_ready",
+    "physical_procedure": [
+      ".github/regression-coverage/manual/camera-campaign-rehearsal.py",
+      ".github/regression-coverage/manual/camera-campaign-rehearsal.txt"
+    ],
+    "remaining": "Run the reserved two-camera/published-DETR physical acceptance; do not infer physical capture, GPU behavior, public PKI, deployed Cloud availability or general model accuracy from the software fixtures."
+  }
 }
