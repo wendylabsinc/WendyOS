@@ -1,0 +1,120 @@
+"""Portable checks for the hosted Windows VM gate; no emulator or install runs."""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SCRIPT=Path(__file__).with_name('test-windows-vm-boot.py')
+spec=importlib.util.spec_from_file_location('windows_vm_boot',SCRIPT)
+VM=importlib.util.module_from_spec(spec);spec.loader.exec_module(VM)
+
+
+class WindowsVMBootTests(unittest.TestCase):
+    def test_actual_admitted_subprocess_runs_only_after_job_assignment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);receipt=root/'receipt';events=[]
+            class Job:
+                def assign(self,child):
+                    if receipt.exists() or list(root.glob('*.permit')):raise AssertionError('child escaped assignment barrier')
+                    events.append('assigned')
+                def drain(self):events.append('drained')
+                def close(self):events.append('closed')
+            owner=VM.Owned(root,Job(),lambda:None)
+            try:
+                command=[sys.executable,'-c',f'from pathlib import Path; Path({str(receipt)!r}).write_text("actual owned process")']
+                owner.run('child',command,timeout=10)
+                self.assertEqual(receipt.read_text(),'actual owned process')
+            finally:owner.close()
+            self.assertEqual(events,['assigned','drained','closed'])
+
+    def test_assignment_failure_or_cancellation_never_releases_child(self):
+        for fault in ('assignment','cancellation','drain'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);events=[];cancelled=False
+                class Child:
+                    stdin=None
+                    def kill(self):events.append('kill')
+                    def wait(self,timeout):events.append('wait');return 0
+                class Job:
+                    def assign(self,child):
+                        nonlocal cancelled
+                        if fault=='assignment':raise RuntimeError('assignment failed')
+                        cancelled=True
+                    def drain(self):
+                        events.append('drain')
+                        if fault=='drain':raise RuntimeError('unproven drain')
+                    def close(self):events.append('close')
+                def check():
+                    if cancelled:raise KeyboardInterrupt()
+                owner=VM.Owned(root,Job(),check,lambda *a,**k:Child())
+                with self.assertRaises(RuntimeError if fault=='assignment' else KeyboardInterrupt):owner.start('child',['inert'])
+                self.assertFalse(list(root.glob('*.permit')))
+                if fault=='drain':
+                    with self.assertRaisesRegex(RuntimeError,'unproven drain'):owner.close()
+                else:owner.close()
+                self.assertLess(events.index('drain'),events.index('close'))
+                if fault=='assignment':self.assertEqual(events[:2],['kill','wait'])
+
+    def test_download_requires_exact_body_and_hash_without_redirect_or_proxy(self):
+        for body in (b'exact payload',b'short',b'exact payload EXTRA',b'wrong payload'):
+            with self.subTest(body=body),tempfile.TemporaryDirectory() as tmp:
+                target=Path(tmp)/'artifact'
+                class Response:
+                    status=200
+                    def __init__(self):self.pending=body
+                    def __enter__(self):return self
+                    def __exit__(self,*a):pass
+                    def read(self,n):value=self.pending;self.pending=b'';return value
+                class Opener:
+                    def open(self,url,timeout):return Response()
+                pin={'url':'https://fixture.invalid/owned','size':13,'sha256':hashlib.sha256(b'exact payload').hexdigest()}
+                with patch.dict(VM.PINS,fixture=pin),patch.object(VM.urllib.request,'build_opener',return_value=Opener()) as build:
+                    if body==b'exact payload':VM.download('fixture',target)
+                    else:
+                        with self.assertRaises(ValueError):VM.download('fixture',target)
+                    handlers=build.call_args.args
+                    self.assertEqual(handlers[0].proxies,{})
+                    self.assertIsInstance(handlers[1],VM.NoRedirect)
+                if body==b'exact payload':self.assertEqual(target.read_bytes(),body)
+        with self.assertRaises(ValueError):VM.NoRedirect().redirect_request(None,None,302,'',{},'https://foreign.invalid/')
+
+    def test_guest_and_listener_cannot_accept_an_unrelated_host_endpoint(self):
+        guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'0.20.2','version':'recorded agent'}
+        VM.validate_guest(guest)
+        for key in guest:
+            with self.subTest(key=key),self.assertRaises(ValueError):VM.validate_guest(dict(guest,**{key:''}))
+        qemu=Path('/owned/Private Program Files/qemu/qemu-system-aarch64.exe')
+        state={'pid':122,'agentPort':12345,'accel':'tcg','netMode':'user'}
+        listener={'pid':122,'port':12345,'path':str(qemu)}
+        VM.validate_listener(listener,state,qemu,12345)
+        for key,value in (('pid',999),('port',54321),('path','/foreign/qemu.exe')):
+            with self.subTest(key=key),self.assertRaises(ValueError):VM.validate_listener(dict(listener,**{key:value}),state,qemu,12345)
+
+    def test_private_environment_removes_case_variants_and_keeps_host_tools_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.dict(os.environ,{'PROGRAMFILES':'foreign','ProgramFiles':'other','SystemRoot':str(root/'system'),'PATH':'foreign','Path':'other','WENDY_CONFIG_DIR':'user','Wendy_Token':'private'},clear=True):
+                env=VM.private_environment(root,root/'private')
+                self.assertEqual([key for key in env if key.upper()=='PROGRAMFILES'],['PROGRAMFILES'])
+                self.assertEqual([key for key in env if key.upper()=='PATH'],['PATH'])
+                self.assertNotIn('Wendy_Token',env)
+                self.assertEqual(env['WENDY_CONFIG_DIR'],str(root/'config'))
+                self.assertEqual(os.environ['WENDY_CONFIG_DIR'],'user')
+
+    def test_original_launch_control_preserves_source_and_has_one_changed_site(self):
+        source=VM.ROOT/'go/internal/cli/vm/spec.go';before=source.read_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            overlay=VM.mutant_overlay(Path(tmp));mapping=json.loads(overlay.read_text())['Replace']
+            self.assertEqual(list(mapping),[str(source)])
+            changed=Path(mapping[str(source)]).read_text()
+            self.assertNotIn('if path, err := FindQEMU(runtime.GOOS); err == nil {',changed)
+            self.assertIn('return "qemu-system-aarch64"',changed)
+            self.assertEqual(source.read_bytes(),before)
+
+if __name__=='__main__':unittest.main()
