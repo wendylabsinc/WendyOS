@@ -4,12 +4,16 @@ Thank you for contributing to WendyOS! This document covers the development work
 
 ## CLI design
 
-Use the [Command Line Interface Guidelines](https://clig.dev/) as the default
-design guidance for Wendy CLI changes. Apply them with judgment and preserve
+Use the [Command Line Interface Guidelines](https://clig.dev/) as the baseline
+standard for Wendy CLI design. Apply them with judgment and preserve
 established behavior unless a change is intentional. Document Wendy-specific
 decisions and exceptions in the [executable E2E reference](../../../../../../swift/WendyE2ETests/README.md#reference-directory),
 a behavioral reference backed by executable assertions. Full-screen TUI design
 requires separate guidance.
+
+For questions about initialization, [generators](https://guides.rubyonrails.org/generators.html),
+and file conflicts, use concrete references such as the [Ruby on Rails CLI](https://guides.rubyonrails.org/command_line.html)
+for inspiration, applying judgment while Wendy's executable specs remain authoritative.
 
 ## CI / GitHub Actions
 
