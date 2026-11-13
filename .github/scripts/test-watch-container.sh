@@ -54,6 +54,7 @@ if [[ ${1:-} != --inside ]]; then
       [[ $result == 0 ]]
       grep -q '^--- PASS: TestMultiAppSlowReadinessIsolationLifecycle ' "$prepared/$case_name.log"
       grep -q 'MULTIAPP_LIFECYCLE_VERIFIED ' "$prepared/$case_name.log"
+      grep -q 'ROLLING_ISOLATION_VERIFIED ' "$prepared/$case_name.log"
     else
       [[ $result != 0 ]]
       grep -q '^--- FAIL: TestMultiAppSlowReadinessIsolationLifecycle ' "$prepared/$case_name.log"

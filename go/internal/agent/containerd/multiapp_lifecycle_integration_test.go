@@ -22,9 +22,11 @@ import (
 	"github.com/containerd/containerd/v2/core/images"
 	monitor "github.com/wendylabsinc/wendy/go/internal/agent/container"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Real prebuilt-image Compose deployment through CLI/RPC, delayed TCP listeners,
@@ -262,8 +264,109 @@ func TestMultiAppSlowReadinessIsolationLifecycle(t *testing.T) {
 	}
 	stop()
 	wait("first telemetry stream drained", 5*time.Second, output, func() bool { _, active, _ := observer.snapshot(); return active == 0 })
-	// Redeploy the same app after removing shared isolation and host networking.
-	// Both old labels and the live cache exist before this actual CLI deploy.
+	// The later full Compose redeploy replaces both siblings before hydration.
+	// Exercise the original old-sibling hydration window separately.
+	// Replace one real sibling through the production RPC while beta still has
+	// its old shared-network labels and running process, then crash the new alpha.
+	func() {
+		// Recover service membership from actual persisted Compose labels.
+		c.RebuildAppStateCaches(ctx)
+		if group, grouped := c.GroupRestartAppID(ctx, appID+"_alpha"); !grouped || group != appID {
+			t.Fatal("rolling isolation precondition: initial shared group was not registered")
+		}
+		betaBefore := taskFor("beta")
+		betaBeforeBirth := watchTaskBirth(betaBefore.Pid())
+		betaContainer, err := c.client.LoadContainer(ctx, appID+"_beta")
+		if err != nil {
+			t.Fatal(err)
+		}
+		betaLabels, err := betaContainer.Labels(ctx)
+		if err != nil || betaLabels[labelKeyIsolation] != "shared-network" || betaBeforeBirth == "" {
+			t.Fatal("rolling isolation precondition: live beta lacks old persisted isolation")
+		}
+		cfg := &appconfig.AppConfig{AppID: appID, ServiceName: "alpha", Version: "2", Services: map[string]*appconfig.ServiceConfig{"alpha": {}, "beta": {}}}
+		cfgBytes, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rpc, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rpc.Close()
+		request := &agentpb.CreateContainerRequest{AppName: appID, ImageName: imageName, AppConfig: cfgBytes, Cmd: "/bin/sh", UserArgs: []string{"-c", "echo ROLLING_PRIVATE_ALPHA; while :; do sleep 1; done"}}
+		if _, err := agentpb.NewWendyContainerServiceClient(rpc).CreateContainer(ctx, request); err != nil {
+			t.Fatalf("rolling private create RPC: %v", err)
+		}
+		rollingOutput, err := c.StartContainer(ctx, appID+"_alpha", "", nil)
+		if err != nil {
+			t.Fatalf("rolling private task start: %v", err)
+		}
+		captured := &watchCapturedOutput{}
+		outputDone := make(chan struct{})
+		go func() {
+			defer close(outputDone)
+			for item := range rollingOutput {
+				_, _ = captured.Write(item.Stdout)
+				_, _ = captured.Write(item.Stderr)
+			}
+		}()
+		wait("rolling private process emits actual output", 5*time.Second, captured, func() bool { return strings.Contains(captured.String(), "ROLLING_PRIVATE_ALPHA") })
+		alpha := taskFor("alpha")
+		alphaBirth := watchTaskBirth(alpha.Pid())
+		if ns, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/net", alpha.Pid())); err != nil || ns == hostNS || alphaBirth == "" {
+			t.Fatalf("rolling private task did not get a real private namespace: %s %v", ns, err)
+		}
+		probeFrom("alpha", false)
+		probeFrom("beta", true)
+		// Read actual persisted sibling labels during the replacement window.
+		// An authoritative empty isolation must survive this production hydration.
+		if _, err := c.ListBootContainers(ctx); err != nil {
+			t.Fatal(err)
+		}
+		rollingMonitor := monitor.NewContainerMonitor(zap.NewNop(), c, logs, 100*time.Millisecond)
+		for _, name := range names {
+			rollingMonitor.Register(appID+"_"+name, monitor.RestartUnlessStopped, 0)
+		}
+		rollingCtx, cancelRolling := context.WithCancel(ctx)
+		rollingDone := make(chan struct{})
+		go func() { defer close(rollingDone); rollingMonitor.Run(rollingCtx) }()
+		defer func() {
+			cancelRolling()
+			select {
+			case <-rollingDone:
+			case <-time.After(10 * time.Second):
+				t.Error("rolling monitor did not drain")
+			}
+		}()
+		if err := alpha.Kill(ctx, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		wait("rolling private service recovers without old sibling restart", 15*time.Second, captured, func() bool {
+			betaContainer, betaErr := c.client.LoadContainer(ctx, appID+"_beta")
+			if betaErr != nil {
+				t.Fatal("removed isolation restarted the healthy sibling during rolling replacement: container lost")
+			}
+			beta, betaErr := betaContainer.Task(ctx, nil)
+			if betaErr != nil || beta.Pid() != betaBefore.Pid() || watchTaskBirth(beta.Pid()) != betaBeforeBirth {
+				t.Fatal("removed isolation restarted the healthy sibling during rolling replacement")
+			}
+			ctr, err := c.client.LoadContainer(ctx, appID+"_alpha")
+			if err != nil {
+				return false
+			}
+			task, err := ctr.Task(ctx, nil)
+			return err == nil && watchTaskBirth(task.Pid()) != "" && watchTaskBirth(task.Pid()) != alphaBirth
+		})
+		select {
+		case <-outputDone:
+		case <-time.After(3 * time.Second):
+			t.Fatal("rolling old output pump did not drain")
+		}
+		t.Log("ROLLING_ISOLATION_VERIFIED old live sibling labels, actual private replacement, independent monitor recovery")
+	}()
+	// Complete the actual CLI Compose redeploy and retain the existing two-private
+	// namespace, environment and healthy-sibling assertions as a separate phase.
 	writeConfig(true)
 	output, stop = startCLI()
 	wait("both private replacement processes report effective environment", 25*time.Second, output, func() bool {
