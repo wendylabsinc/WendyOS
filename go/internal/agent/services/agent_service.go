@@ -25,6 +25,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
+	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -122,9 +123,8 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		CpuArchitecture: runtime.GOARCH,
 		Featureset:      detectFeatureset(),
 		BinarySha256:    s.binarySHA256(),
-		// Every type the agent's app config parsing knows. It ignores any
-		// other, so the CLI refuses a project that uses one (WDY-4049).
-		EntitlementTypes: slices.Clone(appconfig.ValidEntitlementTypes),
+		// The CLI refuses a project that uses any other type before it deploys.
+		EntitlementTypes: advertisedEntitlementTypes(),
 	}
 
 	if hn, err := os.Hostname(); err == nil {
@@ -584,6 +584,15 @@ func detectNvidiaGPUArch() string {
 	return board.Detect().NvidiaGPUArch()
 }
 
+// advertisedEntitlementTypes lists the types this agent knows and this device can honour.
+func advertisedEntitlementTypes() []string {
+	types := slices.Clone(appconfig.ValidEntitlementTypes)
+	if !oci.ArduinoBridgeAvailable() {
+		types = slices.DeleteFunc(types, func(t string) bool { return t == appconfig.EntitlementArduinoBridge })
+	}
+	return types
+}
+
 func detectFeatureset() []string {
 	features := []string{"data-inference-classification"}
 
@@ -627,6 +636,9 @@ func detectFeatureset() []string {
 		// the outcome). See oshealth.Gate.
 		features = append(features, "os-healthcheck")
 	}
+
+	features = append(features, mcuFeatureEntries(loadMCULayouts())...)
+	features = append(features, mcuOwnerFeature()...)
 
 	return features
 }
