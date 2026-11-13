@@ -53,6 +53,24 @@ class FoxgloveRuntimeAdmissionTests(unittest.TestCase):
                 with self.subTest(case=name,code=code,text=text),self.assertRaises((ValueError,RuntimeError)):
                     GATE.validate_case(name,code,text,root)
 
+    def test_old_dds_startup_requires_same_verified_image_and_actual_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);normal=root/'normal';control=root/'control'
+            normal.mkdir();control.mkdir();self.evidence(normal);self.evidence(control)
+            (control/'installed-packages.txt').unlink()
+            text='--- FAIL: '+TEST+'\nFOXGLOVE_DEPLOYED_IMAGE actual digest\nlo: the same interface may not be selected twice\n'
+            GATE.validate_case('duplicate-loopback',1,text,control,normal)
+            for code,log in ((0,text),(124,text),(1,text.replace('lo: the same interface may not be selected twice','unrelated build failure')),(1,text+'--- SKIP: unavailable')):
+                with self.assertRaises(RuntimeError):
+                    GATE.validate_case('duplicate-loopback',code,log,control,normal)
+            for name in ('image-digest.txt','Dockerfile','wendy.json'):
+                original=(control/name).read_bytes();(control/name).write_text('changed')
+                with self.assertRaises(ValueError):
+                    GATE.validate_case('duplicate-loopback',1,text,control,normal)
+                (control/name).write_bytes(original)
+            with self.assertRaises(ValueError):
+                GATE.validate_case('duplicate-loopback',1,text,control)
+
     def test_rejects_missing_foreign_or_unresolved_artifact_provenance(self):
         for fault in ('missing','symlink','digest','package'):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temp:

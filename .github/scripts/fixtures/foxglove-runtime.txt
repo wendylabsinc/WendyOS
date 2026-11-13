@@ -105,3 +105,36 @@ may build those exact files with an existing ordinary Docker driver for a local
 package smoke test; it does not establish real Agent/containerd deployment.
 No hardware acceptance, actual robot ROS topic, Foxglove desktop UI, simulator
 creation or hosted success follows from portable parser/generation tests.
+
+Loopback-only CycloneDDS startup regression (2026-11-13)
+  Hosted run 43368990597 / job 131700219619 built and deployed the actual bridge,
+  then CycloneDDS aborted with: lo: the same interface may not be selected twice.
+  This is a production startup defect on a valid loopback-only host: explicit lo
+  plus autodetermine selects the same interface twice. CycloneDDS defaults to
+  IPv4 and ranks loopback last among eligible UP/addressed interfaces:
+  https://cyclonedds.io/docs/cyclonedds/latest/config/network_interfaces.html
+
+  The Agent now retains automatic external selection only when the observed
+  host has an UP, non-loopback IPv4 candidate. Down, unaddressed and IPv6-only
+  interfaces cannot satisfy the default transport. Observation errors fail
+  explicitly. Loopback, localhost peer and participant index remain enabled;
+  ordinary external hosts retain the original auto selection and SUBNET scope.
+  Interface changes between creation and ROS startup still need app restart;
+  this change does not introduce dynamic DDS reconfiguration.
+
+  The existing gate adds duplicate-loopback as a fourth case, restoring exactly
+  the original unconditional autodetermine expression. It must deploy the same
+  immutable image and generated inputs as the fully successful normal case,
+  then fail with CycloneDDS's actual duplicate-interface diagnostic. Because a
+  failed startup cannot exec dpkg-query, only this control uses the previously
+  validated package list from that identical image. Normal/other controls retain
+  their direct package observation. Both image provenance and terminal startup
+  logs are captured even if the app exits before the first running-state poll.
+  The test still waits for RUNNING or an actual recorded termination reason,
+  rather than racing exec against a merely created container.
+
+  Normal still requires the actual forwarded WebSocket, five changing DDS CDR
+  payloads and a running app after forwarding cancellation. No artificial eth
+  interface is added. The existing 20-minute overall/25-minute step budgets and
+  owned cleanup remain unchanged. Local source/race/admission checks do not
+  establish full post-fix OCI startup; required hosted execution remains pending.
