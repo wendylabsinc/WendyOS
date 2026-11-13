@@ -316,6 +316,20 @@ const (
 	MaxEnvEntryLen = 32 * 1024
 )
 
+// ValidateRequiredEnv checks requiredEnv against env: each name is a key of
+// env (its default there may be empty), and listed once.
+func ValidateRequiredEnv(required []string, env map[string]string) error {
+	for i, name := range required {
+		if _, ok := env[name]; !ok {
+			return fmt.Errorf("requiredEnv: %q is not in env; add it to env with its default (it may be empty)", name)
+		}
+		if slices.Contains(required[:i], name) {
+			return fmt.Errorf("requiredEnv: %q is listed twice; list it once", name)
+		}
+	}
+	return nil
+}
+
 // ValidateEnvEntries checks caller-supplied KEY=value entries: bounded, no
 // NUL, CR or LF, a POSIX name, and no reserved prefix (case-insensitive).
 // The container runtime applies it to every create, and a deployment's
@@ -426,6 +440,11 @@ type AppConfig struct {
 	// key by key. Values may reference host env vars via ${VAR}, expanded by
 	// `wendy run` at deploy time (see ServiceConfig.Env).
 	Env map[string]string `json:"env,omitempty"`
+	// RequiredEnv names the settings a deployment must give a non-empty value
+	// (sem 2026-11-13 11:01). Each is also a key of Env, whose value there is
+	// the default shown and may be empty; an empty value is never required by
+	// itself. Clients check it; the device does nothing with it.
+	RequiredEnv []string `json:"requiredEnv,omitempty"`
 }
 
 // ContainerName returns the container identifier for this app config.
@@ -919,6 +938,9 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if err := ValidateEnv("env", c.Env); err != nil {
+		return err
+	}
+	if err := ValidateRequiredEnv(c.RequiredEnv, c.Env); err != nil {
 		return err
 	}
 

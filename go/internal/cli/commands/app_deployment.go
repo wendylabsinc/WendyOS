@@ -218,6 +218,15 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 		next = resolveSelection(assets, sel)
 		review = append(review, "Devices: "+deviceDiff(assets, cur, next))
 	}
+	release := newRel
+	if release == nil {
+		if i := slices.IndexFunc(rels, func(r *cloudpb.AppRelease) bool { return r.GetId() == d.GetAppReleaseId() }); i >= 0 {
+			release = rels[i]
+		}
+	}
+	if err := checkRequired(orDefault(req.ConfigJson, d.GetConfigJson()), releaseRequired(release)); err != nil {
+		return err
+	}
 	if len(review) == 0 {
 		return usageErrorf("Nothing to change. Add --release, --config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag or --keep-trying.")
 	}
@@ -271,6 +280,18 @@ func runRollback(ctx context.Context, op *registryOp, appID, name string, c chan
 			return usageErrorf("The release of revision %d was deleted, so it cannot be restored.", c.to)
 		}
 		newRel = rels[i]
+	}
+	// The same rule as deploy and update: the release rolled back to must get
+	// every setting it requires.
+	if i := slices.IndexFunc(rels, func(r *cloudpb.AppRelease) bool { return r.GetId() == target.GetAppReleaseId() }); i >= 0 {
+		name, err := emptyRequired(target.GetConfigJson(), releaseRequired(rels[i]))
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			return usageErrorf("Revision %d leaves %s empty, which release %s requires. Choose another revision, or use wendy app deployment update --release %s --config %s=<value>.",
+				c.to, name, rels[i].GetName(), rels[i].GetName(), name)
+		}
 	}
 	cur, err := op.revisionDevices(ctx, d.GetId(), d.GetRevision())
 	if err != nil {
