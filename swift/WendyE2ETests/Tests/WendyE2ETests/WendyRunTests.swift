@@ -6,6 +6,43 @@ struct `'wendy run'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     An invalid manifest fails before connecting to the explicitly selected
+     target or starting a build. A recognized source tree does not bypass
+     capability validation or mutate project files on failure.
+     */
+    @Test
+    func `rejects invalid project configuration before contacting a target`() async throws {
+        try await scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli)
+            try await LocalCLIAssertions.write(
+                cli,
+                path: "wendy.json",
+                text:
+                    #"{"appId":"first-app","entitlements":[{"type":"persist","name":"data","path":"relative"}]}"#
+            )
+            try await LocalCLIAssertions.write(cli, path: "Dockerfile", text: "FROM scratch\n")
+            let before = try await FirstAppFixture.snapshot(cli)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["run", "--json", "--device", "127.0.0.1:1"],
+                exit: 1,
+                monitorNetwork: true
+            )
+            try LocalCLIAssertions.error(
+                result,
+                code: "config_invalid",
+                exit: 1,
+                message: "persist path must be absolute"
+            )
+            try await cli.sh(
+                posix: "rm cli-exit network-observation.json",
+                power: "Remove-Item -LiteralPath 'cli-exit', 'network-observation.json'"
+            )
+            #expect(try await FirstAppFixture.snapshot(cli) == before)
+        }
+    }
+
+    /**
      Displays usage for `wendy run`. The output includes the command synopsis,
      local flags, inherited global flags, and concise descriptions. Help exits
      successfully, writes to stdout, emits no stderr, and leaves configuration,
