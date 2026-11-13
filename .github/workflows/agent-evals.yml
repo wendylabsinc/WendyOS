@@ -1,0 +1,144 @@
+name: Agent evals
+
+on:
+  pull_request:
+    paths:
+      - 'evals/agent-experience/**'
+      - 'go/internal/cli/chat/**'
+      - 'go/internal/cli/mcp/**'
+      - 'plugins/wendy-agentic-coding/**'
+      - '.github/workflows/agent-evals.yml'
+  schedule:
+    # Check weekly; the cadence job allows evals every other Monday at 03:23 UTC.
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Live lab suite
+        type: choice
+        options: [smoke, nightly]
+        default: smoke
+      baseline_ref:
+        description: Baseline treatment revision in this repository (default WENDY_EVAL_BASELINE_REF, else main~1)
+        type: string
+        default: ''
+      repetitions:
+        description: Attempts per task, agent and target on each side (default WENDY_EVAL_REPETITIONS, else 40)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-evals-${{ github.event_name == 'pull_request' && github.ref || 'lab' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cadence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_evals: ${{ steps.check.outputs.run_evals }}
+    steps:
+      - name: Check fortnightly cadence
+        id: check
+        shell: python
+        run: |
+          import os
+          from datetime import date, datetime, timezone
+
+          # A fixed Monday anchor keeps the interval stable across year boundaries.
+          weeks = (datetime.now(timezone.utc).date() - date(2026, 11, 16)).days // 7
+          run_evals = os.environ['GITHUB_EVENT_NAME'] != 'schedule' or weeks % 2 == 0
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'run_evals={str(run_evals).lower()}\n')
+
+  harness:
+    needs: cadence
+    if: needs.cadence.outputs.run_evals == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: '0.10.9'
+      - name: Test runner, graders, accounting and inference observer without models or devices
+        run: uv run --no-project --python 3.12 python -m unittest discover -s evals/agent-experience -v
+
+  # Live models and devices only run on a provisioned, isolated lab account. Never on pull requests.
+  lab:
+    if: github.event_name != 'pull_request' && vars.WENDY_EVAL_LAB_ENABLED == 'true'
+    needs: harness
+    runs-on: [self-hosted, wendy-evals]
+    environment: agent-evals
+    # Attempts run one after another on both sides: size the suite, repetitions and agents to this limit.
+    timeout-minutes: ${{ fromJSON(vars.WENDY_EVAL_TIMEOUT_MINUTES || '360') }}
+    env:
+      LAB_CONFIG: ${{ vars.WENDY_EVAL_CONFIG }}
+      BASELINE_REF: ${{ inputs.baseline_ref || vars.WENDY_EVAL_BASELINE_REF || 'main~1' }}
+      SUITE: ${{ inputs.suite || 'nightly' }}
+      REPETITIONS: ${{ inputs.repetitions || vars.WENDY_EVAL_REPETITIONS || '40' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Resolve baseline and build both treatments
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$LAB_CONFIG"
+          # Checkout creates a local branch only for the ref under test, so try the remote branch too.
+          resolve() { git rev-parse --verify --quiet --end-of-options "$1^{commit}"; }
+          if ! baseline_sha=$(resolve "$BASELINE_REF" || resolve "origin/$BASELINE_REF"); then
+            echo "::error::Baseline revision '$BASELINE_REF' does not name a commit in this repository"
+            exit 1
+          fi
+          if [ "$baseline_sha" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::Baseline revision '$BASELINE_REF' is the commit under test; choose an earlier revision"
+            exit 1
+          fi
+          git worktree add --detach "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID" "$baseline_sha"
+          make -C "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID/go" build-cli
+          make -C go build-cli
+      - name: Measure both treatments and gate on verified results
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'evals/agent-experience')
+          from run_suite import run_pair
+          baseline = Path(os.environ['RUNNER_TEMP']) / ('eval-baseline-' + os.environ['GITHUB_RUN_ID'])
+          code = run_pair(os.environ['SUITE'], os.environ['LAB_CONFIG'], baseline, Path.cwd(),
+                          Path('results'), int(os.environ['REPETITIONS']))
+          report = Path('results/comparison/compare.md')
+          if report.is_file():
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write(report.read_text())
+          # A regression (1), mismatched runs (2) and a lab failure (4) fail the job. Insufficient evidence (3)
+          # is reported, not failed: a job that is red whenever a row is inconclusive hides real regressions.
+          if code == 3:
+              print('::warning title=Agent evals::Insufficient evidence: no verified regression, '
+                    'but the comparison could not pass. See the job summary.')
+              code = 0
+          sys.exit(code)
+          PYCODE
+      - name: Keep manifests, transcripts and verifier evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: agent-evals-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/
+          retention-days: 14
+      - name: Remove baseline worktree
+        if: always()
+        shell: bash
+        run: git worktree remove --force "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID"

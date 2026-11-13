@@ -1,0 +1,10 @@
+{
+  "smoke": {
+    "tasks": ["create-simulator", "deploy-http", "repair-startup"],
+    "scenarios": ["device-versions", "project-validate"]
+  },
+  "nightly": {
+    "tasks": ["create-simulator", "deploy-http", "repair-startup", "update-http", "stop-app", "start-app", "compose-app", "create-go2-simulator", "create-g1-simulator", "debug-otel-logs", "debug-otel-metrics", "debug-otel-traces", "debug-go2-ros2", "debug-g1-ros2", "repair-go2-camera", "repair-g1-camera"],
+    "scenarios": ["all"]
+  }
+}

@@ -169,7 +169,44 @@ def shell_entries(command):
         entry("cli", " ".join(cli_path(argv)), argv) for argv in parse_wendy_invocations(command)]
 
 
+def _reply(value):
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False) if value is not None else None
+
+
+# How a failed, denied or skipped call's result text starts; the last three are what wendy chat writes.
+ERROR_PREFIXES = ("Error:", "error:", "Tool failed:", "Denied:",
+                  "Tool error:", "User denied permission", "Tool was not executed")
+
+
+def _error(value):
+    """Only explicit protocol errors; ordinary prose containing 'error' is not a failure."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value.startswith(ERROR_PREFIXES)
+    return isinstance(value, dict) and (value.get("isError") is True or bool(value.get("error")))
+
+
+def _annotate(entries, result, failed=None, call_id=None, agent_id=""):
+    for item in entries:
+        if result is not None:
+            item["reply_text"] = _reply(result)
+            item["is_error"] = _error(result) if failed is None else failed
+        elif failed is not None:
+            item["is_error"] = failed
+        item["call_id"], item["agent_id"] = call_id, agent_id
+    return entries
+
+
 def claude_entries(events):
+    results = {}
+    for event in events:
+        for block in event.get("message", {}).get("content", []) if isinstance(event.get("message", {}).get("content"), list) else []:
+            if block.get("type") == "tool_result":
+                results[block.get("tool_use_id")] = block
     for event in events:
         if event.get("type") != "assistant":
             continue
@@ -178,11 +215,14 @@ def claude_entries(events):
                 continue
             name, args = block.get("name", ""), block.get("input", {})
             if name.startswith("mcp__wendy__"):
-                yield [entry("mcp", name[len("mcp__wendy__"):], args)]
+                items = [entry("mcp", name[len("mcp__wendy__"):], args)]
             elif name == "Bash":
-                yield shell_entries(args.get("command"))
+                items = shell_entries(args.get("command"))
             else:
-                yield [entry("builtin", name, args)]
+                items = [entry("builtin", name, args)]
+            reply = results.get(block.get("id"))
+            yield _annotate(items, reply.get("content") if reply else None,
+                            bool(reply.get("is_error")) if reply else None, block.get("id"))
 
 
 def codex_entries(events):
@@ -197,20 +237,25 @@ def codex_entries(events):
     for item in items.values():
         kind = item.get("type")
         if kind == "mcp_tool_call":
-            if item.get("server") == "wendy":
-                yield [entry("mcp", item.get("tool", ""), item.get("arguments", {}))]
-            else:
-                yield [entry("builtin", f"{item.get('server')}.{item.get('tool')}", item.get("arguments", {}))]
+            group = [entry("mcp" if item.get("server") == "wendy" else "builtin",
+                           item.get("tool", "") if item.get("server") == "wendy" else
+                           f"{item.get('server')}.{item.get('tool')}", item.get("arguments", {}))]
+            reply = item.get("result")
+            failed = True if item.get("error") or item.get("status") == "failed" else _error(reply) if reply is not None else None
         elif kind == "command_execution":
-            yield shell_entries(item.get("command"))
+            group = shell_entries(item.get("command"))
+            reply = item.get("aggregated_output")
+            failed = item["exit_code"] != 0 if isinstance(item.get("exit_code"), int) else None
         elif kind in ("agent_message", "reasoning"):
             continue
         else:
-            yield [entry("builtin", str(kind), {})]
+            group, reply, failed = [entry("builtin", str(kind), {})], None, None
+        yield _annotate(group, reply, failed, item.get("id"))
 
 
 def wendy_entries(events):
     seen = set()
+    results = {(e.get("agent_id", ""), e.get("id")): e for e in events if e.get("type") == "tool_result"}
     for index, event in enumerate(events):
         if event.get("type") != "tool_start":
             continue
@@ -220,11 +265,13 @@ def wendy_entries(events):
         seen.add(key)
         name, args = event.get("tool", ""), event.get("arguments", {})
         if name == "workspace_exec":
-            yield shell_entries(args.get("command") if isinstance(args, dict) else None)
+            group = shell_entries(args.get("command") if isinstance(args, dict) else None)
         elif name in CHAT_BUILTINS:
-            yield [entry("builtin", name, args)]
+            group = [entry("builtin", name, args)]
         else:
-            yield [entry("mcp", name, args)]
+            group = [entry("mcp", name, args)]
+        reply = results.get(key)
+        yield _annotate(group, reply.get("text") if reply else None, call_id=key[1], agent_id=key[0])
 
 
 def build_trace(adapter, events, proxy_records=None, cli_records=None):
@@ -232,13 +279,25 @@ def build_trace(adapter, events, proxy_records=None, cli_records=None):
     if adapter not in sources:
         raise ValueError(f"unknown adapter: {adapter}")
     trace = [e for group in sources[adapter](events) for e in group]
+    recorded = []
     if proxy_records is not None:
         trace = [e for e in trace if e["channel"] != "mcp"]
-        trace += [entry("mcp", r.get("tool", ""), r.get("arguments", {}), "proxy",
-                        bool(r.get("canned")), r.get("captured"), r.get("is_error"), r.get("reply_text"))
+        recorded += [(r.get("t"), entry("mcp", r.get("tool", ""), r.get("arguments", {}), "proxy",
+                        bool(r.get("canned")), r.get("captured"), r.get("is_error"), r.get("reply_text")))
                   for r in proxy_records]
     if cli_records is not None:
         trace = [e for e in trace if e["channel"] != "cli"]
-        trace += [entry("cli", " ".join(cli_path(r.get("argv", []))), r.get("argv", []), "wrapper",
-                        bool(r.get("canned")), r.get("captured")) for r in cli_records]
-    return trace
+        recorded += [(r.get("t"), entry("cli", " ".join(cli_path(r.get("argv", []))), r.get("argv", []), "wrapper",
+                        bool(r.get("canned")), r.get("captured"),
+                        r["exit_code"] != 0 if isinstance(r.get("exit_code"), int) else None,
+                        r.get("reply_text"))) for r in cli_records]
+    if proxy_records:
+        for (_, item), record in zip(recorded[:len(proxy_records)], proxy_records):
+            item['reply_bytes'] = record.get('reply_bytes')
+    # Proxy and wrapper clocks use the same host time, so mixed MCP/CLI sequences retain order.
+    if recorded and all(isinstance(t, (float, int)) for t, _ in recorded):
+        recorded.sort(key=lambda item: item[0])
+    elif proxy_records and cli_records:
+        for _, item in recorded:
+            item["order_unknown"] = True
+    return trace + [item for _, item in recorded]

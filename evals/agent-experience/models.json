@@ -7,6 +7,7 @@
       {"file": "Qwen3.8-Flash-Next-IQ4_NL-00001-of-00002.gguf", "bytes": 10945504, "sha256": "d63aed7c235572b3ce9ae2fa710d6c846a883db9b54a70f52d140a943e684274"},
       {"file": "Qwen3.8-Flash-Next-IQ4_NL-00002-of-00002.gguf", "bytes": 102037973504, "sha256": "0299b147e42517ff8fa3a4fa66d370c77ce01c44ed8cbc3451b7a42caad5fc10"}
     ],
+    "quantization": "IQ4_NL",
     "context": 65536,
     "server_args": ["--chat-template-kwargs", "{\"enable_thinking\":false}", "--reasoning-budget", "0", "--top-k", "20", "--min-p", "0", "--lazy-mode", "off", "-b", "512", "-ub", "128", "-ot", "per_layer_token_embd=CPU", "--temp", "0.7", "--top-p", "0.8", "--presence-penalty", "1.5"]
   },
@@ -15,6 +16,7 @@
     "revision": "b17cb02dd882d5b6ab62fc777ad2995f19668350",
     "entry_file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
     "files": [{"file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", "bytes": 18556689568, "sha256": "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad"}],
+    "quantization": "Q4_K_M",
     "context": 65536,
     "server_args": []
   }
