@@ -30,16 +30,31 @@ def checked(command, *, env=None, timeout=20):
     return result.stdout.decode().strip()
 
 
-def validate_case(name, code, text, directory):
+def validate_case(name, code, text, directory, normal_directory=None):
     """Require runtime proof before accepting a normal or historical-control exit."""
-    if name not in ('normal','named-service','named-forward'):
+    if name not in ('normal','named-service','named-forward','duplicate-loopback'):
         raise ValueError('unknown Foxglove case')
-    for filename in ('image-digest.txt','installed-packages.txt','Dockerfile','wendy.json'):
+    required = ('image-digest.txt','Dockerfile','wendy.json') if name == 'duplicate-loopback' else ('image-digest.txt','installed-packages.txt','Dockerfile','wendy.json')
+    for filename in required:
         path=directory/filename
         if path.is_symlink() or not path.is_file():
             raise ValueError('missing regular build/runtime evidence: '+filename)
     if not re.fullmatch(r'sha256:[0-9a-f]{64}\n?',(directory/'image-digest.txt').read_text()):
         raise ValueError('missing actual deployed image digest')
+    if name == 'duplicate-loopback':
+        if code != 1 or '--- FAIL: TestFoxgloveGeneratedAppDeploysAndCarriesROS ' not in text or 'lo: the same interface may not be selected twice' not in text or 'FOXGLOVE_DEPLOYED_IMAGE ' not in text or '--- SKIP:' in text:
+            raise RuntimeError('old config did not fail actual CycloneDDS startup')
+        if normal_directory is None:
+            raise ValueError('successful normal image provenance required')
+        # The failed process cannot exec dpkg-query. Its immutable image and
+        # generated inputs must be identical to the fully verified normal run.
+        for filename in required:
+            other=normal_directory/filename
+            if other.is_symlink() or not other.is_file() or (directory/filename).read_bytes()!=other.read_bytes():
+                raise ValueError('startup control changed normal image/input: '+filename)
+        if not (normal_directory/'installed-packages.txt').is_file():
+            raise ValueError('normal installed package evidence missing')
+        return
     packages=(directory/'installed-packages.txt').read_text()
     for package in ('ros-humble-foxglove-bridge','ros-humble-rmw-cyclonedds-cpp','socat'):
         if not re.search(r'^'+re.escape(package)+r' [^\s]+$',packages,re.M):
@@ -126,7 +141,8 @@ def main():
             raise ValueError('fresh fixture builder container already exists')
         for name in ('go/internal/cli/commands/foxglove.go', 'go/internal/cli/commands/foxglove_forward.go',
                      'go/internal/cli/commands/foxglove_runtime_test.go', '.github/scripts/foxglove-runtime-namespace.sh',
-                     '.github/scripts/test-foxglove-runtime.py', '.github/scripts/foxglove-docker-client.py', 'go.mod', 'go.sum'):
+                     '.github/scripts/test-foxglove-runtime.py', '.github/scripts/foxglove-docker-client.py',
+                     'go/internal/agent/containerd/client.go', 'go/internal/agent/containerd/ros2_interfaces.go', 'go.mod', 'go.sum'):
             evidence['sources'][name] = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
         evidence['source_commit'] = checked(['git', 'rev-parse', 'HEAD'])
         source = ROOT/'go/internal/cli/commands/foxglove.go'
@@ -144,7 +160,14 @@ def main():
         if text.count(before) != 1:
             raise ValueError('historical forwarding mutation no longer identifies exactly one site')
         old_forwarding.write_text(text.replace(before, 'return openContainerConnection(ctx, client, multiServiceContainerName(foxgloveAppID, "foxglove"),'))
-        variants = {'normal': None, 'named-service': (source, old_descriptor), 'named-forward': (forwarding, old_forwarding)}
+        dds_source = ROOT/'go/internal/agent/containerd/client.go'
+        dds_text = dds_source.read_text()
+        boundary = 'if autodetermine {\n\t\tb.WriteString(`<NetworkInterface autodetermine="true"/>`)'
+        if dds_text.count(boundary) != 1:
+            raise ValueError('CycloneDDS loopback control boundary changed')
+        old_dds = output/'duplicate-loopback.go'
+        old_dds.write_text(dds_text.replace(boundary, boundary.replace('if autodetermine {', 'if len(interfaces) == 0 {')))
+        variants = {'normal': None, 'named-service': (source, old_descriptor), 'named-forward': (forwarding, old_forwarding), 'duplicate-loopback': (dds_source, old_dds)}
         for name, replacement in variants.items():
             command = ['go', 'test', '-tags', 'regression_foxglove', '-c', '-o', str(output/(name+'.test'))]
             if replacement:
@@ -183,7 +206,7 @@ def main():
             checked(['sudo', '-n', 'rm', '-rf', '--', str(work)], timeout=30)
             work = None
             text = (output/(name+'.log')).read_text()
-            validate_case(name, code, text, case)
+            validate_case(name, code, text, case, output/'normal')
             evidence['cases'].append({'case': name, 'exit_code': code, 'status': 'passed', 'negative_control': name != 'normal'})
         evidence['status'] = 'passed'
     except BaseException as error:

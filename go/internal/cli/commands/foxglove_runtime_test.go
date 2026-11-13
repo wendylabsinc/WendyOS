@@ -79,6 +79,7 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 	logs := services.NewContainerLogManager(zap.NewNop(), services.NewTelemetryBroadcaster())
 	subID, appOutput := logs.Subscribe(foxgloveAppID)
 	logDone := make(chan struct{})
+	appStopped := make(chan struct{}, 1)
 	go func() {
 		defer close(logDone)
 		remaining := 256 << 10
@@ -94,6 +95,10 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 			}
 			if item.Done {
 				t.Log("FOXGLOVE_APP_OUTPUT terminal marker")
+				select {
+				case appStopped <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}()
@@ -171,20 +176,21 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 			}
 		}
 	})
-	// Poll actual container state while image building/uploading proceeds. No
+	// Record image provenance even if startup fails immediately. Actual running
+	// state, WebSocket and changing DDS bytes are required later. No
 	// source, port or handshake success is inferred from a detached acknowledgement.
 	for {
 		apps, err := store.ListContainers(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		running := false
+		created := false
 		for _, app := range apps {
-			if app.AppName == foxgloveAppID && app.RunningState == agentpb.AppRunningState_RUNNING {
-				running = true
+			if app.AppName == foxgloveAppID && (app.RunningState == agentpb.AppRunningState_RUNNING || app.TerminationReason != "") {
+				created = true
 			}
 		}
-		if running {
+		if created {
 			break
 		}
 		select {
@@ -192,7 +198,7 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 			bridgeJoined = true
 			t.Fatalf("Foxglove real deployment/readiness failed: %v", err)
 		case <-ctx.Done():
-			t.Fatal("Foxglove real deployment did not produce a running app")
+			t.Fatal("Foxglove real deployment did not create the app")
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -227,6 +233,12 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 	var packageInfo bytes.Buffer
 	code, err := store.ExecInContainer(ctx, foxgloveAppID, []string{"dpkg-query", "-W", "-f=${Package} ${Version}\\n", "ros-humble-foxglove-bridge", "ros-humble-rmw-cyclonedds-cpp", "socat"}, false, nil, &packageInfo, &packageInfo, nil)
 	if err != nil || code != 0 || !strings.Contains(packageInfo.String(), "ros-humble-foxglove-bridge ") {
+		// Let the already subscribed startup log reach its terminal marker so a
+		// failed native domain creation is not hidden by a stopped-container error.
+		select {
+		case <-appStopped:
+		case <-time.After(3 * time.Second):
+		}
 		t.Fatalf("Foxglove package provenance failed: code=%d err=%v output=%s", code, err, packageInfo.String())
 	}
 	if err := os.WriteFile(filepath.Join(output, "installed-packages.txt"), packageInfo.Bytes(), 0644); err != nil {
