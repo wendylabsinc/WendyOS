@@ -1,5 +1,5 @@
-// Package go2video supplies generated video only to regression fixtures. These
-// access units are not recordings from a Go2 or evidence of firmware behavior.
+// Package go2video supports generated and explicitly admitted recorded regression
+// fixtures. Generated inputs never establish physical Go2 firmware acceptance.
 package go2video
 
 import (

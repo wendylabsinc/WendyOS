@@ -57,8 +57,8 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 	if os.Getenv("WENDY_GO2_H264_KERNEL") != "1" {
 		t.Skip("requires the disposable hosted media fixture")
 	}
-	if os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("RUNNER_ENVIRONMENT") != "github-hosted" || os.Geteuid() != 0 {
-		t.Fatal("requires hosted root fixture")
+	if err := go2video.KernelAdmission(); err != nil {
+		t.Fatal(err)
 	}
 	label := os.Getenv("WENDY_GO2_CAMERA_LABEL")
 	if !strings.HasPrefix(label, "ci-go2-") || len(label) != 19 {
@@ -77,11 +77,17 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 		t.Fatal("requires absolute capture binary")
 	}
 	c, base := newIntegrationClient(t)
-	ctx, cancel := context.WithTimeout(base, 65*time.Second)
+	ctx, cancel := context.WithTimeout(base, 120*time.Second)
 	defer cancel()
 	createReplaceTestImage(t, c, ctx)
 	directory := t.TempDir()
-	units, err := go2video.Generate(ctx, directory)
+	var units [2][]byte
+	var recording *go2video.Recording
+	if archive := os.Getenv("WENDY_GO2_RECORDING"); archive != "" {
+		recording, err = go2video.LoadRecording(ctx, archive)
+	} else {
+		units, err = go2video.Generate(ctx, directory)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +97,10 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 	c.SetCameraLoopbackProvider(provider)
 	if err := provider.EnsureCameraNodes(ctx); err != nil {
 		t.Fatal(err)
+	}
+	ownedNode, err := os.Lstat(path)
+	if err != nil || ownedNode.Mode()&os.ModeCharDevice == 0 {
+		t.Fatalf("owned camera node missing: %v", err)
 	}
 	writer := ros2camera.NewFrameWriter(path)
 	var phase atomic.Int32
@@ -109,7 +119,13 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 			case <-ticker.C:
 			}
 			current := phase.Load()
-			frame, err := ros2camera.DecodeFrame(ros2camera.TypeGo2FrontVideo, go2video.Payload(units[current], sequence))
+			payload := go2video.Payload(units[current], sequence)
+			if recording != nil {
+				index := int(sequence-1) % len(recording.Payloads)
+				payload = recording.Payloads[index]
+				ticker.Reset(recording.Intervals[index])
+			}
+			frame, err := ros2camera.DecodeFrame(ros2camera.TypeGo2FrontVideo, payload)
 			if err != nil {
 				done <- fmt.Errorf("Go2 resolution H264 decode failed: %w", err)
 				return
@@ -143,7 +159,13 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 			}
 		}
 		if drained {
-			loop.RemoveCamera(128)
+			current, statErr := os.Lstat(path)
+			name, nameErr := os.ReadFile("/sys/class/video4linux/video128/name")
+			if statErr != nil || nameErr != nil || !os.SameFile(ownedNode, current) || strings.TrimSpace(string(name)) != label {
+				t.Error("owned camera identity changed before cleanup; retaining node")
+			} else {
+				loop.RemoveCamera(128)
+			}
 		}
 	}()
 	waitPhase := func(want int32) {
@@ -186,7 +208,21 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 		}
 		decodeCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 		defer stop()
-		if err := go2video.Decode(decodeCtx, encoded, want, 6); err != nil {
+		if recording != nil {
+			hashes, err := go2video.DecodeFrameHashes(decodeCtx, encoded, 180)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := go2video.MatchRecording(recording.Reference, hashes); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("GO2_RECORDED_CAPTURE_VERIFIED phase=%d frames=%d manifest=%s", want, len(hashes), recording.ManifestHash)
+			evidence := make([]string, len(hashes))
+			for i, hash := range hashes {
+				evidence[i] = fmt.Sprintf("%x", hash)
+			}
+			t.Logf("GO2_RECORDED_CAPTURE_HASHES phase=%d sha256=%s", want, strings.Join(evidence, ","))
+		} else if err := go2video.Decode(decodeCtx, encoded, want, 6); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,9 +233,14 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 	if err != nil || !strings.Contains(string(format), "H264:640x360@") {
 		t.Fatalf("Go2 writer kernel format is not H264 640x360: %q %v", format, err)
 	}
-	hostCtx, stopHost := context.WithTimeout(ctx, 10*time.Second)
-	cmd := exec.CommandContext(hostCtx, child, "-test.run=^TestGo2NativeH264CaptureChild$", "-test.v", "-test.timeout=9s")
+	hostCtx, stopHost := context.WithTimeout(ctx, 24*time.Second)
+	cmd := exec.CommandContext(hostCtx, child, "-test.run=^TestGo2NativeH264CaptureChild$", "-test.v", "-test.timeout=23s")
 	cmd.Env = append(os.Environ(), "WENDY_GO2_CAPTURE_CHILD=1")
+	captureMode := "WENDY_GO2_CAPTURE_RECORDED=0"
+	if recording != nil {
+		captureMode = "WENDY_GO2_CAPTURE_RECORDED=1"
+	}
+	cmd.Env = append(cmd.Env, captureMode)
 	cmd.WaitDelay = time.Second
 	output, err := cmd.CombinedOutput()
 	stopHost()
@@ -271,13 +312,17 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 	for _, current := range []int32{0, 1} {
 		waitPhase(current)
 		var stdout, stderr bytes.Buffer
-		execCtx, stop := context.WithTimeout(ctx, 11*time.Second)
-		code, err := c.ExecInContainer(execCtx, app, []string{"/bin/busybox", "env", "WENDY_GO2_CAPTURE_CHILD=1", "/capture.test", "-test.run=^TestGo2NativeH264CaptureChild$", "-test.v", "-test.timeout=9s"}, false, nil, &stdout, &stderr, nil)
+		execCtx, stop := context.WithTimeout(ctx, 24*time.Second)
+		code, err := c.ExecInContainer(execCtx, app, []string{"/bin/busybox", "env", "WENDY_GO2_CAPTURE_CHILD=1", captureMode, "/capture.test", "-test.run=^TestGo2NativeH264CaptureChild$", "-test.v", "-test.timeout=23s"}, false, nil, &stdout, &stderr, nil)
 		stop()
 		if err != nil || code != 0 {
 			t.Fatalf("Go2 entitled container capture failed: exit=%d err=%v stdout=%s stderr=%s", code, err, &stdout, &stderr)
 		}
 		decode(stdout.Bytes(), int(current))
+	}
+	if recording != nil {
+		t.Logf("GO2_RECORDED_KERNEL_CONTAINER_VERIFIED manifest=%s; archived source, physical identity remains operator reviewed", recording.ManifestHash)
+		return
 	}
 	t.Log("GO2_KERNEL_CONTAINER_DECODE_VERIFIED: real native service, camera-entitled OCI delivery, fresh red/green decoded pixels; generated source")
 }
