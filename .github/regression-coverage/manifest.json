@@ -1189,10 +1189,24 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2362",
       "title": "fix(chatgpt-plugin): declare CIMD OAuth client form (0.5.5)",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The plugin manifest declares the OAuth client form. Packaging checks exist, but no connected CIMD authorization exchange was verified.",
-      "required_follow_up": "Add a schema assertion for the client form and an OAuth discovery/registration integration fixture.",
-      "evidence": []
+      "required_follow_up": "Require the pinned Auth/Cloud connected journey in wendy-auth CI using a verified read-only Cloud checkout credential. Local real HTTP/TLS discovery, consent, PKCE exchange and replay refusal pass; hosted fresh builds remain unverified.",
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/cloud/pull/1006",
+          "tests": [
+            "wendy-auth/Tests/AuthServerTests/ChatGPTCIMDExchangeTests.swift",
+            "wendy-auth/scripts/ci/test-cimd-companion.py",
+            "cloud/swift/Tests/GRPCServicesTests/RelayCIMDTransportTests.swift"
+          ],
+          "result": "Actual loopback Cloud401/protected-resource metadata joins auth discovery, verified HTTPS CIMD, consent and signed PKCE exchange. Durable runner validates both source revisions/hashes, nonce, exact counts/marker, process exits and owned cleanup. Local prebuilt journey passed; Cloud59 tests and auth20 related tests passed. Wrong issuer/origin, client mode/scope and PKCE bypass controls fail as intended. Auth macOS prerequisite used a disclosed temporary deployment-target adjustment, restored before commits; unmodified Linux fresh-build CI requires configured private peer checkout. Not closed by local evidence."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/wendy-auth/pull/442",
+          "result": "Published three reviewed commits for auth fixtures, durable source-pinned orchestration and a required fresh-build connected journey in the existing auth Swift CI job. Cloud companion1006 is pinned by immutable SHA. No new runner. Proposed Cloud-only Contents:read App configuration is documented and awaiting user setup choice; no credential provisioned and no hosted connected success claimed."
+        }
+      ]
     },
     {
       "key": "2179",
@@ -1642,10 +1656,22 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1595",
       "title": "Recover from stale Bluetooth bonds instead of reporting hollow connects",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests identify stale-bond errors and wait for HID devices. They do not reproduce the full stale-bond remove/pair/connect sequence with BlueZ.",
-      "required_follow_up": "Add a fake D-Bus lifecycle test and a hardware stale-bond reconnect check.",
-      "evidence": []
+      "required_follow_up": "Require the private D-Bus lifecycle and three controls in the existing Linux network race job. Execute the reserved BlueZ/HID procedure separately for actual stale-key and hollow-input recovery on LE/classic devices; hardware cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/bluetooth/stale_bond_dbus_linux_test.go",
+            ".github/scripts/test-stale-bond-dbus.sh",
+            ".github/regression-coverage/manual/bluez-stale-bond-rehearsal.py",
+            ".github/regression-coverage/manual/bluez-stale-bond-rehearsal.txt",
+            ".github/regression-coverage/manual/bluez-input-observer.py",
+            ".github/scripts/bluez_stale_bond_rehearsal_test.py"
+          ],
+          "result": "Unchanged production BlueZ Connect runs over a private real dbus-daemon with a controlled BlueZ peer. Five Linux cases pass: stale-key recovery, hollow-HID recovery, rejected fresh pairing, cancellation during rediscovery and refusal to repair without pair authorization. Assertions cover remove/rediscover/fresh pair/trust/connect order, foreign pairing rejection and actual bus-name withdrawal. Disabling key repair, HID readiness or trust restoration fails intended assertions. Local Linux execution is non-race; required hosted race execution pending. Six offline physical-plan/observer checks pass; reserved vendor peripheral-only reset, real input events, exact identities and restoration are specified, with every hardware case not_run."
+        }
+      ]
     },
     {
       "key": "1743",
