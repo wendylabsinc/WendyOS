@@ -2024,7 +2024,7 @@
       "package": "06",
       "status": "partial",
       "audit_finding": "Tests cover attachment mode, log ownership and lifecycle hooks. A full watch/redeploy session with real app streams and cancellation is not demonstrated across platforms.",
-      "required_follow_up": "Require the actual macOS CLI/native Agent watch journey and forced-detach control in the existing Swift core job. Add the remaining real Linux/container and compose watch lifecycle journey covering Go telemetry and service cleanup; native Mac transport alone does not establish those backend paths.",
+      "required_follow_up": "Run the registered real macOS/native and Linux/Compose watch lifecycle gates in hosted CI, including their forced-detach and restarted-sibling controls.",
       "evidence": [
         {
           "tests": [
@@ -2032,6 +2032,14 @@
             ".github/scripts/test-watch-session.sh"
           ],
           "result": "Final local default-build-system gate passed actual CLI filesystem watch, file sync over gRPC, native process replacement with fresh output, one live telemetry subscription, one persistent CLI hook, SIGINT cleanup and continued app operation. Reinstating the historical forced-detach invariant failed specifically at absent initial live output after successful real detached deployment. Independent cleanup review, Swift formatting and ShellCheck passed. Registered in the existing Swift core job, reusing its build directory; hosted execution remains pending. Linux/container and compose backend coverage remains open."
+        },
+        {
+          "tests": [
+            "go/internal/agent/containerd/watch_compose_integration_test.go",
+            ".github/scripts/prepare-watch-container.sh",
+            ".github/scripts/test-watch-container.sh"
+          ],
+          "result": "Added real CLI watch, file sync, ContainerService, ContainerLogManager and TelemetryService against private containerd. Checks changed-service replacement, unchanged sibling PID/log continuity, fresh process output and SIGINT cleanup with both apps retained. Linux CGO normal and both control CLIs compile, Linux/amd64 fixture compiles, portable admission and ShellCheck pass. Local namespace creation was denied; actual normal and control execution remains pending in the existing containerd job."
         }
       ]
     },
@@ -2693,10 +2701,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1831",
       "title": "fix(agent): support live Go2 H.264 camera streams",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Frame parsing, camera hubs and network setup have tests. Complete live Go2 H.264 decode and container delivery still need a device/simulator integration run.",
-      "required_follow_up": "Feed recorded firmware-format H.264 through the service and decode it at the consumer.",
-      "evidence": []
+      "required_follow_up": "Execute registered generated-video kernel/OCI gate and controls in hosted CI. Capture exact supported Go2 firmware CDR with the human procedure and add archived-corpus replay through the production service and consumer before claiming recorded-stream acceptance.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-go2-h264-loopback.sh",
+            "go/internal/agent/ros2camera/go2_decode_runtime_test.go",
+            "go/internal/agent/services/go2_h264_capture_linux_test.go",
+            "go/internal/agent/containerd/go2_h264_loopback_linux_test.go",
+            ".github/regression-coverage/manual/go2-camera-rehearsal.py"
+          ],
+          "result": "Real generated H264 pixel decode and historical CDR failure control pass locally. Normal/kernel controls compile for Linux; six offline procedure tests pass. Registered production parser/writer/native service/OCI capture and independent pixel decoding in existing media job. Hosted kernel/OCI execution is pending. Exact-target recording and physical CLI/container procedure is prepared with all cases not_run; synthetic publisher bypasses DDS discovery, and archived firmware corpus replay is not implemented."
+        }
+      ]
     },
     {
       "key": "1704",

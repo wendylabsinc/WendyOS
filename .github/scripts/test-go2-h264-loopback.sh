@@ -59,7 +59,7 @@ run_kernel() {
   local label result=0
   label="ci-go2-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
   [[ ! -e /dev/video128 && ! -L /dev/video128 ]] || return 2
-  sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted WENDY_GO2_CAMERA_LABEL="$label" \
+  sudo env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted WENDY_GO2_CAMERA_LABEL="$label" \
     python3 .github/scripts/run-owned-media-test.py --timeout 90 -- \
     unshare --mount --pid --fork --kill-child=KILL --mount-proc \
     bash .github/scripts/test-go2-h264-loopback.sh --inside "$1" "$output/capture.test" "$host_pid_namespace" || result=$?
