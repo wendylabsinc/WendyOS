@@ -82,6 +82,15 @@ def parse_result(code, raw, marker=None):
             and 'G1_DARWIN_RENAME cross_parent=true' in output)
 
 
+def run_logged(command, output, name, environment):
+    # go test -json writes test events to stdout, but module downloads and build
+    # diagnostics to stderr. Keep both streams, without admitting diagnostics as
+    # test events or filtering arbitrary non-JSON lines out of the evidence.
+    with (output/(name+'.jsonl')).open('w') as stream, (output/(name+'.stderr.log')).open('w') as diagnostic:
+        code = OWNER.run(command, 150, cwd=ROOT, env=environment, stdout=stream, stderr=diagnostic)
+    return code, (output/(name+'.jsonl')).read_text()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -122,10 +131,7 @@ def main():
                 for key in list(environment):
                     if key.startswith('WENDY_G1_CACHE_'):
                         del environment[key]
-                log = output/(name+'.jsonl')
-                with log.open('w') as stream:
-                    code = OWNER.run(command, 150, cwd=ROOT, env=environment, stdout=stream)
-                raw = log.read_text()
+                code, raw = run_logged(command, output, name, environment)
                 # Compilation diagnostics are not accepted as a historical
                 # control: every control must execute and fail the real test.
                 if not parse_result(code, raw, marker):
@@ -137,9 +143,8 @@ def main():
             overlay.write_text(json.dumps({'Replace': {str(production): str(native)}}))
             command = ['go', 'test', '-json', '-race', '-overlay='+str(overlay),
                        './go/simulator/g1', '-run', '^TestMaterializeIdentity$', '-count=1', '-timeout=30s']
-            with (output/'historical-native.jsonl').open('w') as stream:
-                code = OWNER.run(command, 150, cwd=ROOT, env=environment, stdout=stream)
-            reproduced = historical_result(code, (output/'historical-native.jsonl').read_text())
+            code, raw = run_logged(command, output, 'historical-native', environment)
+            reproduced = historical_result(code, raw)
             evidence['historical_native_observation'] = {'exit_code': code,
                 'same_parent_rename_EACCES_reproduced': reproduced,
                 'scope': 'actual original sequence with current embedded payload, no observers or synthetic rename policy'}

@@ -1,6 +1,9 @@
 """Portable evidence admission; actual filesystem behavior requires macOS."""
 import importlib.util
 import json
+import os
+import sys
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -15,6 +18,24 @@ def events(*records):
 
 
 class Admission(unittest.TestCase):
+    def test_real_child_keeps_download_diagnostics_outside_test_events(self):
+        marker = 'G1_FAILED_PUBLICATION_LEAKED'
+        for marker_in_events in (True, False):
+            with self.subTest(marker_in_events=marker_in_events), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary)
+                raw = events({'Test':'TestG1CachePublicationLifecycle','Action':'fail'},
+                             {'Output':marker if marker_in_events else 'unrelated failure'})
+                diagnostic = 'go: downloading golang.org/x/sys v0.50.0\n' + marker
+                child = ('import sys; print(' + repr(raw) + '); print(' + repr(diagnostic) +
+                         ', file=sys.stderr); sys.exit(1)')
+                code, actual = GATE.run_logged([sys.executable, '-c', child], output, 'normal', dict(os.environ))
+                self.assertEqual(code, 1)
+                self.assertEqual(actual, raw+'\n')
+                self.assertEqual((output/'normal.stderr.log').read_text(), diagnostic+'\n')
+                self.assertEqual(GATE.parse_result(code, actual, marker), marker_in_events)
+                with self.assertRaises(json.JSONDecodeError):
+                    GATE.parse_result(code, diagnostic+'\n'+actual, marker)
+
     def test_historical_success_is_explicitly_not_reproduction(self):
         raw = events({'Test':'TestMaterializeIdentity','Action':'pass'})
         self.assertFalse(GATE.historical_result(0, raw))
