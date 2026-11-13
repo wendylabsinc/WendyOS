@@ -94,6 +94,10 @@ mount --make-rprivate /
 mount -t tmpfs tmpfs /run
 mount -t tmpfs tmpfs /var/lib
 mkdir -p /var/lib/wendy /run/netns
+# Host runner XDG paths disappear behind the private /run mount. runc exec
+# writes its process specification here, so give every child a private directory.
+export XDG_RUNTIME_DIR=/run/watch-runtime
+mkdir -m 700 "$XDG_RUNTIME_DIR"
 ip link set lo up
 socket="$work/containerd.sock"
 cat > "$work/config.toml" <<'CONFIG'
