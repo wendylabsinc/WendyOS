@@ -3920,10 +3920,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2306",
       "title": "Restore Foxglove bridge deployment on current devices",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover accepted WebSocket subprotocols, cleanup scope and builder validation. They do not deploy a real Foxglove bridge image to a current device.",
-      "required_follow_up": "Add a deployment/WebSocket smoke test using the published bridge image.",
-      "evidence": []
+      "required_follow_up": "Require the actual generated Foxglove build/deployment, real WebSocket/CDR ROS delivery and both historical controls in the existing Go2 ROS job. Confirm recorded runtime, disk and cleanup evidence before marking verified.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/foxglove_runtime_test.go",
+            ".github/scripts/test-foxglove-runtime.py",
+            ".github/scripts/foxglove-runtime-namespace.sh",
+            ".github/scripts/foxglove_runtime_test.py",
+            ".github/scripts/fixtures/foxglove-runtime.txt"
+          ],
+          "result": "Production foxgloveServe generates its real ros:humble Dockerfile and installs the published ROS bridge package; there is no prebuilt bridge image in this path. Fixture uses actual deployment through Agent/ContainerService/containerd, exact image and package evidence, nonce-bound increasing ROS CDR strings through WebSocket/ExecContainer/socat, and forwarding-cancellation ownership. Both historical descriptor/target variants compile; native parser and three offline admission tests pass. The existing Go2 ROS matrix execution includes the full gate and controls without another runner. Actual Linux runtime remains pending; local Docker was unavailable."
+        }
+      ]
     },
     {
       "key": "1875",
