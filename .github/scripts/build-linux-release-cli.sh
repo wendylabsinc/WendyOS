@@ -33,8 +33,11 @@ make -j"$(nproc)"
 make install
 cd "$release_repo/go"
 release_ldflags="-s -w -X github.com/wendylabsinc/wendy/go/internal/shared/version.Version=$release_version"
+# Include the owned prefix in Go's cgo cache key. Changing PKG_CONFIG_PATH
+# alone can reuse linker directives pointing into a deleted previous build.
 CGO_ENABLED=1 CC=musl-gcc GOOS=linux GOARCH="$release_arch" \
   PKG_CONFIG_PATH="$release_work/libusb-prefix/lib/pkgconfig" \
+  CGO_LDFLAGS="-O2 -g -L$release_work/libusb-prefix/lib" \
   go build -tags netgo,osusergo \
   -ldflags "$release_ldflags -linkmode external -extldflags -static" \
   -o "$release_work/wendy" ./cmd/wendy
