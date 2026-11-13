@@ -217,6 +217,16 @@ actor VideoService: RegistrableRPCService {
                     defer { group.cancelAll() }
                     _ = try await group.next()
                 }
+                // The handle gives no reason. A client that reset the stream or
+                // hit its deadline never reads this status; a viewer attached
+                // while the server shuts down does, and must not see OK.
+                if context.cancellation.isCancelled {
+                    throw RPCError(
+                        code: .unavailable,
+                        message:
+                            "Wendy Agent for Mac ended the camera stream: the agent is shutting down or the request was cancelled."
+                    )
+                }
                 await self.releaseStream(device: device, remotePeer: remotePeer)
                 return Metadata()
             } catch {

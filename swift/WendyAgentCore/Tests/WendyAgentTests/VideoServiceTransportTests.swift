@@ -245,6 +245,54 @@ struct VideoServiceTransportTests {
             }
         }
     }
+
+    // Graceful shutdown fires the same RPC cancellation handle as a client
+    // reset, but here the viewer is still attached and reads the status.
+    @Test(.timeLimit(.minutes(1)))
+    func gracefulShutdownEndsAttachedStreamAsUnavailable() async throws {
+        let camera = TransportCameraProbe()
+        defer { camera.finishAll() }
+        let server = try WendyAgent.makeMainServer(
+            services: [VideoService(camera: camera, controls: TransportCameraControls())],
+            certs: nil,
+            host: "127.0.0.1",
+            port: 0,
+            environment: [:],
+            logger: Logger(label: "test.video-shutdown")
+        )
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await server.serve() }
+            defer {
+                server.beginGracefulShutdown()
+                group.cancelAll()
+            }
+            let address = try #require(try await server.listeningAddress)
+            let port = try #require(address.ipv4?.port)
+            let transport = try HTTP2ClientTransport.Posix(
+                target: .ipv4(address: "127.0.0.1", port: port),
+                transportSecurity: .plaintext
+            )
+            try await withGRPCClient(transport: transport) { client in
+                do {
+                    try await TransportVideoClient(client: client).streamVideo(
+                        .init(),
+                        options: .defaults
+                    ) { response in
+                        // The probe's first frame proves the stream is live.
+                        for try await _ in response.messages { server.beginGracefulShutdown() }
+                    }
+                    Issue.record("server shutdown looked like a normal end of stream")
+                } catch let error as RPCError {
+                    #expect(error.code == .unavailable)
+                }
+            }
+            try #require(
+                await transportEventually {
+                    camera.snapshot().terminated == 1 && camera.snapshot().active == 0
+                }
+            )
+        }
+    }
 }
 
 private func transportEventually(_ predicate: @escaping @Sendable () -> Bool) async -> Bool {
