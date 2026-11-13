@@ -3,14 +3,24 @@ on:
   pull_request:
     paths:
       - 'go/simulator/so101/**'
+      - 'go/simulator/go2/go2_sim/**'
+      - 'go/internal/shared/appconfig/**'
+      - 'go.mod'
+      - 'go.sum'
       - 'go/internal/cli/vm/**'
       - 'go/internal/agent/services/go2_feature*'
       - 'go/internal/cli/commands/vm*'
       - 'go/internal/cli/mcp/**'
       - 'web-client/desktop/**'
       - 'web-client/tsconfig.desktop.json'
+      - 'web-client/tsconfig.json'
+      - 'web-client/tests/**'
+      - 'web-client/scripts/**'
+      - 'web-client/package.json'
+      - 'web-client/package-lock.json'
       - 'web-client/electron/**'
       - '.github/workflows/so101-simulator.yml'
+      - '.github/scripts/fixtures/so101-http-lifecycle.md'
   workflow_dispatch:
 permissions:
   contents: read
@@ -49,7 +59,7 @@ jobs:
           docker run --rm --cpus 2 --memory 2g \
             -e SO101_RENDER_TEST=1 -e PYTHONPATH=/opt/wendy-so101 \
             -v "$PWD/go/simulator/so101/tests:/tests:ro" \
-            so101-ci sh -c 'pip install --no-cache-dir pytest==8.4.2 httpx==0.28.1 && pytest -q -p no:cacheprovider /tests'
+            so101-ci sh -c 'pip install --no-cache-dir pytest==8.4.2 httpx==0.28.1 && pytest -q -p no:cacheprovider /tests && python /tests/check_http_control.py'
   viewer:
     runs-on: ubuntu-24.04
     steps:
