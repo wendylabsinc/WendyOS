@@ -8,8 +8,11 @@ if [[ ${1:-} != --inside ]]; then
   binary=$(realpath "$1")
   prepared=$(realpath "$2")
   case_name=$3
-  [[ $case_name == normal || $case_name == forced-detach || $case_name == restart-sibling ]]
-  [[ -x $binary && -x $prepared/$case_name ]]
+  [[ $case_name == normal || $case_name == forced-detach || $case_name == restart-sibling || $case_name == multiapp-normal || $case_name == early-readiness || $case_name == ignored-service-env || $case_name == retained-isolation ]]
+  cli_case=$case_name
+  if [[ $case_name == multiapp-normal || $case_name == retained-isolation ]]; then cli_case=normal; fi
+  if [[ $case_name == retained-isolation ]]; then binary=$prepared/retained-isolation.test; fi
+  [[ -x $binary && -x $prepared/$cli_case ]]
   work=$(mktemp -d /tmp/wendy-watch-container.XXXXXX)
   namespace_started=0
   namespace_drained=0
@@ -46,7 +49,21 @@ if [[ ${1:-} != --inside ]]; then
   set -e
   if [[ $result == 0 || $result == 1 || $result == 2 ]]; then namespace_drained=1; fi
   [[ $namespace_drained == 1 ]]
-  if [[ $case_name == normal ]]; then
+  if [[ $case_name == multiapp-normal || $case_name == early-readiness || $case_name == ignored-service-env || $case_name == retained-isolation ]]; then
+    if [[ $case_name == multiapp-normal ]]; then
+      [[ $result == 0 ]]
+      grep -q '^--- PASS: TestMultiAppSlowReadinessIsolationLifecycle ' "$prepared/$case_name.log"
+      grep -q 'MULTIAPP_LIFECYCLE_VERIFIED ' "$prepared/$case_name.log"
+    else
+      [[ $result != 0 ]]
+      grep -q '^--- FAIL: TestMultiAppSlowReadinessIsolationLifecycle ' "$prepared/$case_name.log"
+      case $case_name in
+        early-readiness) grep -q 'multiapp boundary failed: each delayed service becomes ready and runs its own hook' "$prepared/$case_name.log" ;;
+        ignored-service-env) grep -q 'service effective environment mismatch:' "$prepared/$case_name.log" ;;
+        retained-isolation) grep -q 'removed isolation restarted the healthy sibling' "$prepared/$case_name.log" ;;
+      esac
+    fi
+  elif [[ $case_name == normal ]]; then
     [[ $result == 0 ]]
     grep -q '^--- PASS: TestWatchComposeContainerSession ' "$prepared/$case_name.log"
     grep -q 'WATCH_COMPOSE_VERIFIED ' "$prepared/$case_name.log"
@@ -91,7 +108,13 @@ for ((attempt=0; attempt<100; attempt++)); do
 done
 ctr --address "$socket" version
 export WENDY_CONTAINERD_INTEGRATION="$socket" WENDY_WATCH_CONTAINER_NAMESPACE=1
-export WENDY_WATCH_CLI="$prepared/$case_name" WENDY_WATCH_WORK="$work"
+cli_case=$case_name
+fixture=TestWatchComposeContainerSession
+case $case_name in
+  multiapp-normal|retained-isolation) cli_case=normal; fixture=TestMultiAppSlowReadinessIsolationLifecycle ;;
+  early-readiness|ignored-service-env) fixture=TestMultiAppSlowReadinessIsolationLifecycle ;;
+esac
+export WENDY_WATCH_CLI="$prepared/$cli_case" WENDY_WATCH_WORK="$work"
 # PID1 exits only after the test finishes; Linux then kills every private
 # namespace descendant, including detached shims. Never signal saved host PIDs.
-exec "$binary" -test.run '^TestWatchComposeContainerSession$' -test.v -test.count=1 -test.timeout=150s
+exec "$binary" -test.run "^$fixture$" -test.v -test.count=1 -test.timeout=150s
