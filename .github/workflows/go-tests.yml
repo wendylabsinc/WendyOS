@@ -1539,8 +1539,11 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: agent-own-scope-startup
-          path: ${{ runner.temp }}/agent-own-scope
+          path: |
+            ${{ runner.temp }}/agent-own-scope/*.log
+            ${{ runner.temp }}/agent-own-scope/*.json
           if-no-files-found: ignore
+          retention-days: 7
 
   vet:
     name: Vet
