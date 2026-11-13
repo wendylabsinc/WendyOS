@@ -51,8 +51,7 @@ import (
 const putBlobChunk = 1 << 20
 
 func newAppPublishCmd() *cobra.Command {
-	var tag, appID, layoutDir, platform, dockerfile, cloudGRPC string
-	var untagged bool
+	var p publishArgs
 	cmd := &cobra.Command{
 		Use:   "publish",
 		Short: "Publish an encrypted release of this project's app to the Wendy Cloud registry",
@@ -62,102 +61,142 @@ func newAppPublishCmd() *cobra.Command {
 			"not exist yet is created first.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if tag != "" && untagged {
-				return usageErrorf("Give --tag or --untagged, not both.")
-			}
-			raw, err := os.ReadFile("wendy.json")
-			if err != nil {
-				return fmt.Errorf("reading wendy.json: %w", err)
-			}
-			appCfg, def, err := appDefinition(raw, appID)
-			if err != nil {
-				return err
-			}
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			var branch string
-			switch {
-			case untagged:
-				if branch, err = gitBranch(cwd); err != nil {
-					return err
-				}
-			case tag == "" && !isInteractiveTerminal():
-				return usageErrorf("No tag given. Add --tag <version>, or run in a terminal to answer.")
-			case tag == "":
-				if tag, err = askText("Tag", "The version you want to give this release, for example 1.0.0.", "", func(s string) error { return validateReleaseTag(s) }); err != nil {
-					return err
-				}
-			}
-			defaults := []byte("{}")
-			if appCfg.Env != nil {
-				defaults, _ = json.Marshal(appCfg.Env)
-			}
-			auth, err := pickAppAuth(cloudGRPC)
-			if err != nil {
-				return err
-			}
-			if err := withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-				return ensureApp(ctx, cmd.OutOrStdout(), conn, auth, appCfg.AppID)
-			}); err != nil {
-				return err
-			}
-			work, err := os.MkdirTemp("", "wendy-publish-")
-			if err != nil {
-				return err
-			}
-			defer func() { _ = os.RemoveAll(work) }()
-			if layoutDir == "" {
-				resolved, err := resolveDockerfile(cwd, dockerfile, false, "")
-				if err != nil {
-					return err
-				}
-				layoutDir = filepath.Join(work, "oci")
-				if err := buildImageToOCILayoutDir(cmd.Context(), cwd, resolved, platform, nil, "", layoutDir, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
-					return err
-				}
-			}
-			img, err := ociLayoutManifestForPlatform(layoutDir, platform)
-			if err != nil {
-				return err
-			}
-			if img, err = withAppDefinition(img, def); err != nil {
-				return err
-			}
-			if untagged {
-				digest, err := img.Digest()
-				if err != nil {
-					return err
-				}
-				tag = branch + "@" + digest.String()
-			}
-			return withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-				op, err := newRegistryOp(ctx, conn, auth)
-				if err != nil {
-					return err
-				}
-				releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, tag, string(defaults))
-				if err != nil {
-					return err
-				}
-				manifest, err := op.publish(ctx, releaseID, img, work)
-				if err != nil {
-					return fmt.Errorf("release %s was created but not published: %w", releaseID, err)
-				}
-				cliLogln("Published release %s of %s: %s = %s", releaseID, appCfg.AppID, tag, manifest.GetManifestDigest())
-				return nil
-			})
+			_, err := publishProject(cmd, p)
+			return err
 		},
 	}
-	cmd.Flags().StringVar(&tag, "tag", "", "Release tag, the version you give this release, e.g. 1.0.0")
-	cmd.Flags().BoolVar(&untagged, "untagged", false, "Name the release <git branch>@<manifest digest> instead of a tag")
-	cmd.Flags().StringVar(&appID, "app", "", "App id (default: appId in wendy.json, which it must match)")
-	cmd.Flags().StringVar(&layoutDir, "oci-layout", "", "Publish this OCI image layout directory instead of building")
-	cmd.Flags().StringVar(&platform, "platform", "linux/arm64", "Image platform to build or pick from the layout")
-	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "Dockerfile to build (default: detected)")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
+	p.bind(cmd)
+	cmd.Flags().StringVar(&p.appID, "app", "", "App id (default: appId in wendy.json, which it must match)")
+	cmd.Flags().StringVar(&p.layoutDir, "oci-layout", "", "Publish this OCI image layout directory instead of building")
+	cmd.Flags().StringVar(&p.dockerfile, "dockerfile", "", "Dockerfile to build (default: detected)")
 	return cmd
+}
+
+// publishArgs are publish's answers. lastRun publishes the image the last
+// wendy run of this app built for platform (its OCI layout cache) instead.
+type publishArgs struct {
+	tag, appID, layoutDir, platform, dockerfile, cloudGRPC string
+	untagged, lastRun                                      bool
+}
+
+// bind adds the flags publish shares with promote.
+func (p *publishArgs) bind(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&p.tag, "tag", "", "Release tag, the version you give this release, e.g. 1.0.0")
+	cmd.Flags().BoolVar(&p.untagged, "untagged", false, "Name the release <git branch>@<manifest digest> instead of a tag")
+	cmd.Flags().StringVar(&p.platform, "platform", "linux/arm64", "Image platform to build or pick from the layout")
+	cmd.Flags().StringVar(&p.cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
+}
+
+// publishedRelease is what publishProject created.
+type publishedRelease struct{ app, id, name, digest string }
+
+func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error) {
+	if p.tag != "" && p.untagged {
+		return nil, usageErrorf("Give --tag or --untagged, not both.")
+	}
+	raw, err := os.ReadFile("wendy.json")
+	if err != nil {
+		return nil, fmt.Errorf("reading wendy.json: %w", err)
+	}
+	appCfg, def, err := appDefinition(raw, p.appID)
+	if err != nil {
+		return nil, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	if p.lastRun {
+		// The layout wendy run builds into and chunk-pushes from
+		// (deployByChunkDiff), held so no run rebuilds it while it uploads.
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return nil, err
+		}
+		p.layoutDir = chunkLayoutDir(cache, appCfg.AppID, p.platform)
+		unlock, err := lockOCILayoutDir(cmd.Context(), p.layoutDir)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+		if _, err := os.Stat(filepath.Join(p.layoutDir, "index.json")); err != nil {
+			return nil, usageErrorf("Nothing to promote: run the app with wendy run first, or publish it with wendy app publish.")
+		}
+	}
+	var branch string
+	switch {
+	case p.untagged:
+		if branch, err = gitBranch(cwd); err != nil {
+			return nil, err
+		}
+	case p.tag == "" && !isInteractiveTerminal():
+		return nil, usageErrorf("No tag given. Add --tag <version>, or run in a terminal to answer.")
+	case p.tag == "":
+		if p.tag, err = askText("Tag", "The version you want to give this release, for example 1.0.0.", "", func(s string) error { return validateReleaseTag(s) }); err != nil {
+			return nil, err
+		}
+	}
+	defaults := []byte("{}")
+	if appCfg.Env != nil {
+		defaults, _ = json.Marshal(appCfg.Env)
+	}
+	auth, err := pickAppAuth(p.cloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+	if err := withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+		return ensureApp(ctx, cmd.OutOrStdout(), conn, auth, appCfg.AppID)
+	}); err != nil {
+		return nil, err
+	}
+	work, err := os.MkdirTemp("", "wendy-publish-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(work) }()
+	if p.layoutDir == "" {
+		resolved, err := resolveDockerfile(cwd, p.dockerfile, false, "")
+		if err != nil {
+			return nil, err
+		}
+		p.layoutDir = filepath.Join(work, "oci")
+		if err := buildImageToOCILayoutDir(cmd.Context(), cwd, resolved, p.platform, nil, "", p.layoutDir, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+			return nil, err
+		}
+	}
+	img, err := ociLayoutManifestForPlatform(p.layoutDir, p.platform)
+	if err != nil {
+		return nil, err
+	}
+	if img, err = withAppDefinition(img, def); err != nil {
+		return nil, err
+	}
+	if p.untagged {
+		digest, err := img.Digest()
+		if err != nil {
+			return nil, err
+		}
+		p.tag = branch + "@" + digest.String()
+	}
+	var out *publishedRelease
+	err = withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+		op, err := newRegistryOp(ctx, conn, auth)
+		if err != nil {
+			return err
+		}
+		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, string(defaults))
+		if err != nil {
+			return err
+		}
+		manifest, err := op.publish(ctx, releaseID, img, work)
+		if err != nil {
+			return fmt.Errorf("release %s was created but not published: %w", releaseID, err)
+		}
+		cliLogln("Published release %s of %s: %s = %s", releaseID, appCfg.AppID, p.tag, manifest.GetManifestDigest())
+		out = &publishedRelease{app: appCfg.AppID, id: releaseID, name: p.tag, digest: manifest.GetManifestDigest()}
+		return nil
+	})
+	return out, err
 }
 
 // appConfigLabel carries the release's app definition to the device

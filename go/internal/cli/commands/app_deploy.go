@@ -55,11 +55,8 @@ func newAppDeployCmd() *cobra.Command {
 			"a flag; with all of them given nothing is asked.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if a.run && a.installOnly {
-				return usageErrorf("Choose one of --run and --install-only.")
-			}
-			if _, ok := keepTryingChoices[a.keepTrying]; !ok {
-				return usageErrorf("--keep-trying must be 7d, 30d, 60d or 1y.")
+			if err := a.checkSteps(); err != nil {
+				return err
 			}
 			auth, err := pickAuthEntry(a.cloudGRPC)
 			if err != nil {
@@ -79,6 +76,16 @@ func newAppDeployCmd() *cobra.Command {
 	f.StringVar(&a.release, "release", "", "2  Which release? Its version (or id)")
 	f.StringArrayVar(&a.devices, "device", nil, "3  Which devices? A device name or id (repeatable)")
 	f.StringArrayVar(&a.tags, "tag", nil, "3  Which devices? Every device with this tag (repeatable)")
+	a.bindSteps(cmd)
+	f.StringVar(&a.digest, "digest", "", "Refuse unless the release's manifest digest is this sha256:<hex>")
+	f.StringVar(&a.cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
+	return cmd
+}
+
+// bindSteps adds the flags for questions 3 to 7 that deploy shares with
+// promote.
+func (a *deployAnswers) bindSteps(cmd *cobra.Command) {
+	f := cmd.Flags()
 	f.StringVar(&a.name, "name", "", "3  Name of the deployment")
 	f.BoolVar(&a.move, "move", false, "3  Move chosen devices that run the app in another deployment into this one")
 	f.StringArrayVar(&a.config, "config", nil, "4  What configuration? NAME=VALUE (repeatable)")
@@ -89,9 +96,16 @@ func newAppDeployCmd() *cobra.Command {
 	f.StringVar(&a.note, "note", "", "6  Note for the history")
 	f.BoolVarP(&a.yes, "yes", "y", false, "6  Deploy without asking for confirmation")
 	f.BoolVar(&a.wait, "wait", false, "7  Stay until every device is done")
-	f.StringVar(&a.digest, "digest", "", "Refuse unless the release's manifest digest is this sha256:<hex>")
-	f.StringVar(&a.cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
-	return cmd
+}
+
+func (a *deployAnswers) checkSteps() error {
+	if a.run && a.installOnly {
+		return usageErrorf("Choose one of --run and --install-only.")
+	}
+	if _, ok := keepTryingChoices[a.keepTrying]; !ok {
+		return usageErrorf("--keep-trying must be 7d, 30d, 60d or 1y.")
+	}
+	return nil
 }
 
 // missing is the error for an unanswered question without a terminal.

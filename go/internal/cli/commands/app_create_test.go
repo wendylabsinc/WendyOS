@@ -25,10 +25,11 @@ import (
 )
 
 // appFixture runs app commands in an empty folder, without a terminal,
-// against the fake cloud; any question asked fails the test.
-func appFixture(t *testing.T) (*registryOp, *fakeRegistry) {
+// against the fake cloud (whose device keys are keys); any question asked
+// fails the test.
+func appFixture(t *testing.T, keys ...*cloudpb.RecipientKey) (*registryOp, *fakeRegistry) {
 	t.Helper()
-	op, fake := registryFixture(t)
+	op, fake := registryFixture(t, keys...)
 	t.Chdir(t.TempDir())
 	origTerm, origText, origConfirm, origAuth, origCloud := isInteractiveTerminalFn, askText, askConfirm, pickAppAuth, withAppCloud
 	t.Cleanup(func() {
