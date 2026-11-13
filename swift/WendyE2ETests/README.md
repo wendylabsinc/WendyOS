@@ -109,7 +109,10 @@ WENDY_E2E_LEGACY_INTEGRATION=true \
 
 `WENDY_E2E_HTTP_APP=true` opts into uniquely named real-device app fixtures
 from `.github/ci-tests/http-app-loop`. Select an explicit WendyOS device and
-an isolated CLI HOME. The CLI host needs Python 3, curl, and OpenSSL. Before
+an isolated CLI HOME. This fixture accepts plain dotted LAN hostnames or IPv4
+addresses only; it rejects cloud/provider/VM/socket selectors, explicit ports,
+credentials and unsupported IPv6 forms before scenario setup or inventory.
+The CLI host needs Python 3, curl, and OpenSSL. Before
 any Wendy command, the fixture reduces the copied single-context auth config
 to its held certificate/key and saved device pins. It removes OAuth/API tokens,
 refresh tokens, DPoP/service-account material and renewal endpoints, then checks

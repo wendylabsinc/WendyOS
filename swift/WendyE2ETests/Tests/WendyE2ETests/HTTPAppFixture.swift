@@ -12,6 +12,38 @@ struct HTTPAppFixture: Sendable {
     let mode: ProjectMode
 
     enum ProjectMode: Sendable { case sourceBuild, prebuiltCompose }
+
+    struct InvalidLANDevice: Error, CustomStringConvertible {
+        var description: String {
+            "HTTP app fixture requires a plain dotted LAN hostname or IPv4 address; transport selectors, ports and credentials are unsupported"
+        }
+    }
+
+    init(device: String, mode: ProjectMode) throws {
+        self.device = try Self.requireLANDevice(device)
+        self.mode = mode
+    }
+
+    static func requireLANDevice(_ device: String?) throws -> String {
+        guard let device, device.utf8.count <= 253 else { throw InvalidLANDevice() }
+        let alphanumeric: (UInt8) -> Bool = {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+        }
+        let labels = device.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2,
+            labels.allSatisfy({ label in
+                !label.isEmpty && label.utf8.count <= 63
+                    && alphanumeric(label.utf8.first!) && alphanumeric(label.utf8.last!)
+                    && label.utf8.allSatisfy { alphanumeric($0) || $0 == 45 }
+            })
+        else { throw InvalidLANDevice() }
+        if device.utf8.allSatisfy({ (48...57).contains($0) || $0 == 46 }) {
+            guard labels.count == 4,
+                labels.allSatisfy({ Int($0).map { (0...255).contains($0) } ?? false })
+            else { throw InvalidLANDevice() }
+        }
+        return device
+    }
     // Official Python multiarch index; linux/arm64 layers total about 20 MB compressed.
     static let prebuiltImage =
         "docker.io/library/python@sha256:303398d5c9f110790bce60d64f902e51e1a061e33292985c72bf6cd07960bf09"
@@ -55,6 +87,8 @@ struct HTTPAppFixture: Sendable {
     }
 
     static func scenario() throws -> CLIAndAgentScenario {
+        // Reject explicit transport selectors before setup can issue any command.
+        _ = try requireLANDevice(WendyE2EEnvironment.deviceAddress)
         try #require(
             (ProcessInfo.processInfo.environment["WENDY_AGENT_SOCKET"] ?? "").isEmpty,
             "Unset WENDY_AGENT_SOCKET before a device test; it overrides --device"
@@ -111,15 +145,12 @@ struct HTTPAppFixture: Sendable {
         mode: ProjectMode = .sourceBuild,
         body: @Sendable (HTTPAppFixture) async throws -> Void
     ) async throws {
-        let device = try #require(
-            WendyE2EEnvironment.deviceAddress,
-            "Set an explicit device address"
-        )
+        let device = try requireLANDevice(WendyE2EEnvironment.deviceAddress)
         try #require(
             cli.machine.isLocal && cli.machine.os != .windows,
             "Fixture requires a local POSIX CLI host"
         )
-        let fixture = HTTPAppFixture(device: device, mode: mode)
+        let fixture = try HTTPAppFixture(device: device, mode: mode)
         let before = try await fixture.inventory(cli)
         try #require(!before.contains { $0.name == fixture.app })
         // A pre-existing listener must never be mistaken for this service's readiness.

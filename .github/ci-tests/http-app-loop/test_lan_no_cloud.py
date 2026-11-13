@@ -13,6 +13,45 @@ from prepare_lan_auth import prepare_config
 
 
 class LANNoCloudTests(unittest.TestCase):
+    def test_explicit_cloud_selector_is_rejected_before_wendy_or_cloud_contact(self):
+        # Run the actual fixture validation with a CLI contact spy. The spy is
+        # only a rejection control, never a replacement for deployment behavior.
+        repository = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="e2e-selector-rejection-") as directory:
+            marker = Path(directory) / "wendy-invoked"
+            spy = Path(directory) / "wendy"
+            with socket.socket() as counter:
+                counter.bind(("127.0.0.1", 0))
+                counter.listen()
+                counter.settimeout(0.1)
+                port = counter.getsockname()[1]
+                spy.write_text("#!/usr/bin/env python3\nimport pathlib,socket\n"
+                               f"pathlib.Path({str(marker)!r}).write_text('invoked')\n"
+                               f"socket.create_connection(('127.0.0.1',{port}),timeout=1).close()\n"
+                               "print('[]')\n")
+                spy.chmod(0o700)
+                env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
+                           WENDY_E2E_DEVICE_ADDRESS=f"cloud://127.0.0.1:{port}/tenant/synthetic/asset/synthetic",
+                           WENDY_E2E_LAN_REJECTION_CONTROL="true", WENDY_AGENT_SOCKET="",
+                           WENDY_E2E_CLI_ADDRESS="", WENDY_E2E_AGENT_ADDRESS="")
+                result = subprocess.run(
+                    ["swift", "test", "--package-path", str(repository / "swift/WendyE2ETests"),
+                     "--filter", "rejects an explicit Cloud selector before setup or inventory"],
+                    env=env, text=True, capture_output=True, timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(marker.exists(), "fixture invoked Wendy before rejecting explicit Cloud")
+                with self.assertRaises(socket.timeout):
+                    counter.accept()
+                # Check that both the executable marker and contact counter work.
+                subprocess.run([str(spy)], env=env, capture_output=True, check=True, timeout=2)
+                contact, _ = counter.accept()
+                contact.close()
+                self.assertTrue(marker.exists())
+                print(json.dumps({"rejected_selector": "cloud://loopback-counter/tenant/.../asset/...",
+                                  "fixture_wendy_invocations": 0, "fixture_cloud_contacts": 0,
+                                  "explicit_spy_positive_contact": 1}))
+
     def test_unreachable_lan_never_contacts_cloud_for_executed_fixture_paths(self):
         cli = Path(os.environ["WENDY_E2E_CONTROL_CLI"]).resolve()
         contacts = []
