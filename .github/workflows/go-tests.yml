@@ -1021,7 +1021,7 @@ jobs:
         with:
           name: windows-linklocal-recovery
           path: |
-            ${{ runner.temp }}/linklocal-windows/*.log
+            ${{ runner.temp }}/linklocal-windows/**/*.log
             ${{ runner.temp }}/linklocal-windows/*.json
           if-no-files-found: ignore
           retention-days: 7
