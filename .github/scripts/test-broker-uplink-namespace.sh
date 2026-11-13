@@ -51,7 +51,7 @@ if [[ ${1:-} == --inside ]]; then
   unset WENDY_UPLINK_PEER WENDY_UPLINK_KEYS
   # PID-namespace destruction also drains the broker helper after a panic or
   # watchdog expiry. /run/netns and every created interface exist only here.
-  exec "$2" -test.run '^TestBrokerMovesToPreferredUplinkAfterSessionDrains$' -test.v -test.count=1 -test.timeout=90s
+  exec "$2" -test.run '^(TestBrokerUplinkProtocolControl|TestBrokerMovesToPreferredUplinkAfterSessionDrains)$' -test.v -test.count=1 -test.timeout=90s
 fi
 [[ $# == 1 && $EUID != 0 ]] || { echo 'usage: test-broker-uplink-namespace.sh NEW_OUTPUT_DIRECTORY (normal runner user)' >&2; exit 2; }
 mkdir "$1"
@@ -87,6 +87,7 @@ for variant in normal no-migration ignore-active-session; do
   if [[ $variant == normal ]]; then
     [[ $status == 0 ]] || exit 1
     grep -q "^--- PASS: $regression " "$output/$variant.log"
+    grep -q '^--- PASS: TestBrokerUplinkProtocolControl ' "$output/$variant.log"
     grep -q 'held exact-byte TLS tunnel survived preferred uplink change' "$output/$variant.log"
     if grep -q -- '--- SKIP:' "$output/$variant.log"; then exit 1; fi
   else
