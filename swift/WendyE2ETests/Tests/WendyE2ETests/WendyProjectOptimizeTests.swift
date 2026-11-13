@@ -8,12 +8,10 @@ import WendyE2ETesting
 struct `'wendy project optimize'` {
     let scenario = CLIAndAgentScenario()
 
-    /**
-     Inspection is read-only, including when a missing `.dockerignore` is
-     reported. Non-terminal default output and explicit `--json` describe the
-     same findings, source lines, severities and available fixes. Project bytes,
-     permissions, symlinks and unrelated files remain unchanged.
-     */
+    /// Inspection is read-only, including when a missing `.dockerignore` is
+    /// reported. Non-terminal default output and explicit `--json` describe the
+    /// same findings, source lines, severities and available fixes. Project bytes,
+    /// permissions, symlinks and unrelated files remain unchanged.
     @Test
     func `reports actionable findings without changing the project`() async throws {
         try await scenario.run(authenticated: false) { cli, _ in
@@ -34,14 +32,12 @@ struct `'wendy project optimize'` {
         }
     }
 
-    /**
-     Explicit `--fix` composes cache and release changes on the same build
-     instruction and creates the default `.dockerignore`. Every other file and
-     existing mode is preserved. Repeating the fix leaves exact content and
-     modes unchanged. Contextual CUDA/toolchain findings remain report-only.
-     This case uses human output; the separate known-defect case retains the
-     machine-readable fix-output contract.
-     */
+    /// Explicit `--fix` composes cache and release changes on the same build
+    /// instruction and creates the default `.dockerignore`. Every other file and
+    /// existing mode is preserved. Repeating the fix leaves exact content and
+    /// modes unchanged. Contextual CUDA/toolchain findings remain report-only.
+    /// This case uses human output; the separate known-defect case retains the
+    /// machine-readable fix-output contract.
     @Test
     func `applies only safe edits and leaves a repeat run unchanged`() async throws {
         try await scenario.run(authenticated: false) { cli, _ in
@@ -75,13 +71,11 @@ struct `'wendy project optimize'` {
         }
     }
 
-    /**
-     Multi-service projects analyze each service's own context rather than the
-     root Dockerfile. The offline architecture defaults to arm64; `--arch amd64`
-     removes the forced-amd64 mismatch. `--severity` changes the exit threshold,
-     never filters findings out of the report. Invalid severity is an execution
-     error (exit 2), without edits.
-     */
+    /// Multi-service projects analyze each service's own context rather than the
+    /// root Dockerfile. The offline architecture defaults to arm64; `--arch amd64`
+    /// removes the forced-amd64 mismatch. `--severity` changes the exit threshold,
+    /// never filters findings out of the report. Invalid severity is an execution
+    /// error (exit 2), without edits.
     @Test
     func `selects service contexts and gates on severity and architecture`() async throws {
         try await scenario.run(authenticated: false) { cli, _ in
@@ -148,12 +142,10 @@ struct `'wendy project optimize'` {
         }
     }
 
-    /**
-     Preservation checks detect newly created hidden files, changed bytes,
-     changed permissions and retargeted symlinks. A deliberately altered finding
-     also differs from the expected report. These controls exercise the same
-     observations used above without changing the CLI implementation.
-     */
+    /// Preservation checks detect newly created hidden files, changed bytes,
+    /// changed permissions and retargeted symlinks. A deliberately altered finding
+    /// also differs from the expected report. These controls exercise the same
+    /// observations used above without changing the CLI implementation.
     @Test
     func `rejects unwanted writes and altered findings in its observations`() async throws {
         try await scenario.run(authenticated: false) { cli, _ in
@@ -189,13 +181,11 @@ struct `'wendy project optimize'` {
         }
     }
 
-    /**
-     `--fix --json` must emit one parseable JSON report of the residual findings,
-     with applied-fix commentary kept off stdout. Safe edits still obey the
-     filesystem guarantees. Known defect: applied-fix lines currently precede
-     JSON on stdout. Disabled by default; replay the full expected behavior with
-     `WENDY_E2E_KNOWN_OPTIMIZE_DEFECTS=1`.
-     */
+    /// `--fix --json` must emit one parseable JSON report of the residual findings,
+    /// with applied-fix commentary kept off stdout. Safe edits still obey the
+    /// filesystem guarantees. Known defect: applied-fix lines currently precede
+    /// JSON on stdout. Disabled by default; replay the full expected behavior with
+    /// `WENDY_E2E_KNOWN_OPTIMIZE_DEFECTS=1`.
     @Test(
         .disabled(
             if: !OptimizeFixture.knownDefectsEnabled,
@@ -214,12 +204,10 @@ struct `'wendy project optimize'` {
         }
     }
 
-    /**
-     A directory without a project is an execution error (documented exit 2),
-     rather than a successful clean optimization report. It must remain empty.
-     Known defect: the command currently exits 0 with empty targets/findings.
-     Disabled by default; replay with `WENDY_E2E_KNOWN_OPTIMIZE_DEFECTS=1`.
-     */
+    /// A directory without a project is an execution error (documented exit 2),
+    /// rather than a successful clean optimization report. It must remain empty.
+    /// Known defect: the command currently exits 0 with empty targets/findings.
+    /// Disabled by default; replay with `WENDY_E2E_KNOWN_OPTIMIZE_DEFECTS=1`.
     @Test(
         .disabled(
             if: !OptimizeFixture.knownDefectsEnabled,
