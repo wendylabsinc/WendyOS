@@ -40,22 +40,24 @@ it.
    telemetry-only campaign variant** — there is no conflict left to work
    around.
 3. Each `prediction` record carries `inputs: [{source_id, sample_id}]`.
-   The agent writes every delivered sample into the episode's
-   `model_inputs.jsonl` under the same identifier, and the camera
-   capture's `index.jsonl` carries that identifier on the bytes it kept.
-   Joining on `(source_id, sample_id)` reconstructs (input, outcome)
-   pairs — which is what makes the episode training data rather than a
-   log of conclusions.
+   The camera capture's `index.jsonl` carries the same identifier on the
+   bytes it kept. Match each prediction's source and sample ID to that index
+   to locate the recorded input. The V4L2 example does not currently report
+   individual deliveries to `model_inputs.jsonl`; that ledger is populated
+   by the Agent's managed inference path. Do not infer delivery completeness
+   or zero dropped inputs from this example's prediction records.
 
 ## What the app does
 
 Per delivered frame (scoring at most 5 per second, see rate limiting
 below):
 
-1. Receives an encoded sample from the harness and decodes it with PyAV.
-   A decoded frame may be assembled from more than one sample on
-   transports that deliver byte-stream chunks rather than whole access
-   units, which is why `inputs` is a list.
+1. Reads whole H264 access units from the Agent's loopback node and decodes
+   them with PyAV. Private packet timestamps preserve the original sample
+   identity through decoder reordering. Missing identities, malformed access
+   units, and excessive buffered identities stop capture rather than assign
+   a prediction to guessed input bytes. Raw YUYV, MJPEG, BGR3 and RGB3 nodes
+   remain supported. Arbitrary encoded byte-stream chunks are not supported.
 2. Runs YOLOv8n, exported to Open Neural Network Exchange (ONNX) at image
    build time, through onnxruntime.
 3. Sends a `prediction` record: model `yolov8n`, the pinned model version,
