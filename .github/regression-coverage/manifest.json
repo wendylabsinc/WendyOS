@@ -4150,7 +4150,7 @@
       "package": "13",
       "status": "partial",
       "audit_finding": "Simulator tests cover joint limits, asset packaging and status handling. The desktop UI poll-error recovery needs its desktop suite triggered by every affected backend change.",
-      "required_follow_up": "Require the real HTTP/MuJoCo lifecycle and original reported-limit control in both existing native SO101 image rows. Desktop checks run on the same backend/dependency changes. Keep React poll-error clearing, keyboard behavior and packaged viewer acceptance separate; backend recovery does not prove UI state recovery.",
+      "required_follow_up": "Retain real HTTP/MuJoCo lifecycle and original reported-limit control in both existing native SO101 image rows. Finish React poll-error clearing, keyboard behavior and packaged viewer acceptance; backend recovery does not prove UI state recovery.",
       "evidence": [
         {
           "tests": [
@@ -4160,6 +4160,16 @@
             ".github/scripts/fixtures/so101-http-lifecycle.md"
           ],
           "result": "Source-reviewed actual loopback HTTP fixture runs production lifespan, pinned model, physics and renderer. It requires exact reported degree limits, atomic invalid pose, real joint/frame advance, joined shutdown, refused poll and fresh same-endpoint restart. The historical radians-comparison control must end at the exact HTTP422 out-of-range assertion. Every journey runs in one bounded owned process. Local Python syntax and workflow checks pass; exact shipped-image normal/control execution remains hosted pending. Existing viewer tests are registered for relevant backend and dependency changes; no new UI test or physical-arm acceptance is claimed."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610096",
+          "tests": [
+            "go/simulator/so101/tests/test_http_lifecycle.py",
+            "go/simulator/so101/tests/check_http_control.py",
+            ".github/workflows/so101-simulator.yml"
+          ],
+          "result": "Both native amd64 and arm64 shipped-image jobs passed all seven actual physics/API/render tests and the historical reported-limit control. Logs record the named SO101_REPORTED_BOUND_REJECTED min_deg failure and SO101_HTTP_BOUND_CONTROL_VERIFIED success. Existing viewer job also passed. This verifies the software HTTP/physics lifecycle at this head; React poll recovery, keyboard behavior and packaged viewer acceptance remain partial."
         }
       ]
     },
@@ -4247,7 +4257,7 @@
       "package": "13",
       "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover accepted WebSocket subprotocols, cleanup scope and builder validation. They do not deploy a real Foxglove bridge image to a current device.",
-      "required_follow_up": "Require the actual generated Foxglove build/deployment, real WebSocket/CDR ROS delivery and both historical controls in the existing Go2 ROS job. Confirm recorded runtime, disk and cleanup evidence before marking verified.",
+      "required_follow_up": "Require the actual generated Foxglove build/deployment, real WebSocket/CDR ROS delivery and all three historical controls in the existing Go2 ROS job. Confirm recorded runtime, disk and cleanup evidence before marking verified.",
       "evidence": [
         {
           "tests": [
@@ -4268,6 +4278,14 @@
             ".github/scripts/test-foxglove-runtime.py"
           ],
           "result": "Actual generated-image deployment exposed production CycloneDDS crash on loopback-only hosts: explicit lo plus autodetermine selects lo twice. Narrow external-IPv4 admission fix passes native race cases and original-config local control; full post-fix OCI/WebSocket/CDR and image-bound original-startup control remain required in existing Go2 job."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898614",
+          "tests": [
+            "go/internal/cli/commands/foxglove_runtime_test.go"
+          ],
+          "result": "Post-fix actual OCI image started CycloneDDS and Foxglove3.6.0, advertised the nonce ROS topic and created a real subscription through the forwarded WebSocket. Normal gate then failed its test-only CDR decoder string-bounds check. Humble rmw_cyclonedds serdata_rmw::resize explicitly rounds serialized buffers to four bytes and zero-fills the tail; corrected independent decoder retains declared string length/NUL and admits only exact zero alignment padding. Targeted native parser cases pass and independent source review is clear. Full normal and three controls remain pending; no end-to-end pass claimed."
         }
       ]
     },
