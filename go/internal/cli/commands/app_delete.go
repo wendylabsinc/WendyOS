@@ -108,9 +108,12 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 	}
 
 	started := app.GetDeletionStartedAt() != nil
+	// A resumed delete shows and asks exactly like a first run: it signs only
+	// for devices the operator saw and confirmed.
 	if started {
 		say("%s is being deleted: %s a removal or a detach. Finishing.", appID, plural(len(rows), "device still needs", "devices still need"))
-	} else {
+	}
+	{
 		if !yes {
 			if !interactive {
 				return usageErrorf("Not confirmed. Add --yes to delete it without a terminal.")
@@ -175,7 +178,7 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 			break
 		}
 	}
-	if !started && len(rows) > 0 && !yes {
+	if len(rows) > 0 && !yes {
 		typed, err := deployAsk("Type the app name to confirm", "", "")
 		if err != nil {
 			return err
