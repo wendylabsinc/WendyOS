@@ -28,11 +28,13 @@ run_root_bounded() {
 launcher_is_active() {
   # jobs must run in this parent shell. A pipeline or command substitution
   # gives it a subshell job table and falsely reports a healthy daemon absent.
-  # Include stopped jobs too; only wait after the owned child is no longer in
-  # Bash's table. The file belongs to this fresh fixture output directory.
+  # Include running and stopped jobs, but not completed jobs: Bash retains
+  # completed entries during a function, so unfiltered jobs -p cannot prove
+  # that the launcher is still active. Both builtins must run in this shell.
+  # The file belongs to this fresh fixture output directory.
   # An unreadable/unwritable snapshot is unknown, so retain the bounded polling
   # path rather than falsely declaring exit and entering wait.
-  jobs -p > "$output/pipewire-launcher.jobs" || return 0
+  { jobs -pr && jobs -ps; } > "$output/pipewire-launcher.jobs" || return 0
   local status=0
   grep -Fxq "$daemon_launcher" "$output/pipewire-launcher.jobs" || status=$?
   [[ "$status" != 1 ]]
