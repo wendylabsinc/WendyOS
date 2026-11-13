@@ -35,6 +35,7 @@ SUITES = (
     "go2_replay_admission_test.py",
     "watch_container_admission_test.py",
     "driver_lifecycle_vm_test.py",
+    "driver_vm_preflight_test.py",
     "npu_hardware_test.py",
     "orin_wpa3_rehearsal_test.py",
     "orin_seed_rehearsal_test.py",
