@@ -2187,6 +2187,12 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898743",
           "artifact": 14014637372,
           "result": "Actual Fedora guest reaches its first healthy driver install, then its console switches to console-getty login. All later45s observer,6min context and7min test-timeout diagnostics are absent before the600s QEMU watchdog. Exact source hashes match. Corrected fixture masks both login services and captures test/observer output through a separate virtio-serial port, keeping boot console independently. Nine portable unit/real-private-PTY checks and ShellCheck pass; no new VM or product defect is claimed. Complete install/replacement/rollback/reboot gate remains pending."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254144",
+          "artifact": 14015608712,
+          "result": "Independent virtio diagnostics now prove actual first InstallDriver/sysext merge completed46.66s. The expected healthy module version parameter is absent afterward, so lifecycle still fails. The retained evidence cannot distinguish missing merged payload from module lookup/activation. Added actual SquashFS payload byte/list/activation checks before boot and bounded read-only guest mount/receipt/module/vermagic diagnostics after failure. Eleven portable checks and ShellCheck pass. Shipped apply code, assertions and watchdog remain unchanged; no product defect or successful lifecycle is claimed."
         }
       ]
     },
