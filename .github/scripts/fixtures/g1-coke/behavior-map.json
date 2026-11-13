@@ -38,8 +38,8 @@
         },
         {
           "boundary": "Always extract DLA compiler from verified packaged artifact instead of trusting existing host file",
-          "proof": "No new packaged JetPack extraction proof in this batch.",
-          "remaining": "Pinned package corruption/existing-library substitution and actual extraction need a separate artifact fixture."
+          "proof": "test-coke-dla-package.py pins the actual2,791,444-byte NVIDIA36.4.3 package to the unchanged production checksum, validates Debian metadata and exact8,159,168-byte AArch64 ELF output. ExistingG1 job executes unchanged bootstrap at its real vendor path in private mount/PID/network namespaces: fresh extraction, replacement of an untrusted existing library, checksum/missing-package refusal without modifying that existing library, and exact historical existing-file bypass failure. Local native dpkg-deb extraction/hash/ELF and hosted-only refusal pass; source review clear.",
+          "remaining": "Full namespace normal/control execution remains pending in existing hosted G1 job. No package installation, library loading, physical Jetson or GPU acceptance is claimed."
         },
         {
           "boundary": "Local web assets and motion gating configuration",
@@ -108,7 +108,8 @@
     "transport": "python .github/scripts/test-g1-coke-transports.py --output NEW_DIRECTORY; NumPy required; five real HTTP/thread cases and six source-bound controls, no skips.",
     "locked_review": "uv run --project Examples/G1CokeDemo --frozen --group dev --python 3.12 python .github/scripts/test-g1-coke-review.py --output NEW_DIRECTORY; exact lock versions and all 40 current review/transport cases required.",
     "runner": "Existing G1 simulator row can run the lightweight gate after shipped NumPy installation, then the separate exact Coke Python 3.12 runtime. It must retain the existing Python 3.10 simulator compatibility check. No additional job or matrix entry.",
-    "packet_isolation": "bash .github/scripts/test-rtps-multicast-isolation.sh NEW_DIRECTORY in the existing disposable Linux network job. Requires Go race compiler, sudo, iproute2 and util-linux; no additional runner. Never run its privileged namespace on a user host."
+    "packet_isolation": "bash .github/scripts/test-rtps-multicast-isolation.sh NEW_DIRECTORY in the existing disposable Linux network job. Requires Go race compiler, sudo, iproute2 and util-linux; no additional runner. Never run its privileged namespace on a user host.",
+    "dla_package": "python3 .github/scripts/test-coke-dla-package.py --output NEW_RUNNER_TEMP_DIRECTORY in existingG1 job. Exact public artifact, real dpkg-deb extraction and strict historical control; no new runner."
   },
   "not_claimed": [
     "Physical robot/camera/motor access",

@@ -1389,6 +1389,10 @@ jobs:
         run: |
           .venv/bin/python .github/scripts/test-g1-coke-transports.py --output "$RUNNER_TEMP/coke-transports"
           uv run --project Examples/G1CokeDemo --frozen --group dev --managed-python --python 3.12 python .github/scripts/test-g1-coke-review.py --output "$RUNNER_TEMP/coke-review"
+      - name: Require pinned DLA package extraction and existing-library control
+        if: matrix.robot == 'g1'
+        timeout-minutes: 4
+        run: python3 .github/scripts/test-coke-dla-package.py --output "$RUNNER_TEMP/coke-dla"
       - name: Preserve Coke regression evidence
         if: always() && matrix.robot == 'g1'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1400,6 +1404,8 @@ jobs:
             ${{ runner.temp }}/coke-review/*.log
             ${{ runner.temp }}/coke-review/*.json
             ${{ runner.temp }}/coke-review/junit.xml
+            ${{ runner.temp }}/coke-dla/*.log
+            ${{ runner.temp }}/coke-dla/*.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Set up Go for the Go2 bridge deadline fixture
