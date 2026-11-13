@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "README.md"
+      - ".github/scripts/test-readme-install.py"
+      - ".github/scripts/readme_install_test.py"
+      - ".github/scripts/run-owned-media-test.py"
       - "docs"
       - "docs/**"
       - "go/internal/cli/assets/docs/**"
@@ -16,6 +20,10 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "README.md"
+      - ".github/scripts/test-readme-install.py"
+      - ".github/scripts/readme_install_test.py"
+      - ".github/scripts/run-owned-media-test.py"
       - "docs"
       - "docs/**"
       - "go/internal/cli/assets/docs/**"
@@ -82,6 +90,28 @@ jobs:
 
       - name: Install CLI reference build dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev pkg-config
+
+      - name: Execute README installation with this revision's CLI
+        working-directory: .
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d "$RUNNER_TEMP/docs-installer-cli.XXXXXX")"
+          trap 'rm -rf "$fixture"' EXIT
+          python3 .github/scripts/readme_install_test.py
+          python3 .github/scripts/run-owned-media-test.py --timeout 360 -- \
+            go build -o "$fixture/wendy" ./go/cmd/wendy
+          python3 .github/scripts/test-readme-install.py --cli "$fixture/wendy" \
+            --evidence "$RUNNER_TEMP/docs-readme-install-evidence"
+
+      - name: Preserve documentation installer evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-readme-install-execution
+          path: ${{ runner.temp }}/docs-readme-install-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Install dependencies
         run: npm ci
