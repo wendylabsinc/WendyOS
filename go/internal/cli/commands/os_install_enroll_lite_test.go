@@ -180,3 +180,30 @@ func TestWaitInstalledLiteDoesNotSwitchDevices(t *testing.T) {
 		})
 	}
 }
+
+// Firmware without cloud enrollment is not fixed by rebuilding or re-enrolling:
+// the message says the board works, is not enrolled, and to install another image.
+func TestEnrollInstalledLiteNoCloudEnrollmentSaysToChooseAnotherImage(t *testing.T) {
+	origWait, origEnroll := waitInstalledLiteFn, runLiteEnrollmentFn
+	t.Cleanup(func() { waitInstalledLiteFn, runLiteEnrollmentFn = origWait, origEnroll })
+	waitInstalledLiteFn = func(_ context.Context, port discovery.SerialPortInfo, _ bool) (discovery.SerialPortInfo, error) {
+		return port, nil
+	}
+	runLiteEnrollmentFn = func(*cobra.Command, models.ExternalDevice, *config.AuthConfig, string, liteEnrollmentOptions) error {
+		return errLiteNoCloudEnrollment
+	}
+	err := enrollInstalledLite(context.Background(), discovery.SerialPortInfo{Port: "/dev/x"}, &config.AuthConfig{CloudGRPC: "g:443"}, "n", "v", true)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, bad := range []string{"rebuild", "wendy device enroll"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Fatalf("message contains %q: %v", bad, err)
+		}
+	}
+	for _, want := range []string{"flashed", "not enrolled", "Install again and choose", wendyLiteCloudImage} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("message lacks %q: %v", want, err)
+		}
+	}
+}

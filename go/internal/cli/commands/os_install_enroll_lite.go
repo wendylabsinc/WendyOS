@@ -56,6 +56,27 @@ func resolveLiteInstallEnrollment(cfg *config.Config, opts preEnrollOptions, int
 	return auth, nil
 }
 
+// liteCloudEnrollmentLabel is the picker's note on whether a board's image
+// includes Wendy Cloud enrollment; empty when the CLI does not know.
+func liteCloudEnrollmentLabel(board string) string {
+	if ok, known := wendyLiteCloudEnrollment[board]; known {
+		if ok {
+			return " (Wendy Cloud enrollment: yes)"
+		}
+		return " (Wendy Cloud enrollment: no)"
+	}
+	return ""
+}
+
+// checkLiteImageCanEnroll stops an enrolling install before flashing an image
+// the CLI knows has no Wendy Cloud enrollment.
+func checkLiteImageCanEnroll(board string) error {
+	if ok, known := wendyLiteCloudEnrollment[board]; known && !ok {
+		return fmt.Errorf("the image you chose does not include Wendy Cloud enrollment, so the board could not be enrolled. Nothing was flashed. Install again and choose %q", wendyLiteCloudImage)
+	}
+	return nil
+}
+
 var (
 	installedLiteBootTimeout = 30 * time.Second
 	waitInstalledLiteFn      = waitInstalledLite
@@ -80,6 +101,9 @@ func enrollInstalledLite(ctx context.Context, port discovery.SerialPortInfo, aut
 		// Do not retry this operation: it can reserve an asset and consume a
 		// single-use credential. runEnrollLiteDevice verifies the certificate.
 		err = runLiteEnrollmentFn(cmd, target, auth, name, liteEnrollmentOptions{brokerPort: 5055})
+	}
+	if errors.Is(err, errLiteNoCloudEnrollment) {
+		return fmt.Errorf("the firmware was flashed and the board works, but it is not enrolled. The firmware image that was installed does not include Wendy Cloud enrollment. Install again and choose an image that supports it, such as %q", wendyLiteCloudImage)
 	}
 	if err != nil {
 		return fmt.Errorf("firmware was flashed, but Cloud enrollment is not confirmed: %w; use 'wendy device enroll --cloud-grpc %s' over native USB to finish setup without reflashing", err, auth.CloudGRPC)

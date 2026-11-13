@@ -62,9 +62,10 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 }
 
 var (
-	errLiteUUIDUnsupported  = errors.New("this Wendy Lite firmware cannot enroll with a device UUID; update the firmware over USB before enrolling")
-	errLiteAlreadyEnrolled  = errors.New("this board still holds an issued identity, even if its cloud asset was removed; connect it over USB and run 'wendy device unenroll' with that USB device selected, then enroll again; older firmware must be updated first")
-	connectLiteEnrollmentFn = func(target models.ExternalDevice) (liteEnrollmentDevice, error) {
+	errLiteNoCloudEnrollment = errors.New("this board's firmware does not include Wendy Cloud enrollment, so it cannot be enrolled. Install a firmware image that does with 'wendy install'; for an ESP32-C6, choose \"" + wendyLiteCloudImage + "\"")
+	errLiteUUIDUnsupported   = errors.New("this Wendy Lite firmware cannot enroll with a device UUID; update the firmware over USB before enrolling")
+	errLiteAlreadyEnrolled   = errors.New("this board still holds an issued identity, even if its cloud asset was removed; connect it over USB and run 'wendy device unenroll' with that USB device selected, then enroll again; older firmware must be updated first")
+	connectLiteEnrollmentFn  = func(target models.ExternalDevice) (liteEnrollmentDevice, error) {
 		return (&providers.MicroWendyProvider{}).ConnectEnrollment(target)
 	}
 	runLiteEnrollmentFn    = runEnrollLiteDevice
@@ -100,7 +101,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	// Older firmware does not report this capability. Reject only firmware that
 	// explicitly reports its certificate-issuance task is unavailable.
 	if challenge.CloudEnrollmentSupported != nil && !challenge.GetCloudEnrollmentSupported() {
-		return fmt.Errorf("this Wendy Lite firmware was built without cloud enrollment support; rebuild it with PKI, cloud and Wi-Fi support enabled before enrolling")
+		return errLiteNoCloudEnrollment
 	}
 	// The device's one id is a UUID the CLI mints. Firmware that cannot store
 	// a UUID identity is refused, never enrolled under its hardware id.

@@ -196,6 +196,20 @@ const wendyLiteCatalogJSON = `
 }
 `
 
+// wendyLiteCloudEnrollment records which catalog boards' prebuilt images are
+// known to include Wendy Cloud enrollment. Boards not listed are unknown, and
+// the board's own report after flashing is the only check for them.
+// Evidence: wendy-lite boards/esp32c6_net.defaults turns CONFIG_WENDY_CLOUD off
+// (firmware then reports no cloud enrollment); esp32c6_generic_native keeps the
+// default CONFIG_WENDY_PKI, CLOUD and WIFI_ENABLED on.
+var wendyLiteCloudEnrollment = map[string]bool{
+	"esp32c6_net":            false,
+	"esp32c6_generic_native": true,
+}
+
+// wendyLiteCloudImage names the ESP32-C6 image to point users at.
+const wendyLiteCloudImage = "Generic ESP32-C6 board, 4MB flash"
+
 // WendyLiteBoard is one installable Wendy Lite flavor: a board paired with
 // the firmware binary built for it and the ESP32 target chip it runs on.
 type WendyLiteBoard struct {

@@ -430,7 +430,7 @@ func pickWendyLiteBoard(target string, nightly bool) (string, error) {
 			continue
 		}
 		items = append(items, tui.PickerItem{
-			Name:    v.DisplayName,
+			Name:    v.DisplayName + liteCloudEnrollmentLabel(v.Board),
 			SortKey: strings.ToLower(v.DisplayName),
 			Value:   v.Board,
 		})
@@ -3228,6 +3228,12 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
+	if preOpts.mode == preEnrollForced {
+		if err := checkLiteImageCanEnroll(board); err != nil {
+			return err
+		}
+	}
+
 	wifi.MaxNetworks = liteMaxWiFiNetworks
 	provCreds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
@@ -3252,6 +3258,11 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
 		if resolveErr != nil {
 			return resolveErr
+		}
+		if enrollmentAuth != nil {
+			if err := checkLiteImageCanEnroll(board); err != nil {
+				return err
+			}
 		}
 	}
 

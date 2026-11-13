@@ -323,3 +323,16 @@ func TestInstallESP32FirmwareRefusesTooManyNetworksBeforeTheNameQuestion(t *test
 		t.Fatalf("two networks: %v; want the one-network usage error", err)
 	}
 }
+
+// --pre-enroll with an image that has no cloud enrollment stops before any
+// question or flashing, and names the image to choose instead.
+func TestInstallESP32FirmwareRefusesPreEnrollForImageWithoutCloudEnrollment(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	err := installESP32Firmware(context.Background(), false, "esp32c6_net",
+		discovery.SerialPortInfo{Port: "/dev/ttyACM0"},
+		wifiCLIOptions{Entries: []string{"not-key-value"}}, "", preEnrollOptions{mode: preEnrollForced})
+	if err == nil || !strings.Contains(err.Error(), "does not include Wendy Cloud enrollment") ||
+		!strings.Contains(err.Error(), "Nothing was flashed") || !strings.Contains(err.Error(), wendyLiteCloudImage) {
+		t.Fatalf("got %v; want the no-cloud-enrollment stop naming %q", err, wendyLiteCloudImage)
+	}
+}
