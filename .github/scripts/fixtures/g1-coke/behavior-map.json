@@ -58,8 +58,8 @@
         },
         {
           "boundary": "Lifecycle observer uses host discovery scope; lidar interruption does not swallow SystemExit",
-          "proof": "Original source changes are mapped; no new observer-container or process-exit fixture in this batch.",
-          "remaining": "Actual observer host/container discovery and lidar process exit are still pending. Navigation motor and sensor dashboard changes in this commit are explanatory comments."
+          "proof": "lidar_probe_test.py now executes the actual production main/options parser in separate Python interpreters with a subscriber-boundary injected SystemExit73 or KeyboardInterrupt. SystemExit retains exit73, KeyboardInterrupt retains clean exit0, and the exact old broad catch reproduces swallowed exit0. All21 native tests pass; existing Go TestLidarProbe invokes this suite in required race CI.",
+          "remaining": "Actual observer host/container discovery is still pending. Injected subscriber termination is not ROS middleware or physical sensor teardown proof; navigation motor/dashboard comment-only changes do not need behavioral tests."
         }
       ]
     },
