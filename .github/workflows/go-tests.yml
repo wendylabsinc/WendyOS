@@ -786,6 +786,24 @@ jobs:
             done
           done
 
+      - name: Require real native TLS listener drain and Lite carrier attachment
+        shell: bash
+        run: |
+          set -o pipefail
+          for name in TestNormalNativeTLSListenerAttachmentAndDrain TestNormalNativeTLSLANDialsLitePeer; do
+            sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/operator-current.test" "$name" | tee "$RUNNER_TEMP/$name.log"
+            if grep -q -- '--- SKIP:' "$RUNNER_TEMP/$name.log"; then exit 1; fi
+            grep -q "^--- PASS: $name " "$RUNNER_TEMP/$name.log"
+          done
+      - name: Retain native carrier attachment evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-carrier-attachment
+          path: ${{ runner.temp }}/TestNormalNativeTLS*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: wendylabsinc/WendyOS-Builder

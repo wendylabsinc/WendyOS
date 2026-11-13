@@ -7,7 +7,7 @@ if [[ ${1:-} != --inside ]]; then
   [[ -x $binary ]]
   test_name=${2:-TestPacketBackendContract}
   case "$test_name" in
-    TestPacketBackendContract|TestDuplicateCarrierPreservesLiveRoute|TestAutomaticROSDiscoveryNeverUsesWirelessPath) ;;
+    TestPacketBackendContract|TestDuplicateCarrierPreservesLiveRoute|TestAutomaticROSDiscoveryNeverUsesWirelessPath|TestNormalNativeTLSListenerAttachmentAndDrain|TestNormalNativeTLSLANDialsLitePeer) ;;
     *) echo 'unsupported isolated network test' >&2; exit 2 ;;
   esac
   export WENDY_PACKET_PARENT_mnt WENDY_PACKET_PARENT_net WENDY_PACKET_PARENT_pid
@@ -26,4 +26,8 @@ mount -t tmpfs tmpfs /run
 mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
 ip link set lo up
 export WENDY_PACKET_BACKEND_NAMESPACE=1
+case "$3" in
+  TestNormalNativeTLSListenerAttachmentAndDrain|TestNormalNativeTLSLANDialsLitePeer)
+    export WENDY_LOCALMESH_ISOLATED_TEST=1 ;;
+esac
 "$2" -test.run "^$3\$" -test.v -test.count=1 -test.timeout=60s
