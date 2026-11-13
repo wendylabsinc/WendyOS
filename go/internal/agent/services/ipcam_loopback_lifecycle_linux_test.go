@@ -15,9 +15,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 // The RTSP/RTP camera is synthetic. Loopback allocation, supervision, clocks,
@@ -140,11 +142,23 @@ func testIPCameraKernelLifecycle(t *testing.T, diagnosticMode string) {
 		formatDeadline := time.Now().Add(4 * time.Second)
 		for {
 			format, err := os.ReadFile("/sys/class/video4linux/video200/format")
-			if err == nil && strings.HasSuffix(strings.TrimSpace(string(format)), ":64x48@25") {
+			// With exclusive_caps the format appears before the producer starts
+			// streaming. GStreamer rejects an output-only node immediately, so
+			// wait for the kernel's actual capture capability as well.
+			var caps v4l2Capability
+			fd, capabilityErr := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+			if capabilityErr == nil {
+				_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQueryCap, uintptr(unsafe.Pointer(&caps)))
+				unix.Close(fd)
+				if errno != 0 {
+					capabilityErr = errno
+				}
+			}
+			if err == nil && strings.HasSuffix(strings.TrimSpace(string(format)), ":64x48@25") && capabilityErr == nil && caps.hasVideoCapture() {
 				break
 			}
 			if time.Now().After(formatDeadline) {
-				t.Fatalf("kernel pump did not negotiate 64x48 capture format at 25fps: %q %v", format, err)
+				t.Fatalf("kernel pump did not become a 64x48 capture device at 25fps: format=%q error=%v capabilities=%#x device_caps=%#x query_error=%v", format, err, caps.Capabilities, caps.DeviceCaps, capabilityErr)
 			}
 			wait(20 * time.Millisecond)
 		}
