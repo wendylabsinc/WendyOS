@@ -4292,7 +4292,7 @@
             ".github/scripts/test-windows-vm-boot.py",
             "go/internal/testfixture/windowsvmidentity/main.go"
           ],
-          "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim."
+          "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim. The observed Agent release tag resolves to87df018a9f1e7bdd5f0f1529388797e87e57d97e; its exact network_stats.go and hoststats implementation populate BootId from /proc/sys/kernel/random/boot_id and sample CLOCK_BOOTTIME. The introducing commit282aa2293 is an ancestor."
         }
       ]
     },
@@ -4325,7 +4325,7 @@
             ".github/scripts/test-windows-vm-boot.py",
             "go/internal/testfixture/windowsvmidentity/main.go"
           ],
-          "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim."
+          "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim. The observed Agent release tag resolves to87df018a9f1e7bdd5f0f1529388797e87e57d97e; its exact network_stats.go and hoststats implementation populate BootId from /proc/sys/kernel/random/boot_id and sample CLOCK_BOOTTIME. The introducing commit282aa2293 is an ancestor."
         }
       ]
     },
@@ -4853,6 +4853,14 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378092028/job/131729216774",
           "artifact": 14016050305,
           "result": "Hosted published-rootfs/configuration comparison passes for both pinned RPi5 and VM x86 images. The original logging documentation fails DOC_PACKAGED_JOURNAL; exact installed file membership and source hashes are retained in docs-built-capabilities artifact. Full docs export and route crawl also pass. No real boot, OTA or physical logging acceptance is claimed."
+        },
+        {
+          "tests": [
+            ".github/scripts/check-swift-agent-docs.py",
+            ".github/scripts/swift_agent_docs_test.py",
+            ".github/workflows/swift-tests.yml"
+          ],
+          "result": "New executable documentation gate compiles unchanged production Swift configuration/environment files and observes nine actual processes: documented defaults, all three loopback host overrides, rejected wildcard/control-character hosts, and valid/invalid ports. Actual default127.0.0.1 contradicts original documented::; corrected guide passes and original row fails DOC_AGENT_DEFAULT. Two offline admission checks pass. Required in the existing Swift core job with exact documentation/script path triggers, four-minute cap and source/compiler/binary receipts. Local actual execution passes; hosted gate remains pending. No listener/app/TCC/Keychain/hardware execution or Swift cross-compilation claim."
         }
       ]
     },
