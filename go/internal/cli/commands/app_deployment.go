@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -245,7 +246,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 	if err := confirmChange(c, interactive, fmt.Sprintf("Apply this change to %s?", name)); err != nil {
 		return err
 	}
-	return op.change(ctx, d, newRel, get, without(cur, next), moves, true, cloudpb.DeploymentService_UpdateDeployment_FullMethodName, req,
+	return op.change(ctx, d, newRel, get, without(cur, next), moves, true, keepTryingChoices[c.keepTrying], cloudpb.DeploymentService_UpdateDeployment_FullMethodName, req,
 		func(n *cloudpb.Deployment) bool {
 			return n.GetAppReleaseId() == orDefault(req.AppReleaseId, d.GetAppReleaseId()) && n.GetConfigJson() == orDefault(req.ConfigJson, d.GetConfigJson()) &&
 				n.GetDesiredState() == orDefaultState(req.DesiredState, d.GetDesiredState())
@@ -309,7 +310,7 @@ func runRollback(ctx context.Context, op *registryOp, appID, name string, c chan
 		return err
 	}
 	req := &cloudpb.RollbackDeploymentRequest{OrganizationId: op.org, DeploymentId: d.GetId(), ExpectedRevision: d.GetRevision(), ToRevision: c.to, Note: c.note, MoveDevices: c.move}
-	return op.change(ctx, d, newRel, next, without(cur, next), moves, false, cloudpb.DeploymentService_RollbackDeployment_FullMethodName, req,
+	return op.change(ctx, d, newRel, next, without(cur, next), moves, false, 0, cloudpb.DeploymentService_RollbackDeployment_FullMethodName, req,
 		func(n *cloudpb.Deployment) bool {
 			return n.GetAppReleaseId() == target.GetAppReleaseId() && n.GetConfigJson() == target.GetConfigJson() && n.GetDesiredState() == target.GetDesiredState()
 		}, say)
@@ -444,8 +445,9 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 // deployment, drop leaves it. A new release is sealed under a new key.
 // With mustGet, every device in get must be asked for (an update: the
 // changed content reaches each, or each is new).
+// validity is the operator's --keep-trying answer, 0 for the stated default.
 func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, newRel *cloudpb.AppRelease, get, drop []string, moves map[string]string, mustGet bool,
-	method string, req proto.Message, want func(*cloudpb.Deployment) bool, say func(string, ...any),
+	validity time.Duration, method string, req proto.Message, want func(*cloudpb.Deployment) bool, say func(string, ...any),
 ) error {
 	conf := confirmed{appID: d.GetAppId(), remove: uris(op.org, drop), moves: map[string]string{}}
 	for dev, from := range moves {
@@ -483,6 +485,9 @@ func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, newRel 
 		if conf.kd, err = op.newDeploymentKey(ctx, conf.d, m, contentKey); err != nil {
 			return fmt.Errorf("%s: %w", d.GetName(), err)
 		}
+	}
+	if conf.kd != nil {
+		conf.kd.validity = validity
 	}
 	conf.must = maps.Clone(conf.remove)
 	if mustGet {

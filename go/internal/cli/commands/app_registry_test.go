@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -989,5 +990,32 @@ func TestRegistryAddress(t *testing.T) {
 	t.Setenv(registryEnv, "localhost:9443")
 	if got, _ := registryAddress("api.dev.wendy.sh:443"); got != "localhost:9443" {
 		t.Fatalf("override: %q", got)
+	}
+}
+
+// The digest signed is the manifest of the release the deployment uses now:
+// a change Cloud recorded before its key (release B, newest key sealed for
+// A) is refused and nothing is signed.
+func TestSigningRefusesAKeyForAnotherRelease(t *testing.T) {
+	op, fake, _, _, depID := deployFixture(t)
+	releaseB, _ := publishFixture(t, op)
+	fake.deploys[depID].AppReleaseId = releaseB
+	n := len(fake.assigned)
+	err := op.rotate(context.Background(), depID, "sh.wendy.example", []string{vectorDevice})
+	if err == nil || !strings.Contains(err.Error(), "nothing was signed") || len(fake.assigned) != n {
+		t.Fatalf("a key for another release: %v", err)
+	}
+}
+
+// A statement's validity is the stated default, not what Cloud echoes.
+func TestStatementValidityIsNotCloudsEcho(t *testing.T) {
+	op, fake, _, _, depID := deployFixture(t)
+	fake.deploys[depID].Validity = durationpb.New(365 * 24 * time.Hour)
+	if err := op.rotate(context.Background(), depID, "sh.wendy.example", []string{vectorDevice}); err != nil {
+		t.Fatal(err)
+	}
+	last := fake.assigned[len(fake.assigned)-1]
+	if last.GetExpiresAt().AsTime().After(time.Now().Add(61 * 24 * time.Hour)) {
+		t.Fatalf("expires %v", last.GetExpiresAt().AsTime())
 	}
 }

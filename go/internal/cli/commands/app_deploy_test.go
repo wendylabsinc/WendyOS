@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -102,6 +103,10 @@ func TestDeployWithAllFlagsAsksNothing(t *testing.T) {
 	if len(fake.assigned) != 1 || fake.assigned[0].GetDesiredState() != cloudpb.Running_STOPPED {
 		t.Fatalf("signed %v", fake.assigned)
 	}
+	// The statement carries the operator's 30 days, not Cloud's echo.
+	if exp := time.Until(fake.assigned[0].GetExpiresAt().AsTime()); exp < 29*24*time.Hour || exp > 31*24*time.Hour {
+		t.Fatalf("expires in %v", exp)
+	}
 	for _, want := range []string{"line-3: sh.wendy.example ", "to 1 device, installed only, 1 value changed.", "Devices: packer-01",
 		"Offline devices keep trying for 30 days.", "1 installed", "Follow it later with: wendy app deployment show sh.wendy.example/line-3"} {
 		if !strings.Contains(out.String(), want) {
@@ -142,15 +147,15 @@ func TestDeployMissingAnswerNamesTheFlag(t *testing.T) {
 func TestDeployAsksTheDashboardQuestionsInOrder(t *testing.T) {
 	op, _, releaseID := stepsFixture(t)
 	answers := map[string]string{"App": "sh.wendy.example", "Release": releaseID, "Devices": "packer-01", "Name this deployment": "line-3",
-		"LOG_LEVEL": "info", "UPLOAD_INTERVAL_SECONDS": "30", "Run it now, or install only?": "run", "Note for the history": ""}
+		"LOG_LEVEL": "info", "UPLOAD_INTERVAL_SECONDS": "30", "Run it now, or install only?": "run", "If a device is offline, keep trying for": "1y", "Note for the history": ""}
 	var asked []string
 	deployAsk = func(q, _, _ string) (string, error) { asked = append(asked, q); return answers[q], nil }
 	deployConfirm = func(q string) (bool, error) { asked = append(asked, q); return true, nil }
 	var out bytes.Buffer
-	if err := runDeploy(context.Background(), op, deployAnswers{keepTrying: "60d"}, &out, true); err != nil {
+	if err := runDeploy(context.Background(), op, deployAnswers{}, &out, true); err != nil {
 		t.Fatal(err)
 	}
-	want := "App,Release,Devices,Name this deployment,LOG_LEVEL,UPLOAD_INTERVAL_SECONDS,Run it now, or install only?,Note for the history,Deploy to 1 device?"
+	want := "App,Release,Devices,Name this deployment,LOG_LEVEL,UPLOAD_INTERVAL_SECONDS,Run it now, or install only?,If a device is offline, keep trying for,Note for the history,Deploy to 1 device?"
 	if got := strings.Join(asked, ","); got != want {
 		t.Fatalf("asked %s", got)
 	}
