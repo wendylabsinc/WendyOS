@@ -3519,7 +3519,7 @@
             ".github/regression-coverage/manual/driver-firstboot-rehearsal.txt",
             ".github/scripts/driver_firstboot_rehearsal_test.py"
           ],
-          "result": "Prepared candidate CLI/Agent, exact Orin developer-kit/serial/ECID/storage, public version/catalog/kernel/flashpack/raw hash and reviewed signature-policy binding. Pins actual wendyos-hello source and observes kernel module state, activation receipt, fresh load journal and second-boot persistence. Separate no-egress unenrolled USB registry upload and ten-minute incomplete-firstboot result are required. Three offline admission tests pass, including actual empty-key policy and rejection of cosmetic address changes. Generation performs no device operation or cryptographic signature verification. Every physical case is not_run."
+          "result": "Prepared candidate CLI/Agent, exact Orin developer-kit/serial/ECID/storage, public version/catalog/kernel/flashpack/raw hash and reviewed signature-policy binding. Pins actual wendyos-hello source and observes kernel module state, activation receipt, fresh load journal and second-boot persistence. Separate no-egress unenrolled USB registry upload and ten-minute incomplete-firstboot result are required. Generation refuses a planned post-boot endpoint and emits no command addressing the booted device; those are produced only from a link-local endpoint observed after first boot. Three offline admission tests pass, including actual empty-key policy and a respelled unchanged endpoint never counted as an address change. Generation performs no device operation or cryptographic signature verification. Every physical case is not_run."
         }
       ]
     },
