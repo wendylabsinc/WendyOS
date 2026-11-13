@@ -359,7 +359,7 @@ def execute(output):
                 # Release the original obstruction before restart. The saved
                 # fallback must win even though50051 is now available again.
                 if phase=='collision':blocker.close()
-            evidence.update(normal_boot='passed',collision_fallback='passed',same_disk_restart='passed',guest=first_info,run_state=first_state)
+            evidence.update(normal_boot='passed',collision_fallback='passed',same_disk_restart='passed',guest=evidence['lifecycle'][0]['guest'],run_state=first_state)
         finally:
             blocker.close()
         owner.run('remove',[cli,'vm','rm',name],20,env)
