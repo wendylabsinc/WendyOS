@@ -41,12 +41,30 @@ mount -t tmpfs tmpfs /run
 mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
 # HostPolicy cleanup must never see the runner's resolver journal. No external
 # name resolution is needed; donor DNS is queried by its owned namespace IP.
-exec 9</etc/alternatives
+# Debian's iptables/ip6tables executables traverse /etc/alternatives. Preserve
+# that directory at a stable path BEFORE hiding /etc. mount canonicalizes a
+# /proc/self/fd source back to its old pathname, which now names the empty mount.
+declare -A expected_tools
+for tool in iptables ip6tables; do
+  tool_path=$(command -v "$tool")
+  expected_tools[$tool]=$(readlink -f "$tool_path")
+  [[ -x ${expected_tools[$tool]} ]]
+  printf 'Before /etc isolation: %s -> %s\n' "$tool" "${expected_tools[$tool]}"
+done
+mkdir /run/wendy-lease-alternatives
+mount --bind /etc/alternatives /run/wendy-lease-alternatives
+mount -o remount,bind,ro /run/wendy-lease-alternatives
 mount -t tmpfs tmpfs /etc
 mkdir /etc/alternatives
-mount --bind /proc/self/fd/9 /etc/alternatives
+mount --bind /run/wendy-lease-alternatives /etc/alternatives
 mount -o remount,bind,ro /etc/alternatives
-exec 9<&-
+for tool in iptables ip6tables; do
+  tool_path=$(command -v "$tool")
+  resolved_tool=$(readlink -f "$tool_path")
+  [[ $resolved_tool == "${expected_tools[$tool]}" && -x $resolved_tool ]]
+  printf 'After /etc isolation: %s -> %s\n' "$tool" "$resolved_tool"
+  "$tool" --version
+done
 printf 'root:x:0:0:root:/root:/bin/false\nnobody:x:65534:65534:nobody:/:/bin/false\n' >/etc/passwd
 printf 'root:x:0:\nnogroup:x:65534:\n' >/etc/group
 printf 'passwd: files\ngroup: files\nhosts: files dns\n' >/etc/nsswitch.conf
