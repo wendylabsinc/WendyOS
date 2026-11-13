@@ -1,0 +1,8 @@
+build.fqbn=arduino:zephyr:unoq
+build.variant.path=/cache/arduino/data/internal/arduino_zephyr_1.1.0_9d917e296ff4622f/variants/arduino_uno_q_stm32u585xx
+name=Arduino UNO Q
+runtime.platform.path=/cache/arduino/data/internal/arduino_zephyr_1.1.0_9d917e296ff4622f
+upload.artifacts.loader=/cache/arduino/data/internal/arduino_zephyr_1.1.0_9d917e296ff4622f/firmwares/zephyr-arduino_uno_q_stm32u585xx.elf
+upload.artifacts.sketch=/build/sketch.ino.elf-zsk.bin
+upload.tool.default=remoteocd
+version=1.1.0
