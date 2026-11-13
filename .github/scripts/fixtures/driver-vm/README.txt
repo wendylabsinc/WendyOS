@@ -18,12 +18,28 @@ No host module load/unload, sysext merge, mount, service change, device access,
 KVM, tap, bridge or guest networking is performed. Kernel mutations happen
 only inside the disposable QEMU kernel. Do not bypass the hosted admission.
 
-The guest root is the same native Fedora 44 digest pinned by the existing package
-checks. A matching kernel-core/kernel-devel pair and build dependencies are
+The guest root is the official Fedora 45 amd64 manifest
+sha256:53d138f25f6738257c78553d51369b662efc0e0eb1cd1556a2fe0ad5a115be88,
+published 2026-11-02 from fedora-cloud/docker-brew-fedora source
+a980be0a4c57354f94e13f0e70dd859ec3144ac8. The registry manifest bytes and config
+digest were verified; its config declares linux/amd64 and Fedora 45. This guest
+requires systemd 260 or later because the UNCHANGED production Builder script
+uses --always-refresh, introduced in 260. Fedora 44/systemd 259.10 failed this
+prerequisite before any kernel test. Fedora's official Fedora 45 package data publishes
+systemd 262.1-1.fc45 (2026-10-17):
+  https://packages.fedoraproject.org/pkgs/systemd/systemd/fedora-45-updates.html
+  https://www.freedesktop.org/software/systemd/man/262/systemd-sysext.html
+A matching kernel-core/kernel-devel pair and build dependencies are
 resolved in its ordinary Docker build. Exact RPM versions, kernel/initrd hashes
 and every packed .raw hash are retained. Mismatched versions or missing actual
-systemd-sysext mutable/always-refresh support fail preparation. This is a generic
-kernel integration fixture, not an assertion about a vendor kernel's ABI.
+systemd-sysext mutable/always-refresh support fail preparation with the actual
+RPM versions, binary version and missing prerequisite printed in the build log.
+The feature check reads actual installed binary help after package installation;
+a version number alone cannot substitute for the required options. Packages are
+resolved at build time and their exact versions retained; the image digest does
+not freeze the repository's RPM updates. The Fedora 45 full image build and VM
+lifecycle still require hosted execution; registry/package verification is not
+kernel proof. This is a generic kernel integration fixture, not an assertion about a vendor kernel's ABI.
 
 Both pack-sysext.sh and wendyos-sysext-apply.sh come byte-for-byte from the pinned
 published WendyOS-Builder commit f72a1b354c80523dc2b092e52e38e44fe56c8d5a.
