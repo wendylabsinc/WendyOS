@@ -48,6 +48,8 @@ SUITES = (
     "driver_firstboot_rehearsal_test.py",
     "dragonwing_reset_rehearsal_test.py",
     "mac_camera_rehearsal_test.py",
+    "mac_permission_signing_rehearsal_test.py",
+    "jetson_eval_rehearsal_test.py",
     "mac_agent_lifecycle_rehearsal_test.py",
     "mac_camera_hardware_rehearsal_test.py",
     "linux_media_hardware_rehearsal_test.py",
