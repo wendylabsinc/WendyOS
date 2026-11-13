@@ -472,6 +472,8 @@ jobs:
           sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
       - name: Install USB profile dependencies with isolated service policy
         run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
+      - name: Require stale Bluetooth bond recovery over private D-Bus
+        run: bash .github/scripts/test-stale-bond-dbus.sh "$RUNNER_TEMP/stale-bond-dbus"
       - name: Require native Linux SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - name: Compile both packet backends with the race detector
@@ -623,6 +625,7 @@ jobs:
         with:
           name: transfer-interface-recovery
           path: |
+            ${{ runner.temp }}/stale-bond-dbus/*.log
             ${{ runner.temp }}/chunk-stall-transport/*.log
             ${{ runner.temp }}/chunk-stall-ownership/*.log
             ${{ runner.temp }}/linklocal-multi-interface/*.log

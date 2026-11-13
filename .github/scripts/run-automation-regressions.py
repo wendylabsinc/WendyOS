@@ -37,6 +37,7 @@ SUITES = (
     "mac_camera_hardware_rehearsal_test.py",
     "linux_media_hardware_rehearsal_test.py",
     "topdon_physical_rehearsal_test.py",
+    "bluez_stale_bond_rehearsal_test.py",
     "usb_profile_namespace_test.py",
     "usb_profile_dependencies_test.py",
     "linklocal_multi_interface_test.py",
