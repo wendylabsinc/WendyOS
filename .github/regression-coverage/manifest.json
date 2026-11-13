@@ -3755,7 +3755,7 @@
       "package": "11",
       "status": "partial",
       "audit_finding": "Release packaging now runs on Ubuntu 24.04. Building packages checks some compatibility, but does not prove clean install and upgrade behavior on the supported target distributions.",
-      "required_follow_up": "Retain real native package installation/upgrade coverage and verify Artifact Registry upload plus repository consumption for the exact candidate hashes in an authorized release context. Local package transactions do not prove external repository acceptance.",
+      "required_follow_up": "Observe the existing authorized stable-release job completing eight exact Artifact Registry uploads and four native APT/DNF metadata/download consumers. Keep actual installed-package coverage. External acceptance remains pending until those real receipts exist.",
       "evidence": [
         {
           "tests": [
@@ -3772,6 +3772,15 @@
             ".github/scripts/artifact_registry_rehearsal_test.py"
           ],
           "result": "Seven offline procedure/admission tests pass, including real native DEB parsing and wrong-version rejection. Prepared exact eight-package/native-transaction-hash acceptance binds an authorized release or owner-reserved GCP repositories to four native APT/DNF consumers. It performs no external upload or VM operation during preparation. Actual authenticated repository upload/index/download remains not_run and is not replaced by offline proof."
+        },
+        {
+          "tests": [
+            ".github/scripts/publish-linux-repositories.py",
+            ".github/scripts/consume-linux-repository.py",
+            ".github/scripts/repository_consumers_test.py",
+            ".github/workflows/build.yml"
+          ],
+          "result": "The existing publish-linux-repos job now requires exact source/version/hash-bound upload receipts and native APT/DNF4 downloads of both CLI/Agent architectures in two owned pinned containers. Existing WIF authentication and release if/needs remain unchanged; no runner, identity or credential added. Download-only consumers independently compare candidate hashes and reject a wrong-hash control. Seven offline admission/ownership checks and local native DEB parsing pass; source review clear. No upload, external helper authentication, native repository consumption or release has been executed by this change. Entries remain partial."
         }
       ]
     },
@@ -3782,7 +3791,7 @@
       "package": "11",
       "status": "partial",
       "audit_finding": "The packaging workflow requests RPM v4. No artifact-format assertion or Artifact Registry acceptance test was found.",
-      "required_follow_up": "Retain real native package installation/upgrade coverage and verify Artifact Registry upload plus repository consumption for the exact candidate hashes in an authorized release context. Local package transactions do not prove external repository acceptance.",
+      "required_follow_up": "Observe the existing authorized stable-release job completing eight exact Artifact Registry uploads and four native APT/DNF metadata/download consumers. Keep actual installed-package coverage. External acceptance remains pending until those real receipts exist.",
       "evidence": [
         {
           "tests": [
@@ -3799,6 +3808,15 @@
             ".github/scripts/artifact_registry_rehearsal_test.py"
           ],
           "result": "Seven offline procedure/admission tests pass, including real native DEB parsing and wrong-version rejection. Prepared exact eight-package/native-transaction-hash acceptance binds an authorized release or owner-reserved GCP repositories to four native APT/DNF consumers. It performs no external upload or VM operation during preparation. Actual authenticated repository upload/index/download remains not_run and is not replaced by offline proof."
+        },
+        {
+          "tests": [
+            ".github/scripts/publish-linux-repositories.py",
+            ".github/scripts/consume-linux-repository.py",
+            ".github/scripts/repository_consumers_test.py",
+            ".github/workflows/build.yml"
+          ],
+          "result": "The existing publish-linux-repos job now requires exact source/version/hash-bound upload receipts and native APT/DNF4 downloads of both CLI/Agent architectures in two owned pinned containers. Existing WIF authentication and release if/needs remain unchanged; no runner, identity or credential added. Download-only consumers independently compare candidate hashes and reject a wrong-hash control. Seven offline admission/ownership checks and local native DEB parsing pass; source review clear. No upload, external helper authentication, native repository consumption or release has been executed by this change. Entries remain partial."
         }
       ]
     },
