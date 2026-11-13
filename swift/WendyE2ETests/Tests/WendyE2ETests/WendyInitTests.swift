@@ -263,11 +263,13 @@ struct `'wendy init'` {
      The `--git-init` choice controls repository creation. Skipping git leaves
      no `.git` directory; enabling git creates an initial repository without
      changing generated project content.
+
+     Tracked by [WDY-1936 — CLI: 'wendy init --git-init' is ignored by the non-template scaffold](https://linear.app/wendylabsinc/issue/WDY-1936/cli-wendy-init-git-init-is-ignored-by-the-non-template-scaffold).
      */
     @Test(
         .disabled(
             if: !FirstAppFixture.knownDefectsEnabled,
-            "DEFECT: manual init ignores --git-init yes. Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
+            "[WDY-1936 — CLI: 'wendy init --git-init' is ignored by the non-template scaffold](https://linear.app/wendylabsinc/issue/WDY-1936/cli-wendy-init-git-init-is-ignored-by-the-non-template-scaffold). Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
         )
     )
     func `initializes git only when requested`() async throws {
@@ -633,11 +635,13 @@ extension `'wendy init'` {
      An existing Swift source file belongs to the developer even when no package
      manifest exists yet. Initialization may supply the missing package, but
      must preserve source and unrelated content.
+
+     Tracked by [WDY-4296 — wendy init overwrites existing Swift source when Package.swift is missing](https://linear.app/wendylabsinc/issue/WDY-4296/wendy-init-overwrites-existing-swift-source-when-packageswift-is).
      */
     @Test(
         .disabled(
             if: !FirstAppFixture.knownDefectsEnabled,
-            "DATA LOSS: manual Swift init overwrites existing main.swift when Package.swift is absent. Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
+            "DATA LOSS: [WDY-4296 — wendy init overwrites existing Swift source when Package.swift is missing](https://linear.app/wendylabsinc/issue/WDY-4296/wendy-init-overwrites-existing-swift-source-when-packageswift-is). Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
         )
     )
     func `preserves existing Swift sources when adding a package`() async throws {
