@@ -1648,7 +1648,7 @@
       "package": "04",
       "status": "partial",
       "audit_finding": "BLE/discovery tests cover pending waiters and notification handling. Native notification tests added later improve coverage, but not every radio/client path runs in the standard Linux suite.",
-      "required_follow_up": "Require the Linux private D-Bus GATT disconnect/ownership gate and both controls in hosted CI. Complete native CoreBluetooth callback/waiter coverage and exact-host physical Mac/Linux GATT and Windows WinRT scan procedures. Windows GATT is unimplemented and must remain explicitly unsupported.",
+      "required_follow_up": "Require both Linux private D-Bus and native CoreBluetooth disconnect gates and their regression controls in hosted CI. Complete exact-host physical Mac/Linux GATT and Windows WinRT scan procedures. Windows GATT is unimplemented and remains explicitly unsupported.",
       "evidence": [
         {
           "tests": [
@@ -1656,6 +1656,13 @@
             ".github/scripts/test-gatt-disconnect-dbus.sh"
           ],
           "result": "Production DiscoverServices/Subscribe/WaitNotification run over an owned real dbus-daemon and exported BlueZ protocol peer. Normal Linux ARM64 race test passes as ordinary UID65534; missing-disconnect-wakeup and borrowed-ACL-disconnect controls fail their exact assertions. Own-versus-borrowed connection cleanup, pending waiter wakeup, router join and fresh reconnect are asserted. Only AF_BLUETOOTH socket construction is replaced; no physical radio or host service is used. Registered in existing Linux network job; hosted/native/physical residuals remain open."
+        },
+        {
+          "tests": [
+            "go/internal/shared/ble/central/disconnect_waiters_darwin_test.go",
+            "go/internal/shared/ble/central/testdata/disconnect_waiters_test.m"
+          ],
+          "result": "Actual production CoreBluetooth disconnect delegate wakes independently blocked discovery/read/write/subscribe/L2CAP-open/L2CAP-receive operations and three notification waiters; a fresh session receives exact callback bytes. Normal and missing-broadcast/missing-read-wakeup controls pass locally under the Go race runner in12.893s. No CBCentralManager, radio or privacy prompt is used. Existing macOS central package job includes this test; hosted and physical execution remain pending."
         }
       ]
     },
