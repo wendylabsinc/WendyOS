@@ -1322,9 +1322,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2674",
       "title": "Keep Cloud presence alive over slow mesh uplinks",
       "package": "04",
-      "status": "verified",
+      "status": "partial",
       "audit_finding": "Extensive TLS, lease-history, offer-admission and slow-path tests exist. Real slow BLE uplink presence and relay behavior is not established by these fixtures alone.",
-      "required_follow_up": "Retain the required real-transport regression checks and negative controls in the existing Linux network job.",
+      "required_follow_up": "Run the multi-node slow-link/renewal scenario with bounded loss and verify ongoing sessions survive.",
       "evidence": [
         {
           "tests": [
@@ -1338,7 +1338,8 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
           "result": "Required network job passed ten real relay-traffic runs across stalled renewal and simulated path preference changes; context, lease-discard and synchronous-renewal mutations failed. A separate real TLS test preserved the same admitted session over 40 seconds of application silence using unchanged production keepalive; the disabled-keepalive child expired at the 35-second path cutoff and failed with EOF. Physical radio or kernel routing changes are not claimed."
         }
-      ]
+      ],
+      "resolution": "Loopback coverage only: two real TCP forwarding paths keep the admitted session and its traffic through a stalled renewal and a simulated path change, and a real TLS test holds the session through 40 seconds of silence on production keepalive; the mutation controls are rejected in the required Linux network job. The multi-node slow-link scenario with bounded loss has not been run: no loss is injected and no physical radio is involved. Still open."
     },
     {
       "key": "2670",
@@ -2965,9 +2966,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1726",
       "title": "Check the Docker daemon before the build progress UI starts",
       "package": "12",
-      "status": "verified",
+      "status": "partial",
       "audit_finding": "Later Docker-daemon tests cover hangs, timeouts and noninteractive behavior. They do not establish that every build entry point performs preflight before starting the progress UI.",
-      "required_follow_up": "Retain the actual command/RPC regression cases in the required race CI suite.",
+      "required_follow_up": "Add a run/build test asserting failed daemon preflight prevents the progress UI and build launch.",
       "evidence": [
         {
           "tests": [
@@ -2980,7 +2981,8 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
           "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
-      ]
+      ],
+      "resolution": "Eight wendy run chunked-build cases (directory/tar export, automatic/forced chunking, stopped/hung daemon) refuse before progress output, image build or deployment, and removing the preflight fails; they pass in the required race suite. No test covers a failed preflight on wendy build, or on the wendy run registry-push path, which checks the daemon only inside builder setup after the progress UI has started. A wendy build Dockerfile build with the Docker builder makes no daemon check. Still open."
     },
     {
       "key": "1698",
@@ -3012,9 +3014,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1918",
       "title": "Integrate the optional BuildKit service with the CLI",
       "package": "12",
-      "status": "verified",
+      "status": "partial",
       "audit_finding": "Legacy address/Cloud identity tests accompany BuildKit integration. Compatibility across old directory clients and live relay endpoints needs an explicit version matrix.",
-      "required_follow_up": "Retain the actual command/RPC regression cases in the required race CI suite.",
+      "required_follow_up": "Run old/new client-contract fixtures and assert numeric addresses are never assigned to v2 UUID assets.",
       "evidence": [
         {
           "tests": [
@@ -3028,7 +3030,8 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
           "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
-      ]
+      ],
+      "resolution": "Constructor tests in the commands and MCP packages assert that numeric mesh addresses are used only for legacy assets and never for v2 UUID assets, with numeric-v2 mutations rejected; they pass in the required race suite. Old/new client-contract fixtures were not added, so compatibility with old directory clients is not established. Still open."
     },
     {
       "key": "2247",
