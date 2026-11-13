@@ -11,9 +11,7 @@ decisions and exceptions in the [executable E2E reference](../../../../../../swi
 a behavioral reference backed by executable assertions. Full-screen TUI design
 requires separate guidance.
 
-For questions about initialization, [generators](https://guides.rubyonrails.org/generators.html),
-and file conflicts, use concrete references such as the [Ruby on Rails CLI](https://guides.rubyonrails.org/command_line.html)
-for inspiration, applying judgment while Wendy's executable specs remain authoritative.
+Wendy's executable specs remain authoritative.
 
 The following agreed design conventions apply to new work and intentional
 redesigns. Existing commands may not yet comply; preserve established interfaces
@@ -22,7 +20,7 @@ until deliberate compatibility changes.
 - A TUI is optional convenience. All capabilities must be available without
   Bubble Tea through the ordinary CLI, arguments/options, and plain prompts
   where appropriate.
-- Use one Rails-style file-generation policy: create missing files, leave
+- Use one shared file-generation policy: create missing files, leave
   identical files untouched, explicitly resolve differing files, and preserve
   unrelated files. Interactive conflicts must offer overwrite, skip, diff, and
   quit.
