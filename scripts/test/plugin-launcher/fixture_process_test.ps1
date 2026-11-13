@@ -82,6 +82,26 @@ $case = @{ T = $dir; Fix = (Join-Path $dir 'fixtures with spaces') }
 try {
     $url = Start-FixtureProcess $case $Python (Join-Path $PSScriptRoot 'fixture_server.py')
     if (-not $url.StartsWith('http://127.0.0.1:') -or $case.Server.HasExited) { throw 'real fixture not ready' }
+    # Match Test-TruncatedDownloadCanRetry: become ready, then inject loss.
+    [IO.File]::WriteAllText((Join-Path $case.Fix 'asset.zip'), '0123456789abcdef')
+    [IO.File]::WriteAllText((Join-Path $case.Fix 'truncate-downloads'), 'truncate every asset')
+    $check = Join-Path $dir 'check-truncation.py'
+    [IO.File]::WriteAllText($check, @'
+import http.client, sys, urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open(sys.argv[1] + '/asset.zip', timeout=2) as response:
+    assert response.headers['Content-Length'] == '16'
+    try:
+        response.read()
+    except http.client.IncompleteRead as error:
+        assert error.partial == b'01234567', error.partial
+    else:
+        raise AssertionError('fault-injected asset unexpectedly complete')
+print('ACTUAL_ASSET_TRUNCATION_VERIFIED')
+'@)
+    $result = & $Python $check $url
+    if ($LASTEXITCODE -ne 0 -or $result -ne 'ACTUAL_ASSET_TRUNCATION_VERIFIED') { throw "actual truncation check failed: $result" }
+    Write-Output 'ok   fixture supervisor readiness precedes actual asset truncation'
     $owned = $case.Server
     $ownedId = $owned.Id
     Stop-FixtureProcess $case

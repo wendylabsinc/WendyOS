@@ -120,8 +120,9 @@ function Test-ChecksumMismatchInstallsNothing($c) {
 function Test-TruncatedDownloadCanRetry($c) {
     New-Release $c $V
     $marker = Join-Path $c.Fix 'truncate-downloads'
-    Set-Content $marker 'truncate every asset'
     Start-Fixtures $c
+    # Fault injection begins after the fixture's independent readiness probe.
+    Set-Content $marker 'truncate every asset'
     $r = Invoke-Cmd $c @('mcp', 'serve')
     Assert-Equal $r.Code 1 'truncated download exit'
     Assert-Equal $r.Out '' 'no partial CLI ran'
