@@ -131,10 +131,14 @@ def mutant_overlay(output):
 
 
 def private_environment(output,program_files):
-    env={key:value for key,value in os.environ.items() if not key.upper().startswith('WENDY_') and key.upper() not in ('PROGRAMFILES','PATH','CI','NO_COLOR')}
+    env={key:value for key,value in os.environ.items() if not key.upper().startswith('WENDY_') and key.upper() not in ('PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','PATH','CI','NO_COLOR')}
     system=Path(os.environ['SystemRoot'])
     env.update(PROGRAMFILES=str(program_files),PATH=os.pathsep.join([str(output/'empty-path'),str(system/'System32'),str(system)]),
                WENDY_CONFIG_DIR=str(output/'config'),WENDY_ANALYTICS='false',WENDY_SECRET_STORE='file',WENDY_NO_UPDATE_CHECK='1',CI='true',NO_COLOR='1')
+    # Keep architecture-specific directory aliases consistent in every owned
+    # Python/Go descendant. Retain the real resolver probe: this is not boot proof.
+    env['PROGRAMFILES(X86)']=str(program_files)
+    env['PROGRAMW6432']=str(program_files)
     if shutil.which('qemu-system-aarch64',path=env['PATH']):raise ValueError('QEMU is unexpectedly present on isolated PATH')
     return env
 
