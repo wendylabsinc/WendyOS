@@ -23,8 +23,8 @@
         },
         {
           "boundary": "Stop entry before further motion; propagate KeyboardInterrupt/SystemExit after disarm cleanup; reject frozen camera",
-          "proof": "Existing review tests cover stopped entry and stale readiness. Existing physical_io tests use recording backends.",
-          "remaining": "Robot hardware and actual middleware publisher teardown are not exercised by these fixtures. Inspect full physical_io tests before closing interruption cleanup."
+          "proof": "Existing review tests cover stopped entry and stale readiness. New test_physical_interruption.py uses actual SIGINT/SystemExit, private socket release receipts, independent-process flock contention/reacquisition, the actual watchdog join and fresh owner recovery through production ExactPolicyUnitreeIO. Both normal cases and the original broad-handler control pass locally; required in the existing G1 row and42+ locked review cases.",
+          "remaining": "The supplied backend deliberately never opens DDS or motor publishers. Actual SDK publisher teardown and robot physical stop acceptance remain separate."
         },
         {
           "boundary": "Inference status omits session ID; error and unknown POST close the connection; active HTTP handlers drain",
@@ -33,8 +33,8 @@
         },
         {
           "boundary": "Initialize base simulation without virtual reset; first scene epoch, default reference stepping and 43-joint effort field",
-          "proof": "No new complete scene initialization/replay proof in this batch.",
-          "remaining": "Real verified expert assets plus MuJoCo scene startup, stepping/reset and observation schema remain pending; mocked failed-scene startup is not sufficient."
+          "proof": "test_scene_runtime.py and test-coke-scene-runtime.py execute the original seven hash-pinned expert assets through actual MuJoCo3.12.0. All2400 default CokeScene steps match production Simulation qpos/qvel; real RGBD, initial/reset epochs, terminal no-op and joint_effort43 are asserted. Native macOS normal passes in approximately10s; three original reset/default-step/field controls fail exact JUnit assertions. See scene-and-interruption.md.",
+          "remaining": "Hosted G1 scene execution needs the original expert files supplied outside Git through an approved artifact source and libosmesa6. The repo intentionally has no download URL; no unavailable or skipped hosted gate is claimed. No frozen-policy or physical accuracy proof."
         },
         {
           "boundary": "Always extract DLA compiler from verified packaged artifact instead of trusting existing host file",
@@ -106,10 +106,12 @@
   ],
   "new_gates": {
     "transport": "python .github/scripts/test-g1-coke-transports.py --output NEW_DIRECTORY; NumPy required; five real HTTP/thread cases and six source-bound controls, no skips.",
-    "locked_review": "uv run --project Examples/G1CokeDemo --frozen --group dev --python 3.12 python .github/scripts/test-g1-coke-review.py --output NEW_DIRECTORY; exact lock versions and all 40 current review/transport cases required.",
+    "locked_review": "uv run --project Examples/G1CokeDemo --frozen --group dev --python 3.12 python .github/scripts/test-g1-coke-review.py --output NEW_DIRECTORY; exact lock versions and all 42+ current review/transport cases required.",
     "runner": "Existing G1 simulator row can run the lightweight gate after shipped NumPy installation, then the separate exact Coke Python 3.12 runtime. It must retain the existing Python 3.10 simulator compatibility check. No additional job or matrix entry.",
     "packet_isolation": "bash .github/scripts/test-rtps-multicast-isolation.sh NEW_DIRECTORY in the existing disposable Linux network job. Requires Go race compiler, sudo, iproute2 and util-linux; no additional runner. Never run its privileged namespace on a user host.",
-    "dla_package": "python3 .github/scripts/test-coke-dla-package.py --output NEW_RUNNER_TEMP_DIRECTORY in existingG1 job. Exact public artifact, real dpkg-deb extraction and strict historical control; no new runner."
+    "dla_package": "python3 .github/scripts/test-coke-dla-package.py --output NEW_RUNNER_TEMP_DIRECTORY in existingG1 job. Exact public artifact, real dpkg-deb extraction and strict historical control; no new runner.",
+    "physical_cleanup": "python .github/scripts/test-coke-physical-cleanup.py --output NEW_DIRECTORY in the exact existing Coke runtime; two actual OS/thread cleanup cases and historical handler control, required in existing G1 job.",
+    "recorded_scene": "python .github/scripts/test-coke-scene-runtime.py --expert VERIFIED_ORIGINAL_DIRECTORY --output NEW_DIRECTORY; local actual model/replay/render normal+three controls passed. Hosted registration pending exact external artifact supply, never skip or synthesize missing inputs."
   },
   "not_claimed": [
     "Physical robot/camera/motor access",
