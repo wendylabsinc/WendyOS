@@ -199,10 +199,10 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		if !interactive {
 			return missing("devices chosen", "--device <name>, --tag <tag> or --site <site>", "pick them")
 		}
-		if sites, err = op.sites(ctx); err != nil {
-			return err
-		}
 		say("3/7  Which devices should get it?")
+		if sites, err = op.sites(ctx); err != nil {
+			say("     Sites could not be loaded; choose tags or devices.")
+		}
 		say("     Choose sites, tags, single devices, or any mix.")
 		for _, s := range sites {
 			say("     site %s  %s", s.GetName(), plural(len(inSite(assets, s.GetId())), "device"))
@@ -261,7 +261,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		}
 		in := inSite(assets, s.GetId())
 		if len(in) == 0 {
-			return usageErrorf("No device is in the site %s.", s.GetName())
+			return usageErrorf("No device is in the site %s. Add devices to it under Sites in the dashboard first.", s.GetName())
 		}
 		for _, d := range in {
 			chosen[d.GetId()] = d
@@ -634,7 +634,7 @@ func (op *registryOp) sites(ctx context.Context) ([]*cloudpb.Site, error) {
 func findSite(sites []*cloudpb.Site, nameOrID string) (*cloudpb.Site, error) {
 	i := slices.IndexFunc(sites, func(s *cloudpb.Site) bool { return s.GetId() == nameOrID || s.GetName() == nameOrID })
 	if i < 0 || nameOrID == "" {
-		return nil, usageErrorf("No site %q in this organization.", nameOrID)
+		return nil, usageErrorf("No site %q in this organization. Use a site's name or id as shown under Sites in the dashboard.", nameOrID)
 	}
 	return sites[i], nil
 }

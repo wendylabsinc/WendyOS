@@ -122,6 +122,7 @@ type fakeRegistry struct {
 	tamper     func(*cloudpb.Deployment) // cloud records something else
 	assets     []*cloudpb.Asset
 	sites      []*cloudpb.Site
+	sitesErr   error // ListSites fails with it
 	lifecycle  *cloudpb.LifecycleSettings
 	online     map[string]bool
 	states     []*cloudpb.AppDeviceState
@@ -657,7 +658,7 @@ func (a fakeApps) GetLifecycleSettings(context.Context, *cloudpb.GetLifecycleSet
 }
 
 func (a fakeApps) ListSites(context.Context, *cloudpb.ListSitesRequest) (*cloudpb.ListSitesResponse, error) {
-	return &cloudpb.ListSitesResponse{Sites: a.sites}, nil
+	return &cloudpb.ListSitesResponse{Sites: a.sites}, a.sitesErr
 }
 
 // resolve is a selection's devices among the fake's assets.
