@@ -3794,10 +3794,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2246",
       "title": "Discover and pair USB robot arms on macOS and Linux",
       "package": "13",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Store, identity, hub metadata and pairing tests exist on Go and Swift sides. Real USB renumbering behind hubs is not executed by portable fixtures.",
-      "required_follow_up": "Add a cross-platform inventory fixture for nested hubs and replug/rebind with the saved arm name.",
-      "evidence": []
+      "required_follow_up": "Execute the four native Mac/Linux and serial/location-identity plans with two physically nested hubs. Require actual tty and hub-port change, saved-name behavior, disconnected/ambiguous refusal, unnamed rebind, real Agent restart and exact owned binding cleanup. All physical cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/usb-arm-inventory-rehearsal.py",
+            ".github/regression-coverage/manual/usb-arm-inventory-rehearsal.txt",
+            ".github/scripts/usb_arm_inventory_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-host/candidate CLI/Agent and physical topology procedure using actual pair/list/bind/rebind/forget RPCs. Serial identity follows changed tty/location; serial-less identity intentionally remains port-bound and requires explicit acknowledgment. Saved JSON checker rejects stale tty, changed name/USB identity, false arm verification, ambiguous relocation and unrelated binding changes. Four offline checks pass across both native hosts and identity modes; independent source/CLI/protoJSON review clear. Generation performs no device I/O; every hardware outcome remains not_run."
+        }
+      ]
     },
     {
       "key": "2245",

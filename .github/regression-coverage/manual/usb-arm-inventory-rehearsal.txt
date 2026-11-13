@@ -1,0 +1,137 @@
+Audit2246: native USB arm inventory, nested hubs and saved bindings
+
+Prepared for @HOST@, native @PLATFORM@ Agent, explicit CLI target @TARGET@.
+Selected endpoint @ID@ at @PORT@; owned saved name @NAME@.
+All cases start not_run. Generation reads saved files only. USB metadata does
+not prove the arm model, motor state, access permission, calibration or identity.
+This procedure never opens a serial device, moves a motor or deploys an app.
+
+Required acceptance matrix
+
+Use four independently recorded plans: macOS and Linux, each with a uniquely
+serial-identified adapter and a separate adapter with no serial ID. Each target
+must have two physically nested USB hubs. A missing host, adapter or topology
+leaves that case not_run. A USB passthrough VM or constructed metadata does not
+substitute for either native host. No Windows arm-inventory support is claimed.
+
+Prepare inventory.json with platform, hostname, explicit target selector,
+os_version, agent_version, owner and timezone-qualified captured_at. Include
+adapter fields id, device_path, vendor_id, product_id, serial_number (empty string
+if absent), usb_location, usb_interface and physical_label. Include nested_hubs,
+in physical ancestry order, each with physical_label, native_location, vendor_id
+and product_id. Include paths cli, agent_binary, native_inventory, baseline_list,
+authorization and restart_procedure. These must be saved regular files.
+The baseline_list is the actual target Agent response from:
+  /absolute/candidate/wendy --device EXACT_TARGET --json device pair --usb-arms --list
+Capture it with the bounded Python pattern in step3, substituting this explicit
+argv before plan generation. Save stdout, stderr and the exit/timeout record.
+The native_inventory must preserve full ancestry, not just a flat device list.
+The CLI/Agent binaries must be the exact candidate build from a reviewed source;
+keep build/signature records and compare their hashes to plan.json before runs.
+
+Generate a NEW directory outside Git:
+  python3 .github/regression-coverage/manual/usb-arm-inventory-rehearsal.py prepare inventory.json /absolute/new-plan
+
+1. Reserve the exact native host, two hubs and physically labelled adapter.
+   The authorization record must allow one new host-local USB binding and an
+   Agent restart using the owner's exact already-reviewed restart procedure.
+   No existing binding for this endpoint is allowed; preserve all other bindings.
+   Keep motor power disconnected where the owner's hardware procedure permits;
+   support the arm and do not change torque or bus ownership. Stop if another
+   experiment relies on this host or adapter. Use existing CLI authentication;
+   do not change trust stores, install drivers, force pairing or use insecure TLS.
+
+2. Independently verify host/Agent identity at the target's console, including
+   hostname, OS, candidate binary hash, process path/version and service identity.
+   On macOS use the native Swift Agent, not a Go Agent built for macOS. Preserve
+   its signature/build record. Confirm the explicit CLI target reaches that host.
+   Save full native topology and tty association before every topology change:
+     macOS: /usr/sbin/ioreg -a -l -r -c IOUSBHostDevice
+            /usr/sbin/ioreg -a -l -r -c IOSerialBSDClient
+     Linux: lsusb -t
+            udevadm info --attribute-walk --name EXACT_SELECTED_TTY
+            udevadm info --query=property --name EXACT_SELECTED_TTY
+   Run only the selected platform commands. Do not glob tty paths or open them.
+   Compare both hub ancestors and endpoint VID/PID/serial/interface/location to
+   physical labels and the Agent's list. Reject duplicate serial identities or
+   ambiguous endpoints. A hash proves retained bytes, not physical ancestry.
+
+3. Capture each exact CLI command below individually, with a25-second outer
+   bound. The RPC already has a15-second bound. A portable way to capture is:
+     python3 - <<'PY'
+     import json,subprocess
+     from pathlib import Path
+     p=json.loads(Path('/absolute/new-plan/plan.json').read_text())
+     root=Path('/absolute/new-evidence'); stem='baseline'
+     with (root/(stem+'.json')).open('xb') as out, (root/(stem+'.stderr')).open('xb') as err:
+         try:
+             result=subprocess.run(p['commands']['list'],stdout=out,stderr=err,timeout=25)
+             status={'exit_code':result.returncode,'timed_out':False}
+         except subprocess.TimeoutExpired:
+             status={'exit_code':None,'timed_out':True}
+     with (root/(stem+'.result.json')).open('x') as record:
+         json.dump(status,record)
+     print(status)
+     PY
+   Create the private new-evidence directory first. Change the unique stem
+   and command key explicitly for each step; never overwrite earlier evidence.
+   Inspect CLI/Agent hashes and plan commands before execution. On timeout or
+   nonzero exit retain stderr/result and stop; do not count a partial JSON file.
+   Generation requires selected baseline connected=true, configured=false,
+   verified=false. An existing binding requires a different reserved adapter.
+
+4. Bind the exact endpoint with the generated bind command. This writes only
+   the owned host-local binding. For a serial-less adapter FIRST execute
+   refuse-location-bind without acknowledgment: it must fail with the explicit
+   missing-serial/location acknowledgment error, and a fresh list must show no
+   configured binding. Then use the generated acknowledged bind command. This
+   acknowledges that replacements at the same port cannot be distinguished.
+   Save bind reply and a fresh bound.json list. Require the exact name @NAME@,
+   model so101, configured=true, verified=false and access_status=unknown.
+   Check API observations with:
+     python3 .github/regression-coverage/manual/usb-arm-inventory-rehearsal.py check /absolute/new-plan/plan.json bound /absolute/new-evidence/bound.json
+   The checker never marks hardware passed; native identity review is separate.
+
+5. Unplug ONLY the selected USB data connection. Within10 seconds capture a
+   fresh list: the saved ID/name must remain, connected=false,
+   connection_status=disconnected and device_path empty. Verify phase disconnected.
+   Reconnect to the same physical nested-hub port; preserve new native inventory
+   and require the same ID/name configured and present. Verify phase bound.
+   Fail if a stale tty path is presented as connected while physically absent.
+
+6. Serial-identified adapter: move it through the reserved alternate hub port.
+   Arrange a genuine tty renumber with a second owner-reserved unrelated adapter
+   if needed; never rename device nodes or mutate sysfs/IORegistry. Independently
+   identify both adapters. Require actual changed native tty AND USB location,
+   unchanged serial/interface identity and exactly one saved ID/name. Verify
+   phase renumbered. If the OS reuses the original tty, retain this case not_run
+   until a genuine renumber occurs; same-path replug is a different case.
+
+   Serial-less adapter: moving ports MUST produce a new unconfigured location
+   identity while the original saved ID/name stays disconnected with empty path.
+   Verify phase relocated-location. Do not claim its name follows the adapter.
+   Return the same physically labelled adapter to its original port, inspect its
+   actual ancestry and require the original saved name there. Verify phase bound.
+   This intentional port-following behavior cannot authenticate a replacement.
+
+7. Execute rebind with no new --arm-name. Capture a fresh list and require the
+   original owned name, not the default SO-101 name. Verify phase bound. Restart
+   only the reserved candidate Agent using the exact approved restart_procedure.
+   Record old/new process identity; require actual process exit and a new process
+   with the same candidate hash/version. On Mac use its supported lifecycle,
+   not a broad killall. Within60 seconds require fresh list transport success and
+   the same configured/unverified name and current native endpoint. Verify phase
+   restarted. Do not infer persistence from a cached client or same live process.
+
+8. Execute forget for ONLY @ID@ after verifying it still has @NAME@. Capture a
+   fresh list while the selected adapter is connected: configured=false,
+   verified=false, inventory still present. Verify phase forgotten. Compare every
+   unrelated saved binding ID/name/model to the baseline. Leave unknown or newly
+   changed state for its owner; never delete the whole bindings file. Restore
+   only the reserved physical cable topology and retain all evidence privately.
+
+Record each outcome with native inventory, before/after CLI JSON, binary hashes,
+process restart evidence, timestamps and independent reviewer. A refusal,
+ambiguous identity, missing hardware, timeout or failed cleanup is not a pass.
+No motor calibration, serial I/O, reader reattachment or arm control is covered;
+audit2247 has its separate native physical reader procedure.
