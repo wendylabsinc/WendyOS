@@ -1175,6 +1175,12 @@ func (m tourWizardModel) viewCommands() string {
 	switch m.phase {
 	case phaseWelcome:
 		return "\nRestart the tour:\nwendy tour\n"
+	case phaseAptInstall:
+		return "\nRun on your Linux device:\n" + linuxDesktopCommand("", "", linuxDesktopMachineLabel) +
+			"\n\nOr install using APT, in this order:\n" +
+			"curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -\n" +
+			`echo "deb https://apt.wendy.dev stable main" | sudo tee /etc/apt/sources.list.d/wendy.list` + "\n" +
+			"sudo apt update && sudo apt install -y wendy-agent\n"
 	default:
 		return ""
 	}
@@ -1311,13 +1317,7 @@ func (m tourWizardModel) viewEnterHostname(w int) string {
 func (m tourWizardModel) viewAptInstall(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizTitleStyle.Render("Step 2 — Install the Wendy Agent") + "\n")
-	sb.WriteString(wizSubStyle.Render("Run the following on your Linux device:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render(linuxDesktopCommand("", "", linuxDesktopMachineLabel)) + "\n\n")
-	sb.WriteString(wizBodyStyle.Width(w).Render(
-		"Or using APT:\n") + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render("curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -") + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render(`echo "deb https://apt.wendy.dev stable main" | sudo tee /etc/apt/sources.list.d/wendy.list`) + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render("sudo apt update && sudo apt install -y wendy-agent") + "\n\n")
+	sb.WriteString(wizSubStyle.Width(w).Render("Run the installer command below the box on your Linux device, or use the APT commands below in order.") + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render("Once the agent is installed and the service is running, press Enter.") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Enter to continue"))
 	return sb.String()

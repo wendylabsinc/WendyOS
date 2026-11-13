@@ -81,3 +81,25 @@ func TestTourWelcomeCommandBelowBox(t *testing.T) {
 		assertCommandBelowBox(t, m.View(), "wendy tour")
 	}
 }
+
+func TestTourLinuxInstallCommandsBelowBox(t *testing.T) {
+	commands := []string{
+		linuxDesktopCommand("", "", linuxDesktopMachineLabel),
+		"curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -",
+		`echo "deb https://apt.wendy.dev stable main" | sudo tee /etc/apt/sources.list.d/wendy.list`,
+		"sudo apt update && sudo apt install -y wendy-agent",
+	}
+	for _, width := range []int{40, 100} {
+		m := newTourWizardModel()
+		m.phase, m.width = phaseAptInstall, width
+		output, previous := m.View(), -1
+		for _, command := range commands {
+			assertCommandBelowBox(t, output, command)
+			index := strings.Index(output, "\n"+command+"\n")
+			if index <= previous {
+				t.Fatal("Linux install command order changed")
+			}
+			previous = index
+		}
+	}
+}
