@@ -10,13 +10,12 @@ import sys
 import time
 
 
-def group_has_workload():
-    """The guard remains group leader, so this group ID cannot be reused."""
-    group = os.getpgrp()
+def group_has_workload(group):
+    """Whether the workload's process group still has a live member."""
     proc = Path("/proc")
     if proc.is_dir():
         for entry in proc.iterdir():
-            if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            if not entry.name.isdigit():
                 continue
             try:
                 fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
@@ -31,27 +30,46 @@ def group_has_workload():
     result = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True,
                             text=True, check=True, timeout=2, start_new_session=True)
     for line in result.stdout.splitlines():
-        pid, pgid, state = line.split()
-        if int(pid) != os.getpid() and int(pgid) == group and not state.startswith("Z"):
+        _pid, pgid, state = line.split()
+        if int(pgid) == group and not state.startswith("Z"):
             return True
     return False
 
 
-def terminate_owned_group():
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    os.killpg(os.getpgrp(), signal.SIGTERM)
+def signal_owned_group(group, signum):
+    try:
+        os.killpg(group, signum)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS answers EPERM when only the exited, unreaped leader is left.
+        if group_has_workload(group):
+            raise
+
+
+def terminate_owned_group(group):
+    """One SIGTERM, a bounded grace period, then SIGKILL for whatever is left."""
+    signal_owned_group(group, signal.SIGTERM)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
-            if not group_has_workload():
+            if not group_has_workload(group):
                 break
         except (OSError, ValueError, subprocess.SubprocessError):
             # Uncertain membership is not permission to leave owned work alive.
             pass
         time.sleep(0.05)
-    # This includes the guard itself. It can only signal its own live group.
-    os.killpg(os.getpgrp(), signal.SIGKILL)
+    signal_owned_group(group, signal.SIGKILL)
+
+
+def workload_exited(workload):
+    """Observe the exit without reaping: the unreaped leader keeps its PID,
+    and so the group ID the guard signals, from being reused."""
+    if hasattr(os, "waitid"):
+        return os.waitid(os.P_PID, workload.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+    # ponytail: macOS before Python 3.13 has no waitid; local fixtures there
+    # reap early and accept the reuse window. Linux hosts always have it.
+    return workload.poll() is not None
 
 
 def run_step_guard(liveness_fd, report_fd, argv):
@@ -60,6 +78,9 @@ def run_step_guard(liveness_fd, report_fd, argv):
     Only the runner holds the pipe's write end; transport processes and the
     workload never inherit it. A lost observation therefore leaves work alive,
     while runner death produces EOF independently of its PID or any status file.
+
+    The workload leads its own session, as it did before the guard existed:
+    its setpgid(0, 0) stays a no-op and its group signals never reach the guard.
     """
     stopping = False
 
@@ -69,19 +90,23 @@ def run_step_guard(liveness_fd, report_fd, argv):
 
     signal.signal(signal.SIGTERM, stop_guard)
     signal.signal(signal.SIGINT, stop_guard)
+    workload = None
     with os.fdopen(report_fd, "w", buffering=1) as report:
         try:
-            workload = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
+            workload = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
             report.write(json.dumps({"child_pid": workload.pid}) + "\n")
-            while workload.poll() is None:
+            terminated = False
+            while not terminated and not workload_exited(workload):
                 readable, _, _ = select.select([liveness_fd], [], [], 0.05)
                 if stopping or (readable and not os.read(liveness_fd, 1)):
-                    terminate_owned_group()
-            code = workload.wait()
-            descendants = group_has_workload()
-            report.write(json.dumps({"returncode": code, "descendants_remaining": descendants}) + "\n")
+                    terminate_owned_group(workload.pid)
+                    terminated = True
+            descendants = not terminated and group_has_workload(workload.pid)
             if descendants:
-                terminate_owned_group()
+                terminate_owned_group(workload.pid)
+            # Reaped only after the last group signal; see workload_exited.
+            code = workload.wait()
+            report.write(json.dumps({"returncode": code, "descendants_remaining": descendants}) + "\n")
         except BaseException as exc:
             # Includes a closed report pipe when the runner died during launch.
             print("step guard failed: " + str(exc)[:800], file=sys.stderr, flush=True)
@@ -89,7 +114,8 @@ def run_step_guard(liveness_fd, report_fd, argv):
                 report.write(json.dumps({"error": str(exc)[:800]}) + "\n")
             except OSError:
                 pass
-            terminate_owned_group()
+            if workload is not None:
+                terminate_owned_group(workload.pid)
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "--step-guard":

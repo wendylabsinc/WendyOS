@@ -491,9 +491,9 @@ owned.__truediv__ = Mock(return_value=stat)
 proc = Mock(); proc.is_dir.return_value = True
 with patch('__main__.Path', return_value=proc):
  proc.iterdir.return_value = [foreign]
- assert group_has_workload() is False
+ assert group_has_workload(os.getpgrp()) is False
  proc.iterdir.return_value = [foreign, owned]
- assert group_has_workload() is True
+ assert group_has_workload(os.getpgrp()) is True
 `
 	command := exec.Command("python3", "-c", program)
 	command.Stdin = strings.NewReader(lifecycleWorker)

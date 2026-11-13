@@ -131,3 +131,63 @@ func TestSubmitBackgroundDescendantsCannotLookLikeCompletion(t *testing.T) {
 		t.Fatalf("background workload claimed completed: %+v", state)
 	}
 }
+
+// A workload that appends to WENDY_STEP_DIR/beat until it dies. It ends on its
+// own, so a failing test never has to signal a PID it does not own.
+const heartbeat = `
+for _ in range(1000):
+ with open(os.environ['WENDY_STEP_DIR']+'/beat','a') as f: f.write('.')
+ time.sleep(.02)
+`
+
+func requireHeartbeatStopped(t *testing.T, path string) {
+	t.Helper()
+	size := func() int64 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return -1
+		}
+		return info.Size()
+	}
+	before := size()
+	time.Sleep(300 * time.Millisecond)
+	if before <= 0 {
+		t.Fatal("workload never started")
+	}
+	if size() != before {
+		t.Fatal("workload is still running after its job reached a terminal state")
+	}
+}
+
+func TestSubmitWorkloadLeadsItsOwnProcessGroup(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip(err)
+	}
+	// GNU timeout as argv[0] calls setpgid(0, 0) and ignores the session
+	// leader's EPERM. It must not thereby leave the group its deadline signals.
+	t.Run("setpgid", func(t *testing.T) {
+		source := "import os,time\ntry: os.setpgid(0,0)\nexcept OSError: pass" + heartbeat
+		spec := jobops.Spec{Name: "own-group", WorkingDirectory: t.TempDir(), Steps: []jobops.Step{{Name: "slow", Argv: []string{python, "-c", source}, TimeoutSeconds: 1}}}
+		receipt, err := jobops.Submit(context.Background(), connection(t, &host{}), spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := receipt["job_path"].(string)
+		if state := waitForJob(t, root); state["state"] != "failed" || state["stages"].([]any)[0].(map[string]any)["timed_out"] != true {
+			t.Fatalf("deadline not recorded: %+v", state)
+		}
+		requireHeartbeatStopped(t, filepath.Join(root, "slow", "beat"))
+	})
+	// A workload signalling its own group (kill 0) must not stop its supervisor.
+	t.Run("kill-0", func(t *testing.T) {
+		spec := jobops.Spec{Name: "signals-own-group", WorkingDirectory: t.TempDir(), Steps: []jobops.Step{{Name: "cleanup", Argv: []string{"sh", "-c", `trap "" TERM; kill 0; exit 0`}, TimeoutSeconds: 5}, {Name: "later", Argv: []string{"sh", "-c", "exit 0"}, TimeoutSeconds: 5}}}
+		receipt, err := jobops.Submit(context.Background(), connection(t, &host{}), spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state := waitForJob(t, receipt["job_path"].(string)); state["state"] != "completed" || len(state["stages"].([]any)) != 2 {
+			t.Fatalf("workload's own group signal failed the job: %+v", state)
+		}
+	})
+}
