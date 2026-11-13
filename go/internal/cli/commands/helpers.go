@@ -4540,11 +4540,13 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	// The engine handles offline detection and retry (see discovery.StreamLAN).
 	events := lanStreamFn(discoverCtx, cliLANStreamOptions(discoverCtx))
 	go func() {
-		// ev.Supersedes needs no handling here: picker rows dedup by hostname
-		// (deviceDedupKey/HostKey), so a superseded connect-minted row and the
-		// TXT-id row that replaces it are already the same row.
+		// Picker rows dedup by hostname (deviceDedupKey/HostKey), so a
+		// superseded connect-minted row and the TXT-id row that replaces it are
+		// already the same row. lanPickerRows takes back the row a device
+		// leaves behind when it comes back under another hostname.
+		rows := newLANPickerRows()
 		for ev := range events {
-			if msg := lanPickerEventMsg(ev); msg != nil {
+			for _, msg := range rows.eventMsgs(ev) {
 				p.Send(devicePickerLocalMsg{msg: msg})
 			}
 		}
@@ -4709,6 +4711,81 @@ func lanPickerEventMsg(ev discovery.LANEvent) tea.Msg {
 		probe, insecure := lanRowState(ev)
 		return tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(ev.Device, insecure, probe)}}
 	}
+}
+
+// lanPickerRows turns the discovery stream's events into picker messages and
+// keeps one LAN row per device the stream reports.
+//
+// The stream identifies a device by its cache identity (the TXT device id);
+// the picker keys rows by hostname. A board that takes a new hostname, as one
+// does when it applies the name chosen at install, therefore arrives as the
+// same device under a new row key, and lanPickerEventMsg alone would add a
+// second row and leave the first. Here the row a device was last listed under
+// is remembered, and taken back when the stream reports that device under
+// another hostname or names it as replaced (LANEvent.Supersedes).
+//
+// Those two are the only grounds for removing a row: the stream saying this is
+// the same device. A name or an address alone is never one.
+type lanPickerRows struct {
+	listed map[string]models.LANDevice // cache identity -> device as last listed
+}
+
+func newLANPickerRows() *lanPickerRows {
+	return &lanPickerRows{listed: make(map[string]models.LANDevice)}
+}
+
+// eventMsgs returns the picker messages for one stream event, in the order
+// they must be delivered.
+func (r *lanPickerRows) eventMsgs(ev discovery.LANEvent) []tea.Msg {
+	msg := lanPickerEventMsg(ev)
+	if msg == nil {
+		return nil
+	}
+	identity := discoverycache.Key(ev.Device.ID, ev.Device.DisplayName)
+	add, listing := msg.(tui.PickerAddMsg)
+	if !listing {
+		delete(r.listed, identity) // retracted: lanPickerEventMsg drops its row
+		return []tea.Msg{msg}
+	}
+
+	rowKey := lanPickerRemoveMsg(ev.Device).Key
+	var msgs []tea.Msg
+	for _, earlier := range []string{identity, ev.Supersedes} {
+		previous, known := r.listed[earlier]
+		if !known {
+			continue
+		}
+		delete(r.listed, earlier)
+		staleKey := lanPickerRemoveMsg(previous).Key
+		if strings.EqualFold(staleKey, rowKey) || r.rowListed(staleKey) {
+			// Still this device's row, or one another device is listed under.
+			continue
+		}
+		switch {
+		case models.CanonicalDevicePrincipal(previous.PrincipalURI) != "":
+			// As for a retraction: take only the LAN path, so a mesh path
+			// merged into the row survives.
+			msgs = append(msgs, lanPickerEventMsg(discovery.LANEvent{Kind: discovery.LANRetracted, Device: previous}))
+		case add.Items[0].Supersedes == "":
+			// The picker swaps the rows in one step and keeps the highlight
+			// on the replacement.
+			add.Items[0].Supersedes = staleKey
+		default:
+			msgs = append(msgs, tui.PickerRemoveMsg{Key: staleKey})
+		}
+	}
+	r.listed[identity] = ev.Device
+	return append(msgs, add)
+}
+
+// rowListed reports whether any device is currently listed under rowKey.
+func (r *lanPickerRows) rowListed(rowKey string) bool {
+	for _, dev := range r.listed {
+		if strings.EqualFold(lanPickerRemoveMsg(dev).Key, rowKey) {
+			return true
+		}
+	}
+	return false
 }
 
 // lanRowAddressRank is the one rule for which address a LAN row shows. The

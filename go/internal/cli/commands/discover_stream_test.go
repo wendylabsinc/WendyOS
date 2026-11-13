@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,6 +172,202 @@ func TestLANPickerCachedDevicesStayHiddenUntilConfirmed(t *testing.T) {
 		if got := strings.Contains(view, "no client certificates"); got != step.hint {
 			t.Fatalf("event %+v: no-access hint = %v, want %v; view=%q", step.ev, got, step.hint, view)
 		}
+	}
+}
+
+// lanPickerHarness feeds discovery stream events to a device picker the way
+// pickDeviceWithCloudAuth does.
+type lanPickerHarness struct {
+	m    devicePickerModel
+	rows *lanPickerRows
+}
+
+func newLANPickerHarness() *lanPickerHarness {
+	picker := tui.NewPicker()
+	picker.MergeItem = mergePickerItem
+	return &lanPickerHarness{
+		m:    newDevicePickerModel(context.Background(), picker, nil, 0, true, devicePickerLocalTab),
+		rows: newLANPickerRows(),
+	}
+}
+
+func (h *lanPickerHarness) send(events ...discovery.LANEvent) {
+	for _, ev := range events {
+		for _, msg := range h.rows.eventMsgs(ev) {
+			h.update(devicePickerLocalMsg{msg: msg})
+		}
+	}
+}
+
+func (h *lanPickerHarness) update(msg tea.Msg) {
+	updated, _ := h.m.Update(msg)
+	h.m = updated.(devicePickerModel)
+}
+
+// items returns every row in the picker, sorted by name.
+func (h *lanPickerHarness) items() []tui.PickerItem {
+	var items []tui.PickerItem
+	_, _ = h.m.local.Update(tui.PickerMapMsg{Map: func(item tui.PickerItem) (tui.PickerItem, bool) {
+		items = append(items, item)
+		return item, true
+	}})
+	slices.SortFunc(items, func(a, b tui.PickerItem) int { return strings.Compare(a.Name, b.Name) })
+	return items
+}
+
+func (h *lanPickerHarness) names() []string {
+	var names []string
+	for _, item := range h.items() {
+		names = append(names, item.Name)
+	}
+	return names
+}
+
+// A board flashed with an older image announces itself under a generated name
+// and takes the name chosen at install a moment later. Its device id does not
+// change, so the stream reports the same device under a new hostname, and the
+// picker must show it once.
+func TestLANPickerShowsARenamedBoardOnce(t *testing.T) {
+	boot := models.LANDevice{ID: "5f0c2a6e-58a1-4d43-9d0b-7f1f8f6a2c11", DisplayName: "Brave Dolphin", Hostname: "brave-dolphin.local", IPAddress: "fe80::a1b2%en7", Port: defaultAgentPort}
+	named := boot
+	named.DisplayName, named.Hostname = "Kitchen Pi", "kitchen-pi.local"
+
+	h := newLANPickerHarness()
+	h.send(
+		discovery.LANEvent{Kind: discovery.LANFound, Device: boot},
+		discovery.LANEvent{Kind: discovery.LANUpdated, Device: named},
+	)
+
+	if got := h.names(); !slices.Equal(got, []string{"Kitchen Pi"}) {
+		t.Fatalf("picker rows = %v after the board renamed itself, want only Kitchen Pi", got)
+	}
+}
+
+// The stream names the identity a device replaces (LANEvent.Supersedes). When
+// that identity was listed under another hostname, its row goes.
+func TestLANPickerShowsASupersededBoardOnce(t *testing.T) {
+	boot := models.LANDevice{ID: "5f0c2a6e-58a1-4d43-9d0b-7f1f8f6a2c11", DisplayName: "Brave Dolphin", Hostname: "brave-dolphin.local", Port: defaultAgentPort}
+	enrolled := models.LANDevice{ID: "a37e41d0-0f0e-4b53-8f55-0c1f3c1f9e02", DisplayName: "Kitchen Pi", Hostname: "kitchen-pi.local", Port: defaultAgentPort}
+
+	h := newLANPickerHarness()
+	h.send(
+		discovery.LANEvent{Kind: discovery.LANFound, Device: boot},
+		discovery.LANEvent{Kind: discovery.LANFound, Device: enrolled, Supersedes: probeKey(boot)},
+	)
+
+	if got := h.names(); !slices.Equal(got, []string{"Kitchen Pi"}) {
+		t.Fatalf("picker rows = %v after the board took a new identity, want only Kitchen Pi", got)
+	}
+}
+
+// A highlighted board that renames itself stays highlighted, so Enter does not
+// pick its neighbour.
+func TestLANPickerKeepsTheHighlightOnARenamedBoard(t *testing.T) {
+	other := models.LANDevice{ID: "other", DisplayName: "Alpha", Hostname: "alpha.local", Port: defaultAgentPort}
+	boot := models.LANDevice{ID: "5f0c2a6e-58a1-4d43-9d0b-7f1f8f6a2c11", DisplayName: "Brave Dolphin", Hostname: "brave-dolphin.local", Port: defaultAgentPort}
+	named := boot
+	named.DisplayName, named.Hostname = "Kitchen Pi", "kitchen-pi.local"
+
+	h := newLANPickerHarness()
+	h.send(
+		discovery.LANEvent{Kind: discovery.LANFound, Device: other, Probed: true},
+		discovery.LANEvent{Kind: discovery.LANFound, Device: boot, Probed: true},
+	)
+	h.update(tea.KeyMsg{Type: tea.KeyDown}) // onto Brave Dolphin
+	h.send(discovery.LANEvent{Kind: discovery.LANUpdated, Device: named, Probed: true})
+	h.update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	selected := h.m.local.Selected()
+	if selected == nil || selected.Name != "Kitchen Pi" {
+		t.Fatalf("Enter selected %+v, want the renamed board Kitchen Pi", selected)
+	}
+}
+
+// Only the stream saying "this is the same device" removes a row. Different
+// devices stay apart, an unchanged device keeps its row, and a row another
+// device is still listed under is left alone.
+func TestLANPickerKeepsOtherBoardsRows(t *testing.T) {
+	a := models.LANDevice{ID: "id-a", DisplayName: "Alpha", Hostname: "alpha.local", Port: defaultAgentPort}
+	b := models.LANDevice{ID: "id-b", DisplayName: "Beta", Hostname: "beta.local", Port: defaultAgentPort}
+
+	t.Run("two devices, repeated events", func(t *testing.T) {
+		h := newLANPickerHarness()
+		h.send(
+			discovery.LANEvent{Kind: discovery.LANFound, Device: a},
+			discovery.LANEvent{Kind: discovery.LANFound, Device: b},
+			discovery.LANEvent{Kind: discovery.LANUpdated, Device: a, Probed: true},
+			discovery.LANEvent{Kind: discovery.LANUpdated, Device: b, ProbeFailed: true},
+		)
+		if got := h.names(); !slices.Equal(got, []string{"Alpha", "Beta"}) {
+			t.Fatalf("picker rows = %v, want Alpha and Beta", got)
+		}
+	})
+
+	t.Run("a new device with the same display name", func(t *testing.T) {
+		twin := models.LANDevice{ID: "id-c", DisplayName: "Alpha", Hostname: "alpha-2.local", Port: defaultAgentPort}
+		h := newLANPickerHarness()
+		h.send(
+			discovery.LANEvent{Kind: discovery.LANFound, Device: a},
+			discovery.LANEvent{Kind: discovery.LANFound, Device: twin},
+		)
+		if got := h.names(); !slices.Equal(got, []string{"Alpha", "Alpha"}) {
+			t.Fatalf("picker rows = %v, want both boards named Alpha", got)
+		}
+	})
+
+	t.Run("a row shared with another device", func(t *testing.T) {
+		// Rows merge by hostname, so two devices that announce one hostname
+		// share a row. One of them leaving the name must not take the row from
+		// the other.
+		sharing := models.LANDevice{ID: "id-d", DisplayName: "Alpha", Hostname: "alpha.local", Port: defaultAgentPort}
+		renamed := a
+		renamed.DisplayName, renamed.Hostname = "Gamma", "gamma.local"
+		h := newLANPickerHarness()
+		h.send(
+			discovery.LANEvent{Kind: discovery.LANFound, Device: a},
+			discovery.LANEvent{Kind: discovery.LANFound, Device: sharing},
+			discovery.LANEvent{Kind: discovery.LANUpdated, Device: renamed},
+		)
+		if got := h.names(); !slices.Equal(got, []string{"Alpha", "Gamma"}) {
+			t.Fatalf("picker rows = %v, want Alpha kept for the other device and Gamma added", got)
+		}
+	})
+
+	t.Run("a retracted device can be listed again", func(t *testing.T) {
+		h := newLANPickerHarness()
+		h.send(
+			discovery.LANEvent{Kind: discovery.LANFound, Device: a},
+			discovery.LANEvent{Kind: discovery.LANRetracted, Device: a},
+			discovery.LANEvent{Kind: discovery.LANFound, Device: b},
+			discovery.LANEvent{Kind: discovery.LANFound, Device: a},
+		)
+		if got := h.names(); !slices.Equal(got, []string{"Alpha", "Beta"}) {
+			t.Fatalf("picker rows = %v, want Alpha and Beta", got)
+		}
+	})
+}
+
+// A device with a mesh identity keeps its mesh path when its LAN row moves to
+// a new hostname: only the LAN path is taken from the old row.
+func TestLANPickerRenamedBoardKeepsItsMeshPath(t *testing.T) {
+	snapshot := nearbyMeshFixture()
+	mesh := snapshot.Devices[0]
+	boot := models.LANDevice{ID: mesh.Device, DisplayName: "Brave Dolphin", Hostname: "brave-dolphin.local", PrincipalURI: mesh.Principal, TenantUUID: mesh.Tenant, IsMTLS: true, Port: defaultAgentPort}
+	named := boot
+	named.DisplayName, named.Hostname = "Kitchen Pi", "kitchen-pi.local"
+
+	h := newLANPickerHarness()
+	h.send(discovery.LANEvent{Kind: discovery.LANFound, Device: boot, Probed: true})
+	h.m, _ = reconcileMeshPicker(h.m, snapshot)
+	h.send(discovery.LANEvent{Kind: discovery.LANUpdated, Device: named, Probed: true})
+
+	items := h.items()
+	if len(items) != 1 {
+		t.Fatalf("picker rows = %v, want one row for the board", h.names())
+	}
+	d := items[0].Value.(*pickerEntry).mergedDevice
+	if d.Mesh == nil || d.LAN == nil || d.LAN.Hostname != "kitchen-pi.local" {
+		t.Fatalf("row = %+v (LAN %+v), want the mesh path kept and the LAN path at kitchen-pi.local", d, d.LAN)
 	}
 }
 
