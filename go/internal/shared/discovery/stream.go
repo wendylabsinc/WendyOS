@@ -43,9 +43,12 @@ type LANEvent struct {
 	// Supersedes names the cache key of an already-emitted identity this
 	// device replaces: the connect-minted, hostname-derived row
 	// (cacheConnectSuccess mints ID == DisplayName == hostname) for the same
-	// physical device the live sighting just identified by its TXT device id.
-	// A surface keyed by cache identity must drop that row; one keyed by
-	// hostname (the picker) already merges the two.
+	// physical device the live sighting just identified by its TXT device id,
+	// or the identity the device's service instance announced before it
+	// changed its TXT device id (supersedeInstanceOwner). A surface keyed by
+	// cache identity must drop that row. One keyed by hostname (the picker)
+	// already merges the two when the hostname is the same, and must drop the
+	// old row when it is not.
 	Supersedes string
 }
 
@@ -311,8 +314,11 @@ type lanStream struct {
 	out  chan<- LANEvent
 
 	states map[string]*lanDeviceState
-	cache  *discoverycache.Cache // nil when unavailable or not requested
-	dirty  bool
+	// instances is who announced through each DNS-SD service instance heard
+	// this session; see supersedeInstanceOwner.
+	instances map[lanInstance]*lanInstanceOwner
+	cache     *discoverycache.Cache // nil when unavailable or not requested
+	dirty     bool
 	// Generations must remain unique when a state is removed and recreated
 	// under the same key while its old probe is still running.
 	nextProbeGen int
@@ -350,6 +356,7 @@ func runLANEngine(ctx context.Context, opts StreamOptions, out chan<- LANEvent, 
 		opts:      opts,
 		out:       out,
 		states:    make(map[string]*lanDeviceState),
+		instances: make(map[lanInstance]*lanInstanceOwner),
 		emissions: make(chan MDNSService),
 		results:   make(chan lanProbeResult),
 		cables:    make(chan cableAnswer),
@@ -581,6 +588,18 @@ func (s *lanStream) handleSighting(svc MDNSService) {
 
 	s.retireCachedHostAliases(key, dev)
 	superseded := s.supersedeHostDerived(key, dev)
+	if left := s.supersedeInstanceOwner(key, svc); left != "" {
+		if superseded != "" {
+			s.retract(left) // an event names one superseded identity
+		} else {
+			delete(s.states, left)
+			if s.cache != nil {
+				s.cache.Delete(left)
+				s.dirty = true
+			}
+			superseded = left
+		}
+	}
 	advertised := dev.WiredAddresses
 
 	st, known := s.states[key]
@@ -787,6 +806,73 @@ func (s *lanStream) supersedeHostDerived(key string, dev models.LANDevice) strin
 		return oldKey
 	}
 	return ""
+}
+
+// lanInstance names one DNS-SD service instance as heard on one interface.
+// mDNS lets one responder own an instance name on a link, so on that link the
+// name stands for a single device.
+type lanInstance struct{ iface, name string }
+
+// lanInstanceOwner is what the session knows about one lanInstance.
+type lanInstanceOwner struct {
+	owner     string   // identity the instance last resolved to
+	displaced []string // identities it resolved to before that
+	contested bool     // a displaced identity announced through it again
+}
+
+// supersedeInstanceOwner returns the identity that the sighting svc, resolved
+// to key, has shown to be this same device under an identity it no longer
+// advertises, or "" when there is none. The caller retires that identity.
+//
+// The evidence is the service instance: the one svc came from announced another
+// identity earlier in this session, on the same interface. That is what
+// enrollment does. The agent rewrites the id TXT record to the certificate's
+// device UUID while the instance keeps its name, so a session that already
+// listed the boot id would otherwise show the device twice, forever: no
+// backend reports a withdrawn announcement, and a live-confirmed identity
+// never goes offline on its own.
+//
+// It deliberately concludes little:
+//   - A hostname, display name or address in common proves nothing here, and a
+//     sighting without an instance name or interface is not considered.
+//   - The earlier identity goes only once no instance still announces it. A
+//     device seen on two interfaces keeps it until both report the new one.
+//   - If the earlier identity announces through the instance again, two devices
+//     are using one name (a conflict mDNS has not settled, or a stale answer).
+//     It is listed again as a new sighting, and that instance never supersedes
+//     anything for the rest of the session.
+func (s *lanStream) supersedeInstanceOwner(key string, svc MDNSService) string {
+	if svc.InstanceName == "" || svc.InterfaceName == "" {
+		return ""
+	}
+	at := lanInstance{iface: svc.InterfaceName, name: svc.InstanceName}
+	inst := s.instances[at]
+	if inst == nil {
+		s.instances[at] = &lanInstanceOwner{owner: key}
+		return ""
+	}
+	previous := inst.owner
+	if previous == key {
+		return ""
+	}
+	inst.owner = key
+	if inst.contested {
+		return ""
+	}
+	if slices.Contains(inst.displaced, key) {
+		inst.contested = true
+		return ""
+	}
+	inst.displaced = append(inst.displaced, previous)
+	if _, listed := s.states[previous]; !listed {
+		return ""
+	}
+	for _, other := range s.instances {
+		if other.owner == previous {
+			return "" // still announced by another instance or interface
+		}
+	}
+	return previous
 }
 
 // hostDerivedIdentity reports whether dev's identity was minted from its
