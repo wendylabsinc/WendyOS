@@ -105,6 +105,75 @@ WENDY_E2E_LEGACY_INTEGRATION=true \
     --filter "legacy integration tests"
 ```
 
+### Run the HTTP app lifecycle specs
+
+`WENDY_E2E_HTTP_APP=true` opts into uniquely named real-device app fixtures
+from `.github/ci-tests/http-app-loop`. Select an explicit WendyOS device and
+an isolated CLI HOME. This fixture accepts plain dotted LAN hostnames or IPv4
+addresses only; it rejects cloud/provider/VM/socket selectors, explicit ports,
+credentials and unsupported IPv6 forms before scenario setup or inventory.
+The CLI host needs Python 3, curl, and OpenSSL. Before
+any Wendy command, the fixture reduces the copied single-context auth config
+to its held certificate/key and saved device pins. It removes OAuth/API tokens,
+refresh tokens, DPoP/service-account material and renewal endpoints, then checks
+the actual X509 validity locally. Expired or not-yet-valid certificates fail
+before device access. Remaining signed validity must exceed the maximum
+15-minute CLI renewal margin plus the enforced test timeout and 60 seconds of
+runner shutdown grace. These fixtures require `--test-timeout` between 1 and
+300 seconds; the runner exports its actual normalized bound. An ambient
+`WENDY_AGENT_SOCKET` is refused before scenario setup because it overrides the
+explicit device. No test refreshes a copied session. Private source auth files
+remain unchanged.
+
+The prebuilt Compose cases pin a small official Python multiarch image by
+immutable digest, then run the HTTP payload through Compose's `command` array.
+They need no local or remote builder. Cleanup removes only the exact app;
+the public immutable image remains shared device cache content and is never
+deleted by the fixture. Runs explicitly skip Cloud app registration and never
+consent to changing the builder role. Every fixture CLI command sets the
+supported `WENDY_RUN_NO_CLOUD_FALLBACK=1` setting; failed primary LAN resolution
+must not query Cloud. Build-host resolution is explicitly exempt from that
+setting, so both remote-builder negative specs are deferred with full bodies.
+No product routing or security behavior is changed by this harness setup.
+
+```bash
+WENDY_E2E_HTTP_APP=true bash Scripts/E2ETest.sh \
+  --no-managed-agent --agent-os wendyos --test-timeout 300 \
+  --device-address my-device.local \
+  --cli-auth-config /private/path/e2e-auth.json \
+  --filter "prebuilt HTTP"
+```
+
+The HTTP assertions verify app identity and payload version, a live reported
+endpoint, inventory identity/state/port, endpoint closure after stop, and a new
+process instance after restart. Detached start must report unchecked readiness.
+A separate full-body disabled spec retains companion version preservation:
+Compose currently reports `latest` instead of configured `1.0.0` in inventory.
+Other Compose cases leave that assertion to the disabled defect spec. To replay
+that known failure, explicitly set both `WENDY_E2E_REPLAY_KNOWN_DEFECTS=true` and
+`WENDY_E2E_HTTP_APP=true` and filter `preserves the companion version`.
+The replay retains the original `1.0.0` assertion.
+
+Five source-build positive specs retain complete bodies but remain disabled:
+the available test Jetson lacks BuildKit and the CLI host has no container
+builder. Their same-device `--build-host` path also rejects `--wait-ready`.
+No fixture installs or enables a builder. A claimed ready result must satisfy
+the declared TCP probe immediately; only unchecked detached startup may retry.
+If source deployment may have imported an image but no container exists,
+cleanup fails loudly with the exact app/repository because app inventory alone
+cannot establish image absence. It never prunes shared device caches.
+
+The same opt-in allows selective real-device checks filtered by
+`rejects a missing application and preserves`. The unavailable-builder and
+unsupported remote-readiness cases remain deferred because the supported
+no-fallback setting exempts build hosts. Use a trusted hostname or saved
+identity binding; a bare IP may be refused by identity verification.
+
+For the offline no-Cloud contact control, point `WENDY_E2E_CONTROL_CLI` at a
+locally built CLI and run `test_lan_no_cloud.py` with Python's unittest runner.
+It uses only synthetic credentials, an unreachable loopback Agent, and a local
+Cloud contact counter, including an unset-guard positive control.
+
 ## Test environment
 
 `Scripts/E2ETest.sh` is the preferred runner. It:

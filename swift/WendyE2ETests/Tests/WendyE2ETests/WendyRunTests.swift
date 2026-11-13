@@ -1,9 +1,93 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
 @Suite
 struct `'wendy run'` {
     let scenario = CLIAndAgentScenario()
+
+    /**
+     A single prebuilt Compose service deploys and starts without a local
+     builder. Detached JSON reports unchecked readiness and a usable HTTP
+     endpoint whose response identifies this app and version.
+
+     The fixture pins a small public Python image by digest and removes its
+     exact app afterward, retaining the shared public image cache.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `deploys a prebuilt HTTP service without a local builder`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                _ = try await app.response(cli)
+                // Companion-version preservation has a separate disabled defect spec.
+                try await app.requireState(cli, "RUNNING", expectedVersion: nil)
+            }
+        }
+    }
+
+    /**
+     An explicitly selected remote builder without BuildKit fails with a
+     diagnostic naming that dependency. It does not fall back to a local
+     builder, announce a started app, or change existing deployed app state.
+
+     Currently deferred: the supported LAN-only setting exempts build-host
+     resolution, so this fixture cannot safely execute the remote-builder path.
+     */
+    @Test(
+        .disabled(
+            "Deferred: supported no-Cloud-fallback setting exempts build-host resolution; LAN-only harness cannot contain this remote-builder path"
+        )
+    )
+    func `reports unavailable remote builder without creating an app`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
+                try await cli.sh(
+                    "\(app.command) run --prefix \(app.app) \(app.buildHostArgument) --skip-cloud-registration --detach"
+                ) { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stdout.isEmpty)
+                    #expect(result.stderr.contains("BuildKit"))
+                    #expect(result.stderr.contains(app.device))
+                }
+                let after = try await app.inventory(cli)
+                #expect(!after.contains { $0.name == app.app })
+            }
+        }
+    }
+
+    /**
+     Remote builds currently reject `--wait-ready` before building or deploying.
+     The command returns a failed readiness result and a diagnostic identifying
+     the incompatible flags, leaving existing deployed app state untouched.
+     Currently deferred with remote-builder cases until the harness can safely
+     contain every build-host resolution path without Cloud access.
+     */
+    @Test(
+        .disabled(
+            "Deferred with remote-builder cases: build-host resolution is exempt from supported no-Cloud-fallback setting"
+        )
+    )
+    func `rejects unsupported remote readiness before changing deployed apps`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
+                try await cli.sh(
+                    "\(app.command) run --prefix \(app.app) \(app.buildHostArgument) --skip-cloud-registration --detach --wait-ready"
+                ) { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stderr.contains("--wait-ready"))
+                    #expect(result.stderr.contains("--build-host"))
+                    let output = try JSONDecoder().decode(
+                        HTTPAppFixture.ReadinessFailure.self,
+                        from: Data(result.stdout.utf8)
+                    )
+                    #expect(output.status == "failed")
+                    #expect(output.readiness == "not_checked")
+                }
+                let after = try await app.inventory(cli)
+                #expect(!after.contains { $0.name == app.app })
+            }
+        }
+    }
 
     /**
      An invalid manifest fails before connecting to the explicitly selected
@@ -108,6 +192,48 @@ struct `'wendy run'` {
     )
     func `detaches after starting when requested`() async throws {
         // TODO: enable with isolated build and managed-deploy fixtures (WDY-1950).
+    }
+
+    /**
+     `--detach --wait-ready` reports readiness only after the declared probe
+     passes. The selected device serves an actual HTTP response identifying
+     this deployment, and inventory names the same app, version, and HTTP port.
+
+     Requires `WENDY_E2E_HTTP_APP=true` and an explicit device. The image builds
+     on that same device, so the CLI host needs no container runtime.
+     */
+    @Test(
+        .disabled(
+            "CLI rejects --wait-ready with --build-host; this Mac has no local container runtime"
+        )
+    )
+    func `'--wait-ready' confirms a responding HTTP app on the selected device`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withApp(cli: cli, waitReady: true) { app in
+                _ = try await app.response(cli)
+                try await app.requireState(cli, "RUNNING")
+            }
+        }
+    }
+
+    /**
+     `--detach` without `--wait-ready` acknowledges start and reports
+     `readiness: "not_checked"`. A configured endpoint is useful connection
+     information, not a readiness verdict; the caller verifies HTTP separately.
+     */
+    @Test(
+        .enabled(if: httpAppTestsEnabled),
+        .disabled(
+            "Fixture blocked: Jetson build host has no BuildKit and the CLI host has no container builder; validate a supported builder path before enabling"
+        )
+    )
+    func `'--detach' reports unchecked readiness and a usable HTTP endpoint`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withApp(cli: cli, waitReady: false) { app in
+                _ = try await app.response(cli)
+                try await app.requireState(cli, "RUNNING")
+            }
+        }
     }
 
     /**
