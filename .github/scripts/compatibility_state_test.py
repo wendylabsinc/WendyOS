@@ -145,6 +145,89 @@ class StatefulTests(unittest.TestCase):
         with self.assertRaises(compat.ReviewError):self.resolved(payload)
         self.assertEqual(payload,saved)
 
+    def test_large_coverage_is_complete_and_bounded_across_review_parts(self):
+        data=copy.deepcopy(self.report)
+        data['review_batches']=14
+        base=data['compatibility_coverage'][0]['directions']
+        data['compatibility_coverage']=[]
+        reasons=[]
+        for number in range(1,15):
+            directions=copy.deepcopy(base)
+            for direction,row in directions.items():
+                row['reason']=(f'coverage-{number}-{direction} '+('source evidence remains bounded; '*60))[:1524]
+                reasons.append(row['reason'])
+            data['compatibility_coverage'].append({'batch':number,'directions':directions})
+        with self.assertRaises(ValueError):comments.render_comment(data,REPO)
+        parts=comments.render_continuations(data,REPO)
+        primary=comments.render_primary(data,REPO,1911,[100+i for i in range(len(parts))])
+        self.assertGreater(len(parts),1)
+        self.assertTrue(all(len(body.encode())<=comments.MAX_COMMENT_BYTES-comments.WARNING_RESERVE_BYTES for body in [primary,*parts]))
+        for reason in reasons:self.assertIn(comments.inline(reason),'\n'.join(parts))
+        self.assertEqual(state.parse(parts),self.records)
+        self.assertNotIn(reasons[0],primary)
+
+    def test_private_local_history_is_reusable_and_taints_the_successor(self):
+        private=copy.deepcopy(self.records)
+        for role in ('changed','caller','receiver'):
+            for ref in private[0]['finding'][role]:ref['visibility']='private'
+        for policy,entries in (('Private test guidance',[fixtures.entry(visibility='private')]),(None,[])):
+            meta=api.prepare_review(metadata(),diff().decode(),REPO,entries,private_policy=policy,previous=private)
+            self.assertEqual(meta['_compatibility']['previous'],private)
+            self.assertEqual(meta['_compatibility']['visibility'],'private')
+            with self.assertRaises(compat.ReviewError):compat.public_result({'input_visibility':meta['_compatibility']['visibility']})
+        with self.assertRaises(compat.ReviewError):api.validate_prior_state({'version':2,'decisions':[],'compatibility_findings':private})
+
+    def test_unknown_history_is_not_presented_as_a_current_failure(self):
+        payload=self.resolved(self.update('not_assessed',[]),self.records)
+        body=comments.render_comment(self.report_result(payload,self.records),REPO)
+        visible=body.split('<summary>Evidence and affected flow</summary>')[0]
+        self.assertNotIn(self.records[0]['finding']['after'],visible)
+        self.assertIn('has not been confirmed or cleared',visible)
+
+    def test_structural_source_links_never_invent_line_zero(self):
+        ref=copy.deepcopy(next(iter(self.changed.values())))
+        ref.update(line=0,end_line=0)
+        link=comments.compatibility_code_link(ref)
+        self.assertNotIn('#L0',link)
+        self.assertIn('/blob/'+ref['revision']+'/',link)
+
+    def test_disagreeing_batches_keep_prior_concern_unassessed(self):
+        raw=diff().decode()+diff(path='go/other.go').decode()
+        parsed=api.parse_diff(raw)
+        meta=api.prepare_review(metadata(),raw,REPO,[fixtures.entry()],previous=self.records)
+        batches=api.split_diff(raw,len(diff()))
+        def review(batch_meta,source,repo,model):
+            row=self.update('addressed') if batch_meta['review_batch']['number']==1 else self.update('not_assessed',[])
+            return api.validate_model_response(row,batch_meta['_batch_evidence'],batch_meta['_compatibility'])
+        with patch.object(api,'review_model',side_effect=review):
+            combined=api.review_batches(meta,batches,REPO,'offline',parsed)
+        self.assertEqual(combined['compatibility_updates'][0]['status'],'not_assessed')
+        data=self.report_result(self.initial,self.records);data.update(combined)
+        self.assertEqual(state.current(data)[0]['status'],'not_assessed')
+
+    def test_compatibility_only_attention_uses_existing_label_without_review_requests(self):
+        from api_review_comment_test import REVIEW_DIFF, HEAD, BASE
+        data=result();data.update(decisions=[],review_batches=1,input_visibility='public',evidence_catalog={},compatibility_previous=[],compatibility_updates=[])
+        parsed=api.parse_diff(REVIEW_DIFF.decode())
+        assessment={'revisions':{'repository':REPO,'base':BASE,'head':HEAD},'visibility':'public'}
+        changed=api.finding_catalog(api.evidence_catalog(parsed),assessment)
+        ref=copy.deepcopy(next(iter(changed.values())))
+        finding=dict(self.fixture.finding,changed=[ref],caller=[ref],receiver=[ref])
+        data.update(compatibility_verdict='breaking',compatibility_findings=[finding],compatibility_coverage=[{'batch':1,'directions':self.initial['compatibility_coverage']}])
+        for row in data['compatibility_coverage'][0]['directions'].values():row['evidence']=[];row['status']='not_assessed'
+        data['compatibility_coverage'][0]['directions'][finding['direction']].update(status='partial',evidence=[ref])
+        github=MultipartGitHub()
+        self.assertTrue(comments.publish(data,REPO,1911,HEAD,BASE,REVIEW_DIFF,github))
+        self.assertTrue(any(payload and payload.get('labels')==['api-review'] for _,_,payload in github.mutations()))
+        self.assertFalse(any('/requested_reviewers' in path for _,path,_ in github.mutations()))
+        previous=state.parse(comments.authoritative_bodies(github.comments))
+        data.update(compatibility_findings=[],compatibility_verdict='not_assessed',compatibility_previous=previous,
+                    prior_state_sha256=api.prior_state_digest(comments.model_prior_state([],previous)),
+                    compatibility_updates=[{'prior_id':previous[0]['id'],'status':'cancelled','reason':'Current source disproves the previous concern','evidence':[ref]}])
+        self.assertTrue(comments.publish(data,REPO,1911,HEAD,BASE,REVIEW_DIFF,github))
+        self.assertTrue(any(method=='DELETE' and path.endswith('/labels/api-review') for method,path,_ in github.mutations()))
+        self.assertFalse(any('/requested_reviewers' in path for _,path,_ in github.mutations()))
+
     def test_code_fences_and_source_quotes_cannot_inject_either_state(self):
         marker=state.marker(self.records[0])
         for body in ('```text\n'+marker+'\n```', '~~~~\n'+marker+'\n~~~~', '+ '+marker, '> '+marker):

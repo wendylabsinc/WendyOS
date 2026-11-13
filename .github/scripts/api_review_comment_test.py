@@ -594,7 +594,7 @@ class MultipartTests(unittest.TestCase):
         pages = [comment for comment in github.comments if review.part_index(comment["body"]) > 0]
         self.assertGreater(len(pages), 1)
         self.assertGreater(primary["id"], max(comment["id"] for comment in pages))
-        self.assertIn("93 decisions", primary["body"])
+        self.assertIn("93 API decisions", primary["body"])
         self.assertIn("11 complete diff batch(es)", primary["body"])
         for page in pages:
             self.assertIn(f"#issuecomment-{page['id']}", primary["body"])

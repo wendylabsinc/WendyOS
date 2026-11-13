@@ -292,15 +292,21 @@ def prepare_review(metadata, diff, repo, entries=None, limits=None, private_poli
     if tests:
         raise ReviewError("Supply version/test records as cited supplemental evidence, not uncited coverage claims")
     prepared = dict(metadata)
+    prior_records = compatibility_state.validate_records(previous or [], public_only=False)
+    private_history = any(ref.get("visibility") == "private"
+                          for record in prior_records
+                          for refs in [record["finding"][role] for role in ("changed", "caller", "receiver")]
+                                      + [record["resolution"]["evidence"]]
+                          for ref in refs)
     limits = copy.deepcopy(limits) if limits else {"selection": "explicit", "bytes": used,
         "limitations": ["Only selected immutable ranges supplied; unprovided counterparts, releases and test runs remain not assessed."]}
     if private_policy is None:
         limits.setdefault("limitations", []).append("Feature support/retirement guidance was not supplied; those requirements are not assessed.")
-    prepared["_compatibility"] = {"catalog": catalog, "supplied": supplied, "previous": compatibility_state.validate_records(previous or []),
+    prepared["_compatibility"] = {"catalog": catalog, "supplied": supplied, "previous": prior_records,
         "limits": limits,
         "tests": [{"evidence_id": k, **v} for k, v in catalog.items() if v["kind"] != "source"],
         "revisions": {"repository": repo, "base": metadata["diff_base_sha"], "head": metadata["head"]["sha"]},
-        "visibility": "private" if private_policy or any(e["visibility"] == "private" for e in supplied) else "public"}
+        "visibility": "private" if private_policy or private_history or any(e["visibility"] == "private" for e in supplied) else "public"}
     prepared["_private_policy"] = private_policy
     return prepared
 

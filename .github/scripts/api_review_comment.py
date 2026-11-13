@@ -372,12 +372,33 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
     return current, withdrawn
 
 
+def compatibility_code_link(ref):
+    fragment = f"#L{ref['line']}" if ref["line"] else ""
+    if ref["line"] and ref["end_line"] != ref["line"]:
+        fragment += f"-L{ref['end_line']}"
+    url = f"https://github.com/{ref['repository']}/blob/{ref['revision']}/{urllib.parse.quote(ref['path'], safe='/')}" + fragment
+    label = inline(ref["path"]) + (f":{ref['line']}" if ref["line"] else "")
+    return f"[{label}]({url})"
+
+
+def compatibility_coverage_blocks(result):
+    blocks = []
+    for row in result.get("compatibility_coverage", []):
+        for direction, coverage in row["directions"].items():
+            blocks.append([f"#### Coverage — batch {row['batch']}, `{direction}`", "",
+                           f"**{coverage['status']}**. {inline(coverage['reason'])}", "",
+                           *(["Evidence: " + ", ".join(compatibility_code_link(ref) for ref in coverage["evidence"]), ""] if coverage["evidence"] else [])])
+    return blocks
+
+
 def compatibility_finding_lines(record):
     finding = record["finding"]
     display = {"open": "⚠️ Concern — Open", "not_assessed": "⚠️ Concern — Not reassessed",
                "addressed": "✅ Addressed", "cancelled": "🚫 Cancelled"}[record["status"]]
-    lines = [f"#### {display}: {inline(finding['action'])}", "",
-             f"{inline(finding['consumer'])}: {inline(finding['after'])}", ""]
+    overview = (f"{inline(finding['consumer'])}: {inline(finding['after'])}" if record["status"] == "open" else
+                f"The prior concern for {inline(finding['consumer'])} needs reassessment; it has not been confirmed or cleared." if record["status"] == "not_assessed" else
+                f"Previously reported for {inline(finding['consumer'])}.")
+    lines = [f"#### {display}: {inline(finding['action'])}", "", overview, ""]
     if record["status"] == "open":
         lines += [inline(finding["consider"]), ""]
     if record["resolution"]["reason"]:
@@ -385,23 +406,16 @@ def compatibility_finding_lines(record):
     lines += ["<details>", "<summary>Evidence and affected flow</summary>", "",
               f"**Direction:** `{finding['direction']}`. **Assessment:** {finding['assessment']}.", "",
               f"**Condition:** {inline(finding['condition'])}", "",
-              f"**Before:** {inline(finding['before'])}", ""]
+              f"**Before:** {inline(finding['before'])}", "", f"**Reported failure:** {inline(finding['after'])}", ""]
     for role in ("changed", "caller", "receiver"):
-        links = []
-        for ref in finding[role]:
-            url = f"https://github.com/{ref['repository']}/blob/{ref['revision']}/{urllib.parse.quote(ref['path'], safe='/')}#L{ref['line']}"
-            if ref['end_line'] != ref['line']:
-                url += f"-L{ref['end_line']}"
-            links.append(f"[{inline(ref['path'])}:{ref['line']}]({url})")
-        lines += [f"**{role.capitalize()}:** " + ", ".join(links), ""]
+        lines += [f"**{role.capitalize()}:** " + ", ".join(compatibility_code_link(ref) for ref in finding[role]), ""]
     for ref in record["resolution"]["evidence"]:
-        url = f"https://github.com/{ref['repository']}/blob/{ref['revision']}/{urllib.parse.quote(ref['path'], safe='/')}#L{ref['line']}"
-        lines += [f"**Reassessment:** [{inline(ref['path'])}:{ref['line']}]({url})", ""]
+        lines += ["**Reassessment:** " + compatibility_code_link(ref), ""]
     lines += ["</details>", "", compatibility_state.marker(record), ""]
     return lines
 
 
-def compatibility_lines(result, *, include_findings=True):
+def compatibility_lines(result, *, include_findings=True, include_coverage=True):
     if "compatibility_findings" not in result:
         return ["Compatibility findings: not assessed by this legacy result.", ""]
     records = compatibility_state.current(result)
@@ -422,9 +436,15 @@ def compatibility_lines(result, *, include_findings=True):
             lines += ["</details>", ""]
     lines += ["<details>", "<summary>Coverage and limitations</summary>", "",
               "**Bounded verdict:** " + inline(result["compatibility_verdict"]), ""]
-    for row in result["compatibility_coverage"]:
-        for direction, coverage in row["directions"].items():
-            lines += [f"- Batch {row['batch']}, `{direction}`: **{coverage['status']}**. {inline(coverage['reason'])}"]
+    if include_coverage:
+        for block in compatibility_coverage_blocks(result):
+            lines += block
+    else:
+        for direction in compat.DIRECTIONS:
+            rows = [row["directions"][direction] for row in result["compatibility_coverage"]]
+            lines += [f"- `{direction}`: {sum(r['status'] == 'partial' for r in rows)} partial, "
+                      f"{sum(r['status'] == 'not_assessed' for r in rows)} not assessed batch(es)."]
+        lines += ["", "Full per-batch evidence and limitations are preserved in the linked review parts.", ""]
     limits = result.get("context_limits", {})
     if limits:
         lines += ["", f"Supplemental source: {limits.get('bytes', limits.get('source_bytes', 0)):,} bytes; {limits.get('entries', 0)} ranges. "
@@ -436,7 +456,7 @@ def compatibility_lines(result, *, include_findings=True):
     return lines
 
 
-def review_intro(result: dict, repo: str, *, include_findings=True) -> list[str]:
+def review_intro(result: dict, repo: str, *, include_findings=True, include_coverage=True) -> list[str]:
     head = result["head_sha"]
     coverage = result.get("source_coverage", {})
     files = coverage.get("source_files", result["changed_files"])
@@ -446,7 +466,7 @@ def review_intro(result: dict, repo: str, *, include_findings=True) -> list[str]
             f"**Recommended risk:** {'medium' if result['risk'] == 'mid' else result['risk']}. The author owns the risk label.", "",
             f"Input coverage: {files}/{result['changed_files']} source files across {result.get('review_batches', 1)} complete diff batch(es); no diff truncation. "
             f"{len(coverage.get('excluded_generated_files', []))} generated files excluded (not AI-reviewed). Supplemental context is bounded.", "",
-            *compatibility_lines(result, include_findings=include_findings)]
+            *compatibility_lines(result, include_findings=include_findings, include_coverage=include_coverage)]
 
 
 def markdown_fence(text: str) -> str:
@@ -544,14 +564,14 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
     current_records, withdrawn = reconcile_records(result, previous or [])
     limit = MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES
     compat_records = compatibility_state.current(result) if "compatibility_findings" in result else []
-    maximum_parts = max(1, len(current_records) + len(withdrawn) + len(compat_records))
+    coverage_blocks = compatibility_coverage_blocks(result)
+    maximum_parts = max(1, len(current_records) + len(withdrawn) + len(compat_records) + len(coverage_blocks))
 
     def render(lines: list[str], index: int, total: int) -> str:
         return "\n".join([
-            f"# API decisions — checklist part {index} of {total}", "",
+            f"# AI Compatibility Review — part {index} of {total}", "",
             f"Reviewed revision `{result['head_sha']}`. "
-            "The primary API review comment records whether every checklist part was published successfully.",
-            "Check a box to accept a pending or changed decision.", "",
+            "The primary review links every published part. API checkboxes record human acceptance.", "",
             *lines, revision_marker(result),
             f"<!-- ai-api-review:part={index}/{total} -->", COMMENT_MARKER, "",
         ])
@@ -559,15 +579,14 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
     pages: list[list[str]] = []
     page_lines: list[str] = []
     current_category = None
-    for record in compat_records:
-        block = compatibility_finding_lines(record)
+    for block in [*(compatibility_finding_lines(record) for record in compat_records), *coverage_blocks]:
         candidate = page_lines + block
         if len(render(candidate, maximum_parts, maximum_parts).encode()) > limit:
             if page_lines:
                 pages.append(page_lines)
             page_lines = block
             if len(render(page_lines, maximum_parts, maximum_parts).encode()) > limit:
-                raise ValueError("A compatibility concern exceeds the comment limit; prior review preserved")
+                raise ValueError("A compatibility/coverage block exceeds the comment limit; prior review preserved")
         else:
             page_lines = candidate
     for category, title in CATEGORIES.items():
@@ -610,9 +629,9 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
 
 
 def render_primary(result: dict, repo: str, pr_number: int, comment_ids: list[int]) -> str:
-    lines = review_intro(result, repo, include_findings=False) + [
-        f"**Complete checklist:** {len(result['decisions'])} decisions across {len(comment_ids)} comments.", "",
-        *[f"- [Checklist part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
+    lines = review_intro(result, repo, include_findings=False, include_coverage=False) + [
+        f"**Complete review:** {len(result['decisions'])} API decisions across {len(comment_ids)} comments.", "",
+        *[f"- [Review part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
           for index, identifier in enumerate(comment_ids, start=1)],
         "", revision_marker(result),
         f"<!-- ai-api-review:part=0/{len(comment_ids)} -->", COMMENT_MARKER, "",
@@ -894,7 +913,9 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         return False
 
     labels = []
-    if result["decisions"]:
+    open_compatibility = any(record["status"] in {"open", "not_assessed"}
+                             for record in compatibility_state.current(result)) if "compatibility_findings" in result else False
+    if result["decisions"] or open_compatibility:
         ensure_label(API_LABEL)
         labels.append(API_LABEL["name"])
     else:
