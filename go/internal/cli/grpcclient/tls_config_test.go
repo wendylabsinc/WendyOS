@@ -73,7 +73,7 @@ func testCertInfo(t *testing.T) *config.CertificateInfo {
 func TestNewAgentTLSConfigSetsSessionCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("WENDY_TLS_SESSION_STORE", "file")
-	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, nil, nil)
+	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, false, nil, nil)
 	if err != nil {
 		t.Fatalf("newAgentTLSConfig: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestNewAgentTLSConfigSetsSessionCache(t *testing.T) {
 
 func TestNewAgentTLSConfigHonorsStoreOff(t *testing.T) {
 	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
-	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, nil, nil)
+	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, false, nil, nil)
 	if err != nil {
 		t.Fatalf("newAgentTLSConfig: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestNewAgentTLSConfigDebugLogsResumption(t *testing.T) {
 	tlsDebugWriter = &buf
 	defer func() { tlsDebugWriter = origWriter }()
 
-	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, nil, nil)
+	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, false, nil, nil)
 	if err != nil {
 		t.Fatalf("newAgentTLSConfig: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestNewAgentTLSConfigDebugLogsResumption(t *testing.T) {
 
 func TestOperatorCertificateSelectionIgnoresIssuerHintsOnly(t *testing.T) {
 	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
-	cfg, err := newAgentTLSConfig("device:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, nil, nil)
+	cfg, err := newAgentTLSConfig("device:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

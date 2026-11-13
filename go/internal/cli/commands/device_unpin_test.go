@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,11 +261,9 @@ func TestDeviceUnpinAcceptsAnIdentityURN(t *testing.T) {
 	}
 }
 
-// TestSPKIRefusalNamesAnArgumentUnpinCanActOn is the round trip the two halves
-// of Finding A only make sense together: the exact string spkiRefusal tells the
-// user to run must clear the entry that caused the refusal. Asserting the
-// message text and the command's behaviour separately would let them drift.
-func TestSPKIRefusalNamesAnArgumentUnpinCanActOn(t *testing.T) {
+// TestSPKIRefusalAcceptClearsTheEntry is the round trip: accepting the new key
+// must clear the store entry that caused the refusal.
+func TestSPKIRefusalAcceptClearsTheEntry(t *testing.T) {
 	writePinTestConfig(t, nil)
 	setPinCache(t)
 	seedSPKIPin(t, "urn:wendy:org:7:asset:42")
@@ -275,25 +274,18 @@ func TestSPKIRefusalNamesAnArgumentUnpinCanActOn(t *testing.T) {
 		Want: "sha256:aaa", Got: "sha256:bbb",
 	})
 
-	arg := unpinArgumentFrom(t, err.Error())
-	runUnpin(t, arg)
-
+	// Accepting the new key at the prompt must clear the entry that caused the
+	// refusal, or the next dial refuses identically.
+	var refusal *deviceIdentityRefusalError
+	if !errors.As(err, &refusal) || refusal.accept == nil {
+		t.Fatalf("refusal %v cannot be accepted", err)
+	}
+	if acceptErr := refusal.accept(); acceptErr != nil {
+		t.Fatal(acceptErr)
+	}
 	if _, ok := readSPKIPins(t)["urn:wendy:org:7:asset:42"]; ok {
-		t.Errorf("running the refusal's own suggested command (%q) cleared nothing; the refusal is a dead end", arg)
+		t.Error("accepting the new key cleared nothing; the refusal is a dead end")
 	}
-}
-
-// unpinArgumentFrom extracts the argument a refusal told the user to pass to
-// `wendy device unpin`.
-func unpinArgumentFrom(t *testing.T, msg string) string {
-	t.Helper()
-	const marker = "wendy device unpin "
-	i := strings.Index(msg, marker)
-	if i < 0 {
-		t.Fatalf("refusal %q names no unpin command at all", msg)
-	}
-	rest := msg[i+len(marker):]
-	return strings.TrimRight(strings.Fields(rest)[0], "'\"")
 }
 
 // TestDeviceUnpinLeavesAnotherDevicesPinsAlone is the adversarial case for the

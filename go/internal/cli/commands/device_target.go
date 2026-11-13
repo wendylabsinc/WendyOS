@@ -98,6 +98,15 @@ func resolveOptionsDevice(opts []resolveOption) string {
 	return cfg.device
 }
 
+// resolveOptionsNonInteractive reports whether opts forbid prompting.
+func resolveOptionsNonInteractive(opts []resolveOption) bool {
+	cfg := resolveConfig{excludeProviderKeys: make(map[string]bool)}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return cfg.nonInteractive
+}
+
 // withoutDeviceOverride runs fn with --device and WENDY_DEVICE suspended, so a
 // connection made inside it resolves to the saved default. set-default uses it
 // to confirm and pin the device it just saved.

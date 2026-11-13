@@ -101,15 +101,16 @@ func TestBLEAgentTLSUsesCloudInventoryName(t *testing.T) {
 	}
 }
 
-func TestMissingExpectedIdentityNeverDialsPlaintext(t *testing.T) {
+// With no saved identity, a plaintext answer is used only when the device
+// proves it is unenrolled; this fake cannot.
+func TestMissingExpectedIdentityNeedsUnenrolledPlaintext(t *testing.T) {
 	orig := plaintextConnectFn
 	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
-		t.Fatal("missing expected identity caused a plaintext downgrade")
-		return nil, nil
+		return grpcclient.NewFromConn(nil), nil
 	}
 	t.Cleanup(func() { plaintextConnectFn = orig })
-	conn, _, err := dialAgentLadderWithCerts(context.Background(), dialTarget{Addr: "127.0.0.1:50051"}, []config.CertificateInfo{{}})
-	if conn != nil || !errors.Is(err, certs.ErrExpectedDeviceIdentity) || !blocksUnauthenticatedFallback(err) {
-		t.Fatalf("missing expectation returned connection=%v err=%v", conn != nil, err)
+	conn, _, err := dialAgentLadderWithCerts(context.Background(), dialTarget{Addr: "127.0.0.1:1"}, []config.CertificateInfo{{}})
+	if conn != nil || err == nil {
+		t.Fatalf("unproven plaintext answer returned connection=%v err=%v", conn != nil, err)
 	}
 }

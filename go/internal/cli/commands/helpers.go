@@ -321,6 +321,46 @@ func chooseRejectionErrorForScope(ctx context.Context, device certs.Scope, allCe
 	return rejection
 }
 
+// firstContactRefusal reports an enrolled device that refused this CLI's
+// certificate when no saved identity was involved. Only the device's own
+// answer (a TLS alert or an Unauthenticated status) is reworded; an expired
+// login, a cross-org device, or a failure of the CLI's own checks keeps its
+// specific message. errors.Is still sees the underlying rejection.
+func firstContactRefusal(name string, rejection error, attempts []mtlsAttemptError) error {
+	var plain tlsHandshakeRejectedError
+	if !errors.As(rejection, &plain) || expiredLoginFrom(rejection) != nil || isCertRefreshableError(rejection) {
+		return rejection
+	}
+	for _, attempt := range attempts {
+		if strings.Contains(attempt.err.Error(), "remote error: tls:") || status.Code(attempt.err) == codes.Unauthenticated {
+			return deviceRefusedUserError{name: name, cause: rejection}
+		}
+	}
+	return rejection
+}
+
+// deviceRefusedUserError is an enrolled device saying no to this user.
+type deviceRefusedUserError struct {
+	name  string
+	cause error
+}
+
+const deviceRefusedUserStep = "Sign in with an account that has access to this device ('wendy auth login'), then retry."
+
+func (e deviceRefusedUserError) Error() string {
+	name := e.name
+	if name == "" {
+		name = "The device"
+	} else {
+		name = fmt.Sprintf("Device %q", name)
+	}
+	return name + " is enrolled and refused your sign-in certificate.\n  " + deviceRefusedUserStep
+}
+
+func (e deviceRefusedUserError) NextSteps() []string { return []string{deviceRefusedUserStep} }
+
+func (e deviceRefusedUserError) Unwrap() error { return e.cause }
+
 type provisionedAgentUnauthorizedError struct {
 	cause error
 }
@@ -1279,6 +1319,16 @@ func connectResolvedAgentKeyed(ctx context.Context, hostname, addr, pinKey strin
 // an interactive device picker is presented (unless running in --json mode).
 func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.AgentConnection, error) {
 	conn, err := connectToAgentInner(ctx, opts...)
+	// A changed identity the user accepts is saved, then connected to again;
+	// a second change (its certificate key) may follow the first.
+	for range 2 {
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNonInteractive(opts))
+		if !retry {
+			err = confirmErr
+			break
+		}
+		conn, err = connectToAgentInner(ctx, opts...)
+	}
 	if err != nil {
 		if cloudConn, cloudErr, attempted := connectUnresolvedCloudName(ctx, deviceFlag, err, opts...); attempted {
 			conn, err = cloudConn, cloudErr
@@ -2685,7 +2735,16 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				return nil, err
 			}
 			i := w.probeOrder[pos]
-			conn, tlsErr := grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
+			var conn *grpcclient.AgentConnection
+			var tlsErr error
+			if w.target.Expected == nil && !w.target.pinned() {
+				// No saved identity: the device's certificate is verified
+				// against the trust roots only, and the device decides
+				// whether it accepts ours.
+				conn, tlsErr = grpcclient.ConnectWithTLSFirstContact(ctx, mtlsAddr, &w.allCerts[i], w.pins)
+			} else {
+				conn, tlsErr = grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
+			}
 			if tlsErr != nil {
 				if errors.Is(tlsErr, certs.ErrExpectedDeviceIdentity) {
 					return nil, tlsErr
@@ -2814,9 +2873,10 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 // authenticate the requested device. A host with any pin is never offered the
 // plaintext rung.
 func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
-	if len(allCerts) > 0 && target.Expected == nil {
-		// A local configuration failure must never turn into a plaintext
-		// attempt or a different carrier's trust-on-first-use connection.
+	if len(allCerts) > 0 && target.Expected == nil && target.pinned() {
+		// A saved binding too old to name a device (organization only) must
+		// never turn into a plaintext attempt or a first-contact connection.
+		// A device with no saved binding at all is dialled below.
 		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
 	}
 	candidates := target.dialCandidates()
@@ -2878,7 +2938,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 				// tenant it belongs to.
 				device.TenantUUID = target.Expected.TenantUUID
 			}
-			return nil, cause, chooseRejectionErrorForScope(ctx, device, allCerts, cause)
+			rejection := chooseRejectionErrorForScope(ctx, device, allCerts, cause)
+			if !target.pinned() && target.Expected == nil {
+				rejection = firstContactRefusal(target.PinKey, rejection, walk.attempts)
+			}
+			return nil, cause, rejection
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2911,8 +2975,31 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	// actually worked. The authenticated walk above is where reachability gets
 	// established; cacheFastPathReachable is what proves a plaintext one.
 	conn, err := plaintextConnectFn(ctx, target.Addr)
-	return conn, walk.lastMTLSErr, err
+	if err != nil || len(allCerts) == 0 {
+		return conn, walk.lastMTLSErr, err
+	}
+	// Signed in, no saved binding, and no TLS endpoint accepted us: use the
+	// plaintext setup port only when the device says it is not enrolled. An
+	// enrolled agent never serves it.
+	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
+	state, err := deviceProvisioning(probeCtx, conn)
+	cancel()
+	if err != nil {
+		conn.Close()
+		return nil, walk.lastMTLSErr, err
+	}
+	if state.GetNotProvisioned() == nil {
+		conn.Close()
+		return nil, walk.lastMTLSErr, errEnrolledWithoutTLS
+	}
+	conn.NoSavedIdentity = true
+	return conn, walk.lastMTLSErr, nil
 }
+
+// errEnrolledWithoutTLS is a device that answered on the unencrypted setup port
+// but does not report itself unenrolled. A real enrolled agent serves only
+// TLS, so nothing is sent to it.
+var errEnrolledWithoutTLS = errors.New("the device answered without TLS but does not report itself as unenrolled, so the CLI will not use that connection. Check that the device name or address is correct, then retry")
 
 // dialAgentLadder is dialAgentLadderWithCerts with the CLI's stored certs
 // in config order — the shape every non-fast-path caller wants.
@@ -3580,6 +3667,14 @@ func ExcludeProviders(keys ...string) resolveOption {
 // device, so the clock fix applies to info, run, deploy, ros2 bag, etc.
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 	sel, err := resolveTargetInner(ctx, opts...)
+	for range 2 {
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNonInteractive(opts))
+		if !retry {
+			err = confirmErr
+			break
+		}
+		sel, err = resolveTargetInner(ctx, opts...)
+	}
 	if err != nil {
 		device := resolveOptionsDevice(opts)
 		if device == "" {
