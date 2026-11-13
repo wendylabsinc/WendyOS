@@ -110,6 +110,7 @@ type fakeRegistry struct {
 	deploys    map[string]*cloudpb.Deployment
 	assigned   []*cloudpb.DeviceAssignment
 	removed    []*cloudpb.UnassignDeviceRequest
+	detached   []*cloudpb.DetachDeviceRequest
 	sel        map[string]*cloudpb.DeviceSelection // deployment -> current selection
 	defaults   map[string]string                   // release -> default_config_json
 	extra      []*cloudpb.PendingDeviceStatement   // rows cloud adds to to_sign
@@ -524,7 +525,7 @@ func (f *fakeRegistry) ListDeploymentRevisionDevices(_ context.Context, in *clou
 func (f *fakeRegistry) ListPendingDeviceStatements(_ context.Context, in *cloudpb.ListPendingDeviceStatementsRequest) (*cloudpb.ListPendingDeviceStatementsResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return &cloudpb.ListPendingDeviceStatementsResponse{Statements: f.pending[in.GetDeploymentId()]}, nil
+	return &cloudpb.ListPendingDeviceStatementsResponse{Statements: f.pending[in.GetDeploymentId()+in.GetAppId()]}, nil // exactly one is set
 }
 
 func (f *fakeRegistry) ListDeployments(in *cloudpb.ListDeploymentsRequest, stream grpc.ServerStreamingServer[cloudpb.ListDeploymentsResponse]) error {

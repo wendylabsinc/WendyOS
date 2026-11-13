@@ -30,7 +30,7 @@ func newAppCmd() *cobra.Command {
 		Use:   "app",
 		Short: "Manage this project's app in Wendy Cloud",
 	}
-	cmd.AddCommand(newAppCreateCmd(), newAppReleaseCmd(), newAppPublishCmd(), newAppPromoteCmd(), newAppDeployCmd(), newAppDeploymentCmd(), newAppRotateCmd())
+	cmd.AddCommand(newAppCreateCmd(), newAppReleaseCmd(), newAppPublishCmd(), newAppPromoteCmd(), newAppDeployCmd(), newAppDeploymentCmd(), newAppRotateCmd(), newAppDeleteCmd())
 	return cmd
 }
 
