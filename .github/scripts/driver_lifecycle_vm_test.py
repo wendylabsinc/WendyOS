@@ -24,6 +24,73 @@ SPEC.loader.exec_module(VM)
 
 
 class DriverVMTests(unittest.TestCase):
+    def test_exported_markers_are_removed_only_from_the_owned_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            root = work / "rootfs"
+            (root / "fixture").mkdir(parents=True)
+            (root / "fixture/nonce").write_text("a" * 32)
+            for name in VM.CONTAINER_IDENTITY_MARKERS:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("docker\n")
+            retained = root / "fixture/driver.data"
+            retained.write_bytes(b"actual payload stays")
+            runner = VM.Runner(work, work, "a" * 32)
+            runner.results["export"] = {"container_identity_markers": list(VM.CONTAINER_IDENTITY_MARKERS)}
+            def remove(argv, **options):
+                self.assertEqual(argv[:4], ["sudo", "-n", "rm", "--"])
+                self.assertEqual(argv[4:], [str(root / name) for name in VM.CONTAINER_IDENTITY_MARKERS])
+                subprocess.run(argv[2:], check=True, timeout=3)
+            with mock.patch.object(runner, "command", side_effect=remove):
+                runner.remove_export_container_identity(root)
+            self.assertTrue(all(not (root / name).exists() for name in VM.CONTAINER_IDENTITY_MARKERS))
+            self.assertEqual(retained.read_bytes(), b"actual payload stays")
+            self.assertEqual(len(runner.results["removed_export_container_identity"]), 4)
+            # A later accidental marker or foreign root cannot silently pass.
+            (root / ".dockerenv").write_text("docker")
+            runner.results["export"]["container_identity_markers"] = []
+            with self.assertRaisesRegex(ValueError, "identity remains"):
+                runner.remove_export_container_identity(root)
+            (root / "fixture/nonce").write_text("b" * 32)
+            with self.assertRaisesRegex(ValueError, "nonce mismatch"):
+                runner.remove_export_container_identity(root)
+
+    def test_export_rejects_linked_container_markers(self):
+        for kind, target in ((tarfile.SYMTYPE, "fixture/nonce"), (tarfile.LNKTYPE, "fixture/nonce")):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                archive = self.archive(Path(tmp), [("fixture", tarfile.DIRTYPE, ""),
+                    ("fixture/nonce", tarfile.REGTYPE, ""), (".dockerenv", kind, target)])
+                with self.assertRaisesRegex(ValueError, "regular archive member"):
+                    VM.validate_export(archive)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self.archive(Path(tmp), [(".dockerenv", tarfile.REGTYPE, "")])
+            self.assertEqual(VM.validate_export(archive)["container_identity_markers"], [".dockerenv"])
+
+    def test_native_boot_refuses_container_private_mount_and_namespace_mismatch(self):
+        script = r'''
+timeout() { shift 2; "$@"; }
+systemd-detect-virt() {
+  if [[ $1 == --container ]]; then printf '%s\n' "$CONTAINER"; return "$CONTAINER_STATUS"; fi
+  printf '%s\n' "$VM_KIND"
+}
+findmnt() { printf '%s\n' "$PROPAGATION"; }
+readlink() {
+  if [[ $1 == /proc/1/ns/mnt ]]; then printf '%s\n' "$INIT_NAMESPACE"; else printf 'mnt:[1]\n'; fi
+}
+source "$1"
+driver_vm_require_native_boot
+'''
+        baseline = dict(os.environ, CONTAINER="none", CONTAINER_STATUS="1", VM_KIND="qemu", PROPAGATION="shared", INIT_NAMESPACE="mnt:[1]")
+        for change in ({}, {"CONTAINER": "docker", "CONTAINER_STATUS": "0"},
+                       {"CONTAINER_STATUS": "124"}, {"VM_KIND": "none"},
+                       {"PROPAGATION": "private"}, {"INIT_NAMESPACE": "mnt:[2]"}):
+            with self.subTest(change=change):
+                result = subprocess.run(["bash", "-c", script, "boot-admission", str(VM.FIXTURE / "boot.sh")],
+                                        env={**baseline, **change}, capture_output=True, text=True, timeout=3)
+                self.assertEqual(result.returncode == 0, not change, result.stderr)
+                self.assertEqual("DRIVER_VM_NATIVE_BOOT_READY " in result.stdout, not change)
+
     def test_failed_guest_keeps_original_exit_even_when_diagnostics_time_out(self):
         tail = (VM.FIXTURE / "run-guest.sh").read_text().split('if "$binary" -test.run ', 1)[1]
         tail = 'if "$binary" -test.run ' + tail
@@ -104,7 +171,7 @@ elif name == "timeout": sys.exit(subprocess.call(args[2:]))
             path=self.archive(Path(tmp),[("usr",tarfile.DIRTYPE,""),("usr/bin",tarfile.DIRTYPE,""),
                 ("usr/bin/tool",tarfile.REGTYPE,""),("bin",tarfile.SYMTYPE,"usr/bin")])
             result=VM.validate_export(path)
-            self.assertEqual(result,{"members":4,"expanded_bytes":4})
+            self.assertEqual(result,{"members":4,"expanded_bytes":4,"container_identity_markers":[]})
 
     def test_rejects_paths_that_could_escape_privileged_extraction(self):
         cases=[[("../outside",tarfile.REGTYPE,"")],[("/outside",tarfile.REGTYPE,"")],
@@ -117,11 +184,11 @@ elif name == "timeout": sys.exit(subprocess.call(args[2:]))
 
     def test_requires_real_lifecycle_and_specific_control_boundary(self):
         nonce="a"*32
-        normal=f"DRIVER_VM_EVIDENCE_CHANNEL_READY\n--- PASS: TestDriverLifecycleVM\nDRIVER_VM_LIFECYCLE_VERIFIED {nonce}\nDRIVER_VM_EXIT nonce={nonce} control=normal phase=first status=0\n"
+        normal=f"DRIVER_VM_EVIDENCE_CHANNEL_READY\nDRIVER_VM_NATIVE_BOOT_READY virtualization=qemu usr-propagation=shared\n--- PASS: TestDriverLifecycleVM\nDRIVER_VM_LIFECYCLE_VERIFIED {nonce}\nDRIVER_VM_EXIT nonce={nonce} control=normal phase=first status=0\n"
         VM.accept_log(normal,nonce,"normal","first",0)
-        for bad in (normal.replace("DRIVER_VM_EVIDENCE_CHANNEL_READY", "missing"), normal.replace("LIFECYCLE_VERIFIED","missing"),normal+"--- SKIP: prereq\n",normal.replace(nonce,"b"*32)):
+        for bad in (normal.replace("DRIVER_VM_NATIVE_BOOT_READY", "missing"), normal.replace("DRIVER_VM_EVIDENCE_CHANNEL_READY", "missing"), normal.replace("LIFECYCLE_VERIFIED","missing"),normal+"--- SKIP: prereq\n",normal.replace(nonce,"b"*32)):
             with self.assertRaises(ValueError):VM.accept_log(bad,nonce,"normal","first",0)
-        control=f"DRIVER_VM_EVIDENCE_CHANNEL_READY\n--- FAIL: TestDriverLifecycleVM\nlive driver version mismatch: wendy_fixture_target\nDRIVER_VM_EXIT nonce={nonce} control=omit-unload phase=first status=1\n"
+        control=f"DRIVER_VM_EVIDENCE_CHANNEL_READY\nDRIVER_VM_NATIVE_BOOT_READY virtualization=qemu usr-propagation=shared\n--- FAIL: TestDriverLifecycleVM\nlive driver version mismatch: wendy_fixture_target\nDRIVER_VM_EXIT nonce={nonce} control=omit-unload phase=first status=1\n"
         VM.accept_log(control,nonce,"omit-unload","first",0)
         with self.assertRaises(ValueError):VM.accept_log(control.replace("live driver version mismatch: wendy_fixture_target","compile failed"),nonce,"omit-unload","first",0)
         with self.assertRaises(ValueError):VM.accept_log(control,nonce,"omit-unload","first",124)
@@ -191,7 +258,7 @@ elif name == "timeout": sys.exit(subprocess.call(args[2:]))
                 self.assertEqual(channel, "file,id=driver-evidence,path=" + str(root / "normal-first.log"))
                 options["stdout"].write("independent boot console\n")
                 (root / "normal-first.log").write_text(
-                    f"DRIVER_VM_EVIDENCE_CHANNEL_READY\n--- PASS: TestDriverLifecycleVM\n"
+                    f"DRIVER_VM_EVIDENCE_CHANNEL_READY\nDRIVER_VM_NATIVE_BOOT_READY virtualization=qemu usr-propagation=shared\n--- PASS: TestDriverLifecycleVM\n"
                     f"DRIVER_VM_LIFECYCLE_VERIFIED {nonce}\n"
                     f"DRIVER_VM_EXIT nonce={nonce} control=normal phase=first status=0\n")
                 return 0
