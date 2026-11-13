@@ -57,8 +57,9 @@ func (f *pbFixture) mark(dep string) *postboxMark { return f.p.snapshot().Marks[
 
 func (f *pbFixture) held(dep string) *postboxAssignment { return f.p.snapshot().Assignments[dep] }
 
-// The allow-list is exactly the four relayed methods plus the two moved
-// names, so the deployment-level changes can never be applied on a device.
+// The allow-list is exactly the four relayed methods, the two moved names
+// and DetachDevice, so the deployment-level changes can never be applied on
+// a device.
 func TestPostboxOperationsAllowList(t *testing.T) {
 	var got []string
 	for op := range postboxOperations {
@@ -71,6 +72,7 @@ func TestPostboxOperationsAllowList(t *testing.T) {
 		"wendycloud.v2.DeploymentService/AssignDevice",
 		"wendycloud.v2.DeploymentService/ControlContainer",
 		"wendycloud.v2.DeploymentService/CreateDeployment",
+		"wendycloud.v2.DeploymentService/DetachDevice",
 		"wendycloud.v2.DeploymentService/UnassignDevice",
 	}
 	if !slices.Equal(got, want) {

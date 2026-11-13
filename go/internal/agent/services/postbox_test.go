@@ -69,6 +69,7 @@ type fakePostboxCloud struct {
 	// pageSize > 0 caps a page as cloud's 2 MiB byte cap does: fewer
 	// entries, has_more set.
 	pageSize int
+	onPull   func(*cloudpbv2.PullChangesRequest) // nil: none
 }
 
 func (c *fakePostboxCloud) GetOrgCAs(_ context.Context, in *cloudpbv2.GetOrgCAsRequest, _ ...grpc.CallOption) (*cloudpbv2.GetOrgCAsResponse, error) {
@@ -89,6 +90,9 @@ func (c *fakePostboxCloud) GetOrgCAs(_ context.Context, in *cloudpbv2.GetOrgCAsR
 func (c *fakePostboxCloud) PullChanges(_ context.Context, in *cloudpbv2.PullChangesRequest, _ ...grpc.CallOption) (*cloudpbv2.PullChangesResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.onPull != nil {
+		c.onPull(in)
+	}
 	select {
 	case c.pulls <- in.GetAfterEntryId():
 	default:
