@@ -463,6 +463,12 @@ func persistDeviceName(logger *zap.Logger, root, name string) error {
 	}
 
 	deviceNamePath := filepath.Join(root, "etc/wendyos/device-name")
+	// Remember the stored name so a rename that fails below can put it back.
+	previous, err := os.ReadFile(deviceNamePath)
+	hadPrevious := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading previous device name: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(deviceNamePath), 0o755); err != nil {
 		return fmt.Errorf("creating /etc/wendyos: %w", err)
 	}
@@ -483,7 +489,19 @@ func persistDeviceName(logger *zap.Logger, root, name string) error {
 			zap.String("path", explicitHostnamePath), zap.Error(err))
 		// Do not publish the new device name while hostname generation still
 		// selects the old explicit value. A retry can finish once it is removable.
-		return fmt.Errorf("clearing explicit hostname before applying device name: %w", err)
+		err = fmt.Errorf("clearing explicit hostname before applying device name: %w", err)
+		// Nor leave it stored, where it would take effect unannounced whenever
+		// the explicit hostname is next cleared.
+		var restoreErr error
+		if hadPrevious {
+			restoreErr = os.WriteFile(deviceNamePath, previous, 0o644)
+		} else {
+			restoreErr = os.Remove(deviceNamePath)
+		}
+		if restoreErr != nil {
+			restoreErr = fmt.Errorf("restoring previous device name: %w", restoreErr)
+		}
+		return errors.Join(err, restoreErr)
 	}
 
 	return nil

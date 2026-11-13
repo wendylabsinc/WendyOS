@@ -180,6 +180,17 @@ func TestDeviceNameRestartIntegration(t *testing.T) {
 					}
 				}()
 			}
+			wantStored := "new-device\n"
+			if blocked {
+				wantStored = "old-device\n"
+			}
+			assertStoredDeviceName := func(when string) {
+				t.Helper()
+				// A failed rename must not leave the new name on disk to take effect later.
+				if got, err := os.ReadFile("/etc/wendyos/device-name"); err != nil || string(got) != wantStored {
+					t.Fatalf("stored device name %s = %q, %v; want %q", when, got, err, wantStored)
+				}
+			}
 			core, logs := observer.New(zap.InfoLevel)
 			err := applyDeviceName(zap.New(core), "new-device")
 			wantHostname, wantName := "wendyos-new-device", "new-device"
@@ -194,6 +205,7 @@ func TestDeviceNameRestartIntegration(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
+			assertStoredDeviceName("after the rename")
 			cfgDir, confPath := writeConf(t, "[device]\nname=new-device\n")
 			configPath := t.TempDir()
 			applyWendyConf(zap.NewNop(), cfgDir, configPath)
@@ -205,6 +217,7 @@ func TestDeviceNameRestartIntegration(t *testing.T) {
 			} else if !os.IsNotExist(confErr) {
 				t.Fatalf("successful rename request was not consumed: %v", confErr)
 			}
+			assertStoredDeviceName("after the config-partition retry")
 			assertAdvertisedDeviceName(t, wantHostname, wantName)
 			reboot := func() {
 				t.Helper()
@@ -232,7 +245,8 @@ func TestDeviceNameRestartIntegration(t *testing.T) {
 				if _, err := os.Stat(confPath); !os.IsNotExist(err) {
 					t.Fatalf("recovered rename request was not consumed: %v", err)
 				}
-				wantHostname, wantName = "wendyos-new-device", "new-device"
+				wantHostname, wantName, wantStored = "wendyos-new-device", "new-device", "new-device\n"
+				assertStoredDeviceName("after the recovered rename")
 				assertAdvertisedDeviceName(t, wantHostname, wantName)
 				reboot()
 				assertAdvertisedDeviceName(t, wantHostname, wantName)
