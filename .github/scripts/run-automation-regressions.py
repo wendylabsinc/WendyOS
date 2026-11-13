@@ -56,6 +56,7 @@ SUITES = (
     "broker_uplink_namespace_test.py",
     "accelerator_renumbering_test.py",
     "so101_reader_acceptance_test.py",
+    "usb_arm_inventory_rehearsal_test.py",
     "tensorrt_restart_test.py",
     "oci_retry_test.py",
     "signing_ci_test.py",
