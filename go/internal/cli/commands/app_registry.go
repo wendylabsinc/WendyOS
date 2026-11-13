@@ -184,7 +184,7 @@ func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error
 		if err != nil {
 			return err
 		}
-		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, string(defaults))
+		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, string(defaults), appCfg.RequiredEnv)
 		if err != nil {
 			return err
 		}

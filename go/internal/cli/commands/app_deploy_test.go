@@ -222,9 +222,7 @@ const cloudpbDeployV2 = cloudpb.DeploymentService_CreateDeploymentV2_FullMethodN
 // an empty value is a value for any other setting.
 func TestDeployRefusesAnEmptyRequiredSetting(t *testing.T) {
 	op, fake, releaseID := stepsFixture(t)
-	prev := releaseRequired
-	t.Cleanup(func() { releaseRequired = prev })
-	releaseRequired = func(*cloudpb.AppRelease) []string { return []string{"LOG_LEVEL"} }
+	fake.required[releaseID] = []string{"LOG_LEVEL"} // read back from the release
 	a := allFlags(releaseID)
 	a.config = []string{"LOG_LEVEL=", "UPLOAD_INTERVAL_SECONDS="}
 	if err := runDeploy(context.Background(), op, a, io.Discard, false); err == nil || err.Error() != "LOG_LEVEL has no value. Add --config LOG_LEVEL=<value>." {

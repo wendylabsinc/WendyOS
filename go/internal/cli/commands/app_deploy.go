@@ -430,10 +430,8 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 }
 
 // releaseRequired is the settings rel requires (wendy.json requiredEnv,
-// sent at publish). ponytail: nil until the contract field is pinned
-// (AppRelease.required_config_names, service-protos on top of #193); wiring it
-// is this one line plus the publish side.
-var releaseRequired = func(*cloudpb.AppRelease) []string { return nil }
+// sent at publish).
+var releaseRequired = func(rel *cloudpb.AppRelease) []string { return rel.GetRequiredConfigNames() }
 
 // checkRequired refuses a configuration that leaves a required setting
 // empty (sem 2026-11-13 11:01): naming it, with the one next step.

@@ -114,6 +114,7 @@ type fakeRegistry struct {
 	detached   []*cloudpb.DetachDeviceRequest
 	sel        map[string]*cloudpb.DeviceSelection // deployment -> current selection
 	defaults   map[string]string                   // release -> default_config_json
+	required   map[string][]string                 // release -> required_config_names
 	extra      []*cloudpb.PendingDeviceStatement   // rows cloud adds to to_sign
 	history    map[string][]*cloudpb.DeploymentRevision
 	revDevices map[string][]string // "<deployment>/<revision>" -> devices
@@ -129,7 +130,7 @@ type fakeRegistry struct {
 
 func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry {
 	return &fakeRegistry{t: t, keys: keys, releases: map[string]*cloudpb.ArtifactManifest{}, blobs: map[string][]byte{}, deploys: map[string]*cloudpb.Deployment{},
-		sel: map[string]*cloudpb.DeviceSelection{}, defaults: map[string]string{},
+		sel: map[string]*cloudpb.DeviceSelection{}, defaults: map[string]string{}, required: map[string][]string{},
 		history: map[string][]*cloudpb.DeploymentRevision{}, revDevices: map[string][]string{}, pending: map[string][]*cloudpb.PendingDeviceStatement{},
 		apps: map[string]*cloudpb.App{}, users: map[string]string{"u-ana": "ana@example.com"}}
 }
@@ -442,7 +443,7 @@ func (f *fakeRegistry) ListAppReleases(in *cloudpb.ListAppReleasesRequest, strea
 	f.mu.Lock()
 	page := &cloudpb.ListAppReleasesResponse{}
 	for id := range f.releases {
-		page.AppReleases = append(page.AppReleases, &cloudpb.AppRelease{Id: id, AppId: "sh.wendy.example", DefaultConfigJson: f.defaults[id]})
+		page.AppReleases = append(page.AppReleases, &cloudpb.AppRelease{Id: id, AppId: "sh.wendy.example", DefaultConfigJson: f.defaults[id], RequiredConfigNames: f.required[id]})
 	}
 	f.mu.Unlock()
 	page.Total = int32(len(page.AppReleases))
