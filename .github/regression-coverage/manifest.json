@@ -2424,9 +2424,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2542",
       "title": "feat(data): readable wendy data sources, honest statuses, stable microphone IDs",
       "package": "08",
-      "status": "human_script_ready",
+      "status": "partial",
       "audit_finding": "Stable microphone IDs and alias migration have direct tests. End-to-end capture after ALSA/PipeWire renumbering is not shown.",
-      "required_follow_up": "Execute both physical ALSA and PipeWire microphone renumbering procedures with unchanged stable source ID, changed numeric alias, serial mapping, distinct decoded PCM challenges and missing-device control.",
+      "required_follow_up": "Make check-renumber take the numeric identity from the saved pw-dump/arecord -l evidence or from a new DataSource aliases field, then execute both physical ALSA and PipeWire microphone renumbering procedures with unchanged stable source ID, changed numeric alias, serial mapping, distinct decoded PCM challenges and missing-device control.",
       "evidence": [
         {
           "tests": [
@@ -2434,10 +2434,9 @@
             ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
             ".github/scripts/linux_media_hardware_rehearsal_test.py"
           ],
-          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics, stable microphone alias comparison and detailed per-driver/backend acceptance steps. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics and detailed per-driver/backend acceptance steps. The check-renumber alias comparison cannot run against real wendy --json data sources output: the listing exposes no numeric alias (DataSource has seven fields; PipeWire listings carry no object id), and its offline test passes only on a synthetic aliases key. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
         }
-      ],
-      "resolution": "Detailed executable hardware procedure is prepared. Actual physical execution remains not_run."
+      ]
     },
     {
       "key": "2401",
