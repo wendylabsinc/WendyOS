@@ -107,3 +107,28 @@ compilation and portable path/evidence/cleanup admission tests. No VM, real kern
 module, sysext transition or physical device execution is claimed by those checks.
 Physical PCI/USB binding, radio/firmware state and vendor-specific module stacks
 remain covered only by their separate target procedures.
+
+Fedora system-bus fixture prerequisite
+
+Hosted run43360636095/job131673068153 booted Fedora45 but dbus.socket
+repeatedly failed before InstallDriver. The image installed dbus-daemon with
+weak dependencies disabled and did not enable a system-bus provider.
+The exact Fedora1.16.2-6.fc45 packages were downloaded from:
+https://dl.fedoraproject.org/pub/fedora/linux/development/45/Everything/x86_64/os/Packages/d/dbus-daemon-1.16.2-6.fc45.x86_64.rpm
+https://dl.fedoraproject.org/pub/fedora/linux/development/45/Everything/x86_64/os/Packages/d/dbus-common-1.16.2-6.fc45.noarch.rpm
+Their SHA256 values were respectively:
+519e018add2f8352f126d718a1e48561b0513b480956ee29d1101485b76d5045
+7bf6865f6d9f270c14143b3e6cb78ec9bb7242014fe0c2c3cee7656716d98e97
+Extracted dbus.socket uses its default dbus.service name. The installed
+dbus-daemon.service declares Alias=dbus.service messagebus.service under
+[Install]. Explicitly enabling that installed unit creates the required alias;
+the image build verifies it resolves to the exact daemon unit. No host service
+is started during the ordinary image build.
+
+Before any driver mutation the guest now requires successful system-bus GetId
+and systemd Peer.Ping calls with finite command deadlines. Missing or unhealthy
+services produce bounded unit status/journal/config diagnostics and a failed
+nonce-bound guest exit. The original activation, module-version, rollback and
+reboot assertions remain unchanged. Portable tests execute inert command
+children, including a real stalled child; only hosted QEMU can establish the
+actual bus and driver lifecycle pass.
