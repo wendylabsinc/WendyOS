@@ -96,6 +96,15 @@
         "type": "string"
       }
     },
+    "requiredEnv": {
+      "type": "array",
+      "description": "Names of env settings a deployment must give a non-empty value. Each must also be a key of env, whose value there is the default shown and may be empty.",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "uniqueItems": true
+    },
     "services": {
       "type": "object",
       "description": "Per-service build and runtime configuration for a multi-service app.",

@@ -217,6 +217,15 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 		next = resolveSelection(assets, sel)
 		review = append(review, "Devices: "+deviceDiff(assets, cur, next))
 	}
+	release := newRel
+	if release == nil {
+		if i := slices.IndexFunc(rels, func(r *cloudpb.AppRelease) bool { return r.GetId() == d.GetAppReleaseId() }); i >= 0 {
+			release = rels[i]
+		}
+	}
+	if err := checkRequired(orDefault(req.ConfigJson, d.GetConfigJson()), releaseRequired(release)); err != nil {
+		return err
+	}
 	if len(review) == 0 {
 		return usageErrorf("Nothing to change. Add --release, --config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag or --keep-trying.")
 	}

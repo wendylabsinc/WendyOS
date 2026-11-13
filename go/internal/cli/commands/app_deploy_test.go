@@ -212,3 +212,50 @@ func TestDeviceStateMapping(t *testing.T) {
 }
 
 const cloudpbDeployV2 = cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName
+
+// A setting the release requires must get a value (sem 2026-11-13 11:01);
+// an empty value is a value for any other setting.
+func TestDeployRefusesAnEmptyRequiredSetting(t *testing.T) {
+	op, fake, releaseID := stepsFixture(t)
+	prev := releaseRequired
+	t.Cleanup(func() { releaseRequired = prev })
+	releaseRequired = func(*cloudpb.AppRelease) []string { return []string{"LOG_LEVEL"} }
+	a := allFlags(releaseID)
+	a.config = []string{"LOG_LEVEL=", "UPLOAD_INTERVAL_SECONDS="}
+	if err := runDeploy(context.Background(), op, a, io.Discard, false); err == nil || err.Error() != "LOG_LEVEL has no value. Add --config LOG_LEVEL=<value>." {
+		t.Fatalf("empty required: %v", err)
+	}
+	if len(fake.deploys) != 0 {
+		t.Fatal("a deployment was created")
+	}
+	a.config = []string{"LOG_LEVEL=debug", "UPLOAD_INTERVAL_SECONDS="}
+	if err := runDeploy(context.Background(), op, a, io.Discard, false); err != nil {
+		t.Fatalf("an empty optional setting: %v", err)
+	}
+	if err := runUpdate(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL="}, yes: true}, io.Discard, false); err == nil || !strings.Contains(err.Error(), "LOG_LEVEL has no value") {
+		t.Fatalf("update to an empty required: %v", err)
+	}
+}
+
+// Interactively, a required setting left empty is asked again.
+func TestDeployAsksARequiredSettingAgain(t *testing.T) {
+	op, _, releaseID := stepsFixture(t)
+	prev := releaseRequired
+	t.Cleanup(func() { releaseRequired = prev })
+	releaseRequired = func(*cloudpb.AppRelease) []string { return []string{"LOG_LEVEL"} }
+	asks := 0
+	deployAsk = func(q, hint, def string) (string, error) {
+		if q != "LOG_LEVEL" {
+			return def, nil
+		}
+		if asks++; asks == 1 {
+			return "", nil
+		}
+		return "debug", nil
+	}
+	a := allFlags(releaseID)
+	a.config = nil
+	if err := runDeploy(context.Background(), op, a, io.Discard, true); err != nil || asks != 2 {
+		t.Fatalf("asked %d times: %v", asks, err)
+	}
+}

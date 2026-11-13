@@ -426,6 +426,11 @@ type AppConfig struct {
 	// key by key. Values may reference host env vars via ${VAR}, expanded by
 	// `wendy run` at deploy time (see ServiceConfig.Env).
 	Env map[string]string `json:"env,omitempty"`
+	// RequiredEnv names the settings a deployment must give a non-empty value
+	// (sem 2026-11-13 11:01). Each is also a key of Env, whose value there is
+	// the default shown and may be empty; an empty value is never required by
+	// itself. Clients check it; the device does nothing with it.
+	RequiredEnv []string `json:"requiredEnv,omitempty"`
 }
 
 // ContainerName returns the container identifier for this app config.
@@ -920,6 +925,14 @@ func (c *AppConfig) Validate() error {
 
 	if err := ValidateEnv("env", c.Env); err != nil {
 		return err
+	}
+	for i, name := range c.RequiredEnv {
+		if _, ok := c.Env[name]; !ok {
+			return fmt.Errorf("requiredEnv: %q is not in env; add it to env with its default (it may be empty)", name)
+		}
+		if slices.Contains(c.RequiredEnv[:i], name) {
+			return fmt.Errorf("requiredEnv: %q is listed twice", name)
+		}
 	}
 
 	if c.Frameworks != nil {

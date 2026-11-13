@@ -27,6 +27,7 @@ import (
 type deployAnswers struct {
 	app, release, digest, name, configFile, keepTrying, note, cloudGRPC string
 	devices, tags, config                                               []string
+	required                                                            []string // settings the release requires; filled from the release
 	run, installOnly, move, yes, wait                                   bool
 }
 
@@ -268,8 +269,12 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	plan.name = a.name
 
 	// 4  What configuration?
+	a.required = releaseRequired(rel)
 	config, changed, err := deployConfig(rel.GetDefaultConfigJson(), a, interactive, say)
 	if err != nil {
+		return err
+	}
+	if err := checkRequired(config, a.required); err != nil {
 		return err
 	}
 	plan.config = config
@@ -387,7 +392,14 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 			if s, err := strconv.Unquote(def); err == nil {
 				def = s
 			}
-			answer, err := deployAsk(name, "", def)
+			hint := ""
+			if slices.Contains(a.required, name) {
+				hint = "Required."
+			}
+			answer, err := deployAsk(name, hint, def)
+			for err == nil && hint != "" && strings.TrimSpace(answer) == "" {
+				answer, err = deployAsk(name, name+" is required. Enter a value to continue.", def)
+			}
 			if err != nil {
 				return "", 0, err
 			}
@@ -404,6 +416,28 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 	}
 	text, err := json.Marshal(values)
 	return string(text), changed, err
+}
+
+// releaseRequired is the settings rel requires (wendy.json requiredEnv,
+// sent at publish). ponytail: nil until the contract field is pinned
+// (AppRelease.required_config_names, service-protos on top of #193); wiring it
+// is this one line plus the publish side.
+var releaseRequired = func(*cloudpb.AppRelease) []string { return nil }
+
+// checkRequired refuses a configuration that leaves a required setting
+// empty (sem 2026-11-13 11:01): naming it, with the one next step.
+func checkRequired(config string, required []string) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(config), &values); err != nil {
+		return err
+	}
+	for _, name := range required {
+		var v any
+		if raw, ok := values[name]; !ok || json.Unmarshal(raw, &v) != nil || v == nil || v == "" {
+			return usageErrorf("%s has no value. Add --config %s=<value>.", name, name)
+		}
+	}
+	return nil
 }
 
 // progress shows each device's state in the dashboard's words; with follow
