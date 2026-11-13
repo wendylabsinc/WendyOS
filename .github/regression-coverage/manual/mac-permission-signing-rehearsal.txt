@@ -1,0 +1,162 @@
+Reserved Mac Location and signed-package acceptance — @TRIAL@
+
+Generation runs no native tools or app. All cases remain not_run. Automated
+Location model tests use controlled native input and the real sixty-second
+production timer; profile tests cover invalid bundle IDs, certificate mismatch,
+expiry and restricted entitlement spelling. These human steps add actual TCC,
+AMFI/Gatekeeper and extension approval/loading observations, not screenshots as
+substitutes for behavior. Keep review images/video outside Git.
+
+1. Qualification and ownership.
+   Reserve the WHOLE Mac serial @SERIAL@ and fresh ordinary account @ACCOUNT@
+   UID @UID@ at the exact inventoried hardware UUID/OS build. System extensions
+   are machine-wide: a fresh account on a shared machine is insufficient.
+   Confirm the independently recorded empty-machine baseline: no installed
+   Wendy Agent, matching system extension, Wendy VPN configuration, active Wendy
+   launch job, existing Wendy TCC entry or another user's Wendy process. Require
+   owner authorization and a tested whole-machine recovery/restore method before
+   proceeding. Do not reset TCC, modify its database, disable SIP/Gatekeeper,
+   enable system-extension developer mode, install a trust root or alter an
+   unrelated VPN/extension. If a baseline is not empty, use another reserved Mac.
+   Record native `sw_vers -buildVersion`, `id -u`, `ioreg` serial/UUID, and
+   systemextensionsctl/scutil output. Compare every value with the inventory.
+   Capture public evidence only: no private key, profile token or keychain dump.
+
+2. Exact signed artifact checks before installation.
+   Compare the ZIP, complete bundle inventory, app executable SHA256 @CANDIDATE@,
+   extension executable and both embedded provisioning profiles with the plan.
+   Run release-validation against the exact expected certificate SHA1 @SIGNER@;
+   it validates profile identity/expiry/certificate and actual signed entitlements,
+   then tests the live host/extension signatures against the pinned signer.
+   Expected TeamIdentifier is @TEAM@; bundle IDs are sh.wendy.WendyAgentMac and
+   sh.wendy.WendyAgentMac.NetProxy. Run gatekeeper and staple and require success
+   plus the expected Developer ID/notarization records. Do not resign a rejected
+   bundle or remove quarantine to make it pass. The profile plist records used
+   at generation are provenance inputs; actual bundled validation is mandatory.
+   Inspect the real nonempty NSLocationWhenInUseUsageDescription in Info.plist.
+   The short-lived historical core-only fallback is superseded by the current
+   provisioned release; absence of required profiles/extension fails this plan.
+
+   The owner installs ONLY this reviewed bundle into the previously absent
+   /Applications/WendyAgentMac.app using the normal signed-app installation
+   method. Re-inventory/hash the installed package and rerun its signature check
+   before open-installed. Record the new PID, birth time, executable path and
+   code signature. Require the process remains alive for at least 30 seconds and
+   serves the generated local-info request through the isolated CLI profile; a successful `open`/spctl alone is
+   not AMFI launch proof. Never use the repository SmokeTestMacReleaseLaunch.sh
+   on a shared account: its bundle-ID quit behavior is broader than this plan.
+
+3. 2243/2004 real unanswered Location request.
+   Open the actual menu item 'Welcome & Permissions…' in the pinned app. Leave
+   launch-at-login unchanged; no camera/microphone/Bluetooth request is required
+   for this case. Confirm the OS-level Location decision is initially pending
+   in this fresh account and record global Location Services enabled state.
+   Start a monotonic observation before pressing the Location request button.
+   Verify the system dialog names the pinned app. Leave it unanswered for at
+   least 65 seconds. Request submission and an unchanged status must not report
+   Allowed. While pending, repeated clicks must not launch overlapping requests.
+   By 75 seconds the spinner must stop and the app must explain exactly that
+   macOS has not returned a Location decision and offer retry/System Settings.
+   Require the app remains responsive and same PID; restarting is not recovery.
+   Save the app's bounded events output around the request/timeout and the
+   owner-observed timestamps. If no dialog appears, distinguish a genuinely
+   unanswered native request from disabled global services or a missing usage
+   description. Those guards must explain their own cause without spinning;
+   they cannot satisfy the dialog case. Do not dismiss or grant another app's
+   permission prompt. End the pending OS dialog by the owner choosing denial.
+
+4. Denial and recovery on the same installed app.
+   Require the actual deny decision to stop waiting promptly and show Denied,
+   with no false Allowed result or stale unanswered explanation. Close/reopen
+   the permissions view and require the native decision persists. In System
+   Settings → Privacy & Security → Location Services, the owner may enable only
+   this pinned Wendy app for this reserved account. Bring the app back to the
+   foreground: require status refreshes to Allowed without app restart, extra
+   request or unrelated permission changes. Record PID/birth throughout and a
+   fresh generated local-info response. Revoke only this app's Location access and
+   require Denied again; then restore the recorded owner-approved baseline for
+   this trial. TCC deletion/reset is not a cleanup command. For a separately
+   unanswered retry→Allow scenario, use a second fresh reserved account/trial;
+   do not claim a denied status can open a brand-new native prompt without the
+   OS allowing it. Unanswered, Denied and Allowed each require actual evidence.
+
+5. 2189 shipped release applicability.
+   Current AppDelegate hardcodes meshVPNIsEnabled=false. On the unmodified
+   candidate, require no Wendy Mesh activation entry, no automatic extension
+   activation/approval request and no unexpected Wendy VPN becoming enabled.
+   Capture extension/VPN state before and after launch. This is current shipped
+   behavior. Signature validity and launch success DO NOT prove extension
+   loading; do not invent an activation CLI command or an unavailable menu.
+
+6. Optional separately signed extension-validation build.
+   The generated validation-AppDelegate.swift changes only the reviewed private
+   gate to true. It is an instrumentation source, not an installed binary and
+   not a shipped-release result. On an isolated source checkout at the pinned
+   revision, the authorized release owner applies that exact overlay and builds
+   using the unchanged production Build.sh, actual Developer ID/profile inputs
+   and normal notarization. Preserve source diff/hash, build logs, signer,
+   profiles, immutable ZIP and full bundle inventory in validation_build record.
+   Use new host and extension bundle versions so OS replacement cannot silently
+   use a cached extension. Re-run generation with validation_bundle/validation_zip
+   and the build record; no validation artifact means this case stays pending.
+
+   Quit the owned candidate normally and confirm its PID/listener has ended.
+   Only the owner replaces the candidate at the exact reserved /Applications
+   path with this separately validated/notarized build. Run validation-release-
+   check, validation-gatekeeper and validation-staple against its input bundle,
+   then rehash/validate the installed copy before launching. Record its distinct
+   executable hash/PID. Never mutate or ad-hoc sign the already reviewed bundle.
+
+   The real MeshVPNController first reads this reserved account's ~/.wendy/
+   config.json and refreshes its Cloud directory before installation. Use only
+   the separately owner-approved reserved Cloud profile/tenant and exact test
+   peer in the hashed records; the app does NOT read the CLI WENDY_CONFIG_DIR
+   override here. Do not copy another user's identity or output secrets. If the
+   profile/directory is unavailable, fail at that prerequisite, not at extension
+   loading. In the validation build's actual 'Wendy Mesh' menu, request connect.
+   Observe activation/approval state and the exact app/team/bundle identifier.
+   Initially leave system-extension approval unanswered for 30 seconds: the app
+   must report needs approval rather than claim an active VPN. Then approve only
+   the owned @TEAM@ / sh.wendy.WendyAgentMac.NetProxy request using the OS prompt
+   or indicated Network Extension Settings. No security bypass is allowed.
+
+   Within 120 seconds require systemextensionsctl reports that exact bundle/team
+   enabled and activated at the validation version, actual provider start logs,
+   and scutil/network-extension state for both configured app-proxy and packet
+   providers. 'Activated' alone does not show provider startup. Require fresh
+   exact TCP request/response bytes to the independently provisioned test peer
+   through the mesh address, with peer-side nonce/time receipt and no ordinary
+   LAN/Cloud bypass, using the qualified topology/traffic commands in
+   extension_peer record. That record must specify its actual immutable test
+   service, endpoint, challenge bytes and expected digest; without it data-path
+   acceptance remains pending. Observe failure/refusal distinctly from approval.
+   Disconnect using the validation app menu, require its VPN sessions stop, then
+   reconnect once without another approval and require new traffic. Preserve
+   installer/provider logs and before/after extension/VPN state. This proves
+   the instrumented real installer/providers, never the shipped disabled entry.
+
+7. Original-failure controls and cleanup.
+   Existing provisioning tests reject wrong bundle ID, expired profile, wrong
+   certificate and legacy entitlement values; do not install deliberately bad
+   signed artifacts as a shortcut. Automated Location controls restore early
+   completion and the unbounded wait and must fail at their precise assertions.
+   If doing a physical historical control, the release owner must supply a
+   separately reviewed/signed compatible package and recovery record; no guessed
+   downgrade or TCC reset is generated. Unsupported historical controls remain
+   pending, not evidence against the current package.
+
+   Disconnect the owned validation app, quit it and prove PID/provider sessions
+   are gone. Use only the owner's supported exact-app System Settings/Finder
+   removal sequence recorded before the trial. A reboot may be required for the
+   OS to finish removal; verify systemextensionsctl and scutil against the empty
+   baseline afterward. Never use systemextensionsctl reset/uninstall with disabled
+   SIP, erase global NetworkExtension preferences or delete unrelated jobs. If
+   the OS cannot remove the exact extension normally, retain the machine as an
+   incomplete trial and use its preapproved whole-machine restore; account
+   deletion alone does not remove machine-wide extension state. Restore only
+   the reserved account/device according to its owner record. Physical cases
+   become accepted only after their observations and cleanup are complete.
+
+Apple platform prerequisites (primary references, reviewed during preparation):
+https://developer.apple.com/documentation/systemextensions/installing-system-extensions-and-drivers
+https://developer.apple.com/documentation/systemextensions/ossystemextensionrequest
