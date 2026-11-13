@@ -193,9 +193,16 @@ type PullChangesRequest struct {
 	AfterEntryId int64 `protobuf:"varint,1,opt,name=after_entry_id,json=afterEntryId,proto3" json:"after_entry_id,omitempty"`
 	// Page size. The server caps it; a full page means MORE ENTRIES REMAIN, so
 	// page on has_more rather than treating one page as "all changes".
-	Limit         uint32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Limit uint32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	// The relayed operations (fully-qualified method names, as in the JWS
+	// `operation` claim) this agent accepts from its postbox. Empty from an
+	// agent that predates this field. Device-asserted and descriptive: it
+	// authorizes nothing, and the device still checks every entry. Cloud holds
+	// back an entry whose operation the pull does not list (a detach: see
+	// AssetApp.detach_state) and delivers it once a pull lists it.
+	AcceptedOperations []string `protobuf:"bytes,3,rep,name=accepted_operations,json=acceptedOperations,proto3" json:"accepted_operations,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PullChangesRequest) Reset() {
@@ -242,9 +249,19 @@ func (x *PullChangesRequest) GetLimit() uint32 {
 	return 0
 }
 
+func (x *PullChangesRequest) GetAcceptedOperations() []string {
+	if x != nil {
+		return x.AcceptedOperations
+	}
+	return nil
+}
+
 type PullChangesResponse struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Entries []*PostboxEntry        `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Byte cap: the server stops adding entries before the serialized response
+	// exceeds 2 MiB, and always returns at least one entry when one exists
+	// above after_entry_id (one entry is far below the cap), setting has_more.
+	Entries []*PostboxEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
 	// pki-core's notarized checkpoint for this chain, byte-for-byte as pki-core
 	// signed it. Empty when the chain has not been notarized yet (notarization is
 	// asynchronous, and a self-hosted cloud may have no notarizer at all); the
@@ -612,10 +629,11 @@ const file_wendycloud_v2_postbox_proto_rawDesc = "" +
 	"\x10acked_entry_hash\x18\x05 \x01(\fH\x00R\x0eackedEntryHash\x88\x01\x01\x12:\n" +
 	"\x17postbox_head_entry_hash\x18\x06 \x01(\fH\x01R\x14postboxHeadEntryHash\x88\x01\x01B\x13\n" +
 	"\x11_acked_entry_hashB\x1a\n" +
-	"\x18_postbox_head_entry_hash\"P\n" +
+	"\x18_postbox_head_entry_hash\"\x81\x01\n" +
 	"\x12PullChangesRequest\x12$\n" +
 	"\x0eafter_entry_id\x18\x01 \x01(\x03R\fafterEntryId\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\rR\x05limit\"\x87\x01\n" +
+	"\x05limit\x18\x02 \x01(\rR\x05limit\x12/\n" +
+	"\x13accepted_operations\x18\x03 \x03(\tR\x12acceptedOperations\"\x87\x01\n" +
 	"\x13PullChangesResponse\x125\n" +
 	"\aentries\x18\x01 \x03(\v2\x1b.wendycloud.v2.PostboxEntryR\aentries\x12\x1e\n" +
 	"\n" +
