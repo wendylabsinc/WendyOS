@@ -15,6 +15,14 @@ import (
 )
 
 func TestChunkStallCacheRootThenUser(t *testing.T) {
+	t.Run("user-owned-directory", func(t *testing.T) { chunkStallCacheRootThenUser(t, false) })
+	t.Run("root-created-directory", func(t *testing.T) { chunkStallCacheRootThenUser(t, true) })
+}
+
+// rootCreatesDirectory is a first run under sudo: the user owns only the home
+// above the cache, so the MkdirAll in rememberChunkUploadStall creates the
+// cache as root and only the CLI's exit hook gives it back.
+func chunkStallCacheRootThenUser(t *testing.T, rootCreatesDirectory bool) {
 	if os.Getenv("WENDY_CHUNK_OWNERSHIP") != "1" {
 		t.Skip("hosted ownership gate only")
 	}
@@ -34,11 +42,16 @@ func TestChunkStallCacheRootThenUser(t *testing.T) {
 	if err := os.Chmod(root, 0755); err != nil {
 		t.Fatal(err)
 	}
-	cache := filepath.Join(root, "user-cache")
-	if err := os.Mkdir(cache, 0755); err != nil {
+	owned := filepath.Join(root, "user-cache")
+	cache := owned
+	if rootCreatesDirectory {
+		owned = filepath.Join(root, "home")
+		cache = filepath.Join(owned, ".cache", "wendy")
+	}
+	if err := os.Mkdir(owned, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chown(cache, uid, gid); err != nil {
+	if err := os.Chown(owned, uid, gid); err != nil {
 		t.Fatal(err)
 	}
 	chunkStallTestDir = cache
@@ -53,14 +66,27 @@ func TestChunkStallCacheRootThenUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{path, path + ".lock"} {
+	for _, name := range []string{cache, path, path + ".lock"} {
 		info, err := os.Stat(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Sys().(*syscall.Stat_t).Uid != 0 {
+		if owner := info.Sys().(*syscall.Stat_t).Uid; owner != 0 && (name != cache || rootCreatesDirectory) {
 			t.Fatal("fixture did not create root-owned stall state")
 		}
+	}
+	lockOwner := uint32(0)
+	if rootCreatesDirectory {
+		// What cmd/wendy runs as a sudo invocation exits, with the environment
+		// sudo gives it when it keeps the user's HOME.
+		for name, value := range map[string]string{
+			"HOME": owned, "XDG_CACHE_HOME": "", "WENDY_CONFIG_DIR": "",
+			"SUDO_UID": strconv.Itoa(uid), "SUDO_GID": strconv.Itoa(gid),
+		} {
+			t.Setenv(name, value)
+		}
+		HandBackSudoFiles()
+		lockOwner = uint32(uid)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -83,7 +109,7 @@ func TestChunkStallCacheRootThenUser(t *testing.T) {
 	for _, item := range []struct {
 		path  string
 		owner uint32
-	}{{path, uint32(uid)}, {path + ".lock", 0}} {
+	}{{path, uint32(uid)}, {path + ".lock", lockOwner}} {
 		info, err := os.Stat(item.path)
 		if err != nil {
 			t.Fatal(err)
@@ -91,6 +117,9 @@ func TestChunkStallCacheRootThenUser(t *testing.T) {
 		if info.Sys().(*syscall.Stat_t).Uid != item.owner || info.Mode().Perm() != 0644 {
 			t.Fatalf("wrong final owner/mode for %s: %v", item.path, info)
 		}
+	}
+	if info, err := os.Stat(cache); err != nil || info.Sys().(*syscall.Stat_t).Uid != uint32(uid) {
+		t.Fatalf("cache directory is not the user's: %v %v", info, err)
 	}
 	entries, err := os.ReadDir(cache)
 	if err != nil || len(entries) != 2 {
