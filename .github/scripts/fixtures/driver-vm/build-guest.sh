@@ -44,6 +44,14 @@ from pathlib import Path
 Path(sys.argv[3]).write_text(json.dumps({'name':sys.argv[1], 'modules_load':[sys.argv[2]], 'activation':{'modules_replace':[sys.argv[2]]}}))
 PY
   bash pack-sysext.sh --devkit devkit --driver "build/$variant/driver" --modules "build/$variant/modules" --out "$PWD/images/$variant/$name.raw"
+  # Inspect actual packaged bytes before boot, without loading the module.
+  raw="$PWD/images/$variant/$name.raw"
+  payload="usr/lib/wendyos-driver-payloads/$name"
+  [[ $(unsquashfs -cat "$raw" "$payload/modules-load.conf") == "$module" ]]
+  [[ $(unsquashfs -cat "$raw" "usr/lib/wendyos-driver-activation.d/$name.conf") == "replace $module" ]]
+  unsquashfs -cat "$raw" "$payload/modules/$kver/$module.ko" > "build/$variant/packaged.ko"
+  cmp "build/$variant/modules/$module.ko" "build/$variant/packaged.ko"
+  printf 'DRIVER_VM_PACKAGED_PAYLOAD variant=%s name=%s kernel=%s vermagic=%s\n' "$variant" "$name" "$kver" "$(modinfo -F vermagic "build/$variant/packaged.ko")"
 done
 # A controlled omission in a second VM must leave real v1 code resident on v2 install.
 python3 - <<'PY'

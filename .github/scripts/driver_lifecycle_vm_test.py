@@ -6,6 +6,7 @@ import json
 import os
 import pty
 import select
+import shutil
 import subprocess
 import tty
 from pathlib import Path
@@ -23,6 +24,67 @@ SPEC.loader.exec_module(VM)
 
 
 class DriverVMTests(unittest.TestCase):
+    def test_failed_guest_keeps_original_exit_even_when_diagnostics_time_out(self):
+        tail = (VM.FIXTURE / "run-guest.sh").read_text().split('if "$binary" -test.run ', 1)[1]
+        tail = 'if "$binary" -test.run ' + tail
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "binary"
+            timer = root / "timeout"
+            marker = root / "diagnosed"
+            timer.write_text('#!/bin/bash\nprintf called > "$DIAGNOSTIC_MARKER"\nexit 124\n')
+            timer.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                       DIAGNOSTIC_MARKER=str(marker))
+            for code in (7, 0):
+                marker.unlink(missing_ok=True)
+                binary.write_text(f"#!/bin/bash\nexit {code}\n")
+                binary.chmod(0o755)
+                result = subprocess.run(["bash", "-c", 'set -euo pipefail; binary=$1; ' + tail,
+                                         "guest-exit-test", str(binary)], env=env,
+                                        capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertEqual(marker.exists(), code != 0)
+
+    def test_payload_probes_are_read_only_and_reject_foreign_guest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = root / "calls.jsonl"
+            stub = root / "command"
+            stub.write_text(f'''#!{sys.executable}
+import json, os, pathlib, subprocess, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ["PROBE_CALLS"], "a") as out:
+    out.write(json.dumps([name, *args]) + "\\n")
+if name == "cat":
+    if args == ["/fixture/nonce"]: print("a" * 32)
+    elif args == ["/sys/class/dmi/id/product_name"]: print("WendyDriverFixture-" + "a" * 32)
+elif name == "uname": print("fixture-kernel")
+elif name == "timeout": sys.exit(subprocess.call(args[2:]))
+''')
+            stub.chmod(0o755)
+            for name in ("cat", "uname", "timeout", "head", "ls", "modinfo", "modprobe", "systemd-sysext"):
+                (root / name).symlink_to(stub)
+            env = dict(os.environ, PATH=str(root), PROBE_CALLS=str(calls), WENDY_DRIVER_VM="a" * 32)
+            bash = shutil.which("bash")
+            result = subprocess.run([bash, str(VM.FIXTURE / "diagnostics.sh")], env=env,
+                                    capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+            self.assertEqual([call for call in invocations if call[0] == "modprobe"],
+                             [["modprobe", "--show-depends", "--", name] for name in
+                              ("wendy_fixture_healthy", "wendy_fixture_target", "wendy_fixture_broken")])
+            self.assertIn(["systemd-sysext", "--json=short", "status"], invocations)
+            self.assertIn(["modinfo", "-F", "vermagic", "/usr/lib/wendyos-driver-payloads/wendy-fixture-healthy/modules/fixture-kernel/wendy_fixture_healthy.ko"], invocations)
+            calls.unlink()
+            env["WENDY_DRIVER_VM"] = "b" * 32
+            result = subprocess.run([bash, str(VM.FIXTURE / "diagnostics.sh")], env=env,
+                                    capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                             [["cat", "/fixture/nonce"]])
+
     def archive(self, root, entries):
         path = root / "image.tar"
         with tarfile.open(path, "w") as archive:

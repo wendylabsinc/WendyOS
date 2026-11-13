@@ -149,3 +149,13 @@ boot bound and original normal/control assertions. No driver implementation,
 apply-script flag or timeout is relaxed. Portable PTY/admission/QEMU-argv tests
 prove evidence routing only; the next real VM run must diagnose or pass the
 remaining lifecycle before audit2049 can close.
+
+Failure diagnostics
+-------------------
+The image build reads each actual SquashFS module list and activation metadata,
+and compares its packaged module bytes with the compiled module. It records the
+kernel release and vermagic. A failed guest assertion then records bounded,
+read-only observations of the merged payload, mount table, activation receipt,
+module lookup and vermagic through the independent evidence channel. These
+observations never load a module or refresh the merge. The original test exit
+status remains authoritative even if diagnostics fail or time out.
