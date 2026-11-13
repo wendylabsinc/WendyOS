@@ -54,7 +54,14 @@ class CapsuleBoundaryTests(unittest.TestCase):
             out=root/"boundary"
             self.assertEqual(json.loads((out/"fixed/overlay.json").read_text()),{"Replace":{}})
             commands=json.loads((out/"device-commands.json").read_text())
-            self.assertNotIn("--artifact-url",commands["deploy_fixed"])
+            # deploy_* is an Agent upload only. --yes would also apply whatever
+            # public OS the manifest offers; --json skips the OS step entirely.
+            for name,command in commands.items():
+                if name.startswith("deploy_"):
+                    self.assertNotIn("--yes",command);self.assertNotIn("-y",command);self.assertNotIn("--artifact-url",command)
+                    self.assertIn("--json",command);self.assertIn("--binary",command)
+            self.assertEqual({name.split("_",1)[0] for name in commands},{"deploy","update"})
+            self.assertIn("--yes",commands["update_fixed"])
             self.assertIn("--artifact-url",commands["update_fixed"])
             self.assertNotIn("--json",commands["update_fixed"])
             self.assertEqual(set(json.loads((out/"sync-only/overlay.json").read_text())["Replace"]),{str((Path(data["agent_source"])/M.AGENT_PATH).resolve())})

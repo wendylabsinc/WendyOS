@@ -95,9 +95,12 @@ def generate(inventory,output):
     (out/"build-commands.json").write_text(json.dumps(commands,indent=2)+"\n")
     device_commands={}
     for variant in variants:
-        command=[cli["path"],"device","update","--device",board["address"],"--binary",str(out/variant/"wendy-agent-lab-only"),"--yes"]
-        device_commands["deploy_"+variant]=command
-        device_commands["update_"+variant]=command+["--artifact-url",artifact_url]
+        command=["device","update","--device",board["address"],"--binary",str(out/variant/"wendy-agent-lab-only")]
+        # Agent upload only: without --artifact-url, --yes applies whatever OS
+        # the public manifest offers, and omitting it prompts on a terminal.
+        # JSON mode uploads and verifies the Agent, then skips the OS step.
+        device_commands["deploy_"+variant]=[cli["path"],"--json",*command]
+        device_commands["update_"+variant]=[cli["path"],*command,"--yes","--artifact-url",artifact_url]
     (out/"device-commands.json").write_text(json.dumps(device_commands,indent=2)+"\n")
     guide=(HERE/"jetson-capsule-boundary.txt").read_text()
     for key,value in {"@SERIAL@":board["serial"],"@NONCE@":nonce,"@OS@":data["running_os"],"@UPDATER@":legacy["sha256"],"@SOURCE@":str(source),"@OUTPUT@":str(out)}.items():guide=guide.replace(key,value)
