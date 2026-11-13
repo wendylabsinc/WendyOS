@@ -36,14 +36,14 @@ github.com/bdandy/go-errors v1.2.2 h1:WdFv/oukjTJCLa79UfkGmwX7ZxONAihKu4V0mLIs11
 github.com/bdandy/go-errors v1.2.2/go.mod h1:NkYHl4Fey9oRRdbB1CoC6e84tuqQHiqrOcZpqFEkBxM=
 github.com/bdandy/go-socks4 v1.2.3 h1:Q6Y2heY1GRjCtHbmlKfnwrKVU/k81LS8mRGLRlmDlic=
 github.com/bdandy/go-socks4 v1.2.3/go.mod h1:98kiVFgpdogR8aIGLWLvjDVZ8XcKPsSI/ypGrO+bqHI=
-github.com/bogdanfinn/fhttp v0.6.9 h1:F9MsWR1K6JMRlXN4Q/MfjYmptr29nCdycQo+OPBG5U0=
-github.com/bogdanfinn/fhttp v0.6.9/go.mod h1:7phoj3f/q54WuiTnCTlAhEoaVcdlruKkSzCSD47LzHk=
+github.com/bogdanfinn/fhttp v0.7.3 h1:DLiZfU9dKD+JCFDUZk8XUgbwm32DuvPLp9x2mucNPv0=
+github.com/bogdanfinn/fhttp v0.7.3/go.mod h1:Pco5Ml+HnzrBRAu+6BORirlCAF9JqKmAvC0vI3JSjss=
 github.com/bogdanfinn/quic-go-utls v1.0.10-utls h1:oZN+J3OKMmWaVbI/sx4ULvHiAXbWJKVcvEFW4fkybMU=
 github.com/bogdanfinn/quic-go-utls v1.0.10-utls/go.mod h1:bBLJ2Vy68Q7y6VfbG9czd825rTcQua7n+y12RM9Q588=
 github.com/bogdanfinn/tls-client v1.16.0 h1:km3YLI6CMRLZnfrC+hGStePPryIicd3hoxFQvHB1itY=
 github.com/bogdanfinn/tls-client v1.16.0/go.mod h1:TxbiXlpZhNN5xmxzsr3KhNAeqoEEPJafwgBbyp26Phc=
-github.com/bogdanfinn/utls v1.7.8-barnius h1:wRT83mP4hmuMM1/lIpLKKhzaEuyEKjux7VSj7XHFXdg=
-github.com/bogdanfinn/utls v1.7.8-barnius/go.mod h1:o5v09jf+9ayMEfcP+8sssNdSMm278cyhBV25H8jb5Lw=
+github.com/bogdanfinn/utls v1.8.2-barnius h1:ypYWUe4gklEgdBYP+cZAfoG/hhVUMG6ot/pmqgbc/Es=
+github.com/bogdanfinn/utls v1.8.2-barnius/go.mod h1:piJQqN3RvYCC1Bvh5kqhaAhJ+DC1i7PRJDfPKiZsiF8=
 github.com/bogdanfinn/websocket v1.5.6-barnius h1:QpdWVEZ9rKtcT7C2pU19uE2KQw2XevuKTDTzLxfDi/I=
 github.com/bogdanfinn/websocket v1.5.6-barnius/go.mod h1:41/rXLDWpqJ5A4gOKSY/z4NLbW/hHZHneRcYM0kbpxA=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
@@ -250,6 +250,8 @@ github.com/moby/sys/userns v0.2.1 h1:4OvdM7BcPkASbuouHsbW3aeMJSFlYDldBRnXVZhaRk8
 github.com/moby/sys/userns v0.2.1/go.mod h1:IHUYgu/kao6N8YZlp9Cf444ySSvCmDlmzUcYfDHOl28=
 github.com/modelcontextprotocol/go-sdk v1.8.0 h1:KIvahhYqwtbeniWVPs3TcXEA7b8jEtwfBpOTAI+Urx4=
 github.com/modelcontextprotocol/go-sdk v1.8.0/go.mod h1:dL7u98E/zjJTGzEq+j30jQ8K2k1mb6LeAH4inEcSGts=
+github.com/molecule-man/go-brrr v1.2.0 h1:dOJU45BC3Gc2WXoxAW0rgCAgVuu2gruAOGncfieA0Jw=
+github.com/molecule-man/go-brrr v1.2.0/go.mod h1:7ybW6/7gA3oKY45jOfVNjSJDtrr6ea4tzbsTkjmQDC4=
 github.com/morikuni/aec v1.1.0 h1:vBBl0pUnvi/Je71dsRrhMBtreIqNMYErSAbEeb8jrXQ=
 github.com/morikuni/aec v1.1.0/go.mod h1:xDRgiq/iw5l+zkao76YTKzKttOp2cwPEne25HDkJnBw=
 github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=
