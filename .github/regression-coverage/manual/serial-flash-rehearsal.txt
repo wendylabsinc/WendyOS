@@ -4,7 +4,7 @@ Generation is offline. Every case starts not_run. The Unix PTY fixture proves
 real driver/lock/retry/callback boundaries, not USB enumeration, ESP reset lines,
 ROM SLIP exchanges, flash durability or post-flash firmware compatibility.
 
-Prepare the inventory JSON with host {os: linux|macos, identity, os_build, owner,
+Prepare the inventory JSON with host {os: linux|macos|windows, identity, os_build, owner,
 uid, reserved_account:true}, board {reserved:true, serial, hardware_id, owner,
 model, recovery_instructions, catalog_board, chip, device_name, cp210x:{path,
 vid_pid:10c4:ea60, usb_serial, location}, native:{path, vid_pid:303a:1001,
@@ -21,8 +21,8 @@ native USB Serial/JTAG connectors. The bridge's USB serial is not the ESP chip I
 Record the physical board serial, ESP factory MAC/hardware ID, chip model, flash
 size, bridge USB identity, connector labels and exact host USB topology together.
 Run this matrix separately on each supported host OS/driver qualification being
-claimed. This generator covers Unix hosts; Windows reset/driver acceptance stays
-pending until the same matrix is separately run there.
+claimed. Windows uses the admitted native path below; Unix PTYs do not qualify
+Windows reset, COM enumeration or serial drivers.
 
 The recovery record must contain the board vendor's exact boot/reset instructions,
 validated prior firmware/config backup and an owner-operated restore command for
@@ -46,8 +46,8 @@ it. If selection or bytes differ, stop and regenerate the plan; do not count the
 trial. The config partition is modified in memory by production provisioning.
 Do not hash that resulting flash as if it were the unmodified release archive.
 
-Run commands below in a real terminal as the recorded reserved UID, with terminal
-transcript capture owned by that account. The guardian preserves the terminal and
+Run commands below in a real terminal as the recorded reserved UID or Windows SID, with terminal
+transcript capture owned by that account. The generated supervisor preserves the terminal and
 bounds command descendants. Capture separate CLI return status and actual elapsed
 time. Do not use --force, --yes, --json on interactive install/run, or pipe Yes.
 Generated HOME/profile/cache are fresh and contain no Cloud login. Commands avoid
@@ -122,3 +122,94 @@ of DTR/RTS/EN/BOOT is useful only on a qualified electrically safe test connecto
    payload hashes, USB inventory, return statuses and recovery evidence under this
    private output directory; secrets must be removed before sharing. A failed
    restore means failed cleanup, not a completed hardware pass.
+
+
+Windows native qualification for 1768 and 1572
+
+Generate this plan on the reserved Windows machine from the candidate checkout,
+using the pinned installed Python and PowerShell 7 executables. Driver installation
+is a separate owner operation before qualification. Do not change system policy,
+certificate trust, device ACLs, driver packages or COM assignments in the runner.
+Keep the same real CP210x/native first-flash, target refusal, erase authorization,
+blank/incompatible baselines, live heartbeat and restoration criteria above.
+A Windows run is required independently of Unix outcomes for both audit entries.
+
+For host use os=windows, reserved_account=true, owner, identity and these exact
+native observations instead of uid:
+  machine_uuid: lowercase Win32_ComputerSystemProduct.UUID
+  sid: current ordinary account Windows SID
+  os_build: Win32_OperatingSystem.Version + '/' + BuildNumber
+For each connector retain its COMn path, complete PnP instance_id, USB location
+path, driver_version, driver_provider and driver_inf. Also retain usb_serial and
+vid_pid, matching the independent board identity record. Use native_replug_path
+and native_replug_location for the prequalified changed connector/COM assignment.
+The native PnP instance ID must still bind the same board USB serial after moving
+ports. A changed driver/version or unstable anonymous identity requires renewed
+qualification, not relaxing the guard. Add powershell_binary with the exact local
+PowerShell 7 executable path. The generator hashes that executable and its own
+Python interpreter. The native snapshot script is read-only and opens no serial
+port; run it separately during owner inventory collection:
+  & 'ACTUAL_POWERSHELL7_PATH' -NoProfile -NonInteractive -File '.github/regression-coverage/manual/serial-windows-inventory.ps1'
+Retain its JSON alongside signed driver provenance and the board recovery record.
+The later command runner repeats the snapshot and refuses any mismatch/elevation.
+
+The generated Windows commands invoke serial-windows-run.py, not the Unix guardian.
+They are PowerShell-quoted literal arguments. Each action requires the exact board
+serial as --confirm-board and a NEW output directory. Replace the suffix
+FIRST-UNUSED-TRIAL with a fresh per-attempt name; never delete/reuse a failed output
+to make a trial appear new. Parent handlers record interruption while the retained
+Job drains. A nonce-permitted Python launcher cannot start the CLI or PowerShell
+until assigned to the Job, so all descendants are owned from inception. Timeout,
+Ctrl-C, driver hang or uncertain drain fails and retains evidence. The runner never
+terminates unrelated holders, mutates drivers, or tries to force physical recovery.
+If an OS driver never returns, stop the trial and use the reserved-host recovery
+record; do not count command completion or reuse the port.
+
+Use Start-Transcript to a fresh owner-only file before an interactive action and
+Stop-Transcript afterward, and retain result.json plus inventory.json separately.
+PowerShell transcripts may omit alternate-buffer rendering; also retain the CLI's
+actual errors/version/cache selection and the board serial evidence in the owner
+record. Missing observations stay unknown. The runner inherits the actual terminal
+for confirmation prompts; do not redirect stdin or pass --yes/--force. No secret
+WiFi/Cloud input is needed. Do not use an elevated shell.
+
+Exact action sequence:
+- With only CP210x connected and the reviewed blank baseline, use install_cp210x.
+  Require the USB-UART warning, correct ROM chip before erase, completion/reset.
+  discover_cp210x must not show a responsive WendyCom runtime on the bridge.
+- Move the SAME board to the recorded native connector and use discover_native
+  and identity_before. Match actual board hardware ID, name and firmware version.
+- Restore the reviewed blank baseline, connect only native and use install_native.
+  Record Device Manager/PnP disappearance and return around reset, actual firmware
+  identity, and the owner BOOT/RESET retry. Its retries cannot silently switch to
+  another board. Repeat wrong-chip selection with install_native only on the exact
+  authorized blank board; no-write proof and nonzero exit are still mandatory.
+- For 1572, perform discover_native, physically unplug until no present target COM
+  device remains, then discover_absent. No old Wendy serial row may survive.
+  Reconnect at the qualified changed location/COM and use discover_replug followed
+  by identity_after. The same PnP USB serial/hardware ID must return. Repeat this
+  from the non-Wendy baseline to cover opened-but-unresponsive versus absent.
+  Any other supported ESP/UART device makes admission fail. Non-busy missing-device
+  cause and real contention have Unix PTY proof; Windows error classification still
+  requires the actual native observations and existing Windows driver tests.
+- Restore the reviewed incompatible Lite baseline, original native location/COM
+  and use reinstall. First decline and verify no change, then explicitly authorize
+  the same reserved device on a fresh invocation. Require production's actual
+  capability error, offer, flash, 5-second boot delay/30-second ready window, second
+  build and unique heartbeat, all in that same CLI invocation. A new independent
+  CLI succeeding later cannot make a failed reinstall/reconnect pass. To qualify
+  changed-COM behavior during reinstall, record the move and the original command
+  outcome; a stale-COM failure is a regression result, not a successful discovery.
+- Restore only this board using the recorded vendor-supported firmware procedure,
+  re-read identity, stop owned monitors/CLI processes and return cables to baseline.
+  No global port reset, driver reinstall, shared cache deletion or account change.
+
+Every runner result retains hardware_acceptance=pending_operator_review even when
+cli_exit=0. The owner must compare the immutable firmware receipts and all native
+observations with the criteria above. No physical/Windows result is produced by
+plan generation or by the portable ownership/admission tests.
+
+Windows inventory source references:
+https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-pnpentity
+https://learn.microsoft.com/en-us/previous-versions/windows/desktop/whqlprov/win32-pnpsigneddriver
+https://learn.microsoft.com/en-us/powershell/module/pnpdevice/get-pnpdeviceproperty
