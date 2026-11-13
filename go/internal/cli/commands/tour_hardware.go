@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -132,7 +133,13 @@ func (m tourWizardModel) cmdSampleReadiness() tea.Cmd {
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return tourSampleReadyMsg{err: ErrUserCancelled}
 				}
-				return tourSampleReadyMsg{err: fmt.Errorf("the app was deployed, but %s did not return the tour starter response before the readiness deadline; inspect 'wendy device logs --device %s' and rerun from %s: %w", url, m.foundAddr, m.projectPath, ctx.Err())}
+				text := fmt.Sprintf("the app was deployed, but %s did not return the tour starter response before the readiness deadline; inspect 'wendy device logs --device %s' and rerun from %s: %v", url, m.foundAddr, m.projectPath, ctx.Err())
+				cause := fmt.Errorf("the app was deployed, but %s did not return the tour starter response before the readiness deadline; rerun from %s: %w", url, m.projectPath, ctx.Err())
+				quote := shellQuoteArg
+				if runtime.GOOS == "windows" {
+					quote = powershellSingleQuote
+				}
+				return tourSampleReadyMsg{err: withNextStepsText(cause, text, "wendy device logs --device "+quote(m.foundAddr))}
 			case <-time.After(time.Second):
 			}
 		}

@@ -1187,6 +1187,17 @@ func (m tourWizardModel) viewCommands() string {
 			commands = "\nDeploy your sample again:\n" + tourSampleRedeployCommand(runtime.GOOS, m.projectPath, m.foundAddr) + "\n"
 		}
 		return commands + "\nSign in to Wendy Cloud:\nwendy auth login\n"
+	case phaseError:
+		var below strings.Builder
+		if m.err != nil {
+			below.WriteString("\nDiagnostics:\n" + messageWithoutNextSteps(m.err) + "\n")
+			if steps := NextSteps(m.err); len(steps) != 0 {
+				below.WriteString("\nSuggested commands (replace any address placeholder):\n" + strings.Join(steps, "\n") + "\n")
+			}
+		}
+		below.WriteString("\nRestart the tour:\nwendy tour --hardware\n")
+		below.WriteString("\nRetry a failed sample from its project directory:\nwendy run\n")
+		return below.String()
 	default:
 		return ""
 	}
@@ -1765,11 +1776,10 @@ func (m tourWizardModel) viewError(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizErrorStyle.Render("Something went wrong") + "\n\n")
 	if m.err != nil {
-		sb.WriteString(wizBodyStyle.Width(w).Render(m.err.Error()) + "\n\n")
+		sb.WriteString(wizBodyStyle.Width(w).Render("See the diagnostics and suggested commands below the box.") + "\n\n")
 	}
-	sb.WriteString(wizBodyStyle.Width(w).Render("You can restart the tour at any time with:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy tour --hardware") + "\n\n")
-	sb.WriteString(wizBodyStyle.Width(w).Render("If the image was already written, choose the already-installed option. For a failed sample, rerun wendy run from the project directory shown earlier.") + "\n\n")
+	sb.WriteString(wizBodyStyle.Width(w).Render("You can restart the tour at any time with the command below the box.") + "\n\n")
+	sb.WriteString(wizBodyStyle.Width(w).Render("If the image was already written, choose the already-installed option. For a failed sample, use the retry command below from the project directory shown earlier.") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Press any key to exit"))
 	return sb.String()
 }
@@ -1830,7 +1840,21 @@ func (m tourWizardModel) cmdDiscoveryCheck() tea.Cmd {
 	}
 	return func() tea.Msg {
 		if !m.discoveryStarted.IsZero() && time.Since(m.discoveryStarted) > 2*time.Minute {
-			return tourDiscoveryErrorMsg{err: fmt.Errorf("could not verify %q within two minutes; check power and networking, then run 'wendy discover' (accept USB setup on Linux) or 'wendy install verify --address <name-or-IP>'. Restart with 'wendy tour --hardware' and choose an already installed device", target)}
+			text := fmt.Sprintf("could not verify %q within two minutes; check power and networking, then run 'wendy discover' (accept USB setup on Linux) or 'wendy install verify --address <name-or-IP>'. Restart with 'wendy tour --hardware' and choose an already installed device", target)
+			cause := fmt.Errorf("could not verify %q within two minutes; check power and networking. Accept USB setup on Linux when discovering", target)
+			address := m.hostname
+			if address == "" && target != "" {
+				address = target + ".local"
+			}
+			if address == "" {
+				address = "<name-or-IP>"
+			}
+			quote := shellQuoteArg
+			if runtime.GOOS == "windows" {
+				quote = powershellSingleQuote
+			}
+			return tourDiscoveryErrorMsg{err: withNextStepsText(cause, text,
+				"wendy discover", "wendy install verify --address "+quote(address))}
 		}
 		parent := m.ctx
 		if parent == nil {
