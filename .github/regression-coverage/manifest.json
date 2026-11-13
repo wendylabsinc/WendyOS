@@ -2164,9 +2164,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1905",
       "title": "Complete native Mojo scaffolding and record WDY-2906\u20132913 acceptance",
       "package": "06",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The PR combines log heartbeats, slow startup, environment override and network isolation fixes. Tests exist for these components but no single end-to-end journey verifies their interaction.",
-      "required_follow_up": "Execute the real multi-service lifecycle journey and its three controls in the existing containerd job; require slow readiness, quiet heartbeats, service environment overrides, removal of shared isolation, and isolated process restart.",
+      "required_follow_up": "Retain the required real multi-service lifecycle gate and three original-behavior controls in the existing containerd job.",
       "evidence": [
         {
           "tests": [
@@ -2182,6 +2182,16 @@
           ],
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068153",
           "result": "Actual hosted CLI/Compose/containerd journey passed delayed readiness, service hooks, literal/empty environment overrides and host-network probes, then exposed a product defect at its initial shared-group precondition. GroupRestartAppID guessed ownership from an underscore-containing name, which the valid app-ID parser treats as a single app. New focused tests fail on original code and pass with exact validated persisted label ownership under the race detector. Independent review passes. The complete isolation-removal journey and its controls remain pending after this fix."
+        },
+        {
+          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219743",
+          "tests": [
+            "go/internal/agent/containerd/multiapp_lifecycle_integration_test.go",
+            ".github/scripts/prepare-multiapp-lifecycle.sh",
+            ".github/scripts/test-watch-container.sh"
+          ],
+          "result": "Required hosted Compose step passed. Artifact14012076918 proves delayed real listeners and hooks, quiet heartbeat, literal/empty overrides, shared-to-private namespace replacement and independent crash recovery. Original early-readiness, ignored-service-env and retained-isolation controls each failed at their named boundary. Actual normal completed24.09s; no skipped case. Later unrelated driver VM step was still running when evidence was reconciled. Relevant lifecycle sources remain unchanged."
         }
       ]
     },
@@ -4204,6 +4214,16 @@
             ".github/scripts/fixtures/foxglove-runtime.txt"
           ],
           "result": "Production foxgloveServe generates its real ros:humble Dockerfile and installs the published ROS bridge package; there is no prebuilt bridge image in this path. Fixture uses actual deployment through Agent/ContainerService/containerd, exact image and package evidence, nonce-bound increasing ROS CDR strings through WebSocket/ExecContainer/socat, and forwarding-cancellation ownership. Both historical descriptor/target variants compile; native parser and three offline admission tests pass. The existing Go2 ROS matrix execution includes the full gate and controls without another runner. Actual Linux runtime remains pending; local Docker was unavailable."
+        },
+        {
+          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219619",
+          "tests": [
+            "go/internal/agent/containerd/ros2_interfaces_test.go",
+            "go/internal/cli/commands/foxglove_runtime_test.go",
+            ".github/scripts/test-foxglove-runtime.py"
+          ],
+          "result": "Actual generated-image deployment exposed production CycloneDDS crash on loopback-only hosts: explicit lo plus autodetermine selects lo twice. Narrow external-IPv4 admission fix passes native race cases and original-config local control; full post-fix OCI/WebSocket/CDR and image-bound original-startup control remain required in existing Go2 job."
         }
       ]
     },
@@ -4419,6 +4439,16 @@
             "Examples/WendyDataModelApp/test_wendydata.py"
           ],
           "result": "Added required real kernel sample-ID\u2192example ONNX prediction\u2192sealed camera byte-index/pixel join and exact receipt-time negative control to existing media job. Local real PyAV B-frame identity/pixel tests and30 example tests pass, including two fail-before ctypes ABI tests independently checked against compiled official Linux headers. Found and corrected H264 rejection and wrong pointer-union layouts in the actual example reader. Normal/control Linux fixtures compile; full kernel/race execution remains pending. No application model_inputs ledger, physical camera, published-model accuracy or OCI grant claim."
+        },
+        {
+          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219459",
+          "tests": [
+            "go/internal/agent/services/v4l2_sample_ledger_linux_test.go",
+            ".github/scripts/test-v4l2-sample-ledger.sh",
+            "Examples/WendyDataModelApp/wendydata.py"
+          ],
+          "result": "Required hosted kernel sample-identity step passed. Artifact14012616040 proves actual Linux-header ABI, reordered H264 identities,12 example predictions joined to sealed camera byte-index offsets and decoded pixels, and exact receipt-time control failure. Managed YAML/HF runtime and both controls also passed in inference job131700219364/artifact14011737370. Other malformed-certificate and unknown-own-scope startup gaps keep1890 partial; no physical-camera or published-model accuracy claim."
         }
       ]
     },
