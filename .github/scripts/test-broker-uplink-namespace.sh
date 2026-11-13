@@ -18,10 +18,13 @@ if [[ ${1:-} == --namespace ]]; then
     "$(realpath "$0")" --inside "$binary"
 fi
 if [[ ${1:-} == --inside ]]; then
+  # Compared before the EUID check so the unprivileged admission test reaches
+  # this refusal; reading /proc/self/ns needs no privilege.
+  shared() { echo 'Broker uplink fixture refuses namespaces shared with its parent.' >&2; exit 2; }
+  [[ -n ${WENDY_UPLINK_PARENT_mnt:-} && $(readlink /proc/self/ns/mnt) != "$WENDY_UPLINK_PARENT_mnt" ]] || shared
+  [[ -n ${WENDY_UPLINK_PARENT_net:-} && $(readlink /proc/self/ns/net) != "$WENDY_UPLINK_PARENT_net" ]] || shared
+  [[ -n ${WENDY_UPLINK_PARENT_pid:-} && $(readlink /proc/self/ns/pid) != "$WENDY_UPLINK_PARENT_pid" ]] || shared
   [[ $EUID == 0 && $# == 2 ]] || exit 2
-  [[ -n ${WENDY_UPLINK_PARENT_mnt:-} && $(readlink /proc/self/ns/mnt) != "$WENDY_UPLINK_PARENT_mnt" ]] || exit 2
-  [[ -n ${WENDY_UPLINK_PARENT_net:-} && $(readlink /proc/self/ns/net) != "$WENDY_UPLINK_PARENT_net" ]] || exit 2
-  [[ -n ${WENDY_UPLINK_PARENT_pid:-} && $(readlink /proc/self/ns/pid) != "$WENDY_UPLINK_PARENT_pid" ]] || exit 2
   mount --make-rprivate /
   mount -t tmpfs tmpfs /run
   mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
