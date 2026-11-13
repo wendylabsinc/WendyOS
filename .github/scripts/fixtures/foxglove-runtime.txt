@@ -48,7 +48,19 @@ private mount/PID/network namespaces, only loopback networking, a private /run
 and /var/lib, an actual ContainerService/AgentService UDS and private containerd.
 The local Docker control socket is the only host runtime socket rebound inside.
 Docker performs public build-input downloads; the ROS bridge itself has no
-external network interface or Cloud credentials.
+external network interface or Cloud credentials. Docker's client also exchanges
+registry authorization tokens, so daemon access alone is insufficient. Before
+unshare, the owned launch shell opens the original network namespace on FD9.
+Inside the private mount namespace it verifies that identity, pins the namespace
+with a private bind mount, and closes FD9. Only the Docker PATH wrapper enters
+that pinned network namespace; the Agent, ROS publisher and bridge remain in the
+private network. The helper verifies original network inode plus private mount/
+PID identities and absolute SHA256-pinned Docker/nsenter executables before exec.
+It preserves exact argv, private HOME/config, PID namespace and guardian process
+group. The original resolver file is copied and privately rebound across /run
+replacement. No host resolver, mount, route or daemon configuration is changed.
+Portable helper tests check refusal and literal child argv/environment only;
+actual setns, registry exchange and deployment require the hosted full gate.
 
 Acceptance requires actual image digest and installed package versions, the
 actual generated Dockerfile/config hashes, a negotiated bridge subprotocol,
