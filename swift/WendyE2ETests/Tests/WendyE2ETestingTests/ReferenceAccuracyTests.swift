@@ -141,6 +141,66 @@ struct `reference accuracy` {
     }
 
     @Test
+    func `rejects unterminated attributes without returning earlier entries`() throws {
+        for attribute in ["Test", "Suite"] {
+            let source = """
+                @Suite
+                struct `controls` {
+                    @Test
+                    func `first`() {}
+                    @\(attribute)(.disabled("reason")
+                    func `lost`() {}
+                }
+                """
+            #expect(WendyE2EReference.parseSource(source).isEmpty)
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                UUID().uuidString
+            )
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let file = directory.appendingPathComponent("unterminated.swift")
+            try source.write(to: file, atomically: true, encoding: .utf8)
+            let error = WendyE2EReference.Error.unterminatedAttribute(path: file.path, line: 5)
+            #expect(throws: error) { try WendyE2EReference.parseFile(at: file.path) }
+            #expect(throws: error) { try WendyE2EReference.parseDirectory(at: directory.path) }
+            #expect(error.description == "\(file.path):5: unterminated reference attribute")
+        }
+    }
+
+    @Test
+    func `retains generic trait source with explicitly limited comma classification`() throws {
+        // The ungrouped generic comma is outside the bounded expression scanner.
+        // Its conservative unknown state must retain the original expression;
+        // grouping the same expression makes argument boundaries unambiguous.
+        let documents = WendyE2EReference.parseSource(
+            """
+            @Suite
+            struct `generic reason` {
+                @Test(.disabled(Reason<Int, String>.comment))
+                func `computed generic comment`() {}
+                @Test(.disabled((Reason<Int, String>.comment)))
+                func `grouped generic comment`() {}
+                @Test(.disabled("literal comment"))
+                func `literal comment`() {}
+            }
+            """
+        )
+        let entries = documents.flatMap(\.sections).flatMap(\.entries)
+        #expect(entries.count == 3)
+        #expect(entries.first?.availability != .enabled)
+        #expect(entries.dropFirst().map(\.availability) == [.disabled, .disabled])
+        #expect(entries.first?.availabilityReason == ".disabled(Reason<Int, String>.comment)")
+        #expect(
+            entries.map(\.title) == [
+                "computed generic comment", "grouped generic comment", "literal comment",
+            ]
+        )
+    }
+
+    @Test
     func `preserves source lines with CRLF input`() throws {
         let source = Self.availabilitySource.replacingOccurrences(of: "\n", with: "\r\n")
         let entries = WendyE2EReference.parseSource(source).flatMap(\.sections).flatMap(\.entries)

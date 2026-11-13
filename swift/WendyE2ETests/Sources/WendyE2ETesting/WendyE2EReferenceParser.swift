@@ -21,6 +21,7 @@ struct ReferenceSourceParser {
     private var currentDocument: WendyE2EReference.Document?
     private var currentSections: [WendyE2EReference.Section] = []
     private var documents: [WendyE2EReference.Document] = []
+    private(set) var parsingError: WendyE2EReference.Error?
 
     init(source: String, path: String) {
         self.lines = source.replacingOccurrences(of: "\r\n", with: "\n").components(
@@ -95,7 +96,7 @@ struct ReferenceSourceParser {
         }
 
         finishCurrentDocument()
-        return documents
+        return parsingError == nil ? documents : []
     }
 
     private mutating func finishCurrentDocument() {
@@ -210,8 +211,9 @@ struct ReferenceSourceParser {
             cursor += 1
         }
         guard cursor < tokens.count else {
+            parsingError = .unterminatedAttribute(path: path, line: index + 1)
             index = lines.count
-            return StaticAvailability(state: .conditional, reason: "Unterminated attribute")
+            return StaticAvailability()
         }
         index = tokens[cursor].line + 1
         return StaticAvailability(traits: Array(tokens[(opening + 1)..<cursor]), lexicon: lexicon)

@@ -134,6 +134,7 @@ public enum WendyE2EReference {
         case fileNotFound(String)
         case directoryNotFound(String)
         case unreadableDirectory(String)
+        case unterminatedAttribute(path: String, line: Int)
 
         public var description: String {
             switch self {
@@ -143,6 +144,8 @@ public enum WendyE2EReference {
                 "reference source directory not found: \(path)"
             case .unreadableDirectory(let path):
                 "reference source directory cannot be read: \(path)"
+            case .unterminatedAttribute(let path, let line):
+                "\(path):\(line): unterminated reference attribute"
             }
         }
     }
@@ -156,7 +159,10 @@ public enum WendyE2EReference {
         }
 
         let source = try String(contentsOf: url, encoding: .utf8)
-        return parseSource(source, path: path)
+        var parser = ReferenceSourceParser(source: source, path: path)
+        let documents = parser.parse()
+        if let error = parser.parsingError { throw error }
+        return documents
     }
 
     public static func parseDirectory(at path: String) throws -> [Document] {
@@ -185,6 +191,8 @@ public enum WendyE2EReference {
         return documents
     }
 
+    /// Returns no documents when a recognized attribute is unterminated.
+    /// Use `parseFile(at:)` for a throwing path-and-line diagnostic.
     public static func parseSource(_ source: String, path: String = "<memory>") -> [Document] {
         var parser = ReferenceSourceParser(source: source, path: path)
         return parser.parse()

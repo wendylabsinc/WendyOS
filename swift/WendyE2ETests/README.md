@@ -300,7 +300,12 @@ disable takes precedence over conditional traits. Trait source is retained as
 `availabilityReason`, including any literal explanation, without evaluating
 interpolation or computed reasons. Predicate overloads, including a reason followed
 by a closure or predicate expression, remain conditional. Ordinary reference output
-still omits metadata.
+still omits metadata. Generic argument lists inside traits are not parsed:
+commas in an expression such as `.disabled(Reason<Int, String>.comment)` can be
+reported conservatively as `conditional` (unknown), even when Swift resolves the
+expression to an unconditional comment. A parenthesized generic expression is
+supported because its commas are grouped. Other supported computed comments remain
+unconditional; the extractor does not typecheck or evaluate their expressions.
 
 For API consumers, `Entry.availability` and `Entry.availabilityReason` are additive.
 The existing `isDisabled` initializer/property remains available; false alone is
@@ -320,6 +325,13 @@ opening brace on a later line. This is not a complete Swift parser: regex litera
 inline attribute/declaration layouts, custom or qualified availability traits,
 nested suite inheritance and conditional compilation are not interpreted. Keep
 availability traits directly in the suite/test attribute when using this reference.
+
+Recognized unterminated `@Test` / `@Suite` attributes fail file/directory parsing
+and the CLI with a source path and line diagnostic. CLI directory output validates
+all sources before writing any files. The existing nonthrowing `parseSource` API
+returns no documents for this error, rather than a partial reference; use the
+throwing `parseFile` API when diagnostics are needed. Other Swift syntax errors
+are outside this bounded validation.
 
 ## Writing tests
 
