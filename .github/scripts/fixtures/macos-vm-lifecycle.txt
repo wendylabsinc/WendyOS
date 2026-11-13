@@ -48,7 +48,7 @@ closed before forwarding. Actual prepareVMAppPorts and readiness/hook address
 resolution are called twice, then HTTP must return this run's nonce, a live
 guest boot_id, and increasing counters. Production QMP powerdown must release
 the inherited run lock and refuse further HTTP. Starting the same VM disk/alias
-must preserve Agent hostname/key and agent port, produce a new guest boot_id,
+must preserve the owned regular disk inode, Agent hostname and agent port, produce a new guest boot_id,
 start the persisted restart=no app without reupload, and restore actual forwarded HTTP.
 
 The historical forwarding control removes only prepareVMAppPorts' call to
@@ -73,3 +73,8 @@ This closes no UI/picker rendering, Cloud enrollment, Windows unsupported
 background/QMP behavior, nested ARM64 host, or physical Mac claim.2060 is a
 mixed audit: its other mapped protocol/runtime evidence remains separate.
 Hosted execution is pending until all normal/control markers and evidence pass.
+
+GetAgentVersion on the shipped Go Agent does not populate PublicKey. This
+fixture therefore makes no cryptographic guest-identity claim: it verifies the
+actual hostname, owned disk inode/runstate/port, QMP ownership and fresh
+nonce-bound application bytes across a changed guest boot_id.

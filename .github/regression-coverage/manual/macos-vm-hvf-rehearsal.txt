@@ -45,7 +45,7 @@ Source does not infer physical ownership from a model string.
        --output /private/tmp/RESERVED-OUTPUT/hvf-evidence
    It must report actual production accel=hvf, cancellation while the guest CPU
    is paused, recovery of that same QEMU, real OCI app nonce/counters, graceful
-   stop, persisted Agent identity and a new guest boot_id with working forwarded
+   stop, the same owned disk inode/Agent hostname/port and a new guest boot_id with working forwarded
    HTTP after restart. The original missing-forwarding control must fail only
    its named real app readiness boundary. Unexpected failure stays pending.
 

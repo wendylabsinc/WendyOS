@@ -51,6 +51,10 @@ func TestVMOwnedLifecycle(t *testing.T) {
 	if err != nil || !st.Exists || st.Running {
 		t.Fatalf("requires owned stopped VM: %+v %v", st, err)
 	}
+	diskBefore, err := os.Lstat(s.DiskPath(name))
+	if err != nil || !diskBefore.Mode().IsRegular() {
+		t.Fatal("owned VM disk is not a regular file", err)
+	}
 	oldJSON := jsonOutput
 	jsonOutput = true
 	defer func() { jsonOutput = oldJSON }()
@@ -189,8 +193,11 @@ func TestVMOwnedLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if version.GetHostname() == "" || version.GetPublicKey() == "" {
-		t.Fatal("actual Agent omitted persistent hostname/key identity")
+	// The Go Agent reports hostname here; it does not populate PublicKey.
+	// Bind persistence to this owned disk and actual guest boot/application bytes,
+	// without inventing a cryptographic identity contract for this RPC.
+	if version.GetHostname() == "" {
+		t.Fatal("actual Agent omitted hostname")
 	}
 	t.Logf("VM_AGENT_READY: %s", version)
 	port := lifecycleFreePort(t)
@@ -242,8 +249,12 @@ func TestVMOwnedLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if secondVersion.GetHostname() != version.GetHostname() || secondVersion.GetPublicKey() != version.GetPublicKey() {
-		t.Fatal("same-disk restart changed persistent Agent identity")
+	diskAfter, diskErr := os.Lstat(s.DiskPath(name))
+	if diskErr != nil || !diskAfter.Mode().IsRegular() || !os.SameFile(diskBefore, diskAfter) {
+		t.Fatal("restart replaced the owned VM disk", diskErr)
+	}
+	if secondVersion.GetHostname() != version.GetHostname() {
+		t.Fatal("same-disk restart changed Agent hostname")
 	}
 	// Start the persisted app through its production Agent API; do not upload or
 	// replace the image after restart. An already-running app is handled by Agent.
