@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -115,6 +118,35 @@ func TestDeployWithAllFlagsAsksNothing(t *testing.T) {
 	}
 }
 
+// A site selects every device in it, by name or id; the review names each
+// resolved device before signing, and each gets its own statement. An
+// unknown site is refused.
+func TestDeployBySite(t *testing.T) {
+	op, fake, releaseID := stepsFixture(t)
+	fake.sites = []*cloudpb.Site{{Id: "site-1", Name: "plant-a"}}
+	fake.assets[0].SiteId = proto.String("site-1")
+	a := allFlags(releaseID)
+	a.tags, a.sites = nil, []string{"nowhere"}
+	if err := runDeploy(context.Background(), op, a, io.Discard, false); err == nil || !strings.Contains(err.Error(), `No site "nowhere"`) {
+		t.Fatalf("unknown site: %v", err)
+	}
+	a.sites = []string{"plant-a"}
+	var out bytes.Buffer
+	if err := runDeploy(context.Background(), op, a, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	req := fake.signed(cloudpbDeployV2)[0].payload.(*cloudpb.CreateDeploymentRequest)
+	if !slices.Equal(req.GetTargetSiteIds(), []string{"site-1"}) || len(req.GetTargetTags())+len(req.GetTargetDeviceIds()) != 0 {
+		t.Fatalf("request %v", req)
+	}
+	if !strings.Contains(out.String(), "Devices: packer-01\n") {
+		t.Fatalf("review:\n%s", out.String())
+	}
+	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) {
+		t.Fatalf("statements %v", fake.assigned)
+	}
+}
+
 // L3: without a terminal a missing answer is an error naming its flag, and
 // nothing is created.
 func TestDeployMissingAnswerNamesTheFlag(t *testing.T) {
@@ -167,6 +199,29 @@ func TestDeployAsksTheDashboardQuestionsInOrder(t *testing.T) {
 			t.Fatalf("%q missing or out of order:\n%s", h, out.String())
 		}
 		last = i
+	}
+}
+
+// A failed site listing does not stop an interactive deploy by device: it
+// says so and goes on.
+func TestDeployGoesOnWhenSitesFailToLoad(t *testing.T) {
+	op, fake, releaseID := stepsFixture(t)
+	fake.sitesErr = status.Error(codes.Unavailable, "down")
+	answers := map[string]string{"App": "sh.wendy.example", "Release": releaseID, "Devices": "packer-01", "Name this deployment": "line-3",
+		"Run it now, or install only?": "run", "If a device is offline, keep trying for": "60d"}
+	deployAsk = func(q, _, def string) (string, error) {
+		if a, ok := answers[q]; ok {
+			return a, nil
+		}
+		return def, nil
+	}
+	deployConfirm = func(string) (bool, error) { return true, nil }
+	var out bytes.Buffer
+	if err := runDeploy(context.Background(), op, deployAnswers{}, &out, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Sites could not be loaded; choose tags or devices.") || len(fake.assigned) != 1 {
+		t.Fatalf("assigned %d:\n%s", len(fake.assigned), out.String())
 	}
 }
 

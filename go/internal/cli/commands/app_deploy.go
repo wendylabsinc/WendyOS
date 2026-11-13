@@ -26,7 +26,7 @@ import (
 
 type deployAnswers struct {
 	app, release, digest, name, configFile, keepTrying, note, cloudGRPC string
-	devices, tags, config                                               []string
+	devices, tags, sites, config                                        []string
 	required                                                            []string // settings the release requires; filled from the release
 	run, installOnly, move, yes, wait                                   bool
 }
@@ -77,6 +77,7 @@ func newAppDeployCmd() *cobra.Command {
 	f.StringVar(&a.release, "release", "", "2  Which release? Its version (or id)")
 	f.StringArrayVar(&a.devices, "device", nil, "3  Which devices? A device name or id (repeatable)")
 	f.StringArrayVar(&a.tags, "tag", nil, "3  Which devices? Every device with this tag (repeatable)")
+	f.StringArrayVar(&a.sites, "site", nil, "3  Which devices? Every device in this site, by name or id (repeatable)")
 	a.bindSteps(cmd)
 	f.StringVar(&a.digest, "digest", "", "Refuse unless the release's manifest digest is this sha256:<hex>")
 	f.StringVar(&a.cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
@@ -193,25 +194,34 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	if err != nil {
 		return err
 	}
-	if len(a.devices) == 0 && len(a.tags) == 0 {
+	var sites []*cloudpb.Site
+	if len(a.devices) == 0 && len(a.tags) == 0 && len(a.sites) == 0 {
 		if !interactive {
-			return missing("devices chosen", "--device <name> or --tag <tag>", "pick them")
+			return missing("devices chosen", "--device <name>, --tag <tag> or --site <site>", "pick them")
 		}
 		say("3/7  Which devices should get it?")
-		say("     Choose tags, single devices, or both.")
+		if sites, err = op.sites(ctx); err != nil {
+			say("     Sites could not be loaded; choose tags or devices.")
+		}
+		say("     Choose sites, tags, single devices, or any mix.")
+		for _, s := range sites {
+			say("     site %s  %s", s.GetName(), plural(len(inSite(assets, s.GetId())), "device"))
+		}
 		for _, tag := range allTags(assets) {
 			say("     tag %s  %s", tag, plural(len(withTag(assets, tag)), "device"))
 		}
 		for _, d := range assets {
 			say("     %s  %s", assetName(d), deviceNote(d, online, states, a.app))
 		}
-		answer, err := deployAsk("Devices", "Device names and tag:<tag>, separated by commas.", "")
+		answer, err := deployAsk("Devices", "Device names, site:<site> and tag:<tag>, separated by commas.", "")
 		if err != nil {
 			return err
 		}
 		for _, item := range strings.Split(answer, ",") {
 			if item = strings.TrimSpace(item); strings.HasPrefix(item, "tag:") {
 				a.tags = append(a.tags, strings.TrimPrefix(item, "tag:"))
+			} else if strings.HasPrefix(item, "site:") {
+				a.sites = append(a.sites, strings.TrimPrefix(item, "site:"))
 			} else if item != "" {
 				a.devices = append(a.devices, item)
 			}
@@ -238,6 +248,25 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			chosen[d.GetId()] = d
 		}
 		plan.tags = append(plan.tags, tag)
+	}
+	if len(a.sites) > 0 && sites == nil {
+		if sites, err = op.sites(ctx); err != nil {
+			return err
+		}
+	}
+	for _, name := range a.sites {
+		s, err := findSite(sites, name)
+		if err != nil {
+			return err
+		}
+		in := inSite(assets, s.GetId())
+		if len(in) == 0 {
+			return usageErrorf("No device is in the site %s. Add devices to it under Sites in the dashboard first.", s.GetName())
+		}
+		for _, d := range in {
+			chosen[d.GetId()] = d
+		}
+		plan.siteIDs = append(plan.siteIDs, s.GetId())
 	}
 	for _, id := range slices.Sorted(maps.Keys(chosen)) {
 		plan.devices = append(plan.devices, id)
@@ -580,6 +609,34 @@ func withTag(assets []*cloudpb.Asset, tag string) []*cloudpb.Asset {
 		}
 	}
 	return out
+}
+
+func inSite(assets []*cloudpb.Asset, siteID string) []*cloudpb.Asset {
+	var out []*cloudpb.Asset
+	for _, d := range assets {
+		if d.GetSiteId() == siteID {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// sites lists the organization's sites (SiteService.ListSites).
+func (op *registryOp) sites(ctx context.Context) ([]*cloudpb.Site, error) {
+	resp, err := cloudpb.NewSiteServiceClient(op.conn).ListSites(ctx, &cloudpb.ListSitesRequest{OrganizationId: op.org})
+	if err != nil {
+		return nil, fmt.Errorf("reading the sites: %w", err)
+	}
+	return resp.GetSites(), nil
+}
+
+// findSite is the site with this name or id.
+func findSite(sites []*cloudpb.Site, nameOrID string) (*cloudpb.Site, error) {
+	i := slices.IndexFunc(sites, func(s *cloudpb.Site) bool { return s.GetId() == nameOrID || s.GetName() == nameOrID })
+	if i < 0 || nameOrID == "" {
+		return nil, usageErrorf("No site %q in this organization. Use a site's name or id as shown under Sites in the dashboard.", nameOrID)
+	}
+	return sites[i], nil
 }
 
 // otherDeployment is the device's row for appID when it holds a deployment

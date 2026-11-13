@@ -121,6 +121,8 @@ type fakeRegistry struct {
 	pending    map[string][]*cloudpb.PendingDeviceStatement
 	tamper     func(*cloudpb.Deployment) // cloud records something else
 	assets     []*cloudpb.Asset
+	sites      []*cloudpb.Site
+	sitesErr   error // ListSites fails with it
 	online     map[string]bool
 	states     []*cloudpb.AppDeviceState
 	apps       map[string]*cloudpb.App // app id -> app
@@ -143,6 +145,7 @@ var appRoleIDs = map[string]string{"App owner": "r-owner", "App developer": "r-d
 type fakeApps struct {
 	*fakeRegistry
 	cloudpb.UnimplementedAppServiceServer
+	cloudpb.UnimplementedSiteServiceServer
 	cloudpb.UnimplementedAccessServiceServer
 	cloudpb.UnimplementedRoleServiceServer
 	cloudpb.UnimplementedOrganizationServiceServer
@@ -483,7 +486,7 @@ func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedR
 		Id: uuid.NewString(), OrganizationId: req.GetOrganizationId(), AppReleaseId: req.GetAppReleaseId(), AppId: "sh.wendy.example",
 		Name: req.GetName(), ConfigJson: req.GetConfigJson(), DesiredState: req.GetRunning(), Revision: 1, TargetDeviceIds: req.GetTargetDeviceIds(),
 	}
-	devices := f.resolve(&cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds(), TargetTags: req.GetTargetTags()}) // tags resolve at create
+	devices := f.resolve(&cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds(), TargetTags: req.GetTargetTags(), TargetSiteIds: req.GetTargetSiteIds()}) // tags resolve at create
 	rows := f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, devices)
 	for _, r := range rows {
 		for _, st := range f.states {
@@ -496,7 +499,7 @@ func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedR
 		}
 	}
 	f.deploys[d.Id] = d
-	f.sel[d.Id] = &cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds(), TargetTags: req.GetTargetTags()}
+	f.sel[d.Id] = &cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds(), TargetTags: req.GetTargetTags(), TargetSiteIds: req.GetTargetSiteIds()}
 	f.record(d, devices)
 	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: append(rows, f.extraRows(d)...)}, nil
 }
@@ -636,6 +639,10 @@ func (f *fakeRegistry) RemoveDeployment(_ context.Context, in *cloudpb.SignedReq
 	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: rows}, nil
 }
 
+func (a fakeApps) ListSites(context.Context, *cloudpb.ListSitesRequest) (*cloudpb.ListSitesResponse, error) {
+	return &cloudpb.ListSitesResponse{Sites: a.sites}, a.sitesErr
+}
+
 // resolve is a selection's devices among the fake's assets.
 func (f *fakeRegistry) resolve(sel *cloudpb.DeviceSelection) []string {
 	devices := slices.Clone(sel.GetTargetDeviceIds())
@@ -644,6 +651,9 @@ func (f *fakeRegistry) resolve(sel *cloudpb.DeviceSelection) []string {
 			if slices.Contains(a.GetTags(), tag) && !slices.Contains(devices, a.GetId()) {
 				devices = append(devices, a.GetId())
 			}
+		}
+		if slices.Contains(sel.GetTargetSiteIds(), a.GetSiteId()) && !slices.Contains(devices, a.GetId()) {
+			devices = append(devices, a.GetId())
 		}
 	}
 	return devices
@@ -722,6 +732,7 @@ func registryFixture(t *testing.T, keys ...*cloudpb.RecipientKey) (*registryOp, 
 		cloudpb.RegisterRoleServiceServer(srv, apps)
 		cloudpb.RegisterOrganizationServiceServer(srv, apps)
 		cloudpb.RegisterUserServiceServer(srv, apps)
+		cloudpb.RegisterSiteServiceServer(srv, apps)
 	})
 	reg := serve(func(srv *grpc.Server) { cloudpb.RegisterArtifactRegistryServiceServer(srv, fake) })
 	prevDial := dialRegistry
