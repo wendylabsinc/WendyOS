@@ -30,7 +30,7 @@ func newAppCmd() *cobra.Command {
 		Use:   "app",
 		Short: "Manage this project's app in Wendy Cloud",
 	}
-	cmd.AddCommand(newAppReleaseCmd(), newAppPublishCmd(), newAppDeployCmd(), newAppDeploymentCmd(), newAppRotateCmd())
+	cmd.AddCommand(newAppCreateCmd(), newAppReleaseCmd(), newAppPublishCmd(), newAppDeployCmd(), newAppDeploymentCmd(), newAppRotateCmd())
 	return cmd
 }
 
@@ -62,7 +62,7 @@ func newAppReleaseCmd() *cobra.Command {
 				return fmt.Errorf("wendy app release needs an operator session; run 'wendy auth login'")
 			}
 			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-				id, err := createAppRelease(ctx, conn, auth, auth.Certificates[0].TenantUUID(), appCfg.AppID, tag)
+				id, err := createAppRelease(ctx, conn, auth, auth.Certificates[0].TenantUUID(), appCfg.AppID, tag, "")
 				if err != nil {
 					return err
 				}
@@ -87,10 +87,12 @@ func validateReleaseTag(tag string) error {
 	return nil
 }
 
-func createAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, appID, tag string) (string, error) {
+// createAppRelease creates release tag of appID; defaults is its default
+// configuration (empty: none).
+func createAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, appID, tag, defaults string) (string, error) {
 	release := new(cloudpb.AppRelease)
 	err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.DeploymentService_CreateAppRelease_FullMethodName,
-		&cloudpb.CreateAppReleaseRequest{AppId: appID, OrganizationId: tenant, Name: tag, ReleaseType: cloudpb.ReleaseType_CONTAINER}, release)
+		&cloudpb.CreateAppReleaseRequest{AppId: appID, OrganizationId: tenant, Name: tag, ReleaseType: cloudpb.ReleaseType_CONTAINER, DefaultConfigJson: defaults}, release)
 	if err != nil {
 		return "", fmt.Errorf("creating release %s of %s: %w", tag, appID, err)
 	}
@@ -179,7 +181,7 @@ func (r *deployRelease) begin(ctx context.Context) (*string, error) {
 		ctx, cancel := context.WithTimeout(ctx, releaseCallTimeout)
 		defer cancel()
 		err := withCloud(ctx, r.auth, func(ctx context.Context, cc grpc.ClientConnInterface) (err error) {
-			r.id, err = createAppRelease(ctx, cc, r.auth, r.tenant, r.appID, r.tag)
+			r.id, err = createAppRelease(ctx, cc, r.auth, r.tenant, r.appID, r.tag, "")
 			return err
 		})
 		if err != nil {
