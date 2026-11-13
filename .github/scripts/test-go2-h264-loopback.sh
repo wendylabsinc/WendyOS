@@ -27,10 +27,11 @@ for command in go python3 sudo unshare timeout containerd ctr runc busybox gst-l
 for element in videotestsrc x264enc h264parse avdec_h264 videoconvert fdsrc fdsink; do gst-inspect-1.0 "$element" >/dev/null; done
 output=$(mktemp -d "${RUNNER_TEMP:?}/wendy-go2-h264.XXXXXX")
 trap 'rm -f "$output/"*.test; echo "Go2 H264 logs: $output"' EXIT
-export WENDY_GO2_DECODE_FIXTURE=1
+export WENDY_GO2_DECODE_FIXTURE=1 WENDY_GO2_RECORDED_DECODE_FIXTURE=1
 python3 .github/scripts/run-owned-media-test.py --timeout 180 -- \
-  go test -race ./go/internal/agent/ros2camera -run '^TestGo2ResolutionH264DecodesGeneratedPixels$' -v -count=1 | tee "$output/generated.log"
+  go test -race ./go/internal/agent/ros2camera -run '^Test(Go2ResolutionH264DecodesGeneratedPixels|RecordedGo2ReplayDecodesInterFrames)$' -v -count=1 | tee "$output/generated.log"
 grep -q '^--- PASS: TestGo2ResolutionH264DecodesGeneratedPixels ' "$output/generated.log"
+grep -q '^--- PASS: TestRecordedGo2ReplayDecodesInterFrames ' "$output/generated.log"
 CGO_ENABLED=0 go test -tags regression_go2_h264 -c ./go/internal/agent/services -o "$output/capture.test"
 CGO_ENABLED=0 go test -tags regression_go2_h264 -c ./go/internal/agent/containerd -o "$output/normal.test"
 python3 - "$output" <<'PY'
@@ -48,11 +49,13 @@ for name,path,before,after in [
  (out/(name+'.json')).write_text(json.dumps({'Replace':{str(source):str(replacement)}}))
 PY
 if python3 .github/scripts/run-owned-media-test.py --timeout 180 -- \
-  go test -race -overlay "$output/old-cdr.json" ./go/internal/agent/ros2camera -run '^TestGo2ResolutionH264DecodesGeneratedPixels$' -v -count=1 > "$output/old-cdr.log" 2>&1; then
+  go test -race -overlay "$output/old-cdr.json" ./go/internal/agent/ros2camera -run '^Test(Go2ResolutionH264DecodesGeneratedPixels|RecordedGo2ReplayDecodesInterFrames)$' -v -count=1 > "$output/old-cdr.log" 2>&1; then
   cat "$output/old-cdr.log"; echo 'Old CDR decoder unexpectedly passed' >&2; exit 1
 fi
 grep -q 'Go2 resolution H264 decode failed:' "$output/old-cdr.log"
 grep -q '^--- FAIL: TestGo2ResolutionH264DecodesGeneratedPixels ' "$output/old-cdr.log"
+grep -q '^--- FAIL: TestRecordedGo2ReplayDecodesInterFrames ' "$output/old-cdr.log"
+grep -q 'recorded CDR replay changed access unit:' "$output/old-cdr.log"
 for variant in wrong-format empty-camera-label; do
   CGO_ENABLED=0 go test -tags regression_go2_h264 -overlay "$output/$variant.json" -c ./go/internal/agent/containerd -o "$output/$variant.test"
 done
