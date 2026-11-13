@@ -6,6 +6,9 @@ on:
     paths:
       - "README.md"
       - "DEVELOPMENT.md"
+      - ".github/scripts/check-built-doc-capabilities.py"
+      - ".github/scripts/built_doc_capabilities_test.py"
+      - ".github/scripts/fixtures/docs-capabilities/**"
       - "go/internal/agent/network/documented_backend_unix_test.go"
       - ".github/scripts/test-readme-install.py"
       - ".github/scripts/readme_install_test.py"
@@ -24,6 +27,9 @@ on:
     paths:
       - "README.md"
       - "DEVELOPMENT.md"
+      - ".github/scripts/check-built-doc-capabilities.py"
+      - ".github/scripts/built_doc_capabilities_test.py"
+      - ".github/scripts/fixtures/docs-capabilities/**"
       - "go/internal/agent/network/documented_backend_unix_test.go"
       - ".github/scripts/test-readme-install.py"
       - ".github/scripts/readme_install_test.py"
@@ -121,6 +127,24 @@ jobs:
         working-directory: .
         timeout-minutes: 3
         run: go test -race ./go/internal/agent/network -run '^TestDocumentedGoAgentIgnoresLegacyNetworkBackend$' -count=1 -timeout=60s -v
+
+      - name: Bind OS documentation to published rootfs configuration
+        working-directory: .
+        timeout-minutes: 4
+        run: |
+          python3 .github/scripts/built_doc_capabilities_test.py
+          python3 .github/scripts/run-owned-media-test.py --timeout 210 -- \
+            python3 .github/scripts/check-built-doc-capabilities.py \
+              --output "$RUNNER_TEMP/docs-built-capabilities.json"
+
+      - name: Preserve built documentation capability evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-built-capabilities
+          path: ${{ runner.temp }}/docs-built-capabilities.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Install dependencies
         run: npm ci
