@@ -312,6 +312,15 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # Run native BLE regressions only before publishing a stable release.
+      # The release job requires this macOS build to succeed.
+      - name: Darwin BLE regressions
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        timeout-minutes: 15
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
+
       - name: Install libusb
         run: |
           set -euo pipefail
