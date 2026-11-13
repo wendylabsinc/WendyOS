@@ -110,6 +110,15 @@ def main():
             raise ValueError('require a local Docker socket beneath /run for private rebinding')
         env['DOCKER_HOST'] = 'unix://' + str(socket_path)
         checked(['docker', 'version', '--format', '{{.Server.Version}}'], env=env)
+        for command_name,key in (('docker','DOCKER'),('nsenter','NSENTER')):
+            executable=Path(shutil.which(command_name,path=env['PATH']) or '').resolve(strict=True)
+            info=executable.stat()
+            if not stat.S_ISREG(info.st_mode) or not info.st_mode&0o111 or info.st_size>128<<20:
+                raise ValueError('invalid fixture '+command_name+' executable')
+            env['WENDY_FOXGLOVE_'+('REAL_DOCKER' if key=='DOCKER' else key)]=str(executable)
+            env['WENDY_FOXGLOVE_'+key+'_SHA256']=hashlib.sha256(executable.read_bytes()).hexdigest()
+        evidence['docker_client']={key:env[key] for key in ('WENDY_FOXGLOVE_REAL_DOCKER','WENDY_FOXGLOVE_DOCKER_SHA256','WENDY_FOXGLOVE_NSENTER','WENDY_FOXGLOVE_NSENTER_SHA256')}
+
         # Do not reuse a name/config entry even in the practically impossible
         # event of a nonce collision. The daemon/default builder is unchanged.
         existing = checked(['docker', 'ps', '-a', '--format', '{{.Names}}'], env=env).splitlines()
@@ -117,7 +126,7 @@ def main():
             raise ValueError('fresh fixture builder container already exists')
         for name in ('go/internal/cli/commands/foxglove.go', 'go/internal/cli/commands/foxglove_forward.go',
                      'go/internal/cli/commands/foxglove_runtime_test.go', '.github/scripts/foxglove-runtime-namespace.sh',
-                     '.github/scripts/test-foxglove-runtime.py', 'go.mod', 'go.sum'):
+                     '.github/scripts/test-foxglove-runtime.py', '.github/scripts/foxglove-docker-client.py', 'go.mod', 'go.sum'):
             evidence['sources'][name] = hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
         evidence['source_commit'] = checked(['git', 'rev-parse', 'HEAD'])
         source = ROOT/'go/internal/cli/commands/foxglove.go'
@@ -156,9 +165,8 @@ def main():
             work = Path(tempfile.mkdtemp(prefix='wendy-fg-'))
             (work/'owner.json').write_text(json.dumps({'nonce': nonce, 'case': name}))
             case_env = {**env, **{f'WENDY_FOXGLOVE_PARENT_{kind}': os.readlink('/proc/self/ns/'+kind) for kind in ('mnt', 'net', 'pid')}}
-            command = ['sudo', '-n', 'env', *[key+'='+case_env[key] for key in ('PATH', 'DOCKER_CONFIG', 'BUILDX_CONFIG', 'WENDY_BUILDX_BUILDER', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'WENDY_FOXGLOVE_PARENT_mnt', 'WENDY_FOXGLOVE_PARENT_net', 'WENDY_FOXGLOVE_PARENT_pid')],
-                       'unshare', '--mount', '--net', '--pid', '--fork', '--kill-child=KILL', '--propagation', 'private', '--mount-proc',
-                       'bash', str(ROOT/'.github/scripts/foxglove-runtime-namespace.sh'), str(output/(name+'.test')), str(work), str(case), str(socket_path)]
+            command = ['sudo', '-n', 'env', *[key+'='+case_env[key] for key in ('PATH', 'DOCKER_CONFIG', 'BUILDX_CONFIG', 'WENDY_BUILDX_BUILDER', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'WENDY_FOXGLOVE_PARENT_mnt', 'WENDY_FOXGLOVE_PARENT_net', 'WENDY_FOXGLOVE_PARENT_pid', 'WENDY_FOXGLOVE_REAL_DOCKER', 'WENDY_FOXGLOVE_DOCKER_SHA256', 'WENDY_FOXGLOVE_NSENTER', 'WENDY_FOXGLOVE_NSENTER_SHA256')],
+                       'bash', '-c', 'exec 9</proc/self/ns/net; exec unshare --mount --net --pid --fork --kill-child=KILL --propagation private --mount-proc bash "$@"', 'foxglove-owned', str(ROOT/'.github/scripts/foxglove-runtime-namespace.sh'), str(output/(name+'.test')), str(work), str(case), str(socket_path)]
             builder_may_exist = True
             unknown_drain = True
             code = run(name, command, 720 if name == 'normal' else 180)
