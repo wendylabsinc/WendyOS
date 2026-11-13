@@ -3,7 +3,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +25,20 @@ import (
 // Container demand enters through the real provider API; this does not claim
 // an OCI containerd mount or a physical camera firmware acceptance.
 func TestIPCameraKernelPumpRetainsConsumersAndStopsAfterFinalRelease(t *testing.T) {
+	testIPCameraKernelLifecycle(t, "")
+}
+
+// These isolated observations run only after the mandatory lifecycle gate fails.
+// They never turn that failure into success or change production pipeline args.
+func TestIPCameraKernelDeliveryDiagnostic(t *testing.T) {
+	mode := os.Getenv("WENDY_IPCAM_DELIVERY_DIAGNOSTIC")
+	if mode != "consumer-unsynced" && mode != "producer-write" {
+		t.Skip("requires an explicit diagnostic mode from the hosted fixture")
+	}
+	testIPCameraKernelLifecycle(t, mode)
+}
+
+func testIPCameraKernelLifecycle(t *testing.T, diagnosticMode string) {
 	if os.Getenv("WENDY_IPCAM_LIFECYCLE_LOOPBACK") != "1" {
 		t.Skip("requires the disposable Linux media fixture")
 	}
@@ -40,7 +53,11 @@ func TestIPCameraKernelPumpRetainsConsumersAndStopsAfterFinalRelease(t *testing.
 	if err != nil || strings.TrimSpace(string(version)) != "0.15.4" {
 		t.Fatalf("expected owned v4l2loopback 0.15.4: %q %v", version, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
+	bound := 80 * time.Second
+	if diagnosticMode != "" {
+		bound = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	launch, err := exec.LookPath("gst-launch-1.0")
 	if err != nil {
@@ -81,7 +98,12 @@ func TestIPCameraKernelPumpRetainsConsumersAndStopsAfterFinalRelease(t *testing.
 				args[index] = "location=" + location.String()
 			}
 		}
-		return runIPCameraGStreamerPipeline(pumpCtx, args, func([]byte) error { return errors.New("kernel pump unexpectedly emitted stdout bytes") })
+		if diagnosticMode == "producer-write" {
+			args = append(args, "io-mode=rw")
+		}
+		err := runIPCameraGStreamerPipeline(pumpCtx, args, func([]byte) error { return errors.New("kernel pump unexpectedly emitted stdout bytes") })
+		t.Logf("IP kernel producer exit: diagnostic=%q context=%v error=%v RTP_access_units=%d", diagnosticMode, pumpCtx.Err(), err, source.rtpAccessUnits.Load())
+		return err
 	}
 	loopback := ipcam.NewLoopback(ctx, zap.NewNop(), registry, credentials, pump)
 	t.Cleanup(func() { loopback.Shutdown(); loopback.RemoveCamera(camera.ID) })
@@ -128,13 +150,26 @@ func TestIPCameraKernelPumpRetainsConsumersAndStopsAfterFinalRelease(t *testing.
 		}
 		captureCtx, stop := context.WithTimeout(ctx, 6*time.Second)
 		defer stop()
-		cmd := exec.CommandContext(captureCtx, launch, "-q", "v4l2src", "device="+path, "num-buffers=10", "!", "videoconvert", "!", "video/x-raw,format=RGB", "!", "fdsink", "fd=1")
-		var diagnostic bytes.Buffer
-		cmd.Stderr = &diagnostic
+		args := []string{"-q", "v4l2src", "device=" + path, "num-buffers=10", "!", "videoconvert", "!", "video/x-raw,format=RGB", "!", "fdsink", "fd=1"}
+		if diagnosticMode == "consumer-unsynced" {
+			args = append(args, "sync=false")
+		}
+		cmd := exec.CommandContext(captureCtx, launch, args...)
+		// Keep consumer diagnostics separate from the producer's GST_DEBUG_FILE.
+		// GStreamer initializes independently in this child and otherwise opens
+		// the same file with truncation. Drain stderr through a bounded writer.
+		for _, variable := range os.Environ() {
+			if !strings.HasPrefix(variable, "GST_DEBUG_FILE=") {
+				cmd.Env = append(cmd.Env, variable)
+			}
+		}
+		diagnostic := &limitedBuffer{limit: 64 * 1024}
+		cmd.Stderr = diagnostic
+		rtpBefore := source.rtpAccessUnits.Load()
 		pixels, err := cmd.Output()
 		const frameBytes = 64 * 48 * 3
 		if err != nil || len(pixels) != 10*frameBytes {
-			t.Fatalf("IP kernel consumer did not decode ten frames: bytes=%d err=%v stderr=%s", len(pixels), err, diagnostic.String())
+			t.Fatalf("IP kernel consumer did not decode ten frames: diagnostic=%q bytes=%d err=%v producer_starts=%d active=%d exits=%d RTP_access_units=%d->%d stderr=%s", diagnosticMode, len(pixels), err, starts.Load(), active.Load(), exits.Load(), rtpBefore, source.rtpAccessUnits.Load(), diagnostic.buf.String())
 		}
 		for offset := len(pixels) - 3*frameBytes; offset < len(pixels); offset += frameBytes {
 			assertAdmissionRGB(t, pixels[offset:offset+frameBytes], phase)
@@ -153,6 +188,12 @@ func TestIPCameraKernelPumpRetainsConsumersAndStopsAfterFinalRelease(t *testing.
 	waitStarts(1)
 	capture(0)
 	assertOne("two viewers")
+	if diagnosticMode != "" {
+		capture(1)
+		assertOne("diagnostic changing pixels")
+		t.Logf("IP kernel delivery diagnostic %q decoded ten frames in each fresh phase; the mandatory normal gate remains failed", diagnosticMode)
+		return
+	}
 	first()
 	first() // Releasing one view twice must not consume the other's ref.
 	wait(11 * time.Second)
