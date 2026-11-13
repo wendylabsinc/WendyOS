@@ -1,7 +1,102 @@
 #if os(macOS)
     import AppKit
+    import Darwin
     import SwiftUI
     import SwiftTerm
+
+    /// SwiftTerm 1.18 ignores waitpid's return value and can report an initialized
+    /// zero before the child is waitable. Keep its real PTY, but independently
+    /// observe the command's status before its wrapper exits. No terminal output
+    /// is parsed and command arguments never become shell source.
+    @MainActor
+    final class InstallerExitReceipt {
+        let directory: URL
+        let nonce = UUID().uuidString
+        private let directoryFD: Int32
+        private let directoryDevice: dev_t
+        private let directoryInode: ino_t
+
+        init() throws {
+            directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "wendy-installer-exit-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let fd = Darwin.open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else {
+                _ = rmdir(directory.path)
+                throw POSIXError(.EIO)
+            }
+            var metadata = stat()
+            guard fstat(fd, &metadata) == 0, metadata.st_uid == getuid(),
+                metadata.st_mode & 0o777 == 0o700
+            else {
+                Darwin.close(fd)
+                throw POSIXError(.EACCES)
+            }
+            directoryFD = fd
+            directoryDevice = metadata.st_dev
+            directoryInode = metadata.st_ino
+        }
+
+        deinit { Darwin.close(directoryFD) }
+
+        func arguments(executable: String, arguments: [String]) -> [String] {
+            let script = """
+                receipt=$1
+                nonce=$2
+                shift 2
+                "$@"
+                status=$?
+                (umask 077; set -C; printf '%s:%s\\n' "$nonce" "$status" > "$receipt") || exit 125
+                exit "$status"
+                """
+            return [
+                "-c", script, "wendy-installer", directory.appendingPathComponent("status").path,
+                nonce, executable,
+            ] + arguments
+        }
+
+        func exitStatus() -> Int32? {
+            let fd = openat(directoryFD, "status", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+            guard fd >= 0 else { return nil }
+            defer { Darwin.close(fd) }
+            var metadata = stat()
+            guard fstat(fd, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG,
+                metadata.st_uid == getuid(), metadata.st_mode & 0o777 == 0o600,
+                metadata.st_nlink == 1, metadata.st_size > 0, metadata.st_size <= 64
+            else { return nil }
+            var bytes = [UInt8](repeating: 0, count: 65)
+            let count = Darwin.read(fd, &bytes, bytes.count)
+            guard count == metadata.st_size,
+                let text = String(bytes: bytes.prefix(count), encoding: .utf8),
+                text.hasPrefix(nonce + ":"), text.hasSuffix("\n")
+            else { return nil }
+            let status = String(text.dropFirst(nonce.count + 1).dropLast())
+            guard let value = Int32(status), (0...255).contains(value), String(value) == status
+            else {
+                return nil
+            }
+            return value
+        }
+
+        func remove() {
+            // Never recursively remove a path which could have been replaced.
+            // The retained directory descriptor always names only this receipt.
+            _ = unlinkat(directoryFD, "status", 0)
+            var metadata = stat()
+            if lstat(directory.path, &metadata) == 0,
+                metadata.st_dev == directoryDevice, metadata.st_ino == directoryInode,
+                metadata.st_mode & S_IFMT == S_IFDIR
+            {
+                _ = rmdir(directory.path)
+            }
+        }
+    }
 
     @MainActor
     final class InstallSession: NSObject, ObservableObject, LocalProcessTerminalViewDelegate {
@@ -20,6 +115,7 @@
         @Published var version = ""
         @Published var requireEnrollment = false
         private(set) var operation = Operation.install
+        var exitReceipt: InstallerExitReceipt?
         var guide: InstallGuide { InstallGuide(board: board, method: method) }
 
         func select(_ board: InstallBoard) {
@@ -75,6 +171,14 @@
         // target/erase prompts. The existing CLI owns those interactions in its PTY.
         func launch(executable: String, arguments: [String], operation: Operation) {
             guard !running else { return }
+            let receipt: InstallerExitReceipt
+            do {
+                receipt = try InstallerExitReceipt()
+            } catch {
+                self.error = "The installer exit record could not be created. No write was started."
+                return
+            }
+            exitReceipt = receipt
             self.operation = operation
             error = nil
             result = nil
@@ -89,14 +193,19 @@
             // The terminal starts with an explicit frame and forwards later
             // layout changes to the PTY through SwiftTerm.
             view.startProcess(
-                executable: executable,
-                args: arguments,
+                executable: "/bin/sh",
+                args: receipt.arguments(executable: executable, arguments: arguments),
                 environment: Self.environment(),
                 currentDirectory: NSHomeDirectory()
             )
-            if !view.process.running {
+            // PTY EOF can clear SwiftTerm.running before its exit callback is
+            // delivered for a fast child. Only a missing child PID means the
+            // fork failed; otherwise the callback must judge the real receipt.
+            if view.process.shellPid <= 0 {
                 running = false
                 error = "The installer could not start. No write was started."
+                receipt.remove()
+                exitReceipt = nil
             }
             view.window?.makeFirstResponder(view)
         }
@@ -141,7 +250,10 @@
                     return
                 }
                 self.running = false
-                if exitCode == 0 {
+                let commandStatus = self.exitReceipt?.exitStatus()
+                self.exitReceipt?.remove()
+                self.exitReceipt = nil
+                if exitCode == 0 && commandStatus == 0 {
                     if self.operation == .install {
                         self.installed = true
                         self.result =

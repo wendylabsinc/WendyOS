@@ -119,6 +119,155 @@ final class InstallTests: XCTestCase {
             XCTAssertEqual(session.result, failure)
         }
     }
+    @MainActor func testFabricatedZeroCannotOverrideActualFailedCommandReceipt() async throws {
+        let receipt = try InstallerExitReceipt()
+        defer { receipt.remove() }
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.arguments = receipt.arguments(executable: "/usr/bin/false", arguments: [])
+        try child.run()
+        for _ in 0..<100 where child.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(child.isRunning)
+        XCTAssertEqual(receipt.exitStatus(), 1)
+        let session = InstallSession()
+        let terminal = LocalProcessTerminalView(frame: .zero)
+        session.terminal = terminal
+        session.exitReceipt = receipt
+        session.running = true
+        // A stale terminal cannot consume the active command's receipt.
+        session.processTerminated(source: LocalProcessTerminalView(frame: .zero), exitCode: 0)
+        XCTAssertTrue(session.running)
+        // SwiftTerm 1.18 can fabricate this FIRST zero when waitpid returns no
+        // status. The real shell has independently waited for /usr/bin/false.
+        session.processTerminated(source: terminal, exitCode: 0)
+        XCTAssertFalse(session.running)
+        XCTAssertFalse(session.installed)
+        let failure = session.result
+        session.processTerminated(source: terminal, exitCode: 0)
+        XCTAssertFalse(session.installed)
+        XCTAssertEqual(session.result, failure)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: receipt.directory.path))
+    }
+    @MainActor func testInstallerExitReceiptRejectsUnknownAndUnownedStatus() throws {
+        let receipt = try InstallerExitReceipt()
+        defer { receipt.remove() }
+        let status = receipt.directory.appendingPathComponent("status")
+        XCTAssertNil(receipt.exitStatus())
+        for text in [
+            "", "0\n", "foreign:0\n", "\(receipt.nonce):0", "\(receipt.nonce):00\n",
+            "\(receipt.nonce):-1\n", "\(receipt.nonce):256\n", "\(receipt.nonce):0\nextra",
+            String(repeating: "x", count: 65),
+        ] {
+            try Data(text.utf8).write(to: status)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: status.path
+            )
+            XCTAssertNil(receipt.exitStatus(), text)
+        }
+        try Data("\(receipt.nonce):0\n".utf8).write(to: status)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: status.path)
+        XCTAssertNil(receipt.exitStatus())
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: status.path)
+        XCTAssertEqual(receipt.exitStatus(), 0)
+        let foreign = receipt.directory.appendingPathComponent("foreign")
+        try FileManager.default.moveItem(at: status, to: foreign)
+        try FileManager.default.createSymbolicLink(at: status, withDestinationURL: foreign)
+        XCTAssertNil(receipt.exitStatus())
+        receipt.remove()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: foreign.path))
+        try FileManager.default.removeItem(at: foreign)
+        receipt.remove()
+    }
+    @MainActor func testPTYReceiptPreservesLiteralArgumentsAndFailureAcrossSessions() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let injected = directory.appendingPathComponent("must-not-exist")
+        let literal = "$(/usr/bin/touch '\(injected.path)'); `touch '\(injected.path)'`"
+        for iteration in 0..<20 {
+            let session = InstallSession()
+            session.launch(
+                executable: "/bin/sh",
+                arguments: [
+                    "-c", "test -t 0 && test -t 1 && test \"$1\" = \"$2\"", "literal", literal,
+                    literal,
+                ],
+                operation: .install
+            )
+            for _ in 0..<100 where session.running { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertFalse(session.running, "iteration \(iteration)")
+            XCTAssertTrue(
+                session.installed,
+                session.result ?? session.error ?? "missing install result"
+            )
+            session.launch(executable: "/usr/bin/false", arguments: [literal], operation: .verify)
+            for _ in 0..<100 where session.running { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertFalse(session.running)
+            XCTAssertFalse(session.verified)
+            XCTAssertTrue(session.installed)
+            XCTAssertTrue(session.result?.contains("not verified") == true)
+            XCTAssertNil(session.exitReceipt)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: injected.path))
+    }
+    @MainActor func testReceiptWrapperRefusesAnExistingStaleRecord() async throws {
+        let receipt = try InstallerExitReceipt()
+        defer { receipt.remove() }
+        let status = receipt.directory.appendingPathComponent("status")
+        try Data("stale-invocation:0\n".utf8).write(to: status)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: status.path)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.arguments = receipt.arguments(executable: "/usr/bin/true", arguments: [])
+        child.standardError = FileHandle.nullDevice
+        try child.run()
+        for _ in 0..<100 where child.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(child.isRunning)
+        XCTAssertEqual(child.terminationStatus, 125)
+        XCTAssertEqual(try String(contentsOf: status, encoding: .utf8), "stale-invocation:0\n")
+        XCTAssertNil(receipt.exitStatus())
+    }
+    @MainActor func testPTYInterruptCannotBecomeVerified() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let childPID = directory.appendingPathComponent("child.pid")
+        let session = InstallSession()
+        session.installed = true
+        session.launch(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "printf '%s\\n' \"$$\" > \"$1\"; exec /bin/sleep 30", "owned-interrupt",
+                childPID.path,
+            ],
+            operation: .verify
+        )
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: childPID.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let pid = try XCTUnwrap(
+            Int32(
+                try String(contentsOf: childPID, encoding: .utf8).trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+            )
+        )
+        XCTAssertTrue(session.running)
+        session.interrupt()
+        for _ in 0..<200 where session.running { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(session.running)
+        XCTAssertFalse(session.verified)
+        XCTAssertTrue(session.installed)
+        XCTAssertNil(session.exitReceipt)
+        XCTAssertEqual(kill(pid, 0), -1, "owned interrupted command was not reaped by its wrapper")
+        XCTAssertEqual(errno, ESRCH)
+    }
     @MainActor func testBundled3DGuidesLoadOfflineInWebKit() async throws {
         for board in ["jetson-orin-nano", "dragonwing-iq-9075", "raspberry-pi-5"] {
             let config = WKWebViewConfiguration()
