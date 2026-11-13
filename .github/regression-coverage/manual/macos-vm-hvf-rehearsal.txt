@@ -1,0 +1,66 @@
+Reserved bare-metal Apple Silicon VM acceptance (2270/1875/2060 VM subset)
+
+All cases start NOT_RUN. This procedure creates only disposable WendyOS VMs
+inside a fresh private fixture root; it does not install/update firmware or
+change host networking/virtualization. Use a Mac explicitly reserved by its
+owner, on an ordinary account, physically verify its serial/asset label and
+record those with the owner and time. Confirm it is the bare-metal macOS host,
+not a nested VM or container. Do not run against anyone's existing VM store.
+Source does not infer physical ownership from a model string.
+
+1. Check out the exact reviewed WendyOS candidate, record git rev-parse HEAD,
+   and ensure the lifecycle source files have no unexpected changes. Build the
+   actual CLI and commands suite using the ordinary repository prerequisites:
+     go build -o /private/tmp/RESERVED-OUTPUT/wendy ./go/cmd/wendy
+     go test -c -o /private/tmp/RESERVED-OUTPUT/commands.test ./go/internal/cli/commands
+   Choose a fresh owner-controlled output directory. No installer/root commands
+   are needed. Have the owner provide an ordinary native QEMU installation and
+   matching padded ARM64 UEFI firmware. Record its package/version. If missing,
+   stop for normal owner-managed setup rather than changing it during rehearsal.
+
+2. Generate the admission record on that exact reserved host/account/boot:
+     python3 .github/scripts/test-macos-vm-lifecycle.py \
+       --cli /private/tmp/RESERVED-OUTPUT/wendy \
+       --test-binary /private/tmp/RESERVED-OUTPUT/commands.test \
+       --write-reservation /private/tmp/RESERVED-OUTPUT/reservation.json
+   This reads only identity/version/files and records UUID, UID, hostname, boot,
+   ARM64, exact CLI/test/Python/QEMU/firmware/source hashes. It never creates or
+   boots a VM and leaves hardware_execution=not_run. Inspect every field and
+   match UUID/account/boot to the physically reserved Mac. The owner then writes
+   exactly this owner_confirmation value in that same JSON:
+     I reserve this bare-metal Mac for the owned WendyOS VM lifecycle
+   Keep the original generated record and reviewed amended hash as evidence.
+   Any host reboot or binary/source change requires fresh admission and review.
+
+3. Require12GiB free in /tmp and an uninterrupted35-minute reserved window.
+   Inspect the exact published guest pin in test-windows-vm-boot.py (vm-arm64
+   0.20.2, size582023203, SHA256f9f3e3ac18936230d1f72a38a097ba3bae5f7e37ccaba663b20dbfcc53849ea3).
+   The wrapper validates bytes before boot. The guest is an actual released
+   WendyOS image; only the nonce HTTP test app is locally built. No credential
+   or host directory is shared into the guest. Run:
+     python3 .github/scripts/test-macos-vm-lifecycle.py \
+       --cli /private/tmp/RESERVED-OUTPUT/wendy \
+       --test-binary /private/tmp/RESERVED-OUTPUT/commands.test \
+       --reserved-host /private/tmp/RESERVED-OUTPUT/reservation.json \
+       --output /private/tmp/RESERVED-OUTPUT/hvf-evidence
+   It must report actual production accel=hvf, cancellation while the guest CPU
+   is paused, recovery of that same QEMU, real OCI app nonce/counters, graceful
+   stop, persisted Agent identity and a new guest boot_id with working forwarded
+   HTTP after restart. The original missing-forwarding control must fail only
+   its named real app readiness boundary. Unexpected failure stays pending.
+
+4. Review evidence.json plus normal/control/create/remove/console logs. Both
+   phases must have actual inherited run-lock drain and CLI removal, no skip,
+   panic, unknown drain, or forced-deadline evidence. Hardware execution becomes
+   executed_pending_operator_review only; the owner records pass/fail against
+   the exact source/host/guest identity, with no claim about other Macs, Windows,
+   Cloud, UI, or public enrollment. Preserve outputs outside Git; no screenshots
+   or binary disk images belong in commits.
+
+5. On interruption or unknown cleanup, keep the printed owned /tmp/wv-* root.
+   Never kill a numeric PID from old state.json, remove another VM, or delete
+   disks before drain. The wrapper attempts exact QMP quit and inherited flock
+   verification. If that fails, the owner must inspect that exact private socket
+   and process live identity, or reboot the reserved Mac, then confirm no writer
+   remains before removing the retained owned directory. Record incomplete
+   cleanup as failure. No automated global process/cache/image cleanup exists.

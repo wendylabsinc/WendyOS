@@ -157,6 +157,8 @@ def free_port_span():
 def validate_guest(info):
     if info.get('cpuArchitecture')!='arm64' or info.get('deviceType')!='vm-arm64' or not info.get('version'):
         raise ValueError('CLI did not observe an actual ARM64 WendyOS VM agent')
+    if not info.get('hostname') or not info.get('publicKey'):
+        raise ValueError('actual VM persistent hostname/public key missing')
     if info.get('os')!='wendyos' or info.get('osVersion')!=PINS['guest']['version']:
         raise ValueError('guest OS/version does not match pinned image')
 
@@ -183,6 +185,18 @@ def validate_path_only_control(code,stderr):
     if not isinstance(message,str) or not message.startswith('starting qemu-system-aarch64: exec: "qemu-system-aarch64": ') or 'executable file not found in %PATH%' not in message:
         raise ValueError('control failed outside the historical bare-QEMU launch')
     return record
+
+
+def validate_lifecycle_port(phase,port,metadata,first_state):
+    if type(port) is not int or metadata.get('agentPort')!=port:
+        raise ValueError('automatic start did not persist actual agent port')
+    if phase=='collision':
+        if port<=50051 or port>50051+7*2 or (port-50051)%2:
+            raise ValueError('occupied default port did not select a bounded later span')
+    elif phase=='restart':
+        if not first_state or port!=first_state.get('agentPort'):
+            raise ValueError('restart discarded saved fallback port')
+    else:raise ValueError('unknown VM lifecycle phase')
 
 
 def execute(output):
@@ -254,37 +268,64 @@ def execute(output):
         if len(control_listing)!=1 or control_listing[0].get('name')!=name or control_listing[0].get('state')!='stopped':
             raise RuntimeError('historical launch failure left an active VM')
         evidence['control']='passed_expected_failure'
-        boot=owner.start('console',[cli,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],env)
-        info=None;boot_deadline=time.monotonic()+600;attempt=0
-        while time.monotonic()<boot_deadline:
-            check()
-            if boot.poll() is not None:raise RuntimeError('foreground QEMU/CLI exited before agent readiness')
-            attempt+=1
-            probe=owner.start(f'info-{attempt}',[cli,'--device','vm:'+name,'device','info','--read-only','--json'],env)
-            status=owner.wait(probe,min(30,max(.1,boot_deadline-time.monotonic())))
-            if status==0:
-                info=json.loads((output/f'info-{attempt}.log').read_text());validate_guest(info);break
-            time.sleep(1)
-        if info is None:raise RuntimeError('guest agent did not become ready within10minutes')
-        state_path=Path(env['WENDY_CONFIG_DIR'])/'vms'/name/'state.json'
-        state=json.loads(state_path.read_text())
-        # Observe actual kernel TCP ownership, not only the private run record.
-        query=("$ErrorActionPreference='Stop'; "
-               +f"$r=@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort {port} -State Listen); "
-               +"if($r.Count -ne 1){throw 'ambiguous listener'}; "
-               +"$p=Get-Process -Id $r[0].OwningProcess; "
-               +"@{pid=$p.Id;path=$p.Path;port=$r[0].LocalPort}|ConvertTo-Json -Compress")
-        listener=json.loads(owner.run('listener',[powershell,'-NoProfile','-NonInteractive','-Command',query],20,env))
-        validate_listener(listener,state,qemu,port)
-        evidence.update(normal_boot='passed',guest=info,run_state=state,listener=listener)
-        # The documented foreground console exit is Ctrl-A x. This is an
-        # intentional power-off of this disposable copy, not guest clean shutdown.
-        boot.stdin.write(b'\x01x');boot.stdin.flush()
-        if owner.wait(boot,30)!=0:raise RuntimeError('foreground console exit was unsuccessful')
-        listing=json.loads(owner.run('stopped',[cli,'vm','list','--json'],20,env))
-        if len(listing)!=1 or listing[0].get('name')!=name or listing[0].get('state')!='stopped':raise RuntimeError('CLI did not release its VM run lock/state')
-        for reclaimed_port in (port,port+1):
-            with socket.socket() as reclaimed:reclaimed.bind(('127.0.0.1',reclaimed_port))
+        # Hold only our own default port while starting without --port. This
+        # exercises actual foreground port fallback, not a mocked allocator.
+        blocker=socket.socket()
+        try:
+            blocker.bind(('127.0.0.1',50051));blocker.listen(1)
+        except BaseException:
+            blocker.close();raise
+        try:
+            first_state=None;first_info=None
+            for phase in ('collision','restart'):
+                boot=owner.start(phase+'-console',[cli,'vm','start',name,'--memory','2048','--cpus','2'],env)
+                info=None;boot_deadline=time.monotonic()+600;attempt=0
+                while time.monotonic()<boot_deadline:
+                    check()
+                    if boot.poll() is not None:raise RuntimeError('foreground QEMU/CLI exited before agent readiness: '+phase)
+                    attempt+=1
+                    label=f'{phase}-info-{attempt}'
+                    probe=owner.start(label,[cli,'--device','vm:'+name,'device','info','--read-only','--json'],env)
+                    status=owner.wait(probe,min(30,max(.1,boot_deadline-time.monotonic())))
+                    if status==0:
+                        info=json.loads((output/(label+'.log')).read_text());validate_guest(info);break
+                    time.sleep(1)
+                if info is None:raise RuntimeError('guest agent did not become ready within10minutes: '+phase)
+                vm_dir=Path(env['WENDY_CONFIG_DIR'])/'vms'/name
+                state=json.loads((vm_dir/'state.json').read_text())
+                metadata=json.loads((vm_dir/'meta.json').read_text())
+                port=state.get('agentPort')
+                validate_lifecycle_port(phase,port,metadata,first_state)
+                # Observe actual kernel TCP ownership, not only private records.
+                query=("$ErrorActionPreference='Stop'; "
+                       +f"$r=@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort {port} -State Listen); "
+                       +"if($r.Count -ne 1){throw 'ambiguous listener'}; "
+                       +"$p=Get-Process -Id $r[0].OwningProcess; "
+                       +"@{pid=$p.Id;path=$p.Path;port=$r[0].LocalPort}|ConvertTo-Json -Compress")
+                listener=json.loads(owner.run(phase+'-listener',[powershell,'-NoProfile','-NonInteractive','-Command',query],20,env))
+                validate_listener(listener,state,qemu,port)
+                if phase=='collision':
+                    first_state=state;first_info=info
+                else:
+                    if state['startedAt']==first_state['startedAt']:
+                        raise RuntimeError('restart reused the previous VM run record')
+                    if any(info[key]!=first_info[key] for key in ('hostname','publicKey')):
+                        raise RuntimeError('same-disk restart changed persistent guest identity')
+                evidence.setdefault('lifecycle',[]).append({'phase':phase,'guest':info,'state':state,'metadata':metadata,'listener':listener})
+                # Documented foreground console exit, only for this disposable
+                # owned disk. Stop/join before probing ports or restarting.
+                boot.stdin.write(b'\x01x');boot.stdin.flush()
+                if owner.wait(boot,30)!=0:raise RuntimeError('foreground console exit failed: '+phase)
+                listing=json.loads(owner.run(phase+'-stopped',[cli,'vm','list','--json'],20,env))
+                if len(listing)!=1 or listing[0].get('name')!=name or listing[0].get('state')!='stopped':raise RuntimeError('CLI retained VM run lock/state: '+phase)
+                for reclaimed_port in (port,port+1):
+                    with socket.socket() as reclaimed:reclaimed.bind(('127.0.0.1',reclaimed_port))
+                # Release the original obstruction before restart. The saved
+                # fallback must win even though50051 is now available again.
+                if phase=='collision':blocker.close()
+            evidence.update(normal_boot='passed',collision_fallback='passed',same_disk_restart='passed',guest=first_info,run_state=first_state)
+        finally:
+            blocker.close()
         owner.run('remove',[cli,'vm','rm',name],20,env)
         if (Path(env['WENDY_CONFIG_DIR'])/'vms'/name).exists():raise RuntimeError('owned stopped VM directory survived removal')
         evidence['status']='passed'
@@ -299,7 +340,7 @@ def execute(output):
             finally:
                 for sig,handler in previous.items():signal.signal(sig,handler)
     if stopped:raise KeyboardInterrupt('Windows VM gate interrupted during cleanup')
-    print('WINDOWS_VM_BOOT_VERIFIED packaged QEMU outside PATH, actual WendyOS agent, historical control, owned foreground cleanup')
+    print('WINDOWS_VM_BOOT_VERIFIED packaged QEMU outside PATH, actual WendyOS agent, historical control, default-port collision, sticky same-disk restart, owned foreground cleanup')
 
 
 def main():
