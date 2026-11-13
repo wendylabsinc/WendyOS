@@ -55,13 +55,38 @@ func TestBLEAgentTLSRequiresSavedDeviceIdentity(t *testing.T) {
 	}
 }
 
-func TestBLEAgentTLSUnknownAdvertisementCannotCreateBinding(t *testing.T) {
-	setTempConfig(t, &config.Config{})
-	setPinCache(t)
-	// No credentials are loaded or any BLE connection attempted before refusal.
-	_, err := bleAgentTLSConfig(&models.BluetoothDevice{DisplayName: "robot", ID: "606"}, config.CertificateInfo{}, nil)
-	if !errors.Is(err, certs.ErrExpectedDeviceIdentity) || !blocksUnauthenticatedFallback(err) {
-		t.Fatalf("missing saved identity did not fail closed: %v", err)
+// A Bluetooth device with no saved identity is a first contact: its
+// certificate is still checked against the sign-in's trust roots and tenant.
+func TestBLEAgentTLSFirstContact(t *testing.T) {
+	verify := func(t *testing.T, auth *config.AuthConfig, peer *tls.Config) error {
+		t.Helper()
+		setTempConfig(t, &config.Config{})
+		setPinCache(t)
+		client, err := bleAgentTLSConfig(&models.BluetoothDevice{DisplayName: "robot"}, auth.Certificates[0], nil)
+		if err != nil {
+			t.Fatalf("no saved identity refused before connecting: %v", err)
+		}
+		leaf, err := x509.ParseCertificate(peer.Certificates[0].Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}})
+	}
+	auth, peer := legacyLiteTestPKI(t, 2, certs.AssetURN(2, 606))
+	if err := verify(t, auth, peer); err != nil {
+		t.Fatalf("device under the sign-in's roots was rejected: %v", err)
+	}
+	_, otherPKI := legacyLiteTestPKI(t, 2, certs.AssetURN(2, 606))
+	if err := verify(t, auth, otherPKI); err == nil {
+		t.Fatal("device from another CA was accepted")
+	}
+	tenantAuth, sameTenant := localLiteTestPKI(t)
+	if err := verify(t, tenantAuth, sameTenant); err != nil {
+		t.Fatalf("same-tenant device was rejected: %v", err)
+	}
+	otherAuth, otherTenant := localLiteTestPKIForTenant(t, "11111111-1111-4111-8111-111111111111")
+	if err := verify(t, otherAuth, otherTenant); err == nil {
+		t.Fatal("device from another tenant was accepted")
 	}
 }
 

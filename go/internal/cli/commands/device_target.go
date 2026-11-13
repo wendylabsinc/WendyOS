@@ -98,13 +98,15 @@ func resolveOptionsDevice(opts []resolveOption) string {
 	return cfg.device
 }
 
-// resolveOptionsNonInteractive reports whether opts forbid prompting.
-func resolveOptionsNonInteractive(opts []resolveOption) bool {
+// resolveOptionsNoIdentityPrompt reports whether opts forbid the changed
+// identity prompt: non-interactive callers, and enrollment, which has its own
+// trust prompt that clears the old identity only after enrollment succeeds.
+func resolveOptionsNoIdentityPrompt(opts []resolveOption) bool {
 	cfg := resolveConfig{excludeProviderKeys: make(map[string]bool)}
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return cfg.nonInteractive
+	return cfg.nonInteractive || cfg.enrollmentTrustRecovery
 }
 
 // withoutDeviceOverride runs fn with --device and WENDY_DEVICE suspended, so a

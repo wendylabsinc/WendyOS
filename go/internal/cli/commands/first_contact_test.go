@@ -198,3 +198,78 @@ func TestDiscoverProbeReportsUnenrolledDeviceReachable(t *testing.T) {
 		t.Fatalf("want a reachable unenrolled device, got %+v", dev)
 	}
 }
+
+// reinstalledDeviceFixture is a device saved as enrolled asset 606 that now
+// answers as unenrolled, as it does after a reinstall or reset.
+func reinstalledDeviceFixture(t *testing.T) {
+	t.Helper()
+	restoreDeviceGlobals(t)
+	jsonOutput = false
+	auth, _ := legacyLiteTestPKI(t, 2, certs.AssetURN(2, 606))
+	auth.CloudGRPC = "cloud.test:443"
+	cfg := &config.Config{Auth: []config.AuthConfig{*auth}}
+	cfg.SetDevicePin("127.0.0.1", 2, auth.CloudGRPC, "606", "")
+	setTempConfig(t, cfg)
+	setPinCache(t)
+	deviceFlag = serveSetupProbe(t, "unprovisioned")
+	origDiscover := discoverLANDevices
+	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
+	origConfirm := confirmChangedIdentityFn
+	t.Cleanup(func() { discoverLANDevices, confirmChangedIdentityFn = origDiscover, origConfirm })
+}
+
+func TestSavedDeviceNowUnenrolled(t *testing.T) {
+	t.Run("without a terminal it refuses with the next step", func(t *testing.T) {
+		reinstalledDeviceFixture(t)
+		confirmChangedIdentityFn = func() (bool, error) { t.Fatal("prompted without a terminal"); return false, nil }
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressUpdateCheck(), NonInteractive(), DisableSessionBroker())
+		if conn != nil {
+			conn.Close()
+			t.Fatal("connected without confirmation")
+		}
+		if err == nil || !strings.Contains(err.Error(), "now answers as a device that is not enrolled") || !strings.Contains(err.Error(), changedIdentityStep) {
+			t.Fatalf("err = %v, want the not-enrolled warning and the next step", err)
+		}
+		if got := savedAsset(t); got != "606" {
+			t.Fatalf("saved asset = %q, want 606 unchanged", got)
+		}
+	})
+	t.Run("yes connects unverified and forgets the saved identity", func(t *testing.T) {
+		reinstalledDeviceFixture(t)
+		stubInteractive(t)
+		confirmChangedIdentityFn = func() (bool, error) { return true, nil }
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressUpdateCheck(), DisableSessionBroker())
+		if err != nil {
+			t.Fatalf("confirmed unenrolled device did not connect: %v", err)
+		}
+		defer conn.Close()
+		if conn.IsMTLS || !conn.NoSavedIdentity {
+			t.Fatalf("want an unverified plaintext connection, got IsMTLS=%v NoSavedIdentity=%v", conn.IsMTLS, conn.NoSavedIdentity)
+		}
+		if got := savedAsset(t); got != "" {
+			t.Fatalf("saved asset = %q, want the stale identity forgotten", got)
+		}
+	})
+	t.Run("no stops and changes nothing", func(t *testing.T) {
+		reinstalledDeviceFixture(t)
+		stubInteractive(t)
+		confirmChangedIdentityFn = func() (bool, error) { return false, nil }
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressUpdateCheck(), DisableSessionBroker())
+		if conn != nil {
+			conn.Close()
+			t.Fatal("connected after the user declined")
+		}
+		if !errors.Is(err, ErrUserCancelled) {
+			t.Fatalf("err = %v, want a cancellation", err)
+		}
+		if got := savedAsset(t); got != "606" {
+			t.Fatalf("saved asset = %q, want 606 unchanged", got)
+		}
+	})
+}

@@ -547,9 +547,12 @@ type noAuthenticatedEndpointError struct {
 	candidates []string
 	certSeen   bool
 	// diagnostic is set only when the device answered without TLS — the
-	// unprovisioned case, which is told how to unpin. Unwrap exposes it, styled
-	// like the identity refusals it then reads as.
+	// unprovisioned case. Unwrap exposes it, styled like the identity refusals
+	// it then reads as.
 	diagnostic *devicePinDiagnostic
+	// accept forgets the saved identity once the user confirms connecting to
+	// the device as unenrolled (see acceptChangedIdentity). Set with diagnostic.
+	accept func() error
 }
 
 func (e *noAuthenticatedEndpointError) Error() string { return e.msg }
@@ -659,12 +662,14 @@ func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, 
 				strings.Join(silent, ", "), strings.Join(hostsOf(plaintext), ", "))
 		}
 		diagnostic := devicePinDiagnostic{
-			hostname: pinKey,
-			heading:  fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
-			details:  details,
+			hostname:   pinKey,
+			heading:    fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
+			details:    details,
+			unenrolled: true,
 		}
 		failure.msg = diagnostic.message(false)
 		failure.diagnostic = &diagnostic
+		failure.accept = forgetSavedIdentity(pinKey)
 		return failure
 	}
 	var where string

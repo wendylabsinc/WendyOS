@@ -1322,7 +1322,7 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 	// A changed identity the user accepts is saved, then connected to again;
 	// a second change (its certificate key) may follow the first.
 	for range 2 {
-		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNonInteractive(opts))
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
 		if !retry {
 			err = confirmErr
 			break
@@ -3463,13 +3463,12 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 	if device == nil {
 		return nil, certs.ErrExpectedDeviceIdentity
 	}
-	// The advertised name selects an existing local binding only. It cannot
-	// supply or create an identity: spoofing it still requires that binding's
-	// certificate and private key, and unknown names are rejected.
+	// The advertised name selects an existing local binding only; it cannot
+	// supply an identity. With no binding this is a first contact, checked as
+	// the LAN dial checks one: the chain, a device identity, the legacy org,
+	// any saved key, and the sign-in's tenant. The device decides whether it
+	// accepts this user.
 	expected := expectedIdentityFor(device.HostKey())
-	if expected == nil {
-		return nil, fmt.Errorf("cannot authenticate Bluetooth device %q: %w; refresh its trusted Cloud inventory with 'wendy cloud discover' or use a saved binding from verified enrollment", device.DisplayName, certs.ErrExpectedDeviceIdentity)
-	}
 	keyPEM, err := cert.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
@@ -3478,10 +3477,25 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 		ChainPEM:         cert.PemCertificateChain,
 		ExpectedOrgID:    int32(cert.OrganizationID),
 		ExpectedIdentity: expected,
+		FirstContact:     expected == nil,
 		PinStore:         pins,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building BLE TLS config: %w", err)
+	}
+	if tenant := cert.TenantUUID(); expected == nil && tenant != "" {
+		// The LAN front doors refuse a device from another tenant after
+		// connecting (observeDeviceIdentity); Bluetooth has no such step.
+		verify := tlsCfg.VerifyConnection
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if err := verify(cs); err != nil {
+				return err
+			}
+			if id, ok, err := certs.IdentityFromCert(cs.PeerCertificates[0]); err != nil || !ok || id.TenantUUID != tenant {
+				return fmt.Errorf("Bluetooth device %q does not belong to your sign-in's tenant", device.DisplayName)
+			}
+			return nil
+		}
 	}
 	return tlsCfg, nil
 }
@@ -3505,6 +3519,7 @@ func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
 
 	client, err := attemptBLEConnect(device, cert, pins)
 	if err == nil {
+		noteBLEFirstContact(device)
 		return client, nil
 	}
 
@@ -3522,7 +3537,19 @@ func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
 	if alt == nil {
 		return nil, fmt.Errorf("device belongs to org %s; authenticate for that org with 'wendy auth login'", orgLabel("", mismatch.Got))
 	}
-	return attemptBLEConnect(device, *alt, pins)
+	client, err = attemptBLEConnect(device, *alt, pins)
+	if err == nil {
+		noteBLEFirstContact(device)
+	}
+	return client, err
+}
+
+// noteBLEFirstContact prints the first-contact notice for a Bluetooth device
+// with no saved identity.
+func noteBLEFirstContact(device *models.BluetoothDevice) {
+	if expectedIdentityFor(device.HostKey()) == nil {
+		noteNoSavedIdentityName(device.DisplayName, true)
+	}
 }
 
 // resolveOption configures resolveTarget behaviour.
@@ -3668,7 +3695,7 @@ func ExcludeProviders(keys ...string) resolveOption {
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 	sel, err := resolveTargetInner(ctx, opts...)
 	for range 2 {
-		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNonInteractive(opts))
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
 		if !retry {
 			err = confirmErr
 			break

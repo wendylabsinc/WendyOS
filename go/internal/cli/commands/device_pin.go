@@ -160,6 +160,10 @@ func noteNoSavedIdentity(name string, conn *grpcclient.AgentConnection) {
 	if name == "" {
 		name = conn.Host
 	}
+	noteNoSavedIdentityName(name, conn.IsMTLS)
+}
+
+func noteNoSavedIdentityName(name string, mTLS bool) {
 	noSavedIdentityNoticeMu.Lock()
 	seen := noSavedIdentityNoticed[name]
 	noSavedIdentityNoticed[name] = true
@@ -168,10 +172,10 @@ func noteNoSavedIdentity(name string, conn *grpcclient.AgentConnection) {
 		return
 	}
 	if jsonOutput {
-		plainNotice("%s", noSavedIdentityNotice(name, conn.IsMTLS))
+		plainNotice("%s", noSavedIdentityNotice(name, mTLS))
 		return
 	}
-	cliNotice("%s", noSavedIdentityNotice(tui.Device(name), conn.IsMTLS))
+	cliNotice("%s", noSavedIdentityNotice(tui.Device(name), mTLS))
 }
 
 func noSavedIdentityNotice(name string, mTLS bool) string {
@@ -434,6 +438,9 @@ type devicePinDiagnostic struct {
 	// saved one. It is explained like an SSH host-key change and can be
 	// accepted at an interactive prompt (see acceptChangedIdentity).
 	changed bool
+	// unenrolled marks a saved device that now answers as not enrolled,
+	// confirmed the same way; accepting forgets the saved identity.
+	unenrolled bool
 }
 
 const changedIdentityStep = "To accept the new identity, run this command once in a terminal and confirm."
@@ -442,6 +449,17 @@ const changedIdentityStep = "To accept the new identity, run this command once i
 // prompt, and the body of the refusal when there is no terminal to ask.
 func (d devicePinDiagnostic) changedIdentityWarning(styled bool) string {
 	heading := fmt.Sprintf("Warning: device %q identity changed.", d.hostname)
+	explanation := []string{
+		"It presented a different identity than the one this CLI saved for it.",
+		"The device may have been reinstalled or re-enrolled, or something else may be answering in its place.",
+	}
+	if d.unenrolled {
+		heading = fmt.Sprintf("Warning: device %q now answers as a device that is not enrolled.", d.hostname)
+		explanation = []string{
+			"This CLI saved an enrolled identity for it. It was probably reinstalled or reset, or something else may be answering in its place.",
+			"Connecting means an unverified, unencrypted connection, and forgets the saved identity.",
+		}
+	}
 	details := d.details
 	if styled {
 		heading = tui.ErrorMessage(heading)
@@ -451,17 +469,12 @@ func (d devicePinDiagnostic) changedIdentityWarning(styled bool) string {
 		}
 		details = strings.Join(detailLines, "\n")
 	}
-	return strings.Join([]string{
-		heading,
-		"It presented a different identity than the one this CLI saved for it.",
-		"The device may have been reinstalled or re-enrolled, or something else may be answering in its place.",
-		"",
-		details,
-	}, "\n")
+	lines := append([]string{heading}, explanation...)
+	return strings.Join(append(lines, "", details), "\n")
 }
 
 func (d devicePinDiagnostic) message(styled bool) string {
-	if d.changed {
+	if d.changed || d.unenrolled {
 		return d.changedIdentityWarning(styled) + "\n\n" + changedIdentityStep
 	}
 	heading := d.heading
@@ -537,13 +550,16 @@ func challengeUnprovisionedDevice(cfg *config.Config, hostname string) error {
 		return nil
 	}
 
-	return refuseDevicePin(devicePinDiagnostic{
+	refusal := refuseDevicePinRefusal(devicePinDiagnostic{
 		hostname: hostname,
 		heading:  fmt.Sprintf("Connection blocked: device %q has no enrolled identity.", hostname),
 		details: fmt.Sprintf("Saved: organization %d via %s%s\nNow:   unprovisioned (no mTLS)",
 			prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID)),
 		checkLogin: true,
+		unenrolled: true,
 	})
+	refusal.accept = forgetSavedIdentity(hostname)
+	return refusal
 }
 
 // clearDevicePinForRepin drops the stored pins for hostname so the next

@@ -17,7 +17,7 @@ import (
 // SSH style and ask for confirmation").
 
 var confirmChangedIdentityFn = func() (bool, error) {
-	return tui.ConfirmDefaultNo("Trust the new identity and connect?", tea.WithOutput(os.Stderr))
+	return tui.ConfirmDefaultNo("Trust the device answering now and connect?", tea.WithOutput(os.Stderr))
 }
 
 // acceptChangedIdentity answers a changed device identity the way SSH answers a
@@ -26,27 +26,53 @@ var confirmChangedIdentityFn = func() (bool, error) {
 // otherwise err is what the caller returns. Without a terminal it never
 // accepts: the refusal already says to run the command once interactively.
 func acceptChangedIdentity(err error, nonInteractive bool) (retry bool, _ error) {
-	var refusal *deviceIdentityRefusalError
-	if !errors.As(err, &refusal) || refusal.accept == nil || refusal.diagnostic == nil {
+	diagnostic, accept := confirmableIdentityChange(err)
+	if accept == nil {
 		return false, err
 	}
 	if nonInteractive || jsonOutput || !isInteractiveTerminal() {
 		return false, err
 	}
-	fmt.Fprintln(os.Stderr, refusal.diagnostic.changedIdentityWarning(true))
+	fmt.Fprintln(os.Stderr, diagnostic.changedIdentityWarning(true))
 	accepted, promptErr := confirmChangedIdentityFn()
 	if errors.Is(promptErr, tui.ErrCancelled) || (promptErr == nil && !accepted) {
-		return false, fmt.Errorf("%w: the saved identity for %q was kept", ErrUserCancelled, refusal.diagnostic.hostname)
+		return false, fmt.Errorf("%w: the saved identity for %q was kept", ErrUserCancelled, diagnostic.hostname)
 	}
 	if promptErr != nil {
 		return false, promptErr
 	}
-	if saveErr := refusal.accept(); saveErr != nil {
-		return false, fmt.Errorf("saving the new identity for %q: %w", refusal.diagnostic.hostname, saveErr)
+	if saveErr := accept(); saveErr != nil {
+		return false, fmt.Errorf("saving the new identity for %q: %w", diagnostic.hostname, saveErr)
 	}
 	// A broker may still hold a transport authenticated under the old identity.
 	_ = sessionbroker.InvalidateAll()
 	return true, nil
+}
+
+// confirmableIdentityChange returns the explanation and the accept action of a
+// refusal the user may confirm: a different identity, or a saved device that
+// now answers as unenrolled. accept is nil for every other error.
+func confirmableIdentityChange(err error) (*devicePinDiagnostic, func() error) {
+	var refusal *deviceIdentityRefusalError
+	if errors.As(err, &refusal) && refusal.accept != nil && refusal.diagnostic != nil {
+		return refusal.diagnostic, refusal.accept
+	}
+	var failure *noAuthenticatedEndpointError
+	if errors.As(err, &failure) && failure.accept != nil && failure.diagnostic != nil {
+		return failure.diagnostic, failure.accept
+	}
+	return nil, nil
+}
+
+// forgetSavedIdentity clears the saved identity for key, as `wendy device
+// unpin` does, so the next connection is a first contact.
+func forgetSavedIdentity(key string) func() error {
+	return func() error {
+		return config.Update(func(cfg *config.Config) (bool, error) {
+			clearPinsGoverning(cfg, key)
+			return true, nil
+		})
+	}
 }
 
 // saveChangedIdentity replaces the saved identity for key with obs, clearing

@@ -62,10 +62,11 @@ func TestDevicePinRefusalRecoveryPresentation(t *testing.T) {
 		t.Fatalf("refusal changed the saved pin: %+v", pin)
 	}
 	msg := err.Error()
-	command := "\n  wendy device unpin wendyos-ccr1.local\n"
+	// A saved device answering unenrolled is confirmed SSH style; without a
+	// terminal the refusal explains it and names the one next step.
 	for _, want := range []string{
-		"local pin", "intentionally unenrolled", "changed this device's organization",
-		command, "retry your command", "only clears this CLI", "keep the pin", "wendy auth login",
+		`device "wendyos-ccr1.local" now answers as a device that is not enrolled`,
+		"reinstalled or reset", "something else may be answering", changedIdentityStep,
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal missing %q:\n%s", want, msg)
@@ -73,9 +74,6 @@ func TestDevicePinRefusalRecoveryPresentation(t *testing.T) {
 	}
 	if strings.Contains(msg, "\x1b") {
 		t.Fatalf("programmatic error contains terminal styling: %q", msg)
-	}
-	if strings.Index(msg, command) > strings.Index(msg, "Saved:") {
-		t.Errorf("recovery command is buried after certificate details:\n%s", msg)
 	}
 	var diagnostic interface{ CLIMessage() string }
 	if !errors.As(err, &diagnostic) {
@@ -94,7 +92,7 @@ func TestDevicePinRefusalRecoveryPresentation(t *testing.T) {
 	}
 	for _, line := range lines[1:] {
 		plain := ansi.Strip(line)
-		if strings.HasPrefix(plain, "  wendy device unpin ") || strings.HasPrefix(plain, "Saved:") || strings.HasPrefix(plain, "Now:") {
+		if strings.HasPrefix(plain, "Saved:") || strings.HasPrefix(plain, "Now:") {
 			continue
 		}
 		if strings.Contains(line, "\x1b[") {
