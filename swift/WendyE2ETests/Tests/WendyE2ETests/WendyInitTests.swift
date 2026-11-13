@@ -266,11 +266,24 @@ struct `'wendy init'` {
      */
     @Test(
         .disabled(
-            "WDY-1936: '--git-init' is only honored in the template flow (which requires network); the non-template scaffold never initializes git regardless of --git-init yes/no."
+            if: !FirstAppFixture.knownDefectsEnabled,
+            "DEFECT: manual init ignores --git-init yes. Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
         )
     )
     func `initializes git only when requested`() async throws {
-        // TODO: enable once the non-template scaffold honors --git-init, or via a networked template fixture.
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let args = FirstAppFixture.manual.dropLast(2) + ["--git-init", "yes"]
+            _ = try await FirstAppFixture.run(cli, Array(args))
+            try await cli.sh(
+                posix: "test -d .git && git rev-parse --is-inside-work-tree",
+                power:
+                    "if (-not (Test-Path '.git' -PathType Container)) { throw 'git repository missing' }; git rev-parse --is-inside-work-tree"
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.normalizedStdout == "true\n")
+            }
+            try await FirstAppFixture.validate(cli)
+        }
     }
 
     /**
@@ -280,10 +293,339 @@ struct `'wendy init'` {
      */
     @Test(
         .disabled(
-            "WDY-1909: 'wendy init' ignores global --json and prints human scaffolding output only; JSON output is not implemented."
+            if: !FirstAppFixture.knownDefectsEnabled,
+            "DEFECT: init --json emits no creation summary. Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
         )
     )
     func `prints JSON project creation summary for automation`() async throws {
-        // TODO: enable once 'wendy init' emits a JSON creation summary under --json (WDY-1909).
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let result = try await FirstAppFixture.run(cli, FirstAppFixture.manual + ["--json"])
+            let summary = try FirstAppFixture.object(result.stdout)
+            #expect(summary["appId"] as? String == "first-app")
+            #expect(summary["target"] as? String == "wendyos")
+            #expect(summary["language"] as? String == "python")
+            let files = try #require(summary["files"] as? [String])
+            #expect(
+                Set(files).isSuperset(of: [
+                    "wendy.json", "pyproject.toml", "Dockerfile", "first_app/__init__.py",
+                ])
+            )
+            let entitlements = try #require(summary["entitlements"] as? [[String: Any]])
+            #expect(entitlements.contains { $0["type"] as? String == "network" })
+            try await FirstAppFixture.validate(cli)
+        }
+    }
+}
+
+extension `'wendy init'` {
+    /**
+     `--here` creates a complete manual Python app in the current directory.
+     The manifest, installable package entry point, and container command agree
+     on the app name. No git repository or assistant session is started.
+     */
+    @Test
+    func `creates a consistent Python manifest package and container entry point`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            _ = try await FirstAppFixture.run(cli, FirstAppFixture.manual)
+            let manifest = try await FirstAppFixture.manifest(cli)
+            #expect(
+                Set(manifest.keys) == [
+                    "appId", "version", "platform", "language", "entitlements", "python",
+                ]
+            )
+            #expect(manifest["appId"] as? String == "first-app")
+            #expect(manifest["version"] as? String == "0.1.0")
+            #expect(manifest["platform"] as? String == "linux")
+            #expect(manifest["language"] as? String == "python")
+            #expect((manifest["python"] as? NSDictionary) == [:])
+            let entitlements = try #require(manifest["entitlements"] as? [[String: Any]])
+            #expect(entitlements.count == 1)
+            #expect(entitlements[0]["type"] as? String == "network")
+            let package = try await LocalCLIAssertions.read(cli, path: "pyproject.toml")
+            #expect(package.contains("name = \"first-app\""))
+            #expect(package.contains("first_app = \"first_app:main\""))
+            #expect(package.contains("[build-system]"))
+            let dockerfile = try await LocalCLIAssertions.read(cli, path: "Dockerfile")
+            #expect(dockerfile.contains("COPY . ."))
+            #expect(dockerfile.contains("uv sync"))
+            #expect(dockerfile.contains(#"CMD ["uv", "run", "--no-sync", "first_app"]"#))
+            let execution = try await FirstAppFixture.python(
+                cli,
+                """
+                import first_app
+                first_app.main()
+                """
+            )
+            try execution.requireSuccess()
+            #expect(execution.normalizedStdout == "Hello from first-app!\n")
+            try await FirstAppFixture.validate(cli)
+            let tree = try FirstAppFixture.object(try await FirstAppFixture.snapshot(cli))
+            #expect(tree[".git"] == nil)
+            #expect(tree[".claude"] == nil)
+            #expect(tree["first-app"] == nil)
+            #expect(tree["AGENTS.md"] != nil)
+        }
+    }
+
+    /**
+     Manual Swift creation writes a Linux manifest with a matching executable
+     target and source file, ready for the developer to extend.
+     */
+    @Test
+    func `creates a complete manual Swift scaffold`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let args = [
+                "init", "--here", "--app-id", "first-app", "--target", "wendyos",
+                "--language", "swift", "--no-extra-entitlements", "--assistant", "skip",
+                "--git-init", "no",
+            ]
+            _ = try await FirstAppFixture.run(cli, args)
+            let manifest = try await FirstAppFixture.manifest(cli)
+            #expect(manifest["appId"] as? String == "first-app")
+            #expect(manifest["version"] as? String == "0.1.0")
+            #expect(manifest["platform"] as? String == "linux")
+            #expect(manifest["language"] as? String == "swift")
+            #expect(manifest["python"] == nil)
+            #expect(manifest["entitlements"] != nil)
+            let package = try await LocalCLIAssertions.read(cli, path: "Package.swift")
+            #expect(package.contains("name: \"first-app\""))
+            #expect(package.contains(".executableTarget"))
+            #expect(!package.contains("WendyLite"))
+            let source = try await LocalCLIAssertions.read(
+                cli,
+                path: "Sources/first-app/main.swift"
+            )
+            #expect(source == "print(\"Hello from first-app!\")\n")
+            try await FirstAppFixture.validate(cli)
+        }
+    }
+
+    /**
+     Repeated and comma-separated entitlement options are combined without
+     duplicates. GPIO, I2C, and persistent storage retain their supplied fields;
+     framework options remain separate from device capabilities.
+     */
+    @Test
+    func `applies field-bearing entitlements and framework options`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let args =
+                FirstAppFixture.manual.filter { $0 != "--no-extra-entitlements" } + [
+                    "--entitlement", "gpu,gpio", "--entitlement", "gpu,i2c,persist", "--gpio-pins",
+                    "4,17",
+                    "--i2c-device", "i2c-1", "--persist-name", "first-data", "--persist-path",
+                    "/data/first",
+                    "--framework", "ros2", "--ros2-domain-id", "42", "--ros2-rmw", "cyclonedds",
+                    "--ros2-scope", "device",
+                ]
+            _ = try await FirstAppFixture.run(cli, args)
+            let manifest = try await FirstAppFixture.manifest(cli)
+            let ents = try #require(manifest["entitlements"] as? [[String: Any]])
+            #expect(ents.count == 5)
+            #expect(
+                Set(ents.compactMap { $0["type"] as? String }) == [
+                    "network", "gpu", "gpio", "i2c", "persist",
+                ]
+            )
+            #expect(ents.first { $0["type"] as? String == "gpio" }?["pins"] as? [Int] == [4, 17])
+            #expect(ents.first { $0["type"] as? String == "i2c" }?["device"] as? String == "i2c-1")
+            #expect(
+                ents.first { $0["type"] as? String == "persist" }?["name"] as? String
+                    == "first-data"
+            )
+            #expect(
+                ents.first { $0["type"] as? String == "persist" }?["path"] as? String
+                    == "/data/first"
+            )
+            let frameworks = try #require(manifest["frameworks"] as? [String: Any])
+            let ros2 = try #require(frameworks["ros2"] as? [String: Any])
+            #expect(ros2["domainId"] as? Int == 42)
+            #expect(ros2["rmw"] as? String == "cyclonedds")
+            #expect(ros2["scope"] as? String == "device")
+            try await FirstAppFixture.validate(cli)
+        }
+    }
+
+    /**
+     Invalid choices, incomplete entitlement data, and contradictory options
+     fail before any scaffold or manifest write, preserving unrelated files.
+     */
+    @Test
+    func `rejects invalid manual input before writing`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for (options, diagnostic) in [
+                (["--target", "unknown"], "invalid target"),
+                (["--language", "unknown"], "invalid language"),
+                (["--app-id", " "], "app ID cannot be empty"),
+                (["--assistant", "unknown"], "invalid assistant"),
+                (["--entitlement", "unknown"], "invalid entitlement"),
+                (["--entitlement", "gpio"], "requires --gpio-pins"),
+                (["--gpio-pins", "one"], "invalid pin"),
+                (["--entitlement", "i2c"], "requires --i2c-device"),
+                (["--persist-name", "data"], "requires both --persist-name and --persist-path"),
+                (["--persist-path", "/data"], "requires both --persist-name and --persist-path"),
+                (["--all-entitlements", "--entitlement", "gpu"], "cannot be combined"),
+                (["--no-extra-entitlements", "--entitlement", "gpu"], "cannot be combined"),
+                (["--framework", "unknown"], "invalid framework"),
+                (
+                    ["--framework", "ros2", "--ros2-domain-id", "999"],
+                    "--ros2-domain-id must be between"
+                ),
+                (
+                    ["--target", "darwin", "--language", "swift", "--entitlement", "gpu"],
+                    "do not support WendyOS container entitlements"
+                ),
+                (["--target", "wendy-lite", "--language", "python"], "wendy-lite requires swift"),
+            ] {
+                try await LocalCLIAssertions.write(
+                    cli,
+                    path: "notes.txt",
+                    text: "Keep my unrelated work.\n"
+                )
+                let before = try await FirstAppFixture.snapshot(cli)
+                let entitlementFlags = options.contains {
+                    $0.hasPrefix("--entitlement") || $0.hasPrefix("--gpio")
+                        || $0.hasPrefix("--persist") || $0 == "--all-entitlements"
+                }
+                let base =
+                    entitlementFlags
+                    ? FirstAppFixture.manual.filter { $0 != "--no-extra-entitlements" }
+                    : FirstAppFixture.manual
+                let result = try await FirstAppFixture.run(cli, base + options, succeeds: false)
+                #expect(result.stdout == "")
+                let error = try FirstAppFixture.object(result.stderr)
+                #expect(error["error"] != nil)
+                #expect(result.readableStderr.contains(diagnostic))
+                #expect(!result.stderr.contains("Your project is ready"))
+                #expect(try await FirstAppFixture.snapshot(cli) == before)
+            }
+        }
+    }
+
+    /**
+     Omitted target selection fails in a noninteractive process and identifies
+     the missing option. It never opens a terminal or partially creates an app.
+     */
+    @Test
+    func `reports incomplete noninteractive selection before writing`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let before = try await FirstAppFixture.snapshot(cli)
+            let result = try await FirstAppFixture.run(
+                cli,
+                ["init", "--app-id", "first-app", "--assistant", "skip"],
+                succeeds: false
+            )
+            #expect(result.readableStderr.contains("--target is required"))
+            #expect(try await FirstAppFixture.snapshot(cli) == before)
+        }
+    }
+
+    /**
+     Python initialization fills missing scaffold files while retaining existing
+     source, build recipes, agent instructions, and unrelated user content.
+     A second invocation refuses the manifest conflict and changes no files.
+     */
+    @Test
+    func `preserves partial Python projects and refuses repeated initialization`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let setup = try await FirstAppFixture.python(
+                cli,
+                """
+                import pathlib
+                pathlib.Path('first_app').mkdir()
+                for name, text in {'first_app/__init__.py':'# valuable source\\n',
+                                   'Dockerfile':'# valuable recipe\\n', 'AGENTS.md':'Local instructions\\n',
+                                   'CLAUDE.md':'Local assistant instructions\\n', 'notes.txt':'Keep me\\n'}.items():
+                    pathlib.Path(name).write_text(text)
+                """
+            )
+            try setup.requireSuccess()
+            let before = try FirstAppFixture.object(try await FirstAppFixture.snapshot(cli))
+            _ = try await FirstAppFixture.run(cli, FirstAppFixture.manual)
+            let after = try FirstAppFixture.object(try await FirstAppFixture.snapshot(cli))
+            for (path, content) in before {
+                #expect((after[path] as? NSArray) == (content as? NSArray), "Preserve \(path)")
+            }
+            #expect(after["pyproject.toml"] != nil)
+            try await FirstAppFixture.validate(cli)
+            let completed = try await FirstAppFixture.snapshot(cli)
+            let repeated = try await FirstAppFixture.run(
+                cli,
+                FirstAppFixture.manual,
+                succeeds: false
+            )
+            #expect(repeated.readableStderr.contains("wendy.json already exists"))
+            #expect(try await FirstAppFixture.snapshot(cli) == completed)
+        }
+    }
+
+    /**
+     An existing Swift source file belongs to the developer even when no package
+     manifest exists yet. Initialization may supply the missing package, but
+     must preserve source and unrelated content.
+     */
+    @Test(
+        .disabled(
+            if: !FirstAppFixture.knownDefectsEnabled,
+            "DATA LOSS: manual Swift init overwrites existing main.swift when Package.swift is absent. Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
+        )
+    )
+    func `preserves existing Swift sources when adding a package`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let setup = try await FirstAppFixture.python(
+                cli,
+                """
+                from pathlib import Path
+                Path('Sources/first-app').mkdir(parents=True)
+                Path('Sources/first-app/main.swift').write_text('// valuable source\\n')
+                """
+            )
+            try setup.requireSuccess()
+            _ = try await FirstAppFixture.run(
+                cli,
+                FirstAppFixture.manual + ["--language", "swift"]
+            )
+            let source = try await LocalCLIAssertions.read(
+                cli,
+                path: "Sources/first-app/main.swift"
+            )
+            #expect(source == "// valuable source\n")
+            try await FirstAppFixture.validate(cli)
+        }
+    }
+
+    /**
+     When the generated package already exists but its source was never written,
+     initialization supplies the missing entry point and preserves the package.
+     */
+    @Test(
+        .disabled(
+            if: !FirstAppFixture.knownDefectsEnabled,
+            "DEFECT: manual Swift init skips the missing source when Package.swift exists. Replay with WENDY_E2E_KNOWN_INIT_DEFECTS=1."
+        )
+    )
+    func `completes a partial Swift scaffold without rewriting its package`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let package = """
+                // swift-tools-version:6.2
+                import PackageDescription
+                let package = Package(name: "first-app", targets: [.executableTarget(name: "first-app")])
+                """
+            try await LocalCLIAssertions.write(cli, path: "Package.swift", text: package)
+            _ = try await FirstAppFixture.run(
+                cli,
+                FirstAppFixture.manual + ["--language", "swift"]
+            )
+            #expect(try await LocalCLIAssertions.read(cli, path: "Package.swift") == package)
+            let source = try await FirstAppFixture.python(
+                cli,
+                """
+                from pathlib import Path
+                p = Path('Sources/first-app/main.swift')
+                print(p.read_text() if p.is_file() else 'MISSING_SOURCE', end='')
+                """
+            )
+            try source.requireSuccess()
+            #expect(source.normalizedStdout == "print(\"Hello from first-app!\")\n")
+        }
     }
 }
