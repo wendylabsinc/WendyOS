@@ -3240,10 +3240,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1682",
       "title": "fix(agent): flush filesystems before rebooting so a staged OTA capsule survives",
       "package": "10",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests assert flush-before-reboot ordering and fallback/watchdog behavior. They cannot prove OTA capsule durability across power loss.",
-      "required_follow_up": "Run a fault-injected reboot/storage persistence test and verify the staged capsule after boot.",
-      "evidence": []
+      "required_follow_up": "Complete the discriminating historical Agent sync-boundary fault/reboot procedure. Current updater syncfs can mask an omitted Agent sync. Keep acknowledged-stage durability and actual firmware-consumption cases separate; physical cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/jetson-capsule-rehearsal.py",
+            ".github/regression-coverage/manual/jetson-capsule-rehearsal.txt",
+            ".github/scripts/jetson_capsule_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target capsule/ESP/firmware-transition and acknowledged-stage power-interruption procedure; independent vendor recovery, antirollback and physical-power qualification required. Two new admission tests and four reused A/B tests pass. This does not yet provide a discriminating original Agent sync-boundary control; entry remains partial and all hardware cases remain not_run."
+        }
+      ]
     },
     {
       "key": "1768",
