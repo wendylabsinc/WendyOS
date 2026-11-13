@@ -70,7 +70,7 @@ func TestAppCreateWithAllFlagsAsksNothing(t *testing.T) {
 	isInteractiveTerminalFn = func() bool { return true }
 	group := "https://auth.example/realms/acme#ops"
 	out, err := runApp(newAppCreateCmd(), "--name", "Cam", "--app", "cam.app", "--details", "Counts cars", "--notifications",
-		"--access", "ana@example.com=developer", "--access", group+"=App viewer", "--yes")
+		"--access", "ana@example.com=developer", "--access", group+"=App viewer", "--org-default", "--yes")
 	if err != nil {
 		t.Fatal(err)
 	}

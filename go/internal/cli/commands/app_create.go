@@ -22,7 +22,6 @@ import (
 )
 
 // `wendy app create` asks the dashboard's questions, in its order and words.
-// The lifecycle question waits for its contract.
 
 // The questions and the session; tests replace them.
 var (
@@ -88,6 +87,7 @@ type appAnswers struct {
 	notify            bool
 	access            []string // who=role
 	grants            []appGrant
+	policy            *cloudpb.LifecyclePolicy // nil: not answered; empty: the organization default
 }
 
 // ask fills what the flags (given) did not, in a terminal; without one a
@@ -167,8 +167,10 @@ func newAppCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create an app in Wendy Cloud",
-		Long: "Asks what the app is called, what it does and who has access to it, shows the answers\n" +
-			"and creates the app once you confirm. Each answer has a flag; with all of them nothing is asked.",
+		Long: "Asks what the app is called, what it does, who has access to it and how long its releases\n" +
+			"are kept, shows the answers and creates the app once you confirm. Each answer has a flag; with\n" +
+			"all of them nothing is asked. Without a terminal and lifecycle flags, the app uses the\n" +
+			"organization default.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if notify && noNotify {
@@ -190,6 +192,10 @@ func newAppCreateCmd() *cobra.Command {
 				return cmd.Flags().Changed(f)
 			}
 			if err := a.ask(given); err != nil {
+				return err
+			}
+			var err error
+			if a.policy, err = policyFromFlags(cmd.Flags(), nil); err != nil {
 				return err
 			}
 			if !yes && !isInteractiveTerminal() {
@@ -215,6 +221,7 @@ func newAppCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&notify, "notifications", false, "The app may send notifications")
 	cmd.Flags().BoolVar(&noNotify, "no-notifications", false, "The app sends no notifications (default)")
 	cmd.Flags().StringArrayVar(&a.access, "access", nil, "Give access: <email or realm-issuer#group>=<owner|developer|operator|viewer> (repeatable)")
+	bindPolicyFlags(cmd.Flags())
 	cmd.Flags().BoolVar(&yes, "yes", false, "Create without asking to confirm")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
 	return cmd
@@ -248,6 +255,21 @@ func createApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface
 		return err
 	}
 
+	if a.policy != nil || isInteractiveTerminal() {
+		s, err := lifecycleSettings(ctx, conn, org)
+		if err != nil {
+			return err
+		}
+		if a.policy == nil {
+			if a.policy, err = askPolicy(s); err != nil {
+				return err
+			}
+		}
+		if err := checkPolicy(a.policy, createLimit(s)); err != nil {
+			return err
+		}
+	}
+
 	notifications := "This app sends no notifications"
 	if a.notify {
 		notifications = notifyHint
@@ -256,8 +278,8 @@ func createApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface
 	for _, g := range a.grants {
 		access = append(access, g.who+" ("+g.role+")")
 	}
-	fmt.Fprintf(out, "Review and create\n  Name: %s\n  App id: %s\n  What it does: %s\n  Notifications: %s\n  Access: %s\nNothing is created until you confirm.\n",
-		a.name, a.id, a.details, notifications, strings.Join(access, ", "))
+	fmt.Fprintf(out, "Review and create\n  Name: %s\n  App id: %s\n  What it does: %s\n  Notifications: %s\n  Access: %s\n  Lifecycle: %s\nNothing is created until you confirm.\n",
+		a.name, a.id, a.details, notifications, strings.Join(access, ", "), policySummary(a.policy))
 	if !yes {
 		ok, err := askConfirm("Create app?")
 		if err != nil {
@@ -268,7 +290,7 @@ func createApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface
 		}
 	}
 
-	upsert := &cloudpb.UpsertAppRequest{Id: a.id, OrganizationId: org, Name: &a.name, Details: &a.details}
+	upsert := &cloudpb.UpsertAppRequest{Id: a.id, OrganizationId: org, Name: &a.name, Details: &a.details, LifecyclePolicy: a.policy}
 	if err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.AppService_UpsertApp_FullMethodName, upsert, new(cloudpb.App)); err != nil {
 		return fmt.Errorf("creating %s: %w", a.id, err)
 	}

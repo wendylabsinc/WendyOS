@@ -122,6 +122,7 @@ type fakeRegistry struct {
 	tamper     func(*cloudpb.Deployment) // cloud records something else
 	assets     []*cloudpb.Asset
 	sites      []*cloudpb.Site
+	lifecycle  *cloudpb.LifecycleSettings
 	online     map[string]bool
 	states     []*cloudpb.AppDeviceState
 	apps       map[string]*cloudpb.App // app id -> app
@@ -133,7 +134,12 @@ func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry 
 	return &fakeRegistry{t: t, keys: keys, releases: map[string]*cloudpb.ArtifactManifest{}, blobs: map[string][]byte{}, deploys: map[string]*cloudpb.Deployment{},
 		sel: map[string]*cloudpb.DeviceSelection{}, defaults: map[string]string{}, required: map[string][]string{},
 		history: map[string][]*cloudpb.DeploymentRevision{}, revDevices: map[string][]string{}, pending: map[string][]*cloudpb.PendingDeviceStatement{},
-		apps: map[string]*cloudpb.App{}, users: map[string]string{"u-ana": "ana@example.com"}}
+		apps: map[string]*cloudpb.App{}, users: map[string]string{"u-ana": "ana@example.com"},
+		lifecycle: &cloudpb.LifecycleSettings{ // plan 50/100/365, the organization's per-app limit 20 tagged
+			PlanLimit:     &cloudpb.LifecyclePolicy{KeepTagged: proto.Int32(50), KeepUntagged: proto.Int32(100), UntaggedMaxAgeDays: proto.Int32(365)},
+			DefaultPolicy: &cloudpb.LifecyclePolicy{KeepTagged: proto.Int32(5), KeepUntagged: proto.Int32(10), UntaggedMaxAgeDays: proto.Int32(180)},
+			PerAppLimit:   &cloudpb.LifecyclePolicy{KeepTagged: proto.Int32(20)},
+		}}
 }
 
 // appRoleIDs are the fake's built-in app role ids, by name.
@@ -155,6 +161,9 @@ func (f fakeApps) GetApp(_ context.Context, in *cloudpb.GetAppRequest) (*cloudpb
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if a, ok := f.apps[in.GetId()]; ok && in.GetOrganizationId() == testOperatorTenant {
+		a.LifecyclePolicyLimit = createLimit(f.lifecycle)
+		a.EffectiveLifecyclePolicy = proto.Clone(f.lifecycle.GetDefaultPolicy()).(*cloudpb.LifecyclePolicy)
+		proto.Merge(a.EffectiveLifecyclePolicy, a.GetLifecyclePolicy())
 		return a, nil
 	}
 	return nil, status.Error(codes.NotFound, "app not found")
@@ -167,7 +176,7 @@ func (f fakeApps) UpsertApp(_ context.Context, in *cloudpb.SignedRequest) (*clou
 	if err := f.accept(cloudpb.AppService_UpsertApp_FullMethodName, in, &req); err != nil {
 		return nil, err
 	}
-	f.apps[req.GetId()] = &cloudpb.App{Id: req.GetId(), OrganizationId: req.GetOrganizationId(), Name: req.GetName(), Details: req.GetDetails()}
+	f.apps[req.GetId()] = &cloudpb.App{Id: req.GetId(), OrganizationId: req.GetOrganizationId(), Name: req.GetName(), Details: req.GetDetails(), LifecyclePolicy: req.GetLifecyclePolicy()}
 	return f.apps[req.GetId()], nil
 }
 
@@ -182,7 +191,12 @@ func (f fakeApps) UpdateApp(_ context.Context, in *cloudpb.SignedRequest) (*clou
 		return nil, status.Error(codes.PermissionDenied, "app:set-notification-capability required")
 	}
 	a := f.apps[req.GetId()]
-	a.CanSendNotifications = req.GetCanSendNotifications()
+	if req.CanSendNotifications != nil {
+		a.CanSendNotifications = req.GetCanSendNotifications()
+	}
+	if req.LifecyclePolicy != nil {
+		a.LifecyclePolicy = req.GetLifecyclePolicy()
+	}
 	return a, nil
 }
 
@@ -636,6 +650,10 @@ func (f *fakeRegistry) RemoveDeployment(_ context.Context, in *cloudpb.SignedReq
 		rows = append(rows, &cloudpb.PendingDeviceStatement{Kind: cloudpb.PendingDeviceStatement_KIND_UNASSIGN, DeploymentId: d.Id, Device: deviceURI(testOperatorTenant, dev), Revision: maxRevision})
 	}
 	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: rows}, nil
+}
+
+func (a fakeApps) GetLifecycleSettings(context.Context, *cloudpb.GetLifecycleSettingsRequest) (*cloudpb.LifecycleSettings, error) {
+	return a.lifecycle, nil
 }
 
 func (a fakeApps) ListSites(context.Context, *cloudpb.ListSitesRequest) (*cloudpb.ListSitesResponse, error) {
