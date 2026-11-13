@@ -135,6 +135,55 @@ class AudioModulesTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     modules.verify_archive(path, expected)
 
+    def test_superseded_archive_recovers_exact_bytes_from_launchpad(self):
+        payload = b"exact audited source"
+        expected = (len(payload), hashlib.sha256(payload).hexdigest())
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "source.diff.gz"
+            calls = []
+            def download(args):
+                calls.append(args)
+                if len(calls) == 1:
+                    destination.write_bytes(b"partial transport")
+                    raise subprocess.CalledProcessError(22, args)
+                self.assertFalse(destination.exists())
+                destination.write_bytes(payload)
+            with patch.object(modules, "run", side_effect=download):
+                modules.download_archive(Path(directory), destination.name, expected, AWS)
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1][-1], "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/"
+                             + AWS["source"] + "/" + AWS["version"] + "/source.diff.gz")
+            for args in calls:
+                self.assertIn("--max-time", args)
+                self.assertEqual(args[args.index("--proto-redir") + 1], "=https")
+
+    def test_wrong_hash_never_falls_back_and_existing_download_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "source.diff.gz"
+            def download(args):
+                destination.write_bytes(b"wrong")
+            with patch.object(modules, "run", side_effect=download) as run:
+                with self.assertRaisesRegex(ValueError, "checksum/size mismatch"):
+                    modules.download_archive(Path(directory), destination.name, (5, "0" * 64), AWS)
+                self.assertEqual(run.call_count, 1)
+                with self.assertRaisesRegex(ValueError, "overwrite"):
+                    modules.download_archive(Path(directory), destination.name, (5, "0" * 64), AWS)
+                self.assertEqual(run.call_count, 1)
+            self.assertEqual(destination.read_bytes(), b"wrong")
+
+    def test_all_source_locations_unavailable_fails_without_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "source.diff.gz"
+            def download(args):
+                destination.write_bytes(b"partial")
+                raise subprocess.CalledProcessError(22, args)
+            with patch.object(modules, "run", side_effect=download) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    modules.download_archive(Path(directory), destination.name, (1, "0" * 64), AWS)
+                self.assertEqual(run.call_count, 2)
+            self.assertFalse(destination.exists())
+
     def test_only_regular_sound_source_is_extracted(self):
         for bad in (None, "linux-7.0/sound/../../escape", "linux-7.0/sound/link"):
             with self.subTest(bad=bad), tempfile.TemporaryDirectory() as directory:
