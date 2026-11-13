@@ -102,6 +102,50 @@ func TestRunPingLoopCountsReplies(t *testing.T) {
 	}
 }
 
+// The response arrives while sendEcho still holds the loop. Time spent waiting
+// to process that response must not be included in its network RTT.
+type delayedReturnPingSession struct {
+	*fakePingSession
+	received chan struct{}
+	once     sync.Once
+}
+
+func (s *delayedReturnPingSession) sendEcho(req *cloudpb.IcmpEchoRequest) error {
+	if err := s.fakePingSession.sendEcho(req); err != nil {
+		return err
+	}
+	select {
+	case <-s.received:
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+	select {
+	case <-time.After(300 * time.Millisecond):
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+func (s *delayedReturnPingSession) recv() (*cloudpb.TunnelData, error) {
+	reply, err := s.fakePingSession.recv()
+	if err == nil {
+		s.once.Do(func() { close(s.received) })
+	}
+	return reply, err
+}
+
+func TestPingRTTExcludesReplyQueueDelay(t *testing.T) {
+	session := &delayedReturnPingSession{fakePingSession: newFakePingSession(t.Context()), received: make(chan struct{})}
+	stats := runPingLoop(t.Context(), session, "device", 1, time.Second, io.Discard)
+	if stats.Sent != 1 || stats.Received != 1 || stats.Err != nil {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	if stats.Max >= 150*time.Millisecond {
+		t.Fatalf("RTT includes time waiting to process an arrived reply: %v", stats.Max)
+	}
+}
+
 // TestRunPingLoopCountsLoss exercises the real "no replies" exit path: a
 // finite count against a session that swallows every echo must return on its
 // own once the grace window after the last send elapses — no ctx cancel

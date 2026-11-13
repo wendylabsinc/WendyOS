@@ -123,24 +123,30 @@ func usbSetupAddArgs(conn string, mac net.HardwareAddr) []string {
 		"ipv4.method", "link-local", "ipv6.method", "link-local"}
 }
 
+// isWendyUSBGadget is a seam over discovery.IsWendyUSBGadget for tests.
+var isWendyUSBGadget = discovery.IsWendyUSBGadget
+
 // resolveUSBSetupInterface returns the gadget interface to configure, using the
-// override when given or auto-detecting otherwise.
+// override when given or auto-detecting otherwise. It only ever returns a Wendy
+// device's USB link, so setup never touches another network adapter.
 func resolveUSBSetupInterface(override string) (string, error) {
 	if override != "" {
+		if !isWendyUSBGadget(override) {
+			return "", fmt.Errorf("%s is not a USB connection to a Wendy device; plug in the device and run 'wendy discover' again", override)
+		}
 		return override, nil
 	}
-	found, err := discovery.USBNetworkInterfaceNames()
+	found, err := usbGadgetIfaceNames()
 	if err != nil {
 		return "", fmt.Errorf("detecting USB interfaces: %w", err)
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("no USB gadget interface found.\n" +
-			"  Connect the device with a data (not charge-only) USB cable, wait a few seconds, then retry.")
+		return "", fmt.Errorf("no Wendy device is connected over USB; connect it with a data (not charge-only) cable and retry")
 	case 1:
 		return found[0], nil
 	default:
-		return "", fmt.Errorf("multiple USB interfaces found (%s); pass one with --iface <name>", strings.Join(found, ", "))
+		return "", fmt.Errorf("several Wendy devices are connected over USB (%s); pick one with --iface <name>", strings.Join(found, ", "))
 	}
 }
 

@@ -1,0 +1,387 @@
+---
+title: Connect three boards with no internet
+description: Deploy one Python app with Offline Protocol to three WendyOS boards that discover each other, encrypt every message, hold messages for a board that goes offline, and relay through a middle board.
+language: python
+---
+
+Build one small Python app with [Offline Protocol](/docs/integrations/offline-protocol)
+and deploy it to three WendyOS boards on a network with no internet connection.
+The boards find each other, encrypt everything they send, hold messages for a
+board that goes dark, and carry messages for a board they cannot reach directly.
+
+This is the walkthrough from [Three computers, no internet](https://wendy.dev/blog/offline-protocol-on-wendyos),
+tested on a Qualcomm Dragonwing IQ9, a Raspberry Pi 5, and an NVIDIA Jetson Orin
+Nano. Watch it in the [video](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=59s).
+
+## Prerequisites
+
+- The [Wendy CLI](/docs/installation/cli) on your development machine, with a
+  working container build setup for `wendy run`. The machine builds the app, so
+  it keeps its own internet connection.
+- Three boards running WendyOS on one local network with no internet
+  connection, such as a small router with no uplink. Boards can use Ethernet or
+  Wi-Fi. See the [Raspberry Pi](/docs/installation/wendyos-raspberry-pi-5),
+  [Jetson Orin Nano](/docs/installation/wendyos-nvidia-jetson-orin-nano), and
+  [Qualcomm Dragonwing](/docs/installation/wendyos-qualcomm-dragonwing) guides.
+
+The boards in this tutorial are all 64-bit Arm, so one Dockerfile builds for
+every board. Check that the CLI sees your boards:
+
+```bash
+wendy discover
+```
+
+The commands use `wendyos-pi.local`, `wendyos-iq9.local`, and
+`wendyos-jetson.local`. Replace them with your boards' names.
+
+## Set the clocks
+
+With no internet, the boards have no time server, and encryption depends on the
+current time. If a board's clock is wrong, its keys look invalid and sessions
+won't form:
+
+```bash
+wendy device sync-time
+```
+
+Your development machine fetches a signed timestamp and multicasts it to every
+WendyOS board on the local network. Each board checks the signature itself, so
+none of them has to trust your machine.
+
+## Create the project
+
+Create a project directory ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=230s)):
+
+```bash
+mkdir table-talk
+cd table-talk
+```
+
+Save this as `wendy.json`:
+
+```json
+{
+  "appId": "sh.wendy.examples.table-talk",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "persist", "name": "table-talk-data", "path": "/data" }
+  ]
+}
+```
+
+Offline Protocol finds neighbors using multicast DNS, which does not leave a
+container's private network, so the app uses the board's host network. The
+persistent volume keeps the board's identity and its undelivered messages
+across deploys; without it, the board gets a new address on every deploy. See
+[entitlements](/docs/device/entitlements).
+
+Save this as `Dockerfile`:
+
+```dockerfile
+# Debian on purpose: the SDK's Linux wheels need glibc 2.34 or newer, so Alpine won't work.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+
+RUN pip install --no-cache-dir 'offline-protocol-sdk[lan]==0.32.0'
+
+COPY app.py .
+
+CMD ["python", "app.py"]
+```
+
+`python:3.12-slim` is Debian-based. The SDK's prebuilt 64-bit Arm Linux wheels
+need glibc 2.34 or newer, so Alpine does not work. The `lan` extra adds local
+network discovery.
+
+Save this as `app.py`:
+
+```python
+"""Table Talk: three boards, Offline Protocol, no internet.
+
+The same program runs on every board. Each board finds the others, opens an
+encrypted session with each one, and sends a numbered message every few seconds.
+"""
+
+import asyncio
+import json
+import os
+import secrets
+import socket
+from collections import Counter
+from pathlib import Path
+
+from offline_protocol_sdk import ProtocolManager
+from offline_protocol_sdk.offline_protocol import OverflowPolicy, ProtocolConfig
+
+NAME = os.environ.get("BOARD_NAME") or socket.gethostname()
+DATA = Path(os.environ.get("DATA_DIR", "/data"))
+PORT = int(os.environ.get("LISTEN_PORT", "7878"))
+EVERY = float(os.environ.get("SEND_EVERY", "5"))
+
+# Comma-separated host:port list. Set it to turn off discovery and choose links by hand.
+FIXED_LINKS = [link for link in os.environ.get("TALK_ONLY_TO", "").split(",") if link]
+
+me = None  # this board's address, set once the identity is ready
+peers = set()  # every board we have heard of
+names = {}  # address -> board name, learned as boards introduce themselves
+sent = {}  # message id -> (address, sequence number)
+
+
+def say(text):
+    print(f"[{NAME}] {text}", flush=True)
+
+
+def label(address):
+    return names.get(address) or address[:12] + "..."
+
+
+def links():
+    """How this board is connected, read from its network interfaces."""
+    up = [n.name for n in Path("/sys/class/net").glob("*")
+          if (n / "operstate").read_text().strip() == "up"]
+    kinds = {"Wi-Fi" if n.startswith("wl") else "Ethernet"
+             for n in up if n.startswith(("wl", "en", "eth"))}
+    return " and ".join(sorted(kinds)) or "an unknown link"
+
+
+def on_event(event):
+    kind = event.get("type")
+
+    if kind == "neighbor_discovered":
+        peer = event["peer_id"]
+        if peer not in peers:
+            peers.add(peer)
+            say(f"found {label(peer)} over {event.get('transport')}")
+
+    elif kind == "secure_session_established":
+        say(f"encrypted session with {label(event['peer_id'])}")
+
+    elif kind == "message_received":
+        body = json.loads(event["content"])
+        names[event["sender"]] = body["from"]
+        peers.add(event["sender"])
+        for address, name in body["knows"].items():
+            if address != me:
+                peers.add(address)
+                names[address] = name
+        say(f"<- {body['from']} #{body['seq']}  hops: {event.get('hop_count', 0)}")
+
+    elif kind == "message_delivered":
+        if event["message_id"] in sent:
+            address, seq = sent.pop(event["message_id"])
+            say(f"ok {label(address)} has #{seq}  via {event.get('transport')}")
+
+    elif kind == "message_relayed":
+        say(f"carrying a message from {label(event['sender'])} to {label(event['recipient'])}")
+
+
+config = ProtocolConfig(
+    app_id="table-talk",
+    profile="gateway",
+    ble_enabled=False,
+    wifi_direct_enabled=True,  # the slot for peer streams over local IP
+    internet_enabled=False,
+    reticulum_enabled=False,
+    nostr_enabled=False,
+    prefer_online=False,
+    initial_ttl=8,
+    encryption_enabled=True,
+    require_encryption=True,
+    auto_key_exchange=True,
+    store_pending=True,
+    max_pending_per_peer=64,
+    max_pending_global=4096,
+    pending_ttl_ms=86_400_000,  # keep undelivered messages for a day
+    overflow_policy=OverflowPolicy.DROP_OLDEST,
+)
+
+
+def store_key():
+    """One key per board, made on first boot. Use a real secret store in production."""
+    path = DATA / "store.key"
+    if not path.exists():
+        DATA.mkdir(parents=True, exist_ok=True)
+        path.write_text(secrets.token_hex(32))
+        path.chmod(0o600)
+    return bytes.fromhex(path.read_text())
+
+
+async def main():
+    global me
+    async with ProtocolManager(
+        config,
+        event_handler=on_event,
+        store_key=store_key(),
+        mls_root=DATA / "keys",
+        state_root=DATA / "state",
+    ) as pm:
+        me = pm.local_address
+        names[me] = NAME
+        say(f"I am {me}")
+        say(f"on {links()}")
+
+        pm.peer_stream.configure(
+            listen_host="0.0.0.0",
+            listen_port=PORT,
+            advertise=not FIXED_LINKS,
+            discover=not FIXED_LINKS,
+            peers=FIXED_LINKS or None,
+        )
+        await pm.peer_stream.start()
+
+        seq = 0
+        while True:
+            await asyncio.sleep(EVERY)
+            seq += 1
+            roster = {a: n for a, n in names.items() if n}
+            body = json.dumps({"from": NAME, "seq": seq, "knows": roster})
+            for peer in list(peers):
+                sent[pm.send_message(peer, body)] = (peer, seq)
+
+            # Anything still in `sent` hasn't been acknowledged yet.
+            waiting = Counter(label(address) for address, _ in list(sent.values()))
+            for name, count in waiting.items():
+                if count > 2:
+                    say(f"holding {count} messages for {name}")
+
+
+asyncio.run(main())
+```
+
+The SDK reports everything as an event to `on_event`:
+
+| Event | Meaning |
+| --- | --- |
+| `neighbor_discovered` | Another board was heard on the local network. |
+| `secure_session_established` | The two boards finished exchanging keys. |
+| `message_received` | A message arrived for this board, with its hop count. |
+| `message_delivered` | The receipt for a message this board sent. |
+| `message_relayed` | This board passed along a message for another board. |
+
+The config turns off the Bluetooth, internet, Reticulum, and Nostr transports,
+so only the local network carries traffic. On Linux, `wifi_direct_enabled` is
+the SDK's slot for peer streams, plain TCP on the local network here, and the
+logs call it `WiFiDirect`. `require_encryption=True` makes a send fail rather
+than go out unencrypted. `store_pending=True` keeps messages for unreachable
+boards on disk: 64 per board for one day, after which the oldest are dropped.
+
+There is no account or API key. `store_key()` generates the key that seals the
+SDK's files on first boot and keeps it on the volume. In production, supply it
+from a secret store.
+
+## Deploy to the first board
+
+Run this from the project directory ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=629s)):
+
+```bash
+wendy run --device wendyos-pi.local --env BOARD_NAME=pi
+```
+
+`wendy run` builds the container, pushes it to the board, starts it, and
+streams the logs. The first build takes a minute. The board prints its address
+and how it is connected:
+
+```text
+[pi] I am off1qx7ey8znppjclm2sc99728r4rn9xlfyvgs4fljah
+[pi] on Wi-Fi
+```
+
+The address comes from a key the board generated itself; yours will differ.
+Stop the app and run the same command again: the address stays the same,
+because it lives on the persistent volume.
+
+## Add two more boards
+
+Run each command in its own terminal:
+
+```bash
+wendy run --device wendyos-iq9.local --env BOARD_NAME=iq9
+wendy run --device wendyos-jetson.local --env BOARD_NAME=jetson
+```
+
+No board is told where the others are. The Pi's log shows them arrive:
+
+```text
+[pi] found off1qym97ysv... over WiFiDirect
+[pi] encrypted session with off1qym97ysv...
+[pi] <- iq9 #1  hops: 0
+[pi] ok iq9 has #1  via wifiDirect
+```
+
+`found` means the Pi heard the IQ9 on the local network. `encrypted session`
+means the two boards exchanged keys using MLS. The arrow is message 1 from the
+IQ9; zero hops means it came directly. `ok` is the receipt for the Pi's message.
+
+<Callout type="info">
+  A receipt means the SDK on the other board received the message. For work
+  orders or robot commands, have your app store the message first, then send
+  its own acknowledgment back.
+</Callout>
+
+## Unplug a board
+
+Unplug the Jetson's network cable ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=792s)). The other boards
+keep sending to it, and its messages wait on disk on each board:
+
+```text
+[pi] holding 3 messages for jetson
+[pi] holding 4 messages for jetson
+[pi] holding 5 messages for jetson
+```
+
+Plug it back in ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=838s)). Everything it missed is delivered,
+with no retry, queue, or reconnect code in the app:
+
+```text
+[jetson] <- iq9 #4  hops: 0
+[jetson] <- iq9 #5  hops: 0
+[jetson] <- iq9 #6  hops: 0
+[jetson] <- pi #4  hops: 0
+[jetson] <- pi #5  hops: 0
+```
+
+Messages can arrive out of order, so number them when order matters, as this
+app does.
+
+## Relay through a middle board
+
+Make the Pi and the Jetson unable to reach each other ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=899s)).
+With `TALK_ONLY_TO` set, a board turns off discovery and connects only to the
+listed `host:port` addresses. Give both only the IQ9's address:
+
+```bash
+wendy run --device wendyos-pi.local --env BOARD_NAME=pi --env TALK_ONLY_TO=<iq9-ip>:7878
+wendy run --device wendyos-jetson.local --env BOARD_NAME=jetson --env TALK_ONLY_TO=<iq9-ip>:7878
+```
+
+The IQ9 now carries messages between them:
+
+```text
+[iq9] carrying a message from pi to jetson
+[jetson] <- pi #4  hops: 1
+```
+
+The message left the Pi over Wi-Fi and reached the Jetson over Ethernet. It is
+encrypted for the Jetson, so the IQ9 carries it but cannot read it.
+
+## Clean up
+
+Remove the app from each board:
+
+```bash
+wendy device apps remove sh.wendy.examples.table-talk --force --cleanup --device wendyos-pi.local
+```
+
+Repeat with `wendyos-iq9.local` and `wendyos-jetson.local`.
+
+## Next steps
+
+- Read the [Offline Protocol overview](/docs/integrations/offline-protocol) for
+  capabilities, security, and licensing.
+- Call services on other devices over HTTP, connect over Bluetooth LE, and use
+  groups, files, and replicated documents with
+  [services between devices](/docs/guides/offline-protocol-services).

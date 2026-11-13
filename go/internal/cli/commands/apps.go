@@ -373,7 +373,7 @@ func runAppsDashboard(ctx context.Context, conn *grpcclient.AgentConnection) err
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	result, err := p.Run()
+	result, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("apps dashboard: %w", err)
 	}
@@ -460,14 +460,14 @@ func newAppsStartCmd() *cobra.Command {
 						RestartPolicy: &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED},
 					})
 					if err != nil {
-						return fmt.Errorf("starting container: %w", err)
+						return deviceRefusalOr(err, "starting container")
 					}
 					// Wait for the agent's Started confirmation before returning.
 					// Returning immediately (the old behavior) closed the connection
 					// and canceled the RPC before the agent had loaded the container,
 					// so the start silently failed while we reported success.
 					if err := awaitStarted(stream); err != nil {
-						return fmt.Errorf("starting container: %w", err)
+						return deviceRefusalOr(err, "starting container")
 					}
 					return reportAppAction(
 						appActionResult{App: appName, Action: "start", Status: "started", RestartPolicy: "unless-stopped"},
@@ -484,7 +484,7 @@ func newAppsStartCmd() *cobra.Command {
 						AppName: appName,
 					})
 					if err != nil {
-						return fmt.Errorf("starting container: %w", err)
+						return deviceRefusalOr(err, "starting container")
 					}
 				} else {
 					outStream, stdinAttempted, err = openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
@@ -506,7 +506,7 @@ func newAppsStartCmd() *cobra.Command {
 								AppName: appName,
 							})
 							if startErr != nil {
-								return fmt.Errorf("starting container: %w", startErr)
+								return deviceRefusalOr(startErr, "starting container")
 							}
 							outStream = startStream
 							stdinAttempted = false
@@ -525,7 +525,7 @@ func newAppsStartCmd() *cobra.Command {
 						if cause := context.Cause(ctx); cause != nil {
 							return fmt.Errorf("attached to %s: %w", appName, cause)
 						}
-						return fmt.Errorf("receiving start response: %w", err)
+						return deviceRefusalOr(err, "receiving start response")
 					}
 					gotFirstResponse = true
 					if resp.GetStarted() != nil {
@@ -1065,7 +1065,7 @@ func pickApp(ctx context.Context, target *SelectedDevice, title string) (string,
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return "", fmt.Errorf("app picker: %w", err)
 	}

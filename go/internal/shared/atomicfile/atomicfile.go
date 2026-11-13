@@ -122,6 +122,12 @@ func write(path string, data []byte, perm os.FileMode, hook preRenameHook) error
 	}
 	removeOnFail = false
 
+	return SyncDirectory(dir)
+}
+
+// SyncDirectory makes directory-entry creation or removal durable on Unix.
+// Windows relies on NTFS metadata journaling, as Write does.
+func SyncDirectory(dir string) error {
 	// Windows cannot fsync a directory: os.Open hands back a read-only handle
 	// and FlushFileBuffers needs write access, so the sync below would fail
 	// every write. NTFS journals the rename's metadata on its own.

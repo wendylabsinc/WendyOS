@@ -15,6 +15,7 @@ func TestUSBDirectCandidateHostPort(t *testing.T) {
 }
 
 func TestUSBDirectCandidatesFrom(t *testing.T) {
+	nameRulesOnly(t)
 	ifaces := []net.Interface{
 		{Index: 3, Name: "enxaabbccddeeff", Flags: net.FlagUp},        // USB by name → candidate
 		{Index: 4, Name: "lo0", Flags: net.FlagUp | net.FlagLoopback}, // loopback → skipped
@@ -48,6 +49,7 @@ func TestUSBDirectCandidatesFrom(t *testing.T) {
 // only the "Hardware Port" display name identifies it. Without the resolver the
 // whole feature is inert there.
 func TestUSBDirectCandidatesFromDarwinDisplayNames(t *testing.T) {
+	nameRulesOnly(t)
 	ifaces := []net.Interface{
 		{Index: 4, Name: "en0", Flags: net.FlagUp}, // Wi-Fi → skipped
 		{Index: 5, Name: "en5", Flags: net.FlagUp}, // gadget NCM → candidate
@@ -78,6 +80,7 @@ func TestUSBDirectCandidatesFromDarwinDisplayNames(t *testing.T) {
 // A Windows friendly name ("Ethernet 3") is equally opaque; the adapter
 // description carries the USB signal, while the zone stays the numeric index.
 func TestUSBDirectCandidatesFromWindowsDescriptions(t *testing.T) {
+	nameRulesOnly(t)
 	ifaces := []net.Interface{
 		{Index: 11, Name: "Ethernet", Flags: net.FlagUp},
 		{Index: 12, Name: "Ethernet 3", Flags: net.FlagUp},
@@ -96,6 +99,7 @@ func TestUSBDirectCandidatesFromWindowsDescriptions(t *testing.T) {
 // The resolver stands behind a system query, so interfaces already classified
 // by name must not trigger it.
 func TestUSBDirectCandidatesFromSkipsResolverWhenNameSuffices(t *testing.T) {
+	nameRulesOnly(t)
 	ifaces := []net.Interface{
 		{Index: 3, Name: "enxaabbccddeeff", Flags: net.FlagUp},
 		{Index: 4, Name: "lo0", Flags: net.FlagUp | net.FlagLoopback},

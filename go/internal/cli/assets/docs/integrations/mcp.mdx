@@ -183,7 +183,7 @@ remain unknown when disconnected or when the device supplies insufficient data.
 | ROS nodes, services, parameters, actions, lifecycle, graph, bags | `wendy device ros2`; MCP provides topic and LiDAR inspection |
 | Data sources, recording, episodes, campaigns, downloads | `wendy data` |
 | Cloud logout and credential-session selection (sign in with `auth_login`) | `wendy cloud` / `wendy auth` |
-| Agent-only installation and first-boot WiFi/name/enrollment customization | Installation plan instructions or terminal installer; MCP image jobs use Ethernet for first boot |
+| Agent-only installation and Cloud pre-enrollment during installation | Installation plan instructions or terminal installer; MCP image jobs set the first-boot name and WiFi, not enrollment |
 
 An agent with shell access can invoke these commands. MCP-only clients do not
 automatically have shell access. App-provided tools may cover additional workflows.
@@ -194,6 +194,10 @@ Enable `setup`, call `os_install_plan`, and inspect media with `os_list_drives`
 when applicable. `os_install_start` creates a persistent job for a supported
 raw-media or Jetson developer-kit recovery installation. It records the exact
 published artifact and checksum and returns physical instructions without writing.
+Its optional `device_name`, `wifi` (a list of `{ssid, password, priority, hidden,
+security}`) and `no_wifi` arguments choose what first boot applies. Omitting them
+writes the published image unchanged: an auto-generated name and no WiFi. The
+job states the choice under `provisioning` either way.
 G1 PC2 keeps vendor Ubuntu; agent-only installation follows the plan's terminal
 instructions instead of an image job.
 
@@ -203,9 +207,9 @@ instructions instead of an image job.
 | `waiting_for_target` | User follows physical instructions; `os_install_resume` probes the selected media or USB recovery board |
 | `awaiting_erase_confirmation` | User approves the target and erase scope; resume with its `target.fingerprint` as `target_id` and `confirm_erase=true`; non-removable media also needs `confirm_internal=true` |
 | `queued` / `running` | Detached worker prepares the pinned artifact, rechecks identity and records the write boundary before flashing; poll `os_install_status` |
-| `waiting_for_boot` | Write completed; follow power/recovery instructions, connect Ethernet, identify the booted device |
+| `waiting_for_boot` | Write completed; follow power/recovery instructions, connect Ethernet when the job seeded no WiFi, identify the booted device |
 | `completed` | Resume with explicit `address` and optional `expected_public_key`; expected agent, OS version and board are verified |
-| `write_outcome_unknown` | Worker stopped after writing began; inspect hardware and logs. The job cannot repeat the write. Verify a booted target or create and authorize a new recovery job |
+| `write_outcome_unknown` | Worker stopped after writing began, or the image was written but its first-boot configuration or eject failed (the instructions say which); inspect hardware and logs. The job cannot repeat the write. Verify a booted target or create and authorize a new recovery job |
 
 Show the returned instructions to the user between calls. Job IDs survive client
 and server restarts; status and repeated resume calls cannot restart a completed
@@ -214,9 +218,20 @@ The workflow works without MCP elicitation support.
 
 Jobs do not prompt for administrator passwords over MCP. When elevation is needed,
 the job returns an exact terminal command to resume the same job after password
-entry. Use the supplied executable, job root and target fingerprint. Jobs do not
-pre-seed WiFi, device names or cloud enrollment; use the terminal installer for
-those options. USB recovery requires the appropriate host driver and a readable
+entry. Use the supplied executable, job root and target fingerprint.
+
+A job given a device name or WiFi writes them like the terminal installer: into
+the config partition after a raw-media write, then ejects the media, or into the
+flashpack's per-run config image before a Jetson recovery flash. A job without
+them writes only the published image. Jobs do not pre-enroll Cloud. Results, job
+files and logs never contain WiFi passwords. Passwords wait in a private file in
+the job store; it is discarded after one worker run and expires after 24 hours,
+so a job that fails before writing needs a new `os_install_start`. A hosted chat through
+`wendy cloud mcp` cannot send WiFi passwords; the user can run
+`wendy install jobs start` with `--wifi ssid=<name>,password=<pw>` in a terminal
+and continue with its `job_id`.
+
+USB recovery requires the appropriate host driver and a readable
 chip identity, checked again on the claimed recovery handle. The flashing gadget
 must stay on the confirmed physical USB path; a topology change during recovery
 stops the job and may require the terminal installer. The gadget protocol does

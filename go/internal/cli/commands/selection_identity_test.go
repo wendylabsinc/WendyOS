@@ -74,7 +74,7 @@ func TestEnrollmentSavesOriginalSelectedHostname(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	target, handled, err := connectUnboundEnrollmentTarget(ctx, "localhost", net.JoinHostPort("localhost", port))
+	target, handled, err := connectUnboundSetupTarget(ctx, "localhost", net.JoinHostPort("localhost", port))
 	if err != nil || !handled {
 		t.Fatalf("explicit enrollment setup: handled=%v error=%v", handled, err)
 	}

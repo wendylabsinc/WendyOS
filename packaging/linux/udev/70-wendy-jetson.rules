@@ -7,9 +7,9 @@
 # distinct recovery/gadget PID per Jetson module (oe4t lists 14+), wendy will
 # grow support for more of them, and a stale narrow rule left on user machines
 # would mask later additions. Vendor 0955 devices only expose these interfaces
-# transiently in recovery/flashing mode, so the extra grant is bounded. On distros without a plugdev
-# group (e.g. Fedora/RHEL) create it and add yourself, or run with sudo:
-#   sudo groupadd plugdev && sudo usermod -aG plugdev $USER
-# Must stay identical to usbUdevRule in
-# go/internal/cli/commands/os_install_thor.go (a test asserts it).
+# transiently in recovery/flashing mode, so the extra grant is bounded.
+# The deb, rpm and AUR packages ship these rules for every distro and create
+# plugdev as a system group where it is missing (packaging/linux/sysusers):
+# udev drops a whole rule line that names a missing group. Users outside a
+# desktop login join plugdev once: sudo usermod -aG plugdev $USER
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"

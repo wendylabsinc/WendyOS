@@ -38,8 +38,13 @@ func departedProbedTransport(t *testing.T) *grpc.ClientConn {
 	if _, err := agentpb.NewWendyAgentServiceClient(upstream).GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if upstream.GetState() != connectivity.Ready {
-		t.Fatal("probe did not establish Ready")
+	// gRPC publishes its usable picker before its connectivity state, so the
+	// probe can finish while GetState still reports Connecting. Establish the
+	// fixture's Ready precondition through state notifications, not scheduling.
+	for state := upstream.GetState(); state != connectivity.Ready; state = upstream.GetState() {
+		if state == connectivity.Shutdown || !upstream.WaitForStateChange(ctx, state) {
+			t.Fatalf("probe did not establish Ready: state=%v, context=%v", upstream.GetState(), ctx.Err())
+		}
 	}
 	server.Stop()
 	if !upstream.WaitForStateChange(ctx, connectivity.Ready) {

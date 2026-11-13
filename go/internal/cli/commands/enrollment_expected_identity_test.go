@@ -88,7 +88,7 @@ func TestExplicitSetupCannotOverrideSavedIdentity(t *testing.T) {
 	cfg.SetDevicePin("robot.local", 2, "cloud.test:443", "42", "")
 	setTempConfig(t, cfg)
 	setPinCache(t)
-	target, handled, err := connectUnboundEnrollmentTarget(context.Background(), "robot.local", "127.0.0.1:1")
+	target, handled, err := connectUnboundSetupTarget(context.Background(), "robot.local", "127.0.0.1:1")
 	if target != nil || handled || err != nil {
 		t.Fatalf("setup bypassed a saved device binding: target=%v handled=%v err=%v", target, handled, err)
 	}

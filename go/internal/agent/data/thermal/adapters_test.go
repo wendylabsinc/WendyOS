@@ -106,3 +106,43 @@ func TestCameraProfilesRequireIdentity(t *testing.T) {
 		t.Fatal("agent capability ignored")
 	}
 }
+
+func TestHIK96SensorPlaneExcludesPreviewAndMetadata(t *testing.T) {
+	layout := &pb.RawFormat{Width: 96, Height: 200, Fourcc: "YUYV", BytesPerLine: 200}
+	var err error
+	layout.ThermalPlane, err = Plane(TOPDONTC001HIK, layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, layout.BytesPerLine*layout.Height)
+	// Poison preview, metadata, and row padding with valid but hotter values.
+	for i := 0; i < len(payload); i += 2 {
+		binary.LittleEndian.PutUint16(payload[i:], 60000)
+	}
+	for y := 0; y < 96; y++ {
+		for x := 0; x < 96; x++ {
+			binary.LittleEndian.PutUint16(payload[y*200+x*2:], 5300)
+		}
+	}
+	binary.LittleEndian.PutUint16(payload, 0)
+	binary.LittleEndian.PutUint16(payload[2:], 65535)
+	binary.LittleEndian.PutUint16(payload[95*200+95*2:], 5600)
+	f, err := Decode(payload, layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Width != 96 || f.Height != 96 || f.Coldest != (Point{2, 0, 5300}) || f.Hottest != (Point{95, 95, 5600}) || f.Valid[0] || f.Valid[1] {
+		t.Fatalf("wrong 96x96 sensor plane: %+v, %+v", f.Coldest, f.Hottest)
+	}
+	if f.Temperature != nil || DecodeTemperatureSummary(payload, layout) != nil {
+		t.Fatal("inferred unverified temperature conversion for 96x96 variant")
+	}
+	if f.Image().Bounds().Dx() != 96 || f.Image().Bounds().Dy() != 96 {
+		t.Fatal("preview geometry leaked into heatmap")
+	}
+	for _, size := range [][2]uint32{{200, 96}, {96, 100}, {96, 96}, {240, 240}, {96, 392}, {256, 200}} {
+		if _, err := Plane(TOPDONTC001HIK, &pb.RawFormat{Fourcc: "YUYV", Width: size[0], Height: size[1], BytesPerLine: size[0] * 2}); err == nil {
+			t.Fatalf("accepted unverified layout %v", size)
+		}
+	}
+}

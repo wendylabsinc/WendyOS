@@ -1625,10 +1625,10 @@ func composeStartDetached(ctx context.Context, conn *grpcclient.AgentConnection,
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting service %s: %w", name, err)
+			return deviceRefusalOr(err, "starting service "+name)
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for service %s start: %w", name, err)
+			return deviceRefusalOr(err, "waiting for service "+name+" start")
 		}
 		cliLogln("Service %s started.", name)
 	}
@@ -1660,11 +1660,11 @@ func composeStartWatch(ctx context.Context, conn *grpcclient.AgentConnection, or
 				AppName: cfg.ContainerName(),
 			})
 			if err != nil {
-				errCh <- fmt.Errorf("starting service %s: %w", serviceName, err)
+				errCh <- deviceRefusalOr(err, "starting service "+serviceName)
 				return
 			}
 			if err := awaitStarted(stream); err != nil {
-				errCh <- fmt.Errorf("waiting for service %s start: %w", serviceName, err)
+				errCh <- deviceRefusalOr(err, "waiting for service "+serviceName+" start")
 				return
 			}
 			cancel()

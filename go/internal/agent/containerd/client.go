@@ -227,6 +227,7 @@ type Client struct {
 	// meshIngressMu serializes the check, iptables update, and claim so two
 	// concurrent starts cannot publish the same host port.
 	meshIngress   *meshingress.Registry
+	sketches      SketchOwnership
 	meshMDNS      meshMDNSService
 	meshIngressMu sync.Mutex
 	// A task-exit callback may arrive after a restart has published the same
@@ -1687,6 +1688,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		return err
 	}
 	specDuration = time.Since(phaseStarted)
+	// Before the old version is removed: a refused deploy leaves it running.
+	if err := c.checkHostPorts(ctx, appID, entCfg.Entitlements); err != nil {
+		return err
+	}
 	if validateOnly {
 		return nil
 	}
@@ -2105,8 +2110,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 // same injection. A warning naming a GPU would send someone debugging a
 // display-only app looking for an entitlement it never declared.
 func (c *Client) applyNvidiaCDI(spec *localoci.Spec) error {
-	mgr := cdi.NewManager()
-	cdiSpec, specPath, err := mgr.LoadNVIDIACDISpec()
+	cdiSpec, specPath, err := loadNvidiaCDISpec()
 	if err != nil {
 		// No nvidia-ctk-generated CDI spec. On Tegra/L4T this is expected when the
 		// device's nvidia-container-toolkit predates `nvidia-ctk cdi generate`
@@ -2245,10 +2249,15 @@ func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.
 	if err != nil {
 		return fmt.Errorf("encoding refreshed spec for %q: %w", appName, err)
 	}
-	// A field mask preserves labels/snapshot metadata updated by another
-	// lifecycle operation since Info was read.
-	_, err = c.client.ContainerService().Update(ctx, containers.Container{
-		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: newSpecJSON},
+	return c.persistSpecJSON(ctx, container, info, newSpecJSON)
+}
+
+// persistSpecJSON replaces the stored spec of a container that has no task
+// yet. A field mask preserves labels/snapshot metadata updated by another
+// lifecycle operation since Info was read.
+func (c *Client) persistSpecJSON(ctx context.Context, container containerd.Container, info containers.Container, specJSON []byte) error {
+	_, err := c.client.ContainerService().Update(ctx, containers.Container{
+		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: specJSON},
 	}, "spec")
 	return err
 }
@@ -2299,6 +2308,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	}
 	unlockNetwork := c.lockNetworkOperation(appName)
 	defer unlockNetwork()
+	if err := c.checkSketchBeforeStart(ctx, appName, appID); err != nil {
+		return nil, err
+	}
 	// Hold c.mu for the initial container/metadata snapshot. It is released for
 	// sandbox health checks and CNI cleanup, then reacquired around NewTask so a
 	// concurrent DeleteContainer cannot remove the container between the final
@@ -2399,6 +2411,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// network-operation lock above still serializes this container's lifecycle.
 	muHeld = false
 	c.mu.Unlock()
+	if err := c.checkHostPorts(ctx, appID, parseEntitlementsFromAnnotations(containerLabels)); err != nil {
+		return nil, err
+	}
 	if hasNANEntitlement(parseEntitlementsFromAnnotations(containerLabels)) {
 		unlockNAN := c.lockNANOperation(appID)
 		defer unlockNAN()
@@ -2413,6 +2428,13 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		}
 		nanStartLease.finishStart()
 	}()
+
+	// OS-update resilience for NVIDIA driver files: the stored spec bind-mounts
+	// each one by the exact name it had when the container was created, and an
+	// OS update renames them. Bring the spec in line with the host's current
+	// list before anything below reads it, so that later steps which write the
+	// spec back carry the refreshed mounts instead of overwriting them.
+	c.refreshNvidiaCDIForStart(ctx, container, appName, containerLabels)
 
 	// Reboot resilience for wendy-managed DNS files: host-network and meshed
 	// containers bind-mount /etc/resolv.conf from tmpfs paths written once at
@@ -4984,6 +5006,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 	// have changed regardless of errs — see StartContainer for the
 	// WithoutCancel/go rationale).
 	go c.SyncCameraLoopbacks(context.WithoutCancel(ctx))
+	if wholeApp && len(errs) == 0 && c.sketches != nil {
+		go c.sketches.ForgetApp(context.WithoutCancel(ctx), appID)
+	}
 
 	return errors.Join(errs...)
 }
