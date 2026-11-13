@@ -39,3 +39,19 @@ func TestJetsonUSBCommandsBelowBox(t *testing.T) {
 		}
 	}
 }
+
+func TestDragonwingUSBCommandsBelowBox(t *testing.T) {
+	for _, packaged := range []bool{true, false} {
+		command := cliupdate.InstallCommand("linux")
+		if packaged {
+			command = "sudo usermod -aG plugdev $USER"
+		}
+		assertCommandBelowBox(t, renderDragonwingUSBAccessHint("linux", packaged), command)
+	}
+	for _, goos := range []string{"darwin", "windows"} {
+		output := renderDragonwingUSBAccessHint(goos, false)
+		if strings.Contains(output, "curl ") || strings.Contains(output, "usermod ") {
+			t.Fatalf("Linux remedy on %s: %s", goos, output)
+		}
+	}
+}

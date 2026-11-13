@@ -46,12 +46,12 @@ func TestPackagedUdevRulesAndPlugdevGroup(t *testing.T) {
 	}
 }
 
-// The Linux access message is one sentence with one next step, and never asks
-// the user to create a group or write a rule.
-func TestLinuxUSBAccessStep(t *testing.T) {
+// The Linux access remedy still never asks the user to create a group or write
+// a rule; only its prose and command placement change.
+func TestLinuxUSBAccessHint(t *testing.T) {
 	for _, packaged := range []bool{true, false} {
-		got := linuxUSBAccessStep("Jetson", packaged)
-		for _, bad := range []string{"groupadd", "udev", "tee", "\n"} {
+		got, _ := linuxUSBAccessHint("Jetson", packaged)
+		for _, bad := range []string{"groupadd", "udev", "tee"} {
 			if strings.Contains(got, bad) {
 				t.Errorf("packaged=%v: must not contain %q: %q", packaged, bad, got)
 			}
@@ -60,10 +60,10 @@ func TestLinuxUSBAccessStep(t *testing.T) {
 			t.Errorf("packaged=%v: should offer sudo: %q", packaged, got)
 		}
 	}
-	if got := linuxUSBAccessStep("Jetson", true); !strings.Contains(got, "usermod -aG plugdev $USER") {
+	if _, got := linuxUSBAccessHint("Jetson", true); !strings.Contains(got, "usermod -aG plugdev $USER") {
 		t.Errorf("packaged: should say how to join plugdev: %q", got)
 	}
-	if got := linuxUSBAccessStep("Jetson", false); !strings.Contains(got, cliupdate.InstallCommand("linux")) {
+	if _, got := linuxUSBAccessHint("Jetson", false); !strings.Contains(got, cliupdate.InstallCommand("linux")) {
 		t.Errorf("unpackaged: should say how to install the package: %q", got)
 	}
 }

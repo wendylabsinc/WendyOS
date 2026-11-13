@@ -503,20 +503,6 @@ func wendyPackagedRule(name string) bool {
 	return false
 }
 
-// linuxUSBAccessStep is the one sentence a Linux user sees when the OS refuses
-// wendy the board over USB. With the package, the rules already cover the user
-// at this computer's desktop, so what is left is plugdev for other logins
-// (SSH, headless). Without it there are no rules, and the package is the fix.
-func linuxUSBAccessStep(device string, packaged bool) string {
-	if packaged {
-		return "Your user can't open the " + device + " over USB from this login; run " +
-			"sudo usermod -aG plugdev $USER and log in again, or run the same command with sudo."
-	}
-	return "This wendy was installed without its package, so it can't open the " + device +
-		" over USB; install the package with " + cliupdate.InstallCommand("linux") +
-		", or run the same command with sudo."
-}
-
 // linuxUSBAccessHint keeps the remedy's command separate from the boxed prose.
 func linuxUSBAccessHint(device string, packaged bool) (string, string) {
 	if packaged {
