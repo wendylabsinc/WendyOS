@@ -24,7 +24,9 @@ FIXTURE = ROOT / ".github/scripts/fixtures/driver-vm"
 SPEC = importlib.util.spec_from_file_location("driver_guardian", ROOT / ".github/scripts/run-owned-media-test.py")
 GUARDIAN = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GUARDIAN)
-BASE = "docker.io/library/fedora@sha256:b189269dfee735c54ebcd3b4e43ff2dc0d4a4b07855468970217c9df57968eb0"
+# Fedora 45 official amd64 manifest (2026-11-02); systemd >=260 is required
+# by the unchanged Builder apply script's --always-refresh option.
+BASE = "docker.io/library/fedora@sha256:53d138f25f6738257c78553d51369b662efc0e0eb1cd1556a2fe0ad5a115be88"
 BUILDER = "f72a1b354c80523dc2b092e52e38e44fe56c8d5a"
 SOURCES = {
     "recipes-core/wendyos-sysext-apply/files/wendyos-sysext-apply.sh": "ee68d5fdd1bf76378e221e94a58da3c016325e930ebdc73143d7721d31ece9e9",
