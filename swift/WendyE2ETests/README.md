@@ -85,6 +85,41 @@ WENDY_E2E_LEGACY_INTEGRATION=true \
     --filter "legacy integration tests"
 ```
 
+### Run the HTTP app lifecycle specs
+
+`WENDY_E2E_HTTP_APP=true` opts into uniquely named app fixtures from
+`.github/ci-tests/http-app-loop`. Select an explicit WendyOS device and an
+isolated CLI HOME. The fixtures build on that same device with `--build-host`,
+then remove only their exact app and image. The CLI host needs Python 3 and
+curl; the target needs its builder role and BuildKit daemon already available.
+The fixture never installs or enables a builder. Use a trusted device hostname
+or saved identity binding; a bare IP may be refused by identity verification.
+
+```bash
+WENDY_E2E_HTTP_APP=true bash Scripts/E2ETest.sh \
+  --no-managed-agent --agent-os wendyos \
+  --device-address my-device.local \
+  --cli-auth-config /private/path/e2e-auth.json \
+  --filter "responding HTTP" --filter "HTTP app" --filter "HTTP endpoint"
+```
+
+The positive lifecycle specs retain full executable bodies but are disabled
+pending validation on a supported builder; the current test Jetson has no
+BuildKit daemon and the CLI host has no container builder.
+
+The HTTP assertions verify app identity and version as well as a live response;
+stop/start checks also require a different process instance. Detached start
+must report unchecked readiness. The `--wait-ready` HTTP spec retains a full
+body but is disabled because the CLI rejects that flag with `--build-host`.
+It needs a supported builder path before it can be validated.
+
+When building is unavailable, the same opt-in allows selective real-device
+checks filtered by `rejects a missing application and preserves` and
+`rejects unsupported remote readiness`. To exercise the missing-builder failure
+as well, set `WENDY_E2E_NO_BUILDKIT=true` only for a target known to lack BuildKit
+and filter `reports unavailable remote builder`. These cases assert failure
+and unchanged inventory; they do not establish successful app lifecycle coverage.
+
 ## Test environment
 
 `Scripts/E2ETest.sh` is the preferred runner. It:

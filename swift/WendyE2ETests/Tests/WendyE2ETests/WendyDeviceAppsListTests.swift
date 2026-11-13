@@ -6,6 +6,26 @@ struct `'wendy device apps list'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     JSON inventory includes exactly one entry for a deployed HTTP app, with
+     its configured identity, version, running state, and port. The listed
+     endpoint serves that app's own identity in a real HTTP response.
+     */
+    @Test(
+        .enabled(if: httpAppTestsEnabled),
+        .disabled(
+            "Fixture blocked: Jetson build host has no BuildKit and the CLI host has no container builder; validate a supported builder path before enabling"
+        )
+    )
+    func `identifies the deployed and responding HTTP application`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withApp(cli: cli) { app in
+                try await app.requireState(cli, "RUNNING")
+                _ = try await app.response(cli)
+            }
+        }
+    }
+
+    /**
      Displays usage for `wendy device apps list`. The output includes the
      command synopsis, local flags, inherited global flags, and concise
      descriptions. Help exits successfully, writes to stdout, emits no
