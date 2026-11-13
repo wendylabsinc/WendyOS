@@ -252,11 +252,14 @@ func TestStaleBondDBusLifecycle(t *testing.T) {
 	for _, name := range []string{"key-error", "hollow-hid", "pair-rejected", "cancel-discovery", "pair-not-authorized"} {
 		t.Run(name, func(t *testing.T) {
 			p := newBondPeer(t)
+			p.mu.Lock()
 			p.hid, p.rejectPair, p.holdDiscovery = name == "hollow-hid", name == "pair-rejected", name == "cancel-discovery"
+			holdDiscovery := p.holdDiscovery
+			p.mu.Unlock()
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			cancelDone := make(chan struct{})
-			if p.holdDiscovery {
+			if holdDiscovery {
 				go func() {
 					defer close(cancelDone)
 					select {
@@ -267,7 +270,7 @@ func TestStaleBondDBusLifecycle(t *testing.T) {
 				}()
 			}
 			paired, err := (&BlueZManager{logger: zap.NewNop()}).Connect(ctx, bondAddress, name != "pair-not-authorized", false)
-			if p.holdDiscovery {
+			if holdDiscovery {
 				<-cancelDone
 			}
 			p.mu.Lock()
