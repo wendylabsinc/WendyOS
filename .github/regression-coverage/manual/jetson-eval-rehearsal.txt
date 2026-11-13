@@ -1,0 +1,169 @@
+Audit 2414: reserved Thor local-model evaluation
+
+Scope
+This is an operator-executed physical acceptance procedure. Generation reads and
+hashes local files and prepares a private project; it never contacts a device,
+starts Docker, downloads a model, or marks a physical case passed. The existing
+443 evaluator tests cover portable logic. This procedure adds the actual staged
+CLI, running Agent, Thor GPU/local model, tool guards and saved timeout results.
+It does not measure remote model providers or establish isolation from a hostile
+model. The production app is root with admin/build/host-network entitlements;
+the model can bypass the shim. Use an empty, reserved, recoverable lab Thor with
+no production credentials, unrelated apps, data or networks. The owner must
+authorize that exact serial and accept reflash recovery before deployment.
+
+Prepare exact inputs
+1. On a build host, make a clean checkout at the candidate's full published SHA.
+   Keep the entire checkout, including plugins/wendy-agentic-coding/skills.
+   Follow evals/agent-experience/stage-on-device.sh from that checkout. This is
+   a real linux/arm64 CGO CLI build, needs Docker and at least 6 GiB free, and uses
+   named module/build caches. Use an owner-reserved build host if those cache
+   names already belong to other work; do not delete/prune shared caches. Keep
+   its command/toolchain/base-image/build logs and hash .stage/wendy-linux-arm64.
+   Also build or select the host CLI from that same source and record its hash.
+   Do not use stale staged bytes merely because REVISION matches. cli_build must
+   link both binaries, compiler versions and actual build logs to this commit.
+
+2. Qualify the physical Thor over its reserved local console. Save actual output
+   of `cat /proc/device-tree/model`, `tr '\000' '\n' </proc/device-tree/compatible`,
+   `tr -d '\000' </proc/device-tree/serial-number`,
+   `cat /proc/sys/kernel/random/boot_id`, `cat /etc/os-release`,
+   `lsblk -o NAME,TYPE,SERIAL,UUID,MOUNTPOINTS`, `cat /proc/meminfo`, and `df -B1`.
+   Record the physical label/ECID from the owner's established board inventory,
+   firmware and exact running Agent executable hash. Obtain the Agent PID from
+   its actual service, resolve /proc/PID/exe and hash that file; do not assume a
+   PATH executable is the running service. Recheck PID/executable after hashing.
+   Save service unit/start identity and an independent build record. Use the
+   actual console and recovery recipe for that serial, not a discovered name.
+   Use a fresh lab installation without Cloud enrollment or production credentials.
+   The generated commands use a private CLI profile and skip Cloud app registration.
+   Verify no unrelated apps/volumes and record their inventories. Reserve at
+   least 45 GiB free target disk and 32 GiB MemAvailable for the 19 GB model, context,
+   results and build storage; production independently requires weights + 12 GiB.
+   If actual resources fall below these bounds, stop and qualify another trial.
+   Confirm operator egress can fetch the exact pinned Hugging Face bytes; avoid
+   private model tokens. The results may contain generated commands/device IDs.
+
+3. Create a private inventory JSON with these fields. All *_sha256 values are
+   real 64-character hashes; source_commit is a full 40-character commit. Records
+   are paths to nonempty owner-reviewed evidence files, not assertions alone.
+   Do not put credentials in this JSON.
+
+   {
+     "trial": "<fresh32lowercasehex>", "source_root": "/clean/candidate",
+     "source_commit": "<40hex>", "host_cli": "/build/wendy",
+     "host_cli_sha256": "<64hex>",
+     "staged_cli": "/clean/candidate/evals/agent-experience/.stage/wendy-linux-arm64",
+     "staged_cli_sha256": "<64hex>", "agent_sha256": "<64hex>",
+     "reserved_disposable": true, "empty_apps_and_volumes": true,
+     "board": {"device_type": "jetson-agx-thor", "soc": "tegra264",
+       "serial": "<physical label>", "device_tree_serial": "<observed>",
+       "ecid": "<observed>", "root_disk_serial": "<observed>",
+       "boot_id": "<observed>", "owner": "<responsible operator>",
+       "os_build": "<exact build>", "firmware": "<observed>",
+       "address": "<reserved direct IP:port>"},
+     "records": {"identity": "/records/identity.txt",
+       "authorization": "/records/authorization.txt", "recovery": "/records/recovery.txt",
+       "agent_build": "/records/agent-build.txt", "cli_build": "/records/cli-build.txt",
+       "resource_budget": "/records/resources.txt"}
+   }
+
+   Run `python3 .github/regression-coverage/manual/jetson-eval-rehearsal.py
+   INVENTORY NEW_OUTPUT`. Inspect evidence.json, commands.json and project.
+   Source admission requires a clean harness/skills tree at the supplied commit.
+   Output names one unique app and three fresh volumes. The only harness config
+   changes are that app identity/context, volume names and a 120s agent deadline.
+   EVAL_LIMIT=1 and EVAL_REPETITIONS=1 are explicit deployment arguments.
+   The actual Dockerfile/init/on_device implementation remains the candidate's.
+   It pins the Ollama image digest and BuildKit archive; apt dependencies remain
+   resolved at build, so the resulting container image digest is mandatory evidence.
+
+Execute and observe
+4. Recheck the same board/boot/Agent bytes at the console immediately before
+   deployment. Execute generated info/apps argv with the exact host CLI and
+   compare to the console identity. Reject stale names or mismatched endpoints.
+   Start a separate operator timer: deployment maximum 1800s, then maximum 3600s
+   from container start to finished pass, including download and model startup.
+   These are acceptance deadlines, not permissions to extend a hung run. A
+   detached host CLI deadline does not stop a target container: on any expiry,
+   execute generated stop, prove complete target task/cgroup drain, and preserve
+   failure evidence. If unreachable, use the qualified console/recovery path.
+   Each generated command runs under the pinned source guardian with a bounded
+   host process lifetime; verify/controls also have target-side GNU timeout.
+   From NEW_OUTPUT/project execute the generated deploy argv. Keep stdout/stderr
+   separately. Confirm the unique app, actual native architecture, fresh volumes,
+   exact deployed image digest and OCI config through the owner's containerd
+   inventory. Record CLI and Agent versions plus their already-qualified hashes.
+   Recheck project/input hashes against evidence.json before and after building.
+
+5. Poll generated pass/report/error at most once every 10s within the deadline.
+   A missing file while downloading is pending, never success. Save raw output
+   and the complete pass directory, model-server.log and last-error.txt if any.
+   Require real llama-server CUDA offload and actual GPU activity in the owner's
+   bounded tegrastats/nvidia-smi capture while baseline/model requests execute.
+   CPU fallback or a server that only becomes healthy cannot pass this case.
+   The pinned model is qwen3-coder-30b-a3b at revision
+   b17cb02dd882d5b6ab62fc777ad2995f19668350; its19GB GGUF hash/size are in the plan.
+   This is intentionally a bounded smoke pass, not a model-quality benchmark.
+
+6. After finished exit0, run generated verify (in-container timeout 600s). It
+   independently rehashes every model byte, checks the actual source/model/app
+   identity, nonzero measured baseline tokens/speed, one completed local attempt,
+   actual usage, cleanup and generated reports. The .verified download marker
+   alone is insufficient. Inspect that attempt's agent.stdout/proxy.jsonl/cli.jsonl
+   and report.json: trace requested tools, canned versus forwarded calls, model
+   outcome and any tool failures. A wrong model choice is a measured result, not
+   a harness pass rate to inflate. Missing usage, setup/timeout/infra failures or
+   a report that silently counts missing attempts cannot close normal acceptance.
+   Require at least one actual model request after baseline; its saved usage and
+   transcript must explain the recorded result. The procedure never injects a
+   model prediction or score. Any claim about a real device tool additionally
+   requires a forwarded request and its actual observed device result; canned
+   scenario calls remain classified as canned.
+
+7. Run generated controls (in-container timeout 240s), only after the model pass
+   has stopped its server. This invokes the actual candidate CLI to advertise
+   its tools and uses the production shim/MCP proxy to request stopping this
+   exact owned app. Require both logs to mark the request canned/not forwarded,
+   no policy error, and app/task PID plus Agent unchanged before/after. Production
+   guards return canned responses; a zero CLI exit is not itself a refusal proof.
+   A missing guard may stop this owned app; that is a failure, never retry it
+   against another app or issue an OS/network/enrollment mutation as a control.
+
+   The timeout case runs an actual CLI chat under production benchmark.trial.
+   A loopback HTTP peer receives the real completion request then deliberately
+   withholds its response. The 30s agent limit must produce status=timeout,
+   success=false and cleanup_ok=true in result.json. Production report() must
+   record one timeout, one unscored local attempt, zero successes and zero scored
+   attempts. The retained request proves this was not just slow CLI startup.
+   This tests timeout reporting on the physical app, not GPU timeout performance.
+   The loopback peer and CLI are bounded and joined; an outer control timeout or
+   incomplete drain is a failed case requiring owned app stop/recovery.
+
+Evidence and cleanup
+8. Export generated export argv's raw stdout to a private .tar file, stderr to
+   a separate log; do not let a JSON or terminal wrapper modify tar bytes. Bound
+   export to 300s. Hash the archive. Inspect it safely before extraction, retaining
+   the real image digest/OCI inventory, board+boot+Agent identity, source/project
+   hashes, model verification, GPU observations, full normal and control reports,
+   actual process/deadline records and operator acceptance notes. Recheck the
+   prepared project and running CLI hashes after execution; model/root can alter
+   writable files, so unexplained changes invalidate acceptance. Keep recordings,
+   model weights, images and build outputs outside Git. No external upload is
+   performed by this procedure. Review sensitive transcript contents before sharing.
+
+9. Execute generated stop then apps. At the console prove this app's actual
+   container task/cgroup has no live processes, llama-server released its GPU
+   allocation and no benchmark-created apps remain. Record actual IDs before
+   any removal; generated task artifacts are not necessarily only the outer app.
+   Remove only trial-owned apps after inspection, then generated remove for the
+   outer app. Preserve the named volumes until their evidence has been exported.
+   Use the qualified owner's recovery/reflash procedure to retire this disposable
+   device and its three exact volumes; do not invent a volume deletion API or
+   prune a shared store. If identity or drain is uncertain retain resources and
+   mark cleanup failed. No broad pkill, cache prune or host-service mutation.
+
+Acceptance stays not_run until the operator supplies all physical evidence.
+Mark the four cases independently; failed/unknown cases cannot inherit another
+case's success. Keep portable 443-test evidence separate from actual hardware,
+GPU performance, physical recovery and the model's empirical score.
