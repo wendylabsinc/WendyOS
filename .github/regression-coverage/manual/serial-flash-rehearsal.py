@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import sys
 
 ROOT=Path(__file__).resolve().parents[3]
 spec=importlib.util.spec_from_file_location('serial_common',Path(__file__).with_name('orin-firstboot-rehearsal.py'))
@@ -17,9 +18,12 @@ line=COMMON.line
 
 def generate(inventory,output):
     data=json.loads(Path(inventory).read_text());host=data['host'];board=data['board']
-    if host['os'] not in ('linux','macos') or host['reserved_account'] is not True:raise ValueError('reserved Unix account required')
+    if host['os'] not in ('linux','macos','windows') or host['reserved_account'] is not True:raise ValueError('reserved host account required')
     for key in ('identity','os_build','owner'):line(host[key])
-    if type(host['uid']) is not int or host['uid']<501:raise ValueError('ordinary reserved UID required')
+    if host['os']=='windows':
+        if not re.fullmatch(r'S-1-5-21-(?:[0-9]+-){3}[0-9]+',host['sid']):raise ValueError('exact reserved Windows SID required')
+        if not re.fullmatch(r'[a-f0-9-]{36}',host['machine_uuid']):raise ValueError('exact Windows machine UUID required')
+    elif type(host['uid']) is not int or host['uid']<501:raise ValueError('ordinary reserved UID required')
     if board['reserved'] is not True:raise ValueError('reserved board required')
     for key in ('serial','hardware_id','owner','model','recovery_instructions'):line(board[key])
     if not re.fullmatch('[a-z][a-z0-9-]{2,40}',board['device_name']):raise ValueError('unique device name required')
@@ -34,11 +38,21 @@ def generate(inventory,output):
     if board['cp210x']['vid_pid']!='10c4:ea60' or board['native']['vid_pid']!='303a:1001':raise ValueError('require actual CP210x and native Serial/JTAG pair')
     for transport in ('cp210x','native'):
         for key in ('path','usb_serial','location'):line(board[transport][key])
-        if not board[transport]['path'].startswith('/dev/'):raise ValueError('exact native serial path required')
+        if host['os']=='windows':
+            if not re.fullmatch(r'COM[1-9][0-9]*',board[transport]['path']):raise ValueError('exact Windows COM path required')
+            for key in ('instance_id','driver_version','driver_provider','driver_inf'):line(board[transport][key])
+            vid,pid=board[transport]['vid_pid'].split(':')
+            if not board[transport]['instance_id'].upper().startswith('USB\\VID_'+vid.upper()+'&PID_'+pid.upper()):raise ValueError('Windows PnP VID/PID mismatch')
+        elif not board[transport]['path'].startswith('/dev/'):raise ValueError('exact native serial path required')
     if board['cp210x']['path']==board['native']['path']:raise ValueError('different physical connectors required')
     for key in ('native_replug_path',):
-        if not line(board[key]).startswith('/dev/') or board[key]==board['native']['path']:raise ValueError('predeclare changed native path for replug trial')
+        valid=(re.fullmatch(r'COM[1-9][0-9]*',line(board[key])) if host['os']=='windows' else line(board[key]).startswith('/dev/'))
+        if not valid or board[key]==board['native']['path']:raise ValueError('predeclare changed native path for replug trial')
+    if host['os']=='windows':
+        line(board['native_replug_location'])
+        if board['native_replug_location']==board['native']['location']:raise ValueError('changed Windows USB location required')
     records={key:artifact(data[key]) for key in ('cli_binary','identity_record','recovery_record','blank_state_record','reinstall_state_record','app_review_record','main_manifest','firmware_manifest','firmware_binary')}
+    if host['os']=='windows':records['powershell_binary']=artifact(data['powershell_binary'])
     if not os.access(records['cli_binary']['path'],os.X_OK):raise ValueError('executable candidate CLI required')
     main=json.loads(Path(records['main_manifest']['path']).read_text());fm=json.loads(Path(records['firmware_manifest']['path']).read_text())
     firmware_id=selected['binary'].removeprefix('wendy_mcu_');entry=main['firmware'][firmware_id];version=entry['latest'];fw=fm['versions'][version]
@@ -60,7 +74,7 @@ def generate(inventory,output):
     # Private cache binds the reviewed bytes when the live manifest still selects
     # this exact asset. Manifest drift invalidates the trial; no pin flag exists.
     cached.write_bytes(Path(records['firmware_binary']['path']).read_bytes());cached.chmod(0o600)
-    env=['env','HOME='+str(out/'home'),'XDG_CACHE_HOME='+str(out/'cache'),'WENDY_CONFIG_DIR='+str(out/'cli-profile'),'WENDY_SECRET_STORE=file']
+    env=['env','HOME='+str(out/'home'),'XDG_CACHE_HOME='+str(out/'cache'),'WENDY_CONFIG_DIR='+str(out/'cli-profile'),'WENDY_SECRET_STORE=file','WENDY_ANALYTICS=false','WENDY_NO_UPDATE_CHECK=1']
     cli=env+[records['cli_binary']['path']]
     guardian=['python3',str(ROOT/'.github/scripts/run-owned-media-test.py'),'--timeout']
     commands={
@@ -70,16 +84,31 @@ def generate(inventory,output):
       'identity_after':guardian+['45','--']+cli+['--json','--device','wendy-lite:'+board['native_replug_path'],'device','info','--read-only'],
       'reinstall':guardian+['900','--']+cli+['--device','wendy-lite:'+board['native']['path'],'run','--prefix',str(project),'--skip-cloud-registration'],
     }
+    windows=None
     if host['os']=='linux':commands['usb_inventory']=['udevadm','info','--query=property','--name',board['native']['path']]
-    else:commands['usb_inventory']=['ioreg','-p','IOUSB','-l','-w','0']
+    elif host['os']=='macos':commands['usb_inventory']=['ioreg','-p','IOUSB','-l','-w','0']
+    else:
+        records['python_binary']=artifact(sys.executable)
+        windows_sources=[Path(__file__).with_name('serial-windows-run.py'),Path(__file__).with_name('serial-windows-inventory.ps1'),Path(__file__).with_name('ble-transport-run.py'),ROOT/'.github/scripts/test-linklocal-windows.py']
+        actions={}
+        for name,transport,source in [('install_cp210x','cp210x','install'),('install_native','native','install'),('identity_before','native','identity_before'),('identity_after','replug','identity_after'),('reinstall','native','reinstall'),('discover_native','native','discover'),('discover_cp210x','cp210x','discover'),('discover_absent','absent','discover'),('discover_replug','replug','discover')]:
+            argv=commands[source];start=argv.index(records['cli_binary']['path'])
+            actions[name]={'transport':transport,'timeout':int(argv[3]),'argv':argv[start:]}
+        windows={'actions':actions,'environment':{'HOME':str(out/'home'),'USERPROFILE':str(out/'home'),'LOCALAPPDATA':str(out/'cache'),'WENDY_CONFIG_DIR':str(out/'cli-profile'),'WENDY_SECRET_STORE':'file','WENDY_ANALYTICS':'false','WENDY_NO_UPDATE_CHECK':'1'},'supervisor':str(windows_sources[2]),'job_helper':str(windows_sources[3]),'snapshot':str(windows_sources[1])}
+        commands={name:[sys.executable,str(windows_sources[0]),str(out/'evidence.json'),name,'--confirm-board',board['serial'],'--output',str(out/(name+'-FIRST-UNUSED-TRIAL'))] for name in actions}
+
     guide=Path(__file__).with_suffix('.txt').read_text()
     guide+='\nExact candidate commands (generation did not execute them):\n'
-    for name,args in commands.items():guide+='\n'+name+':\n'+shlex.join(args)+'\n'
+    for name,args in commands.items():
+        rendered=('& '+' '.join("'"+part.replace("'","''")+"'" for part in args)) if host['os']=='windows' else shlex.join(args)
+        guide+='\n'+name+':\n'+rendered+'\n'
     guide+='\nSelected catalog board: '+board['catalog_board']+'; chip: '+board['chip']+'; version: '+version+'\nPrivate original firmware cache: '+str(cached)+'\n'
     (out/'procedure.txt').write_text(guide)
     (out/'commands.json').write_text(json.dumps(commands,indent=2)+'\n')
     paths=['go/internal/cli/commands/espflash.go','go/internal/cli/commands/os_install.go','go/internal/cli/commands/run.go','go/internal/cli/commands/wlite_variants.go','go/internal/shared/discovery/serial_discovery.go','go/internal/shared/discovery/serial_usb.go','go/internal/cli/liteclient/client.go']
     evidence={'audit_entries':['1768','1572'],'hardware_execution':'not_run','inventory':data,'inventory_record':artifact(str(Path(inventory).resolve())),'records':records,'app_sources':project_records,'sources':[artifact(str(ROOT/p)) for p in paths]+[artifact(str(Path(__file__))),artifact(str(Path(__file__).with_suffix('.txt')))],'generated':[artifact(str(out/p)) for p in ('commands.json','procedure.txt')],'firmware':{'id':firmware_id,'version':version,'cache':str(cached),'sha256':records['firmware_binary']['sha256']},'cases':[{'id':key,'status':'not_run','observations':[]} for key in ('host_board_identity','cp210x_first_flash','native_first_flash_reset','unplug_replug','reinstall_and_live_app','wrong_chip_refusal','restoration')]}
+    if windows:
+        evidence['windows']=windows;evidence['sources'] += [artifact(str(p)) for p in windows_sources]
     (out/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n');return evidence
 
 if __name__=='__main__':
