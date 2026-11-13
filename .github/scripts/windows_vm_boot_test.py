@@ -16,6 +16,18 @@ VM=importlib.util.module_from_spec(spec);spec.loader.exec_module(VM)
 
 
 class WindowsVMBootTests(unittest.TestCase):
+    def test_missing_tool_control_requires_exact_structured_launch_error(self):
+        import json
+        error={'code':'tool_not_found','exit':6,'retryable':False,'message':'starting qemu-system-aarch64: exec: "qemu-system-aarch64": executable file not found in %PATH%','next_steps':[]}
+        VM.validate_path_only_control(6,json.dumps({'error':error}))
+        for code,record in ((1,error),(124,error),(6,{**error,'code':'config_invalid'}),(6,{**error,'exit':1}),
+                            (6,{**error,'retryable':True}),(6,{**error,'message':'starting another-tool: executable file not found in %PATH%'}),
+                            (6,{**error,'message':'starting qemu-system-aarch64: firmware is missing'})):
+            with self.subTest(code=code,record=record),self.assertRaises(ValueError):
+                VM.validate_path_only_control(code,json.dumps({'error':record}))
+        for malformed in ('not JSON','{}','{"error":null}','{"error":[]}'):
+            with self.assertRaises(ValueError):VM.validate_path_only_control(6,malformed)
+
     def test_actual_admitted_subprocess_runs_only_after_job_assignment(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);receipt=root/'receipt';events=[]

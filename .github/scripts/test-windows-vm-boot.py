@@ -170,6 +170,21 @@ def validate_listener(record,state,qemu,port):
         raise ValueError('unexpected VM acceleration/network/run state')
 
 
+
+def validate_path_only_control(code,stderr):
+    # Missing executables use the CLI's documented machine error exit6, rather
+    # than a generic Cobra exit1. Demand the exact launch boundary as well.
+    try:record=json.loads(stderr)['error']
+    except (ValueError,KeyError,TypeError):raise ValueError('control did not emit a structured CLI error')
+    if not isinstance(record,dict):raise ValueError('control error is not an object')
+    message=record.get('message','')
+    if code!=6 or record.get('exit')!=6 or record.get('code')!='tool_not_found' or record.get('retryable') is not False:
+        raise ValueError('control did not reach the missing-tool contract')
+    if not isinstance(message,str) or not message.startswith('starting qemu-system-aarch64: exec: "qemu-system-aarch64": ') or 'executable file not found in %PATH%' not in message:
+        raise ValueError('control failed outside the historical bare-QEMU launch')
+    return record
+
+
 def execute(output):
     if os.name!='nt' or platform.machine().lower() not in ('amd64','x86_64') or os.environ.get('GITHUB_ACTIONS')!='true':
         raise RuntimeError('run only on the existing disposable x64 Windows CI runner')
@@ -233,9 +248,11 @@ def execute(output):
         owner.run('qemu-lookup',[lookup,qemu],20,env)
         # Restore historical bare executable launch. Private ProgramFiles is
         # populated, but PATH deliberately lacks QEMU. It must fail before boot.
-        before=owner.run('path-only-control',[control,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],30,env,expected=1)
-        before+=(output/'path-only-control.stderr.log').read_text(errors='replace')
-        if 'starting qemu-system-aarch64' not in before or 'executable file not found' not in before:raise RuntimeError('control failed outside historical executable lookup')
+        owner.run('path-only-control',[control,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],30,env,expected=6)
+        evidence['control_error']=validate_path_only_control(6,(output/'path-only-control.stderr.log').read_text(errors='replace'))
+        stopped=json.loads(owner.run('control-stopped',[cli,'vm','list','--json'],20,env))
+        if len(stopped)!=1 or stopped[0].get('name')!=name or stopped[0].get('state')!='stopped':
+            raise RuntimeError('historical launch failure left an active VM')
         evidence['control']='passed_expected_failure'
         boot=owner.start('console',[cli,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],env)
         info=None;boot_deadline=time.monotonic()+600;attempt=0
