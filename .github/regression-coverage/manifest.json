@@ -2323,6 +2323,16 @@
             ".github/scripts/test-rtps-multicast-isolation.sh"
           ],
           "result": "Actual per-interface multicast packet isolation passed6.02s with real loopback and wired namespace interfaces. Reverting socket membership filtering fails CROSS_INTERFACE_DISCOVERY by admitting the loopback writer on the wired participant. This closes the packet-filtering boundary only; observer, Patrol runtime, hosted scene/assets and remaining mixed-merge behaviors stay partial."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254252",
+          "tests": [
+            ".github/scripts/test-g1-coke-review.py",
+            ".github/scripts/test-coke-physical-cleanup.py",
+            ".github/scripts/test-coke-dla-package.py"
+          ],
+          "result": "Hosted G1 job passes42 locked review cases, actual SIGINT/SystemExit flock/socket/watchdog cleanup and historical swallowed-interruption control. Real pinned NVIDIA package extraction passes fresh/existing/corrupt/missing cases; the historical existing-file bypass fails exact library byte-identity admission. No hardware, DLA library execution or policy-inference accuracy claim. Hosted scene asset supply and remaining observer/cache/Patrol boundaries remain separately tracked."
         }
       ]
     },
@@ -4538,9 +4548,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1890",
       "title": "Run YAML-defined Hugging Face camera campaigns in the agent",
       "package": "14",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "This large mixed PR contains inference, certificate/session and CI fixes. Test presence across many packages does not establish coverage of every correction in the PR.",
-      "required_follow_up": "Require hosted YAML camera campaign runtime and both controls. Reconcile the broad merge\u2019s certificate/session/Cloud corrections against their own focused runtime evidence; retain physical camera and published-model acceptance separately.",
+      "required_follow_up": "Retain the reconciled fourteen software corrections and passing actual Agent startup, TLS policy, sensor tenant, kernel sample identity and managed campaign gates. Execute the exact reserved two-camera/published-model/restart procedure when physical setup is available; all hardware cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -4593,6 +4603,17 @@
             "go/internal/agent/mcusource/mtls_identity_transport_test.go"
           ],
           "result": "Hosted full race job passed all eight real TLS13 ML-DSA-policy cases and twelve sensor tenant TLS/gRPC cases. Historical missing-issuer-policy control admitted application bytes and failed both expected directions; pairing-derived tenant control failed exact intended peer boundaries. Unknown-own-scope actual Agent startup matrix still pending, so the mixed entry remains partial."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254125",
+          "artifact": 14015198249,
+          "tests": [
+            "go/internal/testfixture/agentscope/startup_linux_test.go",
+            ".github/scripts/test-agent-own-scope.py",
+            ".github/regression-coverage/1890-follow-up.json"
+          ],
+          "result": "All seven actual Agent process/container cases passed their expected boundaries. Known legacy/SPIFFE and explicit-off controls served exact-leaf mTLS RPC; unknown strict/grace stayed alive with production refusal and no mTLS/setup listener. Both historical downgrade controls served RPC before the named failed assertion. Exact source hashes match and cleanup_errors is empty. Independent review reconciled all fourteen original software corrections with existing runtime/protocol/persistence evidence or documented superseded/test-only changes. Physical two-camera/published-DETR/Agent-restart acceptance has the executable exact-target procedure; no hardware or public-model accuracy pass is claimed."
         }
       ]
     },

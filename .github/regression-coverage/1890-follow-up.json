@@ -1,8 +1,8 @@
 {
   "audit_key": "1890",
   "original_merge": "284058dfdfb7abdc586884d33a5556f6c1cf35ed",
-  "reviewed_root": "50ce4945a",
-  "method": "Original commit/source decomposition, exact hosted runtime artifacts and per-behavior evidence. Kernel sample identity passed at8b59c8dce; TLS policy and sensor tenant matrices passed at50ce4945a. Actual unknown-own-scope startup remains pending.",
+  "reviewed_root": "2debcbb5aad06e78d332dee33a167cc632614931",
+  "method": "Original fourteen-behavior decomposition reconciled against exact hosted runtime artifacts and scoped persistence/protocol tests. All software corrections covered; physical two-camera/published-model/restart acceptance has an executable procedure and remains not_run.",
   "items": [
     {
       "original_commit": "b42fdde4c",
@@ -31,14 +31,15 @@
     {
       "original_commit": "3dda11ee3",
       "behavior": "Unknown own identity cannot disable mTLS enforcement",
-      "status": "coverage_added_pending_ci",
+      "status": "verified_hosted_runtime",
       "tests": "go/internal/testfixture/agentscope/startup_linux_test.go; .github/scripts/test-agent-own-scope.py; .github/scripts/agent_own_scope_test.py; go/internal/agent/interceptor/mtls_test.go; rpc_authorization_test.go",
-      "scope": "Required existing startup job runs the actual Agent executable in seven separate network-none/cap-drop containers with private signed provisioning state. Unknown own scope under strict/grace must log the production refusal, stay alive and never expose mTLS/plaintext ports; known legacy/SPIFFE and explicit-off controls require real mTLS GetAgentVersion with exact seeded leaf. Restoring only the historical actual-main downgrade must serve RPC before the named failing assertion. Linux fixture compilation, four portable ownership/cancellation checks and source review pass; actual container matrix/control remains hosted pending. No installed-host, mesh-ingress, public PKI or Cloud claim.",
+      "scope": "Actual seven-container Agent startup matrix passes at2debcbb5a. Five normal cases verify exact-leaf authenticated RPC or the intended unknown-scope refusal with no listener. Both historical permissive controls actually serveRPC before failing the named assertion. Artifact14015198249 has matching source hashes and empty cleanup_errors. No deployed host, public PKI or physical acceptance claim.",
       "related_entries": [
         "2596"
       ],
       "evidence_urls": [
-        "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875"
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875",
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254125"
       ]
     },
     {
