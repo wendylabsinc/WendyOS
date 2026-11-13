@@ -66,6 +66,7 @@ SUITES = (
     "usb_arm_inventory_rehearsal_test.py",
     "tensorrt_restart_test.py",
     "camera_campaign_runtime_test.py",
+    "camera_campaign_rehearsal_test.py",
     "oci_retry_test.py",
     "signing_ci_test.py",
     "stagefile_images_test.py",

@@ -1,0 +1,166 @@
+{
+  "audit_key": "1890",
+  "original_merge": "284058dfdfb7abdc586884d33a5556f6c1cf35ed",
+  "reviewed_root": "44ef6f4f6",
+  "method": "read-only original commit diffs, current source/tests and existing manifest evidence; no new test execution",
+  "items": [
+    {
+      "original_commit": "b42fdde4c",
+      "behavior": "Camera loopback sample identity",
+      "status": "partial",
+      "tests": "go/internal/agent/services/hub_loopback_writer_test.go; Examples/WendyDataModelApp/test_wendydata.py",
+      "scope": "Checks byte-layout/flag helpers and example parser. New managed HF fixture does not read V4L2 timestamps. Need actual kernel dequeue sample-ID match against episode ledger; physical camera/published-model proof remains separate.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "b42fdde4c/d7e5341e7/c66651732/e94ff095b",
+      "behavior": "Review exclusions, complete batching, malformed-response repair and CI bootstrap",
+      "status": "covered_existing",
+      "tests": "api_review_test.py; security_review_test.py; review_diff_test.py",
+      "scope": "Required offline suite covers actual script behavior; bootstrap is workflow configuration, not a physical regression. Existing2260 evidence applies.",
+      "related_entries": [
+        "2260"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782"
+      ]
+    },
+    {
+      "original_commit": "3dda11ee3",
+      "behavior": "Unknown own identity cannot disable mTLS enforcement",
+      "status": "focused_tests_transport_residual",
+      "tests": "go/internal/agent/interceptor/mtls_test.go; rpc_authorization_test.go",
+      "scope": "Actual policy wrappers reject unknown scope using constructed TLSInfo. Source startup fails closed. Existing2596 real TLS role/tenant cases complement but do not exercise missing-own-scope Agent startup. A startup-process negative test would close that exact boundary.",
+      "related_entries": [
+        "2596"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875"
+      ]
+    },
+    {
+      "original_commit": "3dda11ee3",
+      "behavior": "Direct ML-DSA chain policy and unknown EKU rejection",
+      "status": "focused_tests_transport_residual",
+      "tests": "go/internal/agent/mtls/peer_chain_test.go:TestDirectMLDSAChainsEnforcePolicy; go/internal/shared/certs/peer_chain_test.go:TestPermitsUsageRejectsUnknownEKUs",
+      "scope": "Real signed certificate bytes exercise both production verifier callbacks; no complete socket handshake for malformed critical-extension/unknown-EKU matrix. Existing2596 runtime matrix proves valid issuer completion/roles only.",
+      "related_entries": [
+        "2596"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875"
+      ]
+    },
+    {
+      "original_commit": "3dda11ee3",
+      "behavior": "Notification and Cloud signer certificate-chain normalization",
+      "status": "covered_existing",
+      "tests": "go/internal/agent/services/notification_service_test.go:TestNotificationConnectionNormalizesCertificateChain; go/internal/cli/cloudrequest/sign_test.go:TestSignerNormalizesCertificateChain; notification_cloud_contract_test.go",
+      "scope": "Focused normalization tests plus actual verified Cloud mTLS notification delivery. Does not claim live deployed Cloud service.",
+      "related_entries": [
+        "2066",
+        "1894"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990"
+      ]
+    },
+    {
+      "original_commit": "3dda11ee3",
+      "behavior": "Renewed certificate persists only exact issuer/tenant session",
+      "status": "covered_focused_persistence",
+      "tests": "go/internal/cli/commands/certrenew_test.go:TestPersistRenewedCertificateSelectsExactSession",
+      "scope": "Real private config persistence/reload with two issuer/tenant collisions and legacy org cases; certificate values supplied by test. Does not prove remote renewal lifecycle.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "3dda11ee3",
+      "behavior": "Experimental direct ACME enrollment gate",
+      "status": "superseded_contract",
+      "tests": "go/internal/agent/services/provisioning_acme_test.go",
+      "scope": "Current production no longer has historical env gate. Current capability-readonly/config-before-EAB/durable-key guards supersede that initial rollout restriction; do not restore obsolete flag.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "4ba4a3f61",
+      "behavior": "OAuth refresh serialized across processes and session selection",
+      "status": "covered_existing_process",
+      "tests": "go/internal/cli/commands/auth_refresh_lock_test.go:TestOAuthRefreshAcrossProcesses/TestOAuthCheckpointSerializesWithConfigUpdateAcrossProcesses/TestOAuthRefreshPersistsOnlySelectedSession",
+      "scope": "Real child-process barrier and local rotating OAuth HTTP endpoint assert one refresh, durable checkpoint and selected-session isolation; required full commands race suite executes. No live account required.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "08e263576",
+      "behavior": "Cloud v2 UUID roster discovery and correct relay method",
+      "status": "covered_existing_transport",
+      "tests": "go/internal/cli/commands/cloud_discover_v2_test.go:TestCloudDiscoverJSONV2/TestCloudDiscoveryV2DoesNotUseRetiredRelay/TestCloudDiscoveryJSONPreservesPKIDeviceBinding",
+      "scope": "Real loopback gRPC ListAssets covers205-item pagination, online/all, empty, streaming failure, bounds and UUID binding. Actual method capture rejects retired relay. Request server is controlled; not deployed Cloud availability.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "2647087d8",
+      "behavior": "ACME CSR requests both TLS usages; reject unusable returned cert",
+      "status": "covered_existing_protocol",
+      "tests": "go/internal/agent/acmeenroll/acmeenroll_test.go:TestEnroll/TestEnrollRejectsUnusableAuthenticationUsages; provisioning_boot_transport_test.go",
+      "scope": "Actual HTTP ACME order/CSR/certificate protocol and returned cert usage checks; firstboot runtime confirms persisted identity. Physical NetworkManager separately qualified.",
+      "related_entries": [
+        "2805"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325859"
+      ]
+    },
+    {
+      "original_commit": "c66651732",
+      "behavior": "Sensor source tenant derives from local certificate and pinned peer identity",
+      "status": "covered_runtime_with_limits",
+      "tests": "go/internal/agent/mcusource/mtls_dialer_test.go; lite_camera_fixture_test.go; source_restart_fixture_test.go",
+      "scope": "Actual authenticated SensorLink stream/reconnect kernel fixtures complement per-pairing pin checks. Legacy numeric-org-only mismatch vs SPIFFE own-tenant remains exact test distinction to verify before declaring that negative complete.",
+      "related_entries": [
+        "2350",
+        "1858"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43315180056/job/131521484536",
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305"
+      ]
+    },
+    {
+      "original_commit": "fd0ecf698",
+      "behavior": "Picker callback return types",
+      "status": "compile_and_existing_callback",
+      "tests": "go/internal/cli/commands/auth_picker_test.go",
+      "scope": "Compile correction plus default callback tests; user requests non-UI focus, no GUI acceptance needed.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "510f1bcd2/e94ff095b",
+      "behavior": "Principal-aware VM identity, Qualcomm and E2E test drift",
+      "status": "test_only_alignment",
+      "tests": "go/internal/cli/commands/vm_identity_test.go; go/internal/agent/cdi/qualcomm_test.go",
+      "scope": "Changes repair expected fixtures after merge; not independent production defects.",
+      "related_entries": [],
+      "evidence_urls": []
+    },
+    {
+      "original_commit": "1890 inference",
+      "behavior": "Managed YAML campaign inference lifecycle",
+      "status": "local_runtime_hosted_pending",
+      "tests": "go/internal/agent/services/data_campaign_runtime_test.go; .github/scripts/test-camera-campaign-runtime.py",
+      "scope": "64eb53257 local real RPC/managed PyAV+DETR worker, red/blue generated pixels, durable service restart, recorder/removal and two controls. Published model, physical camera and GPU acceptance not implied.",
+      "related_entries": [
+        "2258"
+      ],
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430931049",
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498452"
+      ]
+    }
+  ]
+}

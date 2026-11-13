@@ -4173,6 +4173,15 @@
             ".github/scripts/fixtures/camera-campaign/README.txt"
           ],
           "result": "Local native race execution passed the actual CampaignDeploy gRPC, DataService/VideoService hub, ManagedFactory embedded Python/PyAV/Transformers worker and recorder using generated H264 red/blue scenes and a small local DETR model. Two sealed episodes across a manager/service restart retained encoded positive frames, prediction/input ledger and hashes. Camera disappearance/new-generation recovery preserved presence/cooldown; campaign removal joined the real worker. Historical lost-presence and missing-input-ledger controls fail their exact runtime boundaries. The existing inference-worker row executes this gate with no added runner. Mixed merge corrections, physical camera, published-model accuracy and GPU behavior are not closed by this fixture."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/camera-campaign-rehearsal.py",
+            ".github/regression-coverage/manual/camera-campaign-rehearsal.txt",
+            ".github/scripts/camera_campaign_rehearsal_test.py",
+            ".github/regression-coverage/1890-follow-up.json"
+          ],
+          "result": "Prepared an exact reserved-target physical procedure with two separately inventoried V4L2 cameras, independently reviewed published DETR checkpoint hashes, qualified empty/person scenes, retained media/model input ledger, outage/cooldown/new-camera observations and one authorized Agent restart without redeploy. All physical cases remain not_run. The committed14-behavior decomposition maps the original mixed merge to exact existing tests/evidence and retains real kernel sample-ID joining, full malformed-certificate TLS, unknown-own-scope startup and SensorLink own-tenant residuals. This entry remains partial; procedure readiness does not close its software gaps."
         }
       ]
     },
