@@ -294,7 +294,9 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 		close(streamDone)
 	}()
 	defer func() {
-		cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		// The busybox init can require the normal SIGTERM grace and SIGKILL
+		// escalation. Keep time for both phases and the output drain.
+		cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), stopGracePeriod+killWaitTimeout+5*time.Second)
 		defer stop()
 		if err := c.StopContainer(cleanupCtx, app); err != nil {
 			t.Error(err)
