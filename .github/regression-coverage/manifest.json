@@ -4150,10 +4150,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1890",
       "title": "Run YAML-defined Hugging Face camera campaigns in the agent",
       "package": "14",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "This large mixed PR contains inference, certificate/session and CI fixes. Test presence across many packages does not establish coverage of every correction in the PR.",
-      "required_follow_up": "Split the listed corrections into focused regression owners, including current Cloud identity and inference lifecycle fixtures.",
-      "evidence": []
+      "required_follow_up": "Require hosted YAML camera campaign runtime and both controls. Reconcile the broad merge\u2019s certificate/session/Cloud corrections against their own focused runtime evidence; retain physical camera and published-model acceptance separately.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/data_campaign_runtime_test.go",
+            ".github/scripts/test-camera-campaign-runtime.py",
+            ".github/scripts/fixtures/camera-campaign/README.txt"
+          ],
+          "result": "Local native race execution passed the actual CampaignDeploy gRPC, DataService/VideoService hub, ManagedFactory embedded Python/PyAV/Transformers worker and recorder using generated H264 red/blue scenes and a small local DETR model. Two sealed episodes across a manager/service restart retained encoded positive frames, prediction/input ledger and hashes. Camera disappearance/new-generation recovery preserved presence/cooldown; campaign removal joined the real worker. Historical lost-presence and missing-input-ledger controls fail their exact runtime boundaries. The existing inference-worker row executes this gate with no added runner. Mixed merge corrections, physical camera, published-model accuracy and GPU behavior are not closed by this fixture."
+        }
+      ]
     },
     {
       "key": "2137",
