@@ -474,6 +474,9 @@ type deviceIdentityRefusalError struct {
 	msg        string
 	diagnostic *devicePinDiagnostic
 	cause      error
+	// accept saves the identity the device presented, after the user
+	// confirmed it (see acceptChangedIdentity). nil for every other refusal.
+	accept func() error
 }
 
 func (e *deviceIdentityRefusalError) Error() string { return e.msg }
@@ -491,16 +494,16 @@ func refuseIdentity(format string, args ...any) *deviceIdentityRefusalError {
 	return &deviceIdentityRefusalError{msg: fmt.Sprintf(format, args...)}
 }
 
-// identityRefusal renders a wrong-device rejection. Same text in interactive,
-// JSON, and non-interactive modes — there is deliberately no "trust this?"
-// prompt, because a MITM warning that can be dismissed gets dismissed.
+// identityRefusal renders a wrong-device rejection. The front doors ask an
+// interactive user whether to trust the presented identity, as SSH does for a
+// changed host key; without a terminal it stays a refusal.
 func identityRefusal(pinKey string, im *certs.IdentityMismatchError) error {
 	saved, now := identityMismatchSides(im)
-	return refuseDevicePin(devicePinDiagnostic{
-		hostname: pinKey,
-		heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", pinKey),
-		details:  fmt.Sprintf("Saved: %s\nNow:   %s", saved, now),
-	})
+	var accept func() error
+	if im.GotPrincipal != "" || im.GotAsset != "" {
+		accept = saveChangedIdentity(pinKey, observedDeviceIdentity{mTLS: true, orgID: int(im.GotOrg), assetID: im.GotAsset, principal: im.GotPrincipal})
+	}
+	return refuseChangedIdentity(pinKey, fmt.Sprintf("Saved: %s\nNow:   %s", saved, now), accept)
 }
 
 // identityMismatchSides names the expected and presented identities. A SPIFFE
@@ -544,9 +547,12 @@ type noAuthenticatedEndpointError struct {
 	candidates []string
 	certSeen   bool
 	// diagnostic is set only when the device answered without TLS — the
-	// unprovisioned case, which is told how to unpin. Unwrap exposes it, styled
-	// like the identity refusals it then reads as.
+	// unprovisioned case. Unwrap exposes it, styled like the identity refusals
+	// it then reads as.
 	diagnostic *devicePinDiagnostic
+	// accept forgets the saved identity once the user confirms connecting to
+	// the device as unenrolled (see acceptChangedIdentity). Set with diagnostic.
+	accept func() error
 }
 
 func (e *noAuthenticatedEndpointError) Error() string { return e.msg }
@@ -656,12 +662,14 @@ func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, 
 				strings.Join(silent, ", "), strings.Join(hostsOf(plaintext), ", "))
 		}
 		diagnostic := devicePinDiagnostic{
-			hostname: pinKey,
-			heading:  fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
-			details:  details,
+			hostname:   pinKey,
+			heading:    fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
+			details:    details,
+			unenrolled: true,
 		}
 		failure.msg = diagnostic.message(false)
 		failure.diagnostic = &diagnostic
+		failure.accept = forgetSavedIdentity(pinKey)
 		return failure
 	}
 	var where string
@@ -925,41 +933,20 @@ func describeAddrFamilies(v4, v6 int) string {
 }
 
 // spkiRefusal renders the OTHER pin's rejection: the SPKI store's, which is
-// keyed by the certificate's own asset URN rather than by hostname and fires
-// when a device's public key changes while its pinned certificate is still
-// valid.
-//
-// Without this the store's PinMismatchError reached the user only as whatever
-// text survived gRPC's handshake wrapper — a message that names neither the
-// host as the user knows it nor any way out, leaving hand-editing
-// known_devices.json as the only recovery. The SPKI store has no hostname in
-// it, so the key comes from the dial: pinKey when there is one, the store's own
-// display name otherwise.
-//
-// The command it prints names pm.Key — the SPKI store's own key — not the
-// hostname, even though the hostname is what the user recognises. Naming the
-// hostname is what made this refusal a dead end for the two populations that
-// hit it most: the picker and `wendy device list` dial the IP first, so the
-// message named an IP that keys nothing and whose asset nothing in local state
-// can derive; and agents that never advertise `orgid` (the Swift macOS agent,
-// Linux agents before 2026-07-18) leave the discovery cache with no identity to
-// derive it from either. pm.Key is in hand at the moment of refusal and is
-// exactly what the store is keyed by, so `wendy device unpin <urn>` reaches the
-// entry directly — and clears any config pin naming the same identity with it.
+// keyed by the certificate's own identity rather than by hostname and fires
+// when a device's public key changes while its certificate still names the
+// same device. The SPKI store has no hostname in it, so the name comes from
+// the dial: pinKey when there is one, the store's own display name otherwise.
+// Accepting it forgets the old key, so the next connection records the new one.
 func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 	named := pinKey
 	if named == "" {
 		named = pm.DisplayName
 	}
-	// A store key is always present in a real mismatch; fall back to the name
-	// only so a hand-built error still points at something.
-	unpinArg := pm.Key
-	if unpinArg == "" {
-		unpinArg = named
-	}
-	refusal := refuseIdentity(
-		"device %q presented a different certificate key than the one pinned for %s (pinned %s, now %s); refusing to connect — if its certificate was legitimately reissued, run 'wendy device unpin %s'",
-		named, pm.Key, pm.Want, pm.Got, unpinArg)
+	refusal := refuseChangedIdentity(named, fmt.Sprintf("Identity: %s\nSaved key: %s\nNow key:   %s", pm.Key, pm.Want, pm.Got), func() error {
+		_, err := removeSPKIPinsReporting([]string{pm.Key})
+		return err
+	})
 	refusal.cause = pm
 	return refusal
 }

@@ -457,7 +457,7 @@ func TestWrongDeviceAbortsLadder(t *testing.T) {
 	if err == nil {
 		t.Fatal("ladder returned no error for a wrong-device rejection")
 	}
-	for _, want := range []string{`device "orin.local" identity changed`, "asset 42 in organization 7", "asset 43 in organization 7", "wendy device unpin orin.local", "changed this device's organization"} {
+	for _, want := range []string{`device "orin.local" identity changed`, "asset 42 in organization 7", "asset 43 in organization 7", "reinstalled or re-enrolled", changedIdentityStep} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %v, want the identity refusal to include %q", err, want)
 		}
@@ -519,8 +519,8 @@ func TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder(t *testing.T) {
 		if err == nil {
 			t.Fatal("no error for a wrong-device rejection")
 		}
-		if !strings.Contains(err.Error(), "wendy device unpin wendyos-calm-zinnia") {
-			t.Fatalf("err = %v, want it to name 'wendy device unpin wendyos-calm-zinnia' — the key that actually holds the pin", err)
+		if !strings.Contains(err.Error(), `device "wendyos-calm-zinnia.local" identity changed`) {
+			t.Fatalf("err = %v, want it to name wendyos-calm-zinnia.local — the key that actually holds the pin", err)
 		}
 	})
 
@@ -610,14 +610,10 @@ func TestSPKIMismatchAbortsLadderAndNamesUnpin(t *testing.T) {
 	if err == nil {
 		t.Fatal("ladder returned no error for an SPKI pin rejection")
 	}
-	// The command named must be one that clears the entry that caused THIS
-	// refusal. It used to assert "unpin orin.local", which reads right and does
-	// nothing: this test's own setup has no config pin and an empty discovery
-	// cache — the `wendy device list` shape — so a hostname-keyed unpin finds no
-	// key and no derivable asset, and the very next dial refuses identically.
-	// The store's key is the only name that reaches the entry.
-	if !strings.Contains(err.Error(), "wendy device unpin urn:wendy:org:7:asset:42") {
-		t.Fatalf("err = %v, want the SPKI refusal naming an unpin argument that actually clears the entry; naming the host leaves hand-editing known_devices.json as the only recovery", err)
+	// The refusal names the store's key, the only name that reaches the entry,
+	// and says how to accept the new key.
+	if !strings.Contains(err.Error(), "urn:wendy:org:7:asset:42") || !strings.Contains(err.Error(), changedIdentityStep) {
+		t.Fatalf("err = %v, want the SPKI refusal naming the identity and how to accept the new key", err)
 	}
 	// The host is still what the user recognises, so the refusal must keep
 	// naming it — the URN tells them what to run, not what broke.

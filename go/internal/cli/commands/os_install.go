@@ -2696,7 +2696,7 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 	if err != nil || plan == nil {
 		return nil, err
 	}
-	return mintProvisioningJSON(ctx, plan, *deviceName)
+	return mintProvisioningJSON(ctx, plan, deviceName)
 }
 
 // planProvisioning is the question half of resolveProvisioningJSON: it may
@@ -2716,8 +2716,9 @@ func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnr
 }
 
 // mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
-// plan, or a failure the person chose to continue past, bakes nothing.
-func mintProvisioningJSON(ctx context.Context, plan *acmePreEnrollPlan, deviceName string) ([]byte, error) {
+// plan, or a failure the person chose to continue past, bakes nothing. A name
+// changed because Cloud found it taken is written back to *deviceName.
+func mintProvisioningJSON(ctx context.Context, plan *acmePreEnrollPlan, deviceName *string) ([]byte, error) {
 	if plan == nil {
 		return nil, nil
 	}
@@ -2855,7 +2856,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 	}
 	// Reserving the name in Cloud waits for the erase confirm, so a declined
 	// install leaves nothing reserved and its retry can use the same name.
-	provisioningJSON, err := mintProvisioningJSON(ctx, plan, name)
+	provisioningJSON, err := mintProvisioningJSON(ctx, plan, &name)
 	if err != nil {
 		return diskInstallSettled{}, err
 	}

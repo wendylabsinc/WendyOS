@@ -227,6 +227,7 @@ type Client struct {
 	// meshIngressMu serializes the check, iptables update, and claim so two
 	// concurrent starts cannot publish the same host port.
 	meshIngress   *meshingress.Registry
+	sketches      SketchOwnership
 	meshMDNS      meshMDNSService
 	meshIngressMu sync.Mutex
 	// A task-exit callback may arrive after a restart has published the same
@@ -1687,6 +1688,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		return err
 	}
 	specDuration = time.Since(phaseStarted)
+	// Before the old version is removed: a refused deploy leaves it running.
+	if err := c.checkHostPorts(ctx, appID, entCfg.Entitlements); err != nil {
+		return err
+	}
 	if validateOnly {
 		return nil
 	}
@@ -2303,6 +2308,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	}
 	unlockNetwork := c.lockNetworkOperation(appName)
 	defer unlockNetwork()
+	if err := c.checkSketchBeforeStart(ctx, appName, appID); err != nil {
+		return nil, err
+	}
 	// Hold c.mu for the initial container/metadata snapshot. It is released for
 	// sandbox health checks and CNI cleanup, then reacquired around NewTask so a
 	// concurrent DeleteContainer cannot remove the container between the final
@@ -2403,6 +2411,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// network-operation lock above still serializes this container's lifecycle.
 	muHeld = false
 	c.mu.Unlock()
+	if err := c.checkHostPorts(ctx, appID, parseEntitlementsFromAnnotations(containerLabels)); err != nil {
+		return nil, err
+	}
 	if hasNANEntitlement(parseEntitlementsFromAnnotations(containerLabels)) {
 		unlockNAN := c.lockNANOperation(appID)
 		defer unlockNAN()
@@ -4995,6 +5006,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 	// have changed regardless of errs — see StartContainer for the
 	// WithoutCancel/go rationale).
 	go c.SyncCameraLoopbacks(context.WithoutCancel(ctx))
+	if wholeApp && len(errs) == 0 && c.sketches != nil {
+		go c.sketches.ForgetApp(context.WithoutCancel(ctx), appID)
+	}
 
 	return errors.Join(errs...)
 }
