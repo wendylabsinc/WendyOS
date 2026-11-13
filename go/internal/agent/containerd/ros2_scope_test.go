@@ -27,6 +27,9 @@ func lastEnv(env []string, key string) string {
 }
 
 func TestBuildROS2Env_Scopes(t *testing.T) {
+	previous := ros2HasExternalIPv4
+	ros2HasExternalIPv4 = func() (bool, error) { return true, nil }
+	t.Cleanup(func() { ros2HasExternalIPv4 = previous })
 	withPeripheralInterfaces(t, "eth1")
 	zero := 0
 	networkCyclone := `<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/><NetworkInterface autodetermine="true"/></Interfaces></General>` +
