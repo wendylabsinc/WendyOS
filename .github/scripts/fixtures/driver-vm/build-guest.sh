@@ -2,11 +2,10 @@
 # Runs only in the ordinary Docker image build, never on the CI host kernel.
 set -euo pipefail
 cd /fixture
-kver=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core)
-[[ $kver != *$'\n'* && -d /usr/src/kernels/$kver ]] || { echo 'kernel/devel mismatch' >&2; exit 1; }
-[[ $(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' kernel-devel) == "$kver" ]]
-systemd-sysext --help | grep -q -- --mutable
-systemd-sysext --help | grep -q -- --always-refresh
+# shellcheck source=.github/scripts/fixtures/driver-vm/preflight.sh
+source /fixture/preflight.sh
+driver_vm_preflight /usr/src/kernels
+kver=$driver_vm_kernel_release
 printf '%s\n' "$kver" > kernel-release
 rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > packages.txt
 # The exact packer consumes the same metadata fields as a released devkit.
