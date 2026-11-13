@@ -50,6 +50,7 @@ on:
       - 'Examples/ThermalNotify/**'
       - 'evals/**'
       - 'Examples/WendyDataModelApp/**'
+      - 'swift/WendyAgentCore/**'
   pull_request:
     paths:
       - '.gitattributes'
@@ -97,6 +98,7 @@ on:
       - 'Examples/ThermalNotify/**'
       - 'evals/**'
       - 'Examples/WendyDataModelApp/**'
+      - 'swift/WendyAgentCore/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -542,7 +544,7 @@ jobs:
       - name: Install network fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+          sudo apt-get install -y avahi-daemon iproute2 iptables dnsmasq-base iputils-ping util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
       - name: Install USB profile dependencies with isolated service policy
         run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
       - name: Require stale Bluetooth bond recovery over private D-Bus
@@ -719,6 +721,21 @@ jobs:
             ${{ runner.temp }}/usb-profile-dependencies/*.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Require slow gateway lease continuation through controller steps
+        timeout-minutes: 10
+        run: |
+          python3 .github/scripts/prepare-sharing-slow-lease.py "$RUNNER_TEMP/sharing-slow-lease"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT .github/scripts/test-sharing-slow-lease.sh "$RUNNER_TEMP/sharing-slow-lease/normal.test" "$RUNNER_TEMP/sharing-slow-lease/control.test" "$RUNNER_TEMP/sharing-slow-lease"
+      - name: Retain slow gateway lease evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sharing-slow-lease
+          path: |
+            ${{ runner.temp }}/sharing-slow-lease/*.log
+            ${{ runner.temp }}/sharing-slow-lease/*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
@@ -844,6 +861,23 @@ jobs:
         env:
           APP_PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/test-native-app.sh "$APP_PLATFORM"
+      - name: Require CLI enrollment through production Mac provisioning
+        if: matrix.platform == 'macos'
+        timeout-minutes: 25
+        run: |
+          python3 .github/scripts/run-owned-media-test.py --timeout 600 -- go build -o "$RUNNER_TEMP/mac-enrollment-cli" ./go/cmd/wendy
+          bash .github/scripts/test-mac-enrollment.sh "$RUNNER_TEMP/mac-enrollment" "$RUNNER_TEMP/mac-enrollment-swift-core" "$RUNNER_TEMP/mac-enrollment-cli"
+      - name: Retain Mac enrollment evidence
+        if: always() && matrix.platform == 'macos'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mac-enrollment
+          path: |
+            ${{ runner.temp }}/mac-enrollment/build.log
+            ${{ runner.temp }}/mac-enrollment/runtime.log
+            ${{ runner.temp }}/mac-enrollment/evidence.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Exercise WendyNotify HTTP and private notification socket
         if: matrix.platform == 'macos'
         timeout-minutes: 15
