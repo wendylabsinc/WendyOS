@@ -12,7 +12,10 @@ release_arch=$2
 [[ ! -e "$3" && ! -L "$3" ]] || { echo 'output must be a new binary path' >&2; exit 2; }
 release_output=$(realpath -m "$3")
 release_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-release_work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wendy-release-cli.XXXXXXXX")
+# Go records CGO_LDFLAGS in the binary's build info, so this is a fixed path:
+# a random one would differ in every release. mkdir refuses an existing path.
+release_work=${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wendy-release-cli
+mkdir -m 700 -- "$release_work"
 trap 'rm -rf -- "$release_work"' EXIT
 cd "$release_work"
 # The release workflow already pins this upstream libusb archive.
