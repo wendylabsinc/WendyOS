@@ -99,10 +99,13 @@ class WindowsVMBootTests(unittest.TestCase):
     def test_private_environment_removes_case_variants_and_keeps_host_tools_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            with patch.dict(os.environ,{'PROGRAMFILES':'foreign','ProgramFiles':'other','SystemRoot':str(root/'system'),'PATH':'foreign','Path':'other','WENDY_CONFIG_DIR':'user','Wendy_Token':'private'},clear=True):
+            with patch.dict(os.environ,{'PROGRAMFILES':'foreign','ProgramFiles':'other','ProgramW6432':'foreign64','ProgramFiles(x86)':'foreign32','SystemRoot':str(root/'system'),'PATH':'foreign','Path':'other','WENDY_CONFIG_DIR':'user','Wendy_Token':'private'},clear=True):
                 env=VM.private_environment(root,root/'private')
                 self.assertEqual([key for key in env if key.upper()=='PROGRAMFILES'],['PROGRAMFILES'])
                 self.assertEqual([key for key in env if key.upper()=='PATH'],['PATH'])
+                for name in ('PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432'):
+                    self.assertEqual([key for key in env if key.upper()==name],[name])
+                    self.assertEqual(env[name],str(root/'private'))
                 self.assertNotIn('Wendy_Token',env)
                 self.assertEqual(env['WENDY_CONFIG_DIR'],str(root/'config'))
                 self.assertEqual(os.environ['WENDY_CONFIG_DIR'],'user')

@@ -22,6 +22,7 @@ func main() {
 	record := map[string]any{
 		"goos": runtime.GOOS, "goarch": runtime.GOARCH, "pointer_bits": strconv.IntSize,
 		"program_files": os.Getenv("ProgramFiles"), "expected": expected,
+		"program_files_x86": os.Getenv("ProgramFiles(x86)"), "program_w6432": os.Getenv("ProgramW6432"),
 	}
 	info, statErr := os.Stat(expected)
 	if statErr != nil {
