@@ -2,6 +2,7 @@ package localmesh
 
 import (
 	"context"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -18,6 +19,9 @@ func ServiceRuntimeCredentials(t *testing.T) (*Credentials, *Credentials) {
 	return testCredentials(t)
 }
 
+// RenewServiceRuntimeCredentials renews the same device principal under a
+// fresh ML-DSA-65 key, as provisioning_renew.go always does. NotBefore stays
+// backdated here; pki-core stamps the issuance time instead.
 func RenewServiceRuntimeCredentials(t *testing.T, old *Credentials) *Credentials {
 	t.Helper()
 	leaf, err := x509.ParseCertificate(old.Certificate.Certificate[0])
@@ -27,12 +31,16 @@ func RenewServiceRuntimeCredentials(t *testing.T, old *Credentials) *Credentials
 	leaf.SerialNumber = big.NewInt(time.Now().UnixNano())
 	leaf.NotBefore = leaf.NotBefore.Add(time.Minute)
 	leaf.NotAfter = leaf.NotAfter.Add(time.Hour)
-	pki := testPKI()
-	der, err := x509.CreateCertificate(rand.Reader, leaf, pki.certificate, old.Signer.Public(), pki.key)
+	signer, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := x509.MarshalPKCS8PrivateKey(old.Certificate.PrivateKey)
+	pki := testPKI()
+	der, err := x509.CreateCertificate(rand.Reader, leaf, pki.certificate, signer.Public(), pki.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := x509.MarshalPKCS8PrivateKey(signer)
 	if err != nil {
 		t.Fatal(err)
 	}

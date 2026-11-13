@@ -79,8 +79,8 @@ func serviceIdentityEvidence(t *testing.T, old, renewed, receiver *localmesh.Cre
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before.RawSubjectPublicKeyInfo, after.RawSubjectPublicKeyInfo) || !after.NotAfter.After(before.NotAfter) {
-		t.Fatal("fixture renewal did not preserve the key and extend leaf validity")
+	if bytes.Equal(before.RawSubjectPublicKeyInfo, after.RawSubjectPublicKeyInfo) || !after.NotAfter.After(before.NotAfter) {
+		t.Fatal("fixture renewal did not use a fresh key and extend leaf validity")
 	}
 	report := map[string]any{"publisher": old.Device.Principal(), "receiver": receiver.Device.Principal(),
 		"old_sha256": fmt.Sprintf("%x", sha256.Sum256(before.Raw)), "renewed_sha256": fmt.Sprintf("%x", sha256.Sum256(after.Raw)),
