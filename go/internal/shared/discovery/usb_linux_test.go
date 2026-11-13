@@ -118,3 +118,57 @@ func TestDiscoverUSB_FromSysfsTree(t *testing.T) {
 		t.Errorf("expected the matched device to be flagged as a Wendy device, got %+v", devices[0])
 	}
 }
+
+func TestDiscoverUSB_RecordsTheNetworkInterface(t *testing.T) {
+	root := t.TempDir()
+	mkdev := func(name string, interfaces map[string][]string) {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range map[string]string{"idVendor": "1d6b", "idProduct": "0104", "manufacturer": "Wendy Labs Inc", "product": "WendyOS Device " + name} {
+			if err := os.WriteFile(filepath.Join(dir, k), []byte(v+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for usbInterface, nets := range interfaces {
+			if err := os.MkdirAll(filepath.Join(dir, usbInterface), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, net := range nets {
+				if err := os.MkdirAll(filepath.Join(dir, usbInterface, "net", net), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+
+	// A WendyOS gadget: network function on interface 0, serial console on 2.
+	mkdev("3-1", map[string][]string{"3-1:1.0": {"enx02a1b2c3d4e5"}, "3-1:1.1": nil, "3-1:1.2": nil})
+	// No network function bound.
+	mkdev("3-2", map[string][]string{"3-2:1.0": nil})
+	// Two network interfaces: which one a device answers on is not known.
+	mkdev("3-3", map[string][]string{"3-3:1.0": {"usb0"}, "3-3:1.2": {"usb1"}})
+
+	devices, err := discoverUSBAt(root)
+	if err != nil {
+		t.Fatalf("discoverUSBAt: %v", err)
+	}
+	got := make(map[string]string, len(devices))
+	for _, dev := range devices {
+		got[dev.Name] = dev.NetworkInterface
+	}
+	want := map[string]string{
+		"Wendy Labs Inc WendyOS Device 3-1": "enx02a1b2c3d4e5",
+		"Wendy Labs Inc WendyOS Device 3-2": "",
+		"Wendy Labs Inc WendyOS Device 3-3": "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("devices = %v, want %v", got, want)
+	}
+	for name, iface := range want {
+		if got[name] != iface {
+			t.Errorf("%s: NetworkInterface = %q, want %q", name, got[name], iface)
+		}
+	}
+}

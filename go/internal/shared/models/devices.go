@@ -39,6 +39,11 @@ type USBDevice struct {
 	Hostname          string `json:"hostname,omitempty"`
 	AgentVersion      string `json:"agentVersion,omitempty"`
 	IsWendyDevice     bool   `json:"isWendyDevice"`
+	// NetworkInterface is the host interface this device's USB network link
+	// appears as (e.g. "en11", "enx02a1b2c3d4e5"), when the scan could tell.
+	// The link is point-to-point, so a LAN device seen on that interface is
+	// this same board.
+	NetworkInterface string `json:"networkInterface,omitempty"`
 }
 
 func (d USBDevice) HumanReadable() string {
