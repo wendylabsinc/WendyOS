@@ -13,7 +13,7 @@ import (
 // Bubble Tea truncates View lines to the window width, even without a border.
 // These screens use its terminal handoff to print the complete instructions.
 func tourHasCommandOutput(phase tourPhase) bool {
-	return phase == phaseWelcome || phase == phaseAptInstall || phase == phaseCloud
+	return phase == phaseWelcome || phase == phaseAptInstall || phase == phaseCloud || phase == phaseError
 }
 
 type tourCommandOutputDoneMsg struct {
@@ -48,7 +48,7 @@ type tourCommandScreenModel struct {
 
 func (m tourCommandScreenModel) View() string {
 	if tourHasCommandOutput(m.phase) {
-		if m.phase == phaseCloud {
+		if m.phase == phaseCloud || m.phase == phaseError {
 			return wizHintStyle.Render("Press any key to exit")
 		}
 		if m.phase == phaseAptInstall {

@@ -196,3 +196,54 @@ func TestTourCompletionCommandsSurviveLiveRenderer(t *testing.T) {
 		}
 	}
 }
+
+func TestTourDiagnosticsSurviveLiveRenderer(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		wizard := newTourWizardModel()
+		wizard.phase, wizard.width, wizard.targetName = phaseError, width, "edge"
+		wizard.hostname = "192.0.2.10"
+		wizard.discoveryStarted = time.Now().Add(-3 * time.Minute)
+		discovery := wizard.cmdDiscoveryCheck()().(tourDiscoveryErrorMsg)
+		wizard.err = discovery.err
+		assertTourCommandsSurviveLiveRenderer(t, wizard, phaseError)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		wizard.ctx, wizard.foundAddr, wizard.projectPath = ctx, "edge.local", "/tmp/long sample path 'with quotes'"
+		readiness := wizard.cmdSampleReadiness()().(tourSampleReadyMsg)
+		cancel()
+		wizard.err = readiness.err
+		assertTourCommandsSurviveLiveRenderer(t, wizard, phaseError)
+		wizard.err = errors.New("transport refused with a diagnostic longer than the narrow screen\nprintf '%s\\n' 'complete literal diagnostic command with long arguments'")
+		assertTourCommandsSurviveLiveRenderer(t, wizard, phaseError)
+	}
+}
+
+func TestTourWelcomeSurvivesLiveRenderer(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		wizard := newTourWizardModel()
+		wizard.width = width
+		assertTourCommandsSurviveLiveRenderer(t, wizard, phaseWelcome)
+	}
+}
+
+func TestTourCommandOutputPreservesCancellationAndCause(t *testing.T) {
+	for _, key := range []tea.KeyMsg{key("q"), {Type: tea.KeyCtrlC}} {
+		m := tourCommandScreenModel{tourWizardModel: newTourWizardModel(), pending: true}
+		updated, cmd := m.Update(key)
+		if cmd == nil || !errors.Is(tourModelResult(updated.(tourCommandScreenModel).tourWizardModel), ErrUserCancelled) {
+			t.Fatal("pending output swallowed cancellation")
+		}
+	}
+	original, writeFailure := errors.New("original boot failure"), errors.New("terminal write failed")
+	wizard := newTourWizardModel()
+	wizard.phase, wizard.err = phaseError, original
+	m := tourCommandScreenModel{tourWizardModel: wizard, pending: true}
+	updated, cmd := m.Update(tourCommandOutputDoneMsg{phase: phaseError, err: writeFailure})
+	result := tourModelResult(updated.(tourCommandScreenModel).tourWizardModel)
+	if cmd == nil || !errors.Is(result, original) || !errors.Is(result, writeFailure) {
+		t.Fatal("output failure lost original diagnostic")
+	}
+	updated, cmd = m.Update(tourCommandOutputDoneMsg{phase: phaseCloud})
+	if cmd != nil || updated.(tourCommandScreenModel).displayed {
+		t.Fatal("stale callback changed current screen")
+	}
+}
