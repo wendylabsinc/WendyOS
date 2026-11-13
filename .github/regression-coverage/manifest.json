@@ -1808,10 +1808,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2124",
       "title": "cli: link-local USB-C host profile that follows the device across ports",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "USB profile argument construction has tests; actual NetworkManager replug/port migration is not verified by the helper tests.",
-      "required_follow_up": "Use two simulated USB interfaces and assert the profile reconnects without an interface-name pin.",
-      "evidence": []
+      "required_follow_up": "Require the real NetworkManager profile recreation/restart journey and interface-name-pinning control in the existing Linux networking job. Hosted privileged execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-usb-profile-namespace.sh",
+            ".github/scripts/usb_profile_namespace_test.py",
+            "go/internal/cli/commands/device_usbsetup_namespace_linux_test.go",
+            ".github/scripts/install-usb-profile-dependencies.py",
+            ".github/scripts/usb_profile_dependencies_test.py"
+          ],
+          "result": "Prepared production runUSBSetup against private NetworkManager and D-Bus, actual veth deletion/recreation with a new interface name/index and unchanged MAC, unrelated-MAC exclusion, saved profile UUID reuse, daemon restart and exact TCP payloads. Private mounts isolate Netplan, NetworkManager and udev rule writes; udev triggers are recorded rather than sent to physical devices. Normal and interface-pinning control Linux race builds and offline fixture checks pass. Dependency provisioning isolates service policy and host sockets, preserves existing policy bytes/identity and requires namespace-drain proof before removing an owned temporary policy. Actual privileged normal/control execution remains pending on the existing hosted networking runner; no physical USB pass is claimed."
+        }
+      ]
     },
     {
       "key": "2122",
@@ -2642,20 +2653,40 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2315",
       "title": "Stop the Mac agent crashing when viewing a thermal camera",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Capture-format tests protect the thermal format choice, but do not open the real thermal camera or exercise AVFoundation startup.",
-      "required_follow_up": "Add a recorded device-format fixture and an optional thermal capture smoke test under runtime concurrency checks.",
-      "evidence": []
+      "required_follow_up": "Run the generated exact-Mac thermal startup and repeated/concurrent decoded-capture procedure with recorded runtime concurrency instrumentation, fresh actual device formats and independent active-format observations.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-hardware-rehearsal.py",
+            ".github/regression-coverage/fixtures/topdon-2315-formats.json",
+            ".github/scripts/mac_camera_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared an exact-Mac companion to the existing packaged-camera procedure with seven additional cases, all not_run. Historical TOPDON dimensions are explicitly source-reported, with a fresh target format record required before physical capture. The plan pins instrumented build evidence and camera identities, covers repeated/concurrent thermal capture and actor diagnostics, and provides an explicitly invoked enrolled UVC authorization/range/read-write-readback/restore helper. Fresh human topology confirmation is required; every write uses --no-persist, bounded owned CLI processes and final restoration of the original control. Ten offline tests use synthetic records and inert child processes, including SIGTERM restoration and failed-restore reporting. Generation performs no hardware access or native permission changes; offline success is not a physical pass."
+        }
+      ],
+      "resolution": "Detailed executable physical Mac procedure is prepared. All hardware cases remain not_run."
     },
     {
       "key": "2222",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2222",
       "title": "Enable USB camera controls on enrolled Macs",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Swift tests cover controls and CLI capability routing. Camera UVC behavior on enrolled hardware still requires a live device.",
-      "required_follow_up": "Retain control-range tests and add an enrolled USB-camera control round trip.",
-      "evidence": []
+      "required_follow_up": "Run the explicit enrolled UVC helper with fresh physical camera/topology confirmation and owner-approved control, review server-side authorization refusal evidence, and verify original control restoration and unchanged persisted control settings.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-hardware-rehearsal.py",
+            ".github/regression-coverage/fixtures/topdon-2315-formats.json",
+            ".github/scripts/mac_camera_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared an exact-Mac companion to the existing packaged-camera procedure with seven additional cases, all not_run. Historical TOPDON dimensions are explicitly source-reported, with a fresh target format record required before physical capture. The plan pins instrumented build evidence and camera identities, covers repeated/concurrent thermal capture and actor diagnostics, and provides an explicitly invoked enrolled UVC authorization/range/read-write-readback/restore helper. Fresh human topology confirmation is required; every write uses --no-persist, bounded owned CLI processes and final restoration of the original control. Ten offline tests use synthetic records and inert child processes, including SIGTERM restoration and failed-restore reporting. Generation performs no hardware access or native permission changes; offline success is not a physical pass."
+        }
+      ],
+      "resolution": "Detailed executable physical Mac procedure is prepared. All hardware cases remain not_run."
     },
     {
       "key": "1924",

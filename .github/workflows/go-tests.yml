@@ -435,6 +435,8 @@ jobs:
         run: |
           sudo apt-get update --error-on=any
           sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+      - name: Install USB profile dependencies with isolated service policy
+        run: sudo -n env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
       - name: Require native Linux SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - name: Compile both packet backends with the race detector
@@ -576,6 +578,8 @@ jobs:
         run: bash .github/scripts/test-chunk-stall-ownership.sh "$RUNNER_TEMP/chunk-stall-ownership"
       - name: Require link-local traffic across competing interface routes
         run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
+      - name: Require USB profile migration across recreated interfaces
+        run: bash .github/scripts/test-usb-profile-namespace.sh "$RUNNER_TEMP/usb-profile-namespace"
       - name: Require broker uplink migration after active sessions drain
         run: bash .github/scripts/test-broker-uplink-namespace.sh "$RUNNER_TEMP/broker-uplink"
       - name: Preserve transfer and interface recovery evidence
@@ -588,6 +592,10 @@ jobs:
             ${{ runner.temp }}/chunk-stall-ownership/*.log
             ${{ runner.temp }}/linklocal-multi-interface/*.log
             ${{ runner.temp }}/broker-uplink/*.log
+            ${{ runner.temp }}/usb-profile-namespace/**/*.log
+            ${{ runner.temp }}/usb-profile-namespace/**/*.json
+            ${{ runner.temp }}/usb-profile-dependencies/*.log
+            ${{ runner.temp }}/usb-profile-dependencies/*.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Require wired-only automatic ROS discovery
