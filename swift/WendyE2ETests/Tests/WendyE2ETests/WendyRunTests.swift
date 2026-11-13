@@ -21,9 +21,9 @@ struct `'wendy run'` {
     )
     func `reports unavailable remote builder without creating an app`() async throws {
         try await HTTPAppFixture.scenario().run { cli, _ in
-            try await HTTPAppFixture.withProject(cli: cli) { app in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
                 try await cli.sh(
-                    "\(app.command) run --prefix \(app.app) \(app.buildHostArgument) --yes --detach"
+                    "\(app.command) run --prefix \(app.app) \(app.buildHostArgument) --skip-cloud-registration --detach"
                 ) { result in
                     #expect(result.status.isFailure)
                     #expect(result.stdout.isEmpty)
@@ -44,9 +44,9 @@ struct `'wendy run'` {
     @Test(.enabled(if: httpAppTestsEnabled))
     func `rejects unsupported remote readiness before changing deployed apps`() async throws {
         try await HTTPAppFixture.scenario().run { cli, _ in
-            try await HTTPAppFixture.withProject(cli: cli) { app in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
                 try await cli.sh(
-                    "\(app.command) run --prefix \(app.app) \(app.buildHostArgument) --yes --detach --wait-ready"
+                    "\(app.command) run --prefix \(app.app) \(app.buildHostArgument) --skip-cloud-registration --detach --wait-ready"
                 ) { result in
                     #expect(result.status.isFailure)
                     #expect(result.stderr.contains("--wait-ready"))

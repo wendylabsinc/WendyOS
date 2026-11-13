@@ -21,6 +21,13 @@ struct HTTPAppFixture: Sendable {
         let httpPort: Int?
     }
 
+    struct ImageCleanupUnverified: Error, CustomStringConvertible {
+        let app: String
+        var description: String {
+            "Unresolved owned image: app \(app), repository \(app):latest. Deployment may have imported an image without creating a container; app inventory cannot verify or remove that image. Exact image inspection/cleanup is required; no shared cache prune was attempted."
+        }
+    }
+
     struct Response: Decodable, Sendable {
         let app: String
         let instance: String
@@ -62,6 +69,7 @@ struct HTTPAppFixture: Sendable {
 
     static func withProject(
         cli: WendyE2ESession,
+        imageMayBeImported: Bool = true,
         body: @Sendable (HTTPAppFixture) async throws -> Void
     ) async throws {
         let device = try #require(
@@ -93,6 +101,11 @@ struct HTTPAppFixture: Sendable {
                 try await cli.sh(
                     "\(fixture.command) device apps remove \(quote(fixture.app)) --force --cleanup"
                 )
+            } else if imageMayBeImported {
+                // Container inventory cannot prove that an earlier image import was undone.
+                // The public CLI has no exact image-only cleanup command. Never prune
+                // shared caches or pretend that an absent container proves no image leaked.
+                throw ImageCleanupUnverified(app: fixture.app)
             }
             let cleaned = try await fixture.inventory(cli)
             try #require(!cleaned.contains { $0.name == fixture.app }, "Owned app must be removed")
@@ -108,6 +121,7 @@ struct HTTPAppFixture: Sendable {
     func inventory(_ cli: WendyE2ESession) async throws -> [App] {
         let result = try await cli.sh("\(command) device apps list") { result in
             try result.requireSuccess()
+            #expect(result.stderr.isEmpty)
             return result
         }
         return try JSONDecoder().decode([App].self, from: Data(result.stdout.utf8))
@@ -121,10 +135,17 @@ struct HTTPAppFixture: Sendable {
         #expect(apps[0].httpPort == port)
     }
 
-    func response(_ cli: WendyE2ESession, endpoint: String? = nil) async throws -> Response {
-        // Retry real HTTP, bounded to 20 seconds, with an exact identity check below.
+    func response(
+        _ cli: WendyE2ESession,
+        endpoint: String? = nil,
+        retryStartup: Bool = true
+    ) async throws -> Response {
+        // Detached start acknowledges no readiness, so only that path may poll startup.
+        let retry =
+            retryStartup
+            ? "--retry 20 --retry-delay 1 --retry-connrefused --retry-max-time 20" : "--retry 0"
         let result = try await cli.sh(
-            "curl --fail --silent --show-error --retry 20 --retry-delay 1 --retry-connrefused --retry-max-time 20 --max-time 2 \(Self.quote(endpoint ?? url))"
+            "curl --fail --silent --show-error \(retry) --max-time 2 \(Self.quote(endpoint ?? url))"
         ) { result in
             try result.requireSuccess()
             return result
@@ -193,7 +214,7 @@ struct HTTPAppFixture: Sendable {
     private func deploy(_ cli: WendyE2ESession, waitReady: Bool) async throws {
         let flags = waitReady ? "--wait-ready --readiness-timeout 20s" : ""
         try await cli.sh(
-            "\(command) run --prefix \(Self.quote(app)) --build-host=\(Self.quote(device)) --yes --detach --no-restart \(flags)"
+            "\(command) run --prefix \(Self.quote(app)) --build-host=\(Self.quote(device)) --skip-cloud-registration --detach --no-restart \(flags)"
         ) { result in
             try #require(result.status.isSuccess)
             let output = try JSONDecoder().decode(RunResult.self, from: Data(result.stdout.utf8))
@@ -204,7 +225,14 @@ struct HTTPAppFixture: Sendable {
             let components = try #require(URLComponents(string: endpoint))
             #expect(components.scheme == "http")
             #expect(components.port == port)
-            _ = try await response(cli, endpoint: endpoint + "/ready")
+            if waitReady {
+                // Check the declared TCP readiness condition immediately. Retrying here
+                // would conceal a CLI that reports ready before the port accepts connections.
+                try await cli.sh(
+                    "python3 -c \(Self.quote("import socket; s=socket.socket(); s.settimeout(0.2); assert s.connect_ex((\(String(reflecting: device)), \(port))) == 0, 'CLI claimed readiness before declared TCP probe passed'"))"
+                )
+            }
+            _ = try await response(cli, endpoint: endpoint + "/ready", retryStartup: !waitReady)
         }
     }
 

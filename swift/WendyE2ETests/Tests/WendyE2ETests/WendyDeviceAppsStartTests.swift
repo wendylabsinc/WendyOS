@@ -13,7 +13,7 @@ struct `'wendy device apps start'` {
     @Test(.enabled(if: httpAppTestsEnabled))
     func `rejects a missing application and preserves deployed app state`() async throws {
         try await HTTPAppFixture.scenario().run { cli, _ in
-            try await HTTPAppFixture.withProject(cli: cli) { app in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
                 try await cli.sh("\(app.command) device apps start \(app.app) --detach") { result in
                     #expect(result.status.isFailure)
                     #expect(result.stderr.contains(app.app))
