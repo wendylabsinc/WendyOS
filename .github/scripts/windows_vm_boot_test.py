@@ -96,8 +96,23 @@ class WindowsVMBootTests(unittest.TestCase):
                 if body==b'exact payload':self.assertEqual(target.read_bytes(),body)
         with self.assertRaises(ValueError):VM.NoRedirect().redirect_request(None,None,302,'',{},'https://foreign.invalid/')
 
+    def test_collision_and_restart_require_saved_bounded_port(self):
+        VM.validate_lifecycle_port('collision',50053,{'agentPort':50053},None)
+        VM.validate_lifecycle_port('restart',50053,{'agentPort':50053},{'agentPort':50053})
+        for phase,port,meta,first in (
+            ('collision',50051,{'agentPort':50051},None),
+            ('collision',50054,{'agentPort':50054},None),
+            ('collision',50067,{'agentPort':50067},None),
+            ('collision',50053,{'agentPort':50051},None),
+            ('restart',50051,{'agentPort':50051},{'agentPort':50053}),
+            ('restart',50053,{'agentPort':50053},None),
+            ('unknown',50053,{'agentPort':50053},None),
+        ):
+            with self.subTest(phase=phase,port=port),self.assertRaises(ValueError):
+                VM.validate_lifecycle_port(phase,port,meta,first)
+
     def test_guest_and_listener_cannot_accept_an_unrelated_host_endpoint(self):
-        guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'0.20.2','version':'recorded agent'}
+        guest={'hostname':'fixture-vm','publicKey':'fixture-public-key','cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'0.20.2','version':'recorded agent'}
         VM.validate_guest(guest)
         for key in guest:
             with self.subTest(key=key),self.assertRaises(ValueError):VM.validate_guest(dict(guest,**{key:''}))

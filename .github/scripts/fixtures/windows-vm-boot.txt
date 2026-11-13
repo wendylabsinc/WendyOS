@@ -88,3 +88,16 @@ It does not exercise WinGet's machine-wide installer, interactive prompt renderi
 WSL2, physical USB, enrolled-agent TLS, or automatic Windows VM detachment (which
 is explicitly unsupported in production). Existing installer-policy tests remain
 separate from the real package extraction and VM boot proof.
+
+VM lifecycle extension for2270/2060:
+The same private guest now boots twice. The first foreground start omits --port
+while the fixture owns a live listener on default50051. Actual CLI runstate,
+metadata and kernel listener ownership must agree on a later bounded port span.
+After Ctrl-A x joins the owned QEMU/CLI and both VM ports can be rebound, the
+fixture closes only its default-port obstruction. Restarting the SAME disk with
+--port still omitted must keep the saved fallback, create a new run timestamp,
+reach the real pinned WendyOS Agent again and drain before removal. No extra
+artifact download, VM disk, QEMU installation or runner is introduced; the same
+25-minute overall deadline applies and must fail rather than skip an incomplete
+second boot. Windows automatic detached start/QMP app forwarding is explicitly
+unsupported in production; this does not pretend to exercise those Unix paths.
