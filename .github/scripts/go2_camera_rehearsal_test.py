@@ -50,6 +50,11 @@ class Go2PhysicalProcedure(unittest.TestCase):
             self.assertEqual(manifest['env']['GO2_CAMERA_NODE'],'/dev/video128')
             guide=(root/'plan/procedure.txt').read_text()
             self.assertIn('Recorded service replay remains pending',guide)
+            # Nothing that changes the target may be listed as read-only.
+            read_only,changing=guide.split('\nExact read-only commands:\n')[1].split('\nExact commands that change the target')
+            self.assertEqual([l.split(': ')[0] for l in read_only.splitlines()],['device_info','cameras','apps_before_and_after','owned_consumer_logs'])
+            for word in (' run ',' remove ','--force','--yes','--detach'):self.assertNotIn(word,read_only)
+            self.assertEqual([l.split(': ')[0] for l in changing.splitlines()[1:]],['deploy_owned_consumer','remove_owned_consumer'])
 
     def test_wrong_camera_ambiguous_identity_and_unpinned_image_refuse(self):
         for case in ['wrong-camera','ambiguous-camera','image']:

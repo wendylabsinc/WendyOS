@@ -76,7 +76,11 @@ def generate(inventory,output):
               'remove_owned_consumer':base+['device','apps','remove',app_id,'--force']}
     (out/'commands.json').write_text(json.dumps(commands,indent=2)+'\n')
     guide=Path(__file__).with_suffix('.txt').read_text().replace('@PLAN@',shlex.quote(str(out))).replace('@NODE@',target['node']).replace('@NONCE@',nonce)
-    guide+='\nExact read-only commands:\n'+'\n'.join(name+': '+shlex.join(cmd) for name,cmd in commands.items())+'\n'
+    # deploy creates the owned app and remove deletes it; neither is read-only.
+    changing=('deploy_owned_consumer','remove_owned_consumer')
+    listing=lambda names:'\n'.join(name+': '+shlex.join(commands[name]) for name in names)+'\n'
+    guide+='\nExact read-only commands:\n'+listing([name for name in commands if name not in changing])
+    guide+='\nExact commands that change the target (run only at steps5 and7, for this generated app ID):\n'+listing(changing)
     (out/'procedure.txt').write_text(guide)
     plan['generated_sha256'].update({name:artifact(out/name)['sha256'] for name in
         ['capture-cli.sh','go2-record-cdr.py','go2-recorded-replay.txt','commands.json','procedure.txt']})
