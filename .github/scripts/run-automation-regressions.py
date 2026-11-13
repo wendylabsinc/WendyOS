@@ -32,6 +32,7 @@ SUITES = (
     "gpu_hardware_test.py",
     "go2_camera_rehearsal_test.py",
     "watch_container_admission_test.py",
+    "driver_lifecycle_vm_test.py",
     "npu_hardware_test.py",
     "orin_wpa3_rehearsal_test.py",
     "orin_seed_rehearsal_test.py",
