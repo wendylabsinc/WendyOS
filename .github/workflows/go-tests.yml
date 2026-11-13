@@ -49,6 +49,7 @@ on:
       - 'Examples/WendyNotify/**'
       - 'Examples/ThermalNotify/**'
       - 'evals/**'
+      - 'Examples/WendyDataModelApp/**'
   pull_request:
     paths:
       - '.gitattributes'
@@ -95,6 +96,7 @@ on:
       - 'Examples/WendyNotify/**'
       - 'Examples/ThermalNotify/**'
       - 'evals/**'
+      - 'Examples/WendyDataModelApp/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -870,7 +872,7 @@ jobs:
       - name: Install camera and GStreamer fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules patch libelf-dev gcc-13
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules patch libelf-dev gcc-13 python3-venv
           python3 .github/scripts/prepare-hosted-audio-modules.py
           grep -qx 'WENDY_HOSTED_AUDIO=unavailable' "$GITHUB_ENV" || modinfo snd-aloop
           gst-inspect-1.0 fakesrc
@@ -1005,6 +1007,18 @@ jobs:
         with:
           name: go2-h264-loopback
           path: ${{ runner.temp }}/wendy-go2-h264.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require kernel camera sample identity through model recording
+        timeout-minutes: 10
+        run: bash .github/scripts/test-v4l2-sample-ledger.sh
+      - name: Retain kernel camera sample identity evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: v4l2-sample-ledger
+          path: ${{ runner.temp }}/wendy-v4l2-ledger.*/*.log
           if-no-files-found: ignore
           retention-days: 7
 
