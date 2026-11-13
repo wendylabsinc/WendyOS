@@ -1,4 +1,4 @@
-"""Prepare a target-only address fixture using the real CLI in a disposable HOME."""
+"""Prepare target-only untrusted address hints with the CLI's saved identity binding."""
 
 import argparse
 import ipaddress
@@ -33,14 +33,23 @@ def target_cache(document, target):
     ipaddress.ip_address(entry["ip"].split("%", 1)[0])
     if type(entry["port"]) is not int or not 1 <= entry["port"] <= 65535:
         raise ValueError("invalid cached port")
-    if entry.get("mtls") is not True:
-        raise ValueError("device cache fixture requires an authenticated mTLS target")
-    # Keep the CLI's complete entry, including org, mTLS, interface and age.
+    # Keep routing metadata, never interpret the cached mTLS bit as proof.
     return {"version": 1, "devices": entries}
+
+
+def require_target_binding(auth_config, target):
+    config = json.loads(Path(auth_config).read_text())
+    host = urlsplit("//" + target).hostname
+    pin = config.get("devicePins", {}).get(normalized_host(host), {})
+    if not isinstance(pin.get("principal"), str) or not pin["principal"]:
+        raise ValueError("auth fixture requires an existing saved device principal for the explicit target")
+    # The CLI owns principal parsing and certificate verification. Cache aliases
+    # cannot supply or replace this selected-name binding (dial_target.go).
 
 
 def prepare(cli, auth_config, target, fixture, output):
     started = time.monotonic()
+    require_target_binding(auth_config, target)
     fixture = Path(fixture)
     if fixture.resolve() in {
         (Path.home() / ".wendy/devices.json").resolve(),
@@ -65,7 +74,7 @@ def prepare(cli, auth_config, target, fixture, output):
             (config_dir / "devices.json").write_text(json.dumps(seed))
         # No TLS-session cache, private keys or pin store are copied from HOME.
         result = subprocess.run(
-            [cli, "--json", "--device", target, "device", "info"],
+            [cli, "--json", "--device", target, "device", "info", "--read-only"],
             env={**os.environ, "HOME": home, "WENDY_CONFIG_DIR": str(config_dir), "WENDY_ANALYTICS": "false"},
             check=True, stdout=subprocess.PIPE, text=True, timeout=PREFLIGHT_TIMEOUT_SECONDS,
         )
