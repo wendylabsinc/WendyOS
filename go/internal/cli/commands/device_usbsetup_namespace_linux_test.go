@@ -176,6 +176,15 @@ func TestUSBProfileFollowsDeviceAcrossInterfaceRecreation(t *testing.T) {
 	if !filepath.IsAbs(evidence) {
 		t.Fatal("absolute evidence path required")
 	}
+	// The namespace owns veth links, not a physical USB gadget. Supply only
+	// that hardware classification; keep interface lookup, MAC selection,
+	// NetworkManager persistence and packet delivery on their real paths.
+	classifyGadget := isWendyUSBGadget
+	t.Cleanup(func() { isWendyUSBGadget = classifyGadget })
+	isWendyUSBGadget = func(name string) bool {
+		link, err := net.InterfaceByName(name)
+		return err == nil && name == "usbport0" && link.HardwareAddr.String() == "02:00:00:00:21:24"
+	}
 	write := func(path, content string) {
 		t.Helper()
 		mode := os.FileMode(0600)
