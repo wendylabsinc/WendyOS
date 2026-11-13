@@ -56,7 +56,11 @@ func TestVMOwnedLifecycle(t *testing.T) {
 	defer func() { jsonOutput = oldJSON }()
 	ctx, cancel := context.WithTimeout(context.Background(), 13*time.Minute)
 	defer cancel()
+	allowQMPDrain := true
 	defer func() {
+		if !allowQMPDrain {
+			return
+		} // wrapper drains after this test process exits
 		st, e := s.Status(name)
 		if e != nil {
 			t.Errorf("VM_DRAIN_UNKNOWN: %v", e)
@@ -116,6 +120,19 @@ func TestVMOwnedLifecycle(t *testing.T) {
 	}
 	waitCtx, waitCancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
+	waiterJoined := false
+	defer func() {
+		waitCancel()
+		if !waiterJoined {
+			select {
+			case <-done:
+				waiterJoined = true
+			case <-time.After(4 * time.Second):
+				allowQMPDrain = false
+				t.Error("VM_DRAIN_UNKNOWN: simulator boot waiter did not join before QMP cleanup")
+			}
+		}
+	}()
 	go func() { done <- startSimulatorFn(waitCtx, name) }()
 	// Observe the actual production wait stack before canceling. A scheduler
 	// delay must not turn cancellation before the operation starts into proof.
@@ -124,6 +141,7 @@ func TestVMOwnedLifecycle(t *testing.T) {
 	for time.Now().Before(waitDeadline) {
 		select {
 		case e := <-done:
+			waiterJoined = true
 			waitCancel()
 			t.Fatalf("boot waiter returned before cancellation: %v", e)
 		default:
@@ -148,6 +166,7 @@ func TestVMOwnedLifecycle(t *testing.T) {
 	waitCancel()
 	select {
 	case e := <-done:
+		waiterJoined = true
 		if !errors.Is(e, context.Canceled) {
 			t.Fatalf("VM_CANCEL_RECOVERY: expected cancellation, got %v", e)
 		}
