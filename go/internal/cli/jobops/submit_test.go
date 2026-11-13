@@ -191,3 +191,35 @@ func TestSubmitWorkloadLeadsItsOwnProcessGroup(t *testing.T) {
 		}
 	})
 }
+
+func TestSubmitDeadlineSignalsWorkloadOnceAndRecordsItsStatus(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip(err)
+	}
+	// Checkpoint on the first SIGTERM, abort on a second one.
+	source := `import os,pathlib,signal,time
+terms=[]
+def term(_signal,_frame):
+ terms.append(1)
+ if len(terms)>1: os._exit(70)
+signal.signal(signal.SIGTERM,term)
+while not terms: time.sleep(.02)
+time.sleep(.5)
+pathlib.Path(os.environ['WENDY_STEP_DIR'],'checkpoint').write_text('saved')
+`
+	spec := jobops.Spec{Name: "checkpoint-on-term", WorkingDirectory: t.TempDir(), Steps: []jobops.Step{{Name: "train", Argv: []string{python, "-c", source}, TimeoutSeconds: 1}}}
+	receipt, err := jobops.Submit(context.Background(), connection(t, &host{}), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := receipt["job_path"].(string)
+	state := waitForJob(t, root)
+	stage := state["stages"].([]any)[0].(map[string]any)
+	if state["state"] != "failed" || stage["timed_out"] != true || stage["returncode"] != float64(0) {
+		t.Fatalf("deadline did not record the workload's own exit status: %+v", state)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "train", "checkpoint")); string(data) != "saved" {
+		t.Fatal("workload was signalled again before its checkpoint finished")
+	}
+}

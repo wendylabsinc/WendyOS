@@ -151,7 +151,7 @@ def stop(_signal, _frame):
     global stopping
     stopping = True
     # Only the supervision loop may reap/signal the guard. Keeping its PID
-    # unreaped until the last group signal prevents process-group ID reuse.
+    # unreaped until the last signal prevents PID reuse.
 
 
 signal.signal(signal.SIGTERM, stop)
@@ -221,14 +221,13 @@ try:
                 while child.poll() is None:
                     if stopping or time.monotonic() >= deadline:
                         timed_out = not stopping
-                        try:
-                            os.killpg(child.pid, signal.SIGTERM)
-                        except ProcessLookupError:
-                            pass
+                        # Only the guard is signalled: it sends the workload's
+                        # group a single SIGTERM and reports the workload's status.
+                        child.terminate()
                         try:
                             child.wait(timeout=6)
                         except subprocess.TimeoutExpired:
-                            os.killpg(child.pid, signal.SIGKILL)
+                            child.kill()
                             child.wait()
                         break
                     readable, _, _ = select.select([report_read], [], [], 0.05)
@@ -255,7 +254,7 @@ try:
                 try:
                     child.wait(timeout=6)
                 except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    child.kill()
                     child.wait()
                 except ChildProcessError:
                     pass
