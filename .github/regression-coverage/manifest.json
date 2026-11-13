@@ -2156,6 +2156,14 @@
             ".github/scripts/driver_lifecycle_vm_test.py"
           ],
           "result": "Added real DriverService Unix gRPC, hash-verified shipped Builder packing/apply scripts, matching Fedora kernel modules and squashfs sysext images. QEMU has no network or host directory/device access. Normal/removal-control binaries compile, portable admission/cleanup tests and ShellCheck pass. Both pinned Builder files are accessible without authentication and match recorded hashes. Full VM execution is pending hosted CI; local disk is below the 16GiB prerequisite. Registered once in the existing containerd job before ESP-IDF image preparation."
+        },
+        {
+          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219743",
+          "tests": [
+            "go/internal/agent/services/driver_lifecycle_vm_linux_test.go"
+          ],
+          "result": "Hosted guest booted the real kernel, answered D-Bus/systemd RPC and began the first healthy driver installation, then the host600-second watchdog drained QEMU. Artifact14012323888 reports empty cleanup errors; lifecycle is not verified. Added one bounded guest-only goroutine/systemd/process/journal observation before watchdog expiry, with unchanged test deadlines and assertions. Linux compile and source review pass; runtime diagnosis pending."
         }
       ]
     },
@@ -2946,6 +2954,14 @@
             ".github/scripts/test-ipcam-loopback-lifecycle.sh"
           ],
           "result": "Actual authenticated synthetic RTSP/RTP decoded pixel freshness passes locally under race; deleting the production decoder fails. Kernel normal and ignored-container-demand binaries compile. The hosted gate exercises the production Loopback provider and in-process GStreamer pump with independent V4L2 consumers, two viewers, container-only demand, ten-second idle grace, reacquisition and final removal. Actual kernel execution remains pending."
+        },
+        {
+          "tests": [
+            "go/internal/agent/services/ipcam_output_queue_linux_test.go",
+            ".github/scripts/test-v4l2-output-queue-module.sh",
+            ".github/scripts/v4l2-output-queue-provenance.py"
+          ],
+          "result": "Existing media job now requires the original module to fail the exact OUTPUT completion contract, drains its owned node/module, and rebuilds pinned Builder candidate4828717a recipe patch byte-for-byte. Candidate must pass completion, capture coexistence, no-DQBUF writer reuse, empty poll, STREAMOFF wake and restart, then every unchanged decoded/shared-consumer gate. Source review, Linux test compile, exact patch application, provenance and four portable checks pass. Actual module build/runtime remains pending; candidate branch is published for immutable checkout only, not released. This does not yet establish a new product defect or close1704."
         }
       ]
     },
