@@ -118,7 +118,7 @@ Update with a live native app: 1786 plus 2314 upgrade handoff
 10. Run generated update; retain full stdout, stderr and status. It uploads the exact
     candidate ZIP, commits replacement, waits for the Agent and compares the new
     Agent's launch-time executable hash with the executable extracted from that ZIP.
-    It must exit0 with JSON status success, never up-to-date, timeout or a version-only
+    It must exit 0 with JSON status success, never up-to-date, timeout or a version-only
     match. Current device info does not expose binary_sha256; do not invent that
     field. The pinned CLI's update verification is the RPC hash evidence. Separately
     verify installed executable @CANDIDATE@ and codesign after replacement, a new
@@ -194,3 +194,75 @@ Restoration and retained evidence
     cases; unfinished login, denial, controls, reboot or cleanup remains not_run.
     Logs and packages may contain local paths: retain them in the private review
     artifact store, never commit signing material or screenshots to the repository.
+
+Optional audit 2318: actual signed-package v2 enrollment
+
+This extension is emitted only when inventory.enrollment_peer_binary and
+records.enrollment_peer_build are supplied. Otherwise both packaged enrollment
+cases remain unprepared. Build the local software peer from the exact reviewed
+source revision using `go build -o PRIVATE_PATH ./go/internal/testfixture/macenrollment`.
+Record full source SHA, Go version, command and binary SHA256 in the build record.
+The peer's fresh random test CA/credentials are never production credentials.
+Generation hashes the binary/source/build record and emits enrollment-plan.json
+plus four bounded enrollment-* commands. It executes none of them.
+
+Use a separate fresh reserved-account trial for this extension. Reuse steps 1-3
+for hardware/account/package/signature/recovery admission, but install the pinned
+CANDIDATE with `/usr/bin/ditto @CANDIDATE_APP@ @INSTALLED@` into the absent path.
+Do not enroll the origin package or reuse an account already changed by another
+trial. Confirm macOS 26+ and no provisioning.json, device-key.pem or .provisioned
+in this account's Library/Application Support/sh.wendy.WendyAgentMac before
+opening the app. The reserved account must have no preexisting Agent Keychain
+identity. Never inspect, clear or replace another account's Keychain items.
+Keep another administrator session for recovery. Do not approve remote access:
+the app must listen only on the plan's loopback setup endpoint.
+
+A. Verify candidate executable SHA256 @CANDIDATE@ and actual codesign/spctl
+   results. Run generated open-installed. Before continuing, record launchctl
+   job state and the exact listener PID/path owned by UID @UID@. Every generated
+   enrollment command checks serial/UUID/OS/account, candidate hash/signature and
+   that the loopback listener belongs to that exact app path and UID. A different
+   listener or changed package is a refusal, never an invitation to kill it.
+
+B. In a second terminal in the reserved account, run generated enrollment-peer.
+   It creates only @OUT@/enrollment-peer and exits on Ctrl-C or its ten-minute
+   lifetime. Wait for its atomically written ready.json; do not print/copy it,
+   since it contains disposable operator private-key material. All Cloud/ACME
+   services bind random 127.0.0.1 ports. The Agent uses its ordinary signed-app
+   provisioning path and actual software/SE key selection; no test factory is
+   injected into the package. This local PKI accepts the real signed CSR and
+   binds the issued principal to the CLI-minted UUID. It is not production PKI.
+
+C. Run generated enrollment-enroll. The wrapper uses only the generated private
+   CLI profile and the supported local-development Cloud plaintext setting;
+   ACME is local HTTP. Actual device management must switch to mTLS. Record
+   complete CLI stdout/stderr and exit 0, never secrets from ready.json. Grant an
+   OS Keychain/Secure Enclave prompt only after verifying that it names this
+   pinned app and reserved account; denial, unavailable service or timeout is a
+   failed/pending case, not success. No public Cloud registration is performed.
+
+D. Run enrollment-apps and enrollment-status, retaining both outputs. apps must
+   complete successfully through the CLI's saved exact-identity mTLS binding.
+   status must report the same minted principal, candidate hash, current Agent
+   PID, certificate hash and actual key backing, with exactly one Cloud mint,
+   account, order and finalization. A nominal enrollment message alone is not
+   acceptance. Preserve only public fingerprints/counters, not private keys.
+
+E. Quit this reserved app normally, observe its old PID gone and no successful
+   mTLS listener, then run open-installed again. Record a NEW Agent PID and same
+   candidate executable. Repeat enrollment-apps and enrollment-status without
+   enrolling again. Principal, certificate hash and key backing must be unchanged,
+   and all issuance counts must still equal 1. This proves signed app startup
+   reloads the durable identity and serves v2 after a real process restart.
+   The peer must remain alive for both observations. Expiry requires a new fresh
+   account/trial; never reset the issued identity just to repeat this test.
+
+F. Ctrl-C the owned peer and observe it exited. Quit the reserved app and confirm
+   no Agent or fixture process remains for this trial. Archive public evidence,
+   package/source hashes and logs outside the reserved account, with secrets
+   excluded. The owner then retires the dedicated account using the documented
+   recovery process, removing its entire test Keychain/state as an account, not
+   a broad Keychain command. Never run device unenroll as a cleanup substitute:
+   current direct-PKI reset is intentionally refused without Cloud authorization.
+   Retain uncertain state and report failure if process/account cleanup is not
+   confirmed. All packaged cases remain not_run until these observations exist.

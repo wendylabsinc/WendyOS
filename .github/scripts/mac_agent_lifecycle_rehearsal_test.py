@@ -100,4 +100,45 @@ class MacLifecyclePlans(unittest.TestCase):
                 self.assertFalse((root/'plan').exists())
 
 
+    def test_optional_packaged_enrollment_pins_peer_and_never_executes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);inventory,raw=self.fixture(root)
+            raw['enrollment_peer_binary']=raw['cli_binary']
+            raw['records']['enrollment_peer_build']=raw['records']['candidate_build']
+            inventory.write_text(json.dumps(raw))
+            with patch.object(PLAN.COMMON.subprocess,'run') as run,patch.object(PLAN.COMMON.subprocess,'check_output') as spawn:
+                evidence=PLAN.generate(inventory,root/'plan')
+            run.assert_not_called();spawn.assert_not_called()
+            self.assertIn('2318',evidence['audit_entries'])
+            self.assertEqual({case['status'] for case in evidence['cases']},{'not_run'})
+            settings=json.loads((root/'plan/enrollment-plan.json').read_text())
+            self.assertEqual(settings['candidate'],evidence['candidate']['executable'])
+            self.assertEqual(settings['peer'],PLAN.COMMON.artifact(raw['enrollment_peer_binary']))
+            commands=json.loads((root/'plan/commands.json').read_text())
+            for verb in ('peer','enroll','apps','status'):
+                self.assertEqual(commands['enrollment-'+verb][-1],verb)
+                self.assertEqual(commands['enrollment-'+verb][1],str((root/'plan/enrollment-actions.py').resolve()))
+            for item in evidence['generated']:self.assertEqual(PLAN.COMMON.artifact(item['path']),item)
+            guide=(root/'plan/procedure.txt').read_text()
+            self.assertIn('without\n   enrolling again',guide)
+            self.assertIn('--timeout 620',guide)
+            self.assertIn('Never run device unenroll',guide)
+
+    def test_enrollment_action_refuses_foreign_host_before_observation_or_execution(self):
+        spec=importlib.util.spec_from_file_location('mac_enrollment_actions',SCRIPT.with_name('mac-agent-enrollment.py'))
+        action=importlib.util.module_from_spec(spec);spec.loader.exec_module(action)
+        with patch.object(action.sys,'platform','linux'),patch.object(action.subprocess,'check_output') as spawn:
+            with self.assertRaises(ValueError):action.admit({},50051)
+            spawn.assert_not_called()
+        for url in ('https://127.0.0.1:1/status','http://localhost:1/status','http://192.0.2.1:1/status','http://a:b@127.0.0.1:1/status','http://127.0.0.1:1/status?x=1'):
+            with self.subTest(url=url),self.assertRaises(ValueError):action.local_url(url)
+        self.assertEqual(action.local_url('http://127.0.0.1:123/status'),'http://127.0.0.1:123/status')
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'artifact';path.write_text('reviewed')
+            record=PLAN.COMMON.artifact(path)
+            self.assertEqual(action.artifact(record),str(path.resolve()))
+            path.write_text('changed')
+            with self.assertRaises(ValueError):action.artifact(record)
+
+
 if __name__ == '__main__': unittest.main()
