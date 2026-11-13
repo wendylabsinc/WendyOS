@@ -70,15 +70,22 @@ class _Timecode(ctypes.Structure):
     ]
 
 
+class _BufferMemory(ctypes.Union):
+    # videodev2.h's m union includes pointers, even for MMAP's uint32 offset.
+    _fields_ = [("offset", ctypes.c_uint32), ("userptr", ctypes.c_ulong),
+                ("planes", ctypes.c_void_p), ("fd", ctypes.c_int32)]
+
+
 class _Buffer(ctypes.Structure):
     """v4l2_buffer. 88 bytes: timestamp at 24, sequence at 56."""
 
+    _anonymous_ = ("m",)
     _fields_ = [
         ("index", ctypes.c_uint32), ("type", ctypes.c_uint32),
         ("bytesused", ctypes.c_uint32), ("flags", ctypes.c_uint32),
         ("field", ctypes.c_uint32), ("timestamp", _Timeval),
         ("timecode", _Timecode), ("sequence", ctypes.c_uint32),
-        ("memory", ctypes.c_uint32), ("offset", ctypes.c_uint32),
+        ("memory", ctypes.c_uint32), ("m", _BufferMemory),
         ("length", ctypes.c_uint32), ("reserved2", ctypes.c_uint32),
         ("request_fd", ctypes.c_int32),
     ]
@@ -105,7 +112,9 @@ class _PixFormat(ctypes.Structure):
 
 class _Format(ctypes.Structure):
     class _U(ctypes.Union):
-        _fields_ = [("pix", _PixFormat), ("raw", ctypes.c_uint8 * 200)]
+        # v4l2_window contains pointers, aligning the union to8 on Linux64.
+        _fields_ = [("pix", _PixFormat), ("raw", ctypes.c_uint8 * 200),
+                    ("_pointer_alignment", ctypes.c_void_p)]
 
     _fields_ = [("type", ctypes.c_uint32), ("fmt", _U)]
 

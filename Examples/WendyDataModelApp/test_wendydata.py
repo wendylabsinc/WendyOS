@@ -330,3 +330,30 @@ class TestFramePredictionIdentity(unittest.TestCase):
         record = wendydata.build_prediction("model", "v1", 0.5, [], inputs=frame.input_refs())
         self.assertEqual(record["inputs"], [{"source_id": node.source_id, "sample_id": 12345678}])
         self.assertEqual(frame.boottime_nanos, 987654321000)
+
+
+class TestLinux64V4L2Layout(unittest.TestCase):
+    """Linux videodev2.h ABI, independently checked by the hosted C helper."""
+
+    def test_format_union_starts_at_eight(self):
+        import ctypes
+        self.assertEqual(ctypes.sizeof(wendyframes._Format), 208)
+        self.assertEqual(wendyframes._Format.fmt.offset, 8)
+        # Actual kernel bytes place width/height/fourcc at8/12/16.
+        response = bytearray(208)
+        struct.pack_into('=IIII', response, 0, 1, 0, 64, 48)
+        struct.pack_into('=I', response, 16, wendyframes.PIX_H264)
+        value = wendyframes._Format.from_buffer_copy(response)
+        self.assertEqual((value.fmt.pix.width, value.fmt.pix.height, value.fmt.pix.pixelformat), (64, 48, wendyframes.PIX_H264))
+
+    def test_buffer_memory_union_occupies_eight_bytes(self):
+        import ctypes
+        self.assertEqual(ctypes.sizeof(wendyframes._Buffer), 88)
+        self.assertEqual(wendyframes._Buffer.length.offset, 72)
+        self.assertEqual(wendyframes._Buffer.request_fd.offset, 80)
+        response = bytearray(88)
+        struct.pack_into('=II', response, 64, 4096, 0)
+        struct.pack_into('=I', response, 72, 8192)
+        struct.pack_into('=i', response, 80, -1)
+        value = wendyframes._Buffer.from_buffer_copy(response)
+        self.assertEqual((value.offset, value.length, value.request_fd), (4096, 8192, -1))
