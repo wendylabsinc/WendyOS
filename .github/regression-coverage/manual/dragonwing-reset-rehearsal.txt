@@ -1,0 +1,200 @@
+Physical Dragonwing EDL config seed and /data reset, audit1998
+
+All cases begin not_run. Generation hashes supplied files and reads pinned Builder
+source objects. It does not inspect USB, read a board, run a CLI command, modify
+storage, load drivers, or read credentials. The console marker helper is a separate
+explicit physical operation: its create mode writes only one new owned nonce file.
+Use only reserved disposable board serial @SERIAL@ with the named owner's approval.
+This validates filesystem recreation, NOT secure erasure or overwriting all UFS
+cells. The actual production blanking payload is 1MiB at the data partition head.
+
+Target, provenance and authorization
+
+1. Record exact model/carrier revision, printed board serial, SoC serial and its
+   observed Linux path, Sahara MSM ID, EDL USB serial/CID/physical port, console
+   endpoint, internal UFS model/serial/capacity and GPT/LUN layout. The generic
+   05c6:9008 USB ID does not identify a model. The expected MSM ID is @MSM@.
+   Disconnect other EDL boards and unrelated removable storage. Match the selected
+   CLI target to the independent serial/USB inventory before approving its erase.
+   The CLI can warn and continue on unknown chip steppings; this acceptance cannot:
+   a missing/mismatched model proof leaves the case pending rather than waiving it.
+
+2. Reserve the full board and all UFS contents. Obtain explicit approval to lose
+   both OS slots, config, /data, old enrollment, saved networks and app state.
+   Preserve an owner-approved backup and model-specific recovery record with exact
+   recovery image hashes, power/cable/DIP instructions, storage fingerprint and a
+   named operator capable of recovering THIS board. Do not read enrollment keys,
+   passwords, other app files or unrelated data into evidence. Never use a shared
+   production board or imply that the nonce stands in for permission to erase it.
+   Also authorize the small baseline nonce write and three planned boot cycles.
+
+3. Use an already bootable WendyOS baseline with plain ext4 /data directly on the
+   reserved UFS data partition. Root and data must resolve to the same UFS disk;
+   encrypted mapper volumes, custom partitioning, other data devices and blank
+   boards without a persistent baseline need separate procedures. The marker
+   helper refuses them. Missing hardware Wi-Fi or an unsupported radio keeps the
+   seeded-network case pending; do not substitute a host-side mock.
+
+4. Inventory fields are cli_binary,agent_binary,cli_source_commit,
+   agent_source_commit,builder_source,builder_source_commit,release_descriptor,
+   release_archive,device_catalog,rawprogram,patches,programmer,bundle_review,
+   identity_record,storage_record,recovery_record,authorization_record,ap_record,
+   trial (32 random lowercase hex),flash_seconds (300..7200),boot_seconds (60..900).
+   board contains device (dragonwing-iq-9075 or dragonwing-iq-8275),storage:"ufs",
+   msm_id,serial,soc_serial,soc_serial_path,owner,edl_usb_path,serial_console,
+   ufs_serial,ufs_size_bytes,carrier_revision,management_address,device_name and
+   partitions.config/data {lun,start_sector,sector_size,num_sectors}. The serial
+   observer is the actually present /proc/device-tree/serial-number or
+   /sys/devices/soc0/serial_number, not a guessed path. Wi-Fi fields are
+   security:"open",ssid,interface,station_mac,bssid,gateway. Use a dedicated isolated
+   OPEN lab AP with no credentials or unrelated clients, not a public hotspot.
+   Record the real radio chipset/driver/firmware and AP identity in ap_record.
+
+5. Bind the exact immutable device-version catalog qcomflash entry to the complete
+   local archive. The descriptor is {device,storage,version,url,sha256,size_bytes};
+   an optional GCS generation query must still match the catalog URL and full hash.
+   Independently inspect the real extracted archive and record the actual
+   rawprogram0.xml, patch0.xml, prog_firehose_ddr.elf and full image payloads. The
+   programmer must be the DDR/UFS programmer, not prog_firehose_lite.elf for SPI-NOR.
+   bundle_review contains release_archive_sha256,rawprogram_sha256,patches_sha256,
+   programmer_sha256,builder_source_commit,reviewer and a narrative of extraction,
+   payload/hash verification, exact-board compatibility and first-boot source.
+   The copied descriptors and programmer must come from THAT archive. Generation
+   checks the reviewed binding; it neither extracts a multi-GiB bundle nor certifies
+   the review. Its XML geometry validation proves only that the source can express
+   the seeded/blanked writes. It is not evidence that a device performed them.
+
+6. Generate locally:
+     python3 dragonwing-reset-rehearsal.py inventory.json NEW_PRIVATE_OUTPUT
+   Compare the generated inventory/source/artifact hashes before every physical
+   phase. The host commands use a new private cli-config directory and file secret
+   store; retain those prefixes. Run the plan command and compare the exact board,
+   immutable version, qcomflash URL and full digest. The actual install resolves
+   the catalog again: any changed artifact/catalog requires a new reviewed plan.
+   Pin the candidate CLI and Linux arm64 Agent bytes/source commits. The install
+   passes --binary and --pre-enroll=false; it must not fetch a replacement Agent.
+   No --force, --storage, --drive, --rootfs-only, --no-bmap or
+   --yes-overwrite-internal belongs on this EDL path. Confirm each physical prompt
+   yourself after checking the named board/storage. Never automate its consent.
+
+Persist a baseline marker before EDL
+
+7. Copy only marker-config.json and dragonwing-reset-marker.py to an owned
+   directory on the board through the owner's local serial-console workflow.
+   Verify their generated hashes. The helper needs Python3, findmnt, lsblk and GNU
+   timeout already present. If missing, leave acceptance pending rather than
+   changing the candidate image to manufacture a result. On the exact console:
+     timeout --signal=TERM --kill-after=5s 60s python3 dragonwing-reset-marker.py marker-config.json create > before-create.json
+   It first checks SoC serial/device type, actual /data mount, plain-ext4 UUID,
+   data PARTLABEL and the parent UFS serial/capacity shared with root. It then uses
+   exclusive creation of /data/.wendy-1998-@TRIAL@, writes only this nonce, fsyncs
+   the file and directory, and reports public mount/boot identity. A preexisting
+   path, symlink, wrong mount or wrong board must fail, never be overwritten.
+
+8. Reboot the existing baseline normally from the local console with
+   systemctl reboot. Within @BOOT@ seconds require a new boot ID and run:
+     timeout --signal=TERM --kill-after=5s 60s python3 dragonwing-reset-marker.py marker-config.json present > before-persisted.json
+   Require exact nonce, SAME data UUID and UFS identity as before-create.json.
+   This proves the marker was durable before flash; a marker only seen in RAM or
+   a failed baseline reboot cannot prove the later reset. Do not list or read other
+   /data contents. Preserve the read-only GPT/storage record, baseline hostname,
+   old OS/Agent versions and public enrollment status, without credential files.
+
+Actual EDL write, specific to this family
+
+9. Start fresh host/serial transcripts with UTC and monotonic timestamps. Power
+   the board OFF, set @SWITCH@ @ON@, connect the host to USB0 (USB-C), then power ON.
+   Follow the exact carrier's reviewed guide; do not use another family's switch
+   labels. It should enumerate in EDL with no display output. Run the generated
+   install command. Check the selected serial/CID/USB path and observed MSM ID
+   @MSM@ before approving the full UFS factory reset. The other family's result
+   is not transferable. @MANAGEMENT@
+
+10. Keep power and USB stable for the entire write. The actual flash must seed the
+    config FAT32 image containing the unique name, lab AP parameters and candidate
+    Agent, program the data-head zeros, and apply disk GPT patches. Preserve the
+    CLI's full per-attempt flash log and final exit. Require actual acknowledgments
+    `wrote "config"` and `wrote "data"`, followed by completed GPT patching and a
+    successful terminal result. A source-code list, XML ordering, progress at99%,
+    generated image, programmer upload or dry run cannot satisfy this step.
+    A warning that config was blanked instead of seeded is a failure of this
+    requested-seed case. Candidate --binary/name/Wi-Fi seeding must not silently
+    fall back. Keep all failed attempts, including whether storage was reached.
+
+11. Observe at most @FLASH@ seconds. This is a human observation bound, not
+    permission to kill an active flash writer or pull power. If the bound expires
+    or any write/patch fails, mark failure and retain the log/console state. Do not
+    start a second writer, force a reset, or blindly retry. Follow the reserved
+    recovery procedure after identifying whether the writer is still active and
+    storage was modified. A reported nothing-written error differs from a partial
+    flash and must remain distinguishable in the evidence.
+
+12. Only after successful completion, move @SWITCH@ @OFF@ and power-cycle as the
+    CLI instructs. The flasher deliberately does not reset while EDL remains set.
+    Leaving the switch ON and observing EDL again is not an OS/seed failure.
+    @MANAGEMENT@ Record the actual first OS boot on the same console and match
+    the same SoC/board/UFS identity before issuing any management command.
+
+First boot must show both fresh data and the intended seed
+
+13. Within @BOOT@ seconds run on the board:
+      timeout --signal=TERM --kill-after=5s 60s python3 dragonwing-reset-marker.py marker-config.json absent > after-firstboot.json
+    If the helper was lost with /data, transfer only these same hashed observer
+    files again from the host. Require the pre-flash nonce ABSENT, a NEW plain-ext4
+    /data UUID, the same physical UFS serial/capacity/root parent, and a new boot ID.
+    Cross-check the actual data partition geometry/GPT against the reviewed
+    descriptor after its patches. A different disk, an unmounted /data directory,
+    a failed lookup or a merely changed path cannot count as a reset.
+      timeout 15 journalctl -b -u wendyos-data.service --no-pager -n 200
+      timeout 15 journalctl -b -u wendyos-config-init.service --no-pager -n 100
+    Require this boot's actual data-initializer decision to create a fresh
+    filesystem after finding no old signature, and its successful completion.
+    Review exact wording against the pinned Builder source. The config initializer
+    must preserve the seeded filesystem rather than replace it as an unknown
+    leftover. An absent marker alone is insufficient; the old filesystem could
+    simply be unmounted. The new UUID plus first-boot init and actual write evidence
+    distinguish that from the intended factory reset. No secure-wipe claim follows.
+
+14. Verify name and candidate application without reading seed/identity secrets:
+      hostname
+      cat /etc/hostname
+      cat /etc/wendyos/device-name
+      timeout 15 systemctl show wendy-agent.service --property=MainPID,ActiveState,SubState
+    Require hostname wendyos-@NAME@ and device name @NAME@. Hash the observed live
+    /proc/MAINPID/exe using sha256sum and require @AGENT@, correlated with the same
+    unit PID before and after the observation. Do not read keys or provisioning
+    JSON. Run generated verify/info; require exact OS/device type and an explicitly
+    present organization:null, not an absent/unknown enrollment result. The factory
+    reset must not silently re-enroll from an old identity or old config seed.
+
+15. Verify the seeded network through generated wifi_status and the board console:
+      timeout 15 nmcli -f GENERAL,IP4,IP6 device show @INTERFACE@
+      timeout 15 iw dev @INTERFACE@ link
+      timeout 30 ping -I @INTERFACE@ -c 5 @GATEWAY@
+    Require the actual interface/station MAC, SSID @SSID@, BSSID and reachable lab
+    gateway to match the AP record. Do not invoke device wifi connect after flash
+    to repair this test: the association must result from first-boot config
+    application. Capture the relevant bounded Agent/network journal interval
+    without dumping /config/wendy.conf, NetworkManager secrets or identity files.
+    A familiar SSID alone is insufficient; compare BSSID and the fresh first-boot
+    timeline. A timeout or absent radio leaves seeded-network acceptance incomplete.
+
+Second boot and cleanup
+
+16. Reboot normally once more after first-boot initialization has completed. Within
+    @BOOT@ seconds require another new boot ID, the SAME new /data UUID as step13,
+    nonce still absent, same UFS/root identity, exact candidate Agent/OS, name,
+    enrollment status and seeded network association. Re-run absent, verify/info,
+    wifi_status and the read-only observations. The initializer must retain data
+    rather than format it again. Never accept a transient first boot as persistence.
+
+17. Preserve exact hashes, approvals, EDL acknowledgments, failure exits, storage
+    snapshots and both boot transcripts before cleaning up. Delete only the owned
+    host cli-config/output files after evidence retention. If the attempt was
+    canceled before flash, leave the single marker for the owner to remove after
+    checking its exact nonce and target identity; never remove other /data entries.
+    Failed or ambiguous flashes use the reviewed recovery procedure, without
+    automatic reflash. Keep IQ9075 and IQ8275 results separate. Encrypted/custom
+    layouts, another carrier/stepping, absent network hardware, missing physical
+    writes or incomplete boot evidence remain not_run or failed. Generator tests
+    do not turn any of these physical cases into a pass.
