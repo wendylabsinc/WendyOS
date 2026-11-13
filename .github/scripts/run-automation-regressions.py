@@ -66,6 +66,7 @@ SUITES = (
     "rtps_multicast_isolation_test.py",
     "linklocal_windows_test.py",
     "windows_vm_boot_test.py",
+    "macos_vm_lifecycle_test.py",
     "chunk_stall_ownership_test.py",
     "broker_uplink_namespace_test.py",
     "accelerator_renumbering_test.py",

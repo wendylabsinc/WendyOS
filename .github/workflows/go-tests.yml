@@ -874,8 +874,8 @@ jobs:
 
   darwin-install-host:
     name: macOS CLI and device regressions
-    runs-on: macos-15
-    timeout-minutes: 25
+    runs-on: macos-15-intel
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -896,7 +896,7 @@ jobs:
       - name: Install CLI native dependencies
         run: brew install libusb pkg-config
       - name: Verify native Make VERSION in the built CLI
-        run: python3 .github/scripts/test-native-make-version.py
+        run: python3 .github/scripts/test-native-make-version.py --retain-binary "$RUNNER_TEMP/vm-lifecycle-cli"
       - name: Compile raw-device and target-scoped preparation tests
         run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
       - name: Require disposable disk image regressions
@@ -908,6 +908,31 @@ jobs:
           done
       - name: Require native resolver and stale discovery cache regressions
         run: bash .github/scripts/test-darwin-discovery.sh
+
+      - name: Inspect or install the native QEMU dependency
+        run: |
+          if command -v qemu-system-aarch64; then
+            qemu-system-aarch64 --version
+          else
+            brew install qemu
+          fi
+      - name: Require real VM cancellation and forwarded app recovery
+        timeout-minutes: 35
+        run: |
+          python3 .github/scripts/test-macos-vm-lifecycle.py \
+            --cli "$RUNNER_TEMP/vm-lifecycle-cli" \
+            --test-binary "$RUNNER_TEMP/install.test" \
+            --output "$RUNNER_TEMP/macos-vm-lifecycle"
+      - name: Preserve macOS VM lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-vm-lifecycle
+          path: |
+            ${{ runner.temp }}/macos-vm-lifecycle/*.log
+            ${{ runner.temp }}/macos-vm-lifecycle/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   native-app-regressions:
     name: Native app regressions (${{ matrix.platform }})
