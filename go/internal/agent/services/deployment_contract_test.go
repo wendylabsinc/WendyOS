@@ -42,7 +42,7 @@ func (f *pbFixture) assignment(dep, app string, rev int32) *cloudpbv2.DeviceAssi
 	return &cloudpbv2.DeviceAssignment{
 		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: app, AppReleaseId: uuid.NewString(),
 		ManifestDigest: "sha256:ab", DeploymentKeyId: "k1", DesiredState: cloudpbv2.Running_STOPPED,
-		ExpiresAt: timestamppb.New(f.now.Add(time.Hour)), ConfigJson: `{"env":{"A":"1"}}`, Revision: rev,
+		ExpiresAt: timestamppb.New(f.now.Add(time.Hour)), ConfigJson: `{"A":"1"}`, Revision: rev,
 	}
 }
 
@@ -193,7 +193,7 @@ func TestPostboxEqualRevisionAcceptsOnlyIdenticalContent(t *testing.T) {
 	rotated.AppReleaseId, rotated.DeploymentKeyId = first.AppReleaseId, "k2"
 	changed := g.assignment(d, "web", 1)
 	changed.AppReleaseId = first.AppReleaseId
-	changed.ConfigJson = `{"env":{"A":"2"}}`
+	changed.ConfigJson = `{"A":"2"}`
 	g.statement(assignNew, d, rotated, 0)
 	g.statement(assignNew, d, changed, 0)
 	g.cycle()
@@ -281,23 +281,28 @@ func TestPostboxDuplicateRemovalIsANoOp(t *testing.T) {
 
 func TestCheckConfig(t *testing.T) {
 	for config, ok := range map[string]bool{
-		`{}`:                  true,
-		` {"env":{"A":"1"}} `: true,
-		``:                    false,
-		`null`:                false,
-		`[]`:                  false,
-		`"x"`:                 false,
-		`{} {}`:               false,
-		`{"a":1`:              false,
+		`{}`:                   true,
+		` {"A":"1"} `:          true,
+		`{"WENDY_DEVICE":"x"}`: false, // reserved: the agent's own
+		`{"LD_PRELOAD":"x"}`:   false,
+		``:                     false,
+		`null`:                 false,
+		`[]`:                   false,
+		`"x"`:                  false,
+		`{} {}`:                false,
+		`{"a":1`:               false,
 		`{"a":"` + strings.Repeat("x", maxConfigSize) + `"}`: false,
-		`{"a":{"a":1},"b":[{"a":1},{"a":2}]}`:                true,
+		`{"a":{"a":1},"b":[{"a":1},{"a":2}]}`:                false, // named values only
+		`{"A":"x","B":1.5,"C":true}`:                         true,
+		`{"A":null}`:                                         false,
+		`{"bad-name":"x"}`:                                   false,
 		`{"a":1,"a":2}`:                                      false,
 		`{"b":{"a":1,"a":2}}`:                                false,
 		`{"c":[{"a":1,"a":2}]}`:                              false,
 		`{"a":}`:                                             false,
 		`{"env":1,"ENV":2}`:                                  false,
 		`{"k":1,"\u212a":2}`:                                 false, // Kelvin sign folds to k
-		`{"a":{"env":1},"b":{"ENV":1}}`:                      true,
+		`{"a":{"env":1},"b":{"ENV":1}}`:                      false, // nested: not a named value
 		`{"a":1e400}`:                                        true,
 		`{"a":123456789012345678901234567890}`:               true,
 	} {
@@ -665,25 +670,20 @@ func TestPostboxRefusedRemovalKeepsTheHeldOutcome(t *testing.T) {
 	}
 }
 
-// A crash after a rotation copy's commit never reports "applied" for an
-// app that was not started.
-func TestPostboxRotationCrashKeepsTheTrueOutcome(t *testing.T) {
+// A committed entry whose pull had ended is settled with the outcome that
+// pull recorded, never assumed applied.
+func TestSettleCommittedReportsTheRecordedOutcome(t *testing.T) {
 	f := newPBFixture(t)
-	r := f.release(t)
-	r.assign.Revision, r.assign.ConfigJson, r.assign.DesiredState = 1, "{}", cloudpbv2.Running_RUNNING
-	f.withArtifacts(&fakeArtifacts{r: r})
-	f.assignEntry(r.assign)
-	f.cycle()
-	f.p.waitPulls()
-	if f.outcome("web").Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
-		t.Fatal("setup: a running release reported applied")
+	if err := f.p.load(f.uri); err != nil {
+		t.Fatal(err)
 	}
-	rot := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
-	rot.ExpiresAt = timestamppb.New(f.now.Add(2 * time.Hour))
-	f.assignEntry(rot)
-	f.restartFrom(f.committedWrite())
-	if o := f.outcome("web"); o.EntryID != 2 || o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
-		t.Fatalf("outcome %+v: want entry 2 settled without claiming applied", o)
+	f.p.mu.Lock()
+	f.p.state.Assignments = map[string]*postboxAssignment{"d": {AppID: "web", EntryID: 2, Pulled: true, DesiredState: cloudpbv2.Running_RUNNING.String()}}
+	f.p.state.Outcomes = map[string]*postboxOutcome{"web": {EntryID: 1, Outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED}}
+	f.p.mu.Unlock()
+	o, _, _ := f.p.settleCommitted(context.Background(), &postboxPending{EntryID: 2, AppID: "web", Committed: true})
+	if o != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED {
+		t.Fatalf("settled %v, want the recorded APPLY_FAILED", o)
 	}
 }
 

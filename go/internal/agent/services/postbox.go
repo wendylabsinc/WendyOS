@@ -99,12 +99,27 @@ type postboxControl interface {
 	AppOf(ctx context.Context, name string) string
 	// ImportRelease imports a verified registry release into containerd.
 	ImportRelease(ctx context.Context, img ReleaseImage) error
+	// HasRelease reports whether the release image is on the device with the
+	// signed manifest digest.
+	HasRelease(ctx context.Context, app, release, manifestDigest string) bool
+	// ReleaseAppConfig is the app definition (the release's wendy.json) the
+	// verified release image carries; ErrNoAppDefinition when it carries none.
+	ReleaseAppConfig(ctx context.Context, app, release, manifestDigest string) ([]byte, error)
+	// StartRelease creates the app's container from a release through the
+	// path `wendy run` takes, then starts it or leaves it stopped. replaced
+	// reports whether it got as far as replacing the app's container.
+	StartRelease(ctx context.Context, s ReleaseStart) (replaced bool, err error)
+	// AppState is the app's container as the runtime holds it.
+	AppState(ctx context.Context, app string) AppContainerState
 	// RemoveReleases deletes app's registry releases except the release ids
 	// in keep, and the containers running one; every app's when app is "".
 	RemoveReleases(ctx context.Context, app string, keep []string) error
 	// RemoveReleaseImages deletes every registry release image and collects
 	// its content, leaving containers alone.
 	RemoveReleaseImages(ctx context.Context) error
+	// PruneReleases deletes app's release images outside keep that no
+	// container was created from; it never deletes an app.
+	PruneReleases(ctx context.Context, app string, keep []string) error
 }
 
 // postboxState is everything that must survive a restart. It belongs to one
@@ -164,6 +179,13 @@ type postboxAssignment struct {
 	EntryID       int64  `json:"entryId,omitempty"`
 	CorrelationID string `json:"correlationId,omitempty"`
 	Pulled        bool   `json:"pulled,omitempty"`
+	// Applied: this statement's app was started (or installed) and reported
+	// applied. Previous is the last applied statement before this one (the
+	// same deployment's earlier revision, or a move's old deployment): what
+	// actually ran, never a statement that failed, so its app can be put
+	// back if this one cannot start.
+	Applied  bool   `json:"applied,omitempty"`
+	Previous []byte `json:"previous,omitempty"`
 }
 
 // postboxOutcome is the latest postbox decision about an app, carried on the
@@ -1363,6 +1385,9 @@ type releaseRemover interface {
 	// ReleaseApps lists the apps with a container running one of app's
 	// releases outside keep (any app's when app is "").
 	ReleaseApps(ctx context.Context, app string, keep []string) ([]string, error)
+	// ReleasesInUse lists the release ids of app's releases a container was
+	// created from.
+	ReleasesInUse(ctx context.Context, app string) ([]string, error)
 	// DeleteReleaseImages deletes those releases and collects their content.
 	DeleteReleaseImages(ctx context.Context, app string, keep []string) error
 }
@@ -1397,6 +1422,22 @@ func (c containerControl) RemoveReleaseImages(ctx context.Context) error {
 		return nil
 	}
 	return remover.DeleteReleaseImages(ctx, "", nil)
+}
+
+// PruneReleases deletes superseded release images of app: those outside keep
+// that no container runs or was created from. A release a container still
+// uses stays until the app moves off it, so an update never removes the
+// running app.
+func (c containerControl) PruneReleases(ctx context.Context, app string, keep []string) error {
+	remover, ok := c.svc.containerd.(releaseRemover)
+	if !ok {
+		return nil
+	}
+	used, err := remover.ReleasesInUse(ctx, app)
+	if err != nil {
+		return err
+	}
+	return remover.DeleteReleaseImages(ctx, app, append(slices.Clone(keep), used...))
 }
 
 // ImportRelease imports through the containerd client when it can.

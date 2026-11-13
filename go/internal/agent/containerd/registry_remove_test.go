@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/containers"
@@ -116,6 +117,51 @@ func TestImportLeaseIsCollectedSynchronously(t *testing.T) {
 		}
 		if !opts.Synchronous {
 			t.Fatalf("import err %v: lease not deleted synchronously", importErr)
+		}
+	}
+}
+
+func TestReleasesInUse(t *testing.T) {
+	ctrs := []containers.Container{
+		{ID: "web", Image: releaseImagePrefix + "web:r1"},
+		{ID: "web_api", Image: releaseImagePrefix + "web:r1"},
+		{ID: "webx", Image: releaseImagePrefix + "webx:r2"},
+		{ID: "dev", Image: "docker.io/library/web:latest"},
+	}
+	if got := releasesInUse(ctrs, "web"); !slices.Equal(got, []string{"r1"}) {
+		t.Fatalf("in use %v, want [r1]", got)
+	}
+}
+
+// The app definition is read only from the image the operator signed.
+func TestCheckReleaseDigest(t *testing.T) {
+	if checkReleaseDigest("sha256:aa", "sha256:aa") != nil {
+		t.Fatal("the signed image refused")
+	}
+	if checkReleaseDigest("sha256:bb", "sha256:aa") == nil || checkReleaseDigest("sha256:aa", "") == nil {
+		t.Fatal("another image, or an empty signed digest, accepted")
+	}
+}
+
+// Only ImportRelease writes the release prefix: the direct-run assemble path
+// refuses it before touching the store.
+func TestAssembleImageRefusesTheReleasePrefix(t *testing.T) {
+	c := &Client{}
+	for _, name := range []string{"localhost/wendy-release/web:r1", "localhost/wendy-release/web"} {
+		if err := c.AssembleImage(context.Background(), name, nil, nil); err == nil || !strings.Contains(err.Error(), "reserved for registry releases") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+// A release is created only from a reference pinned to its signed digest.
+func TestSplitReleaseRef(t *testing.T) {
+	if name, digest, err := splitReleaseRef("localhost/wendy-release/web:r1@sha256:aa"); err != nil || name != "localhost/wendy-release/web:r1" || digest != "sha256:aa" {
+		t.Fatalf("%q %q %v", name, digest, err)
+	}
+	for _, ref := range []string{"localhost/wendy-release/web:r1", "localhost/wendy-release/web:r1@"} {
+		if _, _, err := splitReleaseRef(ref); err == nil {
+			t.Fatalf("%q: an unpinned release accepted", ref)
 		}
 	}
 }

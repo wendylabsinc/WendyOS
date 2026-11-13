@@ -90,7 +90,10 @@ func checkConfig(config string) error {
 	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("the configuration is more than one JSON object")
 	}
-	return nil
+	// Named values only: host access comes from the release, never from a
+	// deployment (sem, 2026-11-12).
+	_, err := configEnv(config)
+	return err
 }
 
 // checkJSONObject reads the rest of an object whose '{' was read, refusing a
@@ -278,6 +281,13 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 		AppID: app, AppReleaseID: r.GetAppReleaseId(), ManifestDigest: r.GetManifestDigest(),
 		DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
 		Assignment: raw, EntryID: entryID, CorrelationID: correlation, Pulled: absent,
+		// An ABSENT revision is applied as it is held (its removal queued):
+		// the last applied state, after which nothing is put back.
+		Applied: absent,
+	}
+	replaced := dep
+	if move {
+		replaced = from
 	}
 	outcome := outcomePulling
 	now := p.trustedNow()
@@ -290,6 +300,19 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 			if prev.Pulled && o != nil && o.EntryID == prev.EntryID && pullSucceeded(o.Outcome) {
 				held.Pulled, outcome = true, o.Outcome
 			}
+		}
+		// The statement this one replaces on the device, started again if
+		// this one cannot start; a rotation copy keeps the one it had.
+		// The last applied statement, never a failed one; a rotation copy
+		// keeps its predecessor's.
+		switch prev := st.Assignments[replaced]; {
+		case prev == nil:
+		case repeat:
+			held.Previous, held.Applied = prev.Previous, prev.Applied && held.Pulled
+		case prev.Applied:
+			held.Previous = prev.Assignment
+		default:
+			held.Previous = prev.Previous
 		}
 		st.Assignments = maps.Clone(st.Assignments) // copy on write: a pull's commit reads it
 		st.Marks = maps.Clone(st.Marks)
