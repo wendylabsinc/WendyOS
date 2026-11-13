@@ -971,10 +971,17 @@ func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 	if named == "" {
 		named = pm.DisplayName
 	}
-	refusal := refuseChangedIdentity(named, fmt.Sprintf("Identity: %s\nSaved key: %s\nNow key:   %s", pm.Key, pm.Want, pm.Got), func() error {
+	// The certificate named the identity this key is saved for, so the warning
+	// is about the key and not about a different identity.
+	refusal := refuseDevicePinRefusal(devicePinDiagnostic{
+		hostname: named,
+		details:  fmt.Sprintf("Identity: %s\nSaved key: %s\nNow key:   %s", pm.Key, pm.Want, pm.Got),
+		changed:  true, keyChanged: true,
+	})
+	refusal.accept = func() error {
 		_, err := removeSPKIPinsReporting([]string{pm.Key})
 		return err
-	})
+	}
 	refusal.cause = pm
 	return refusal
 }
