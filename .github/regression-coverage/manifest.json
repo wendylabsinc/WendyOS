@@ -1818,9 +1818,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2261",
       "title": "fix: prefer wired connections over Wi-Fi",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests cover route choice, advertisement ranking and delayed path moves. Actual multi-interface routing and roaming remain environment-dependent.",
-      "required_follow_up": "Require the real broker uplink namespace gate and both controls in the existing Linux network job. Verify held-session continuity through preferred-route change and new presence/tunnel source after the session drains. Native kernel execution remains pending.",
+      "required_follow_up": "Retain the hosted namespace lifecycle gate and its required regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1829,6 +1829,11 @@
             "go/internal/agent/services/broker_uplink_namespace_test.go"
           ],
           "result": "Actual TunnelBrokerClient.Run uses TLS presence/tunnel RPCs, kernel source lookup, a reachability probe and unchanged10-second path timers. Two veth routes model Wi-Fi/wired uplinks. Exact-byte tunneled TCP must survive more than two checks after the wired route becomes preferred; after drain, new presence/tunnel traffic must use its source address. Controls disable migration or active-session protection. Native race and ordinary-user Linux wire controls pass; normal/two-control Linux race binaries compile; two offline admission checks and ShellCheck pass. Read-only peer review clear. Registered in the existing network job; privileged namespace normal/control execution remains pending. Physical radio, sysfs hardware classification and Avahi publication are outside this fixture."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658482070",
+          "result": "Real TLS tunnel retained exact bytes while the preferred kernel route changed. After its session drained, presence and a new tunnel used the wired source. Disabling migration failed idle source change; ignoring active sessions interrupted the held tunnel and failed exact-byte delivery. The named gate and all controls succeeded before the grouped job hit its35-minute timeout in a later unrelated step. Relevant source is unchanged. The job ceiling is now45 minutes to let the remaining grouped checks run; the cancelled overall job does not qualify the PR as ready."
         }
       ]
     },
@@ -1870,9 +1875,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2124",
       "title": "cli: link-local USB-C host profile that follows the device across ports",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "USB profile argument construction has tests; actual NetworkManager replug/port migration is not verified by the helper tests.",
-      "required_follow_up": "Require the real NetworkManager profile recreation/restart journey and interface-name-pinning control in the existing Linux networking job. Hosted privileged execution remains pending.",
+      "required_follow_up": "Retain the hosted namespace lifecycle gate and its required regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1883,6 +1888,11 @@
             ".github/scripts/usb_profile_dependencies_test.py"
           ],
           "result": "Prepared production runUSBSetup against private NetworkManager and D-Bus, actual veth deletion/recreation with a new interface name/index and unchanged MAC, unrelated-MAC exclusion, saved profile UUID reuse, daemon restart and exact TCP payloads. Private mounts isolate Netplan, NetworkManager and udev rule writes; udev triggers are recorded rather than sent to physical devices. Normal and interface-pinning control Linux race builds and offline fixture checks pass. Dependency provisioning isolates service policy and host sockets, preserves existing policy bytes/identity and requires namespace-drain proof before removing an owned temporary policy. Actual privileged normal/control execution remains pending on the existing hosted networking runner; no physical USB pass is claimed."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658482070",
+          "result": "Actual NetworkManager profile creation, recreated interface, daemon restart and traffic journey passed. Restoring interface-name pinning failed its required recreation assertion. This proves the synthetic USB-profile lifecycle, not physical cable/board enumeration. The named gate and all controls succeeded before the grouped job hit its35-minute timeout in a later unrelated step. Relevant source is unchanged. The job ceiling is now45 minutes to let the remaining grouped checks run; the cancelled overall job does not qualify the PR as ready."
         }
       ]
     },
