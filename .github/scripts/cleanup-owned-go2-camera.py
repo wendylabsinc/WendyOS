@@ -9,6 +9,11 @@ import re
 import stat
 import sys
 import time
+import importlib.util
+_spec = importlib.util.spec_from_file_location("go2_replay_admission", Path(__file__).with_name("go2_replay_admission.py"))
+_admission = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_admission)
+admit = _admission.admit
 
 
 def cleanup(label, dev=Path('/dev'), sysfs=Path('/sys')):
@@ -47,9 +52,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--label', required=True)
     args = parser.parse_args()
-    if (os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted'
-            or not sys.platform.startswith('linux') or os.geteuid() != 0):
-        parser.error('requires the disposable hosted Linux runner')
+    try:
+        admit()
+    except (ValueError, OSError, RuntimeError) as error:
+        parser.error(str(error))
     cleanup(args.label)
 
 

@@ -59,6 +59,7 @@ def generate(inventory,output):
           'cases':{k:'not_run' for k in ['physical_identity','raw_cdr_recording','native_cli_decode','camera_container_delivery','recorded_service_replay','cleanup']}}
     (out/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
     (out/'go2-record-cdr.py').write_bytes((ROOT/files[0]).read_bytes())
+    (out/'go2-recorded-replay.txt').write_bytes((ROOT/'.github/regression-coverage/manual/go2-recorded-replay.txt').read_bytes())
     app=out/'consumer';app.mkdir(mode=0o700)
     app_id='sh.wendy.tests.'+nonce.replace('-','_')
     (app/'wendy.json').write_text(json.dumps({'appId':app_id,'version':'1','entitlements':[{'type':'camera'}],
@@ -78,7 +79,7 @@ def generate(inventory,output):
     guide+='\nExact read-only commands:\n'+'\n'.join(name+': '+shlex.join(cmd) for name,cmd in commands.items())+'\n'
     (out/'procedure.txt').write_text(guide)
     plan['generated_sha256'].update({name:artifact(out/name)['sha256'] for name in
-        ['capture-cli.sh','go2-record-cdr.py','commands.json','procedure.txt']})
+        ['capture-cli.sh','go2-record-cdr.py','go2-recorded-replay.txt','commands.json','procedure.txt']})
     (out/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
     return plan
 

@@ -96,10 +96,12 @@ not a screenshot of another robot. Hashes identify inputs, not acceptance.
 6. Copy the raw-recording directory and physical.h264 to the review artifact store
    outside Git, retaining per-sample hashes, pinned firmware/serial/source records
    and challenge notes. Do not commit images/videos or substitute generated frames.
-   Recorded service replay remains pending until this exact archived corpus is
-   replayed through the production CDR parser/writer/service and independently
-   decoded with matching frame content. The automated generated-video gate does
-   not consume this archive and must not be used to claim recorded replay passed.
+   Recorded service replay remains pending until the exact archived corpus passes.
+   Follow go2-recorded-replay.txt for the executable offline archive preparation
+   and owner-confirmed disposable VM replay. It consumes these exact CDR bytes
+   through the production parser/writer/native service and actual camera-entitled
+   OCI task, comparing independently decoded source/capture frames. A successful
+   synthetic CI gate still does not count as recorded replay or physical proof.
 
 7. Run only remove_owned_consumer for this exact generated app ID. It does not
    delete volumes or image caches. Verify its absence and compare baseline app
