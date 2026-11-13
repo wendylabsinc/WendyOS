@@ -1453,7 +1453,7 @@ jobs:
         uses: ./.github/actions/setup-go-ci
         with:
           cache-name: go2-bridge-deadlines
-      - name: Require ROS callbacks and robot transport deadlines
+      - name: Require ROS callbacks, Patrol flags and robot transport deadlines
         if: matrix.robot == 'go2'
         run: python3 .github/scripts/test-go2-bridge-deadlines.py --output "$RUNNER_TEMP/go2-bridge-deadlines"
       - name: Preserve Go2 bridge deadline evidence
@@ -1464,6 +1464,8 @@ jobs:
           path: |
             ${{ runner.temp }}/go2-bridge-deadlines/*.json
             ${{ runner.temp }}/go2-bridge-deadlines/*.log
+            ${{ runner.temp }}/go2-bridge-deadlines/patrol/**/*.json
+            ${{ runner.temp }}/go2-bridge-deadlines/patrol/**/*.log
           if-no-files-found: ignore
           retention-days: 7
 

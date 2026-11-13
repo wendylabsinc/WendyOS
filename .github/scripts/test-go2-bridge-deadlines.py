@@ -140,6 +140,11 @@ def main():
                 if result == 0 or '--- FAIL: TestGo2BridgeROSDeadlines' not in text or reason not in text:
                     raise RuntimeError(name+' did not fail its intended regression assertion')
             evidence['cases'].append({'name': name, 'exit_code': result, 'expected_failure': name != 'normal'})
+        patrol_spec = importlib.util.spec_from_file_location('patrol_ros', Path(__file__).with_name('test-patrol-ros-runtime.py'))
+        patrol = importlib.util.module_from_spec(patrol_spec)
+        patrol_spec.loader.exec_module(patrol)
+        patrol.run_cases(ROOT, destination, image, network, nonce, containers, run, output)
+        evidence['patrol'] = json.loads((destination/'patrol/summary.json').read_text())
         evidence['status'] = 'passed'
     finally:
         for sig in previous:

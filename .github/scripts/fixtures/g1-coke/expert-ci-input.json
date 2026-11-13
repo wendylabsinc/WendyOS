@@ -1,0 +1,39 @@
+{
+  "schema": "wendy.coke.expert-ci-input.v1",
+  "source_lock": "Examples/G1CokeDemo/assets.lock.json",
+  "status": "approved_remote_source_missing",
+  "required_directory": "${RUNNER_TEMP}/wendy-coke-expert/g1-expert-sim-replay-20260915",
+  "files": {
+    "model.mjb": {
+      "bytes": 126262669,
+      "sha256": "2702eb2f60a0879f9ec53d522e6aad1866ac1dc7ba1d85e75291658e77b1d190"
+    },
+    "rollout.npz": {
+      "bytes": 58099962,
+      "sha256": "c5440b8cab720b2adee835a61118cdc8c08557f8cd77705fe371c06b926781ff"
+    },
+    "result.json": {
+      "bytes": 7467,
+      "sha256": "3f64e006c3c540163c144126f8d5497b1871e0dcdc3fd9fb14b7d41f02d265e4"
+    },
+    "verification.json": {
+      "bytes": 4080,
+      "sha256": "e07cfe1b5fea9c81e5ff4443435286f4258ecbf59a588ddb604e16d113ebeaa0"
+    },
+    "qualification-60s.json": {
+      "bytes": 4685,
+      "sha256": "efcc2c3cec84fe80fecc5109592e4ecf9f2431b30cc00d8f4250b421e88f6061"
+    },
+    "replay_expert.py": {
+      "bytes": 6316,
+      "sha256": "0f296993e060c047ae4617e3dde8862fa9fb63466c607c7e6c142f5cadd873fd"
+    },
+    "source_metadata.json": {
+      "bytes": 8023,
+      "sha256": "3e07a1bf19d026ff7d66c7b56d950f97cc8ad09b8ccbffe7b5e9b962d93859c5"
+    }
+  },
+  "total_bytes": 184393202,
+  "fetch_url": null,
+  "authorization": "No upload of the local Downloads bundle is authorized by this manifest."
+}
