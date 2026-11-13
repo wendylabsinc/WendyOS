@@ -8,6 +8,8 @@ The app records its own dequeue time separately from the sample identity.
 from __future__ import annotations
 
 import ctypes
+from collections import deque
+from fractions import Fraction
 import fcntl
 import logging
 import mmap
@@ -48,6 +50,7 @@ def _fourcc(code: str) -> int:
     return (ord(code[0]) | ord(code[1]) << 8 | ord(code[2]) << 16 | ord(code[3]) << 24)
 
 
+PIX_H264 = _fourcc("H264")
 PIX_YUYV = _fourcc("YUYV")
 PIX_MJPEG = _fourcc("MJPG")
 PIX_BGR24 = _fourcc("BGR3")
@@ -123,6 +126,48 @@ class Frame:
 
 
 
+class H264Frames:
+    """Decode whole access units while retaining each picture's input identity.
+
+    Decoder output order can differ from dequeue order. Private packet PTS values
+    carry bounded metadata through the decoder; neither output position nor
+    nanosecond conversion is used to reconstruct a hub sample ID.
+    """
+
+    def __init__(self, source_id):
+        import av
+        self._av = av
+        self._codec = av.CodecContext.create("h264", "r")
+        self._codec.thread_count = 1
+        self._source_id = source_id
+        self._next = 0
+        self._pending = {}
+
+    def decode(self, payload, sample_id, boottime, dropped):
+        if len(self._pending) >= 128:
+            raise RuntimeError("H264 decoder retained too many unreturned sample identities")
+        self._next += 1
+        token = self._next
+        self._pending[token] = (sample_id, boottime, dropped)
+        packet = self._av.Packet(payload)
+        packet.pts = token
+        packet.time_base = Fraction(1, 1_000_000)
+        frames = []
+        try:
+            pictures = self._codec.decode(packet)
+        except self._av.FFmpegError as error:
+            self._pending.clear()
+            raise RuntimeError("H264 access unit could not be decoded with a trustworthy identity") from error
+        for picture in pictures:
+            metadata = self._pending.pop(picture.pts, None)
+            if metadata is None:
+                raise RuntimeError("H264 decoder returned a picture without its input identity")
+            identity, receipt, lost = metadata
+            frames.append(Frame(image=picture.to_ndarray(format="bgr24"), source_id=self._source_id,
+                                boottime_nanos=receipt, sample_id=identity, dropped_before=lost))
+        return frames
+
+
 class CameraNode:
     """A v4l2loopback node fed by the agent."""
 
@@ -132,6 +177,8 @@ class CameraNode:
         self._fd = os.open(path, os.O_RDWR)
         self._maps: list[mmap.mmap] = []
         self._last_sequence: int | None = None
+        self._decoded = deque()
+        self._decoder = None
         try:
             self._configure()
             self._request_buffers(buffers)
@@ -147,11 +194,13 @@ class CameraNode:
         self.width = fmt.fmt.pix.width
         self.height = fmt.fmt.pix.height
         self.pixelformat = fmt.fmt.pix.pixelformat
-        if self.pixelformat not in (PIX_YUYV, PIX_MJPEG, PIX_BGR24, PIX_RGB24):
+        if self.pixelformat not in (PIX_YUYV, PIX_MJPEG, PIX_BGR24, PIX_RGB24, PIX_H264):
             raise RuntimeError(
                 f"{self.path} offers an unsupported pixel format {self.pixelformat:#x}; "
-                "the agent feeds YUYV, MJPEG, BGR3 or RGB3"
+                "expected H264, YUYV, MJPEG, BGR3 or RGB3"
             )
+        if self.pixelformat == PIX_H264:
+            self._decoder = H264Frames(self.source_id)
         log.info("%s: %dx%d", self.path, self.width, self.height)
 
     def _request_buffers(self, count: int) -> None:
@@ -176,12 +225,18 @@ class CameraNode:
 
     def read(self) -> Frame:
         """Dequeue the next frame. Blocks until one is available."""
+        if getattr(self, "_decoder", None) is not None:
+            while not self._decoded:
+                self._read_buffer()
+            return self._decoded.popleft()
+        return self._read_buffer()
+
+    def _read_buffer(self):
         buf = _Buffer()
         buf.type, buf.memory = V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP
         fcntl.ioctl(self._fd, VIDIOC_DQBUF, buf)
         try:
             payload = self._maps[buf.index][: buf.bytesused]
-            image = self._decode(payload)
             if buf.flags & 0xE000 != 0x4000:
                 raise RuntimeError("camera node did not preserve the agent sample ID")
             sample_id = buf.timestamp.tv_sec * 1_000_000 + buf.timestamp.tv_usec
@@ -193,7 +248,10 @@ class CameraNode:
                 gap = buf.sequence - self._last_sequence - 1
                 dropped = gap if gap > 0 else 0
             self._last_sequence = buf.sequence
-            return Frame(image=image, source_id=self.source_id,
+            if getattr(self, "_decoder", None) is not None:
+                self._decoded.extend(self._decoder.decode(payload, sample_id, boottime, dropped))
+                return None
+            return Frame(image=self._decode(payload), source_id=self.source_id,
                          boottime_nanos=boottime, sample_id=sample_id, dropped_before=dropped)
         finally:
             fcntl.ioctl(self._fd, VIDIOC_QBUF, buf)
@@ -209,7 +267,7 @@ class CameraNode:
 
     def readable(self) -> bool:
         """Whether another frame is already waiting, without blocking."""
-        return bool(select.select([self._fd], [], [], 0)[0])
+        return bool(getattr(self, "_decoded", None)) or bool(select.select([self._fd], [], [], 0)[0])
 
     def frames(self):
         while True:
