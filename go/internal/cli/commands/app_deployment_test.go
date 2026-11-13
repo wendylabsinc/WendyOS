@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -49,13 +50,22 @@ func TestUpdateSignsTheNextRevision(t *testing.T) {
 	if len(fake.assigned) != 2 || last.GetRevision() != 2 || !strings.Contains(last.GetConfigJson(), `"LOG_LEVEL":"debug"`) {
 		t.Fatalf("statements %v", fake.assigned)
 	}
+	if exp := time.Until(fake.assigned[len(fake.assigned)-1].GetExpiresAt().AsTime()); exp > 61*24*time.Hour {
+		t.Fatalf("validity without --keep-trying is the default 60 days, got %v", exp)
+	}
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL=trace"}, keepTrying: "7d", yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if exp := time.Until(fake.assigned[len(fake.assigned)-1].GetExpiresAt().AsTime()); exp > 8*24*time.Hour {
+		t.Fatalf("--keep-trying 7d signed %v", exp)
+	}
 	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{removeTags: []string{"line-3"}, addDevices: []string{"packer-01"}, yes: true}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{removeDevices: []string{"packer-01"}, yes: true}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.removed) != 1 || fake.removed[0].GetRevision() != 4 {
+	if len(fake.removed) != 1 || fake.removed[0].GetRevision() != 5 {
 		t.Fatalf("removals %v", fake.removed)
 	}
 }
@@ -124,6 +134,14 @@ func TestResumeSignsOnlyTheCurrentRevision(t *testing.T) {
 	if len(fake.assigned) != 2 || fake.assigned[1].GetRevision() != 1 || !strings.Contains(out.String(), "packer-01: get revision 1") {
 		t.Fatalf("resume signed %v\n%s", fake.assigned, out.String())
 	}
+	// Cloud recorded release B, but the newest key is still for A: resume
+	// shows B and must not sign A's digest.
+	releaseB, _ := publishFixture(t, op)
+	fake.deploys[depID].AppReleaseId = releaseB
+	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err == nil || !strings.Contains(err.Error(), "nothing was signed") || len(fake.assigned) != 2 {
+		t.Fatalf("a key for another release: %v", err)
+	}
+	fake.deploys[depID].AppReleaseId = fake.assigned[0].GetAppReleaseId()
 	fake.pending[depID][0].Revision = 7
 	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err == nil || len(fake.assigned) != 2 {
 		t.Fatalf("a statement for another revision: %v", err)
