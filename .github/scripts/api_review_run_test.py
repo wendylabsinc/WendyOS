@@ -17,7 +17,7 @@ import httpx
 
 import api_review
 import api_review_comment as comments
-from api_review_test import metadata, diff, decision, model_decision, HEAD_SHA, BASE_SHA, REPO
+from api_review_test import metadata, diff, decision, model_decision, HEAD_SHA, BASE_SHA, REPO, unassessed_fixture
 from api_review_comment_test import result, large_result, bot_comment, MultipartGitHub, pull
 
 
@@ -36,8 +36,18 @@ class FullRunTests(unittest.TestCase):
 
     def run_flow(self, *, relationship="unchanged", failure=None, late_checkbox=False,
                  stale=False, changed_state=False, legacy=False, impact_change=False, dry_run=False,
-                 withdraw_prior=False, competing_claims=False):
+                 withdraw_prior=False, competing_claims=False, compatibility=False):
         previous = self.previous(legacy=legacy)
+        compatibility_prior_id = None
+        if compatibility:
+            import compatibility_state as finding_state
+            import compatibility_review_test as evidence_fixtures
+            fixture = evidence_fixtures.EvidenceTests(); fixture.setUp()
+            initial = fixture.validate(evidence_fixtures.response(dict(fixture.finding, caller=[next(iter(fixture.changed))])))
+            report = dict(initial, compatibility_previous=[], input_visibility="public")
+            finding_record = finding_state.current(report)[0]
+            compatibility_prior_id = finding_record["id"]
+            previous += "\n" + finding_state.marker(finding_record) + "\n"
         source = MultipartGitHub([bot_comment(previous)])
         github = comments.DryRunGitHub(source) if dry_run else source
         requests = []
@@ -86,6 +96,13 @@ class FullRunTests(unittest.TestCase):
                     value = message.json()
                     value["content"][0]["text"] = "not-json"
                     return httpx.Response(200, json=value)
+            if len(requests) == 1:
+                response = unassessed_fixture(response)
+                if compatibility:
+                    from compatibility_review_test import response as finding_response
+                    current = dict(fixture.finding, prior_id=compatibility_prior_id,
+                                   caller=[next(iter(fixture.changed))])
+                    response.update({k:v for k,v in finding_response(current).items() if k.startswith("compatibility_")})
             return self.message(response)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -106,6 +123,15 @@ class FullRunTests(unittest.TestCase):
                                   side_effect=constructor), redirect_stderr(stderr):
                     code = api_review.command_review(args)
             output = json.loads((directory / "result.json").read_text())
+            if compatibility and code == 0:
+                import compatibility_state as finding_state
+                carried = finding_state.current(output)
+                self.assertEqual(len(carried), 1)
+                self.assertEqual(carried[0]["id"], compatibility_prior_id)
+                self.assertEqual(carried[0]["status"], "open")
+                first_prompt = json.loads(requests[0]["messages"][0]["content"])
+                self.assertEqual(first_prompt["prior_compatibility_findings"][0]["id"], compatibility_prior_id)
+                self.assertEqual(requests[0]["output_config"]["effort"], "high")
             if late_checkbox:
                 github.comments[0]["body"] = previous.replace("- [x] Accept", "- [ ] Accept", 1)
             if changed_state:
@@ -136,6 +162,9 @@ class FullRunTests(unittest.TestCase):
                 self.assertEqual(output["decisions"], [])
                 self.assertFalse(published)
                 self.assertIn(comments.WARNING_START, body)
+                if compatibility:
+                    self.assertEqual(finding_state.parse([body])[0]["id"], compatibility_prior_id)
+                    self.assertEqual(finding_state.parse([body])[0]["status"], "open")
                 self.assertEqual(body.count("- [x]"), 11)
                 risk_names = {"risk: low", "risk: mid", "risk: medium", "risk: high"}
                 for _, path, payload in github.mutations():
@@ -218,7 +247,7 @@ class FullRunTests(unittest.TestCase):
                             "relationship": "changed", "reason": "Combined contract changed."}]}
         fixed = copy.deepcopy(bad)
         fixed["matches"][0].update(relationship="ambiguous", reason="Multiple plausible predecessors.")
-        responses = [{"risk": "high", "decisions": [model_decision(title="Combined contract")]}, bad, fixed]
+        responses = [unassessed_fixture({"risk": "high", "decisions": [model_decision(title="Combined contract")]}), bad, fixed]
         requests = []
 
         def transport(request):
@@ -265,6 +294,12 @@ class FullRunTests(unittest.TestCase):
         self.assertTrue(all(len(item["body"].encode()) <= comments.MAX_COMMENT_BYTES - comments.WARNING_RESERVE_BYTES
                             for item in github.comments))
         self.assertEqual(len(requests), 3)
+
+    def test_compatibility_history_and_accepted_decisions_share_the_existing_calls(self):
+        self.run_flow(compatibility=True, dry_run=True)
+
+    def test_incomplete_pass_preserves_compatibility_history_and_acceptance(self):
+        self.run_flow(compatibility=True, failure="incomplete")
 
     def test_complete_run_preserves_eleven_accepted_decisions(self):
         self.run_flow()
