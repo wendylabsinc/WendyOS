@@ -3278,9 +3278,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1682",
       "title": "fix(agent): flush filesystems before rebooting so a staged OTA capsule survives",
       "package": "10",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Tests assert flush-before-reboot ordering and fallback/watchdog behavior. They cannot prove OTA capsule durability across power loss.",
-      "required_follow_up": "Complete the discriminating historical Agent sync-boundary fault/reboot procedure. Current updater syncfs can mask an omitted Agent sync. Keep acknowledged-stage durability and actual firmware-consumption cases separate; physical cases remain not_run.",
+      "required_follow_up": "Execute the historical Thor before-failure/after-success procedure with exact pre-syncfs updater and source-bound Agent variants. Require earliest pre-verifier evidence, actual firmware transition and second boot; a successful old control is inconclusive. Current-updater acknowledged-stage durability remains separate. Every hardware case is not_run.",
       "evidence": [
         {
           "tests": [
@@ -3289,6 +3289,16 @@
             ".github/scripts/jetson_capsule_rehearsal_test.py"
           ],
           "result": "Prepared exact-target capsule/ESP/firmware-transition and acknowledged-stage power-interruption procedure; independent vendor recovery, antirollback and physical-power qualification required. Two new admission tests and four reused A/B tests pass. This does not yet provide a discriminating original Agent sync-boundary control; entry remains partial and all hardware cases remain not_run."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/jetson-capsule-boundary.py",
+            ".github/regression-coverage/manual/jetson-capsule-boundary.txt",
+            ".github/regression-coverage/manual/jetson-capsule-boundary-observer.py",
+            ".github/scripts/jetson_capsule_boundary_test.py"
+          ],
+          "result": "Supplied exact historical Thor Agent/updater source overlays and early-boot observer ordered before verifier/commit/Agent cleanup. Historical-instant, sync-only, unchanged-fixed, failed-clean-request and full60-second watchdog variants all compile for Linux/arm64 with five distinct binary hashes; four new offline checks pass and independent review is clear. Requires real old-control capsule loss without new ESRT/firmware attempt, followed by identical fixed-case firmware application and persistent second boot. Modern updater syncfs and historical Orin rootfs-only path are refused. All physical results remain not_run; compiled binaries were not executed.",
+          "build_evidence": "/tmp/wendy1682-overlay-sourcecheck-20261113/build-evidence.json"
         }
       ]
     },
