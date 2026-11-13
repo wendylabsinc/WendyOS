@@ -472,8 +472,18 @@ type AppRelease struct {
 	// shows it as the starting point, and only the configuration the operator
 	// then signs (DeviceAssignment.config_json) reaches a device.
 	DefaultConfigJson string `protobuf:"bytes,10,opt,name=default_config_json,json=defaultConfigJson,proto3" json:"default_config_json,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Required configuration names (sem 2026-11-13): an empty value is a valid
+	// value and never means "required"; required settings are declared here.
+	// Each name must be a key of the release's default configuration
+	// (default_config_json), and its default value may be empty. Information
+	// for clients: the CLI and the console refuse to create or update a
+	// deployment whose configuration leaves a required name empty. Cloud
+	// stores and returns it unchanged. The device does nothing with it, and
+	// nothing about it is signed per device. A release published without it
+	// has none required; old clients ignore it.
+	RequiredConfigNames []string `protobuf:"bytes,11,rep,name=required_config_names,json=requiredConfigNames,proto3" json:"required_config_names,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AppRelease) Reset() {
@@ -576,6 +586,13 @@ func (x *AppRelease) GetDefaultConfigJson() string {
 	return ""
 }
 
+func (x *AppRelease) GetRequiredConfigNames() []string {
+	if x != nil {
+		return x.RequiredConfigNames
+	}
+	return nil
+}
+
 type CreateAppReleaseRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	AppId          string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
@@ -586,8 +603,11 @@ type CreateAppReleaseRequest struct {
 	// Set by the CLI from wendy.json at publish. One JSON object, UTF-8, at most
 	// 64 KiB, stored verbatim. Empty means `{}`.
 	DefaultConfigJson string `protobuf:"bytes,6,opt,name=default_config_json,json=defaultConfigJson,proto3" json:"default_config_json,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Set by the CLI from wendy.json at publish. Same rules as
+	// AppRelease.required_config_names.
+	RequiredConfigNames []string `protobuf:"bytes,7,rep,name=required_config_names,json=requiredConfigNames,proto3" json:"required_config_names,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CreateAppReleaseRequest) Reset() {
@@ -660,6 +680,13 @@ func (x *CreateAppReleaseRequest) GetDefaultConfigJson() string {
 		return x.DefaultConfigJson
 	}
 	return ""
+}
+
+func (x *CreateAppReleaseRequest) GetRequiredConfigNames() []string {
+	if x != nil {
+		return x.RequiredConfigNames
+	}
+	return nil
 }
 
 // Use this to assign a image_digest to an app_release after it has been pushed to the registry
@@ -3833,7 +3860,7 @@ var File_wendycloud_v2_deployments_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\n" +
-	"\x1fwendycloud/v2/deployments.proto\x12\rwendycloud.v2\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xa8\x03\n" +
+	"\x1fwendycloud/v2/deployments.proto\x12\rwendycloud.v2\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xdc\x03\n" +
 	"\n" +
 	"AppRelease\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
@@ -3848,15 +3875,17 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12=\n" +
 	"\frelease_type\x18\t \x01(\x0e2\x1a.wendycloud.v2.ReleaseTypeR\vreleaseType\x12.\n" +
 	"\x13default_config_json\x18\n" +
-	" \x01(\tR\x11defaultConfigJsonB\x0f\n" +
-	"\r_image_digest\"\xf6\x01\n" +
+	" \x01(\tR\x11defaultConfigJson\x122\n" +
+	"\x15required_config_names\x18\v \x03(\tR\x13requiredConfigNamesB\x0f\n" +
+	"\r_image_digest\"\xaa\x02\n" +
 	"\x17CreateAppReleaseRequest\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x18\n" +
 	"\adetails\x18\x04 \x01(\tR\adetails\x12=\n" +
 	"\frelease_type\x18\x05 \x01(\x0e2\x1a.wendycloud.v2.ReleaseTypeR\vreleaseType\x12.\n" +
-	"\x13default_config_json\x18\x06 \x01(\tR\x11defaultConfigJson\"z\n" +
+	"\x13default_config_json\x18\x06 \x01(\tR\x11defaultConfigJson\x122\n" +
+	"\x15required_config_names\x18\a \x03(\tR\x13requiredConfigNames\"z\n" +
 	"\x17UpdateAppReleaseRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +

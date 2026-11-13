@@ -92,7 +92,7 @@ func (a *deployAnswers) bindSteps(cmd *cobra.Command) {
 	f.StringVar(&a.configFile, "config-file", "", "4  What configuration? A JSON object of named values")
 	f.BoolVar(&a.run, "run", false, "5  Run it now")
 	f.BoolVar(&a.installOnly, "install-only", false, "5  Install only, keep it stopped")
-	f.StringVar(&a.keepTrying, "keep-trying", "60d", "5  How long offline devices keep trying: 7d, 30d, 60d or 1y")
+	f.StringVar(&a.keepTrying, "keep-trying", "", "5  How long offline devices keep trying: 7d, 30d, 60d (default) or 1y")
 	f.StringVar(&a.note, "note", "", "6  Note for the history")
 	f.BoolVarP(&a.yes, "yes", "y", false, "6  Deploy without asking for confirmation")
 	f.BoolVar(&a.wait, "wait", false, "7  Stay until every device is done")
@@ -102,7 +102,7 @@ func (a *deployAnswers) checkSteps() error {
 	if a.run && a.installOnly {
 		return usageErrorf("Choose one of --run and --install-only.")
 	}
-	if _, ok := keepTryingChoices[a.keepTrying]; !ok {
+	if _, ok := keepTryingChoices[a.keepTrying]; !ok && a.keepTrying != "" {
 		return usageErrorf("--keep-trying must be 7d, 30d, 60d or 1y.")
 	}
 	return nil
@@ -285,6 +285,17 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			return err
 		}
 		a.installOnly = strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "install")
+	}
+	for a.keepTrying == "" || keepTryingChoices[a.keepTrying] == 0 {
+		if !interactive {
+			a.keepTrying = "60d" // the preselected answer (ruling 4)
+			break
+		}
+		answer, err := deployAsk("If a device is offline, keep trying for", "7d, 30d, 60d or 1y. After that, the device no longer installs this deployment.", "60d")
+		if err != nil {
+			return err
+		}
+		a.keepTrying = strings.TrimSpace(answer)
 	}
 	plan.desired, plan.validity = cloudpb.Running_RUNNING, keepTryingChoices[a.keepTrying]
 	runWords := "running"
