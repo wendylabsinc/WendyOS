@@ -57,23 +57,24 @@ func TestWendyOSReadinessFallbackPreservesLegacyPreparation(t *testing.T) {
 	for _, tc := range []struct {
 		name, response string
 		exit           int
+		reason         string // why the updater verdict did not delegate
 	}{
-		{"unsupported old engine", "", 1},
-		{"not ready", `{"ok":false,"checks":[{"name":"rootfs A/B redundancy","ok":false}]}`, 5},
-		{"pending deployment", `{"ok":false,"checks":[{"name":"rootfs A/B redundancy","ok":true},{"name":"no pending update","ok":false}]}`, 5},
-		{"other check failed", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":true},{"name":"ESP capsule headroom","ok":false}]}`, 0},
-		{"failed exit with ready output", readyRootfsJSON, 1},
-		{"malformed", "not json", 0},
-		{"empty verdict", `{}`, 0},
-		{"missing rootfs", `{"ok":true,"checks":[{"name":"other","ok":true}]}`, 0},
-		{"missing check ok", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy"}]}`, 0},
-		{"inconsistent overall", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":false}]}`, 0},
-		{"duplicate check", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":true},{"name":"rootfs A/B redundancy","ok":true}]}`, 0},
-		{"duplicate key", `{"ok":false,"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":true}]}`, 0},
-		{"duplicate nested key", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":false,"ok":true}]}`, 0},
-		{"case alias", `{"ok":false,"OK":true,"checks":[{"name":"rootfs A/B redundancy","ok":true}]}`, 0},
-		{"trailing json", readyRootfsJSON + ` {}`, 0},
-		{"oversized", readyRootfsJSON + strings.Repeat(" ", wendyOSReadinessLimit), 0},
+		{"unsupported old engine", "", 1, `exit status 1`},
+		{"not ready", `{"ok":false,"checks":[{"name":"rootfs A/B redundancy","ok":false}]}`, 5, `failed checks: "rootfs A/B redundancy"`},
+		{"pending deployment", `{"ok":false,"checks":[{"name":"rootfs A/B redundancy","ok":true},{"name":"no pending update","ok":false}]}`, 5, `failed checks: "no pending update"`},
+		{"other check failed", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":true},{"name":"ESP capsule headroom","ok":false}]}`, 0, `failed checks: "ESP capsule headroom"`},
+		{"failed exit with ready output", readyRootfsJSON, 1, `exit status 1`},
+		{"malformed", "not json", 0, `malformed`},
+		{"empty verdict", `{}`, 0, `malformed`},
+		{"missing rootfs", `{"ok":true,"checks":[{"name":"other","ok":true}]}`, 0, `did not report "rootfs A/B redundancy"`},
+		{"missing check ok", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy"}]}`, 0, `malformed`},
+		{"inconsistent overall", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":false}]}`, 0, `failed checks: "rootfs A/B redundancy"`},
+		{"duplicate check", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":true},{"name":"rootfs A/B redundancy","ok":true}]}`, 0, `malformed`},
+		{"duplicate key", `{"ok":false,"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":true}]}`, 0, `malformed`},
+		{"duplicate nested key", `{"ok":true,"checks":[{"name":"rootfs A/B redundancy","ok":false,"ok":true}]}`, 0, `malformed`},
+		{"case alias", `{"ok":false,"OK":true,"checks":[{"name":"rootfs A/B redundancy","ok":true}]}`, 0, `malformed`},
+		{"trailing json", readyRootfsJSON + ` {}`, 0, `malformed`},
+		{"oversized", readyRootfsJSON + strings.Repeat(" ", wendyOSReadinessLimit), 0, `exceeds limit`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			trace := stubWendyOSPreflightBinary(t, fmt.Sprintf("if [ \"$1\" = check ]; then\n printf '%%s' '%s'\n exit %d\nfi\nexit 0\n", tc.response, tc.exit))
@@ -86,8 +87,14 @@ func TestWendyOSReadinessFallbackPreservesLegacyPreparation(t *testing.T) {
 				_, err := f.p.prepare(ctx)
 				return err
 			}
-			if err := w.install(context.Background(), "https://example.invalid/update.wendy", func(string, int32) { t.Error("unready engine reached install") }); err == nil || !strings.Contains(err.Error(), "firmware-managed") {
+			err := w.install(context.Background(), "https://example.invalid/update.wendy", func(string, int32) { t.Error("unready engine reached install") })
+			if err == nil || !strings.Contains(err.Error(), "firmware-managed") {
 				t.Fatalf("legacy refusal: %v", err)
+			}
+			// The refusal names why the updater verdict did not delegate, so a
+			// failing non-rootfs check is not reported only as "reflash".
+			if !strings.Contains(err.Error(), "wendyos-update check: ") || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("refusal %q does not carry updater reason %q", err, tc.reason)
 			}
 			assertWendyOSPreflightCalls(t, trace, "prepare\ncheck\n")
 			f.wantVariable(t, rootfsRedundancy, 6, 0)
