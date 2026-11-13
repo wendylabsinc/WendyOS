@@ -263,7 +263,10 @@ class ReviewInputTests(unittest.TestCase):
             args = argparse.Namespace(metadata=str(path / 'meta'), diff=str(path / 'diff'), previous=None,
                 repo=REPO, pr_number=42, expected_head_sha=HEAD, expected_base_sha=BASE,
                 model='offline', output=str(path / 'result'))
-            with patch.object(api_review, 'review_model', return_value={'risk': 'mid', 'decisions': []}) as model:
+            fixture = {'risk': 'mid', 'decisions': [], 'compatibility_verdict': 'not_assessed', 'compatibility_findings': [],
+                       'compatibility_coverage': {d: {'status': 'not_assessed', 'reason': 'Source-only fixture does not supply a runtime chain', 'evidence': []}
+                                                  for d in api_review.compat.DIRECTIONS}}
+            with patch.object(api_review, 'review_model', return_value=fixture) as model:
                 code = api_review.command_review(args)
             return code, json.loads((path / 'result').read_text()), model
 

@@ -1,4 +1,4 @@
-name: API Review
+name: AI Compatibility Review
 
 on:
   pull_request:
@@ -74,36 +74,16 @@ jobs:
             .github/workflows/integration-test-review.yml
           persist-credentials: false
 
-      - name: Bootstrap batched review automation when absent from base
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Require complete trusted review automation
         run: |
           set -euo pipefail
           scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          if [[ -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" && -f "$scripts_dir/review_diff.py" ]]; then
-            exit 0
-          fi
-          if [[ -f "$scripts_dir/api_review.py" && ! -f "$scripts_dir/api_review_comment.py" ]] || \
-             [[ ! -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" ]]; then
-            echo "::error::Base revision contains incomplete API review automation."
-            exit 1
-          fi
-
-          # Bootstrap only: the introducing PR predates batched review on base.
-          # Only same-repository writers can reach this step. Download only the
-          # review automation files at the event's immutable head SHA;
-          # application code is never checked out, compiled, or executed.
-          echo "::notice::Bootstrapping API review automation from the same-repository PR"
-          bootstrap_dir="$(mktemp -d)"
-          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py review_diff.py review_diff_test.py review_sources.py; do
-            gh api --method GET \
-              "repos/$REPO/contents/.github/scripts/$filename" \
-              -f ref="$EXPECTED_HEAD_SHA" --jq '.content' \
-              | base64 --decode > "$bootstrap_dir/$filename"
-            test -s "$bootstrap_dir/$filename"
+          for filename in api_review.py api_review_comment.py compatibility_review.py review_diff.py review_sources.py; do
+            if [[ ! -s "$scripts_dir/$filename" ]]; then
+              echo "::error::AI Compatibility Review is not activated on trusted main; no PR-head automation fallback is permitted."
+              exit 1
+            fi
           done
-          mkdir -p "$scripts_dir"
-          cp "$bootstrap_dir/"*.py "$scripts_dir/"
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -116,6 +96,7 @@ jobs:
           python3 review-automation/.github/scripts/api_review_test.py
           python3 review-automation/.github/scripts/api_review_comment_test.py
           python3 review-automation/.github/scripts/review_diff_test.py
+          python3 review-automation/.github/scripts/compatibility_review_test.py
           if [[ -f review-automation/.github/scripts/review_sources_test.py ]]; then
             python3 review-automation/.github/scripts/review_sources_test.py
           fi
@@ -202,6 +183,7 @@ jobs:
             previous_args=(--previous "$RUNNER_TEMP/previous-api-review.json")
           fi
           python3 review-automation/.github/scripts/api_review.py review \
+            --source-repository "$GITHUB_WORKSPACE/review-automation" \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
             "${previous_args[@]}" \
@@ -212,8 +194,13 @@ jobs:
             --output "$RUNNER_TEMP/api-review-result.json" \
             --model "$CLAUDE_MODEL"
 
-      - name: Preserve complete API review result
+      - name: Guard result privacy before artifact upload
         if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
+        id: public-result
+        run: python3 review-automation/.github/scripts/api_review.py guard-public --result "$RUNNER_TEMP/api-review-result.json"
+
+      - name: Preserve complete API review result
+        if: always() && steps.public-result.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: api-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
@@ -271,6 +258,7 @@ jobs:
           python3 .github/scripts/api_review_run_test.py
           python3 .github/scripts/review_sources_test.py
           python3 .github/scripts/api_review_workflow_test.py
+          python3 .github/scripts/compatibility_review_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
@@ -337,6 +325,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           python3 .github/scripts/api_review.py review \
+            --source-repository "$GITHUB_WORKSPACE" \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
             --previous "$RUNNER_TEMP/previous-api-review.json" \
@@ -358,8 +347,13 @@ jobs:
             --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Preserve candidate result
+      - name: Guard candidate privacy before artifact upload
         if: always() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
+        id: public-candidate
+        run: python3 .github/scripts/api_review.py guard-public --result "$RUNNER_TEMP/api-review-result.json"
+
+      - name: Preserve candidate result
+        if: always() && steps.public-candidate.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: api-review-validation-${{ github.run_id }}

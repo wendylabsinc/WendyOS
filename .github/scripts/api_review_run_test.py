@@ -17,7 +17,7 @@ import httpx
 
 import api_review
 import api_review_comment as comments
-from api_review_test import metadata, diff, decision, model_decision, HEAD_SHA, BASE_SHA, REPO
+from api_review_test import metadata, diff, decision, model_decision, HEAD_SHA, BASE_SHA, REPO, unassessed_fixture
 from api_review_comment_test import result, large_result, bot_comment, MultipartGitHub, pull
 
 
@@ -86,7 +86,7 @@ class FullRunTests(unittest.TestCase):
                     value = message.json()
                     value["content"][0]["text"] = "not-json"
                     return httpx.Response(200, json=value)
-            return self.message(response)
+            return self.message(unassessed_fixture(response) if len(requests) == 1 else response)
 
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -218,7 +218,7 @@ class FullRunTests(unittest.TestCase):
                             "relationship": "changed", "reason": "Combined contract changed."}]}
         fixed = copy.deepcopy(bad)
         fixed["matches"][0].update(relationship="ambiguous", reason="Multiple plausible predecessors.")
-        responses = [{"risk": "high", "decisions": [model_decision(title="Combined contract")]}, bad, fixed]
+        responses = [unassessed_fixture({"risk": "high", "decisions": [model_decision(title="Combined contract")]}), bad, fixed]
         requests = []
 
         def transport(request):

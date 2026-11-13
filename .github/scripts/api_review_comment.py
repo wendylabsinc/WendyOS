@@ -20,6 +20,7 @@ import zlib
 
 from api_review import RISKS, illustrative_excerpt, prior_state_digest, validate_prior_state
 from review_diff import diff_lines
+import compatibility_review as compat
 
 COMMENT_MARKER = "<!-- ai-api-review:v1 -->"
 PART_MARKER_RE = re.compile(r"<!-- ai-api-review:part=(\d+)/(\d+) -->")
@@ -367,10 +368,41 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
     return current, withdrawn
 
 
+def compatibility_lines(result):
+    if "compatibility_findings" not in result:
+        return ["Compatibility findings: not assessed by this legacy result.", ""]
+    lines = ["## Compatibility (advisory)", "",
+             "Bounded verdict: " + inline(result["compatibility_verdict"]) + ". Empty findings are not a universal compatibility guarantee.", ""]
+    for row in result["compatibility_coverage"]:
+        for direction, coverage in row["directions"].items():
+            lines += [f"- Batch {row['batch']}, {direction}: {coverage['status']}. {inline(coverage['reason'])}"]
+    lines += [""]
+    for finding in result["compatibility_findings"]:
+        lines += [f"**{inline(finding['assessment'])}: {inline(finding['consumer'])}** ({finding['direction']})", "",
+                  f"{inline(finding['action'])}. Condition: {inline(finding['condition'])}.",
+                  f"Before: {inline(finding['before'])}. After: {inline(finding['after'])}.",
+                  inline(finding["consider"]), ""]
+        for role in ("changed", "caller", "receiver"):
+            links = []
+            for ref in finding[role]:
+                url = f"https://github.com/{ref['repository']}/blob/{ref['revision']}/{urllib.parse.quote(ref['path'], safe='/')}#L{ref['line']}"
+                links.append(f"[{inline(ref['path'])}:{ref['line']}-{ref['end_line']}]({url})")
+            lines += [role.capitalize() + ": " + ", ".join(links)]
+        lines += [""]
+    if not result["compatibility_findings"]:
+        lines += ["No concrete compatibility failure returned in the supplied evidence.", ""]
+    limits = result.get("context_limits", {})
+    lines += ["Context: " + inline(json.dumps(limits, ensure_ascii=False)), "",
+              "Source revisions/pins are not installed versions. Test definitions do not establish execution or old/new version coverage.", "",
+              inline(result.get("model_call_policy", "Private calibration: one evidence call, no repair/reconciliation; CLI transport is not CI SDK validation.")), ""]
+    return lines
+
+
 def review_intro(result: dict, repo: str) -> list[str]:
     head = result["head_sha"]
     return [
-        "# API decisions", "",
+        "# AI Compatibility Review", "",
+        *compatibility_lines(result),
         f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
         + (f"Input coverage: {result['source_coverage']['source_files']}/{result['changed_files']} source files, "
          f"{result['source_coverage']['source_bytes']:,}/{result['diff_bytes']:,} diff bytes reviewed; "
@@ -673,6 +705,7 @@ def fetch_state(repo: str, pr_number: int, output: Path, github) -> None:
 def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: str, diff_bytes: bytes, github) -> bool:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or pr_number <= 0:
         raise ValueError("Invalid repository or PR number")
+    compat.public_result(result)
     validate_result(result, head_sha, base_sha)
     diff = ""
     if result["status"] in {"complete", "skipped"}:
@@ -682,6 +715,26 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
             diff = diff_bytes.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError("API review diff is not valid UTF-8") from error
+    if result["status"] == "complete" and "compatibility_findings" in result:
+        from api_review import evidence_catalog, parse_diff, finding_catalog
+        from review_sources import source_diff
+        source, _ = source_diff(diff)
+        assessment = {"revisions": {"repository": repo, "base": result["diff_base_sha"], "head": head_sha}, "visibility": "public"}
+        changed = finding_catalog(evidence_catalog(parse_diff(source)), assessment)
+        supplemental = result.get("evidence_catalog", {})
+        if (not isinstance(supplemental, dict) or any(ref.get("visibility") != "public" for ref in supplemental.values())
+                or any(ref.get("repository") != repo or ref.get("revision") not in {head_sha, result["diff_base_sha"]} for ref in supplemental.values())):
+            raise ValueError("Publication requires public same-repository immutable evidence")
+        coverage = result.get("compatibility_coverage")
+        if not isinstance(coverage, list) or len(coverage) != result.get("review_batches"):
+            raise ValueError("Compatibility assessment did not cover every batch")
+        for row in coverage:
+            # Validate each coverage record, then findings with their own direction.
+            compat.validate({"compatibility_verdict": "not_assessed", "compatibility_findings": [],
+                             "compatibility_coverage": row["directions"]}, changed, supplemental, resolved=True)
+        merged = {d: {"status": "partial", "reason": "Combined bounded batch evidence", "evidence": [next(iter(changed.values()))]} for d in compat.DIRECTIONS}
+        compat.validate({"compatibility_verdict": result["compatibility_verdict"], "compatibility_findings": result["compatibility_findings"],
+                         "compatibility_coverage": merged}, changed, supplemental, resolved=True)
     root = f"/repos/{repo}"
     issue = f"{root}/issues/{pr_number}"
     pull_path = f"{root}/pulls/{pr_number}"
