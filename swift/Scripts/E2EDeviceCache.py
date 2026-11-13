@@ -16,7 +16,9 @@ PREFLIGHT_TIMEOUT_SECONDS = 30
 
 
 def normalized_host(value):
-    return value.lower().rstrip(".").removesuffix(".local")
+    # Match config.normalizePinHost and normalizeMDNSHost exactly: trim one
+    # trailing dot, not every dot (a different spelling can have no binding).
+    return value.strip().lower().removesuffix(".").removesuffix(".local")
 
 
 def target_cache(document, target):
@@ -49,6 +51,8 @@ def require_target_binding(auth_config, target):
 
 def prepare(cli, auth_config, target, fixture, output):
     started = time.monotonic()
+    if os.environ.get("WENDY_AGENT_SOCKET"):
+        raise ValueError("unset WENDY_AGENT_SOCKET when using an explicit device cache fixture")
     require_target_binding(auth_config, target)
     fixture = Path(fixture)
     if fixture.resolve() in {

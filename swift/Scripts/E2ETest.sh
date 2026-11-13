@@ -405,6 +405,10 @@ if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" && ( -z "$DEVICE_ADDRESS" || "$ISOLATION" !
   echo "ERROR: --device-cache-fixture requires an explicit --device-address, --isolation per-test and --no-managed-agent." >&2
   exit 64
 fi
+if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" && -n "${WENDY_AGENT_SOCKET:-}" ]]; then
+  echo "ERROR: unset WENDY_AGENT_SOCKET when using an explicit device cache fixture." >&2
+  exit 64
+fi
 
 if [[ "$PARALLEL" == "true" && "$ISOLATION" != "per-test" ]]; then
   echo "ERROR: --parallel requires --isolation per-test." >&2

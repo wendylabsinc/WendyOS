@@ -8,6 +8,19 @@ import unittest
 
 
 class ManagedAgentCleanupTests(unittest.TestCase):
+    def test_cache_fixture_rejects_socket_override_before_building(self):
+        runner = Path(__file__).with_name("E2ETest.sh")
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([
+                "bash", str(runner), "--output-dir", directory,
+                "--device-cache-fixture", str(Path(directory) / "fixture.json"),
+                "--device-address", "cache-test.local", "--no-managed-agent",
+            ], env={**os.environ, "WENDY_AGENT_SOCKET": "/tmp/unrelated-agent.sock"},
+                capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 64, result.stderr)
+            self.assertIn("unset WENDY_AGENT_SOCKET", result.stderr)
+            self.assertNotIn("Building", result.stdout)
+
     def test_unmanaged_macos_cleanup_never_quits_an_app_or_opens_a_log(self):
         source = Path(__file__).with_name("E2ETest.sh").read_text()
         function = "stop_managed_agent() {" + source.split("stop_managed_agent() {", 1)[1].split("\n}\n", 1)[0] + "\n}"

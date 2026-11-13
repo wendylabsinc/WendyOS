@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -21,7 +22,11 @@ func (agent) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest) (
 }
 
 func main() {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	network, address := "tcp", "127.0.0.1:0"
+	if len(os.Args) == 2 {
+		network, address = "unix", os.Args[1]
+	}
+	listener, err := net.Listen(network, address)
 	if err != nil {
 		panic(err)
 	}

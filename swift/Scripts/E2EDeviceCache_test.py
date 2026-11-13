@@ -9,10 +9,19 @@ import subprocess
 import unittest
 from unittest import mock
 
-from E2EDeviceCache import main, prepare
+from E2EDeviceCache import main, normalized_host, prepare
 
 
 class DeviceCacheTests(unittest.TestCase):
+    def test_host_normalization_preserves_the_cli_binding_key(self):
+        for host, expected in [
+            (" Orin.LOCAL. ", "orin"),
+            ("orin.local..", "orin.local."),
+            ("orin...", "orin.."),
+        ]:
+            with self.subTest(host=host):
+                self.assertEqual(normalized_host(host), expected)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -138,6 +147,13 @@ print(json.dumps({"version": "test", "preflightHome": str(home), "files": files,
                     self.prepare()
                 self.assertFalse(self.output.exists())
 
+    def test_rejects_ambient_socket_override_before_invoking_cli(self):
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/tmp/unrelated-agent.sock"}):
+            with self.assertRaisesRegex(ValueError, "unset WENDY_AGENT_SOCKET"):
+                self.prepare()
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.cli.with_suffix(".home").exists())
+
 
 @unittest.skipUnless(
     os.environ.get("WENDY_E2E_CACHE_TEST_CLI") and os.environ.get("WENDY_E2E_CACHE_TEST_SERVER"),
@@ -184,6 +200,42 @@ class RealDeviceCacheTests(unittest.TestCase):
                 with self.assertRaises(subprocess.CalledProcessError):
                     prepare(cli, auth, target, fixture, output)
                 self.assertFalse(output.exists())
+                # The CLI trims only one trailing dot. With two dots this is
+                # a different, unbound name, despite the saved cache-test pin.
+                target = f"cache-test.local..:{port}"
+                cache["devices"][0]["hostname"] = "cache-test.local.."
+                (config / "devices.json").write_text(json.dumps(cache))
+                fixture.write_text(json.dumps({**cache, "e2eTarget": target}))
+                result = subprocess.run([cli, "--json", "--device", target, "device", "info", "--read-only"],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["version"], "test-plaintext")
+                with self.assertRaisesRegex(ValueError, "existing saved device principal"):
+                    prepare(cli, auth, target, fixture, output)
+                self.assertFalse(output.exists())
+                socket = root / "agent.sock"
+                unix_server = subprocess.Popen([os.environ["WENDY_E2E_CACHE_TEST_SERVER"], str(socket)],
+                                               stdout=subprocess.PIPE, text=True)
+                try:
+                    self.assertTrue(select.select([unix_server.stdout], [], [], 5)[0], "Unix server did not start")
+                    unix_server.stdout.readline()
+                    target = "cache-test.local:1"
+                    cache["devices"][0].update(hostname="cache-test.local", port=1)
+                    fixture.write_text(json.dumps({**cache, "e2eTarget": target}))
+                    # The real CLI's intentional local-socket shortcut bypasses
+                    # even this bound, unreachable explicit TCP target.
+                    result = subprocess.run([cli, "--json", "--device", target, "device", "info", "--read-only"],
+                        env={**env, "WENDY_AGENT_SOCKET": str(socket)}, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["version"], "test-plaintext")
+                    with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": str(socket)}):
+                        with self.assertRaisesRegex(ValueError, "unset WENDY_AGENT_SOCKET"):
+                            prepare(cli, auth, target, fixture, output)
+                    self.assertFalse(output.exists())
+                finally:
+                    unix_server.terminate()
+                    unix_server.wait(timeout=5)
+                    unix_server.stdout.close()
         finally:
             server.terminate()
             try:

@@ -141,6 +141,8 @@ must already contain a saved device principal for the explicit target hostname.
 The CLI parses and enforces that existing binding on every connection; cache
 metadata never creates or replaces identity bindings. In particular, a cached
 `mtls: true` value is a routing hint, not proof of an authenticated connection.
+Unset `WENDY_AGENT_SOCKET`: the runner, preflight and opted-in scenario reject
+this ambient override because it bypasses the explicit device address.
 Preparation pays the normal cold lookup cost. Later runs seed that preflight
 HOME from the prepared fixture and check reachability using the real CLI and
 its mandatory saved binding. Each run writes a separate refreshed snapshot;

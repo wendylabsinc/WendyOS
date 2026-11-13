@@ -164,9 +164,20 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
                     )
                 }
                 try await cli.sh(
-                    posix: "cp \(Self.shellQuote(source)) \"$HOME/.wendy/devices.json\"",
-                    power:
-                        "Copy-Item -LiteralPath \(Self.powerShellQuote(source)) -Destination (Join-Path $env:HOME '.wendy/devices.json') -ErrorAction Stop"
+                    posix: """
+                        if [ -n "${WENDY_AGENT_SOCKET:-}" ]; then
+                          echo "ERROR: unset WENDY_AGENT_SOCKET when using an explicit device cache fixture." >&2
+                          exit 1
+                        fi
+                        cp \(Self.shellQuote(source)) "$HOME/.wendy/devices.json"
+                        """,
+                    power: """
+                        if ($env:WENDY_AGENT_SOCKET) {
+                            Write-Error "unset WENDY_AGENT_SOCKET when using an explicit device cache fixture."
+                            exit 1
+                        }
+                        Copy-Item -LiteralPath \(Self.powerShellQuote(source)) -Destination (Join-Path $env:HOME '.wendy/devices.json') -ErrorAction Stop
+                        """
                 )
             }
             let agent = try await WendyE2ESession.begin(

@@ -48,4 +48,25 @@ struct `device cache fixtures` {
             }
         }
     }
+
+    @Test(
+        .enabled(
+            if: WendyE2EEnvironment.cliDeviceCachePath != nil
+                && !(ProcessInfo.processInfo.environment["WENDY_AGENT_SOCKET"] ?? "").isEmpty
+        )
+    )
+    func `rejects an ambient socket override in opted-in fixtures`() async throws {
+        do {
+            try await CLIAndAgentScenario().run(useDeviceCache: true) { _, _ in
+                Issue.record("The ambient socket override reached the test body.")
+            }
+            Issue.record("The ambient socket override was accepted.")
+        } catch let error as WendyE2EMachineError {
+            if case .commandFailed(_, let command, _) = error {
+                #expect(command.contains("WENDY_AGENT_SOCKET"))
+            } else {
+                throw error
+            }
+        }
+    }
 }
