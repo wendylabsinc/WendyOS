@@ -53,7 +53,7 @@ def main():
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         report = output / "junit.xml"
         with (output / "review.log").open("w") as log:
-            result = GUARDIAN.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", str(report), "tests/test_review_regressions.py", "tests/test_transport_boundaries.py"], 120, cwd=EXAMPLE, env=environment, stdout=log)
+            result = GUARDIAN.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", str(report), "tests/test_review_regressions.py", "tests/test_transport_boundaries.py", "tests/test_replay_integrity.py"], 120, cwd=EXAMPLE, env=environment, stdout=log)
         evidence["exit_code"] = result
         if result != 0:
             raise RuntimeError("required Coke review suite failed; see review.log")
