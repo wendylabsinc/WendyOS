@@ -1087,7 +1087,11 @@ func (m tourWizardModel) View() string {
 	}
 	inner := w - 10
 	if inner < 40 {
-		inner = 40
+		if tourHasCommandOutput(m.phase) {
+			inner = max(8, inner)
+		} else {
+			inner = 40
+		}
 	}
 
 	var body string
@@ -2237,7 +2241,10 @@ func newTourCmd() *cobra.Command {
 			m := newTourWizardModel()
 			m.root = cmd.Root()
 			m.ctx = ctx
-			final, err := tui.RunProgram(tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)))
+			final, err := tui.RunProgram(tea.NewProgram(tourCommandScreenModel{tourWizardModel: m}, tea.WithAltScreen(), tea.WithContext(ctx)))
+			if output, ok := final.(tourCommandScreenModel); ok {
+				final = output.tourWizardModel
+			}
 			if result, ok := final.(tourWizardModel); ok && result.diagnosticStep != "" {
 				step = result.diagnosticStep
 			}
