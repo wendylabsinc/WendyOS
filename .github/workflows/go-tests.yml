@@ -258,6 +258,7 @@ jobs:
           go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
           go test -c -o "$RUNNER_TEMP/t234.test" ./go/internal/cli/tegraflash/t234
       - name: Require loop-device and actual sudo ownership regressions
+        shell: bash
         env:
           WENDY_INSTALL_HOST_TESTS: '1'
         run: |
@@ -266,6 +267,7 @@ jobs:
             grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
           done
       - name: Require exclusive recovery writer access on a mounted loop disk
+        shell: bash
         run: |
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
@@ -281,6 +283,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Test direct and nested USB disk discovery
+        shell: bash
         run: |
           go test ./go/internal/cli/tegraflash/t234 -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksNestedHub ' "$RUNNER_TEMP/disk-discovery.log"
@@ -290,6 +293,7 @@ jobs:
       - name: Compile raw-device and target-scoped preparation tests
         run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
       - name: Require disposable disk image regressions
+        shell: bash
         run: |
           sudo env WENDY_E2E_DISKIMAGE=1 "$RUNNER_TEMP/install.test" -test.run '^(TestRelocateGPTDarwinRawDiskImage|TestMarkFATVolumes_DiskImage|TestStopTargetIndexing|TestStopTargetIndexingNoMountedFAT|TestUnmountDarwinDisk)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
           for test in TestRelocateGPTDarwinRawDiskImage TestMarkFATVolumes_DiskImage TestStopTargetIndexing TestStopTargetIndexingNoMountedFAT TestUnmountDarwinDisk; do
