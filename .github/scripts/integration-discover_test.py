@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +17,54 @@ spec.loader.exec_module(discovery)
 
 
 class DiscoveryTests(unittest.TestCase):
+    def discover_process(self, devices, required=True):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = Path(directory) / "wendy-fixture"
+            cli.write_text('''#!/usr/bin/env python3
+import json, os, sys
+devices = json.loads(os.environ["FIXTURE_DEVICES"])
+args = sys.argv[1:]
+if args[0] == "discover":
+    print(json.dumps({"lanDevices": [{"hostname": name, "isWendyDevice": True} for name in devices]}))
+elif args[:2] == ["device", "info"]:
+    device = devices[args[args.index("--device") + 1]]
+    print(json.dumps({"deviceType": device["type"]}))
+elif args[:3] == ["device", "apps", "list"]:
+    device = devices[args[args.index("--device") + 1]]
+    if not device.get("authorized", True): sys.exit(1)
+    print("[]")
+else:
+    sys.exit("unexpected operation: " + repr(args))
+''')
+            cli.chmod(0o755)
+            args = [os.sys.executable, str(Path(__file__).with_name("integration-discover.py")), "--wendy", str(cli)]
+            if required:
+                args.append("--require-platforms")
+            return subprocess.run(args, env=dict(os.environ, FIXTURE_DEVICES=json.dumps(devices)),
+                                  capture_output=True, text=True, timeout=15)
+
+    def test_cli_gate_accepts_renamed_thor_and_refuses_missing_or_inaccessible_families(self):
+        devices = {"renamed-pi.local": {"type": "raspberry-pi-5"},
+                   "renamed-thor.local": {"type": "jetson-agx-thor"},
+                   "renamed-iq.local": {"type": "dragonwing-iq-8275"}}
+        result = self.discover_process(devices)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), list(devices))
+        for state in ("missing", "unauthorized"):
+            with self.subTest(state=state):
+                incomplete = dict(devices)
+                if state == "missing":
+                    del incomplete["renamed-thor.local"]
+                else:
+                    incomplete["renamed-thor.local"] = {"type": "jetson-agx-thor", "authorized": False}
+                failed = self.discover_process(incomplete)
+                self.assertEqual(failed.returncode, 1, failed.stderr)
+                self.assertEqual(failed.stdout, "")
+                self.assertIn("no accessible device for required platform(s): jetson", failed.stderr)
+                discovery_only = self.discover_process(incomplete, required=False)
+                self.assertEqual(discovery_only.returncode, 0, discovery_only.stderr)
+                self.assertEqual(json.loads(discovery_only.stdout), ["renamed-pi.local", "renamed-iq.local"])
+
     def test_selects_renamed_devices_and_all_required_families(self):
         devices = [("new-pi.local", "raspberry-pi"),
                    ("new-thor.local", "jetson"),

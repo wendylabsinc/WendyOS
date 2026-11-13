@@ -133,24 +133,32 @@ struct AgentUpdateLockTests {
 
     @Test("an uncommitted lock older than the stale threshold is stolen")
     func staleUncommittedLockIsStolen() async throws {
-        let lock = AgentUpdateLock(staleThreshold: .milliseconds(50))
+        let clock = AgentUpdateTestClock()
+        let lock = AgentUpdateLock(now: clock.now)
         #expect(await lock.tryAcquire() == true)
         #expect(await lock.tryAcquire() == false)
 
         // Models the leak: whoever acquired the lock never got to release it
         // (grpc-swift can fail the initial-metadata write before the response
         // producer, and its `release`, ever runs).
-        try await Task.sleep(for: .milliseconds(200))
+        clock.advance(by: AgentUpdateLock.defaultStaleThreshold - .nanoseconds(1))
+        #expect(await lock.tryAcquire() == false)
+        clock.advance(by: .nanoseconds(1))
+        #expect(await lock.tryAcquire() == true)
+        // Stealing establishes a fresh acquisition, not another stale holder.
+        #expect(await lock.tryAcquire() == false)
+        clock.advance(by: AgentUpdateLock.defaultStaleThreshold)
         #expect(await lock.tryAcquire() == true)
     }
 
     @Test("a committed lock is never stolen, however old")
     func committedLockIsNeverStolen() async throws {
-        let lock = AgentUpdateLock(staleThreshold: .milliseconds(50))
+        let clock = AgentUpdateTestClock()
+        let lock = AgentUpdateLock(now: clock.now)
         #expect(await lock.tryAcquire() == true)
         await lock.markCommitted()
 
-        try await Task.sleep(for: .milliseconds(200))
+        clock.advance(by: .seconds(365 * 24 * 60 * 60))
         // Post-commit the process is exiting; a steal here could double-install.
         #expect(await lock.tryAcquire() == false)
     }

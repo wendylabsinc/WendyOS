@@ -588,6 +588,14 @@ type CloudNotificationSender struct {
 	connection      *grpc.ClientConn
 }
 
+// cloudResponseError marks an error returned by the Cloud RPC itself. Cloud
+// controls its text, which can contain notification content or recipient
+// details. Errors the agent raises before the call stay unmarked.
+type cloudResponseError struct{ error }
+
+// GRPCStatus keeps status.Code and status.FromError returning Cloud's status.
+func (e cloudResponseError) GRPCStatus() *status.Status { return status.Convert(e.error) }
+
 func NewCloudNotificationSender(logger *zap.Logger, provisioningSvc *ProvisioningService) *CloudNotificationSender {
 	return &CloudNotificationSender{logger: logger, provisioningSvc: provisioningSvc}
 }
@@ -640,7 +648,7 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
 			zap.String("status_code", status.Code(err).String()))
-		return nil, err
+		return nil, cloudResponseError{err}
 	}
 	return response, nil
 }
@@ -684,7 +692,7 @@ func (s *CloudNotificationSender) createNotificationV2WithACME(
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
 			zap.String("status_code", status.Code(err).String()))
-		return nil, err
+		return nil, cloudResponseError{err}
 	}
 	return &cloudpb.CreateNotificationV2Response{NotificationId: response.GetNotificationId()}, nil
 }

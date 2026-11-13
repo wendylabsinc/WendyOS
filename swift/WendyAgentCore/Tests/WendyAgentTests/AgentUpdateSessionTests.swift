@@ -629,7 +629,8 @@ struct AgentServiceUpdateLockingTests {
         let harness = try Harness()
         defer { harness.cleanup() }
 
-        let lock = AgentUpdateLock(staleThreshold: .milliseconds(50))
+        let clock = AgentUpdateTestClock()
+        let lock = AgentUpdateLock(now: clock.now)
         let service = AgentService(
             updateLock: lock,
             updateDependencies: makeDependencies(harness)
@@ -645,7 +646,7 @@ struct AgentServiceUpdateLockingTests {
         )
         #expect(await lock.tryAcquire() == false)
 
-        try await Task.sleep(for: .milliseconds(200))
+        clock.advance(by: AgentUpdateLock.defaultStaleThreshold)
         // Without the steal, every later update would fail with
         // failedPrecondition until someone restarted the app by hand.
         #expect(await lock.tryAcquire() == true)
@@ -656,7 +657,8 @@ struct AgentServiceUpdateLockingTests {
         let harness = try Harness()
         defer { harness.cleanup() }
 
-        let lock = AgentUpdateLock(staleThreshold: .milliseconds(50))
+        let clock = AgentUpdateTestClock()
+        let lock = AgentUpdateLock(now: clock.now)
         let service = AgentService(
             updateLock: lock,
             updateDependencies: makeDependencies(harness)
@@ -672,7 +674,7 @@ struct AgentServiceUpdateLockingTests {
         let writer = CollectingWriter<Wendy_Agent_Services_V1_UpdateAgentResponse>()
         _ = try await response.accepted.get().producer(RPCWriter(wrapping: writer))
 
-        try await Task.sleep(for: .milliseconds(200))
+        clock.advance(by: .seconds(365 * 24 * 60 * 60))
         // The handler wires the session's commit hook to markCommitted(), so
         // the shutdown window can never be raced by a second install.
         #expect(await lock.tryAcquire() == false)

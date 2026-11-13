@@ -57,6 +57,8 @@ const (
 	preEnrollSkip                        // --pre-enroll explicitly set to false
 )
 
+var errESP32DeviceType = errors.New("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
@@ -113,6 +115,11 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			defer startInstallSession(cmd)()
+			// Alias and driver resolution can fetch manifests before runOSInstall.
+			// Refuse unsupported explicit targets before either path runs.
+			if isESP32Target(deviceType) {
+				return errESP32DeviceType
+			}
 			if len(drivers) > 0 {
 				if len(args) != 0 || deviceType == "" || deviceName == "" {
 					return usageErrorf("--driver requires --device-type and --device-name, and cannot be combined with positional image/drive arguments")
@@ -455,7 +462,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
 	// Rejected before any manifest fetch: the answer never depends on it.
 	if isESP32Target(flagDeviceType) {
-		return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+		return errESP32DeviceType
 	}
 	if storageOverride != "" && storageOverride != "nvme" && storageOverride != "sd" && storageOverride != "emmc" {
 		return fmt.Errorf("invalid --storage %q: must be \"nvme\", \"sd\", or \"emmc\" (jetson-agx-orin only)", storageOverride)

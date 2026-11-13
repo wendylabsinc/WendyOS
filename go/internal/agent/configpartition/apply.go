@@ -457,13 +457,19 @@ func validDeviceName(name string) bool {
 	return name[len(name)-1] != '-'
 }
 
-func applyDeviceName(logger *zap.Logger, name string) error {
+func persistDeviceName(logger *zap.Logger, root, name string) error {
 	if !validDeviceName(name) {
 		return fmt.Errorf("%w %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", errInvalidDeviceName, name)
 	}
 
-	const deviceNamePath = "/etc/wendyos/device-name"
-	if err := os.MkdirAll("/etc/wendyos", 0o755); err != nil {
+	deviceNamePath := filepath.Join(root, "etc/wendyos/device-name")
+	// Remember the stored name so a rename that fails below can put it back.
+	previous, err := os.ReadFile(deviceNamePath)
+	hadPrevious := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading previous device name: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(deviceNamePath), 0o755); err != nil {
 		return fmt.Errorf("creating /etc/wendyos: %w", err)
 	}
 	if err := os.WriteFile(deviceNamePath, []byte(name+"\n"), 0o644); err != nil {
@@ -474,13 +480,36 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 	// A device-name apply is a deliberate re-identification, so clear any explicit
 	// rename — it outranks device-name (hostname.go, update-mdns-uuid.sh) and would
 	// otherwise override this name on the next boot.
-	const explicitHostnamePath = "/etc/wendy-agent/hostname"
+	explicitHostnamePath := filepath.Join(root, "etc/wendy-agent/hostname")
 	if err := os.Remove(explicitHostnamePath); err == nil {
 		logger.Info("Cleared explicit hostname so the device name takes effect",
 			zap.String("path", explicitHostnamePath))
 	} else if !os.IsNotExist(err) {
 		logger.Warn("Could not clear explicit hostname; it will keep overriding the device name",
 			zap.String("path", explicitHostnamePath), zap.Error(err))
+		// Do not publish the new device name while hostname generation still
+		// selects the old explicit value. A retry can finish once it is removable.
+		err = fmt.Errorf("clearing explicit hostname before applying device name: %w", err)
+		// Nor leave it stored, where it would take effect unannounced whenever
+		// the explicit hostname is next cleared.
+		var restoreErr error
+		if hadPrevious {
+			restoreErr = os.WriteFile(deviceNamePath, previous, 0o644)
+		} else {
+			restoreErr = os.Remove(deviceNamePath)
+		}
+		if restoreErr != nil {
+			restoreErr = fmt.Errorf("restoring previous device name: %w", restoreErr)
+		}
+		return errors.Join(err, restoreErr)
+	}
+
+	return nil
+}
+
+func applyDeviceName(logger *zap.Logger, name string) error {
+	if err := persistDeviceName(logger, "/", name); err != nil {
+		return err
 	}
 
 	// Build an env with a full system PATH so scripts can find standard
