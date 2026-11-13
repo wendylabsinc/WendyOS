@@ -154,6 +154,20 @@ that known failure, explicitly set both `WENDY_E2E_REPLAY_KNOWN_DEFECTS=true` an
 `WENDY_E2E_HTTP_APP=true` and filter `preserves the companion version`.
 The replay retains the original `1.0.0` assertion.
 
+The everyday update/log batch uses the same prebuilt service. Select the exact
+test-name filters `replays owned stdout`, `limits stored replay`,
+`keeps serving after output`, `redeploys changed HTTP`, and
+`preserves the working HTTP`. The replay cases compare actual request markers
+from both streams, app and severity filtering, and recent versus older matching
+batches. `--tail` counts batches, not JSON lines. The pressure case writes a
+bounded 2 MiB per stream without a log reader and requires the same process to
+keep serving HTTP. It does not prove unlimited output handling or attribution
+of Agent events from a crash-loop that emits no stdout; the latter remains
+uncovered. Changed runtime configuration must change the served payload version
+and process while preserving a second owned app. Invalid-manifest preservation
+is checked before deployment, followed by a repaired successful redeploy; it
+does not assert rollback after an accepted replacement starts or crashes.
+
 Five source-build positive specs retain complete bodies but remain disabled:
 the available test Jetson lacks BuildKit and the CLI host has no container
 builder. Their same-device `--build-host` path also rejects `--wait-ready`.

@@ -7,6 +7,98 @@ struct `'wendy run'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     Redeploying a changed prebuilt Compose service applies its changed runtime
+     environment: HTTP reports the new payload version from a new process.
+     Exactly one entry remains for that app; an unrelated owned app retains its
+     inventory, payload version and process while continuing to serve requests.
+     This checks the served version; the known companion inventory-version
+     defect has a separate opt-in spec.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `redeploys changed HTTP content without replacing an unrelated app`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { other in
+                try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                    let before = try await app.response(cli)
+                    let otherBefore = try await other.response(cli)
+                    let inventory = try await app.inventory(cli)
+                    try await app.setVersion(cli, "2.0.0")
+                    try await app.deploy(cli, expectedVersion: "2.0.0")
+                    let after = try await app.response(
+                        cli,
+                        retryStartup: false,
+                        expectedVersion: "2.0.0"
+                    )
+                    #expect(after.instance != before.instance)
+                    try await app.requireState(cli, "RUNNING", expectedVersion: nil)
+                    let otherAfter = try await other.response(cli, retryStartup: false)
+                    #expect(otherAfter.instance == otherBefore.instance)
+                    #expect(otherAfter.requests > otherBefore.requests)
+                    #expect(
+                        try await app.inventory(cli).filter { $0.name != app.app }
+                            == inventory.filter { $0.name != app.app }
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     A replacement with a locally invalid manifest fails with the original
+     configuration diagnostic, before deployment. The last working app keeps
+     its inventory and process and continues serving requests. Repairing the
+     manifest permits a later changed version to deploy successfully.
+
+     This is preflight preservation, not a promise of rollback after an image
+     has been accepted or a replacement has started and then crashed.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `preserves the working HTTP app after invalid replacement configuration`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                let before = try await app.response(cli)
+                let inventory = try await app.inventory(cli)
+                let path = app.app + "/wendy.json"
+                let original = try await LocalCLIAssertions.read(cli, path: path)
+                var config = try #require(
+                    JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any]
+                )
+                config["entitlements"] = [["type": "persist", "name": "data", "path": "relative"]]
+                let invalid = try JSONSerialization.data(
+                    withJSONObject: config,
+                    options: [.sortedKeys]
+                )
+                try await LocalCLIAssertions.write(
+                    cli,
+                    path: path,
+                    text: String(decoding: invalid, as: UTF8.self)
+                )
+                try await cli.sh(
+                    "\(app.command) run --prefix \(app.app) --skip-cloud-registration --detach --no-restart"
+                ) { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stdout.isEmpty)
+                    #expect(result.stderr.contains("persist path must be absolute"))
+                    #expect(result.stderr.contains("config_invalid"))
+                }
+                #expect(try await app.inventory(cli) == inventory)
+                let survived = try await app.response(cli, retryStartup: false)
+                #expect(survived.instance == before.instance)
+                #expect(survived.requests > before.requests)
+                try await LocalCLIAssertions.write(cli, path: path, text: original)
+                try await app.setVersion(cli, "2.0.0")
+                try await app.deploy(cli, expectedVersion: "2.0.0")
+                let repaired = try await app.response(
+                    cli,
+                    retryStartup: false,
+                    expectedVersion: "2.0.0"
+                )
+                #expect(repaired.instance != before.instance)
+            }
+        }
+    }
+
+    /**
      A single prebuilt Compose service deploys and starts without a local
      builder. Detached JSON reports unchecked readiness and a usable HTTP
      endpoint whose response identifies this app and version.

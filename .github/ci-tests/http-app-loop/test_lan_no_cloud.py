@@ -98,6 +98,7 @@ class LANNoCloudTests(unittest.TestCase):
                 commands = [
                     ["run", "--prefix", str(project), "--skip-cloud-registration", "--detach"],
                     ["device", "apps", "list"],
+                    ["device", "logs", "--app", "e2e-missing", "--tail", "1", "--no-follow"],
                     ["device", "apps", "start", "e2e-missing", "--detach"],
                     ["device", "apps", "stop", "e2e-missing"],
                     ["device", "apps", "remove", "e2e-missing", "--force"],

@@ -72,6 +72,8 @@ struct HTTPAppFixture: Sendable {
         let app: String
         let instance: String
         let version: String
+        let requests: Int
+        let burstBytesPerStream: Int
     }
 
     struct ReadinessFailure: Decodable, Sendable {
@@ -213,23 +215,67 @@ struct HTTPAppFixture: Sendable {
     func response(
         _ cli: WendyE2ESession,
         endpoint: String? = nil,
-        retryStartup: Bool = true
+        retryStartup: Bool = true,
+        expectedVersion: String = "1.0.0",
+        timeoutSeconds: Int = 2
     ) async throws -> Response {
         // Detached start acknowledges no readiness, so only that path may poll startup.
         let retry =
             retryStartup
             ? "--retry 20 --retry-delay 1 --retry-connrefused --retry-max-time 20" : "--retry 0"
         let result = try await cli.sh(
-            "curl --fail --silent --show-error \(retry) --max-time 2 \(Self.quote(endpoint ?? url))"
+            "curl --fail --silent --show-error \(retry) --max-time \(timeoutSeconds) \(Self.quote(endpoint ?? url))"
         ) { result in
             try result.requireSuccess()
             return result
         }
         let response = try JSONDecoder().decode(Response.self, from: Data(result.stdout.utf8))
         #expect(response.app == app)
-        #expect(response.version == "1.0.0")
+        #expect(response.version == expectedVersion)
         #expect(!response.instance.isEmpty)
+        #expect(response.requests > 0)
         return response
+    }
+
+    func setVersion(_ cli: WendyE2ESession, _ version: String) async throws {
+        let script = """
+            import json
+            from pathlib import Path
+            p = Path(\(String(reflecting: app))) / 'wendy.json'
+            config = json.loads(p.read_text())
+            config['version'] = \(String(reflecting: version))
+            config['env']['E2E_HTTP_VERSION'] = \(String(reflecting: version))
+            p.write_text(json.dumps(config))
+            """
+        try await cli.sh("python3 -c \(Self.quote(script))")
+    }
+
+    struct LogEntry: Decodable, Sendable {
+        let timestamp: String
+        let severity: String
+        let service: String?
+        let body: String
+        let attributes: [String: String]?
+    }
+
+    func logs(
+        _ cli: WendyE2ESession,
+        tail: Int = 20,
+        level: String = "info"
+    ) async throws -> [LogEntry] {
+        let result = try await cli.sh(
+            "\(command) device logs --app \(Self.quote(app)) --tail \(tail) --level \(level) --no-follow"
+        ) { result in
+            try result.requireSuccess()
+            return result
+        }
+        return try result.stdout.split(separator: "\n").map {
+            try JSONDecoder().decode(LogEntry.self, from: Data($0.utf8))
+        }
+    }
+
+    func marker(_ stream: String, _ response: Response) -> String {
+        "e2e \(stream) app=\(app) instance=\(response.instance) version=\(response.version) request=\(response.requests)"
     }
 
     func stop(_ cli: WendyE2ESession, expectedVersion: String? = "1.0.0") async throws {
@@ -307,7 +353,11 @@ struct HTTPAppFixture: Sendable {
 
     }
 
-    private func deploy(_ cli: WendyE2ESession, waitReady: Bool) async throws {
+    func deploy(
+        _ cli: WendyE2ESession,
+        waitReady: Bool = false,
+        expectedVersion: String = "1.0.0"
+    ) async throws {
         let flags = waitReady ? "--wait-ready --readiness-timeout 20s" : ""
         let builder = mode == .sourceBuild ? buildHostArgument : ""
         try await cli.sh(
@@ -329,7 +379,12 @@ struct HTTPAppFixture: Sendable {
                     "python3 -c \(Self.quote("import socket; s=socket.socket(); s.settimeout(0.2); assert s.connect_ex((\(String(reflecting: device)), \(port))) == 0, 'CLI claimed readiness before declared TCP probe passed'"))"
                 )
             }
-            _ = try await response(cli, endpoint: endpoint + "/ready", retryStartup: !waitReady)
+            _ = try await response(
+                cli,
+                endpoint: endpoint + "/ready",
+                retryStartup: !waitReady,
+                expectedVersion: expectedVersion
+            )
         }
     }
 
