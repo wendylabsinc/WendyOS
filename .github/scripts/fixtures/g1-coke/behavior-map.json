@@ -53,8 +53,8 @@
       "behaviors": [
         {
           "boundary": "Production RTPS multicast socket only receives on joined interfaces",
-          "proof": "Existing TestParticipantRestrictsMulticastToJoinedInterfaces inspects the actual NewParticipant socket option.",
-          "remaining": "Actual distinct-interface multicast packet exclusion remains pending; getsockopt alone does not establish packet isolation."
+          "proof": "TestMulticastPacketsStayOnTheirJoinedInterface runs two real production participants on private loopback/veth interfaces. Actual external-namespace SPDP/SEDP plus exact binary samples must reach only the appropriate participant. test-rtps-multicast-isolation.sh requires normal and a named pre-fix control removing the production multicast restriction. Both binaries compile; hosted kernel/race execution remains pending.",
+          "remaining": "Hosted normal and historical-control packet execution is required before accepting this boundary. This does not prove container observer deployment or physical middleware interoperability."
         },
         {
           "boundary": "Lifecycle observer uses host discovery scope; lidar interruption does not swallow SystemExit",
@@ -107,7 +107,8 @@
   "new_gates": {
     "transport": "python .github/scripts/test-g1-coke-transports.py --output NEW_DIRECTORY; NumPy required; five real HTTP/thread cases and six source-bound controls, no skips.",
     "locked_review": "uv run --project Examples/G1CokeDemo --frozen --group dev --python 3.12 python .github/scripts/test-g1-coke-review.py --output NEW_DIRECTORY; exact lock versions and all 40 current review/transport cases required.",
-    "runner": "Existing G1 simulator row can run the lightweight gate after shipped NumPy installation, then the separate exact Coke Python 3.12 runtime. It must retain the existing Python 3.10 simulator compatibility check. No additional job or matrix entry."
+    "runner": "Existing G1 simulator row can run the lightweight gate after shipped NumPy installation, then the separate exact Coke Python 3.12 runtime. It must retain the existing Python 3.10 simulator compatibility check. No additional job or matrix entry.",
+    "packet_isolation": "bash .github/scripts/test-rtps-multicast-isolation.sh NEW_DIRECTORY in the existing disposable Linux network job. Requires Go race compiler, sudo, iproute2 and util-linux; no additional runner. Never run its privileged namespace on a user host."
   },
   "not_claimed": [
     "Physical robot/camera/motor access",
