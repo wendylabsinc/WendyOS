@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'scripts/generate-sbom.sh'
+      - 'scripts/*sbom.py'
+      - 'scripts/release-security.py'
       - 'scripts/test/**'
       - '.github/workflows/build.yml'
       - '.github/workflows/sbom.yml'
@@ -12,6 +14,8 @@ on:
     branches: [main]
     paths:
       - 'scripts/generate-sbom.sh'
+      - 'scripts/*sbom.py'
+      - 'scripts/release-security.py'
       - 'scripts/test/**'
       - '.github/workflows/build.yml'
       - '.github/workflows/sbom.yml'
@@ -45,6 +49,9 @@ jobs:
       # `#cgo pkg-config: libusb-1.0`.
       - name: Install libusb (cgo dependency of the CLI)
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev pkg-config
+
+      - name: Release security regression tests
+        run: python3 -m unittest discover -s scripts/test -p '*_test.py' -v
 
       - name: Unit tests (fake syft)
         run: bash scripts/test/generate-sbom.test.sh
