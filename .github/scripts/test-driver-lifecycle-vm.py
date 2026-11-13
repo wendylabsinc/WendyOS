@@ -80,6 +80,7 @@ def validate_export(path):
 
 def accept_log(text, nonce, control, phase, code):
     require(code == 0, "QEMU did not shut down normally")
+    require("DRIVER_VM_EVIDENCE_CHANNEL_READY\n" in text, "missing independent guest evidence channel")
     require("--- SKIP:" not in text, "guest driver test skipped")
     marker = f"DRIVER_VM_EXIT nonce={nonce} control={control} phase={phase} status="
     lines = [line.strip() for line in text.splitlines() if line.startswith(marker)]
@@ -175,7 +176,7 @@ LABEL {LABEL}={self.nonce}
 RUN dnf -y --setopt=install_weak_deps=False install systemd systemd-udev dbus-daemon kernel-core kernel-modules kernel-devel kmod squashfs-tools dracut gcc make elfutils-libelf-devel python3 findutils diffutils procps-ng util-linux e2fsprogs && dnf clean all
 COPY . /fixture/
 RUN install -m755 /fixture/wendyos-sysext-apply.sh /usr/sbin/wendyos-sysext-apply.sh && bash /fixture/build-guest.sh
-RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fixture.service && systemctl enable driver-fixture.service && systemctl set-default multi-user.target && systemctl mask serial-getty@ttyS0.service && printf '%s\\n' '{self.nonce}' > /etc/machine-id && mkdir -p /data/extensions/enabled && rm -f /fixture/Dockerfile
+RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fixture.service && systemctl enable driver-fixture.service && systemctl set-default multi-user.target && systemctl mask serial-getty@ttyS0.service console-getty.service && printf '%s\\n' '{self.nonce}' > /etc/machine-id && mkdir -p /data/extensions/enabled && rm -f /fixture/Dockerfile
 ''')
         self.created_image = True # Track before build; a failed late build may still tag it.
         self.command(["docker", "build", "--pull=false", "--network=default", "--label", LABEL + "=" + self.nonce, "-t", self.tag, str(context)], timeout=1200)
@@ -217,17 +218,24 @@ RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fix
         self.command(["sudo", "-n", "rm", "-rf", "--", str(rootfs)], timeout=120)
 
     def boot(self, disk, control, phase):
+        require(not any(char in str(self.output) for char in (",", "\n", "\r")), "evidence path contains QEMU delimiters")
+        log = self.output / (control + "-" + phase + ".log")
+        console = self.output / (control + "-" + phase + "-console.log")
+        require(not log.exists() and not console.exists(), "guest evidence paths already exist")
         append = f"root=/dev/vda rw console=ttyS0 loglevel=4 selinux=0 audit=0 systemd.show_status=false wendy.driver={self.nonce} wendy.control={control} wendy.phase={phase} "
         command = ["qemu-system-x86_64", "-machine", "q35,accel=tcg", "-cpu", "max", "-smp", "2", "-m", "2048",
                    "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot", "-nic", "none",
+                   "-device", "virtio-serial-pci",
+                   "-chardev", "file,id=driver-evidence,path=" + str(log),
+                   "-device", "virtserialport,chardev=driver-evidence,name=wendy.driver.evidence",
                    "-smbios", "type=1,product=WendyDriverFixture-" + self.nonce,
                    "-kernel", str(self.work / "vmlinuz"), "-initrd", str(self.work / "initrd"),
                    "-append", append, "-drive", "file=" + str(disk) + ",format=qcow2,if=virtio"]
-        log = self.output / (control + "-" + phase + ".log")
         start = time.monotonic()
-        with log.open("x") as stream:
+        with console.open("x") as stream:
             code = GUARDIAN.run(command, self.remaining_timeout(600), cwd=ROOT, stdout=stream)
-        require(log.stat().st_size <= 32 * 1024 * 1024, "guest console exceeded evidence limit")
+        require(log.is_file() and log.stat().st_size <= 32 * 1024 * 1024, "guest evidence missing or exceeded limit")
+        require(console.stat().st_size <= 32 * 1024 * 1024, "guest console exceeded evidence limit")
         accept_log(log.read_text(errors="replace"), self.nonce, control, phase, code)
         self.results[control + "/" + phase] = {"passed": True, "seconds": round(time.monotonic() - start, 2), "log": str(log)}
 

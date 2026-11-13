@@ -132,3 +132,20 @@ nonce-bound guest exit. The original activation, module-version, rollback and
 reboot assertions remain unchanged. Portable tests execute inert command
 children, including a real stalled child; only hosted QEMU can establish the
 actual bus and driver lifecycle pass.
+
+Hosted 50ce4945a / run43373610335 / job131714898743 reached actual first
+healthy install, then lost all later test/45-second observer/test-timeout output.
+The console explicitly showed Fedora console-getty.service taking the same
+ttyS0 that the fixture used; masking serial-getty alone did not exclude it.
+This does not establish that terminal contention caused the driver stall.
+
+The fixture now masks both console gettys and routes test output/observer probes
+through an owned virtio-serial character port (virtio_console included in the
+initramfs). The host captures that port directly as <control>-<phase>.log;
+<control>-<phase>-console.log independently retains kernel/systemd boot output.
+Port admission waits at most15seconds and refuses ordinary files; lifecycle
+acceptance requires its explicit ready marker. QEMU retains the unchanged600s
+boot bound and original normal/control assertions. No driver implementation,
+apply-script flag or timeout is relaxed. Portable PTY/admission/QEMU-argv tests
+prove evidence routing only; the next real VM run must diagnose or pass the
+remaining lifecycle before audit2049 can close.
