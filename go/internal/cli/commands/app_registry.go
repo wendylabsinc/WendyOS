@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -157,46 +156,6 @@ func (f *registryFlags) run(cmd *cobra.Command, call func(context.Context, *regi
 		}
 		return call(ctx, op, appCfg.AppID, f.devices)
 	})
-}
-
-func newAppAssignCmd() *cobra.Command {
-	var f registryFlags
-	cmd := &cobra.Command{
-		Use:   "assign",
-		Short: "Assign more devices to an existing deployment",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
-				kd, err := op.current(ctx, f.deployment)
-				if err != nil {
-					return err
-				}
-				return op.change(ctx, kd.deployment, kd, appID, devices, nil)
-			})
-		},
-	}
-	f.bind(cmd, true)
-	return cmd
-}
-
-func newAppUnassignCmd() *cobra.Command {
-	var f registryFlags
-	cmd := &cobra.Command{
-		Use:   "unassign",
-		Short: "Remove devices from a deployment; Cloud stops serving them its release",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
-				d, err := cloudpb.NewDeploymentServiceClient(op.conn).GetDeployment(ctx, &cloudpb.GetDeploymentRequest{Id: f.deployment})
-				if err != nil {
-					return fmt.Errorf("reading deployment %s: %w", f.deployment, err)
-				}
-				return op.change(ctx, d, nil, appID, nil, devices)
-			})
-		},
-	}
-	f.bind(cmd, true)
-	return cmd
 }
 
 func newAppRotateCmd() *cobra.Command {
@@ -681,7 +640,11 @@ func (op *registryOp) deploy(ctx context.Context, p deployPlan) (*cloudpb.Deploy
 	if err != nil {
 		return d, fmt.Errorf("deployment %s: %w", d.GetId(), err)
 	}
-	return d, op.signPending(ctx, d, kd, p.appID, keys, nil, moves, resp)
+	must := map[string]bool{}
+	for dev := range keys {
+		must[dev] = true
+	}
+	return d, op.signPending(ctx, confirmed{d: d, kd: kd, appID: p.appID, revision: 1, assign: keys, moves: moves, must: must}, resp.GetToSign(), resp.GetNextPageToken())
 }
 
 // releases lists appID's releases, newest first.
@@ -759,71 +722,28 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 	return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
 }
 
-// change adds devices to, or drops them from, deployment d as one new
-// revision (expected_revision = d's), then signs each device's statement.
-// kd is needed only to add devices.
-func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID string, add, drop []string) error {
-	if d.GetAppId() != appID {
-		return fmt.Errorf("deployment %s is of app %s, not %s (wendy.json)", d.GetId(), d.GetAppId(), appID)
-	}
-	if d.GetRevision() < 1 || d.GetRemovedAt() != nil {
-		return fmt.Errorf("deployment %s cannot be changed: it has no current revision", d.GetId())
-	}
-	revs, err := cloudpb.NewDeploymentServiceClient(op.conn).ListDeploymentRevisions(ctx, &cloudpb.ListDeploymentRevisionsRequest{DeploymentId: d.GetId(), PageSize: 1})
-	if err != nil {
-		return fmt.Errorf("reading deployment %s: %w", d.GetId(), err)
-	}
-	if len(revs.GetRevisions()) == 0 || revs.GetRevisions()[0].GetRevision() != d.GetRevision() {
-		return fmt.Errorf("deployment %s changed while it was read; try again", d.GetId())
-	}
-	sel := proto.Clone(revs.GetRevisions()[0].GetSelection()).(*cloudpb.DeviceSelection)
-	for _, dev := range add {
-		if slices.Contains(sel.TargetDeviceIds, dev) {
-			return usageErrorf("%s is already in deployment %s", dev, d.GetId())
-		}
-		sel.TargetDeviceIds = append(sel.TargetDeviceIds, dev)
-	}
-	remove := map[string]bool{}
-	for _, dev := range drop {
-		i := slices.Index(sel.TargetDeviceIds, dev)
-		if i < 0 {
-			return usageErrorf("%s is not named in deployment %s; if it is in through a tag, change the tags instead", dev, d.GetId())
-		}
-		sel.TargetDeviceIds = slices.Delete(sel.TargetDeviceIds, i, i+1)
-		remove[deviceURI(op.org, dev)] = true
-	}
-	keys := map[string][]byte{}
-	if len(add) > 0 {
-		if keys, err = op.deviceKeys(ctx, add); err != nil {
-			return err
-		}
-	}
-	resp := new(cloudpb.DeploymentChangeResponse)
-	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_UpdateDeployment_FullMethodName, &cloudpb.UpdateDeploymentRequest{
-		OrganizationId: op.org, DeploymentId: d.GetId(), ExpectedRevision: d.GetRevision(), Devices: sel,
-	}, resp); err != nil {
-		return fmt.Errorf("changing deployment %s: %w", d.GetId(), err)
-	}
-	next := resp.GetDeployment()
-	if next.GetId() != d.GetId() || next.GetRevision() != d.GetRevision()+1 || next.GetAppReleaseId() != d.GetAppReleaseId() ||
-		next.GetConfigJson() != d.GetConfigJson() || next.GetDesiredState() != d.GetDesiredState() {
-		return fmt.Errorf("Cloud recorded a change of deployment %s that differs from the one asked for; nothing was sent to devices", d.GetId())
-	}
-	return op.signPending(ctx, next, kd, appID, keys, remove, nil, resp)
+// confirmed is one revision as the operator confirmed it: every statement
+// cloud lists must be part of it.
+type confirmed struct {
+	d        *cloudpb.Deployment
+	kd       *keyedDeployment // nil when no device gets the deployment
+	appID    string
+	revision int32             // what the statements carry: d's, or the maximum for a terminal removal
+	assign   map[string][]byte // device URI -> verified key: may get the deployment
+	remove   map[string]bool   // device URIs that may leave it
+	moves    map[string]string // device URI -> the deployment of the app it moves out of
+	must     map[string]bool   // device URIs cloud must ask for
 }
 
-// signPending signs every statement cloud lists for revision d (to_sign,
-// then the pending list), refusing any that is not part of the change the
-// operator asked for: devices that get the deployment (assign, with their
-// verified keys), leave it (remove), or move into it from the deployment the
-// operator confirmed (moves, by device URI). Every device is tried.
-func (op *registryOp) signPending(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID string, assign map[string][]byte, remove map[string]bool, moves map[string]string, resp *cloudpb.DeploymentChangeResponse) error {
-	rows, next := resp.GetToSign(), resp.GetNextPageToken()
+// signPending signs every statement cloud lists (rows, then the pending
+// list from next), refusing any the operator did not confirm. Every device
+// is tried.
+func (op *registryOp) signPending(ctx context.Context, c confirmed, rows []*cloudpb.PendingDeviceStatement, next string) error {
 	signed := map[string]bool{}
 	var errs []error
 	for {
 		for _, row := range rows {
-			if err := op.signRow(ctx, d, kd, appID, assign, remove, moves, row); err != nil {
+			if err := op.signRow(ctx, c, row); err != nil {
 				cliLogln("Not sent to %s: %v", row.GetDevice(), err)
 				errs = append(errs, fmt.Errorf("%s: %w", row.GetDevice(), err))
 				continue
@@ -833,61 +753,59 @@ func (op *registryOp) signPending(ctx context.Context, d *cloudpb.Deployment, kd
 		if next == "" {
 			break
 		}
-		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: d.GetId(), PageToken: next})
+		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: c.d.GetId(), PageToken: next})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("reading the rest of the devices: %w", err))
 			break
 		}
 		rows, next = page.GetStatements(), page.GetNextPageToken()
 	}
-	for _, dev := range slices.Sorted(maps.Keys(assign)) {
+	for _, dev := range slices.Sorted(maps.Keys(c.must)) {
 		if !signed[dev] {
 			errs = append(errs, fmt.Errorf("%s: Cloud did not ask for its instruction", dev))
 		}
 	}
-	for _, dev := range slices.Sorted(maps.Keys(remove)) {
-		if !signed[dev] {
-			errs = append(errs, fmt.Errorf("%s: Cloud did not ask for its removal", dev))
-		}
-	}
 	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("deployment %s revision %d: %d devices not sent their instruction: %w", d.GetId(), d.GetRevision(), len(errs), err)
+		return fmt.Errorf("deployment %s revision %d: %d devices not sent their instruction: %w", c.d.GetId(), c.d.GetRevision(), len(errs), err)
 	}
 	return nil
 }
 
-// signRow signs one listed statement if it is one the operator asked for.
-func (op *registryOp) signRow(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID string, assign map[string][]byte, remove map[string]bool, moves map[string]string, row *cloudpb.PendingDeviceStatement) error {
-	if row.GetDeploymentId() != d.GetId() || row.GetRevision() != d.GetRevision() {
-		return fmt.Errorf("Cloud asked for deployment %s revision %d, not %s revision %d", row.GetDeploymentId(), row.GetRevision(), d.GetId(), d.GetRevision())
+// signRow signs one listed statement if it is one the operator confirmed.
+func (op *registryOp) signRow(ctx context.Context, c confirmed, row *cloudpb.PendingDeviceStatement) error {
+	if row.GetDeploymentId() != c.d.GetId() || row.GetRevision() != c.revision {
+		return fmt.Errorf("Cloud asked for deployment %s revision %d, not %s revision %d", row.GetDeploymentId(), row.GetRevision(), c.d.GetId(), c.revision)
 	}
 	switch row.GetKind() {
 	case cloudpb.PendingDeviceStatement_KIND_ASSIGN:
-		key, ok := assign[row.GetDevice()]
-		if !ok || kd == nil {
+		key, ok := c.assign[row.GetDevice()]
+		if !ok || c.kd == nil || c.revision == maxRevision {
 			return errors.New("Cloud asked to give it the deployment, which was not asked for")
 		}
 		move := row.GetReplacesDeploymentId() != "" || row.GetReplacesRevision() != 0
-		if move && (moves[row.GetDevice()] == "" || moves[row.GetDevice()] != row.GetReplacesDeploymentId() || row.GetReplacesRevision() < 1) {
+		if move && (c.moves[row.GetDevice()] == "" || c.moves[row.GetDevice()] != row.GetReplacesDeploymentId() || row.GetReplacesRevision() < 1 || row.GetReplacesRevision() == maxRevision) {
 			return fmt.Errorf("Cloud asked to move it from deployment %s, which was not asked for", row.GetReplacesDeploymentId())
 		}
-		return op.signAssign(ctx, d, kd, appID, row.GetDevice(), key, row.GetReplacesDeploymentId(), row.GetReplacesRevision())
+		return op.signAssign(ctx, c.d, c.kd, c.appID, row.GetDevice(), key, row.GetReplacesDeploymentId(), row.GetReplacesRevision())
 	case cloudpb.PendingDeviceStatement_KIND_UNASSIGN:
-		if !remove[row.GetDevice()] {
+		if !c.remove[row.GetDevice()] {
 			return errors.New("Cloud asked to remove it, which was not asked for")
 		}
 		valid, _ := cloudrequest.ValidUntil(time.Now(), cloudrequest.MaxValidity) // removals: the platform cap, not the tenant's
 		var resp cloudpb.DeviceStatementResponse
 		if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_UnassignDevice_FullMethodName, &cloudpb.UnassignDeviceRequest{
-			OrganizationId: op.org, DeploymentId: d.GetId(), Device: row.GetDevice(), Revision: d.GetRevision(), ValidUntil: timestamppb.New(valid),
+			OrganizationId: op.org, DeploymentId: c.d.GetId(), Device: row.GetDevice(), Revision: c.revision, ValidUntil: timestamppb.New(valid),
 		}, &resp); err != nil {
 			return err
 		}
-		cliLogln("Sent %s its removal from deployment %s (postbox entry %d)", row.GetDevice(), d.GetId(), resp.GetPostboxEntryId())
+		cliLogln("Sent %s its removal from deployment %s (postbox entry %d)", row.GetDevice(), c.d.GetId(), resp.GetPostboxEntryId())
 		return nil
 	}
 	return fmt.Errorf("Cloud asked for a statement of kind %s, which was not asked for", row.GetKind())
 }
+
+// maxRevision is the revision of a terminal removal (UnassignDeviceRequest).
+const maxRevision = 2147483647
 
 // signAssign signs device's statement for revision d at kd's key, carrying
 // the device's own wrap of that key.

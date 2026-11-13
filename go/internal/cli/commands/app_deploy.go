@@ -647,13 +647,15 @@ func newAppDeploymentCmd() *cobra.Command {
 	}
 	show.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
 	cmd.AddCommand(show)
+	cmd.AddCommand(deploymentChangeCmds()...)
 	return cmd
 }
 
-// findDeployment is appID's live deployment called name.
-func (op *registryOp) findDeployment(ctx context.Context, appID, name string) (*cloudpb.Deployment, error) {
+// findDeployment is appID's live deployment called name (or a removed one,
+// with includeRemoved).
+func (op *registryOp) findDeployment(ctx context.Context, appID, name string, includeRemoved bool) (*cloudpb.Deployment, error) {
 	for offset := int32(0); ; {
-		stream, err := cloudpb.NewDeploymentServiceClient(op.conn).ListDeployments(ctx, &cloudpb.ListDeploymentsRequest{OrganizationId: op.org, AppId: appID, Offset: offset})
+		stream, err := cloudpb.NewDeploymentServiceClient(op.conn).ListDeployments(ctx, &cloudpb.ListDeploymentsRequest{OrganizationId: op.org, AppId: appID, Offset: offset, IncludeRemoved: includeRemoved})
 		if err != nil {
 			return nil, fmt.Errorf("reading the deployments of %s: %w", appID, err)
 		}
@@ -669,7 +671,7 @@ func (op *registryOp) findDeployment(ctx context.Context, appID, name string) (*
 			total = page.GetTotal()
 			for _, d := range page.GetDeployments() {
 				seen++
-				if d.GetName() == name && d.GetAppId() == appID && d.GetRemovedAt() == nil {
+				if d.GetName() == name && d.GetAppId() == appID && (includeRemoved || d.GetRemovedAt() == nil) {
 					return d, nil
 				}
 			}
@@ -682,7 +684,7 @@ func (op *registryOp) findDeployment(ctx context.Context, appID, name string) (*
 
 func (op *registryOp) showDeployment(ctx context.Context, appID, name string, out io.Writer) error {
 	say := func(format string, args ...any) { _, _ = fmt.Fprintf(out, format+"\n", args...) }
-	d, err := op.findDeployment(ctx, appID, name)
+	d, err := op.findDeployment(ctx, appID, name, false)
 	if err != nil {
 		return err
 	}
