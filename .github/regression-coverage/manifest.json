@@ -1616,10 +1616,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2524",
       "title": "fix(agent): let a Wendy Net roaming device finish its gateway lease over Bluetooth",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests model pending lease ownership, slow radio negotiation and cancellation. They do not establish successful roaming on a physical BLE link.",
-      "required_follow_up": "Add a roaming integration test with a lease exchange longer than one controller step.",
-      "evidence": []
+      "required_follow_up": "Require the actual Controller/kernel policy slow-lease gate and pending-withdrawal control in the existing network job. Preserve the unchanged five-second wait and fifteen-second step context; physical BLE remains separate.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/meshsharing/lease_controller_namespace_linux_test.go",
+            ".github/scripts/prepare-sharing-slow-lease.py",
+            ".github/scripts/test-sharing-slow-lease.sh"
+          ],
+          "result": "Prepared real TLS lease over one TCP connection held across16seconds and successive actual Controller.Step calls; pending steps must retain the same connection before roaming. Existing real namespaces then require dual-stack HTTP/DNS, grant/revocation and donor withdrawal cleanup. Historical pending-withdrawal mutation must fail at retained lease assertion. Node/probe inputs are controlled; actual resolved integration is separate. Normal/control Linux compilation, ShellCheck and independent review pass. Privileged runtime remains pending; no physical radio was used."
+        }
+      ]
     },
     {
       "key": "2527",
@@ -3007,9 +3016,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2318",
       "title": "Mac agent: serve v2 provisioning so wendy device enroll works on macOS",
       "package": "09",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Go and Swift contract tests plus an ACME test server cover provisioning. A complete CLI-to-packaged-Mac-agent enrollment is not part of the regular fixture.",
-      "required_follow_up": "Require the actual CLI to production Mac Agent enrollment journey and refusal controls in hosted Swift core CI. Retain signed packaged-app enrollment with disposable PKI as an exact reserved-Mac procedure.",
+      "required_follow_up": "Require actual CLI enrollment, local ACME validation, persisted restart and mTLS refusal in the existing macOS26 native-app job. Signed-package acceptance has an executable exact reserved-Mac procedure; those cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -3017,7 +3026,16 @@
             "go/internal/testfixture/macenrollment/main.go",
             ".github/scripts/test-mac-enrollment.sh"
           ],
-          "result": "Exact-source native run passes actual CLI enrollment through production v2 Agent startup and local ACME peer validating EAB/JWS/CSR. Persisted software-key identity survives a fresh Agent and authenticates mTLS status; absent client certificate is refused. Legacy-only and unavailable services refuse before any Cloud/ACME issuance. Uses supported plaintext development Cloud transport and loopback disposable PKI, never user Keychain. All runtime source hashes match integrated files. Existing Swift core job reuses its built CLI and scratch. Hosted CI and signed-package execution remain unverified."
+          "result": "Exact-source native run passes actual CLI enrollment through production v2 Agent startup and local ACME peer validating EAB/JWS/CSR. Persisted software-key identity survives a fresh Agent and authenticates mTLS status; absent client certificate is refused. Legacy-only and unavailable services refuse before any Cloud/ACME issuance. Uses supported plaintext development Cloud transport and loopback disposable PKI, never user Keychain. All runtime source hashes match integrated files. Existing macOS26 native-app job builds the exact CLI and reuses one private core scratch; the production macOS26 capability guard remains active. Hosted CI and signed-package execution remain unverified."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-agent-lifecycle-rehearsal.py",
+            ".github/regression-coverage/manual/mac-agent-enrollment.py",
+            ".github/regression-coverage/manual/mac-agent-lifecycle-rehearsal.txt",
+            ".github/scripts/mac_agent_lifecycle_rehearsal_test.py"
+          ],
+          "result": "Prepared signed-package enrollment/restart extension with exact reserved Mac/account/source/binary/package identity, actual loopback-only listener ownership, disposable local PKI, real CLI saved mTLS binding, unchanged persisted identity after a new app PID, exactly-once issuance and owned cleanup. Seven local generator/guard tests pass, including wildcard/mixed listeners and actual redirect refusal with hostile proxy environment. Independent source review is clear. No signed package, OS credential prompt or account operation was executed; every physical case remains not_run."
         }
       ]
     },
