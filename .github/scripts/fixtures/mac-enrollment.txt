@@ -1,0 +1,51 @@
+Audit 2318 software enrollment acceptance
+
+Run once in the existing macOS Swift core/native row, after its Go setup and CLI
+build. Reuse that CLI and the same Swift core scratch/build system:
+  bash .github/scripts/test-mac-enrollment.sh "$RUNNER_TEMP/mac-enrollment" "$RUNNER_TEMP/swift-core" PATH_TO_THIS_HEAD_CLI default
+Use native instead of default only when the row uses native for both Swift build
+and test. No new job, runner, signed app, login item, Cloud account or device is
+created. The helper build has a 180s bound; incremental Swift build has 600s;
+actual runtime has 140s. Native measured runtime was 1.66s. Cold CI build cost
+still depends on the existing row's cache; no new dependency tree is requested.
+
+The standalone Go peer owns only random loopback listeners and a new private
+0700 directory. Random disposable Cloud bearer/EAB credentials and operator keys
+stay there. The CLI uses explicit file-backed configuration and a private HOME.
+The local development Cloud dial uses WENDY_CLOUD_INSECURE=true, scoped to the
+child CLI only; actual device enrollment switches to real mTLS. ACME uses the
+production HTTP client against a loopback HTTP peer, with validated ES256 JWS,
+fresh nonces, EAB MAC/account-key binding, permanent UUID order, signed CSR and
+issued certificate. Operator-signed Cloud request bytes/scope are checked with a
+fresh ML-DSA key. These controlled peers are not production PKI/Cloud acceptance.
+
+The Swift test starts WendyAgent through its production service registry and
+callbacks. Its internal factory forces software keys, retains live ACME, and
+uses a fresh private provisioning directory. Its controlled empty camera avoids
+hardware/control restoration. Loopback configuration suppresses Bonjour/Cloud
+relay. The public initializer and production factory default remain unchanged.
+The test never starts/stops the user's app, touches Secure Enclave/Keychain,
+changes trust stores, or invokes make agent-start/agent-stop.
+
+Actual CLI device enroll must first refuse both a live v1-only RPC peer and a
+production Agent advertising unavailable ACME, before Cloud/ACME counts change.
+Normal enrollment must spend exactly one EAB/account/order/CSR issuance, return
+CLI success after its authenticated reconnect, save the selected identity binding,
+and persist the exact Cloud-minted UUID. A fresh Agent object then reloads the
+unchanged state/key, serves the same v2 identity over authenticated mTLS, and
+rejects a client without a certificate. Restart must not repeat issuance.
+Fixed loopback ports18820/18821 must be free; collision fails rather than dialing
+another process. No skipped test or missing marker can pass the wrapper.
+
+Children receive bounded termination through their Foundation Process objects;
+no saved numeric PID is killed. Unknown drain fails and retains owned files.
+The outer shared guardian bounds inherited process descendants. The peer owns
+no child processes and joins all three listener goroutines before exit. Private
+credentials/state are removed only after known child and Agent drain. Retain only
+build.log/runtime.log/evidence.json, not peer binaries, private state or keys.
+
+The audit's full packaged-Agent requirement remains separate: signed bundle
+registration, Aqua launch/launchd, real Keychain/Secure Enclave and package update
+are not established by this software test. Reuse the existing reserved-account
+mac-agent-lifecycle-rehearsal procedure for that acceptance; all such execution
+remains not_run until an owner supplies actual signed-package evidence.
