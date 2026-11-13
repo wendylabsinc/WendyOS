@@ -53,13 +53,13 @@ def main():
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         report = output / "junit.xml"
         with (output / "review.log").open("w") as log:
-            result = GUARDIAN.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", str(report), "tests/test_review_regressions.py", "tests/test_transport_boundaries.py", "tests/test_replay_integrity.py"], 120, cwd=EXAMPLE, env=environment, stdout=log)
+            result = GUARDIAN.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", str(report), "tests/test_review_regressions.py", "tests/test_transport_boundaries.py", "tests/test_replay_integrity.py", "tests/test_physical_interruption.py"], 120, cwd=EXAMPLE, env=environment, stdout=log)
         evidence["exit_code"] = result
         if result != 0:
             raise RuntimeError("required Coke review suite failed; see review.log")
         cases = ET.parse(report).findall(".//testcase")
-        if len(cases) < 40 or any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error")):
-            raise RuntimeError("all 40+ required review cases must execute and pass; skips are failures")
+        if len(cases) < 42 or any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error")):
+            raise RuntimeError("all 42+ required review cases must execute and pass; skips are failures")
         evidence["tests"] = [case.attrib for case in cases]
         evidence["status"] = "passed"
         print(f"COKE_LOCKED_REVIEW_VERIFIED: {len(cases)} cases without skips")
