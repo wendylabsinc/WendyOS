@@ -56,9 +56,13 @@ if (( normal_status != 0 )); then
   # known drain. A watchdog/interruption/cleanup uncertainty cannot launch a
   # second writer or remove an unknown node. Keep the original failure code.
   if (( normal_status == 1 )) && [[ ! -e /dev/video200 && ! -L /dev/video200 ]]; then
-    for mode in consumer-unsynced producer-write; do
+    for mode in output-queue consumer-unsynced producer-write; do
       diagnostic_status=0
-      run_fixture "$output/services.test" '^TestIPCameraKernelDeliveryDiagnostic$' "$mode" "$mode" 25 \
+      diagnostic_test=TestIPCameraKernelDeliveryDiagnostic
+      if [[ "$mode" == output-queue ]]; then
+        diagnostic_test=TestIPCameraOutputQueueContractDiagnostic
+      fi
+      run_fixture "$output/services.test" "^$diagnostic_test$" "$mode" "$mode" 25 \
         > "$output/$mode.log" 2>&1 || diagnostic_status=$?
       cat "$output/$mode.log"
       if (( diagnostic_status >= 124 )) || [[ -e /dev/video200 || -L /dev/video200 ]]; then
