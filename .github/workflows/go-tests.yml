@@ -530,6 +530,16 @@ jobs:
         run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
       - name: Require stale Bluetooth bond recovery over private D-Bus
         run: bash .github/scripts/test-stale-bond-dbus.sh "$RUNNER_TEMP/stale-bond-dbus"
+      - name: Require GATT disconnect wakeup and connection ownership
+        run: bash .github/scripts/test-gatt-disconnect-dbus.sh "$RUNNER_TEMP/gatt-disconnect-dbus"
+      - name: Preserve GATT disconnect evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: gatt-disconnect-dbus
+          path: ${{ runner.temp }}/gatt-disconnect-dbus/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require native Linux SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - name: Compile both packet backends with the race detector
