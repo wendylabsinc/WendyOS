@@ -155,4 +155,112 @@ struct `'wendy os cache list'` {
             }
         }
     }
+
+    /**
+     The OS inventory includes regular images and recursively sized extracted
+     flashpacks. Checksum stamps, other directories, and build caches are excluded.
+     JSON reports exact bytes; the plain list reports the same downloads in MiB.
+     Listing never edits the files. POSIX hosts only.
+     */
+    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX cache fixture"))
+    func `lists populated images and flashpacks with exact bytes and OS-only scope`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await CacheCommandFixture.populate(cli)
+            try await cli.sh(
+                """
+                \(try CacheCommandFixture.environment(cli))
+                printf 'checksum-stamp' > "$cache/os-images/jetson.flashpack.sha256"
+                mkdir -p "$cache/os-images/unrelated-directory"
+                printf 'not-a-download' > "$cache/os-images/unrelated-directory/keep"
+                """
+            )
+            try await cli.sh(
+                "\(try CacheCommandFixture.environment(cli))\nwendy os cache list --json"
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stderr.isEmpty)
+                let rows = try #require(
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
+                        as? [[String: Any]]
+                )
+                #expect(
+                    rows.compactMap { $0["name"] as? String }.sorted() == [
+                        "jetson.flashpack", "pi.img",
+                    ]
+                )
+                for row in rows {
+                    let name = try #require(row["name"] as? String)
+                    #expect(row["sizeBytes"] as? Int == (name == "pi.img" ? 11 : 12))
+                    #expect(row["size"] as? String == (name == "pi.img" ? "11 B" : "12 B"))
+                    #expect(row["path"] == nil)
+                }
+            }
+            try await cli.sh("\(try CacheCommandFixture.environment(cli))\nwendy os cache list") {
+                result in
+                #expect(result.status.isSuccess)
+                #expect(result.stderr.isEmpty)
+                let lines = result.stdout.split(separator: "\n").map(String.init)
+                #expect(lines.count == 3)
+                #expect(
+                    Set(lines.prefix(2))
+                        == Set(["  jetson.flashpack  (0.0 MB)", "  pi.img  (0.0 MB)"])
+                )
+                #expect(lines.last?.hasPrefix("Cache directory: /") == true)
+                #expect(lines.last?.hasSuffix("/wendy/os-images") == true)
+            }
+            try await cli.sh(
+                """
+                \(try CacheCommandFixture.environment(cli))
+                test "$(cat "$cache/os-images/jetson.flashpack/boot/kernel")" = '1234567'
+                test "$(cat "$cache/os-images/jetson.flashpack/rootfs")" = '12345'
+                test "$(cat "$cache/os-images/pi.img")" = '12345678901'
+                test "$(cat "$cache/os-images/jetson.flashpack.sha256")" = 'checksum-stamp'
+                test "$(cat "$cache/os-images/unrelated-directory/keep")" = 'not-a-download'
+                """
+            )
+        }
+    }
+
+    /**
+     An unreadable extracted flashpack fails the entire inventory with a diagnostic
+     naming the download. Neither human nor JSON output may silently omit bytes or
+     return a partial success. The denied-read control and payload check use POSIX
+     permissions and run without root privileges.
+     */
+    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"))
+    func `fails loudly when a populated flashpack cannot be sized`() async throws {
+        let scenario = CacheCommandFixture.restoringPermissions(
+            for: "os-images/locked.flashpack/boot"
+        )
+        try await scenario.run(authenticated: false) { cli, _ in
+            for mode in ["", "--json"] {
+                try await cli.sh(
+                    """
+                    \(try CacheCommandFixture.environment(cli))
+                    test "$(id -u)" -ne 0
+                    locked="$cache/os-images/locked.flashpack/boot"
+                    mkdir -p "$locked"
+                    printf 'preserve-this-kernel' > "$locked/kernel"
+                    chmod 000 "$locked"
+                    trap 'chmod 700 "$locked"' EXIT
+                    if cat "$locked/kernel" >/dev/null 2>&1; then
+                      echo 'negative control unexpectedly read locked kernel' >&2; exit 90
+                    fi
+                    set +e
+                    wendy os cache list \(mode)
+                    cache_command_exit=$?
+                    set -e
+                    chmod 700 "$locked"
+                    test "$(cat "$locked/kernel")" = 'preserve-this-kernel'
+                    exit "$cache_command_exit"
+                    """
+                ) { result in
+                    #expect(!result.status.isSuccess)
+                    #expect(result.stdout.isEmpty)
+                    #expect(result.stderr.contains("locked.flashpack"))
+                    #expect(result.stderr.lowercased().contains("permission denied"))
+                }
+            }
+        }
+    }
 }
