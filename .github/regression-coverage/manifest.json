@@ -1646,9 +1646,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1903",
       "title": "Discover Wendy Lite boards over BLE",
       "package": "04",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "BLE/discovery tests cover pending waiters and notification handling. Native notification tests added later improve coverage, but not every radio/client path runs in the standard Linux suite.",
-      "required_follow_up": "Require both Linux private D-Bus and native CoreBluetooth disconnect gates and their regression controls in hosted CI. Complete exact-host physical Mac/Linux GATT and Windows WinRT scan procedures. Windows GATT is unimplemented and remains explicitly unsupported.",
+      "required_follow_up": "Execute the exact-host Mac/Linux GATT disconnect/reconnect and Windows WinRT scan procedure on a reserved Wendy Lite peripheral, retaining physical identity, permission, power-event and cleanup evidence. Hosted native gates remain required. Windows GATT is unsupported; physical L2CAP/TLS, writes, controller tuning and roaming are separate scope.",
       "evidence": [
         {
           "tests": [
@@ -1663,6 +1663,17 @@
             "go/internal/shared/ble/central/testdata/disconnect_waiters_test.m"
           ],
           "result": "Actual production CoreBluetooth disconnect delegate wakes independently blocked discovery/read/write/subscribe/L2CAP-open/L2CAP-receive operations and three notification waiters; a fresh session receives exact callback bytes. Normal and missing-broadcast/missing-read-wakeup controls pass locally under the Go race runner in12.893s. No CBCentralManager, radio or privacy prompt is used. Existing macOS central package job includes this test; hosted and physical execution remain pending."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/ble-transport-rehearsal.py",
+            ".github/regression-coverage/manual/ble-transport-rehearsal.txt",
+            ".github/regression-coverage/manual/ble-transport-run.py",
+            "go/internal/shared/ble/central/physical_disconnect_test.go",
+            "go/internal/shared/ble/scan/physical_windows_test.go",
+            ".github/scripts/ble_transport_rehearsal_test.py"
+          ],
+          "result": "Prepared actual native transport probes with exact source/binary/firmware/host/peripheral hashes and public identity. Mac/Linux require quiet real notification waiters, operator-observed disconnect, joined waiters and fresh same-identity reconnect. Windows requires two actual WinRT watcher lifecycles and joined process/pipes, without claiming unimplemented GATT. Seven offline plan/ownership/cancellation cases pass; probes compile on all three platforms. No radio, permissions, power or hardware operations were performed; every physical case is not_run."
         }
       ]
     },
