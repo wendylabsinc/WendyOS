@@ -23,7 +23,9 @@ class USBProfileAdmissionTests(unittest.TestCase):
                 command=root/name;command.write_text('#!/bin/sh\n'+body+'\n');command.chmod(0o700)
             env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],GITHUB_ACTIONS='true',RUNNER_ENVIRONMENT='github-hosted',**{'WENDY_USB_PARENT_'+kind:'same-namespace' for kind in ('mnt','net','pid','uts')})
             result=subprocess.run(['bash',str(SCRIPT),'--inside','unused','out'],env=env,capture_output=True,text=True,timeout=3)
-            self.assertNotEqual(result.returncode,0)
+            self.assertEqual(result.returncode,2)
+            # Runs unprivileged: only the namespace guard prints this, not the EUID check.
+            self.assertIn('outside its parent namespaces',result.stderr)
             self.assertFalse(marker.exists())
 
 if __name__=='__main__':unittest.main()

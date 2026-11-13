@@ -15,11 +15,16 @@ if [[ ${1:-} == --namespace ]]; then
     "$(realpath "$0")" --inside "$(realpath "$2")" "$(realpath "$3")"
 fi
 if [[ ${1:-} == --inside ]]; then
-  [[ $EUID == 0 && $# == 3 ]] || exit 2
+  # Namespace guard first: it needs no privilege, so the unprivileged offline
+  # test reaches it instead of stopping at the EUID check.
   for kind in mnt net pid uts; do
     variable="WENDY_USB_PARENT_$kind"
-    [[ -n ${!variable:-} && $(readlink "/proc/self/ns/$kind") != "${!variable}" ]] || exit 2
+    [[ -n ${!variable:-} && $(readlink "/proc/self/ns/$kind") != "${!variable}" ]] || {
+      echo 'USB profile fixture must run outside its parent namespaces.' >&2
+      exit 2
+    }
   done
+  [[ $EUID == 0 && $# == 3 ]] || exit 2
   mount --make-rprivate /
   # Never create directories on the host. Package provisioning must supply
   # these mountpoints; every write below goes into fresh namespace mounts.
