@@ -2997,10 +2997,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2314",
       "title": "Keep Wendy Agent for Mac running as a launch agent",
       "package": "09",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "LaunchAgent supervision and permission source checks exist. Full login/logout, crash and package-upgrade behavior under launchd remains outside the unit fixture.",
-      "required_follow_up": "Add a signed app launchd lifecycle smoke test in a disposable macOS user session.",
-      "evidence": []
+      "required_follow_up": "Execute the source-bound signed-package lifecycle procedure in a reserved Mac account. Require actual launchd crash/login/reboot persistence, exact new-process update verification, native-app continuity, historical controls and owned restoration. Every packaged/hardware case remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-agent-lifecycle-rehearsal.py",
+            ".github/regression-coverage/manual/mac-agent-lifecycle-rehearsal.txt",
+            ".github/scripts/mac_agent_lifecycle_rehearsal_test.py"
+          ],
+          "result": "Prepared exact signed bundle/ZIP/CLI/source and reserved-account identities, production launchd crash/clean-exit/login/reboot checks, actual candidate update with launch-time hash evidence and retained native heartbeat PID/birth/counter, signed historical supervision/update-quit controls, and owned restoration. Three offline generator/admission tests pass. No app install, launchd registration, account/session, permissions or credentials were changed. All packaged and physical cases remain not_run."
+        }
+      ]
     },
     {
       "key": "2243",
@@ -3037,10 +3046,26 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1786",
       "title": "fix(agent): reliably restart macOS agent after update",
       "package": "09",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover executable digest and the hard-exit watchdog. They do not perform a packaged app update and verify launchd relaunches the new binary.",
-      "required_follow_up": "Add a signed Mac update/restart smoke test with version verification.",
-      "evidence": []
+      "required_follow_up": "Execute the source-bound signed-package lifecycle procedure in a reserved Mac account. Require actual launchd crash/login/reboot persistence, exact new-process update verification, native-app continuity, historical controls and owned restoration. Every packaged/hardware case remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-agent-lifecycle-rehearsal.py",
+            ".github/regression-coverage/manual/mac-agent-lifecycle-rehearsal.txt",
+            ".github/scripts/mac_agent_lifecycle_rehearsal_test.py"
+          ],
+          "result": "Prepared exact signed bundle/ZIP/CLI/source and reserved-account identities, production launchd crash/clean-exit/login/reboot checks, actual candidate update with launch-time hash evidence and retained native heartbeat PID/birth/counter, signed historical supervision/update-quit controls, and owned restoration. Three offline generator/admission tests pass. No app install, launchd registration, account/session, permissions or credentials were changed. All packaged and physical cases remain not_run."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-mac-agent-termination.py",
+            ".github/scripts/fixtures/mac-agent-termination.swift"
+          ],
+          "result": "Unchanged production AgentRelauncher compiled into real native macOS child processes. Graceful/nil handlers retain the acknowledgement-delay write and exit after the500ms window; a hung graceful handler exits by the actual10s watchdog. Restoring the historical45s delay reaches the same hung callback but fails the14s bound. Local execution passes. Registered in the existing Swift core job; this proves termination behavior only, not packaged AppKit/update/launchd acceptance."
+        }
+      ]
     },
     {
       "key": "2078",
