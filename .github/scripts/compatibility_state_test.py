@@ -117,7 +117,7 @@ class StatefulTests(unittest.TestCase):
 
     def test_only_linked_bot_history_is_authoritative(self):
         body=comments.render_comment(self.report,REPO)
-        orphan=bot_comment(body,55)
+        orphan=bot_comment(body+"\n<!-- ai-api-review:part=1/1 -->",55)
         primary=bot_comment(comments.render_comment(result(),REPO),11)
         self.assertEqual(state.parse(comments.authoritative_bodies([orphan,primary])),[])
         primary['body']=comments.render_primary(self.report,REPO,1911,[55])
@@ -227,6 +227,16 @@ class StatefulTests(unittest.TestCase):
         self.assertTrue(comments.publish(data,REPO,1911,HEAD,BASE,REVIEW_DIFF,github))
         self.assertTrue(any(method=='DELETE' and path.endswith('/labels/api-review') for method,path,_ in github.mutations()))
         self.assertFalse(any('/requested_reviewers' in path for _,path,_ in github.mutations()))
+
+    def test_ordinary_comment_links_are_not_pagination_state(self):
+        data=result()
+        data['decisions'][0]['compatibility']='Preserve callback URL `https://example.test/#issuecomment-999`.'
+        body=comments.render_comment(data,REPO)
+        self.assertEqual(comments.authoritative_bodies([bot_comment(body,11)]),[body])
+        primary=comments.render_primary(self.report,REPO,1911,[55])
+        primary += '\nReference `https://example.test/#issuecomment-999`.\n'
+        part='Review content\n<!-- ai-api-review:part=1/1 -->'
+        self.assertEqual(comments.authoritative_bodies([bot_comment(primary,11),bot_comment(part,55)]),[primary,part])
 
     def test_code_fences_and_source_quotes_cannot_inject_either_state(self):
         marker=state.marker(self.records[0])

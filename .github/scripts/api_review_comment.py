@@ -729,12 +729,21 @@ def authoritative_bodies(comments: list[dict]) -> list[str]:
     if primary is None:
         return []
     bodies = [primary["body"]]
-    linked_ids = {int(value) for value in re.findall(r"#issuecomment-(\d+)", primary["body"])}
-    if linked_ids:
+    part = PART_MARKER_RE.search(primary["body"])
+    if part:
+        total = int(part[2])
+        links = re.findall(
+            r"^- \[(?:Checklist|Review) part (\d+) of (\d+)\]\(https://github\.com/[^/\s]+/[^/\s]+/pull/\d+#issuecomment-(\d+)\)$",
+            primary["body"], re.MULTILINE)
+        if len(links) != total or sorted((int(index), int(count)) for index, count, _ in links) != [(index, total) for index in range(1, total + 1)]:
+            raise ValueError("API review primary has incomplete part links")
         by_id = {comment["id"]: comment for comment in comments}
-        if any(identifier not in by_id for identifier in linked_ids):
-            raise ValueError("API review primary links to missing checklist state")
-        bodies.extend(by_id[identifier]["body"] for identifier in sorted(linked_ids))
+        for index, _, value in sorted(links, key=lambda row: int(row[0])):
+            identifier = int(value)
+            if (identifier not in by_id or part_index(by_id[identifier]["body"]) != int(index)
+                    or int(PART_MARKER_RE.search(by_id[identifier]["body"])[2]) != total):
+                raise ValueError("API review primary links to missing checklist state")
+            bodies.append(by_id[identifier]["body"])
     return bodies
 
 

@@ -482,4 +482,3 @@ def public_result(result):
         raise ReviewError("Private or unknown-provenance compatibility result cannot be published or uploaded")
     if result.get("input_visibility", "public") != "public":
         raise ReviewError("Private review result cannot be published or uploaded")
-
