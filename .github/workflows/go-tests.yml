@@ -1530,6 +1530,17 @@ jobs:
           name: agent-performance-smoke
           path: /tmp/agent-performance-smoke
           retention-days: 7
+      - name: Reject unknown own scope before exposing Agent mTLS
+        run: |
+          python3 .github/scripts/agent_own_scope_test.py
+          python3 .github/scripts/test-agent-own-scope.py --agent /tmp/wendy-agent --output "$RUNNER_TEMP/agent-own-scope"
+      - name: Retain actual Agent scope startup evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: agent-own-scope-startup
+          path: ${{ runner.temp }}/agent-own-scope
+          if-no-files-found: ignore
 
   vet:
     name: Vet
