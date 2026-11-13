@@ -3007,10 +3007,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2318",
       "title": "Mac agent: serve v2 provisioning so wendy device enroll works on macOS",
       "package": "09",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Go and Swift contract tests plus an ACME test server cover provisioning. A complete CLI-to-packaged-Mac-agent enrollment is not part of the regular fixture.",
-      "required_follow_up": "Add an enrollment smoke test against the packaged Mac agent with disposable PKI.",
-      "evidence": []
+      "required_follow_up": "Require the actual CLI to production Mac Agent enrollment journey and refusal controls in hosted Swift core CI. Retain signed packaged-app enrollment with disposable PKI as an exact reserved-Mac procedure.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/MacEnrollmentTransportTests.swift",
+            "go/internal/testfixture/macenrollment/main.go",
+            ".github/scripts/test-mac-enrollment.sh"
+          ],
+          "result": "Exact-source native run passes actual CLI enrollment through production v2 Agent startup and local ACME peer validating EAB/JWS/CSR. Persisted software-key identity survives a fresh Agent and authenticates mTLS status; absent client certificate is refused. Legacy-only and unavailable services refuse before any Cloud/ACME issuance. Uses supported plaintext development Cloud transport and loopback disposable PKI, never user Keychain. All runtime source hashes match integrated files. Existing Swift core job reuses its built CLI and scratch. Hosted CI and signed-package execution remain unverified."
+        }
+      ]
     },
     {
       "key": "2314",
