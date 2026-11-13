@@ -128,10 +128,13 @@ Prepare off-device
 Run the sensitive before/after pair
 
 9. First run generated deploy_historical-instant (Agent upload only), and verify
-   the live executable hash using step8. Start uninterrupted external serial
+   the live executable hash using step8. Every deploy_* command uses --json,
+   which uploads and verifies the Agent and skips the OS-update step; never add
+   --yes to it, because without --artifact-url that applies the latest public
+   OS. Start uninterrupted external serial
    capture, then run generated update_historical-instant, which pins that same
    exact --binary and the final instrumented --artifact-url. This is the real Agent install path, not console
-   install followed by a manual delayed reboot. Keep text mode (no --json).
+   install followed by a manual delayed reboot. Keep update_* in text mode (no --json).
    Confirm the CLI actually deployed this binary before it requests the update;
    preserve its version/upload evidence and the installed executable hash from
    the separate pre-update deployment observation if needed. If the CLI cannot
