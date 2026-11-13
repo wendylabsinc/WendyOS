@@ -78,8 +78,8 @@
       "behaviors": [
         {
           "boundary": "macOS source-cache root stays writable through rename, then becomes read-only under the cache lock; cleanup retains ownership until protected",
-          "proof": "Existing TestMaterializeIdentity checks actual published bytes, read-only file/directory modes and inode-preserving reuse; Concurrent/RejectsModifiedCache/CleansOnlyOwnedTemporary/RejectsInvalidRoot cover filesystem lifecycle. Full G1 package passes locally on macOS with race enabled.",
-          "remaining": "No simulator boot, asset download or physical robot claim. Removing the pre-rename chmod0700 still passed TestMaterializeIdentity on the local macOS27 filesystem; this is not a discriminating historical control. Original macOS failure sensitivity remains unproven here."
+          "proof": "test-g1-cache-publication.py runs actual native filesystem source-cache publication with the real embedded payload, readonly payload/writeable-root probes, cross-process flock exclusion, actual final-chmod denial in a per-process sandbox, owned cleanup/foreign-tree retention, retry and same-inode reuse. Native -race normal and four discriminating contract/ownership/protection/lock controls pass on macOS27. Registered in the existing macOS15 CLI/device row; see mac-source-cache.md.",
+          "remaining": "Original uninstrumented same-parent publication sequence still succeeds on local macOS27; its EACCES report is not reproduced. Native same-parent/cross-parent behavior and original-sequence compatibility are recorded separately from the required contract controls. Hosted macOS15 execution/sensitivity remains pending. No simulator boot/model download/robot claim."
         }
       ]
     },
@@ -112,7 +112,8 @@
     "dla_package": "python3 .github/scripts/test-coke-dla-package.py --output NEW_RUNNER_TEMP_DIRECTORY in existingG1 job. Exact public artifact, real dpkg-deb extraction and strict historical control; no new runner.",
     "physical_cleanup": "python .github/scripts/test-coke-physical-cleanup.py --output NEW_DIRECTORY in the exact existing Coke runtime; two actual OS/thread cleanup cases and historical handler control, required in existing G1 job.",
     "recorded_scene": "python .github/scripts/test-coke-scene-runtime.py --expert VERIFIED_ORIGINAL_DIRECTORY --output NEW_DIRECTORY; local actual model/replay/render normal+three controls passed. Hosted registration pending exact external artifact supply, never skip or synthesize missing inputs.",
-    "patrol_ros": "Existing test-go2-bridge-deadlines.py now runs five native ROS Patrol journeys and three source controls using its already-built image/private network; no new image build or runner. Actual runtime remains hosted pending."
+    "patrol_ros": "Existing test-go2-bridge-deadlines.py now runs five native ROS Patrol journeys and three source controls using its already-built image/private network; no new image build or runner. Actual runtime remains hosted pending.",
+    "mac_source_cache": "python3 .github/scripts/test-g1-cache-publication.py --output NEW_DIRECTORY in existing native macOS CLI/device job. Actual filesystem+kernel permission+four controls required; uninstrumented historical sequence separately classified, never counted as a negative control when compatible."
   },
   "not_claimed": [
     "Physical robot/camera/motor access",
