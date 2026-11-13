@@ -85,12 +85,17 @@ struct `'wendy cloud discover'` {
     @Test
     func `reports missing auth before contacting discovery services`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
-            try await LocalCLIAssertions.prepare(cli)
+            let config = LocalCLIAssertions.config.replacingOccurrences(
+                of: "{\"analytics\"",
+                with: "{\"defaultDevice\":\"unrelated-default.invalid\",\"analytics\""
+            )
+            try await LocalCLIAssertions.prepare(cli, config: config)
             let result = try await LocalCLIAssertions.run(
                 cli,
                 ["cloud", "discover", "--cloud-grpc", "127.0.0.1:1", "--json"],
                 exit: 3,
-                monitorNetwork: true
+                monitorNetwork: true,
+                monitorSavedDefault: true
             )
             try LocalCLIAssertions.error(
                 result,

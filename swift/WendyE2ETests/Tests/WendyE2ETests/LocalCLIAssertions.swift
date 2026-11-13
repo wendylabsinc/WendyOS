@@ -70,13 +70,18 @@ enum LocalCLIAssertions {
         _ cli: WendyE2ESession,
         _ args: [String],
         exit: Int,
-        monitorNetwork: Bool = false
+        monitorNetwork: Bool = false,
+        monitorSavedDefault: Bool = false
     ) async throws -> WendyE2EShellResult {
         let posixArgs = args.map(quote).joined(separator: " ")
         let powerArgs = args.map(powerQuote).joined(separator: ", ")
-        let posixCommand = monitorNetwork ? "python3 -c \(quote(networkCounter)) wendy" : "wendy"
+        try #require(!monitorSavedDefault || monitorNetwork)
+        let monitorFlag = monitorSavedDefault ? "--saved-default " : ""
+        let posixCommand =
+            monitorNetwork ? "python3 -I -c \(quote(networkCounter)) \(monitorFlag)wendy" : "wendy"
         let powerCommand =
-            monitorNetwork ? "python -c \(powerQuote(networkCounter)) wendy" : "wendy"
+            monitorNetwork
+            ? "python -I -c \(powerQuote(networkCounter)) \(monitorFlag)wendy" : "wendy"
         let result = try await cli.sh(
             posix: """
                 env -i HOME="$HOME" PATH="$PATH" TMPDIR="$TMPDIR" WENDY_CONFIG_DIR="$HOME/.wendy" \
@@ -104,17 +109,24 @@ enum LocalCLIAssertions {
             let counts = try #require(
                 try JSONSerialization.jsonObject(with: Data(observation.utf8)) as? [String: Int]
             )
-            #expect(counts == ["positiveControl": 1, "connections": 0])
+            var expected = ["positiveControl": 1, "connections": 0]
+            if monitorSavedDefault {
+                expected["defaultPositiveControl"] = 1
+                expected["defaultConnections"] = 0
+            }
+            #expect(counts == expected)
         }
         return result
     }
 
-    // A TCP handshake needs no service implementation. The positive control
-    // proves the listener observes connections before the real CLI is launched.
-    // Requires Python 3 on the CLI machine.
+    // Each listener gets a real handshake positive control. The optional LAN
+    // default is bound in both config and its preservation snapshot BEFORE the
+    // command starts, so fallback is observed rather than sent to a dead port.
+    // Requires Python 3 on the CLI machine; saved-default mode is unauthed only.
     private static let networkCounter = """
-        import json, shutil, socket, subprocess, sys
-        with socket.socket() as listener:
+        import contextlib, json, os, pathlib, shutil, socket, subprocess, sys
+        def listen(stack):
+            listener = stack.enter_context(socket.socket())
             listener.bind(('127.0.0.1', 0))
             listener.listen()
             listener.settimeout(2)
@@ -122,20 +134,45 @@ enum LocalCLIAssertions {
             with socket.create_connection(address, timeout=2):
                 connection, _ = listener.accept()
                 connection.close()
-            endpoint = '%s:%d' % address
-            command = [shutil.which(sys.argv[1])] + [value.replace('127.0.0.1:1', endpoint) for value in sys.argv[2:]]
-            result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
             listener.setblocking(False)
+            return listener, '%s:%d' % address
+        def connections(listener):
             count = 0
             while True:
                 try:
                     connection, _ = listener.accept()
                 except BlockingIOError:
-                    break
+                    return count
                 count += 1
                 connection.close()
-            with open('network-observation.json', 'w') as output:
-                json.dump({'positiveControl': 1, 'connections': count}, output)
+        argv = sys.argv[1:]
+        saved_default = argv[0] == '--saved-default'
+        if saved_default:
+            argv = argv[1:]
+        with contextlib.ExitStack() as stack:
+            listener, endpoint = listen(stack)
+            default_listener = None
+            if saved_default:
+                default_listener, default_endpoint = listen(stack)
+                config_path = pathlib.Path(os.environ['WENDY_CONFIG_DIR']) / 'config.json'
+                snapshot = pathlib.Path('before-config/config.json')
+                original = config_path.read_bytes()
+                assert snapshot.read_bytes() == original, 'configuration changed before observation'
+                config = json.loads(original)
+                assert not config.get('auth'), 'saved-default observer requires an unauthenticated fixture'
+                config['defaultDevice'] = default_endpoint
+                observed_config = json.dumps(config).encode()
+                config_path.write_bytes(observed_config)
+                snapshot.write_bytes(observed_config)
+            command = [shutil.which(argv[0])] + [value.replace('127.0.0.1:1', endpoint) for value in argv[1:]]
+            try:
+                result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            finally:
+                observation = {'positiveControl': 1, 'connections': connections(listener)}
+                if saved_default:
+                    observation.update(defaultPositiveControl=1, defaultConnections=connections(default_listener))
+                with open('network-observation.json', 'w') as output:
+                    json.dump(observation, output)
             sys.stdout.buffer.write(result.stdout)
             sys.stderr.buffer.write(result.stderr)
             sys.exit(result.returncode)

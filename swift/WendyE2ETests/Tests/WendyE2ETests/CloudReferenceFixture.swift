@@ -13,6 +13,9 @@ enum CloudReferenceFixture {
         let asset: String
         let name: String
         let pkiName: String
+        let deviceType: String
+        let os: String
+        let architecture: String
 
         var selector: String { "cloud://\(endpoint)/tenant/\(tenant)/asset/\(asset)" }
         var flags: [String] { ["--cloud-grpc", endpoint, "--device", asset, "--json"] }
@@ -31,11 +34,17 @@ enum CloudReferenceFixture {
             tenant: value("TENANT_UUID"),
             asset: value("ASSET_ID"),
             name: value("DEVICE_NAME"),
-            pkiName: value("PKI_DEVICE_NAME")
+            pkiName: value("PKI_DEVICE_NAME"),
+            deviceType: value("DEVICE_TYPE"),
+            os: value("OS"),
+            architecture: value("CPU_ARCHITECTURE")
         )
         try #require(UUID(uuidString: target.tenant) != nil)
         try #require(UUID(uuidString: target.asset) != nil)
         try #require(!target.name.isEmpty && !target.pkiName.isEmpty)
+        try #require(
+            !target.deviceType.isEmpty && !target.os.isEmpty && !target.architecture.isEmpty
+        )
         return target
     }
 
@@ -61,7 +70,7 @@ enum CloudReferenceFixture {
         // Read credentials only within the CLI sandbox, never through a recorded
         // shell result. The snapshot stays beside the isolated work directory.
         let script = """
-            import json, os, pathlib, sys
+            import datetime, json, os, pathlib, sys
             os.umask(0o077)
             endpoint, tenant = sys.argv[1:]
             path = pathlib.Path(os.environ['HOME']) / '.wendy/config.json'
@@ -72,6 +81,16 @@ enum CloudReferenceFixture {
             assert auth['cloudGRPC'] == endpoint, 'fixture endpoint mismatch'
             principal = auth['certificates'][0]['principalUri']
             assert principal.startswith('spiffe://wendy.sh/tenant/' + tenant + '/operator/'), 'fixture tenant mismatch'
+            expiry_text = auth.get('oauthExpiresAt')
+            assert expiry_text, 'read-only fixture needs oauthExpiresAt freshness metadata before any CLI call'
+            expiry = datetime.datetime.fromisoformat(expiry_text.replace('Z', '+00:00'))
+            remaining = (expiry - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+            assert remaining > 300, 'read-only fixture needs an access token valid for at least five more minutes; obtain a new Dev sign-in, never refresh a copied rotating token'
+            # A copied rotating handle can invalidate the original session. These
+            # read-only scenarios retain real access credentials, never refresh authority.
+            # AuthConfig uses refreshToken for both inline values and secret-store
+            # references; OAuthRefreshToken() has no separate reference field.
+            auth.pop('refreshToken', None)
             config['defaultDevice'] = 'unrelated-default.invalid'
             path.write_text(json.dumps(config))
             pathlib.Path('.cloud-reference-before.json').write_bytes(path.read_bytes())
@@ -147,6 +166,27 @@ enum CloudReferenceFixture {
         #expect(row["name"] as? String == target.name)
         #expect(row["pkiDeviceName"] as? String == target.pkiName)
         #expect(row["selector"] as? String == target.selector)
+    }
+
+    // Fixture expectations are independent of discovery rows and sibling CLI
+    // responses. JSON has no unique peer ID; these are metadata assertions,
+    // not an independent proof of the identity enforced by the mTLS transport.
+    static func info(_ result: WendyE2EShellResult, target: Target) throws -> [String: Any] {
+        let info = try #require(
+            try JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+        )
+        for field in ["version", "osVersion", "cliVersion"] {
+            let value = try #require(info[field] as? String)
+            #expect(!value.isEmpty)
+        }
+        #expect(info["deviceType"] as? String == target.deviceType)
+        #expect(info["os"] as? String == target.os)
+        #expect(info["cpuArchitecture"] as? String == target.architecture)
+        #expect(info["hasGpu"] is Bool)
+        #expect(info["hasNpu"] is Bool)
+        let org = try #require(info["organization"] as? [String: Any])
+        #expect(org["id"] as? String == target.tenant)
+        return info
     }
 
     static func tunnelNotice(_ result: WendyE2EShellResult, target: Target) {

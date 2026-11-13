@@ -8,8 +8,10 @@ struct `'wendy cloud device info'` {
     /**
      An explicit Cloud asset UUID selects the enrolled device even when a
      different default target is saved. JSON describes its agent, OS, architecture
-     and enrolled tenant. The connection notice names the selected Cloud device
-     on stderr; stdout remains one JSON object.
+     and enrolled tenant. Each path must match the independently configured
+     device type, OS and architecture, without pinning mutable versions. The
+     connection notice names the selected Cloud device on stderr; stdout remains
+     one JSON object.
 
      This opt-in read-only check resolves the UUID in the selected Cloud endpoint,
      then queries the agent through the Cloud tunnel. A LAN hostname is not a
@@ -38,20 +40,7 @@ struct `'wendy cloud device info'` {
             ] {
                 let result = try await LocalCLIAssertions.run(cli, command, exit: 0)
                 CloudReferenceFixture.tunnelNotice(result, target: target)
-                let info = try #require(
-                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
-                        as? [String: Any]
-                )
-                for field in [
-                    "version", "os", "osVersion", "cpuArchitecture", "deviceType", "cliVersion",
-                ] {
-                    let value = try #require(info[field] as? String)
-                    #expect(!value.isEmpty)
-                }
-                #expect(info["hasGpu"] is Bool)
-                #expect(info["hasNpu"] is Bool)
-                let org = try #require(info["organization"] as? [String: Any])
-                #expect(org["id"] as? String == target.tenant)
+                _ = try CloudReferenceFixture.info(result, target: target)
                 try await CloudReferenceFixture.preserved(cli)
             }
         }
@@ -85,17 +74,11 @@ struct `'wendy cloud device info'` {
                 exit: 0
             )
             #expect(selected.stderr == "")
-            let expected = try #require(
-                try JSONSerialization.jsonObject(with: Data(cloud.stdout.utf8)) as? [String: Any]
-            )
-            let actual = try #require(
-                try JSONSerialization.jsonObject(with: Data(selected.stdout.utf8)) as? [String: Any]
-            )
+            let expected = try CloudReferenceFixture.info(cloud, target: target)
+            let actual = try CloudReferenceFixture.info(selected, target: target)
             for field in ["version", "os", "osVersion", "cpuArchitecture", "deviceType"] {
                 #expect(actual[field] as? String == expected[field] as? String)
             }
-            let org = try #require(actual["organization"] as? [String: Any])
-            #expect(org["id"] as? String == target.tenant)
             try await CloudReferenceFixture.preserved(cli)
         }
     }
@@ -143,7 +126,7 @@ struct `'wendy cloud device info'` {
         try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
             let config = LocalCLIAssertions.config.replacingOccurrences(
                 of: "{\"analytics\"",
-                with: "{\"defaultDevice\":\"127.0.0.1:1\",\"analytics\""
+                with: "{\"defaultDevice\":\"unrelated-default.invalid\",\"analytics\""
             )
             try await LocalCLIAssertions.prepare(cli, config: config)
             for command in [["info", "--read-only"], ["apps", "list"]] {
@@ -153,7 +136,8 @@ struct `'wendy cloud device info'` {
                         "--cloud-grpc", "127.0.0.1:1", "--json", "--device",
                     ],
                     exit: 2,
-                    monitorNetwork: true
+                    monitorNetwork: true,
+                    monitorSavedDefault: true
                 )
                 try LocalCLIAssertions.error(
                     result,
@@ -176,7 +160,7 @@ struct `'wendy cloud device info'` {
         try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
             let config = LocalCLIAssertions.config.replacingOccurrences(
                 of: "{\"analytics\"",
-                with: "{\"defaultDevice\":\"127.0.0.1:1\",\"analytics\""
+                with: "{\"defaultDevice\":\"unrelated-default.invalid\",\"analytics\""
             )
             try await LocalCLIAssertions.prepare(cli, config: config)
             for selector in [
@@ -187,7 +171,8 @@ struct `'wendy cloud device info'` {
                     cli,
                     ["device", "info", "--read-only", "--device", selector, "--json"],
                     exit: 1,
-                    monitorNetwork: true
+                    monitorNetwork: true,
+                    monitorSavedDefault: true
                 )
                 try LocalCLIAssertions.error(
                     result,
@@ -213,7 +198,7 @@ struct `'wendy cloud device info'` {
         try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
             let config = LocalCLIAssertions.config.replacingOccurrences(
                 of: "{\"analytics\"",
-                with: "{\"defaultDevice\":\"127.0.0.1:1\",\"analytics\""
+                with: "{\"defaultDevice\":\"unrelated-default.invalid\",\"analytics\""
             )
             try await LocalCLIAssertions.prepare(cli, config: config)
             for selector in [
@@ -226,7 +211,8 @@ struct `'wendy cloud device info'` {
                         "--json",
                     ] + selector,
                     exit: 3,
-                    monitorNetwork: true
+                    monitorNetwork: true,
+                    monitorSavedDefault: true
                 )
                 try LocalCLIAssertions.error(
                     result,
