@@ -4132,10 +4132,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2245",
       "title": "Add built-in SO-101 follower simulator and arm viewer",
       "package": "13",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Simulator tests cover joint limits, asset packaging and status handling. The desktop UI poll-error recovery needs its desktop suite triggered by every affected backend change.",
-      "required_follow_up": "Run desktop and simulator tests together and verify an error clears after the next successful poll.",
-      "evidence": []
+      "required_follow_up": "Require the real HTTP/MuJoCo lifecycle and original reported-limit control in both existing native SO101 image rows. Desktop checks run on the same backend/dependency changes. Keep React poll-error clearing, keyboard behavior and packaged viewer acceptance separate; backend recovery does not prove UI state recovery.",
+      "evidence": [
+        {
+          "tests": [
+            "go/simulator/so101/tests/test_http_lifecycle.py",
+            "go/simulator/so101/tests/check_http_control.py",
+            ".github/workflows/so101-simulator.yml",
+            ".github/scripts/fixtures/so101-http-lifecycle.md"
+          ],
+          "result": "Source-reviewed actual loopback HTTP fixture runs production lifespan, pinned model, physics and renderer. It requires exact reported degree limits, atomic invalid pose, real joint/frame advance, joined shutdown, refused poll and fresh same-endpoint restart. The historical radians-comparison control must end at the exact HTTP422 out-of-range assertion. Every journey runs in one bounded owned process. Local Python syntax and workflow checks pass; exact shipped-image normal/control execution remains hosted pending. Existing viewer tests are registered for relevant backend and dependency changes; no new UI test or physical-arm acceptance is claimed."
+        }
+      ]
     },
     {
       "key": "2270",
