@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -190,14 +189,16 @@ func TestEnrollmentModeReachesLocalPickerChoice(t *testing.T) {
 					defer target.Close()
 				}
 				want := enroll && state == "unprovisioned"
-				if (err == nil) != want {
+				if enroll && (err == nil) != want {
 					t.Fatalf("picker enrollment=%v state=%s error=%v, want allowed=%v", enroll, state, err, want)
 				}
 				if want && target.Agent.DevicePinKey != "new-robot.local" {
 					t.Fatalf("setup lost selected hostname: %q", target.Agent.DevicePinKey)
 				}
-				if !enroll && !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-					t.Fatalf("ordinary picker relaxed missing identity: %v", err)
+				// The ordinary picker may reach an unenrolled device (covered
+				// by the first-contact tests), never one that is not.
+				if !enroll && state != "unprovisioned" && err == nil {
+					t.Fatalf("ordinary picker accepted a %s device over plaintext", state)
 				}
 			})
 		}

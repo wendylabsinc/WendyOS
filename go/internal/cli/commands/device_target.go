@@ -98,6 +98,17 @@ func resolveOptionsDevice(opts []resolveOption) string {
 	return cfg.device
 }
 
+// resolveOptionsNoIdentityPrompt reports whether opts forbid the changed
+// identity prompt: non-interactive callers, and enrollment, which has its own
+// trust prompt that clears the old identity only after enrollment succeeds.
+func resolveOptionsNoIdentityPrompt(opts []resolveOption) bool {
+	cfg := resolveConfig{excludeProviderKeys: make(map[string]bool)}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return cfg.nonInteractive || cfg.enrollmentTrustRecovery
+}
+
 // withoutDeviceOverride runs fn with --device and WENDY_DEVICE suspended, so a
 // connection made inside it resolves to the saved default. set-default uses it
 // to confirm and pin the device it just saved.

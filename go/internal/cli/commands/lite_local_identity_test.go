@@ -157,6 +157,13 @@ func TestLocalLiteIdentityHonorsCancellation(t *testing.T) {
 
 func localLiteTestPKI(t *testing.T) (*config.AuthConfig, *tls.Config) {
 	t.Helper()
+	return localLiteTestPKIForTenant(t, liteTestTenant)
+}
+
+// localLiteTestPKIForTenant is localLiteTestPKI with the device certificate
+// naming deviceTenant; the operator stays in liteTestTenant.
+func localLiteTestPKIForTenant(t *testing.T, deviceTenant string) (*config.AuthConfig, *tls.Config) {
+	t.Helper()
 	_, caKey := newP256KeyPEM(t)
 	ca := &x509.Certificate{
 		SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
@@ -183,7 +190,7 @@ func localLiteTestPKI(t *testing.T) (*config.AuthConfig, *tls.Config) {
 	}
 	auth.Certificates[0].PemCertificate = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: primaryDER}))
 	_, deviceKey := newP256KeyPEM(t)
-	deviceURI, err := url.Parse("spiffe://wendy.sh/tenant/" + liteTestTenant + "/device/" + liteTestAssetID)
+	deviceURI, err := url.Parse("spiffe://wendy.sh/tenant/" + deviceTenant + "/device/" + liteTestAssetID)
 	if err != nil {
 		t.Fatal(err)
 	}
