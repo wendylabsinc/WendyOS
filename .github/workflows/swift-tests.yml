@@ -24,6 +24,10 @@ on:
       - '.github/scripts/restore-trusted-build-cache.sh'
       - '.github/scripts/test-watch-session.sh'
       - '.github/scripts/test-mac-agent-termination.py'
+      - '.github/scripts/test-mac-enrollment.sh'
+      - 'go/internal/testfixture/macenrollment/**'
+      - 'go/internal/cli/commands/device_enroll*'
+      - 'go/internal/cli/commands/device.go'
       - '.github/scripts/fixtures/mac-agent-termination.swift'
       - '.github/scripts/run-owned-media-test.py'
       - 'go.mod'
@@ -131,6 +135,22 @@ jobs:
       - name: Require live watch redeployment and interrupt cleanup
         timeout-minutes: 25
         run: bash .github/scripts/test-watch-session.sh "$RUNNER_TEMP/watch-session" "$GITHUB_WORKSPACE/swift/Build/SwiftPM"
+
+      - name: Require CLI enrollment through production Mac provisioning
+        timeout-minutes: 16
+        run: bash .github/scripts/test-mac-enrollment.sh "$RUNNER_TEMP/mac-enrollment" "$GITHUB_WORKSPACE/swift/Build/SwiftPM" "$RUNNER_TEMP/watch-session/wendy"
+
+      - name: Retain Mac enrollment evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mac-enrollment
+          path: |
+            ${{ runner.temp }}/mac-enrollment/build.log
+            ${{ runner.temp }}/mac-enrollment/runtime.log
+            ${{ runner.temp }}/mac-enrollment/evidence.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Retain watch transport evidence
         if: always()
