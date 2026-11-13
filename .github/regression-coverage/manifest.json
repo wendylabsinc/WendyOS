@@ -1899,20 +1899,46 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2266",
       "title": "Add frameworks.ros2.scope and deprecate discoveryScope",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Manifest and scope tests cover inheritance and route-read failures. Namespace and actual DDS behavior need the runtime suite as well.",
-      "required_follow_up": "Execute isolated network/peripheral scope tests and fail closed on missing IPv6 route information.",
-      "evidence": []
+      "required_follow_up": "Require hosted production container creation and fresh DDS visibility for network/peripheral scopes, including old-loopback and fail-open-route controls, in the existing containerd job. Preserve intentional IPv4-only support; actual hardware interface classification remains outside this synthetic topology.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/containerd/ros2_scope_runtime_test.go",
+            ".github/scripts/prepare-ros-scope-runtime.py",
+            ".github/scripts/test-ros-scope-runtime.sh",
+            ".github/scripts/ros_scope_runtime_test.py",
+            ".github/scripts/fixtures/ros-scope-runtime.md",
+            ".github/scripts/fixtures/ros-scope-transport.py",
+            ".github/scripts/fixtures/ros-scope-smoke.py"
+          ],
+          "result": "Prepared real containerd/ROS topology with device-only, wired peripheral and default-uplink publishers. Production CreateContainerWithProgress resolves scope and injects DDS configuration; nonce-bound changing topic payloads must prove allowed visibility and excluded-peer isolation. Unreadable/oversized IPv6 route views must fall back to device-only visibility. Physical-device sysfs markers are fixture-only; actual veth links/routes and DDS transport remain real. Pinned-base ROS image passes ordinary unprivileged process smoke; normal and both control Linux binaries compile, existing scope/route tests pass, and all three cleanup tests pass without skips in ordinary Linux. Direct interruption or uncertain namespace drain retains owned work and records failed cleanup. Registered in existing containerd job without a new runner. Full privileged normal/control execution remains pending. The historical contract intentionally accepts an absent IPv6 table on IPv4-only kernels; this fixture does not change that behavior."
+        }
+      ]
     },
     {
       "key": "2300",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2300",
       "title": "Let ROS 2 network and peripherals scopes reach device apps",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Scope mapping tests protect the configured network/peripheral values. Actual DDS discovery and device access inside the app still need the runtime fixture.",
-      "required_follow_up": "Exercise both scopes in a container and verify visible topics and permitted peripherals.",
-      "evidence": []
+      "required_follow_up": "Require hosted production container creation and fresh DDS visibility for network/peripheral scopes, including old-loopback and fail-open-route controls, in the existing containerd job. Preserve intentional IPv4-only support; actual hardware interface classification remains outside this synthetic topology.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/containerd/ros2_scope_runtime_test.go",
+            ".github/scripts/prepare-ros-scope-runtime.py",
+            ".github/scripts/test-ros-scope-runtime.sh",
+            ".github/scripts/ros_scope_runtime_test.py",
+            ".github/scripts/fixtures/ros-scope-runtime.md",
+            ".github/scripts/fixtures/ros-scope-transport.py",
+            ".github/scripts/fixtures/ros-scope-smoke.py"
+          ],
+          "result": "Prepared real containerd/ROS topology with device-only, wired peripheral and default-uplink publishers. Production CreateContainerWithProgress resolves scope and injects DDS configuration; nonce-bound changing topic payloads must prove allowed visibility and excluded-peer isolation. Unreadable/oversized IPv6 route views must fall back to device-only visibility. Physical-device sysfs markers are fixture-only; actual veth links/routes and DDS transport remain real. Pinned-base ROS image passes ordinary unprivileged process smoke; normal and both control Linux binaries compile, existing scope/route tests pass, and all three cleanup tests pass without skips in ordinary Linux. Direct interruption or uncertain namespace drain retains owned work and records failed cleanup. Registered in existing containerd job without a new runner. Full privileged normal/control execution remains pending. The historical contract intentionally accepts an absent IPv6 table on IPv4-only kernels; this fixture does not change that behavior."
+        }
+      ]
     },
     {
       "key": "2453",
