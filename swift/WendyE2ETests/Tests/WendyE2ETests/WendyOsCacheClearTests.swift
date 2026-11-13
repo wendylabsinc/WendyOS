@@ -245,12 +245,13 @@ struct `'wendy os cache clear'` {
      does not currently pass. Opt in with `WENDY_E2E_KNOWN_CACHE_DEFECTS=1` and
      filter `removes read-only extracted flashpacks and remains empty on repeat clear`
      to reproduce it using the isolated denied-removal fixture below.
+     Tracked by [WDY-4298 — wendy os cache clear cannot remove readable read-only flashpack contents](https://linear.app/wendylabsinc/issue/WDY-4298/wendy-os-cache-clear-cannot-remove-readable-read-only-flashpack).
      */
     @Test(
         .enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"),
         .disabled(
             if: !CacheCommandFixture.knownDefectsEnabled,
-            "DEFECT: OS-only clear fails to remove owner-readable 0555 flashpacks. Replay the denied-removal fixture with WENDY_E2E_KNOWN_CACHE_DEFECTS=1."
+            "DEFECT: [WDY-4298 — wendy os cache clear cannot remove readable read-only flashpack contents](https://linear.app/wendylabsinc/issue/WDY-4298/wendy-os-cache-clear-cannot-remove-readable-read-only-flashpack). Replay the denied-removal fixture with WENDY_E2E_KNOWN_CACHE_DEFECTS=1."
         )
     )
     func `removes read-only extracted flashpacks and remains empty on repeat clear`() async throws {

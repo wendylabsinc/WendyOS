@@ -277,12 +277,13 @@ struct `'wendy cache list'` {
      currently pass. Opt in with `WENDY_E2E_KNOWN_CACHE_DEFECTS=1` and filter
      `fails loudly when a populated build cache cannot be sized` to reproduce it
      using the isolated denied-read fixture below.
+     Tracked by [WDY-4297 — wendy cache list reports an unreadable populated build cache as empty](https://linear.app/wendylabsinc/issue/WDY-4297/wendy-cache-list-reports-an-unreadable-populated-build-cache-as-empty).
      */
     @Test(
         .enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"),
         .disabled(
             if: !CacheCommandFixture.knownDefectsEnabled,
-            "DEFECT: unreadable per-app build caches return success with 0 B. Replay the denied-read fixture with WENDY_E2E_KNOWN_CACHE_DEFECTS=1."
+            "DEFECT: [WDY-4297 — wendy cache list reports an unreadable populated build cache as empty](https://linear.app/wendylabsinc/issue/WDY-4297/wendy-cache-list-reports-an-unreadable-populated-build-cache-as-empty). Replay the denied-read fixture with WENDY_E2E_KNOWN_CACHE_DEFECTS=1."
         )
     )
     func `fails loudly when a populated build cache cannot be sized`() async throws {
