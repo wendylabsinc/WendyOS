@@ -41,6 +41,7 @@ SUITES = (
     "orin_firstboot_rehearsal_test.py",
     "jetson_ab_rehearsal_test.py",
     "jetson_capsule_rehearsal_test.py",
+    "jetson_capsule_boundary_test.py",
     "driver_firstboot_rehearsal_test.py",
     "dragonwing_reset_rehearsal_test.py",
     "mac_camera_rehearsal_test.py",
