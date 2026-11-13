@@ -77,7 +77,7 @@ class PolicyMountpoint:
         self.path.unlink()
 
 
-def provision(policy,output,runner,*,work_parent=None):
+def provision(policy,output,runner,*,work_parent=None,download=None):
     output=Path(output)
     output.mkdir(parents=True,exist_ok=False)
     owner=PolicyMountpoint(policy)
@@ -85,6 +85,13 @@ def provision(policy,output,runner,*,work_parent=None):
             'packages':['network-manager','dbus'],'cleanup_errors':[]}
     namespace_drained=True
     try:
+        # Fetch while the host resolver is visible. This phase only downloads
+        # archives; package installation stays behind private service sockets.
+        if download is not None:
+            with (output/'download.log').open('w') as log:
+                result['download_exit_code']=download(log)
+            if result['download_exit_code']!=0:
+                raise RuntimeError('dependency download failed: '+str(result['download_exit_code']))
         with tempfile.TemporaryDirectory(prefix='wendy-nm-install-',dir=work_parent) as directory:
             work=Path(directory)
             stub=work/'policy-rc.d'
@@ -141,7 +148,7 @@ def inside(plan_path):
     env=dict(os.environ,DEBIAN_FRONTEND='noninteractive',NEEDRESTART_MODE='l')
     for key in ('DBUS_SYSTEM_BUS_ADDRESS','DBUS_SESSION_BUS_ADDRESS','DBUS_STARTER_ADDRESS','DBUS_STARTER_BUS_TYPE','SYSTEMD_BUS_ADDRESS'):
         env.pop(key,None)
-    status=subprocess.run(['apt-get','install','-y','--no-upgrade','--no-install-recommends','network-manager','dbus'],env=env).returncode
+    status=subprocess.run(['apt-get','install','-y','--no-download','--no-upgrade','--no-install-recommends','network-manager','dbus'],env=env).returncode
     # This Python process is namespace PID1 and owns/reaps orphaned children.
     # A normal helper exit is insufficient if package scripts left descendants.
     while True:
@@ -180,7 +187,11 @@ def main():
                 drained=completed=={'nonce':details['nonce'],'exit_code':status}
             except (OSError,ValueError):drained=False
             return status,drained
-        provision(Path('/usr/sbin/policy-rc.d'),args.output,run,work_parent='/var/tmp')
+        def download(log):
+            return owned.run(['apt-get','install','-y','--download-only','--no-upgrade',
+                '--no-install-recommends','network-manager','dbus'],180,stdout=log,
+                env=dict(os.environ,DEBIAN_FRONTEND='noninteractive',NEEDRESTART_MODE='l'))
+        provision(Path('/usr/sbin/policy-rc.d'),args.output,run,work_parent='/var/tmp',download=download)
     finally:
         for sig,handler in previous.items():signal.signal(sig,handler)
 

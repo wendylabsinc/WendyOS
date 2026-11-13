@@ -17,6 +17,37 @@ spec=importlib.util.spec_from_file_location('usb_deps',SCRIPT)
 MODULE=importlib.util.module_from_spec(spec);spec.loader.exec_module(MODULE)
 
 class USBDependencyPolicyTests(unittest.TestCase):
+    def test_download_precedes_policy_and_isolated_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);policy=root/'policy';events=[]
+            def download(log):
+                self.assertFalse(policy.exists())
+                events.append('download')
+                log.write('archives fetched with the resolver still available\n')
+                return 0
+            def install(plan,log):
+                self.assertEqual(events,['download'])
+                self.assertEqual(policy.read_bytes(),MODULE.POLICY)
+                events.append('install')
+                return 0,True
+            MODULE.provision(policy,root/'result',install,work_parent=root,download=download)
+            self.assertEqual(events,['download','install'])
+            self.assertFalse(policy.exists())
+            result=json.loads((root/'result/result.json').read_text())
+            self.assertEqual(result['download_exit_code'],0)
+            self.assertEqual(result['status'],'passed')
+
+    def test_download_failure_never_prepares_policy_or_starts_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);policy=root/'policy';install=mock.Mock()
+            with self.assertRaisesRegex(RuntimeError,'dependency download failed: 100'):
+                MODULE.provision(policy,root/'result',install,work_parent=root,download=lambda _:100)
+            install.assert_not_called()
+            self.assertFalse(policy.exists())
+            result=json.loads((root/'result/result.json').read_text())
+            self.assertEqual(result['download_exit_code'],100)
+            self.assertFalse(result['cleanup_errors'])
+
     def test_existing_regular_and_symlink_policy_are_never_replaced(self):
         for symlink in (False,True):
             with self.subTest(symlink=symlink),tempfile.TemporaryDirectory() as directory:
