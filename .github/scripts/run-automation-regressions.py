@@ -28,6 +28,7 @@ SUITES = (
     "release_policy_test.py",
     "artifact_registry_rehearsal_test.py",
     "repository_consumers_test.py",
+    "swift_agent_docs_test.py",
     "runtime_guest_bootstrap_test.py",
     "esp_idf_ownership_test.py",
     "janitor_report_test.py",
