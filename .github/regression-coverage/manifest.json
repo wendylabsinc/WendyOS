@@ -3532,9 +3532,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1768",
       "title": "Harden ESP32 flashing and support CP210x UART ports",
       "package": "10",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "SLIP, reset sequencing, target validation and UART variants have tests. USB/UART reset behavior and first flash on CP210x are hardware-dependent.",
-      "required_follow_up": "Require actual Unix PTY discovery/retry journeys in the existing race job and finish Windows native driver/reset qualification. Execute exact CP210x/native USB flashing and same-command reinstall/recovery procedures on qualified boards.",
+      "required_follow_up": "Execute exact CP210x and native USB flashing/reset/identity acceptance on qualified Unix and Windows hosts with the pinned CLI and catalog/firmware inputs; physical cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -3543,6 +3543,14 @@
             ".github/regression-coverage/manual/serial-flash-rehearsal.py"
           ],
           "result": "Actual owned PTY open/flock/missing-path retry, handshake failure classification, disappearance/reappearance callbacks and exact bytes pass under local race detector. Both historical misclassification controls fail the intended assertions. Required existing race-job registration reuses its compiler flags. Three offline Unix physical-plan checks pass; no serial hardware or firmware flashing executed. Native Windows driver/reset qualification remains incomplete; full entry not closed."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/serial-windows-inventory.ps1",
+            ".github/regression-coverage/manual/serial-windows-run.py",
+            ".github/regression-coverage/manual/serial-flash-rehearsal.txt"
+          ],
+          "result": "Six offline qualification/ownership checks pass, including actual inert Job-admission barrier and cancellation during drain. Windows procedure adds exact CIM/PnP/driver/COM identity, reset/flash/readback and same-command reconnect steps; Unix procedure retained. Native Windows hardware acceptance remains not_run. Existing reset/SLIP/chip-target unit coverage runs in ordinary CLI package race tests, which passed at published bbb14e431 in job131687685865; production espflash sources remain unchanged."
         }
       ]
     },
@@ -3551,9 +3559,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1572",
       "title": "Wendy Lite: wendy run: offer Wendy Lite reinstall (part 1)",
       "package": "10",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover busy-port classification, picker cleanup and flash prompting. Actual disappearing serial ports and reinstall/reconnect behavior remain hardware-dependent.",
-      "required_follow_up": "Require actual Unix PTY discovery/retry journeys in the existing race job and finish Windows native driver/reset qualification. Execute exact CP210x/native USB flashing and same-command reinstall/recovery procedures on qualified boards.",
+      "required_follow_up": "Reconcile the actual PTY normal/control journeys in required hosted race CI, then execute exact Unix/Windows same-command reinstall and reconnect procedures on qualified hardware.",
       "evidence": [
         {
           "tests": [
@@ -3562,6 +3570,13 @@
             ".github/regression-coverage/manual/serial-flash-rehearsal.py"
           ],
           "result": "Actual owned PTY open/flock/missing-path retry, handshake failure classification, disappearance/reappearance callbacks and exact bytes pass under local race detector. Both historical misclassification controls fail the intended assertions. Required existing race-job registration reuses its compiler flags. Three offline Unix physical-plan checks pass; no serial hardware or firmware flashing executed. Native Windows driver/reset qualification remains incomplete; full entry not closed."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/serial-windows-inventory.ps1",
+            ".github/regression-coverage/manual/serial-windows-run.py"
+          ],
+          "result": "Windows physical acceptance now requires actual unplug/changed COM and the same interactive command through capability failure, reinstall, restart, second build and heartbeat. A later independent successful command cannot satisfy recovery. Six offline checks pass; actual hardware remains not_run."
         }
       ]
     },
@@ -4422,9 +4437,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2048",
       "title": "WASM Web Support",
       "package": "15",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The mixed PR includes browser authentication, refresh serialization and CI review repairs. WASM, Go and Python tests cover different portions; not every script/UI path is a required check.",
-      "required_follow_up": "Run the browser storage/refresh tests and automation helper suites independently, including concurrent process refresh.",
+      "required_follow_up": "Require new twelve-case MCU TLS/gRPC tenant matrix and original-scope control in existing race CI; reconcile with seven-fix map, passing browser/automation jobs and native OAuth process proofs.",
       "evidence": [
         {
           "tests": [
@@ -4432,6 +4447,14 @@
             "go/internal/cli/commands/auth_refresh_lock_test.go"
           ],
           "result": "Actual OAuth child-process refresh/checkpoint, Cloud discovery, picker and VM identity selections pass locally in11.942s. New production callback test proves context set/clear reaches disk and malformed configuration returns an error without altering original bytes. Historical silent-clear control fails its named assertion. Native ACME/browserauth/grpcclient packages pass; opt-in live Cloud execution is not claimed. Seven-original-fix mapping and MCU/browser runtime reconciliation remain in progress."
+        },
+        {
+          "tests": [
+            ".github/scripts/fixtures/wasm-auth/behavior-map.txt",
+            ".github/scripts/test-sensor-asset-identity.py",
+            "go/internal/agent/mcusource/mtls_identity_transport_test.go"
+          ],
+          "result": "Twelve actual loopback TCP/TLS and sensorRPC cases cover numeric asset identity derived from the consumer certificate tenant, despite stale pairingOrgID; wrong tenant/asset are refused before dispatch for legacy and SPIFFE scopes. Race normal passes1.100s; original pairing-org assumption fails both intended boundaries. Existing BrowserWASM job131700219405 and automation job131700219478 pass at8b59c8dce. Seven original fixes mapped independently; adapter/browser-worker evidence is not a real browser profile or live Cloud run. Required newMCU hosted gate pending."
         }
       ]
     },
