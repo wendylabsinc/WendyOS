@@ -1,0 +1,210 @@
+Audit1682 original abrupt-reboot regression — executable historical lab route
+
+This is a supplemental physical procedure, not a recorded pass. It addresses the
+specific Thor gap left by the current-updater rehearsal: an old updater fsyncs the
+capsule FILE but not its vfat directory. The real immediate kernel reboot is the
+fault injection. No power switch, cache/sysctl tuning, forced storage failure or
+invented trigger API is needed. Real arbitrary power-cut timing is not claimed.
+
+The evidence chain is source-specific:
+  Agent fix: 7c2d5787b7e1cfc7347caa700e6e1bfe584125f2
+  Old updater: 2ef50a953e29809f2bd2a59df0f50625e2030289
+  Updater durability fix, excluded here: cb2c7b5a5ed67c7f3d9d04315e32bdd3902024e9
+  Incident/design: 2af488bb16295e78200432caa3a59bee92572558
+The pinned old updater permits capsule staging only on tegra264 (AGX Thor);
+its Orin branch performs a rootfs-only switch. This historical route therefore
+REFUSES Orin. Qualifying another historical Orin updater is a separate task, not
+a reason to override its allowlist.
+
+The latter records the same-image Thor failure: no ESRT attempt, unchanged
+firmware/slot, then verifier rollback. A new updater's Syncfs can make the old
+Agent control pass; that is not a sensitive test of the Agent fix.
+
+Prepare off-device
+
+1. Reserve only physical serial @SERIAL@ with the capsule plan's exact ECID,
+   board, disk serial, APP/APP_b/ESP UUIDs and vendor-qualified forward capsule.
+   Independently authorize all destructive preparation, each update/reboot and
+   recovery. Use the existing capsule plan's stable power, complete console and
+   anti-rollback/recovery requirements. No production workload or credentials.
+   Normal legacy Agent operations use the authenticated direct CLI endpoint;
+   local console is reserved for identity observations and authorized recovery.
+
+2. Make clean private source worktrees at the two exact commits above. Do not
+   reset a user checkout. The initial image must actually be @OS@ and run the
+   affected updater SHA256 @UPDATER@ from the pinned producer record; do not edit
+   os-release to force the workaround. Its copyFileSync has file.Sync but no
+   Syncfs, parent fsync, rename-plus-dirsync or post-install wrapper sync. Review
+   the shipped initial image and installed binary; record go version -m output,
+   producer/toolchain/build command, source commit and SHA256. A provenance gap,
+   different updater or sync performed by a wrapper disqualifies sensitivity.
+   Do not install a historical updater into an unrelated production OS.
+
+3. Generator inventory fields: capsule_plan (the existing1682 evidence.json),
+   agent_source, updater_source, nonce (independent32hex), running_os,
+   legacy_updater_binary and legacy_producer_record. The producer JSON must bind
+   source_revision, binary_sha256, running_os and reviewer. Run on the host:
+     python3 .github/regression-coverage/manual/jetson-capsule-boundary.py inventory.json NEW_OUTPUT
+   Generation hashes inputs and emits source overlays, image files, build commands
+   and all-not_run evidence. It neither builds nor installs anything automatically.
+
+4. In @SOURCE@ execute the exact generated build command for each required
+   variant. All are Linux/arm64, CGO disabled, -mod=readonly and -trimpath, with
+   Go toolchain1.26.5 and output only in @OUTPUT@. Record Go version, complete command/exit, overlay
+   hashes and output SHA256. All five binary hashes must be distinct; identical
+   outputs mean an overlay was not applied and disqualify the build. The generator
+   canonicalizes source paths (including /tmp symlinks) for Go overlay matching.
+   Never distribute these lab binaries as a release.
+   Source variants differ ONLY as recorded:
+   fixed: unchanged production code from the original fix.
+   historical-instant: post-install call is the actual immediate reboot syscall,
+     with no sync/clean request; matches the pre-fix boundary. The now-unused OS
+     version read is removed. It adds no tracing, reads, pauses or flushing.
+   sync-only: post-install calls the actual production reboot(), preserving
+     unix.Sync followed by the immediate syscall, with no clean shutdown.
+   clean-request-failure: only the systemctl function dependency returns an
+     explicit injected error; production sync and immediate fallback still run.
+   watchdog-no-reboot: only that dependency returns nil WITHOUT requesting a
+     reboot; production sync, full unchanged60-second sleep and real immediate
+     fallback still run. This simulates an acknowledged request that did not
+     reboot, not an actual hung PID1/storage driver. No shortened timer.
+
+5. Independently review and include EVERY file in generated image-files in BOTH
+   the prepared initial root and the candidate image. Include Python3 and the
+   existing util-linux/nvbootctrl tools. The candidate must carry the unchanged
+   fixed Agent, the intended updater and the same exact capsule/marker; it must
+   not boot one of the dangerous lab variants after success. Recompute archive,
+   descriptor and capsule-plan hashes for these instrumented images. The existing
+   payload inspection must additionally record path/mode/SHA256 for every
+   generated observer/config/unit/drop-in, the candidate fixed Agent and capsule.
+   Do not reuse an artifact digest from before these image changes. This is a
+   two-stage preparation: generate/build the instrumentation first; produce and
+   inspect the instrumented initial/candidate images; regenerate the capsule
+   plan with their final hashes; regenerate this boundary package in a NEW output
+   directory with the SAME nonce/board. Require every embedded observer/config/
+   unit/drop-in byte to match the final package. Build commands/output paths may
+   change, so re-record the actual final binaries. The candidate URL in generated
+   device-commands.json must refer to that final inspected image.
+
+6. Check systemd unit ordering OFFLINE against both actual image unit sets:
+     systemd-analyze verify PATH_TO_IMAGE_UNITS
+   PATH_TO_IMAGE_UNITS means the independently extracted image's actual observer,
+   Agent and updater unit files plus drop-ins with their real paths, not a host
+   wildcard. Use systemd-analyze --root on a complete isolated image tree if its
+   tool version supports it. Do not start or reload the host system manager.
+   On the prepared target BEFORE staging, read the live merged units with:
+     timeout 15 systemctl cat ci1682-observe.service
+     timeout 15 systemctl cat wendyos-update-verify.service wendyos-update-commit.service wendy-agent.service
+     timeout 15 systemctl show ci1682-observe.service --property=ActiveState,SubState,Result,Before
+   Each verifier/commit/Agent unit must REQUIRE and start AFTER the observer.
+   The observer has a60-second limit, its whole process group is systemd-owned,
+   and failure prevents those units starting. A failure is a lab STOP, not a pass;
+   recover only over the reserved console. Do not remove ordering to get green.
+
+7. The actual observer runs after local-fs/data mounts, BEFORE verifier/Agent
+   cleanup, on every boot. It verifies DT serial/SoC and ESP GPT/parent disk, then
+   records boot ID, root major/minor, nvbootctrl slots/firmware, ESRT, OsIndications
+   and exact capsule presence/hash. If ESP is not mounted it creates a unique
+   /run directory and mounts only that verified block device read-only, then
+   unmounts only its own mount. Existing mounts are never remounted/unmounted.
+   It writes an exclusive boot record to /data/ci1682/@NONCE@/BOOT_ID.json and
+   CI1682_BOOT_OBSERVATION to the serial console/journal. Readonly evidence is
+   taken AFTER firmware, so it cannot flush the pre-reboot vulnerable directory.
+   A post-Agent manual inspection is insufficient: rollback may delete capsules.
+
+8. Reboot the prepared baseline normally once, before starting the experiment.
+   Require successful observer completion, full console record with this nonce,
+   known boot ID, no pending deployment, exact old firmware/slot, no capsule and
+   no active capsule-delivery request. Verify the installed old updater hash and
+   current root image identity. Read these on the reserved console:
+     cat /etc/os-release
+     sha256sum /usr/bin/wendyos-update
+     timeout 15 systemctl show wendy-agent.service --property=MainPID,ActiveState,SubState
+   Hash /proc/ACTUAL_MAIN_PID/exe with sha256sum, then re-read MainPID to exclude
+   a process replacement while observing. Match the recorded observer/config/unit hashes.
+   Stop on any failed/ambiguous check. Do not touch ESP, sync, unmount it, run a
+   storage diagnostic or attach a debugger BETWEEN staging and the test reboot.
+
+Run the sensitive before/after pair
+
+9. First run generated deploy_historical-instant (Agent upload only), and verify
+   the live executable hash using step8. Start uninterrupted external serial
+   capture, then run generated update_historical-instant, which pins that same
+   exact --binary and the final instrumented --artifact-url. This is the real Agent install path, not console
+   install followed by a manual delayed reboot. Keep text mode (no --json).
+   Confirm the CLI actually deployed this binary before it requests the update;
+   preserve its version/upload evidence and the installed executable hash from
+   the separate pre-update deployment observation if needed. If the CLI cannot
+   establish the intended binary, stop; do not infer it from the filename.
+   The candidate format/min_tool_version must be supported by the exact old
+   updater; choose a qualified compatible artifact, never bypass its admission
+   guard. Candidate image/capsule, initial OS/updater, board and source/binary identities
+   must be recorded. Observe at most the capsule plan's install/boot bounds.
+
+10. The old-control failure is valid ONLY with all of these actual observations:
+    installer successfully staged the exact candidate and requested the reboot;
+    a new boot ID; earliest observer record BEFORE verifier/Agent cleanup shows
+    no staged capsule; ESRT last_attempt_version/status unchanged with no new
+    capsule processing in the serial firmware transcript; old firmware and old
+    root/boot chain remain; verifier reports running!=target and subsequent
+    rollback corresponds to that same attempted artifact. An ESRT rejection,
+    wrong capsule, unsupported firmware, failed install, missing observer record,
+    cleanup-before-observation or transport error is not the required failure.
+    A control that succeeds is INCONCLUSIVE, never a pass: writeback may already
+    have completed. Preserve that run and do not artificially weaken durability.
+
+11. After an accepted control failure, require the exact original baseline again:
+    old firmware/slot, healthy Agent, no pending deployment, exact old updater,
+    empty ESP capsule path and no armed capsule indication. Retain the failed
+    trial's observer record externally before any qualified recovery. If rollback
+    does not produce the baseline, use only the separately authorized recovery.
+    Run generated deploy_fixed, verify its live executable hash, then update_fixed
+   with the unchanged fixed Agent and IDENTICAL
+    candidate/capsule. No manual console install or sync is inserted.
+
+12. Require actual clean-handover log on the affected OS, a new boot, earliest
+    observer evidence and serial firmware processing of the intended capsule,
+    the expected new ESRT/firmware version and target root/boot chain, followed
+    by successful verified commit. A consumed/deleted capsule is expected only
+    together with those fresh firmware/slot observations; absence alone fails.
+    Reboot normally a second time and require persistent new firmware/root/Agent
+    identity. This before-failure/after-success pair is the smallest rigorous
+    human route for the ORIGINAL1682 regression, with no external trigger rig.
+
+Isolate sync and exercise the fallback (separately qualified baselines)
+
+13. A firmware transition can advance anti-rollback state. Do not pretend a
+    rootfs reflash restores firmware. Use a separately qualified complete recovery
+    or a matched reserved board with its own regenerated identity/config for each
+    positive trial. Keep exact same capsule transition and old updater. Run the
+    sync-only variant through the identical Agent install path; require successful
+    firmware application and target boot. The valid old-control failure plus this
+    result establishes the actual sync-before-immediate-reboot durability, without
+    relying on systemd unmounts. No mount/ESP observation is inserted before reboot.
+
+14. For the clean-request-failure variant require the explicit injected-request
+    log, actual immediate reboot and the same successful physical durability
+    observations. For watchdog-no-reboot require the normal clean-path log then
+    the unchanged60-second grace and fallback log followed by actual reboot.
+    Use external console capture timestamps (host monotonic timestamps), with no
+    reboot before60 seconds and at most90 seconds to reset under an idle reserved
+    lab load. Require firmware/target boot and second-boot persistence as above.
+    If the process dies early, a service restarts it, the reboot never occurs or
+    evidence is missing, fail the fixture; do not count a manual reboot.
+    These real-reboot variants validate the injected dependency-failure outcomes;
+    they do not claim an actual physically hung systemd/unmount was reproduced.
+
+15. Preserve every binary/overlay/source/image/capsule hash, command exit, initial
+    and earliest postboot records, external serial trace, firmware/ESRT transition,
+    actual observer-before-verifier ordering, rollback/commit and second boot.
+    Record failed/inconclusive/not_run distinctly. Recover the reserved device
+    with its approved normal image after the trials, verify the normal Agent,
+    and retain public evidence before removing only this nonce's lab material.
+    Never ship the historical/direct-reboot or fake-clean-request variants.
+
+Limits: this procedure supplies the actual source instrumentation and boot
+observer; hardware execution/build results remain pending until recorded. It
+cannot force spontaneous writeback to stay dirty. If the exact old control does
+not exhibit loss, sensitivity remains unproven on that board/firmware/storage.
+There is no claim of arbitrary power-cut, firmware-write interruption, unknown
+old releases, or new-updater behavior from this historical experiment.
