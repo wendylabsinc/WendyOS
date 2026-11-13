@@ -17,6 +17,21 @@ enum FirstAppFixture {
         "--git-init", "no",
     ]
 
+    static func requirePythonScaffoldTools(_ cli: WendyE2ESession) async throws {
+        let result = try await python(
+            cli,
+            """
+            import sys
+            if sys.version_info < (3, 11):
+                sys.stderr.write('First-app Python scaffold fixture requires Python 3.11+ (tomllib); '
+                                 'found ' + sys.version.split()[0] + ' at ' + sys.executable + '. '
+                                 'Put Python 3.11+ first on the CLI machine PATH and rerun this spec.\\n')
+                sys.exit(1)
+            """
+        )
+        try #require(result.status.isSuccess, "\(result.stderr)")
+    }
+
     static func run(
         _ cli: WendyE2ESession,
         _ arguments: [String],

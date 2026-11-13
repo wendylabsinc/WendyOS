@@ -59,8 +59,12 @@ bash Scripts/E2ETest.sh \
 
 Repeat `--filter` to pass multiple test filters.
 
-The Python scaffold installation spec uses Python 3.11+ and an offline wheelhouse.
-Provision it once in an isolated fixture directory, then pass its absolute path
+The first-app Python scaffold checks (default parsed build settings and optional
+installation) require Python 3.11+ on the CLI machine. They check this prerequisite
+before scaffolding and report how to select a supported `python3` on `PATH`.
+CI selecting either check must provision that interpreter. The optional installation
+check additionally needs an offline wheelhouse and venv/ensurepip tooling.
+Provision the wheelhouse once in an isolated fixture directory, then pass its absolute path
 on the CLI machine as `WENDY_E2E_PYTHON_WHEELHOUSE`:
 
 ```bash

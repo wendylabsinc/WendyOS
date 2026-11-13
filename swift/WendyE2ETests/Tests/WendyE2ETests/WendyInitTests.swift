@@ -322,10 +322,12 @@ extension `'wendy init'` {
      `--here` creates a complete manual Python app in the current directory.
      The manifest, parsed package build settings, and container command agree
      on the app name. No git repository or assistant session is started.
+     This check requires Python 3.11+ for TOML parsing on the CLI machine.
      */
     @Test
     func `creates a consistent Python manifest package and container entry point`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
+            try await FirstAppFixture.requirePythonScaffoldTools(cli)
             _ = try await FirstAppFixture.run(cli, FirstAppFixture.manual)
             let manifest = try await FirstAppFixture.manifest(cli)
             #expect(
@@ -396,6 +398,7 @@ extension `'wendy init'` {
     )
     func `installs and runs the generated Python console entry point offline`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
+            try await FirstAppFixture.requirePythonScaffoldTools(cli)
             let wheelhouse = try #require(FirstAppFixture.pythonWheelhouse)
             _ = try await FirstAppFixture.run(cli, FirstAppFixture.manual)
             let execution = try await FirstAppFixture.python(
