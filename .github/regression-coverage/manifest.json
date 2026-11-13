@@ -2265,6 +2265,13 @@
             ".github/scripts/fixtures/g1-coke/behavior-map.json"
           ],
           "result": "Five actual HTTP/thread cases and six historical controls pass locally. Voice WebSocket, transcript and playback race tests and the macOS G1 package also pass. Existing G1 row now requires the separate locked Python3.12 Coke runtime with all40+ review cases and no skips; hosted execution pending. Original six-commit residuals remain mapped, including actual multicast exclusion, observer scope, simulator scenes and verified packaged DLA extraction."
+        },
+        {
+          "tests": [
+            "go/internal/rtps/multicast_isolation_linux_test.go",
+            ".github/scripts/test-rtps-multicast-isolation.sh"
+          ],
+          "result": "Required existing-network-job gate sends actual SPDP/SEDP/sample datagrams over separate loopback/veth interfaces into production participants, requires20 exact positive samples per interface and rejects cross-interface discovery. Removing only production multicast restriction must fail that named boundary. Linux normal/control compilation, ShellCheck and local/self-hosted refusal checks pass; actual kernel/race execution pending. Container observer and other original mixed-merge residuals remain open."
         }
       ]
     },
