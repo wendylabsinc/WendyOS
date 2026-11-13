@@ -1576,6 +1576,35 @@ func markTypedVMConnection(conn *grpcclient.AgentConnection, pinKey, dialled str
 	}
 }
 
+// keepAsRequestedDevice makes usbConn — a connection the USB-direct fallback
+// substituted for a named device's own address — the requested device's
+// connection, which is what the front door then judges it as. The fallback
+// dialled it under the USB address's own key, so it arrives carrying that key
+// and that key's answer to "is there a saved identity?" (normally none). Both
+// are about the wrong name, so before the pin check:
+//
+//   - DevicePinKey becomes pinKey. A reconnect after an agent or OS update is
+//     made under the key the connection carries; under the USB address's it
+//     would accept any enrolled board on the cable.
+//   - NoSavedIdentity is cleared when pinKey has a saved identity. The pin
+//     check compares the device with that identity, so this is not a first
+//     contact and must not be announced as one. "Saved" is the ladder's own
+//     reading (see dialTarget.pinned).
+//
+// The mark is only ever cleared, and never for a plaintext connection. Nothing
+// authenticated that peer, whatever is saved: a saved name refuses it (see
+// challengeUnprovisionedDevice), and for an unsaved one it must stay marked so
+// Wi-Fi credentials still need consent (see AgentConnection.UnverifiedPlaintext).
+func keepAsRequestedDevice(usbConn *grpcclient.AgentConnection, pinKey string) {
+	usbConn.DevicePinKey = pinKey
+	if !usbConn.NoSavedIdentity || !usbConn.IsMTLS {
+		return
+	}
+	if _, _, saved := governingPin(pinKey); saved {
+		usbConn.NoSavedIdentity = false
+	}
+}
+
 // connectFromSelectedDevice converts a SelectedDevice from the picker into a
 // gRPC AgentConnection. Returns an error if the selected device does not
 // support gRPC.
@@ -3899,13 +3928,9 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 					// hostname) is on USB — use it directly. It is not the address
 					// that was asked for, so it is never treated as the typed one.
 					//
-					// It is still the device that was asked for, so it carries
-					// pinKey, the key the check below judges it under. The fallback
-					// dialled it under the USB address's own key, which normally
-					// holds no pin, and a reconnect after an agent or OS update is
-					// made under the key the connection carries: left as it was, it
-					// would accept any enrolled board on the cable.
-					usbConn.DevicePinKey = pinKey
+					// It is still the device that was asked for, and the check
+					// below judges it under pinKey (see keepAsRequestedDevice).
+					keepAsRequestedDevice(usbConn, pinKey)
 					conn, dialled = usbConn, ""
 				} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 					// Default device is unreachable — offer interactive recovery.

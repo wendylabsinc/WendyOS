@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +45,8 @@ type usbOnlyDevice struct {
 	// updateChecks and brokerSeeds record the steps that follow the pin check.
 	updateChecks []*grpcclient.AgentConnection
 	brokerSeeds  map[string]*grpcclient.AgentConnection
+	// notices is what a command running with --json was told on stderr.
+	notices bytes.Buffer
 	// beforePrimaryFails runs inside the failing dial of the device's own
 	// address. retryErr, when set, is how that address fails once recovery
 	// dials it again.
@@ -76,11 +80,19 @@ func stubUSBOnlyDevice(t *testing.T, cfg *config.Config, primaryErr error, hostn
 	origObserve, origFind := observeDeviceIdentityFn, findDeviceByIDFn
 	origCands, origPreDial := usbDirectCandidatesFn, usbDirectPreDialFn
 	origBrokerConnect, origBrokerStart, origUpdate := connectSessionBrokerFn, startSessionBrokerFn, checkAndOfferUpdateFn
+	// The first-contact notice is printed once per device per process.
+	noSavedIdentityNoticeMu.Lock()
+	origNotice, origNoticed := noticeOut, noSavedIdentityNoticed
+	noticeOut, noSavedIdentityNoticed = &d.notices, map[string]bool{}
+	noSavedIdentityNoticeMu.Unlock()
 	t.Cleanup(func() {
 		osLookupHostFn, lanBrowseFn, dialAgentLadderFn, discoverLANDevices = origLookup, origBrowse, origLadder, origDiscover
 		observeDeviceIdentityFn, findDeviceByIDFn = origObserve, origFind
 		usbDirectCandidatesFn, usbDirectPreDialFn = origCands, origPreDial
 		connectSessionBrokerFn, startSessionBrokerFn, checkAndOfferUpdateFn = origBrokerConnect, origBrokerStart, origUpdate
+		noSavedIdentityNoticeMu.Lock()
+		noticeOut, noSavedIdentityNoticed = origNotice, origNoticed
+		noSavedIdentityNoticeMu.Unlock()
 	})
 	osLookupHostFn = func(context.Context, string) ([]string, error) { return nil, errors.New("no resolver in test") }
 	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
@@ -92,6 +104,9 @@ func stubUSBOnlyDevice(t *testing.T, cfg *config.Config, primaryErr error, hostn
 		retry := len(d.targets) > 0
 		d.targets = append(d.targets, target)
 		if target.Addr == usbGadgetAddr || target.Addr == usbGadgetMTLSAddr {
+			// As the ladder of a signed-in CLI marks it: a dial under a key
+			// with no saved identity is a first contact.
+			d.conn.NoSavedIdentity = target.Expected == nil && !target.pinned()
 			return d.conn, nil, nil
 		}
 		if d.beforePrimaryFails != nil {
@@ -433,4 +448,97 @@ func TestResolveTargetJudgesTheUSBConnectionUnderTheRequestedName(t *testing.T) 
 				got.Addr, got.PinKey, got.Expected, usbGadgetMTLSAddr, device)
 		}
 	})
+}
+
+// firstContactNotices counts the notices a --json command printed saying its
+// connection to name was not checked against a saved identity.
+func (d *usbOnlyDevice) firstContactNotices(name string, mTLS bool) int {
+	line := strings.Join(strings.Fields(noSavedIdentityNotice(name, mTLS)), " ")
+	return strings.Count(d.notices.String(), line)
+}
+
+// A board reached over USB is judged under the requested name, so whether the
+// CLI had a saved identity to check it against is that name's answer. The USB
+// address the fallback dialled has none of its own, and that is not the answer
+// that counts: a saved device is not a first contact.
+func TestResolveTargetUSBConnectionIsAFirstContactOnlyForAnUnsavedName(t *testing.T) {
+	const device, addr = "wendy-thor.local", "wendy-thor.local:50051"
+	saved := map[string]config.DevicePin{"wendy-thor": pinA}
+	offline := errors.New("device offline in test")
+	nothingAnswered := pinnedHostNoAuthenticatedEndpointError(device, []string{addr}, nil, false)
+	for _, tc := range []struct {
+		name    string
+		pins    map[string]config.DevicePin
+		primary error
+		obs     observedDeviceIdentity
+		unsaved bool
+	}{
+		{"saved device", saved, nothingAnswered, assetObs("42"), false},
+		{"enrolled board with no saved identity", nil, offline, assetObs("42"), true},
+		{"unenrolled board with no saved identity", nil, offline, observedDeviceIdentity{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := stubUSBOnlyDevice(t, &config.Config{DevicePins: tc.pins}, tc.primary, "wendy-thor", tc.obs)
+			jsonOutput = true // notices are then plain lines in d.notices
+			deviceFlag = device
+
+			sel, err := resolveUSBOnlyDevice()
+			if err != nil {
+				t.Fatalf("resolveTarget = %v, want the board on USB", err)
+			}
+			defer sel.Close()
+			if got := sel.Agent.NoSavedIdentity; got != tc.unsaved {
+				t.Errorf("connection marked as having no saved identity = %v, want %v", got, tc.unsaved)
+			}
+			want := 0
+			if tc.unsaved {
+				want = 1
+			}
+			if got := d.firstContactNotices(device, tc.obs.mTLS); got != want {
+				t.Errorf("first-contact notices = %d, want %d; printed:\n%s", got, want, d.notices.String())
+			}
+			// Nothing authenticated an unenrolled board, so Wi-Fi credentials
+			// still need the user's consent before they go to it.
+			if got := sel.Agent.UnverifiedPlaintext(); got != !tc.obs.mTLS {
+				t.Errorf("connection treated as unverified plaintext = %v, want %v", got, !tc.obs.mTLS)
+			}
+		})
+	}
+}
+
+// A saved identity only ever removes the first-contact mark from an
+// authenticated connection. A plaintext board answering for a saved name is
+// refused by the pin check; this is what holds if it ever got past that (the
+// identity forgotten by another wendy process in between): it is still marked
+// as unverified. Nothing gains the mark either: a signed-out CLI's plaintext
+// connection never carried it.
+func TestKeepAsRequestedDeviceOnlyClearsFirstContactForASavedAuthenticatedDevice(t *testing.T) {
+	const saved, unsaved = "wendy-thor.local", "wendy-pi.local"
+	setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{"wendy-thor": pinA}})
+	for _, tc := range []struct {
+		name          string
+		key           string
+		mTLS, dialled bool // dialled is the mark the fallback's own dial left
+		want          bool
+	}{
+		{"saved name, authenticated", saved, true, true, false},
+		{"saved name, plaintext", saved, false, true, true},
+		{"unsaved name, authenticated", unsaved, true, true, true},
+		{"unsaved name, plaintext", unsaved, false, true, true},
+		{"unsaved name, plaintext from a signed-out CLI", unsaved, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &grpcclient.AgentConnection{DevicePinKey: usbGadgetKey, IsMTLS: tc.mTLS, NoSavedIdentity: tc.dialled}
+			keepAsRequestedDevice(conn, tc.key)
+			if conn.DevicePinKey != tc.key {
+				t.Errorf("connection is kept as %q, want the requested %q", conn.DevicePinKey, tc.key)
+			}
+			if conn.NoSavedIdentity != tc.want {
+				t.Errorf("marked as having no saved identity = %v, want %v", conn.NoSavedIdentity, tc.want)
+			}
+			if got, want := conn.UnverifiedPlaintext(), tc.dialled && !tc.mTLS; got != want {
+				t.Errorf("treated as unverified plaintext = %v, want %v as dialled", got, want)
+			}
+		})
+	}
 }
