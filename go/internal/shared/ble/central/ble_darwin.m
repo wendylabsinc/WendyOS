@@ -669,6 +669,13 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
                                      NSTimeInterval idleTimeout, NSTimeInterval wholeTimeout) {
     WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
     if (!conn.connected || !conn.l2capChannel || !conn.l2capIORunning) return WENDY_BLE_ERR_DISCONNECTED;
+    NSThread *thread = conn.l2capIOThread;
+    // performSelector requires a live target run loop. A stale running flag
+    // cannot make a completed thread a valid enqueue target.
+    if (!thread || thread.isFinished) {
+        [conn failL2CAP];
+        return WENDY_BLE_ERR_DISCONNECTED;
+    }
 
     // CBL2CAP writes must run on the thread that owns the output stream.
     // Do not synchronously dispatch: that thread may exit after the check
@@ -681,7 +688,7 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
     request.progressDeadline = now + idleTimeout;
     request.completed = dispatch_semaphore_create(0);
     [conn performSelector:@selector(performL2CAPWrite:)
-                 onThread:conn.l2capIOThread
+                 onThread:thread
                withObject:request
             waitUntilDone:NO];
     // Wait in short slices. The I/O thread can exit between the check above
@@ -694,7 +701,7 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
             dispatch_time(DISPATCH_TIME_NOW, (int64_t)(slice * NSEC_PER_SEC))) == 0) {
             return request.error;
         }
-        BOOL stranded = [conn.l2capIOThread isFinished];
+        BOOL stranded = [thread isFinished];
         if (stranded && dispatch_semaphore_wait(request.completed, DISPATCH_TIME_NOW) == 0) {
             return request.error; // the thread ran the request just before it exited
         }

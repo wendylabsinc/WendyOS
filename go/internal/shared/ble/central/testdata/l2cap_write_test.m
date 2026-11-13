@@ -63,8 +63,21 @@ static void scenario(const char *name) {
 @interface FakeConnection : WendyBLEConnection
 @property (strong) dispatch_semaphore_t started;
 @property (strong) dispatch_semaphore_t stopped;
+@property NSUInteger finishedEnqueues;
 @end
 @implementation FakeConnection
+- (void)performSelector:(SEL)selector onThread:(NSThread *)thread withObject:(id)object waitUntilDone:(BOOL)wait {
+    if (thread.isFinished) {
+        self.finishedEnqueues++;
+        // Observe the actual production enqueue boundary on a real finished
+        // NSThread. Do not forward this invalid call into OS-version-specific
+        // Foundation behavior: the historical control fails our assertion.
+        fprintf(stderr, "native attempted enqueue on completed I/O thread\n");
+        fflush(stderr);
+        return;
+    }
+    [super performSelector:selector onThread:thread withObject:object waitUntilDone:wait];
+}
 - (void)l2capIOThreadMain {
     @autoreleasepool {
         NSRunLoop *loop = NSRunLoop.currentRunLoop;
@@ -98,6 +111,12 @@ static FakeConnection *start(FakeOutput *output) {
 static void stop(FakeConnection *conn) {
     conn.l2capIORunning = NO;
     assert(dispatch_semaphore_wait(conn.stopped, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC)) == 0);
+    // stopped is signaled inside the thread's autorelease pool. Wait for real
+    // NSThread completion before reusing state or claiming the thread exited.
+    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 1.0;
+    while (!conn.l2capIOThread.isFinished && NSProcessInfo.processInfo.systemUptime < deadline)
+        [NSThread sleepForTimeInterval:0.001];
+    assert(conn.l2capIOThread.isFinished);
 }
 
 static void exercise(NSArray<NSNumber *> *writes, BOOL resume, BOOL disconnect,
@@ -245,8 +264,8 @@ int main(void) {
             assert([updated.received isEqualToData:[@"abcdefgh" dataUsingEncoding:NSUTF8StringEncoding]]);
         }
 
-        // A request queued onto an I/O thread that has already exited never
-        // runs. The sender must notice the dead thread long before its deadline.
+        // A finished thread is not a valid performSelector target. Reject it
+        // before enqueueing, even when the connection's running flag is stale.
         scenario("already-exited I/O thread");
         FakeOutput *output = [FakeOutput new];
         FakeConnection *conn = start(output);
@@ -258,6 +277,8 @@ int main(void) {
         assert(NSProcessInfo.processInfo.systemUptime - before < 1.0);
         assert(output.received.length == 0);
         assert(conn.l2capError);
+        assert(conn.finishedEnqueues == 0);
+        scenario("finished I/O thread rejected before enqueue");
 
         // Close aborts a send stalled under backpressure rather than waiting
         // out the write timeout.

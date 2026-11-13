@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -46,6 +48,65 @@ func TestL2CAPNativeWriteBackpressure(t *testing.T) {
 		}
 		t.Fatalf("native BLE regression: %v\n%s", err, output)
 	}
+}
+
+// Restore only the completed-thread preflight, then require the native fixture
+// to observe the forbidden enqueue on its actual finished NSThread. The fixture
+// does not forward that invalid operation into version-specific Foundation code.
+func TestL2CAPNativeFinishedThreadEnqueueControl(t *testing.T) {
+	source, err := os.ReadFile("ble_darwin.m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := `    if (!thread || thread.isFinished) {
+        [conn failL2CAP];
+        return WENDY_BLE_ERR_DISCONNECTED;
+    }
+`
+	if strings.Count(string(source), before) != 1 {
+		t.Fatal("completed-thread guard source site changed")
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "testdata"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ble_darwin.m"), []byte(strings.Replace(string(source), before, "", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ble_darwin.h", "testdata/l2cap_write_test.m"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(root, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binary := filepath.Join(root, "l2cap-finished-thread-control")
+	guardian, err := filepath.Abs("../../../../../.github/scripts/run-owned-media-test.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compile := exec.Command("python3", guardian, "--timeout", "10", "--", "xcrun", "clang", "-g", "-fobjc-arc", "-fblocks", "-UNDEBUG", "-framework", "Foundation", "-framework", "CoreBluetooth", filepath.Join(root, "testdata/l2cap_write_test.m"), "-o", binary)
+	if output, err := compile.CombinedOutput(); err != nil {
+		t.Fatalf("compile completed-thread control: %v\n%s", err, output)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary)
+	command.WaitDelay = time.Second
+	output, runErr := command.CombinedOutput()
+	var status syscall.WaitStatus
+	ok := false
+	if command.ProcessState != nil {
+		status, ok = command.ProcessState.Sys().(syscall.WaitStatus)
+	}
+	if runErr == nil || ctx.Err() != nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGABRT ||
+		!strings.Contains(string(output), "native attempted enqueue on completed I/O thread") ||
+		!strings.Contains(string(output), "conn.finishedEnqueues == 0") {
+		t.Fatalf("completed-thread control did not fail its exact enqueue assertion: %v\n%s", runErr, output)
+	}
+	t.Logf("completed-thread source control rejected its actual enqueue: %s", output)
 }
 
 func logNativeBLECrashReport(t *testing.T, pid int, started time.Time) {
