@@ -2,16 +2,18 @@
   "audit_key": "1890",
   "original_merge": "284058dfdfb7abdc586884d33a5556f6c1cf35ed",
   "reviewed_root": "44ef6f4f6",
-  "method": "Original commit/source decomposition, existing manifest evidence, native runtime observations and compiled Linux-header proof. Newly registered kernel sample-identity runtime remains pending.",
+  "method": "Original commit/source decomposition, exact hosted runtime artifacts and per-behavior evidence. Kernel sample identity passed at8b59c8dce; remaining certificate/startup boundaries stay open.",
   "items": [
     {
       "original_commit": "b42fdde4c",
       "behavior": "Camera loopback sample identity",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "tests": "go/internal/agent/services/v4l2_sample_ledger_linux_test.go; .github/scripts/test-v4l2-sample-ledger.sh; .github/scripts/fixtures/v4l2-ledger/abi.c; .github/scripts/fixtures/v4l2-ledger/check_abi.py; Examples/WendyDataModelApp/test_wendydata.py",
-      "scope": "Required existing media job exercises generated H264 through the real hub, OUTPUT writer, kernel DQBUF, example reader/model and Unix recording socket. Twelve predicted sample IDs must resolve to sealed camera index offsets and independently decoded exact pixel hashes. Historical receipt-time control must fail at the sample join. Independent compiled Linux headers exposed and confirmed ctypes layout correction;30 local example tests and real codec reorder controls pass. Linux fixture/control compilation passes; actual hosted kernel/race runtime remains pending. No application-side model_inputs delivery ledger exists; this gate does not invent it. Physical capture/published-model accuracy and OCI camera grants remain separate.",
+      "scope": "Hosted media step at8b59c8dce passed real Linux-header ABI checks, reordered H264 identity,12 predicted sample IDs joined to sealed camera index offsets and independently decoded pixels, plus exact receipt-time negative control. Artifact14012616040. No application-side model_inputs delivery ledger, physical capture, published-model accuracy or OCI camera grant claim.",
       "related_entries": [],
-      "evidence_urls": []
+      "evidence_urls": [
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219459"
+      ]
     },
     {
       "original_commit": "b42fdde4c/d7e5341e7/c66651732/e94ff095b",
