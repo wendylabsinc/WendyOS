@@ -37,7 +37,9 @@ class LinkLocalAdmissionTests(unittest.TestCase):
                        WENDY_LINKLOCAL_PARENT_pid='shared-parent-namespace')
             result = subprocess.run(['bash', str(SCRIPT), '--inside', '/unused'],
                                     env=env, capture_output=True, text=True, timeout=3)
-            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.returncode, 2)
+            # Names the namespace guard: the EUID refusal alone exits 2 silently.
+            self.assertIn('namespaces shared with its parent', result.stderr)
             self.assertFalse(marker.exists())
 
 if __name__ == '__main__':
