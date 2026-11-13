@@ -430,7 +430,7 @@ func pickWendyLiteBoard(target string, nightly bool) (string, error) {
 			continue
 		}
 		items = append(items, tui.PickerItem{
-			Name:    v.DisplayName + liteCloudEnrollmentLabel(v.Board),
+			Name:    v.DisplayName + liteCloudEnrollmentLabel(v.CloudEnrollment),
 			SortKey: strings.ToLower(v.DisplayName),
 			Value:   v.Board,
 		})

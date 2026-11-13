@@ -207,3 +207,44 @@ func TestEnrollInstalledLiteNoCloudEnrollmentSaysToChooseAnotherImage(t *testing
 		}
 	}
 }
+
+// The catalog's cloud_enrollment value decides the pre-flash refusal: no
+// stops the install and names a same-chip image that has it; yes and a
+// catalog that says nothing (an older one) both let the install go on.
+func TestCheckCatalogImageCanEnrollFollowsCatalogValue(t *testing.T) {
+	yes, no := true, false
+	boards := func(net, native *bool) []wendyLiteCatalogBoard {
+		return []wendyLiteCatalogBoard{
+			{Name: "c6_net", DisplayName: "C6 net", Target: "esp32c6", CloudEnrollment: net},
+			{Name: "c6_native", DisplayName: "C6 native", Target: "esp32c6", CloudEnrollment: native},
+			{Name: "s3", DisplayName: "S3", Target: "esp32s3", CloudEnrollment: &no},
+		}
+	}
+	if err := checkCatalogImageCanEnroll(boards(&yes, &yes), "c6_net"); err != nil {
+		t.Fatalf("catalog says yes: %v", err)
+	}
+	if err := checkCatalogImageCanEnroll(boards(nil, nil), "c6_net"); err != nil {
+		t.Fatalf("catalog says nothing: %v", err)
+	}
+	err := checkCatalogImageCanEnroll(boards(&no, &yes), "c6_net")
+	if err == nil || !strings.Contains(err.Error(), "Nothing was flashed") || !strings.Contains(err.Error(), `"C6 native"`) {
+		t.Fatalf("catalog says no: got %v; want a stop naming the same-chip image", err)
+	}
+	err = checkCatalogImageCanEnroll(boards(&no, &no), "s3")
+	if err == nil || !strings.Contains(err.Error(), "Nothing was flashed") || strings.Contains(err.Error(), `"`) {
+		t.Fatalf("no image with enrollment for the chip: got %v; want a stop naming none", err)
+	}
+}
+
+func TestLiteCloudEnrollmentLabelFollowsCatalogValue(t *testing.T) {
+	yes, no := true, false
+	if got := liteCloudEnrollmentLabel(&yes); !strings.Contains(got, "yes") {
+		t.Fatalf("yes: %q", got)
+	}
+	if got := liteCloudEnrollmentLabel(&no); !strings.Contains(got, "no") {
+		t.Fatalf("no: %q", got)
+	}
+	if got := liteCloudEnrollmentLabel(nil); got != "" {
+		t.Fatalf("nothing: %q", got)
+	}
+}

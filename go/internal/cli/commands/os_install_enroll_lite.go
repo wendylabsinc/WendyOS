@@ -57,24 +57,44 @@ func resolveLiteInstallEnrollment(cfg *config.Config, opts preEnrollOptions, int
 }
 
 // liteCloudEnrollmentLabel is the picker's note on whether a board's image
-// includes Wendy Cloud enrollment; empty when the CLI does not know.
-func liteCloudEnrollmentLabel(board string) string {
-	if ok, known := wendyLiteCloudEnrollment[board]; known {
-		if ok {
-			return " (Wendy Cloud enrollment: yes)"
-		}
-		return " (Wendy Cloud enrollment: no)"
+// includes Wendy Cloud enrollment; empty when the catalog says nothing.
+func liteCloudEnrollmentLabel(cloudEnrollment *bool) string {
+	if cloudEnrollment == nil {
+		return ""
 	}
-	return ""
+	if *cloudEnrollment {
+		return " (Wendy Cloud enrollment: yes)"
+	}
+	return " (Wendy Cloud enrollment: no)"
 }
 
 // checkLiteImageCanEnroll stops an enrolling install before flashing an image
-// the CLI knows has no Wendy Cloud enrollment.
+// the catalog says has no Wendy Cloud enrollment.
 func checkLiteImageCanEnroll(board string) error {
-	if ok, known := wendyLiteCloudEnrollment[board]; known && !ok {
-		return fmt.Errorf("the image you chose does not include Wendy Cloud enrollment, so the board could not be enrolled. Nothing was flashed. Install again and choose %q", wendyLiteCloudImage)
+	boards, err := wendyLiteCatalogBoards()
+	if err != nil {
+		return err
 	}
-	return nil
+	return checkCatalogImageCanEnroll(boards, board)
+}
+
+func checkCatalogImageCanEnroll(boards []wendyLiteCatalogBoard, board string) error {
+	var chosen *wendyLiteCatalogBoard
+	for i := range boards {
+		if boards[i].Name == board {
+			chosen = &boards[i]
+		}
+	}
+	if chosen == nil || chosen.CloudEnrollment == nil || *chosen.CloudEnrollment {
+		return nil
+	}
+	msg := "the image you chose does not include Wendy Cloud enrollment, so the board could not be enrolled. Nothing was flashed. Install again"
+	for _, b := range boards {
+		if b.Target == chosen.Target && b.CloudEnrollment != nil && *b.CloudEnrollment {
+			return fmt.Errorf("%s and choose %q", msg, b.DisplayName)
+		}
+	}
+	return errors.New(msg + " and choose an image that includes it")
 }
 
 var (

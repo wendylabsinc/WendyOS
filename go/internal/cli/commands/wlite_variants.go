@@ -124,90 +124,92 @@ const wendyLiteCatalogJSON = `
             "name": "esp32c5_net_psram",
             "display_name": "ESP32-C5, 8MB flash + 8MiB PSRAM, Wendy Net router + WASM",
             "binary": "esp32c5_net_psram",
-            "target": "esp32c5"
+            "target": "esp32c5",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32c6_net",
             "display_name": "ESP32-C6, 8MB flash, single-carrier Wendy Net + small WASM guest",
             "binary": "esp32c6_net",
-            "target": "esp32c6"
+            "target": "esp32c6",
+            "cloud_enrollment": false
         },
         {
             "name": "esp32c5_generic_native",
             "display_name": "Generic ESP32-C5 board, 4MB flash",
             "binary": "esp32c5_native",
-            "target": "esp32c5"
+            "target": "esp32c5",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32c6_generic_native",
             "display_name": "Generic ESP32-C6 board, 4MB flash",
             "binary": "esp32c6_native",
-            "target": "esp32c6"
+            "target": "esp32c6",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32c61_generic_native",
             "display_name": "Generic ESP32-C61 board, 4MB flash",
             "binary": "esp32c61_native",
-            "target": "esp32c61"
+            "target": "esp32c61",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32s3_generic_native",
             "display_name": "Generic ESP32-S3 board, 4MB flash",
             "binary": "esp32s3_native",
-            "target": "esp32s3"
+            "target": "esp32s3",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32s31_generic_native",
             "display_name": "Generic ESP32-S31 board, 4MB flash, preview",
             "binary": "esp32s31_native",
-            "target": "esp32s31"
+            "target": "esp32s31",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32s31_korvo_1_native",
             "display_name": "ESP32-S31-Korvo-1 V1.1, 16MB flash, 16MB PSRAM, camera/microphone SensorLink, preview",
             "binary": "esp32s31_korvo_1_native",
-            "target": "esp32s31"
+            "target": "esp32s31",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32s3_seeed_xiao_native",
             "display_name": "Seeed Studio XIAO ESP32S3, 8MB flash, 8MB PSRAM, Sense camera/mic SensorLink",
             "binary": "esp32s3_seeed_xiao_native",
-            "target": "esp32s3"
+            "target": "esp32s3",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32s3_m5_stamp_s3_native",
             "display_name": "M5Stack StampS3, 8MB flash",
             "binary": "esp32s3_m5_stamp_s3_native",
-            "target": "esp32s3"
+            "target": "esp32s3",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32p4_dfr1172_firebeetle_native",
             "display_name": "DFRobot FireBeetle 2 ESP32-P4 (DFR1172), 16MB flash, 32MB PSRAM",
             "binary": "esp32p4_dfr1172_firebeetle_native",
-            "target": "esp32p4"
+            "target": "esp32p4",
+            "cloud_enrollment": true
         },
         {
             "name": "esp32s31_mosaico_native",
             "display_name": "ESP-Mosaico, 16MB flash, touch display, mesh dashboard, preview",
             "binary": "esp32s31_mosaico_native",
-            "target": "esp32s31"
+            "target": "esp32s31",
+            "cloud_enrollment": true
         }
     ]
 }
 `
 
-// wendyLiteCloudEnrollment records which catalog boards' prebuilt images are
-// known to include Wendy Cloud enrollment. Boards not listed are unknown, and
-// the board's own report after flashing is the only check for them.
-// Evidence: wendy-lite boards/esp32c6_net.defaults turns CONFIG_WENDY_CLOUD off
-// (firmware then reports no cloud enrollment); esp32c6_generic_native keeps the
-// default CONFIG_WENDY_PKI, CLOUD and WIFI_ENABLED on.
-var wendyLiteCloudEnrollment = map[string]bool{
-	"esp32c6_net":            false,
-	"esp32c6_generic_native": true,
-}
-
-// wendyLiteCloudImage names the ESP32-C6 image to point users at.
+// wendyLiteCloudImage names the ESP32-C6 image the after-flash messages point
+// users at; those messages do not know the board.
 const wendyLiteCloudImage = "Generic ESP32-C6 board, 4MB flash"
 
 // WendyLiteBoard is one installable Wendy Lite flavor: a board paired with
@@ -217,6 +219,9 @@ type WendyLiteBoard struct {
 	Target      string
 	DisplayName string
 	Version     string
+	// CloudEnrollment is the catalog's cloud_enrollment value for the image;
+	// nil when the catalog says nothing (an older catalog).
+	CloudEnrollment *bool
 }
 
 // wendyLiteCatalogBoard is one entry of the embedded catalog's boards array.
@@ -225,6 +230,8 @@ type wendyLiteCatalogBoard struct {
 	DisplayName string `json:"display_name"`
 	Binary      string `json:"binary"`
 	Target      string `json:"target"`
+	// CloudEnrollment is nil when the catalog has no cloud_enrollment field.
+	CloudEnrollment *bool `json:"cloud_enrollment,omitempty"`
 }
 
 // wendyLiteCatalogBoards parses the embedded catalog and returns its boards
@@ -255,6 +262,8 @@ func WendyLiteBoards() ([]WendyLiteBoard, error) {
 			Target:      b.Target,
 			DisplayName: b.DisplayName,
 			Version:     "(latest)",
+
+			CloudEnrollment: b.CloudEnrollment,
 		})
 	}
 	return boards, nil
