@@ -153,7 +153,11 @@ func TestBLEControllerOutcomePreservesAuthenticatedTraffic(t *testing.T) {
 	for _, mode := range []string{"command-disallowed", "unsupported", "completion-refused", "success", "accepted-timeout", "monitor-lost", "disconnect", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			allow := mode == "command-disallowed" || mode == "unsupported" || mode == "completion-refused" || mode == "success"
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			// Cancelling the operation is the stimulus in the cancelled case.
+			// Its completion must still be joined under the original wall deadline.
+			lifecycleCtx, finishLifecycle := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Cleanup(finishLifecycle)
+			ctx, cancel := context.WithCancel(lifecycleCtx)
 			a, b := tcpConnectionPair(t)
 			raw := &intervalTransportConn{Conn: a}
 			controller := &intervalController{mode: mode, entered: make(chan struct{}), release: make(chan struct{}), raw: raw}
@@ -208,7 +212,7 @@ func TestBLEControllerOutcomePreservesAuthenticatedTraffic(t *testing.T) {
 			close(controller.release)
 			select {
 			case <-dialDone:
-			case <-ctx.Done():
+			case <-lifecycleCtx.Done():
 				t.Fatal("provider exceeded bounded controller/traffic lifecycle")
 			}
 			if allow {
