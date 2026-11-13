@@ -7,11 +7,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +77,37 @@ func TestDriverLifecycleVM(t *testing.T) {
 	const broken = "wendy-fixture-broken"
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
+	// Capture a stalled guest's real process/systemd state before the host
+	// watchdog drains QEMU. This observer changes no driver or test deadline.
+	diagnosticsDone := make(chan struct{})
+	go func() {
+		defer close(diagnosticsDone)
+		timer := time.NewTimer(45 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		fmt.Fprintln(os.Stdout, "DRIVER_VM_STALL_DIAGNOSTICS")
+		_ = pprof.Lookup("goroutine").WriteTo(os.Stdout, 2)
+		for _, command := range [][]string{
+			{"systemctl", "list-jobs", "--no-pager"},
+			{"systemctl", "status", "systemd-sysext.service", "--no-pager", "--lines=20"},
+			{"ps", "-eo", "pid,ppid,stat,wchan:30,args"},
+			{"journalctl", "--no-pager", "--lines=80"},
+		} {
+			probeCtx, stop := context.WithTimeout(ctx, 3*time.Second)
+			probe := exec.CommandContext(probeCtx, command[0], command[1:]...)
+			probe.WaitDelay = time.Second
+			probe.Stdout, probe.Stderr = os.Stdout, os.Stdout
+			fmt.Fprintf(os.Stdout, "DRIVER_VM_PROBE %v\n", command)
+			err := probe.Run()
+			stop()
+			fmt.Fprintf(os.Stdout, "DRIVER_VM_PROBE_RESULT %v\n", err)
+		}
+	}()
+	defer func() { cancel(); <-diagnosticsDone }()
 	svc := NewDriverService(zap.NewExample()) // No path, command, module, merge or verifier seams.
 	socket := "/run/wendy-driver-fixture-" + nonce + ".sock"
 	listener, err := net.Listen("unix", socket)
@@ -157,6 +191,7 @@ func TestDriverLifecycleVM(t *testing.T) {
 	}
 	install := func(name, variant string, stage bool) *pb.DriverApplyResponse {
 		t.Helper()
+		t.Logf("DRIVER_VM_INSTALL_BEGIN name=%s variant=%s stage=%v", name, variant, stage)
 		payload, err := os.ReadFile("/fixture/images/" + variant + "/" + name + ".raw")
 		if err != nil {
 			t.Fatal(err)
@@ -181,7 +216,7 @@ func TestDriverLifecycleVM(t *testing.T) {
 		var terminal *pb.DriverApplyResponse
 		for {
 			response, err := stream.Recv()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
@@ -197,6 +232,7 @@ func TestDriverLifecycleVM(t *testing.T) {
 		if terminal == nil {
 			t.Fatal("install had no terminal response")
 		}
+		t.Logf("DRIVER_VM_INSTALL_END name=%s variant=%s response=%v", name, variant, terminal)
 		return terminal
 	}
 	completed := func(response *pb.DriverApplyResponse) {
@@ -257,7 +293,7 @@ func TestDriverLifecycleVM(t *testing.T) {
 	var removed *pb.DriverApplyResponse
 	for {
 		response, err := remove.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -289,7 +325,7 @@ func TestDriverLifecycleVM(t *testing.T) {
 	}
 	for {
 		response, err := cleanup.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
