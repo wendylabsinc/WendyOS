@@ -21,7 +21,11 @@ func TestGo2NativeH264CaptureChild(t *testing.T) {
 	if os.Getenv("WENDY_GO2_CAPTURE_CHILD") != "1" {
 		t.Skip("requires the owned Go2 kernel fixture")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	frames, rate, bound := 6, 10, 8*time.Second
+	if os.Getenv("WENDY_GO2_CAPTURE_RECORDED") == "1" {
+		frames, rate, bound = 120, 30, 20*time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	svc := &VideoService{logger: zap.NewNop()}
 	var encoded []byte
@@ -35,11 +39,15 @@ func TestGo2NativeH264CaptureChild(t *testing.T) {
 			t.Errorf("invalid native access unit size %d", len(data))
 			return false
 		}
+		if len(encoded)+len(data) > 16<<20 {
+			t.Error("capture exceeds 16 MiB")
+			return false
+		}
 		encoded = append(encoded, data...)
 		count++
-		return count < 6
-	}, "/dev/video128", &agentpb.StreamVideoRequest{Width: 640, Height: 360, Framerate: 10})
-	if err != nil || count != 6 {
+		return count < frames
+	}, "/dev/video128", &agentpb.StreamVideoRequest{Width: 640, Height: 360, Framerate: uint32(rate)})
+	if err != nil || count != frames {
 		t.Fatalf("Go2 native service capture failed: frames=%d err=%v", count, err)
 	}
 	fmt.Printf("GO2_CAPTURE_BYTES %s\n", base64.StdEncoding.EncodeToString(encoded))
