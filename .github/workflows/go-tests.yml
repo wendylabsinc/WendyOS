@@ -948,17 +948,6 @@ jobs:
           grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
 
-      - name: Require authenticated IP-camera pump consumer lifecycle
-        run: bash .github/scripts/test-ipcam-loopback-lifecycle.sh
-      - name: Preserve IP-camera lifecycle evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: ipcam-loopback-lifecycle
-          path: ${{ runner.temp }}/wendy-ipcam-lifecycle.*/*.log
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Require Go2 H264 decoding through the kernel and a camera-entitled container
         timeout-minutes: 15
         run: |
@@ -977,6 +966,17 @@ jobs:
         with:
           name: go2-h264-loopback
           path: ${{ runner.temp }}/wendy-go2-h264.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require authenticated IP-camera pump consumer lifecycle
+        run: bash .github/scripts/test-ipcam-loopback-lifecycle.sh
+      - name: Preserve IP-camera lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ipcam-loopback-lifecycle
+          path: ${{ runner.temp }}/wendy-ipcam-lifecycle.*/*.log
           if-no-files-found: ignore
           retention-days: 7
 
