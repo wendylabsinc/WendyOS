@@ -233,7 +233,7 @@ func newAppLifecycleCmd() *cobra.Command {
 			return withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
 				app, err := cloudpb.NewAppServiceClient(conn).GetApp(ctx, &cloudpb.GetAppRequest{Id: args[0], OrganizationId: org})
 				if status.Code(err) == codes.NotFound {
-					return usageErrorf("No app %s in this organization.", args[0])
+					return usageErrorf("No app %s in this organization. Create it with wendy app create.", args[0])
 				}
 				if err != nil {
 					return fmt.Errorf("reading %s: %w", args[0], err)
