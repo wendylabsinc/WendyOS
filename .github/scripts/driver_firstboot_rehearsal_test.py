@@ -90,7 +90,7 @@ class DriverFirstbootTests(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     def test_rejects_mismatched_target_catalog_bytes_signature_review_and_bounds(self):
-        for fault in ("carrier","storage","address","same-address","source","secret","bound","archive","kernel","raw","module","signature","disabled","review-key","origin"):
+        for fault in ("carrier","storage","address","same-address","same-address-spelling","source","secret","bound","archive","kernel","raw","module","signature","disabled","review-key","origin"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);inventory,data,marker=self.fixture(root)
                 catalog_path=Path(data["device_catalog"]);catalog=json.loads(catalog_path.read_text());entry=catalog["versions"]["0.20.2"];driver=entry["extensions"][0]
@@ -99,6 +99,7 @@ class DriverFirstbootTests(unittest.TestCase):
                 elif fault=="storage":data["board"]["storage"]="emmc"
                 elif fault=="address":data["board"]["usb_address_after"]="127.0.0.1:50051"
                 elif fault=="same-address":data["board"]["usb_address_after"]=data["board"]["usb_address_before"]
+                elif fault=="same-address-spelling":data["board"]["usb_address_after"]="[169.254.44.1]:50051"
                 elif fault=="source":data["agent_source_commit"]="main"
                 elif fault=="secret":data["password"]="never-record-this"
                 elif fault=="bound":data["disconnect_seconds"]=601
