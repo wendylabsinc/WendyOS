@@ -277,6 +277,84 @@ func TestCarrierSnapshotsConcurrentWithAdmission(t *testing.T) {
 	}
 }
 
+func TestCarrierWorkspaceReusePreservesAdmittedBytes(t *testing.T) {
+	f := &admissionFixture{capacity: 1356}
+	sender := &carrierIPSender{sender: f, negotiated: WholeIPDatagramLimit}
+	want := make(map[uint32][]byte)
+	for id := uint32(1); id <= 60; id++ {
+		// Exercise a whole frame immediately after a last fragment with a
+		// nonzero offset, as well as short frames after full workspace writes.
+		size := TunnelMTU
+		f.capacity = 1356
+		if id%3 == 1 {
+			f.capacity = 1156
+		} else if id%3 == 0 {
+			size = 80
+		}
+		packet, _ := assemblyPacket(t, size, id)
+		packet[len(packet)-1] = byte(id)
+		want[id] = bytes.Clone(packet)
+		if err := sender.sendIP(id, packet); err != nil {
+			t.Fatal(err)
+		}
+		// The caller may also recycle its input once admission returns.
+		clear(packet)
+	}
+	verifyCarrierPackets(t, f.accepted, want)
+}
+
+func TestCarrierWorkspaceConcurrentSends(t *testing.T) {
+	f := &admissionFixture{capacity: 1156}
+	sender := &carrierIPSender{sender: f, negotiated: WholeIPDatagramLimit}
+	want := make(map[uint32][]byte)
+	for id := uint32(1); id <= 200; id++ {
+		packet, _ := assemblyPacket(t, TunnelMTU, id)
+		packet[len(packet)-1] = byte(id)
+		want[id] = packet
+	}
+	var workers sync.WaitGroup
+	for worker := uint32(0); worker < 8; worker++ {
+		workers.Go(func() {
+			for id := worker + 1; id <= 200; id += 8 {
+				if err := sender.sendIP(id, want[id]); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	workers.Wait()
+	verifyCarrierPackets(t, f.accepted, want)
+	if stats := sender.snapshot(); stats.FragmentedPackets != 200 || stats.Fragments != 400 || stats.PartialDrops != 0 {
+		t.Fatalf("concurrent admission accounting: %+v", stats)
+	}
+}
+
+func verifyCarrierPackets(t *testing.T, frames [][]byte, want map[uint32][]byte) {
+	t.Helper()
+	// Keep separate receivers so concurrent admission order cannot turn a
+	// lower, independently generated test ID into a retired serial number.
+	receivers := make(map[uint32]*IPAssembler)
+	for _, frame := range frames {
+		id := binary.BigEndian.Uint32(frame[1:5])
+		if receivers[id] == nil {
+			receivers[id] = &IPAssembler{wholeIP: true}
+		}
+		got, err := receivers[id].Receive(frame, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil {
+			if !bytes.Equal(got, want[id]) {
+				t.Fatalf("packet %d changed or delivered twice after buffer reuse", id)
+			}
+			delete(want, id)
+		}
+	}
+	if len(want) > 0 {
+		t.Fatalf("missing %d admitted packets", len(want))
+	}
+}
+
 func FuzzCarrierWholeAssemblyBounds(f *testing.F) {
 	packet := make([]byte, TunnelMTU)
 	packet[0] = 0x60
