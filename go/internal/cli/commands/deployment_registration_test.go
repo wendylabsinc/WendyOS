@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
-	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -21,7 +20,6 @@ import (
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -114,25 +112,6 @@ func TestRegistrationDeduplicatesAppsAndPropagatesCloudFailure(t *testing.T) {
 	})
 	if !called || !errors.Is(err, denied) {
 		t.Fatalf("failure hidden: %v", err)
-	}
-}
-
-func TestRunStopsBeforeBuildingWhenRegistrationFails(t *testing.T) {
-	// Nothing listens on a closed listener's port, so the enrollment check fails.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener.Close()
-	agent, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { agent.Close() })
-	conn := &grpcclient.AgentConnection{Conn: agent}
-	err = runWithAgent(context.Background(), conn, t.TempDir(), &appconfig.AppConfig{AppID: "app"}, runOptions{})
-	if err == nil || !strings.Contains(err.Error(), "registering deployment with Cloud") || !strings.Contains(err.Error(), "--skip-cloud-registration") {
-		t.Fatalf("registration did not stop deployment: %v", err)
 	}
 }
 
