@@ -2022,10 +2022,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1736",
       "title": "WDY-2041: keep watch sessions attached",
       "package": "06",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests cover attachment mode, log ownership and lifecycle hooks. A full watch/redeploy session with real app streams and cancellation is not demonstrated across platforms.",
-      "required_follow_up": "Add an end-to-end watch test that edits a file, observes new output, then verifies cleanup on interrupt.",
-      "evidence": []
+      "required_follow_up": "Require the actual macOS CLI/native Agent watch journey and forced-detach control in the existing Swift core job. Add the remaining real Linux/container and compose watch lifecycle journey covering Go telemetry and service cleanup; native Mac transport alone does not establish those backend paths.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/WatchSessionTransportTests.swift",
+            ".github/scripts/test-watch-session.sh"
+          ],
+          "result": "Final local default-build-system gate passed actual CLI filesystem watch, file sync over gRPC, native process replacement with fresh output, one live telemetry subscription, one persistent CLI hook, SIGINT cleanup and continued app operation. Reinstating the historical forced-detach invariant failed specifically at absent initial live output after successful real detached deployment. Independent cleanup review, Swift formatting and ShellCheck passed. Registered in the existing Swift core job, reusing its build directory; hosted execution remains pending. Linux/container and compose backend coverage remains open."
+        }
+      ]
     },
     {
       "key": "2086",
