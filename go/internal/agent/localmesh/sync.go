@@ -441,8 +441,9 @@ func (s *Synchronizer) localDevicePrincipal(principal string) bool {
 
 // Receive returns replies plus independently verified changed records to relay.
 // Invalid signatures or lifetimes are fatal except for a bounded retry while
-// an exact advertised renewed chain is in flight, or a signature mismatch on a
-// revision the origin has already replaced. Unverified data grants no trust.
+// an exact advertised renewed chain is in flight, or a signature or issue-date
+// mismatch on a revision the origin has already replaced. Unverified data
+// grants no trust.
 func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (replies []ControlMessage, changed []SignedManifest, err error) {
 	s.Sweep(now)
 	switch m.Kind {

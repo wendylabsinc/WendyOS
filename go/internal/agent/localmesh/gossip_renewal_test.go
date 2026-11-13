@@ -3,6 +3,7 @@ package localmesh
 import (
 	"crypto/ecdsa"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -362,75 +363,96 @@ func TestManifestGossipSameLeafIssuerChangeRefreshesDescriptorImmediately(t *tes
 }
 
 // A neighbour can still relay the revision an origin signed before it renewed
-// with a fresh key. It cannot verify under the current leaf and could never be
-// applied, so it is dropped without failing the relaying carrier. Only a
-// revision below the admitted floor gets that outcome; nothing is recorded.
+// with a fresh key. It fails the current leaf's signature or issuance-date
+// check and could never be applied, so it is dropped without failing the
+// relaying carrier. Only a revision below the admitted floor gets that
+// outcome; nothing is recorded.
 func TestGossipUnverifiableManifestIsBenignOnlyBelowAdmittedRevision(t *testing.T) {
-	for _, revision := range []uint64{1, 2, 3} {
-		name := map[uint64]string{1: "superseded", 2: "current", 3: "newer"}[revision]
-		t.Run(name, func(t *testing.T) {
-			f := newWarmRenewalFixture(t) // The renewed leaf has a different key.
-			cache, err := OpenIdentityCache("", DefaultCacheLimits(), f.verify, f.now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, credentials := range []*Credentials{f.old, f.renewed} {
-				if _, err = cache.Put(credentials.Certificate.Certificate, f.now); err != nil {
+	for _, predates := range []bool{false, true} {
+		for _, revision := range []uint64{1, 2, 3} {
+			name := map[bool]string{false: "signature/", true: "predates/"}[predates] + map[uint64]string{1: "superseded", 2: "current", 3: "newer"}[revision]
+			t.Run(name, func(t *testing.T) {
+				f := newWarmRenewalFixture(t) // The renewed leaf has a different key.
+				renewed, signer, issued := f.renewed, f.old, f.now
+				if predates {
+					// issue backdates NotBefore by an hour: this leaf starts at
+					// f.now, as pki-core stamps it. Sign with its own key so
+					// only the issuance-date check can refuse the envelope.
+					renewed = newManifestTestAuthority(t, f.now).issue(t, f.now.Add(time.Hour), nil, f.now.Add(2*time.Hour))
+					signer, issued = renewed, f.now.Add(-time.Minute)
+				}
+				rejected := func(err error) bool {
+					if predates {
+						return err != nil && strings.Contains(err.Error(), "predates authenticating certificate")
+					}
+					return errors.Is(err, ErrInvalidManifestSignature)
+				}
+				cache, err := OpenIdentityCache("", DefaultCacheLimits(), renewed.Verify, f.now)
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			d, err := NewDirectory(f.renewed.Device.Tenant(), 10, cache)
-			if err != nil {
-				t.Fatal(err)
-			}
-			current := f.wire(t, f.now) // Revision 2 under the renewed key.
-			if changed, err := d.Accept(current, f.now); err != nil || !changed {
-				t.Fatal(changed, err)
-			}
-			m := routeManifest(f.old.Device, f.now)
-			m.Revision = revision
-			m.Expires = f.now.Add(MaxLease).UnixMilli() // Revision 2 repeats the admitted body.
-			obsolete, err := SignManifest(m, f.old.Certificate.Certificate, f.old.Signer, f.now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, direct := d.Accept(obsolete, f.now)
-			body, _ := netwire.Marshal(obsolete)
-			source := netgossip.NewPool().NewSession(netgossip.Manifest)
-			have := source.Offer(body, f.now.Add(MaxLease), f.now)
-			pool := netgossip.NewPool()
-			receiver := NewSynchronizer(d, cache, pool)
-			defer receiver.Close()
-			want, _, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: have}, f.now)
-			if err != nil || len(want) != 1 {
-				t.Fatal(want, err)
-			}
-			data, _, err := source.Receive(*want[0].Gossip, f.now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			replies, changed, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: data}, f.now)
-			if revision < 2 {
-				if !errors.Is(direct, ErrSupersededManifest) || err != nil || len(replies) != 0 || len(changed) != 0 {
-					t.Fatalf("superseded old-key revision failed the carrier or was relayed: direct=%v replies=%v changed=%v err=%v", direct, replies, changed, err)
+				if _, err = cache.Put(renewed.Certificate.Certificate, f.now); err != nil {
+					t.Fatal(err)
 				}
-			} else if !errors.Is(direct, ErrInvalidManifestSignature) || !errors.Is(err, ErrInvalidManifestSignature) || len(changed) != 0 {
-				t.Fatalf("old-key signature at an applicable revision was not rejected as invalid: direct=%v changed=%v err=%v", direct, changed, err)
-			}
-			records := d.Records(f.now)
-			if len(records) != 1 || !sameManifestWire(records[0], current) || d.history[current.ownerKey()].Revision != 2 {
-				t.Fatal("unverifiable manifest changed the admitted record or replay floor")
-			}
-			if _, ok := d.CurrentRecordChain(current, f.now); !ok {
-				t.Fatal("unverifiable manifest withdrew the admitted record's authority")
-			}
-			// Never authenticated: no shared receipt may suppress these bytes.
-			receiver.Close()
-			alternate := pool.NewSession(netgossip.Manifest)
-			defer alternate.Close()
-			if next, _, err := alternate.Receive(*have, f.now); err != nil || next == nil {
-				t.Fatal("unverifiable manifest became a shared receipt", next, err)
-			}
-		})
+				d, err := NewDirectory(renewed.Device.Tenant(), 10, cache)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m := routeManifest(renewed.Device, f.now)
+				m.Revision = 2
+				m.Expires = f.now.Add(MaxLease).UnixMilli()
+				current, err := SignManifest(m, renewed.Certificate.Certificate, renewed.Signer, f.now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if changed, err := d.Accept(current, f.now); err != nil || !changed {
+					t.Fatal(changed, err)
+				}
+				// The signature case at revision 2 repeats the admitted body.
+				m.Revision = revision
+				m.Issued, m.Expires = issued.UnixMilli(), issued.Add(MaxLease).UnixMilli()
+				obsolete, err := SignManifest(m, signer.Certificate.Certificate, signer.Signer, issued)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, direct := d.Accept(obsolete, f.now)
+				body, _ := netwire.Marshal(obsolete)
+				source := netgossip.NewPool().NewSession(netgossip.Manifest)
+				have := source.Offer(body, f.now.Add(MaxLease), f.now)
+				pool := netgossip.NewPool()
+				receiver := NewSynchronizer(d, cache, pool)
+				defer receiver.Close()
+				want, _, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: have}, f.now)
+				if err != nil || len(want) != 1 {
+					t.Fatal(want, err)
+				}
+				data, _, err := source.Receive(*want[0].Gossip, f.now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				replies, changed, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: data}, f.now)
+				if revision < 2 {
+					if !errors.Is(direct, ErrSupersededManifest) || err != nil || len(replies) != 0 || len(changed) != 0 {
+						t.Fatalf("superseded revision failed the carrier or was relayed: direct=%v replies=%v changed=%v err=%v", direct, replies, changed, err)
+					}
+				} else if !rejected(direct) || !rejected(err) || len(changed) != 0 {
+					t.Fatalf("unverifiable manifest at an applicable revision was not rejected: direct=%v changed=%v err=%v", direct, changed, err)
+				}
+				records := d.Records(f.now)
+				if len(records) != 1 || !sameManifestWire(records[0], current) || d.history[current.ownerKey()].Revision != 2 {
+					t.Fatal("unverifiable manifest changed the admitted record or replay floor")
+				}
+				if _, ok := d.CurrentRecordChain(current, f.now); !ok {
+					t.Fatal("unverifiable manifest withdrew the admitted record's authority")
+				}
+				// Never authenticated: no shared receipt may suppress these bytes.
+				receiver.Close()
+				alternate := pool.NewSession(netgossip.Manifest)
+				defer alternate.Close()
+				if next, _, err := alternate.Receive(*have, f.now); err != nil || next == nil {
+					t.Fatal("unverifiable manifest became a shared receipt", next, err)
+				}
+			})
+		}
 	}
 }

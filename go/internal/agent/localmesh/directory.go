@@ -92,10 +92,10 @@ var ErrStaleManifest = errors.New("stale wendy net manifest")
 // or unauthorized manifests; certificate renewal may need an in-flight leaf.
 var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
 
-// ErrSupersededManifest reports an envelope that does not verify under the
-// current leaf at a revision its origin has already replaced, as a neighbour
-// relays after a fresh-key renewal. It is never authenticated: callers drop
-// it without a shared receipt and without failing the relaying carrier.
+// ErrSupersededManifest reports an envelope that predates the current leaf or
+// does not verify under it, at a revision its origin has already replaced, as
+// a neighbour relays after a fresh-key renewal. It is never authenticated:
+// callers drop it without a shared receipt or failing the relaying carrier.
 var ErrSupersededManifest = errors.New("superseded wendy net manifest")
 
 // ErrManifestOutlivesCertificate can await an explicitly advertised renewed
@@ -371,16 +371,19 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	// The selected path is independently trusted at the local verification
 	// clock. Static signed dates belong to the signing leaf's window; a newer
 	// issuer's NotBefore does not date an already-signed announcement.
+	// A revision below the admitted floor is refused whatever its date or
+	// signature. Only that outcome is renamed in the two checks below: a
+	// current or newer revision that fails either one is still rejected.
 	if time.UnixMilli(m.Issued).Before(leaf.NotBefore) {
+		if d.superseded(owner, m.Revision, now) {
+			return false, ErrSupersededManifest
+		}
 		return false, errors.New("manifest predates authenticating certificate")
 	}
 	if time.UnixMilli(m.Expires).After(leaf.NotAfter) || time.UnixMilli(m.Expires).After(id.NotAfter) {
 		return false, ErrManifestOutlivesCertificate
 	}
 	if !validManifestSignature(w, leaf) {
-		// A revision below the admitted floor is refused whatever its
-		// signature. Only that outcome is renamed here: a current or newer
-		// revision that fails verification is still an invalid signature.
 		if d.superseded(owner, m.Revision, now) {
 			return false, ErrSupersededManifest
 		}
