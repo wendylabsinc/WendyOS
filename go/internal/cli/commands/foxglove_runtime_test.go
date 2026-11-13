@@ -74,7 +74,38 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 		return err
 	}))
 	agentpb.RegisterWendyAgentServiceServer(server, services.NewAgentService(zap.NewNop(), nil, nil, nil, nil))
-	agentpb.RegisterWendyContainerServiceServer(server, services.NewContainerService(zap.NewNop(), store))
+	// Preserve actual bridge startup output when the process exits before the
+	// WebSocket readiness check. The ordinary detached CLI discards this stream.
+	logs := services.NewContainerLogManager(zap.NewNop(), services.NewTelemetryBroadcaster())
+	subID, appOutput := logs.Subscribe(foxgloveAppID)
+	logDone := make(chan struct{})
+	go func() {
+		defer close(logDone)
+		remaining := 256 << 10
+		for item := range appOutput {
+			for _, data := range [][]byte{item.Stdout, item.Stderr} {
+				if len(data) > remaining {
+					data = data[:remaining]
+				}
+				if len(data) > 0 {
+					t.Logf("FOXGLOVE_APP_OUTPUT %s", data)
+					remaining -= len(data)
+				}
+			}
+			if item.Done {
+				t.Log("FOXGLOVE_APP_OUTPUT terminal marker")
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		logs.Unsubscribe(foxgloveAppID, subID)
+		select {
+		case <-logDone:
+		case <-time.After(5 * time.Second):
+			t.Error("Foxglove diagnostic log subscriber did not drain")
+		}
+	})
+	agentpb.RegisterWendyContainerServiceServer(server, services.NewContainerService(zap.NewNop(), store, services.WithLogManager(logs)))
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	t.Cleanup(func() {
