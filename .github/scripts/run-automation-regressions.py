@@ -47,6 +47,7 @@ SUITES = (
     "driver_firstboot_rehearsal_test.py",
     "dragonwing_reset_rehearsal_test.py",
     "mac_camera_rehearsal_test.py",
+    "mac_agent_lifecycle_rehearsal_test.py",
     "mac_camera_hardware_rehearsal_test.py",
     "linux_media_hardware_rehearsal_test.py",
     "topdon_physical_rehearsal_test.py",
