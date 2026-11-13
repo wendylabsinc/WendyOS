@@ -289,6 +289,38 @@ Build/Reference/
 Use this artifact to review the behavioral reference generated from the current
 E2E source files.
 
+`swift-e2e-testing reference --spec-review` (or `--include-disabled-state`)
+adds static availability metadata in HTML, Markdown and JSON. `enabled` means
+no recognized availability trait restricts the declaration; it does not mean the
+test passed or its runtime prerequisites are satisfied. Unconditional `.disabled`
+is `disabled`. `.enabled(if:)`, conditional `.disabled` and
+closure conditions are `conditional`: the generator never evaluates Swift
+expressions, even literal booleans. Suite traits are inherited. An unconditional
+disable takes precedence over conditional traits. Trait source is retained as
+`availabilityReason`, including any literal explanation, without evaluating
+interpolation or computed reasons. Predicate overloads, including a reason followed
+by a closure or predicate expression, remain conditional. Ordinary reference output
+still omits metadata.
+
+For API consumers, `Entry.availability` and `Entry.availabilityReason` are additive.
+The existing `isDisabled` initializer/property remains available; false alone is
+not evidence of enablement. Setting that property explicitly resets availability
+and clears its reason. JSON with availability metadata adds `availability` and
+`availabilityReason` (when present). It retains `isDisabled` for static enabled or
+disabled entries, and omits that legacy boolean for conditional entries so they
+cannot be mistaken for enabled. Consumers requiring that key must migrate to
+`availability` before reading conditional entries.
+
+The extractor follows the repository convention: standalone `@Suite` / `@Test`
+attributes followed by backticked `struct` / `func` names, one flattened suite per
+command file. Its small lexical scanner balances function bodies and attributes
+across ordinary, raw and multiline strings (including interpolation), quoted
+identifiers, line comments and nested block comments. It also handles a function's
+opening brace on a later line. This is not a complete Swift parser: regex literals,
+inline attribute/declaration layouts, custom or qualified availability traits,
+nested suite inheritance and conditional compilation are not interpreted. Keep
+availability traits directly in the suite/test attribute when using this reference.
+
 ## Writing tests
 
 ### Organization and naming

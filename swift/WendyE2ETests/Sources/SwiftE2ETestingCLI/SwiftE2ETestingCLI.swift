@@ -30,10 +30,10 @@ struct ReferenceCommand: ParsableCommand {
     @Flag(help: "Include source file and line metadata.")
     var includeSourceLocations = false
 
-    @Flag(help: "Include enabled/disabled test metadata.")
+    @Flag(help: "Include static enabled/disabled/conditional availability and trait source.")
     var includeDisabledState = false
 
-    @Flag(help: "Include source locations and disabled state.")
+    @Flag(help: "Include source locations and static availability metadata.")
     var specReview = false
 
     @Option(name: .long, help: "Output format: markdown, md, html, or json.")

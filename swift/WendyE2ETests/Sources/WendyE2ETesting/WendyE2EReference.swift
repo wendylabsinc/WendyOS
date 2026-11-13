@@ -30,11 +30,30 @@ public enum WendyE2EReference {
         }
     }
 
+    /// Static trait information, not the result of running a test or its conditions.
+    public enum Availability: String, Sendable, Equatable, Encodable {
+        case enabled
+        case disabled
+        case conditional
+    }
+
     public struct Entry: Sendable, Equatable {
         public var title: String
         public var documentation: String
         public var sourceLocation: SourceLocation
-        public var isDisabled: Bool
+        public var availability: Availability
+        /// Source spelling of availability traits. Expressions are never evaluated.
+        public var availabilityReason: String?
+
+        /// Compatibility view: true only for unconditional disabling traits.
+        /// False does not imply enabled; inspect `availability` for conditional tests.
+        public var isDisabled: Bool {
+            get { availability == .disabled }
+            set {
+                availability = newValue ? .disabled : .enabled
+                availabilityReason = nil
+            }
+        }
 
         public init(
             title: String,
@@ -45,7 +64,22 @@ public enum WendyE2EReference {
             self.title = title
             self.documentation = documentation
             self.sourceLocation = sourceLocation
-            self.isDisabled = isDisabled
+            self.availability = isDisabled ? .disabled : .enabled
+            self.availabilityReason = nil
+        }
+
+        public init(
+            title: String,
+            documentation: String,
+            sourceLocation: SourceLocation,
+            availability: Availability,
+            availabilityReason: String? = nil
+        ) {
+            self.title = title
+            self.documentation = documentation
+            self.sourceLocation = sourceLocation
+            self.availability = availability
+            self.availabilityReason = availabilityReason
         }
     }
 
