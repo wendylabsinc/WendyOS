@@ -53,7 +53,7 @@
       "behaviors": [
         {
           "boundary": "Production RTPS multicast socket only receives on joined interfaces",
-          "proof": "TestMulticastPacketsStayOnTheirJoinedInterface runs two real production participants on private loopback/veth interfaces. Actual external-namespace SPDP/SEDP plus exact binary samples must reach only the appropriate participant. test-rtps-multicast-isolation.sh requires normal and a named pre-fix control removing the production multicast restriction. Both binaries compile; hosted kernel/race execution remains pending. Actual hosted job131714898807 at50ce4945a passed real interface/sample delivery and the named CROSS_INTERFACE_DISCOVERY control.",
+          "proof": "TestMulticastPacketsStayOnTheirJoinedInterface runs two real production participants on private loopback/veth interfaces. Actual external-namespace SPDP/SEDP plus exact binary samples must reach only the appropriate participant. test-rtps-multicast-isolation.sh requires normal and a named pre-fix control removing the production multicast restriction. Both binaries compile. Actual hosted job131714898807 at50ce4945a passed real interface/sample delivery and the named CROSS_INTERFACE_DISCOVERY control.",
           "remaining": "Container observer and physical middleware interoperability remain separate."
         },
         {
