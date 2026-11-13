@@ -40,14 +40,14 @@ class EvidenceTests(unittest.TestCase):
         self.assessment = self.meta["_compatibility"]
         self.changed = api.finding_catalog(api.evidence_catalog(self.parsed), self.assessment)
         self.extra = self.assessment["catalog"]
-        self.finding = dict(assessment="breaking", direction="state_reader_writer", consumer="Stored-state reader",
+        self.finding = dict(prior_id="", assessment="breaking", direction="state_reader_writer", consumer="Stored-state reader",
                             action="Open a previously saved registry", condition="An older reader loads a newly written record",
                             before="The supported record is decoded", after="The new required encoding fails parsing",
                             consider="Consider retaining a decoder adapter for the existing encoding.",
                             changed=[next(iter(self.changed))], caller=[next(iter(self.extra))], receiver=[next(iter(self.changed))])
 
     def validate(self, value):
-        return compat.validate(value, self.changed, self.extra)
+        return compat.validate(value, self.changed, self.extra, previous=[])
 
     def test_exact_immutable_resolution_and_short_stable_id(self):
         sid = next(iter(self.extra))
@@ -84,7 +84,7 @@ class EvidenceTests(unittest.TestCase):
             extras = compat.context_catalog([entry(kind=kind)])[0]
             finding = dict(self.finding, caller=[next(iter(extras))])
             with self.subTest(kind=kind), self.assertRaisesRegex(compat.ReviewError, "Runtime findings"):
-                compat.validate(response(finding), self.changed, extras)
+                compat.validate(response(finding), self.changed, extras, previous=[])
 
     def test_coverage_claims_and_both_peer_plus_state_directions(self):
         for change in ({"status": "complete"}, {"status":"partial","evidence":[]}, {"status": []}):
@@ -113,7 +113,7 @@ class EvidenceTests(unittest.TestCase):
             extras=compat.context_catalog([entry(path=path,kind=compat.source_kind(path))])[0]
             finding=dict(self.finding,caller=[next(iter(extras))])
             with self.assertRaisesRegex(compat.ReviewError,'Runtime findings'):
-                compat.validate(response(finding),self.changed,extras)
+                compat.validate(response(finding),self.changed,extras, previous=[])
 
     def test_runtime_spec_files_remain_source(self):
         for path in ('go/internal/agent/oci/spec.go', 'go/internal/agent/containerd/device_spec.go', 'go/internal/cli/jobops/spec.go', 'go/internal/cli/vm/spec.go'):
@@ -146,7 +146,7 @@ class EvidenceTests(unittest.TestCase):
         valid=response(self.finding)
         for previous in (None, dict(valid, compatibility_findings=[dict(self.finding,caller=['invented'])])):
             api.preserve_findings(previous, self.validate(valid), self.changed, self.extra)
-        with self.assertRaisesRegex(compat.ReviewError,'already-valid'):
+        with self.assertRaisesRegex(compat.ReviewError,'dropped original'):
             api.preserve_findings(valid,self.validate(response()),self.changed,self.extra)
 
     def test_production_model_shape_repair_accepts_corrected_full_payload(self):

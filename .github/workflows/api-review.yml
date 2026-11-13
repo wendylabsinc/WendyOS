@@ -3,7 +3,6 @@ name: AI Compatibility Review
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    branches: [main]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -42,7 +41,7 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      CLAUDE_MODEL: claude-opus-4-8
+      CLAUDE_MODEL: claude-opus-5-5
     steps:
       - name: Resolve current trusted main automation
         id: trusted-automation
@@ -78,7 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          for filename in api_review.py api_review_comment.py compatibility_review.py review_diff.py review_sources.py; do
+          for filename in api_review.py api_review_comment.py compatibility_review.py compatibility_state.py review_diff.py review_sources.py; do
             if [[ ! -s "$scripts_dir/$filename" ]]; then
               echo "::error::AI Compatibility Review is not activated on trusted main; no PR-head automation fallback is permitted."
               exit 1
@@ -97,6 +96,7 @@ jobs:
           python3 review-automation/.github/scripts/api_review_comment_test.py
           python3 review-automation/.github/scripts/review_diff_test.py
           python3 review-automation/.github/scripts/compatibility_review_test.py
+          python3 review-automation/.github/scripts/compatibility_state_test.py
           if [[ -f review-automation/.github/scripts/review_sources_test.py ]]; then
             python3 review-automation/.github/scripts/review_sources_test.py
           fi
@@ -231,7 +231,7 @@ jobs:
 
   validate-candidate-tests:
     name: Test candidate API review without credentials
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
@@ -259,6 +259,7 @@ jobs:
           python3 .github/scripts/review_sources_test.py
           python3 .github/scripts/api_review_workflow_test.py
           python3 .github/scripts/compatibility_review_test.py
+          python3 .github/scripts/compatibility_state_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
@@ -273,7 +274,7 @@ jobs:
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number }}
       EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
-      CLAUDE_MODEL: claude-opus-4-8
+      CLAUDE_MODEL: claude-opus-5-5
     steps:
       # SECURITY: Manual dispatch is an explicit writer-authorized candidate
       # validation. Pin execution to the dispatched immutable commit; automatic

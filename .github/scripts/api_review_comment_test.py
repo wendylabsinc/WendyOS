@@ -115,11 +115,12 @@ class MultipartGitHub(FakeGitHub):
 
 
 class RenderingTests(unittest.TestCase):
-    def test_grouped_linked_unchecked_decisions_and_explicit_empty_categories(self):
+    def test_grouped_linked_unchecked_decisions_and_compact_categories(self):
         body = review.render_comment(result(), REPO, diff=REVIEW_DIFF.decode())
         self.assertIn("- [ ] Accept **Native `run.command` launch command** — 🟢 **Additive**.", body)
         self.assertIn(f"/blob/{HEAD}/go/internal/shared/appconfig/appconfig.go#L10-L12", body)
-        self.assertIn("## Network contracts and constants\n\nNo API decisions changed.", body)
+        self.assertNotIn("## Network contracts and constants", body)
+        self.assertIn("<summary>API decisions (1)", body)
         self.assertIn("**Change:** Add optional `run.command` and `run.cwd`", body)
         self.assertIn("**Compatibility:** Existing `wendy.json` manifests keep their launch behavior.", body)
         self.assertIn("**Code:**", body)
@@ -594,7 +595,7 @@ class MultipartTests(unittest.TestCase):
         self.assertGreater(len(pages), 1)
         self.assertGreater(primary["id"], max(comment["id"] for comment in pages))
         self.assertIn("93 decisions", primary["body"])
-        self.assertIn("11 complete batch(es)", primary["body"])
+        self.assertIn("11 complete diff batch(es)", primary["body"])
         for page in pages:
             self.assertIn(f"#issuecomment-{page['id']}", primary["body"])
         bodies = "\n".join(page["body"] for page in pages)

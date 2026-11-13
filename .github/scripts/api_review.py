@@ -15,10 +15,12 @@ from typing import Any
 
 from review_diff import DiffBatch, DiffBatchError, diff_lines, split_diff
 import compatibility_review as compat
+import compatibility_state
 
 # Each batch includes every source byte and any repeated fragment context.
 MAX_DIFF_BYTES = 200_000
 MAX_REVIEW_WORKERS = 4
+MODEL_EFFORT = "high"
 CATEGORIES = {"network", "protobuf", "storage", "config", "cli", "other"}
 IMPACTS = {"additive", "breaking", "behavioral"}
 RISKS = {"low", "mid", "high"}
@@ -220,7 +222,7 @@ def model_schema(evidence: dict[int, dict[str, Any]], assessment=None) -> dict[s
         "properties": {"evidence_id": {"type": "integer", **({"enum": list(evidence)} if evidence else {})}},
     }
     if assessment is not None:
-        fields = compat.schema(evidence, assessment["catalog"])
+        fields = compat.schema(evidence, assessment["catalog"], assessment.get("previous"))
         schema["properties"].update(fields)
         schema["required"].extend(fields)
     return schema
@@ -262,13 +264,13 @@ def user_prompt(metadata: dict[str, Any], diff: str, repo: str) -> str:
             "structural_evidence": structural}
     assessment = metadata.get("_compatibility")
     if assessment is not None:
-        data.update(source_evidence=assessment["supplied"], context_limits=assessment["limits"],
+        data.update(prior_compatibility_findings=assessment.get("previous", []), source_evidence=assessment["supplied"], context_limits=assessment["limits"],
                     review_revisions=assessment["revisions"], test_evidence=assessment["tests"],
-                    response_schema=model_schema(evidence, assessment))
+                    response_schema=model_schema(evidence, assessment), response_limits=compat.RESPONSE_LIMITS)
     return json.dumps(data, ensure_ascii=False)
 
 
-def prepare_review(metadata, diff, repo, entries=None, limits=None, private_policy=None, tests=None):
+def prepare_review(metadata, diff, repo, entries=None, limits=None, private_policy=None, tests=None, previous=None):
     """The common candidate preparation used by normal review and calibration.
 
     entries/policy/tests are explicit trusted LOCAL inputs, not PR body fields.
@@ -294,7 +296,7 @@ def prepare_review(metadata, diff, repo, entries=None, limits=None, private_poli
         "limitations": ["Only selected immutable ranges supplied; unprovided counterparts, releases and test runs remain not assessed."]}
     if private_policy is None:
         limits.setdefault("limitations", []).append("Feature support/retirement guidance was not supplied; those requirements are not assessed.")
-    prepared["_compatibility"] = {"catalog": catalog, "supplied": supplied,
+    prepared["_compatibility"] = {"catalog": catalog, "supplied": supplied, "previous": compatibility_state.validate_records(previous or []),
         "limits": limits,
         "tests": [{"evidence_id": k, **v} for k, v in catalog.items() if v["kind"] != "source"],
         "revisions": {"repository": repo, "base": metadata["diff_base_sha"], "head": metadata["head"]["sha"]},
@@ -310,11 +312,67 @@ def finding_catalog(evidence, assessment):
                       kind="changed_source") for key, value in evidence.items()}
 
 
+def decode_model_json(response: str) -> dict[str, Any]:
+    """Decode one JSON object, optionally inside one whole-response JSON fence.
+
+    This removes only a transport envelope. It never searches prose for JSON,
+    repairs syntax, drops duplicate keys or changes the response's values.
+    Provider completion is checked before calling this function.
+    """
+    if not isinstance(response, str):
+        raise ReviewError("Claude returned invalid API review JSON")
+    text = response.strip(" \t\r\n")
+    if text.startswith("```"):
+        fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n([\s\S]*)\r?\n```", text, re.IGNORECASE)
+        if not fence:
+            raise ReviewError("Claude returned an invalid JSON response envelope")
+        text = fence[1]
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ReviewError("Claude returned duplicate JSON object members")
+            result[key] = value
+        return result
+
+    def invalid_constant(_):
+        raise ReviewError("Claude returned a non-JSON numeric constant")
+
+    try:
+        payload = json.loads(text, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    except (ValueError, TypeError) as error:
+        raise ReviewError("Claude returned invalid API review JSON") from error
+    if not isinstance(payload, dict):
+        raise ReviewError("Claude review response must be one JSON object")
+    return payload
+
+
+def provider_text(message, *, reconciliation=False):
+    """Accept optional thinking blocks but never tools or incomplete output."""
+    label = "API decision reconciliation" if reconciliation else "API review response"
+    if getattr(message, "stop_reason", None) != "end_turn":
+        raise ReviewError(f"Claude did not complete {label}")
+    blocks = getattr(message, "content", [])
+    if not blocks or any(getattr(block, "type", None) not in {"text", "thinking", "redacted_thinking"} for block in blocks):
+        raise ReviewError("Claude returned an unsupported API review response")
+    texts = [block.text for block in blocks if block.type == "text" and isinstance(getattr(block, "text", None), str)]
+    if not texts or any(block.type == "text" and not isinstance(getattr(block, "text", None), str) for block in blocks):
+        raise ReviewError("Claude returned an unsupported API review response")
+    usage = getattr(message, "usage", None)
+    if usage is not None and callable(getattr(usage, "model_dump", None)):
+        measured = {key: value for key, value in usage.model_dump().items()
+                    if key in {"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"}
+                    and type(value) is int}
+        print("Claude API usage: " + json.dumps(measured, sort_keys=True), file=sys.stderr)
+    return "".join(texts)
+
+
 def validate_model_response(payload, parsed, assessment=None):
     """Common response path for SDK execution and private one-call calibration."""
     evidence = evidence_catalog(parsed)
     if assessment is not None:
-        payload = compat.validate(payload, finding_catalog(evidence, assessment), assessment["catalog"])
+        payload = compat.validate(payload, finding_catalog(evidence, assessment), assessment["catalog"], previous=assessment.get("previous"))
     return validate_payload(resolve_evidence(payload, evidence), parsed)
 
 
@@ -339,7 +397,7 @@ def evidence_ranges(lines: set[int]) -> list[list[int]]:
 
 
 def validate_payload(payload: Any, parsed: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) not in ({"risk", "decisions"}, {"risk", "decisions", "compatibility_verdict", "compatibility_findings", "compatibility_coverage"}):
+    if not isinstance(payload, dict) or set(payload) not in ({"risk", "decisions"}, {"risk", "decisions", "compatibility_verdict", "compatibility_findings", "compatibility_coverage"}, {"risk", "decisions", "compatibility_verdict", "compatibility_findings", "compatibility_coverage", "compatibility_updates"}):
         raise ReviewError("Model response must contain risk and decisions and the required compatibility assessment")
     if not isinstance(payload["risk"], str) or payload["risk"] not in RISKS:
         raise ReviewError("Model response has an invalid testing risk")
@@ -408,21 +466,36 @@ def validate_repair(previous: Any, repaired: dict[str, Any], parsed: dict[str, A
         remaining.remove(decision)
 
 
-def preserve_findings(previous, repaired, changed, supplemental):
+def preserve_findings(previous, repaired, changed, supplemental, previous_records=None):
     """Only independently valid prior findings survive shape repair unchanged."""
     if not isinstance(previous, dict) or not isinstance(previous.get("compatibility_findings"), list):
         return
+    if len(repaired.get("compatibility_findings", [])) < len(previous["compatibility_findings"]):
+        raise ReviewError("API review repair dropped original compatibility findings")
     for finding in previous["compatibility_findings"]:
         if not isinstance(finding, dict):
             continue
-        probe = {"compatibility_verdict": finding.get("assessment"), "compatibility_findings": [finding],
+        probe = {"compatibility_verdict": finding.get("assessment"), "compatibility_findings": [finding], "compatibility_updates": [],
                  "compatibility_coverage": {d: {"status": "partial", "reason": "Validation probe", "evidence": [next(iter(changed))]} for d in compat.DIRECTIONS}}
         try:
-            valid = compat.validate(probe, changed, supplemental)["compatibility_findings"][0]
+            valid = compat.validate(probe, changed, supplemental, previous=[r for r in previous_records or [] if r["id"] == finding.get("prior_id")] if "prior_id" in finding else None)["compatibility_findings"][0]
         except (ReviewError, StopIteration):
             continue
         if valid not in repaired.get("compatibility_findings", []):
             raise ReviewError("API review repair changed or removed an already-valid compatibility finding")
+    for update in previous.get("compatibility_updates", []):
+        if not isinstance(update, dict):
+            continue
+        probe_previous = [r for r in previous_records or [] if r["id"] == update.get("prior_id")]
+        probe = {"compatibility_verdict": "not_assessed", "compatibility_findings": [],
+                 "compatibility_updates": [update], "compatibility_coverage": {
+                     d: {"status": "not_assessed", "reason": "Independent validation", "evidence": []} for d in compat.DIRECTIONS}}
+        try:
+            valid_update = compat.validate(probe, changed, supplemental, previous=probe_previous)["compatibility_updates"][0]
+        except ReviewError:
+            continue
+        if valid_update not in repaired.get("compatibility_updates", []):
+            raise ReviewError("API review repair changed or removed an already-valid compatibility update")
 
 
 def review_model(metadata: dict[str, Any], diff: str, repo: str, model: str) -> Any:
@@ -445,7 +518,7 @@ def review_model(metadata: dict[str, Any], diff: str, repo: str, model: str) -> 
             message = client.messages.create(
                 model=model,
                 max_tokens=16000,
-                output_config={"format": {"type": "json_schema", "schema": schema}},
+                output_config={"effort": MODEL_EFFORT, "format": {"type": "json_schema", "schema": schema}},
                 system=[{"type": "text", "text": system_prompt(metadata.get("_private_policy")), "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -455,30 +528,22 @@ def review_model(metadata: dict[str, Any], diff: str, repo: str, model: str) -> 
             raise ReviewError("Claude API request failed; no complete API review was produced") from error
         # A truncated response can omit decisions. Do not treat it as a complete
         # result that can be repaired merely by completing its JSON syntax.
-        if getattr(message, "stop_reason", None) != "end_turn":
-            raise ReviewError("Claude did not complete the API review response")
-        blocks = getattr(message, "content", [])
-        if not blocks or any(getattr(block, "type", None) != "text" or not isinstance(getattr(block, "text", None), str) for block in blocks):
-            raise ReviewError("Claude returned an unsupported API review response")
-        response = "".join(block.text for block in blocks)
+        response = provider_text(message)
         payload: Any = None
         try:
-            try:
-                payload = json.loads(response)
-            except (ValueError, TypeError) as error:
-                raise ReviewError("Claude returned invalid API review JSON") from error
+            payload = decode_model_json(response)
             payload = validate_model_response(payload, parsed, assessment)
             if attempt:
                 validate_repair(resolve_evidence(previous_payload, evidence, strict=False), payload, parsed)
                 if assessment is not None:
-                    preserve_findings(previous_payload, payload, finding_catalog(evidence, assessment), assessment["catalog"])
+                    preserve_findings(previous_payload, payload, finding_catalog(evidence, assessment), assessment["catalog"], assessment.get("previous"))
             return payload
         except ReviewError as error:
             if attempt:
                 raise ReviewError(f"Claude API review response remains invalid after one repair: {error}") from error
             try:
-                previous_payload = json.loads(response)
-            except (ValueError, TypeError):
+                previous_payload = decode_model_json(response)
+            except ReviewError:
                 previous_payload = None
             repair_prompt = json.loads(user_prompt(metadata, diff, repo))
             repair_prompt["response_repair"] = {"validation_error": str(error), "previous_response": response}
@@ -523,7 +588,7 @@ def review_batches(metadata: dict[str, Any], batches: list[DiffBatch], repo: str
         batch_metadata["_batch_continues_line"] = bool(batch.start_column)
         payload = validate_payload(review_model(batch_metadata, batch.text, repo, model), parsed_batches[index])
         if "_compatibility" in metadata:
-            payload = compat.validate(payload, finding_catalog(evidence_catalog(parsed_batches[index]), metadata["_compatibility"]), metadata["_compatibility"]["catalog"], resolved=True)
+            payload = compat.validate(payload, finding_catalog(evidence_catalog(parsed_batches[index]), metadata["_compatibility"]), metadata["_compatibility"]["catalog"], resolved=True, previous=metadata["_compatibility"].get("previous"))
         return payload
 
     with ThreadPoolExecutor(max_workers=min(MAX_REVIEW_WORKERS, len(batches))) as executor:
@@ -542,27 +607,51 @@ def review_batches(metadata: dict[str, Any], batches: list[DiffBatch], repo: str
                 combined["decisions"].append(decision)
     if "_compatibility" in metadata:
         combined["compatibility_verdict"] = "not_assessed"
+        combined["compatibility_updates"] = []
         combined["compatibility_findings"] = []
         combined["compatibility_coverage"] = []
         for number, payload in enumerate(payloads, 1):
             combined["compatibility_findings"].extend(payload["compatibility_findings"])
+            combined["compatibility_updates"].extend(payload.get("compatibility_updates", []))
             combined["compatibility_coverage"].append({"batch": number, "directions": payload["compatibility_coverage"]})
         verdicts = [p["compatibility_verdict"] for p in payloads]
         combined["compatibility_verdict"] = ("breaking" if "breaking" in verdicts else "migration_needed" if "migration_needed" in verdicts
                                               else verdicts[0] if len(payloads) == 1 else "not_assessed")
-        if len(combined["compatibility_findings"]) > 20:
+        # Batches can only retire a prior concern when they agree. A current
+        # concern takes precedence over a partial-view resolution elsewhere.
+        current_ids = {f.get("prior_id") for f in combined["compatibility_findings"] if f.get("prior_id")}
+        updates = {}
+        for row in combined["compatibility_updates"]:
+            key = row["prior_id"]
+            if key in current_ids:
+                continue
+            if key in updates and updates[key]["status"] != row["status"]:
+                updates[key] = {"prior_id": key, "status": "not_assessed", "reason": "Batch assessments disagree; the prior concern has not been cleared.", "evidence": []}
+            else:
+                updates.setdefault(key, row)
+        combined["compatibility_updates"] = list(updates.values())
+        unique = {}
+        for finding in combined["compatibility_findings"]:
+            key = finding.get("prior_id") or json.dumps(finding, sort_keys=True)
+            if key in unique and unique[key] != finding:
+                raise ReviewError("Conflicting compatibility identity across batches; prior review preserved")
+            unique[key] = finding
+        combined["compatibility_findings"] = list(unique.values())
+        if len(combined["compatibility_findings"]) > compat.MAX_FINDINGS:
             raise ReviewError("Combined compatibility findings exceed limit; nothing was truncated")
     return combined
 
 
 def validate_prior_state(value: Any) -> dict[str, Any]:
     """Validate bot-comment state before exposing it to the model."""
-    if not isinstance(value, dict) or set(value) != {"version", "decisions"}:
+    if not isinstance(value, dict) or set(value) not in ({"version", "decisions"}, {"version", "decisions", "compatibility_findings"}):
         raise ReviewError("Previous API review state has an invalid shape")
     if value["version"] != PRIOR_STATE_VERSION or not isinstance(value["decisions"], list):
         raise ReviewError("Previous API review state has an unsupported version")
     if len(value["decisions"]) > 500:
         raise ReviewError("Previous API review state has too many decisions")
+    if "compatibility_findings" in value:
+        compatibility_state.validate_records(value["compatibility_findings"])
     keys = {"id", "version", "state", "category", "title", "change", "compatibility", "impact", "paths"}
     seen: set[str] = set()
     for item in value["decisions"]:
@@ -746,7 +835,7 @@ If response_repair is present, correct the previous response using the same curr
         try:
             message = client.messages.create(
                 model=model, max_tokens=8000,
-                output_config={"format": {"type": "json_schema", "schema": reconciliation_schema(
+                output_config={"effort": MODEL_EFFORT, "format": {"type": "json_schema", "schema": reconciliation_schema(
                     len(decisions), [item["id"] for item in prior["decisions"]])}},
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}],
@@ -755,13 +844,7 @@ If response_repair is present, correct the previous response using the same curr
             raise ReviewError(reconciliation_failure(error, anthropic, "request")) from error
         # Truncation and provider failures are not evidence of a complete match
         # set, so neither enters response repair.
-        if getattr(message, "stop_reason", None) != "end_turn":
-            raise ReviewError("Claude did not complete API decision reconciliation")
-        blocks = getattr(message, "content", [])
-        if not blocks or any(getattr(block, "type", None) != "text"
-                             or not isinstance(getattr(block, "text", None), str) for block in blocks):
-            raise ReviewError("Claude returned unsupported API decision reconciliation")
-        response = "".join(block.text for block in blocks)
+        response = provider_text(message, reconciliation=True)
         payload: Any = None
         try:
             try:
@@ -822,7 +905,8 @@ def command_review(args: argparse.Namespace) -> int:
         result["review_batches"] = len(batches)
         entries, limits = compat.collect_context(getattr(args, "source_repository", None), args.repo,
                                                  metadata["diff_base_sha"], metadata["head"]["sha"], parsed)
-        metadata = prepare_review(metadata, diff, args.repo, entries, limits)
+        metadata = prepare_review(metadata, diff, args.repo, entries, limits, previous=prior.get("compatibility_findings", []))
+        result["compatibility_previous"] = prior.get("compatibility_findings", [])
         result["input_visibility"] = metadata["_compatibility"]["visibility"]
         result["context_limits"] = metadata["_compatibility"]["limits"]
         result["evidence_catalog"] = metadata["_compatibility"]["catalog"]

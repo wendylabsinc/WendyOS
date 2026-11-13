@@ -447,7 +447,7 @@ class ModelTests(unittest.TestCase):
         self.assertIn("decisions[0].locations[0]", prompt["response_repair"]["validation_error"])
 
     def test_invalid_json_gets_one_complete_response_repair(self):
-        result, create = self.call_model(error=[self.message('```json\n{"risk":"low","decisions":[]}\n```'), self.message({"risk": "low", "decisions": []})])
+        result, create = self.call_model(error=[self.message('{"risk":"low","decisions":['), self.message({"risk": "low", "decisions": []})])
         self.assertEqual(result, {"risk": "low", "decisions": []})
         self.assertEqual(create.call_count, 2)
 
@@ -725,7 +725,7 @@ class ReconciliationTests(unittest.TestCase):
 
 def unassessed_fixture(payload):
     if isinstance(payload, dict) and "compatibility_findings" not in payload:
-        return dict(payload, compatibility_verdict="not_assessed", compatibility_findings=[],
+        return dict(payload, compatibility_verdict="not_assessed", compatibility_findings=[], compatibility_updates=[],
                     compatibility_coverage={d: {"status": "not_assessed", "reason": "Offline legacy decision fixture supplies no runtime chain", "evidence": []}
                                             for d in api_review.compat.DIRECTIONS})
     return payload
