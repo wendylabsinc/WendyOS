@@ -43,6 +43,8 @@ func stampValidity(req proto.Message, now time.Time) error {
 		field = &r.ValidUntil
 	case *cloudpbv2.UnassignDeviceRequest:
 		field = &r.ValidUntil
+	case *cloudpbv2.DetachDeviceRequest:
+		field = &r.ValidUntil
 	case *cloudpbv2.DeviceAssignment:
 		field = &r.ExpiresAt
 	default:

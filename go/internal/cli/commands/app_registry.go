@@ -7,22 +7,30 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -43,24 +51,56 @@ import (
 const putBlobChunk = 1 << 20
 
 func newAppPublishCmd() *cobra.Command {
-	var tag, layoutDir, platform, dockerfile, cloudGRPC string
+	var tag, appID, layoutDir, platform, dockerfile, cloudGRPC string
+	var untagged bool
 	cmd := &cobra.Command{
 		Use:   "publish",
 		Short: "Publish an encrypted release of this project's app to the Wendy Cloud registry",
 		Long: "Builds the project's container image (or takes --oci-layout), encrypts every blob on this\n" +
 			"machine and uploads only ciphertext as a new release tagged --tag. The release key is\n" +
-			"wrapped to this machine's registry key and to the Wendy custodian key.",
+			"wrapped to this machine's registry key and to the Wendy custodian key. An app that does\n" +
+			"not exist yet is created first.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := validateReleaseTag(tag); err != nil {
-				return usageErrorf("%v", err)
+			if tag != "" && untagged {
+				return usageErrorf("Give --tag or --untagged, not both.")
 			}
-			appCfg, err := appconfig.LoadFromFile("wendy.json")
+			raw, err := os.ReadFile("wendy.json")
+			if err != nil {
+				return fmt.Errorf("reading wendy.json: %w", err)
+			}
+			appCfg, def, err := appDefinition(raw, appID)
 			if err != nil {
 				return err
 			}
-			auth, err := pickAuthEntry(cloudGRPC)
+			cwd, err := os.Getwd()
 			if err != nil {
+				return err
+			}
+			var branch string
+			switch {
+			case untagged:
+				if branch, err = gitBranch(cwd); err != nil {
+					return err
+				}
+			case tag == "" && !isInteractiveTerminal():
+				return usageErrorf("No tag given. Add --tag <version>, or run in a terminal to answer.")
+			case tag == "":
+				if tag, err = askText("Tag", "The version you want to give this release, for example 1.0.0.", "", func(s string) error { return validateReleaseTag(s) }); err != nil {
+					return err
+				}
+			}
+			defaults := []byte("{}")
+			if appCfg.Env != nil {
+				defaults, _ = json.Marshal(appCfg.Env)
+			}
+			auth, err := pickAppAuth(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			if err := withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+				return ensureApp(ctx, cmd.OutOrStdout(), conn, auth, appCfg.AppID)
+			}); err != nil {
 				return err
 			}
 			work, err := os.MkdirTemp("", "wendy-publish-")
@@ -69,10 +109,6 @@ func newAppPublishCmd() *cobra.Command {
 			}
 			defer func() { _ = os.RemoveAll(work) }()
 			if layoutDir == "" {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
 				resolved, err := resolveDockerfile(cwd, dockerfile, false, "")
 				if err != nil {
 					return err
@@ -86,12 +122,22 @@ func newAppPublishCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+			if img, err = withAppDefinition(img, def); err != nil {
+				return err
+			}
+			if untagged {
+				digest, err := img.Digest()
+				if err != nil {
+					return err
+				}
+				tag = branch + "@" + digest.String()
+			}
+			return withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
 				op, err := newRegistryOp(ctx, conn, auth)
 				if err != nil {
 					return err
 				}
-				releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, tag)
+				releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, tag, string(defaults))
 				if err != nil {
 					return err
 				}
@@ -104,12 +150,100 @@ func newAppPublishCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&tag, "tag", "", "Release tag, e.g. v1.4.0 (required)")
+	cmd.Flags().StringVar(&tag, "tag", "", "Release tag, the version you give this release, e.g. 1.0.0")
+	cmd.Flags().BoolVar(&untagged, "untagged", false, "Name the release <git branch>@<manifest digest> instead of a tag")
+	cmd.Flags().StringVar(&appID, "app", "", "App id (default: appId in wendy.json, which it must match)")
 	cmd.Flags().StringVar(&layoutDir, "oci-layout", "", "Publish this OCI image layout directory instead of building")
 	cmd.Flags().StringVar(&platform, "platform", "linux/arm64", "Image platform to build or pick from the layout")
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "Dockerfile to build (default: detected)")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
 	return cmd
+}
+
+// appConfigLabel carries the release's app definition to the device
+// (agent services.AppConfigLabel), at most maxAppDefinition bytes.
+const (
+	appConfigLabel   = "sh.wendy/app-config"
+	maxAppDefinition = 64 << 10
+)
+
+// appDefinition is wendy.json as a release carries it: compact JSON holding
+// only the fields AppConfig knows. What the device would refuse is refused
+// here, in its words, before anything is built or uploaded.
+func appDefinition(raw []byte, app string) (*appconfig.AppConfig, []byte, error) {
+	cfg, err := appconfig.LoadFromBytes(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	if app != "" && app != cfg.AppID {
+		return nil, nil, usageErrorf("--app must match appId in wendy.json (%s).", cfg.AppID)
+	}
+	if len(cfg.Services) > 0 || cfg.ServiceName != "" {
+		return nil, nil, errors.New("apps with several services cannot be deployed yet; deploy each service as its own app")
+	}
+	if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
+		return nil, nil, fmt.Errorf("wendy.json: %w", err)
+	}
+	def, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if warnings := append(appconfig.ValidateJSON(raw), appconfig.ValidateJSON(def)...); len(warnings) > 0 {
+		return nil, nil, fmt.Errorf("%s. A device refuses an app with warnings; fix wendy.json first", strings.Join(warnings, "; "))
+	}
+	if len(def) > maxAppDefinition {
+		return nil, nil, fmt.Errorf("wendy.json is %d bytes as published, over the %d a device accepts", len(def), maxAppDefinition)
+	}
+	return cfg, def, nil
+}
+
+// withAppDefinition labels img's config with def; the manifest digest the
+// operator signs covers it.
+func withAppDefinition(img v1.Image, def []byte) (v1.Image, error) {
+	cf, err := img.ConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	cfg := cf.Config
+	cfg.Labels = maps.Clone(cfg.Labels)
+	if cfg.Labels == nil {
+		cfg.Labels = map[string]string{}
+	}
+	cfg.Labels[appConfigLabel] = string(def)
+	return mutate.Config(img, cfg)
+}
+
+// gitBranch is the branch checked out in dir.
+func gitBranch(dir string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	if branch := strings.TrimSpace(string(out)); err == nil && branch != "" {
+		return branch, nil
+	}
+	return "", usageErrorf("--untagged names the release after the current git branch, and this folder has none checked out.")
+}
+
+// ensureApp creates appID first, asking the create questions, when Cloud
+// does not have it.
+func ensureApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface, auth *config.AuthConfig, appID string) error {
+	org, err := operatorOrg(auth)
+	if err != nil {
+		return err
+	}
+	_, err = cloudpb.NewAppServiceClient(conn).GetApp(ctx, &cloudpb.GetAppRequest{Id: appID, OrganizationId: org})
+	if status.Code(err) != codes.NotFound {
+		if err != nil {
+			return fmt.Errorf("reading app %s: %w", appID, err)
+		}
+		return nil
+	}
+	if !isInteractiveTerminal() {
+		return fmt.Errorf("%s doesn't exist yet. Run wendy app create --app %s first, or run this in a terminal.", appID, appID)
+	}
+	a := &appAnswers{id: appID, name: appID}
+	if err := a.ask(func(f string) bool { return f == "app" }); err != nil {
+		return err
+	}
+	return createApp(ctx, out, conn, auth, a, false)
 }
 
 // registryFlags are the flags deploy, assign, unassign and rotate share.
@@ -158,82 +292,6 @@ func (f *registryFlags) run(cmd *cobra.Command, call func(context.Context, *regi
 	})
 }
 
-func newAppDeployCmd() *cobra.Command {
-	var f registryFlags
-	var release, digest, name string
-	var tags []string
-	cmd := &cobra.Command{
-		Use:   "deploy",
-		Short: "Deploy a published release to picked devices through Wendy Cloud",
-		Long: "Creates deployment --name of --release at revision 1, running with the release's default\n" +
-			"configuration, makes its deployment key and sends each --device its own operator-signed\n" +
-			"instruction. Each device's key is verified before anything is created.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if len(tags) > 0 {
-				// WDY-4015 item 5 is open: cloud resolves tags without signing
-				// the result, so a device cannot verify it was targeted.
-				return usageErrorf("tag targets are not supported yet: a device cannot verify a tag that Cloud resolved; name each device with --device")
-			}
-			if !canonicalUUID(release) {
-				return usageErrorf("--release must be a release id (lower-case UUID)")
-			}
-			if name == "" {
-				return usageErrorf("No deployment name given. Add --name <name>.")
-			}
-			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
-				return op.deploy(ctx, appID, release, digest, name, devices)
-			})
-		},
-	}
-	f.bind(cmd, false)
-	cmd.Flags().StringVar(&release, "release", "", "Release id printed by 'wendy app publish' (required)")
-	cmd.Flags().StringVar(&digest, "digest", "", "Refuse unless the release's manifest digest is this sha256:<hex>")
-	cmd.Flags().StringVar(&name, "name", "", "Name of the deployment, unique among the app's deployments (required)")
-	cmd.Flags().StringArrayVar(&tags, "target-tag", nil, "Not supported yet: tag targets are refused")
-	return cmd
-}
-
-func newAppAssignCmd() *cobra.Command {
-	var f registryFlags
-	cmd := &cobra.Command{
-		Use:   "assign",
-		Short: "Assign more devices to an existing deployment",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
-				kd, err := op.current(ctx, f.deployment)
-				if err != nil {
-					return err
-				}
-				return op.change(ctx, kd.deployment, kd, appID, devices, nil)
-			})
-		},
-	}
-	f.bind(cmd, true)
-	return cmd
-}
-
-func newAppUnassignCmd() *cobra.Command {
-	var f registryFlags
-	cmd := &cobra.Command{
-		Use:   "unassign",
-		Short: "Remove devices from a deployment; Cloud stops serving them its release",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
-				d, err := cloudpb.NewDeploymentServiceClient(op.conn).GetDeployment(ctx, &cloudpb.GetDeploymentRequest{Id: f.deployment})
-				if err != nil {
-					return fmt.Errorf("reading deployment %s: %w", f.deployment, err)
-				}
-				return op.change(ctx, d, nil, appID, nil, devices)
-			})
-		},
-	}
-	f.bind(cmd, true)
-	return cmd
-}
-
 func newAppRotateCmd() *cobra.Command {
 	var f registryFlags
 	cmd := &cobra.Command{
@@ -255,7 +313,8 @@ func newAppRotateCmd() *cobra.Command {
 
 // registryOp is one operator session's view of the registry.
 type registryOp struct {
-	conn        grpc.ClientConnInterface
+	conn        grpc.ClientConnInterface // cloud
+	reg         grpc.ClientConnInterface // the registry: ArtifactRegistryService
 	auth        *config.AuthConfig
 	org, me     string
 	key         hpke.PrivateKey
@@ -293,10 +352,60 @@ func newRegistryOp(ctx context.Context, conn grpc.ClientConnInterface, auth *con
 			return nil, err
 		}
 	}
+	reg, err := dialRegistry(auth)
+	if err != nil {
+		return nil, err
+	}
 	return &registryOp{
-		conn: conn, auth: auth, org: auth.Certificates[0].TenantUUID(), me: auth.Certificates[0].PrincipalURI,
+		conn: conn, reg: reg, auth: auth, org: auth.Certificates[0].TenantUUID(), me: auth.Certificates[0].PrincipalURI,
 		key: key, keyID: keyID, roots: roots, custodian: custodian, custodianID: custodianID,
 	}, nil
+}
+
+// registryEnv overrides the registry's address (host:port).
+const registryEnv = "WENDY_REGISTRY"
+
+// registryAddress is the registry's own address: WENDY_REGISTRY, or
+// registry.<domain>:443 next to the session's api.<domain> (sem: the registry
+// is its own service at registry.<env>).
+func registryAddress(cloudGRPC string) (string, error) {
+	if addr := os.Getenv(registryEnv); addr != "" {
+		return addr, nil
+	}
+	host, _, err := net.SplitHostPort(cloudGRPC)
+	if domain, ok := strings.CutPrefix(host, "api."); err == nil && ok && domain != "" {
+		return net.JoinHostPort("registry."+domain, "443"), nil
+	}
+	return "", fmt.Errorf("no registry address is known for %s; set %s to the registry's host:port", cloudGRPC, registryEnv)
+}
+
+// dialRegistry connects to the registry with the operator's certificate,
+// chain and key in the TLS handshake (operator mTLS), like cloud.
+// ponytail: the connection lives until the CLI exits; close it if a long-lived
+// caller appears.
+var dialRegistry = func(auth *config.AuthConfig) (grpc.ClientConnInterface, error) {
+	addr, err := registryAddress(auth.CloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+	var cert *config.CertificateInfo
+	if len(auth.Certificates) > 0 {
+		cert = &auth.Certificates[0]
+	}
+	creds, err := clouddefaults.CloudTransportCredentials(addr, cert)
+	if err != nil {
+		return nil, err
+	}
+	// The DPoP proof names the registry (htu), but the token comes from the
+	// session itself: a refresh saves the session, never this copy.
+	htu := *auth
+	htu.CloudGRPC = addr
+	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, cloudrequest.DPoPDialOptions(&htu, cliDPoPTokenProvider(auth))...)
+	conn, err := grpc.NewClient(addr, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the registry: %w", err)
+	}
+	return conn, nil
 }
 
 // sessionCAs are the CA certificates of the operator's own chain, which
@@ -413,7 +522,7 @@ func (op *registryOp) ownWraps(scope byte, scopeID string, key []byte) ([]*cloud
 
 func (op *registryOp) addWraps(ctx context.Context, wraps []*cloudpb.KeyWrap, sealed []*cloudpb.SealedContentKey) error {
 	var resp cloudpb.AddWrapsResponse
-	err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.ArtifactRegistryService_AddWraps_FullMethodName,
+	err := cloudrequest.Invoke(ctx, op.reg, op.auth, cloudpb.ArtifactRegistryService_AddWraps_FullMethodName,
 		&cloudpb.AddWrapsRequest{OrganizationId: op.org, Wraps: wraps, SealedContentKeys: sealed}, &resp)
 	if err != nil {
 		return fmt.Errorf("adding key wraps: %w", err)
@@ -493,7 +602,7 @@ func (op *registryOp) publish(ctx context.Context, releaseID string, img v1.Imag
 	}
 
 	var resp cloudpb.PublishArtifactResponse
-	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.ArtifactRegistryService_PublishArtifact_FullMethodName,
+	if err := cloudrequest.Invoke(ctx, op.reg, op.auth, cloudpb.ArtifactRegistryService_PublishArtifact_FullMethodName,
 		&cloudpb.PublishArtifactRequest{OrganizationId: op.org, AppReleaseId: releaseID, Manifest: manifest}, &resp); err != nil {
 		return nil, fmt.Errorf("publishing the artifact: %w", err)
 	}
@@ -559,7 +668,7 @@ func (op *registryOp) putBlob(ctx context.Context, uploadID string, blob *cloudp
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	stream, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).PutBlob(ctx)
+	stream, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).PutBlob(ctx)
 	if err != nil {
 		return fmt.Errorf("uploading %s: %w", blob.CiphertextDigest, err)
 	}
@@ -597,7 +706,7 @@ func (op *registryOp) putBlob(ctx context.Context, uploadID string, blob *cloudp
 // one thing a served manifest can be checked against here) and, when set,
 // against the digest the operator expects.
 func (op *registryOp) artifact(ctx context.Context, releaseID, want string) (*cloudpb.ArtifactManifest, error) {
-	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).GetArtifact(ctx, &cloudpb.GetArtifactRequest{OrganizationId: op.org, AppReleaseId: releaseID})
+	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetArtifact(ctx, &cloudpb.GetArtifactRequest{OrganizationId: op.org, AppReleaseId: releaseID})
 	if err != nil {
 		return nil, fmt.Errorf("reading release %s: %w", releaseID, err)
 	}
@@ -614,7 +723,7 @@ func (op *registryOp) artifact(ctx context.Context, releaseID, want string) (*cl
 
 // contentKey opens this machine's release-scope wrap of the content key.
 func (op *registryOp) contentKey(ctx context.Context, releaseID string, m *cloudpb.ArtifactManifest) ([]byte, error) {
-	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
+	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
 		OrganizationId: op.org, Scope: &cloudpb.WrapScope{Scope: &cloudpb.WrapScope_AppReleaseId{AppReleaseId: releaseID}, KeyId: m.GetContentKeyId()},
 	})
 	if err != nil {
@@ -670,79 +779,92 @@ func (op *registryOp) newDeploymentKey(ctx context.Context, d *cloudpb.Deploymen
 	return &keyedDeployment{deployment: d, manifestDigest: m.GetManifestDigest(), key: key, sealed: sealed}, nil
 }
 
-// deploy creates deployment name of releaseID for devices at revision 1, with
-// the release's default configuration, running, and signs each device's
+// deployPlan is a deploy as the operator confirmed it.
+type deployPlan struct {
+	appID, releaseID, digest, name, config, note string
+	desired                                      cloudpb.Running
+	validity                                     time.Duration
+	deviceIDs, tags                              []string          // the selection as given
+	devices                                      []string          // every device it resolved to, as shown
+	moves                                        map[string]string // device UUID -> the deployment it moves out of
+}
+
+// deploy creates the deployment at revision 1 and signs each device's
 // statement.
-func (op *registryOp) deploy(ctx context.Context, appID, releaseID, wantDigest, name string, devices []string) error {
-	m, err := op.artifact(ctx, releaseID, wantDigest)
+func (op *registryOp) deploy(ctx context.Context, p deployPlan) (*cloudpb.Deployment, error) {
+	m, err := op.artifact(ctx, p.releaseID, p.digest)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	config, err := op.releaseDefaults(ctx, appID, releaseID)
+	contentKey, err := op.contentKey(ctx, p.releaseID, m)
 	if err != nil {
-		return err
-	}
-	contentKey, err := op.contentKey(ctx, releaseID, m)
-	if err != nil {
-		return err
+		return nil, err
 	}
 	defer clear(contentKey)
-	keys, err := op.deviceKeys(ctx, devices)
+	keys, err := op.deviceKeys(ctx, p.devices)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	moves := map[string]string{}
+	for dev, from := range p.moves {
+		moves[deviceURI(op.org, dev)] = from
 	}
 	resp := new(cloudpb.DeploymentChangeResponse)
 	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName, &cloudpb.CreateDeploymentRequest{
-		OrganizationId: op.org, AppReleaseId: releaseID, Running: cloudpb.Running_RUNNING, TargetDeviceIds: devices, Name: name, ConfigJson: config,
+		OrganizationId: op.org, AppReleaseId: p.releaseID, Running: p.desired, TargetDeviceIds: p.deviceIDs, TargetTags: p.tags,
+		Name: p.name, ConfigJson: p.config, Note: p.note, MoveDevices: len(moves) > 0, Validity: durationpb.New(p.validity),
 	}, resp); err != nil {
-		return fmt.Errorf("creating the deployment: %w", err)
+		return nil, fmt.Errorf("creating the deployment: %w", err)
 	}
 	d := resp.GetDeployment()
-	if !canonicalUUID(d.GetId()) || d.GetAppReleaseId() != releaseID || d.GetAppId() != appID || d.GetName() != name || d.GetRevision() != 1 ||
-		d.GetConfigJson() != config || d.GetDesiredState() != cloudpb.Running_RUNNING {
-		return fmt.Errorf("Cloud created a deployment that differs from the one asked for (%s, revision %d); nothing was sent to devices", d.GetId(), d.GetRevision())
+	if !canonicalUUID(d.GetId()) || d.GetAppReleaseId() != p.releaseID || d.GetAppId() != p.appID || d.GetName() != p.name || d.GetRevision() != 1 ||
+		d.GetConfigJson() != p.config || d.GetDesiredState() != p.desired {
+		return nil, fmt.Errorf("Cloud created a deployment that differs from the one asked for (%s, revision %d); nothing was sent to devices", d.GetId(), d.GetRevision())
 	}
-	cliLogln("Created deployment %s (%s) of release %s (%s)", name, d.GetId(), releaseID, m.GetManifestDigest())
 	kd, err := op.newDeploymentKey(ctx, d, m, contentKey)
 	if err != nil {
-		return fmt.Errorf("deployment %s: %w", d.GetId(), err)
+		return d, fmt.Errorf("deployment %s: %w", d.GetId(), err)
 	}
-	return op.signPending(ctx, d, kd, appID, keys, nil, resp)
+	must := map[string]bool{}
+	for dev := range keys {
+		must[dev] = true
+	}
+	return d, op.signPending(ctx, confirmed{d: d, kd: kd, appID: p.appID, revision: 1, assign: keys, moves: moves, must: must}, resp.GetToSign(), resp.GetNextPageToken())
 }
 
-// releaseDefaults is the release's default configuration, `{}` when empty,
-// after checking the release belongs to appID.
-func (op *registryOp) releaseDefaults(ctx context.Context, appID, releaseID string) (string, error) {
-	for offset := int32(0); ; {
-		stream, err := cloudpb.NewDeploymentServiceClient(op.conn).ListAppReleases(ctx, &cloudpb.ListAppReleasesRequest{OrganizationId: op.org, AppId: appID, Offset: offset})
+// releases lists appID's releases, newest first.
+func (op *registryOp) releases(ctx context.Context, appID string) ([]*cloudpb.AppRelease, error) {
+	var out []*cloudpb.AppRelease
+	for {
+		stream, err := cloudpb.NewDeploymentServiceClient(op.conn).ListAppReleases(ctx, &cloudpb.ListAppReleasesRequest{OrganizationId: op.org, AppId: appID, Offset: int32(len(out))})
 		if err != nil {
-			return "", fmt.Errorf("reading the releases of %s: %w", appID, err)
+			return nil, fmt.Errorf("reading the releases of %s: %w", appID, err)
 		}
-		var seen, total int32
+		var total int32
+		before := len(out)
 		for {
 			page, err := stream.Recv()
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
-				return "", fmt.Errorf("reading the releases of %s: %w", appID, err)
+				return nil, fmt.Errorf("reading the releases of %s: %w", appID, err)
 			}
 			total = page.GetTotal()
 			for _, r := range page.GetAppReleases() {
-				seen++
-				if r.GetId() == releaseID && r.GetAppId() == appID {
-					if r.GetDefaultConfigJson() == "" {
-						return "{}", nil
-					}
-					return r.GetDefaultConfigJson(), nil
+				if r.GetAppId() == appID {
+					out = append(out, r)
 				}
 			}
 		}
-		offset += seen
-		if seen == 0 || offset >= total {
-			return "", fmt.Errorf("release %s is not a release of %s", releaseID, appID)
+		if len(out) == before || int32(len(out)) >= total {
+			break
 		}
 	}
+	slices.SortStableFunc(out, func(a, b *cloudpb.AppRelease) int {
+		return b.GetCreatedAt().AsTime().Compare(a.GetCreatedAt().AsTime())
+	})
+	return out, nil
 }
 
 // current is a deployment with this machine's newest deployment key that
@@ -752,7 +874,7 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 	if err != nil {
 		return nil, fmt.Errorf("reading deployment %s: %w", deploymentID, err)
 	}
-	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
+	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
 		OrganizationId: op.org, Scope: &cloudpb.WrapScope{Scope: &cloudpb.WrapScope_DeploymentId{DeploymentId: deploymentID}},
 	})
 	if err != nil {
@@ -785,70 +907,28 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 	return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
 }
 
-// change adds devices to, or drops them from, deployment d as one new
-// revision (expected_revision = d's), then signs each device's statement.
-// kd is needed only to add devices.
-func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID string, add, drop []string) error {
-	if d.GetAppId() != appID {
-		return fmt.Errorf("deployment %s is of app %s, not %s (wendy.json)", d.GetId(), d.GetAppId(), appID)
-	}
-	if d.GetRevision() < 1 || d.GetRemovedAt() != nil {
-		return fmt.Errorf("deployment %s cannot be changed: it has no current revision", d.GetId())
-	}
-	revs, err := cloudpb.NewDeploymentServiceClient(op.conn).ListDeploymentRevisions(ctx, &cloudpb.ListDeploymentRevisionsRequest{DeploymentId: d.GetId(), PageSize: 1})
-	if err != nil {
-		return fmt.Errorf("reading deployment %s: %w", d.GetId(), err)
-	}
-	if len(revs.GetRevisions()) == 0 || revs.GetRevisions()[0].GetRevision() != d.GetRevision() {
-		return fmt.Errorf("deployment %s changed while it was read; try again", d.GetId())
-	}
-	sel := proto.Clone(revs.GetRevisions()[0].GetSelection()).(*cloudpb.DeviceSelection)
-	for _, dev := range add {
-		if slices.Contains(sel.TargetDeviceIds, dev) {
-			return usageErrorf("%s is already in deployment %s", dev, d.GetId())
-		}
-		sel.TargetDeviceIds = append(sel.TargetDeviceIds, dev)
-	}
-	remove := map[string]bool{}
-	for _, dev := range drop {
-		i := slices.Index(sel.TargetDeviceIds, dev)
-		if i < 0 {
-			return usageErrorf("%s is not named in deployment %s; if it is in through a tag, change the tags instead", dev, d.GetId())
-		}
-		sel.TargetDeviceIds = slices.Delete(sel.TargetDeviceIds, i, i+1)
-		remove[deviceURI(op.org, dev)] = true
-	}
-	keys := map[string][]byte{}
-	if len(add) > 0 {
-		if keys, err = op.deviceKeys(ctx, add); err != nil {
-			return err
-		}
-	}
-	resp := new(cloudpb.DeploymentChangeResponse)
-	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_UpdateDeployment_FullMethodName, &cloudpb.UpdateDeploymentRequest{
-		OrganizationId: op.org, DeploymentId: d.GetId(), ExpectedRevision: d.GetRevision(), Devices: sel,
-	}, resp); err != nil {
-		return fmt.Errorf("changing deployment %s: %w", d.GetId(), err)
-	}
-	next := resp.GetDeployment()
-	if next.GetId() != d.GetId() || next.GetRevision() != d.GetRevision()+1 || next.GetAppReleaseId() != d.GetAppReleaseId() ||
-		next.GetConfigJson() != d.GetConfigJson() || next.GetDesiredState() != d.GetDesiredState() {
-		return fmt.Errorf("Cloud recorded a change of deployment %s that differs from the one asked for; nothing was sent to devices", d.GetId())
-	}
-	return op.signPending(ctx, next, kd, appID, keys, remove, resp)
+// confirmed is one revision as the operator confirmed it: every statement
+// cloud lists must be part of it.
+type confirmed struct {
+	d        *cloudpb.Deployment
+	kd       *keyedDeployment // nil when no device gets the deployment
+	appID    string
+	revision int32             // what the statements carry: d's, or the maximum for a terminal removal
+	assign   map[string][]byte // device URI -> verified key: may get the deployment
+	remove   map[string]bool   // device URIs that may leave it
+	moves    map[string]string // device URI -> the deployment of the app it moves out of
+	must     map[string]bool   // device URIs cloud must ask for
 }
 
-// signPending signs every statement cloud lists for revision d (to_sign,
-// then the pending list), refusing any that is not part of the change the
-// operator asked for: devices that get the deployment (assign, with their
-// verified keys) or leave it (remove). Every device is tried.
-func (op *registryOp) signPending(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID string, assign map[string][]byte, remove map[string]bool, resp *cloudpb.DeploymentChangeResponse) error {
-	rows, next := resp.GetToSign(), resp.GetNextPageToken()
+// signPending signs every statement cloud lists (rows, then the pending
+// list from next), refusing any the operator did not confirm. Every device
+// is tried.
+func (op *registryOp) signPending(ctx context.Context, c confirmed, rows []*cloudpb.PendingDeviceStatement, next string) error {
 	signed := map[string]bool{}
 	var errs []error
 	for {
 		for _, row := range rows {
-			if err := op.signRow(ctx, d, kd, appID, assign, remove, row); err != nil {
+			if err := op.signRow(ctx, c, row); err != nil {
 				cliLogln("Not sent to %s: %v", row.GetDevice(), err)
 				errs = append(errs, fmt.Errorf("%s: %w", row.GetDevice(), err))
 				continue
@@ -858,64 +938,63 @@ func (op *registryOp) signPending(ctx context.Context, d *cloudpb.Deployment, kd
 		if next == "" {
 			break
 		}
-		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: d.GetId(), PageToken: next})
+		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: c.d.GetId(), PageToken: next})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("reading the rest of the devices: %w", err))
 			break
 		}
 		rows, next = page.GetStatements(), page.GetNextPageToken()
 	}
-	for _, dev := range slices.Sorted(maps.Keys(assign)) {
+	for _, dev := range slices.Sorted(maps.Keys(c.must)) {
 		if !signed[dev] {
 			errs = append(errs, fmt.Errorf("%s: Cloud did not ask for its instruction", dev))
 		}
 	}
-	for _, dev := range slices.Sorted(maps.Keys(remove)) {
-		if !signed[dev] {
-			errs = append(errs, fmt.Errorf("%s: Cloud did not ask for its removal", dev))
-		}
-	}
 	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("deployment %s revision %d: %d devices not sent their instruction: %w", d.GetId(), d.GetRevision(), len(errs), err)
+		return fmt.Errorf("deployment %s revision %d: %d devices not sent their instruction: %w", c.d.GetId(), c.d.GetRevision(), len(errs), err)
 	}
 	return nil
 }
 
-// signRow signs one listed statement if it is one the operator asked for.
-func (op *registryOp) signRow(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID string, assign map[string][]byte, remove map[string]bool, row *cloudpb.PendingDeviceStatement) error {
-	if row.GetDeploymentId() != d.GetId() || row.GetRevision() != d.GetRevision() {
-		return fmt.Errorf("Cloud asked for deployment %s revision %d, not %s revision %d", row.GetDeploymentId(), row.GetRevision(), d.GetId(), d.GetRevision())
+// signRow signs one listed statement if it is one the operator confirmed.
+func (op *registryOp) signRow(ctx context.Context, c confirmed, row *cloudpb.PendingDeviceStatement) error {
+	if row.GetDeploymentId() != c.d.GetId() || row.GetRevision() != c.revision {
+		return fmt.Errorf("Cloud asked for deployment %s revision %d, not %s revision %d", row.GetDeploymentId(), row.GetRevision(), c.d.GetId(), c.revision)
 	}
 	switch row.GetKind() {
 	case cloudpb.PendingDeviceStatement_KIND_ASSIGN:
-		key, ok := assign[row.GetDevice()]
-		if !ok || kd == nil {
+		key, ok := c.assign[row.GetDevice()]
+		if !ok || c.kd == nil || c.revision == maxRevision {
 			return errors.New("Cloud asked to give it the deployment, which was not asked for")
 		}
-		if row.GetReplacesDeploymentId() != "" || row.GetReplacesRevision() != 0 {
+		move := row.GetReplacesDeploymentId() != "" || row.GetReplacesRevision() != 0
+		if move && (c.moves[row.GetDevice()] == "" || c.moves[row.GetDevice()] != row.GetReplacesDeploymentId() || row.GetReplacesRevision() < 1 || row.GetReplacesRevision() == maxRevision) {
 			return fmt.Errorf("Cloud asked to move it from deployment %s, which was not asked for", row.GetReplacesDeploymentId())
 		}
-		return op.signAssign(ctx, d, kd, appID, row.GetDevice(), key)
+		return op.signAssign(ctx, c.d, c.kd, c.appID, row.GetDevice(), key, row.GetReplacesDeploymentId(), row.GetReplacesRevision())
 	case cloudpb.PendingDeviceStatement_KIND_UNASSIGN:
-		if !remove[row.GetDevice()] {
+		if !c.remove[row.GetDevice()] {
 			return errors.New("Cloud asked to remove it, which was not asked for")
 		}
 		valid, _ := cloudrequest.ValidUntil(time.Now(), cloudrequest.MaxValidity) // removals: the platform cap, not the tenant's
 		var resp cloudpb.DeviceStatementResponse
 		if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_UnassignDevice_FullMethodName, &cloudpb.UnassignDeviceRequest{
-			OrganizationId: op.org, DeploymentId: d.GetId(), Device: row.GetDevice(), Revision: d.GetRevision(), ValidUntil: timestamppb.New(valid),
+			OrganizationId: op.org, DeploymentId: c.d.GetId(), Device: row.GetDevice(), Revision: c.revision, ValidUntil: timestamppb.New(valid),
 		}, &resp); err != nil {
 			return err
 		}
-		cliLogln("Sent %s its removal from deployment %s (postbox entry %d)", row.GetDevice(), d.GetId(), resp.GetPostboxEntryId())
+		cliLogln("Sent %s its removal from deployment %s (postbox entry %d)", row.GetDevice(), c.d.GetId(), resp.GetPostboxEntryId())
 		return nil
 	}
 	return fmt.Errorf("Cloud asked for a statement of kind %s, which was not asked for", row.GetKind())
 }
 
+// maxRevision is the revision of a terminal removal (UnassignDeviceRequest).
+const maxRevision = 2147483647
+
 // signAssign signs device's statement for revision d at kd's key, carrying
 // the device's own wrap of that key.
-func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID, device string, pub []byte) error {
+func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd *keyedDeployment, appID, device string, pub []byte, replaces string, replacesRevision int32) error {
 	keyID := registrycrypto.KeyID(kd.key)
 	w, err := op.wrap(registrycrypto.ScopeDeployment, d.GetId(), keyID, kd.key, cloudpb.RecipientKind_RECIPIENT_KIND_DEVICE, device, pub)
 	if err != nil {
@@ -930,6 +1009,7 @@ func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd 
 		OrganizationId: op.org, DeploymentId: d.GetId(), Device: device, AppId: appID, AppReleaseId: d.GetAppReleaseId(),
 		ManifestDigest: kd.manifestDigest, DeploymentKeyId: keyID, DesiredState: d.GetDesiredState(), DeviceWrap: w,
 		ExpiresAt: timestamppb.New(expires), ConfigJson: d.GetConfigJson(), Revision: d.GetRevision(),
+		ReplacesDeploymentId: replaces, ReplacesRevision: replacesRevision,
 	}, &resp); err != nil {
 		return err
 	}
@@ -978,7 +1058,7 @@ func (op *registryOp) rotate(ctx context.Context, deploymentID, appID string, de
 	cliLogln("Deployment %s now uses key %s", deploymentID, registrycrypto.KeyID(kd.key))
 	var errs []error
 	for _, device := range slices.Sorted(maps.Keys(keys)) {
-		if err := op.signAssign(ctx, d, kd, appID, device, keys[device]); err != nil {
+		if err := op.signAssign(ctx, d, kd, appID, device, keys[device], "", 0); err != nil {
 			cliLogln("Not sent to %s: %v", device, err)
 			errs = append(errs, fmt.Errorf("%s: %w", device, err))
 		}
