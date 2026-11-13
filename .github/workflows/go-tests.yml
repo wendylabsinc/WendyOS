@@ -897,6 +897,7 @@ jobs:
           path: |
             ${{ runner.temp }}/g1-cache-publication/*.json
             ${{ runner.temp }}/g1-cache-publication/*.jsonl
+            ${{ runner.temp }}/g1-cache-publication/*.stderr.log
           if-no-files-found: ignore
           retention-days: 7
       - name: Test direct and nested USB disk discovery
