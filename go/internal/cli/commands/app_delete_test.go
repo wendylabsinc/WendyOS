@@ -182,19 +182,23 @@ func TestAppDeleteSendsBatchesOf200(t *testing.T) {
 	}
 }
 
-// An app already being deleted cannot be cancelled: no confirmation is
-// asked, only each device's choice.
-func TestAppDeleteBeingDeletedSkipsConfirmations(t *testing.T) {
+// Resuming a delete that was interrupted shows the devices and asks exactly
+// like a first run; without a terminal it needs --yes like a first run.
+func TestAppDeleteResumeShowsAndAsksLikeAFirstRun(t *testing.T) {
 	op, fake, _ := deleteFixture(t, row(kindUnassign, vectorDevice, "packer-01"))
 	fake.apps[exampleApp].DeletionStartedAt = timestamppb.Now()
+	if err := runAppDelete(context.Background(), op, exampleApp, nil, false, io.Discard, false); err == nil || !strings.Contains(err.Error(), "Add --yes") || len(fake.apps) != 1 {
+		t.Fatalf("no terminal, no --yes: %v", err)
+	}
 	var asked []string
-	deployConfirm = func(q string) (bool, error) { asked = append(asked, q); return false, nil }
+	deployConfirm = func(q string) (bool, error) { asked = append(asked, q); return strings.HasPrefix(q, "Delete "), nil }
+	deployAsk = func(q, _, _ string) (string, error) { asked = append(asked, q); return exampleApp, nil }
 	var out bytes.Buffer
 	if err := runAppDelete(context.Background(), op, exampleApp, nil, false, &out, true); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(asked) != "[Detach packer-01 instead? The app keeps running there as a direct run.]" ||
-		!strings.Contains(out.String(), "sh.wendy.example is being deleted: 1 device still needs a removal or a detach. Finishing.") || len(fake.apps) != 0 {
+	if len(asked) != 3 || !strings.HasPrefix(asked[0], "Delete sh.wendy.example?") || asked[2] != "Type the app name to confirm" ||
+		!strings.Contains(out.String(), "is being deleted: 1 device still needs") || !strings.Contains(out.String(), ": 1 device: packer-01") || len(fake.apps) != 0 {
 		t.Fatalf("asked %v\n%s", asked, out.String())
 	}
 }
