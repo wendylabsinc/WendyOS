@@ -14,6 +14,8 @@ if [[ ${1:-} == --inside ]]; then
   # host sockets. No host service or network configuration is changed.
   mount --make-rprivate /
   mount -t tmpfs -o mode=755 tmpfs /run
+  export XDG_RUNTIME_DIR=/run/go2-runtime
+  mkdir -m700 "$XDG_RUNTIME_DIR"
   export WENDY_GO2_H264_KERNEL=1 WENDY_GO2_CAPTURE_BINARY=$3
   bash .github/scripts/test-containerd-regressions.sh "$2" '^TestGo2H264KernelServiceAndContainerDelivery$'
   exit
