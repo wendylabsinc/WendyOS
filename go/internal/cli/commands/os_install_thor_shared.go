@@ -471,14 +471,14 @@ func printThorBadStateHint(w io.Writer) {
 		"Plug the Thor into a monitor and power-cycle it.",
 		"If the screen shows " + thorHintEmph.Render("UEFI") + ", the Thor is in a bad state.",
 		"",
-		"Attach a USB keyboard and type these two commands exactly:",
-		"",
-		thorHintCmd.Render("  " + cmdA),
-		thorHintCmd.Render("  " + cmdB),
+		"Attach a USB keyboard and type the two commands below exactly.",
 		"",
 		"Then power-cycle again, re-enter recovery mode, and re-run the flash.",
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
+	fmt.Fprintln(w, "\nIn the UEFI shell:")
+	fmt.Fprintln(w, cmdA)
+	fmt.Fprintln(w, cmdB)
 }
 
 // printThorGadgetUnreachableHint is a calm note for a flash that never wrote data.

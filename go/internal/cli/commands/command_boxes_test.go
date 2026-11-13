@@ -55,3 +55,11 @@ func TestDragonwingUSBCommandsBelowBox(t *testing.T) {
 		}
 	}
 }
+
+func TestThorRecoveryCommandsBelowBox(t *testing.T) {
+	var output strings.Builder
+	printThorBadStateHint(&output)
+	for _, slot := range []string{"A", "B"} {
+		assertCommandBelowBox(t, output.String(), "setvar RootfsStatusSlot"+slot+" -guid 781E084C-A330-417C-B678-38E696380CB9 -bs -rt -nv =0x00000000")
+	}
+}
