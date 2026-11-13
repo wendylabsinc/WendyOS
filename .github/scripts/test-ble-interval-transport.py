@@ -50,7 +50,7 @@ def main():
     env={**os.environ,'WENDY_BLE_INTERVAL_POLICY':str(output/'radio.json')}
     for name in ('normal','reject-fallback'):
         binary=output/(name+'.test')
-        command=['go','test','-race','-vet=off','-tags','regression_ble_interval','-overlay',str(output/(name+'.json')),'-c','-o',str(binary),'./go/internal/agent/bleprovider']
+        command=['go','test','-race','-gcflags=all=-c=1','-vet=off','-tags','regression_ble_interval','-overlay',str(output/(name+'.json')),'-c','-o',str(binary),'./go/internal/agent/bleprovider']
         with (output/(name+'-compile.log')).open('w') as log:
             if OWNER.run(command,180,cwd=ROOT,env=env,stdout=log):raise RuntimeError('compile failed: '+name)
         selection='^TestBLEControllerOutcomePreservesAuthenticatedTraffic$'

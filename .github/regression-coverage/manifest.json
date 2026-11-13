@@ -1626,10 +1626,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2527",
       "title": "fix(ble): keep a Wendy Net BLE link when the controller refuses the interval update",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The test injects Command Disallowed and checks the link stays up. Other controller-specific timing and PHY responses remain unverified.",
-      "required_follow_up": "Add a controller response matrix including refusal, timeout, disconnect and successful negotiation.",
-      "evidence": []
+      "required_follow_up": "Require actual Linux provider/TLS transport for all eight HCI outcomes and the historical refusal-fallback control in the existing race job. Physical controller behavior remains separate.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/bleprovider/interval_transport_linux_test.go",
+            ".github/scripts/test-ble-interval-transport.py"
+          ],
+          "result": "Prepared actual provider dial, PKI/TLS, stream hello and two exact echoes for accepted/refused negotiation, plus zero TLS output and joined IO for unknown/timeout/disconnect/cancel outcomes. Overlays replace only controller syscall outcomes and private policy path. Normal and historical fallback-removal Linux binaries compile; source review is clear. Actual Linux race runtime remains pending; cross-compilation establishes no radio or firmware behavior."
+        }
+      ]
     },
     {
       "key": "2603",

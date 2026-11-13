@@ -216,6 +216,17 @@ jobs:
       - name: Test bounded physical thermal capture helper
         run: go test -race ./.github/scripts/fixtures/topdon-physical-capture -count=1 -timeout=60s
 
+      - name: Require authenticated BLE transport after interval refusal
+        run: python3 .github/scripts/test-ble-interval-transport.py "$RUNNER_TEMP/ble-interval-transport"
+      - name: Retain BLE interval transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ble-interval-transport
+          path: ${{ runner.temp }}/ble-interval-transport
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Require first-boot driver reconnect and target guards
         run: python3 .github/scripts/test-firstboot-driver-transport.py --output "$RUNNER_TEMP/firstboot-driver-transport"
       - name: Retain first-boot driver transport evidence

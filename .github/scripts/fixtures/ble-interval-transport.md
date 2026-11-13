@@ -1,6 +1,6 @@
 # BLE interval refusal and authenticated traffic (audit 2527)
 
-Run as the ordinary Linux user in the existing network job:
+Run as the ordinary Linux user in the existing race-test job:
 
 ```sh
 python3 .github/scripts/test-ble-interval-transport.py "$RUNNER_TEMP/ble-interval-transport"
