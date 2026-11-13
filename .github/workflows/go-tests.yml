@@ -48,6 +48,7 @@ on:
       - 'Examples/SO101Reader/**'
       - 'Examples/WendyNotify/**'
       - 'Examples/ThermalNotify/**'
+      - 'evals/**'
   pull_request:
     paths:
       - '.gitattributes'
@@ -93,6 +94,7 @@ on:
       - 'Examples/SO101Reader/**'
       - 'Examples/WendyNotify/**'
       - 'Examples/ThermalNotify/**'
+      - 'evals/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -127,6 +129,8 @@ jobs:
           python -m pip install -r .github/scripts/requirements-regression-tests.txt
       - name: Exercise review, event and failure contracts without publishing
         run: python .github/scripts/run-automation-regressions.py
+      - name: Require eval accounting, tool guards and process deadlines
+        run: python .github/scripts/run-eval-regressions.py
 
   shared-grpc-api-contracts:
     name: Shared gRPC API contracts

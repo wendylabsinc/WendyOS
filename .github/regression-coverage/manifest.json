@@ -4038,10 +4038,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2414",
       "title": "feat(evals): grade agents' Wendy tool use, and run the benchmark on a Jetson against itself",
       "package": "13",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Evaluation parser, proxy and grading tests cover many reported failures. The benchmark itself depends on an agent/device environment and is not an ordinary required test.",
-      "required_follow_up": "Run the pure eval tests on every eval change and use a pinned device fixture for tool-guard and timeout reporting.",
-      "evidence": []
+      "required_follow_up": "Require the pure eval suite in the existing offline CI job on every eval change; retain exact-device local-model tool-guard and timeout-reporting acceptance separately.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/run-eval-regressions.py",
+            "evals/agent-experience/test_on_device.py",
+            "evals/agent-experience/test_benchmark.py",
+            "evals/agent-experience/test_scenarios.py",
+            "evals/agent-experience/test_wrapper.py"
+          ],
+          "result": "All443 existing pure eval tests pass locally in41.133s without skips, covering tool-trace grading, unknown-tool refusal, baseline context rejection, process deadlines, exit status, resume and incomplete usage accounting. A required step shares the existing offline automation job; push and pull_request path filters include evals/**. No model, GPU or physical device benchmark was executed. Hosted gate and exact-Jetson procedure remain pending."
+        }
+      ]
     },
     {
       "key": "2448",
