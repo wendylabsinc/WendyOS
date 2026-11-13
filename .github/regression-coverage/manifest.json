@@ -2254,10 +2254,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2022",
       "title": "Propopsal: Clean up visible CLI surface",
       "package": "06",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "CLI cleanup includes simulator, multicast and demo security corrections with mixed hardware/example tests. Several require opt-in environments.",
-      "required_follow_up": "Run explicit simulator isolation, listener binding and inference teardown scenarios; reject silent skips for required cases.",
-      "evidence": []
+      "required_follow_up": "Require actual Coke HTTP/thread controls and the exact locked review runtime in the existing G1 simulator job; retain the six-commit behavior map and finish packet/observer isolation, simulator replay and packaged artifact residuals.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-g1-coke-transports.py",
+            ".github/scripts/test-g1-coke-review.py",
+            ".github/scripts/fixtures/g1-coke/behavior-map.json"
+          ],
+          "result": "Five actual HTTP/thread cases and six historical controls pass locally. Voice WebSocket, transcript and playback race tests and the macOS G1 package also pass. Existing G1 row now requires the separate locked Python3.12 Coke runtime with all40+ review cases and no skips; hosted execution pending. Original six-commit residuals remain mapped, including actual multicast exclusion, observer scope, simulator scenes and verified packaged DLA extraction."
+        }
+      ]
     },
     {
       "key": "2828",
@@ -3133,30 +3142,59 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2243",
       "title": "fix(mac): wait for Location decisions and explain unanswered requests",
       "package": "09",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Permission request lifecycle tests cover pending decisions and cancellation. The real macOS permission dialog remains outside the fixture.",
-      "required_follow_up": "Run the suite in CI and add a packaged-app permission smoke test for unanswered and denied states.",
-      "evidence": []
+      "required_follow_up": "Require the actual Location model and unchanged60s timeout in the existing macOS15 core job; execute the prepared exact signed-app OS-dialog procedure on a reserved Mac.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-mac-location-permission.py",
+            "swift/Scripts/TestLocationPermissionRequest.sh",
+            ".github/regression-coverage/manual/mac-permission-signing-rehearsal.py",
+            ".github/regression-coverage/manual/mac-permission-signing-rehearsal.txt"
+          ],
+          "result": "Actual production model pending/denied/refresh/retry and unchanged60s timeout pass natively in63.257s with only native fact/submission seams controlled. Early-completion and missing-timeout controls fail their intended boundaries. Existing three helper/source checks pass; required hosted registration added. Three offline procedure checks pass. Real OS dialogs remain not_run; exact whole-Mac signed artifact, unanswered/denied/allowed and recovery instructions prepared."
+        }
+      ]
     },
     {
       "key": "2004",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2004",
       "title": "fix(mac): stop Location permission from spinning indefinitely",
       "package": "09",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "No test landed with this fix, but later PR 2243 added permission-request lifecycle tests and source checks. Those protect the waiting logic, not the real macOS permission dialog.",
-      "required_follow_up": "Keep the later tests in CI and retain a denied/unanswered/approved OS-dialog smoke test.",
-      "evidence": []
+      "required_follow_up": "Require the actual Location model and unchanged60s timeout in the existing macOS15 core job; execute the prepared exact signed-app OS-dialog procedure on a reserved Mac.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-mac-location-permission.py",
+            "swift/Scripts/TestLocationPermissionRequest.sh",
+            ".github/regression-coverage/manual/mac-permission-signing-rehearsal.py",
+            ".github/regression-coverage/manual/mac-permission-signing-rehearsal.txt"
+          ],
+          "result": "Actual production model pending/denied/refresh/retry and unchanged60s timeout pass natively in63.257s with only native fact/submission seams controlled. Early-completion and missing-timeout controls fail their intended boundaries. Existing three helper/source checks pass; required hosted registration added. Three offline procedure checks pass. Real OS dialogs remain not_run; exact whole-Mac signed artifact, unanswered/denied/allowed and recovery instructions prepared."
+        }
+      ]
     },
     {
       "key": "2189",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2189",
       "title": "Provision Mac releases for Wendy Mesh",
       "package": "09",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Provisioning tests reject wrong bundle IDs, expired profiles and signer mismatch. Actual notarized network-extension installation still needs a signed release check.",
-      "required_follow_up": "Run profile tests plus a packaged app signature/extension loading smoke test.",
-      "evidence": []
+      "required_follow_up": "Execute the exact signed-package/profile/AMFI and extension procedure on a qualified whole reserved Mac. Shipped disabled activation and separately signed gate-enabled validation are distinct cases.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/Scripts/ValidateMacProvisioning_test.py",
+            ".github/regression-coverage/manual/mac-permission-signing-rehearsal.py",
+            ".github/regression-coverage/manual/mac-permission-signing-rehearsal.txt"
+          ],
+          "result": "Seven profile regression cases pass locally and remain registered in Swift CI. Three offline procedure checks pass. Actual signed ZIP/app/extension/profile hashes, DeveloperID/notarization, real AMFI launch and bounded Agent response are required. Current AppDelegate disables meshVPNIsEnabled; shipped nonactivation is checked separately from optional exact signed gate-overlay extension loading. All physical/signing/extension execution remains not_run."
+        }
+      ]
     },
     {
       "key": "1786",
@@ -4148,9 +4186,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2414",
       "title": "feat(evals): grade agents' Wendy tool use, and run the benchmark on a Jetson against itself",
       "package": "13",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Evaluation parser, proxy and grading tests cover many reported failures. The benchmark itself depends on an agent/device environment and is not an ordinary required test.",
-      "required_follow_up": "Require the pure eval suite in the existing offline CI job on every eval change; retain exact-device local-model tool-guard and timeout-reporting acceptance separately.",
+      "required_follow_up": "Require443 pure eval tests in existing offline CI and execute the prepared exact-Thor local-model/tool-guard/timeout procedure.",
       "evidence": [
         {
           "tests": [
@@ -4161,6 +4199,14 @@
             "evals/agent-experience/test_wrapper.py"
           ],
           "result": "All443 existing pure eval tests pass locally in41.133s without skips, covering tool-trace grading, unknown-tool refusal, baseline context rejection, process deadlines, exit status, resume and incomplete usage accounting. A required step shares the existing offline automation job; push and pull_request path filters include evals/**. No model, GPU or physical device benchmark was executed. Hosted gate and exact-Jetson procedure remain pending."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/jetson-eval-rehearsal.py",
+            ".github/regression-coverage/manual/jetson-eval-rehearsal.txt",
+            ".github/regression-coverage/manual/jetson-eval-controls.py"
+          ],
+          "result": "Five offline qualification/procedure checks pass. Actual native CLI delayedHTTP request through production benchmark.trial produces an unscored timeout report after30s and joins its peer. Physical generator binds stagedCLI/Agent/source/model/board identities, unique app and volumes, real GPU/model pass and shim/MCP guards with bounded owned cleanup. Physical Thor/model execution remains not_run. Pure443-case CI gate awaits hosted execution."
         }
       ]
     },

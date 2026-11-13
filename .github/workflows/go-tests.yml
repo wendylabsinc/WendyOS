@@ -46,6 +46,7 @@ on:
       - 'swift/WendyAgentMac/RuntimeGuest/**'
       - 'swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift'
       - 'Examples/SO101Reader/**'
+      - 'Examples/G1CokeDemo/**'
       - 'Examples/WendyNotify/**'
       - 'Examples/ThermalNotify/**'
       - 'evals/**'
@@ -94,6 +95,7 @@ on:
       - 'swift/WendyAgentMac/RuntimeGuest/**'
       - 'swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift'
       - 'Examples/SO101Reader/**'
+      - 'Examples/G1CokeDemo/**'
       - 'Examples/WendyNotify/**'
       - 'Examples/ThermalNotify/**'
       - 'evals/**'
@@ -1323,7 +1325,7 @@ jobs:
   simulator-python310:
     name: ROS Humble simulator dependencies (${{ matrix.robot }})
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.robot == 'go2' && 40 || 15 }}
+    timeout-minutes: ${{ matrix.robot == 'go2' && 40 || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -1341,6 +1343,25 @@ jobs:
           uv pip install --python .venv/bin/python -r "go/simulator/$ROBOT/requirements.txt"
           uv pip check --python .venv/bin/python
           .venv/bin/python .github/scripts/test-simulator-dependencies.py
+      - name: Require Coke HTTP and inference lifecycle regressions
+        if: matrix.robot == 'g1'
+        timeout-minutes: 18
+        run: |
+          .venv/bin/python .github/scripts/test-g1-coke-transports.py --output "$RUNNER_TEMP/coke-transports"
+          uv run --project Examples/G1CokeDemo --frozen --group dev --managed-python --python 3.12 python .github/scripts/test-g1-coke-review.py --output "$RUNNER_TEMP/coke-review"
+      - name: Preserve Coke regression evidence
+        if: always() && matrix.robot == 'g1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coke-regressions
+          path: |
+            ${{ runner.temp }}/coke-transports/**/*.log
+            ${{ runner.temp }}/coke-transports/**/*.json
+            ${{ runner.temp }}/coke-review/*.log
+            ${{ runner.temp }}/coke-review/*.json
+            ${{ runner.temp }}/coke-review/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Set up Go for the Go2 bridge deadline fixture
         if: matrix.robot == 'go2'
         uses: ./.github/actions/setup-go-ci

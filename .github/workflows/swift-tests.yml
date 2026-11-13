@@ -24,6 +24,7 @@ on:
       - '.github/scripts/restore-trusted-build-cache.sh'
       - '.github/scripts/test-watch-session.sh'
       - '.github/scripts/test-mac-agent-termination.py'
+      - '.github/scripts/test-mac-location-permission.py'
       - '.github/scripts/fixtures/mac-agent-termination.swift'
       - '.github/scripts/run-owned-media-test.py'
       - 'go.mod'
@@ -112,6 +113,23 @@ jobs:
           path: |
             ${{ runner.temp }}/mac-agent-termination/*.json
             ${{ runner.temp }}/mac-agent-termination/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require Location decisions and the real unanswered timeout
+        timeout-minutes: 10
+        run: |
+          python3 .github/scripts/run-owned-media-test.py --timeout 60 -- bash swift/Scripts/TestLocationPermissionRequest.sh
+          python3 .github/scripts/test-mac-location-permission.py "$RUNNER_TEMP/location-permission"
+
+      - name: Preserve Location permission evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: location-permission
+          path: |
+            ${{ runner.temp }}/location-permission/**/*.log
+            ${{ runner.temp }}/location-permission/**/*.json
           if-no-files-found: ignore
           retention-days: 7
 
