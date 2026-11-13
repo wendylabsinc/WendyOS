@@ -2993,9 +2993,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1704",
       "title": "WDY-2430: IP-camera container parity (Phase 3) \u2014 v4l2loopback nodes, ref-counted pump, camera test",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Camera/probe/loopback tests and CLI help tests exist. Real v4l2loopback/GStreamer container delivery can skip without kernel and media dependencies.",
-      "required_follow_up": "Execute the required final media fixture against the owned v4l2loopback module. Verify exact decoded pixels, shared viewer/container-demand lifetime, full idle grace, reacquisition and node removal; an ignored-container-demand control must fail. Physical firmware and actual OCI camera mounting are separate scope.",
+      "required_follow_up": "Retain the required authenticated RTSP/kernel lifecycle and ignored-container-demand control. Builder kernel fix remains a separate unreleased companion; broader module compatibility is required before release.",
       "evidence": [
         {
           "tests": [
@@ -3012,6 +3012,13 @@
             ".github/scripts/v4l2-output-queue-provenance.py"
           ],
           "result": "Existing media job now requires the original module to fail the exact OUTPUT completion contract, drains its owned node/module, and rebuilds pinned Builder candidate4828717a recipe patch byte-for-byte. Candidate must pass completion, capture coexistence, no-DQBUF writer reuse, empty poll, STREAMOFF wake and restart, then every unchanged decoded/shared-consumer gate. Source review, Linux test compile, exact patch application, provenance and four portable checks pass. Actual module build/runtime remains pending; candidate branch is published for immutable checkout only, not released. This does not yet establish a new product defect or close1704."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254419",
+          "artifact": 14016307539,
+          "artifact_sha256": "c55e9bda3a2bbbbcb87f3e7ae52dc420a20c01dc068538520c0113b2f927c91c",
+          "result": "Complete hosted media job passes against exact Builder4828717a recipe/patch. Actual authenticated RTSP/GStreamer/V4L2 lifecycle passes45.33s: decoded fresh pixels, two viewer refs, retained container-only demand through idle grace, release/reacquisition, two authenticated sessions, joined writers and final node removal. Authenticated stream pixel-change check passes22.19s. Ignored-container-demand control fails its named retained-pump boundary22.95s. Original module independently fails unqueued-buffer contract; candidate lifecycle and all unchanged shared media consumers pass. Physical camera firmware remains separate; candidate is not yet released."
         }
       ]
     },
