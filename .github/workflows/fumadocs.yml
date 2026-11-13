@@ -9,6 +9,8 @@ on:
       - ".github/scripts/check-built-doc-capabilities.py"
       - ".github/scripts/built_doc_capabilities_test.py"
       - ".github/scripts/fixtures/docs-capabilities/**"
+      - ".github/scripts/test-readme-template.py"
+      - ".github/scripts/fixtures/readme-template/**"
       - "go/internal/agent/network/documented_backend_unix_test.go"
       - ".github/scripts/test-readme-install.py"
       - ".github/scripts/readme_install_test.py"
@@ -30,6 +32,8 @@ on:
       - ".github/scripts/check-built-doc-capabilities.py"
       - ".github/scripts/built_doc_capabilities_test.py"
       - ".github/scripts/fixtures/docs-capabilities/**"
+      - ".github/scripts/test-readme-template.py"
+      - ".github/scripts/fixtures/readme-template/**"
       - "go/internal/agent/network/documented_backend_unix_test.go"
       - ".github/scripts/test-readme-install.py"
       - ".github/scripts/readme_install_test.py"
@@ -330,6 +334,11 @@ jobs:
           timeout 120 git -C "$fixtures/native" fetch -q --depth=1 \
             https://github.com/wendylabsinc/wendy-lite-native-apps.git \
             73271d49c1c6872ca46e63a36e94012c6fd68f2f
+          # Reuse this exact pinned checkout and the existing Go/Node build job.
+          # The generated app runs locally; this does not claim device deployment.
+          python3 ../../../../../.github/scripts/test-readme-template.py \
+            --templates "$fixtures/templates" \
+            --evidence "$RUNNER_TEMP/docs-readme-template-evidence"
           examples_checked=0
           preview_checked=0
 
@@ -387,7 +396,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: docs-regression-evidence
-          path: ${{ runner.temp }}/docs-*-crawl.json
+          path: |
+            ${{ runner.temp }}/docs-*-crawl.json
+            ${{ runner.temp }}/docs-readme-template-evidence
           if-no-files-found: ignore
           retention-days: 7
 
