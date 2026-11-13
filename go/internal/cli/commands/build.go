@@ -300,8 +300,13 @@ func newBuildCmd() *cobra.Command {
 // selected device's own OS/arch when an agent is connected (cfgPlatform
 // overrides the device-reported OS (and arch, when it names one)), or
 // the configured platform with no device to ask, defaulting to linux/arm64.
+// A configured non-Linux OS (darwin, wendy-lite) is not a container platform,
+// so with no device it keeps the linux/arm64 default too.
 func resolveBuildPlatform(ctx context.Context, target *SelectedDevice, cfgPlatform string) string {
 	platform := resolveAgentPlatform(cfgPlatform, "linux", "arm64")
+	if !strings.EqualFold(platformOS(platform), appconfig.PlatformLinux) {
+		platform = "linux/arm64"
+	}
 	if target != nil && target.Agent != nil {
 		versionResp, err := target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 		if err == nil {

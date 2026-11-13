@@ -26,10 +26,25 @@ func TestBuildWithoutAgentPassesConfiguredPlatformToDocker(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the subprocess fixture uses a POSIX shell")
 	}
+	// Docker builds Linux images only: a darwin or wendy-lite project that
+	// carries a Dockerfile keeps the linux/arm64 default with no device to ask.
+	for _, tc := range []struct{ config, want string }{
+		{"wendyos/amd64", "linux/amd64"},
+		{"darwin", "linux/arm64"},
+		{"darwin/amd64", "linux/arm64"},
+		{"wendy-lite", "linux/arm64"},
+	} {
+		t.Run(tc.config, func(t *testing.T) {
+			testBuildWithoutAgentDockerPlatform(t, tc.config, tc.want)
+		})
+	}
+}
+
+func testBuildWithoutAgentDockerPlatform(t *testing.T, configured, wantPlatform string) {
 	dir := t.TempDir()
 	chdirTo(t, dir)
 	for name, content := range map[string]string{
-		"wendy.json": `{"appId":"platform-regression","platform":"wendyos/amd64","entitlements":[]}`,
+		"wendy.json": `{"appId":"platform-regression","platform":"` + configured + `","entitlements":[]}`,
 		"Dockerfile": "FROM scratch\n",
 		"docker":     "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$WENDY_BUILD_ARGUMENTS\"\n",
 	} {
@@ -65,7 +80,7 @@ func TestBuildWithoutAgentPassesConfiguredPlatformToDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(data)), "\n")
-	want := []string{"buildx", "build", "--platform", "linux/amd64", "-f", "Dockerfile", "-t", "platform-regression:latest", "--load", "."}
+	want := []string{"buildx", "build", "--platform", wantPlatform, "-f", "Dockerfile", "-t", "platform-regression:latest", "--load", "."}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Docker arguments = %q, want %q", got, want)
 	}
@@ -86,7 +101,8 @@ func (s *platformRegressionAgent) GetAgentVersion(context.Context, *agentpb.GetA
 func TestBuildPlatformConfigurationAndConnectedAgent(t *testing.T) {
 	for _, tc := range []struct{ config, want string }{
 		{"", "linux/arm64"}, {"linux/amd64", "linux/amd64"},
-		{"wendyos/amd64", "linux/amd64"}, {"darwin", "darwin/arm64"},
+		{"wendyos/amd64", "linux/amd64"}, {"wendyos", "linux/arm64"},
+		{"darwin", "linux/arm64"}, {"darwin/amd64", "linux/arm64"}, {"wendy-lite", "linux/arm64"},
 	} {
 		for _, target := range []*SelectedDevice{nil, {}} {
 			if got := resolveBuildPlatform(context.Background(), target, tc.config); got != tc.want {
