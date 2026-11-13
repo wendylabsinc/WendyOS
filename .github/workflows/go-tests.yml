@@ -209,6 +209,9 @@ jobs:
         # of the former 300s under -race on main 08a9cb01 (2026-11-11).
         run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 600s
 
+      - name: Test bounded physical thermal capture helper
+        run: go test -race ./.github/scripts/fixtures/topdon-physical-capture -count=1 -timeout=60s
+
       - name: Require bounded job supervision and transport recovery
         run: bash .github/scripts/test-job-supervisor-lifetime.sh "$RUNNER_TEMP/job-supervisor-lifetime"
 

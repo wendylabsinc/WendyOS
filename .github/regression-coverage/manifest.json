@@ -2355,9 +2355,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2770",
       "title": "Support 96\u00d796 TOPDON thermometry and temperature-based alerts",
       "package": "08",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover thermal geometry, metadata separation and alert freshness. The example Swift tests are outside the standard WendyAgentCore test command, and real sensor calibration is not checked here.",
-      "required_follow_up": "Require ThermalNotify tests in the existing macOS job and retain a recorded physical 96x96 TOPDON frame with device/firmware provenance and independently expected Celsius values. Synthetic metadata fixtures do not establish recorded sensor behavior.",
+      "required_follow_up": "Run the exact-target physical capture, independent calibrated Celsius/geometry checks, recorded-byte replay and live monitor-only threshold sequence in topdon-physical-rehearsal.py. Preserve provenance and bounded cleanup evidence. All physical acceptance cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -2367,6 +2367,16 @@
             ".github/workflows/go-tests.yml"
           ],
           "result": "All 18 existing ThermalNotify tests passed locally. They exercise 96x96 summary geometry, Celsius conversion, malformed/truncated inputs, freshness and frozen summaries, strict alert thresholds, recipient selection and retries. Registered with resolved dependency versions in the existing macOS job and included package changes in both workflow path filters. Hosted execution remains pending. Frame bytes are synthetic; a recorded physical sensor fixture with provenance remains open."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/topdon-physical-rehearsal.py",
+            ".github/regression-coverage/manual/topdon-physical-rehearsal.txt",
+            ".github/regression-coverage/manual/topdon-recorded-replay.swift",
+            ".github/scripts/fixtures/topdon-physical-capture/main_test.go",
+            ".github/scripts/topdon_physical_rehearsal_test.py"
+          ],
+          "result": "Detailed physical procedure pins USB2bdf:0102 revision0409, stable ID, candidate binaries, reference calibration and exact96x200 layout. Bounded Unix-gRPC helper preserves raw frame bytes, timestamps and receipt hashes; real private gRPC race tests and Linux arm64 build pass. Generated plans are offline, all7 physical cases not_run. Swift replay accepts explicit synthetic validation data and rejects original layout and duplicate-reference controls; those runs do not establish physical provenance or Celsius accuracy. Python2 checks pass. Existing macOS job runs18 ThermalNotify tests; existing race/offline jobs now exercise helper/generator without new runners."
         }
       ]
     },
@@ -3835,10 +3845,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2015",
       "title": "wendy device cache prune --all/--min-age with a synchronous containerd GC (WDY-3127)",
       "package": "15",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Prune RPC and GC tests exist. The embedded device-top action correction is mainly compile-checked; a UI action test should assert the options actually passed.",
-      "required_follow_up": "Trigger prune from device top and inspect min-age/all/dry-run values at the RPC boundary.",
-      "evidence": []
+      "required_follow_up": "Require the actual Cobra-to-UDS prune option matrix and device-top p-key-to-RPC/result tests in the existing CLI race job. Existing Agent cache/GC tests remain required.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/device_cache_transport_test.go"
+          ],
+          "command": "go test -race ./go/internal/cli/commands -run 'Test(CachePruneCommand|TopPruneKeyReaches|RunDeviceCachePruneRPC|TopPruneKeyAndCompletion)' -count=1 -timeout=120s",
+          "result": "Actual Cobra parsing sends optional age presence, explicit zero for --all, requested seconds and dry-run over private UDS gRPC. Invalid arguments produce no prune RPC. The actual p-key command reaches Agent once, retains the default grace period, prevents duplicate concurrent actions and preserves success/refusal results. Focused race tests pass locally; dropped-age and dropped-dry-run controls fail the wire assertions. Required hosted CLI race execution pending."
+        }
+      ]
     },
     {
       "key": "2795",
