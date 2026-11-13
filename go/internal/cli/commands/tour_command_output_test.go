@@ -58,54 +58,63 @@ func (m tourObservedCommandModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func TestTourLinuxCommandsSurviveLiveRenderer(t *testing.T) {
-	for _, width := range []int{40, 100} {
-		wizard := newTourWizardModel()
-		wizard.phase, wizard.width = phaseAptInstall, width
-		frame := wizard.View()
-		command := linuxDesktopCommand("", "", linuxDesktopMachineLabel)
-		output := &tourProgramOutput{command: command, fullscreen: make(chan struct{}, 1)}
-		ready := make(chan struct{})
-		model := tourObservedCommandModel{tourCommandScreenModel: tourCommandScreenModel{tourWizardModel: wizard}, ready: ready, once: &sync.Once{}}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		program := tea.NewProgram(model, tea.WithInput(strings.NewReader("")), tea.WithOutput(output), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
-		driverDone := make(chan struct{})
-		go func() {
-			defer close(driverDone)
-			program.Send(tea.WindowSizeMsg{Width: width, Height: 80})
-			program.Send(key("enter")) // rapid continuation while output may be pending
-			program.Send(tea.WindowSizeMsg{Width: 100, Height: 80})
-			program.Send(tea.WindowSizeMsg{Width: width, Height: 80})
-			select {
-			case <-ready:
-			case <-ctx.Done():
-				return
-			}
+func assertTourCommandsSurviveLiveRenderer(t *testing.T, wizard tourWizardModel, wantPhase tourPhase) {
+	t.Helper()
+	width := wizard.width
+	frame := wizard.View()
+	command := "wendy auth login"
+	if wizard.phase == phaseAptInstall {
+		command = linuxDesktopCommand("", "", linuxDesktopMachineLabel)
+	}
+	output := &tourProgramOutput{command: command, fullscreen: make(chan struct{}, 1)}
+	ready := make(chan struct{})
+	model := tourObservedCommandModel{tourCommandScreenModel: tourCommandScreenModel{tourWizardModel: wizard}, ready: ready, once: &sync.Once{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	program := tea.NewProgram(model, tea.WithInput(strings.NewReader("")), tea.WithOutput(output), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
+	driverDone := make(chan struct{})
+	go func() {
+		defer close(driverDone)
+		program.Send(tea.WindowSizeMsg{Width: width, Height: 80})
+		if wizard.phase != phaseWelcome {
 			program.Send(key("enter"))
-			select {
-			case <-output.fullscreen:
-			case <-ctx.Done():
-				return
-			}
+		} // rapid continuation while output may be pending
+		program.Send(tea.WindowSizeMsg{Width: 100, Height: 80})
+		program.Send(tea.WindowSizeMsg{Width: width, Height: 80})
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return
+		}
+		if wizard.phase == phaseWelcome {
 			program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
-		}()
-		final, err := program.Run()
-		cancel()
-		<-driverDone
-		if err != nil {
-			t.Fatalf("width %d: live program: %v; output=%q", width, err, output.String())
-		}
-		if final.(tourObservedCommandModel).phase != phaseEnterHostname {
-			t.Fatal("continuation no longer enters the hostname screen")
-		}
-		if !strings.Contains(output.String(), frame) {
-			t.Fatalf("width %d: actual renderer did not emit the complete frame", width)
-		}
-		for _, line := range strings.Split(wizard.viewCommands(), "\n") {
-			if strings.HasPrefix(line, "curl ") || strings.HasPrefix(line, "echo ") || strings.HasPrefix(line, "sudo ") {
-				if strings.Count(output.String(), line) != 1 {
-					t.Fatalf("command cropped or duplicated after rapid Enter/resize: %q", line)
+		} else {
+			program.Send(key("enter"))
+			if wizard.phase == phaseAptInstall {
+				select {
+				case <-output.fullscreen:
+				case <-ctx.Done():
+					return
 				}
+				program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+			}
+		}
+	}()
+	final, err := program.Run()
+	cancel()
+	<-driverDone
+	if err != nil {
+		t.Fatalf("width %d: live program: %v; output=%q", width, err, output.String())
+	}
+	if final.(tourObservedCommandModel).phase != wantPhase {
+		t.Fatal("continuation changed its destination")
+	}
+	if !strings.Contains(output.String(), frame) {
+		t.Fatalf("width %d: actual renderer did not emit the complete frame", width)
+	}
+	for _, line := range strings.Split(wizard.viewCommands(), "\n") {
+		if strings.HasPrefix(line, "curl ") || strings.HasPrefix(line, "echo ") || strings.HasPrefix(line, "sudo ") || strings.HasPrefix(line, "wendy ") {
+			if strings.Count(output.String(), line) != 1 {
+				t.Fatalf("command cropped or duplicated after rapid Enter/resize: %q", line)
 			}
 		}
 	}
@@ -167,5 +176,23 @@ func TestTourCommandOutputFailure(t *testing.T) {
 	output.SetStdout(&text)
 	if err := output.Run(); err != nil || text.String() != "\ninstructions\n" {
 		t.Fatal("output did not use supplied stdout")
+	}
+}
+
+func TestTourLinuxCommandsSurviveLiveRenderer(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		wizard := newTourWizardModel()
+		wizard.phase, wizard.width = phaseAptInstall, width
+		assertTourCommandsSurviveLiveRenderer(t, wizard, phaseEnterHostname)
+	}
+}
+
+func TestTourCompletionCommandsSurviveLiveRenderer(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		for _, project := range []string{"", "/tmp/long sample project 'with quotes' and spaces"} {
+			wizard := newTourWizardModel()
+			wizard.phase, wizard.width, wizard.projectPath, wizard.foundAddr = phaseCloud, width, project, "edge.local"
+			assertTourCommandsSurviveLiveRenderer(t, wizard, phaseCloud)
+		}
 	}
 }
