@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 type provisioningCrashFixture struct {
@@ -20,6 +23,7 @@ type provisioningCrashFixture struct {
 	Key   []byte
 	Mode  string
 	Phase string
+	CAKey []byte // renew: lets the crash child answer as pki-core
 }
 
 // Exit, rather than return an error, so deferred cleanup cannot mask an
@@ -29,14 +33,29 @@ func TestProvisioningProcessCrash(t *testing.T) {
 		runProvisioningCrashChild(t, path, os.Getenv("WENDY_PROVISIONING_CRASH_ACTION"))
 		return
 	}
-	for _, mode := range []string{"enroll", "repair", "legacy"} {
-		for _, phase := range []string{"before:device-key.pem", "after:device-key.pem", "before:provisioning.json", "after:provisioning.json"} {
+	for _, mode := range []string{"enroll", "repair", "legacy", "renew"} {
+		phases := []string{"before:device-key.pem", "after:device-key.pem", "before:provisioning.json", "after:provisioning.json"}
+		if mode == "renew" {
+			phases = append(phases, "before:"+pendingDeviceKeyFile, "after:"+pendingDeviceKeyFile)
+		}
+		for _, phase := range phases {
 			t.Run(mode+"/"+phase, func(t *testing.T) {
 				identity := newPBFixture(t)
 				fixture := provisioningCrashFixture{
 					State: provisioningState{Enrolled: true, CloudHost: "fixture.invalid:443", OrgID: 7, AssetID: 42,
 						PrincipalURI: identity.uri, CertPEM: identity.certPEM, ChainPEM: identity.chainPEM},
 					Key: []byte(identity.keyPEM), Mode: mode, Phase: phase,
+				}
+				if mode == "renew" {
+					ca := newRenewCA(t)
+					due, _, _ := enrolledForRenewal(t, ca, "", nil)
+					fixture.State = provisioningState{Enrolled: true, CloudHost: due.cloudHost, PrincipalURI: due.principalURI,
+						ACMEDirectoryURL: due.acmeDirectoryURL, CertPEM: due.certPEM, ChainPEM: due.chainPEM}
+					fixture.Key = due.keyPEM
+					var err error
+					if fixture.CAKey, err = x509.MarshalECPrivateKey(ca.key); err != nil {
+						t.Fatal(err)
+					}
 				}
 				dir := t.TempDir()
 				config := filepath.Join(dir, "config")
@@ -54,7 +73,7 @@ func TestProvisioningProcessCrash(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-					} else {
+					} else if mode == "legacy" {
 						legacy := fixture.State
 						legacy.KeyPEM = string(fixture.Key)
 						data, err := json.Marshal(legacy)
@@ -136,6 +155,21 @@ func runProvisioningCrashChild(t *testing.T, path, action string) {
 				t.Fatal(err)
 			}
 		}
+		if fixture.Mode == "renew" {
+			ca := renewCA{pem: fixture.State.ChainPEM}
+			if ca.cert, err = storedDeviceLeaf(ca.pem); err != nil {
+				t.Fatal(err)
+			}
+			if ca.key, err = x509.ParseECPrivateKey(fixture.CAKey); err != nil {
+				t.Fatal(err)
+			}
+			_, endpoint, roots := startFakeRenew(t, renewed(t, ca))
+			t.Setenv(renewEndpointEnv, endpoint)
+			renewRootCAs = roots
+			if _, err := svc.RenewIfDue(context.Background(), time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
 		t.Fatal("requested crash boundary was not reached")
 	}
 
@@ -148,7 +182,16 @@ func runProvisioningCrashChild(t *testing.T, path, action string) {
 			t.Fatalf("torn enrollment JSON: %v", err)
 		}
 		key, _ := os.ReadFile(filepath.Join(config, "device-key.pem"))
-		if !bytes.Equal(key, fixture.Key) && state.KeyPEM != string(fixture.Key) {
+		if fixture.Mode == "renew" {
+			// Renewal replaces the key on purpose: the stored certificate's key
+			// must be on disk, as the device key or as the pending one.
+			pending, _ := os.ReadFile(filepath.Join(config, pendingDeviceKeyFile))
+			_, keyErr := certs.TLSKeyPair(state.CertPEM, "", string(key))
+			_, pendingErr := certs.TLSKeyPair(state.CertPEM, "", string(pending))
+			if keyErr != nil && pendingErr != nil {
+				t.Fatal("renewal left a certificate without its private key")
+			}
+		} else if !bytes.Equal(key, fixture.Key) && state.KeyPEM != string(fixture.Key) {
 			t.Fatal("committed enrollment lost its private key")
 		}
 	} else if !os.IsNotExist(stateErr) {
@@ -162,6 +205,16 @@ func runProvisioningCrashChild(t *testing.T, path, action string) {
 		if _, err := svc.persistProvisioning(&fixture.State, fixture.Key); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if fixture.Mode == "renew" && (fixture.Phase == "after:provisioning.json" || strings.HasSuffix(fixture.Phase, ":device-key.pem")) {
+		// The certificate was committed, so the restart must finish the renewal.
+		if _, err := certs.TLSKeyPair(svc.certPEM, "", string(svc.keyPEM)); err != nil || svc.certPEM == fixture.State.CertPEM || !isMLDSA65Key(svc.keyPEM) {
+			t.Fatalf("restart did not finish the committed renewal: %v", err)
+		}
+		fixture.State.CertPEM, fixture.Key = svc.certPEM, svc.keyPEM
+	}
+	if _, err := os.Lstat(filepath.Join(config, pendingDeviceKeyFile)); !os.IsNotExist(err) {
+		t.Fatalf("pending renewal key survived the restart: %v", err)
 	}
 	if !svc.enrolled || svc.cloudHost != fixture.State.CloudHost || svc.orgID != fixture.State.OrgID ||
 		svc.assetID != fixture.State.AssetID || svc.principalURI != fixture.State.PrincipalURI ||
