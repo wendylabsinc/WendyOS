@@ -3154,6 +3154,9 @@ func flashRetryAction(flashErr error, interactive bool) (retry bool, fatal error
 	return true, nil
 }
 
+// resolveESP32InstallSerialPortsFn is the install-port scan; tests replace it.
+var resolveESP32InstallSerialPortsFn = discovery.ResolveESP32InstallSerialPorts
+
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
 // board is a Wendy Lite catalog board name, e.g. "esp32c6_generic_native". An empty
 // serialDevice means the device should be located by scanning install-capable
@@ -3166,6 +3169,44 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	expectedChip, err := chipModelForTarget(target)
 	if err != nil {
 		return err
+	}
+
+	// Find the board before asking for Wi-Fi, name or enrollment: a missing
+	// board must be reported before any question.
+	//
+	// An explicitly supplied device is used verbatim on every attempt. For
+	// discovered devices, preserve the selected port across retries and ask
+	// again if it disappears, since a different port may be another board.
+	autoDiscoverPort := serialDevice.Port == ""
+	interactive := !jsonOutput && isInteractiveTerminal()
+	if autoDiscoverPort {
+		fmt.Println("\nScanning for ESP32 devices...")
+
+		// A device that's rebooting on its own can drop off and reappear on
+		// the USB bus as it re-enumerates, so a single scan can miss it.
+		// Retry briefly rather than failing on the very first attempt.
+		deadline := time.Now().Add(1 * time.Second)
+		var devices []discovery.SerialPortInfo
+		for {
+			devices, err = resolveESP32InstallSerialPortsFn()
+			if err == nil && len(devices) == 0 {
+				err = fmt.Errorf("no ESP32 serial port found")
+			}
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			fmt.Println("\nNo ESP32 device detected.")
+			fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
+			fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
+			return fmt.Errorf("ESP32 not found: %w", err)
+		}
+		serialDevice, err = selectESP32InstallDevice(devices, discovery.SerialPortInfo{}, interactive, pickFromItems)
+		if err != nil {
+			return err
+		}
 	}
 
 	provCreds, err := resolveWiFiCredentialsList(wifi)
@@ -3201,41 +3242,6 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 
 	if wendyConf.Wifi != nil && len(wendyConf.Wifi.Networks) > 1 {
 		return fmt.Errorf("this device only supports one Wi-Fi network")
-	}
-
-	// An explicitly supplied device is used verbatim on every attempt. For
-	// discovered devices, preserve the selected port across retries and ask
-	// again if it disappears, since a different port may be another board.
-	autoDiscoverPort := serialDevice.Port == ""
-	interactive := !jsonOutput && isInteractiveTerminal()
-	if autoDiscoverPort {
-		fmt.Println("\nScanning for ESP32 devices...")
-
-		// A device that's rebooting on its own can drop off and reappear on
-		// the USB bus as it re-enumerates, so a single scan can miss it.
-		// Retry briefly rather than failing on the very first attempt.
-		deadline := time.Now().Add(1 * time.Second)
-		var devices []discovery.SerialPortInfo
-		for {
-			devices, err = discovery.ResolveESP32InstallSerialPorts()
-			if err == nil && len(devices) == 0 {
-				err = fmt.Errorf("no ESP32 serial port found")
-			}
-			if err == nil || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if err != nil {
-			fmt.Println("\nNo ESP32 device detected.")
-			fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
-			fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
-			return fmt.Errorf("ESP32 not found: %w", err)
-		}
-		serialDevice, err = selectESP32InstallDevice(devices, discovery.SerialPortInfo{}, interactive, pickFromItems)
-		if err != nil {
-			return err
-		}
 	}
 
 	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {

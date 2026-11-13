@@ -3,12 +3,14 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 )
 
 // stubWifiChoice fakes the keychain and the Wi-Fi prompts of
@@ -274,5 +276,20 @@ func TestInstallAsksWiFi(t *testing.T) {
 		if got := installAsksWiFi(deviceType); got != want {
 			t.Errorf("installAsksWiFi(%q) = %v; want %v", deviceType, got, want)
 		}
+	}
+}
+
+// Wendy Lite looks for the board before asking anything: with no board
+// attached, the run reports that instead of reaching the Wi-Fi settings,
+// which a malformed entry would otherwise fail first.
+func TestInstallESP32FirmwareScansForBoardBeforeQuestions(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	orig := resolveESP32InstallSerialPortsFn
+	t.Cleanup(func() { resolveESP32InstallSerialPortsFn = orig })
+	resolveESP32InstallSerialPortsFn = func() ([]discovery.SerialPortInfo, error) { return nil, nil }
+	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native", discovery.SerialPortInfo{},
+		wifiCLIOptions{Entries: []string{"not-key-value"}}, "", preEnrollOptions{mode: preEnrollSkip})
+	if err == nil || !strings.Contains(err.Error(), "ESP32 not found") {
+		t.Fatalf("no board: %v; want ESP32 not found before any Wi-Fi question", err)
 	}
 }
