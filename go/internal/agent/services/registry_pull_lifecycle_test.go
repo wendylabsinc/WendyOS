@@ -22,7 +22,7 @@ import (
 
 func (f *pbFixture) unassignEntry(dep string) {
 	resource := "org/" + f.tenant + "/deployment/" + dep + "/device/" + f.uuid
-	req := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour))}
+	req := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour)), Revision: maxRevision}
 	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, req, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
 	f.cloud.add(jws, payload, typ)
 }
@@ -339,7 +339,7 @@ func TestRegistryPullAbsentRevisionRemovesTheRelease(t *testing.T) {
 	f.assignEntry(r.assign)
 	f.cycle()
 	absent := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
-	absent.DesiredState = cloudpbv2.Running_ABSENT
+	absent.DesiredState, absent.Revision = cloudpbv2.Running_ABSENT, 2
 	rec.removed = nil
 	f.assignEntry(absent)
 	f.cycle()

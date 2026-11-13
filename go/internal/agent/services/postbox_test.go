@@ -66,6 +66,9 @@ type fakePostboxCloud struct {
 	// tenantWide and maxID (0: the tip) shape the checkpoint notarize binds.
 	tenantWide bool
 	maxID      int64
+	// pageSize > 0 caps a page as cloud's 2 MiB byte cap does: fewer
+	// entries, has_more set.
+	pageSize int
 }
 
 func (c *fakePostboxCloud) GetOrgCAs(_ context.Context, in *cloudpbv2.GetOrgCAsRequest, _ ...grpc.CallOption) (*cloudpbv2.GetOrgCAsResponse, error) {
@@ -93,6 +96,10 @@ func (c *fakePostboxCloud) PullChanges(_ context.Context, in *cloudpbv2.PullChan
 	resp := &cloudpbv2.PullChangesResponse{Checkpoint: []byte("checkpoint")}
 	for _, e := range c.entries {
 		if e.GetEntryId() > in.GetAfterEntryId() {
+			if c.pageSize > 0 && len(resp.Entries) == c.pageSize {
+				resp.HasMore = true
+				break
+			}
 			resp.Entries = append(resp.Entries, e)
 		}
 	}
@@ -717,6 +724,7 @@ func TestPostboxAssignmentHeldWhenThePullIsRefused(t *testing.T) {
 		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: uuid.NewString(),
 		ManifestDigest: "sha256:ab", DeploymentKeyId: "k1", DesiredState: cloudpbv2.Running_RUNNING,
 		ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
+		Revision:  1, ConfigJson: "{}",
 	}
 	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, assign, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
 	f.cloud.add(jws, payload, typ)
@@ -728,7 +736,7 @@ func TestPostboxAssignmentHeldWhenThePullIsRefused(t *testing.T) {
 		t.Fatalf("outcome = %+v, want the registry's refusal", o)
 	}
 
-	unassign := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour))}
+	unassign := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour)), Revision: maxRevision}
 	jws, payload, typ = f.sign(cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, unassign, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
 	f.cloud.add(jws, payload, typ)
 	f.cycle()
@@ -1172,6 +1180,7 @@ func TestReportedStateOutcomeHygiene(t *testing.T) {
 	assign := &cloudpbv2.DeviceAssignment{
 		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "bad app", AppReleaseId: "rel",
 		DesiredState: cloudpbv2.Running_RUNNING, ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
+		Revision: 1, ConfigJson: "{}",
 	}
 	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, assign,
 		"org/"+f.tenant+"/deployment/"+dep+"/device/"+f.uuid, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
