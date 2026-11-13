@@ -1,8 +1,12 @@
 Audit 2318 software enrollment acceptance
 
-Run once in the existing macOS Swift core/native row, after its Go setup and CLI
-build. Reuse that CLI and the same Swift core scratch/build system:
-  bash .github/scripts/test-mac-enrollment.sh "$RUNNER_TEMP/mac-enrollment" "$RUNNER_TEMP/swift-core" PATH_TO_THIS_HEAD_CLI default
+Run once in the existing native-app-regressions macOS row on macos-26, after
+its Go/Xcode/libusb setup. The production capability guard requires macOS 26;
+do not enable this fixture in the macos-15 Swift core row or override the guard.
+The desktop Xcode build does not produce a reusable Go CLI or core test product.
+Build that CLI once and use one owned core scratch directory in this existing row:
+  go build -o "$RUNNER_TEMP/mac-enrollment-cli" ./go/cmd/wendy
+  bash .github/scripts/test-mac-enrollment.sh "$RUNNER_TEMP/mac-enrollment" "$RUNNER_TEMP/mac-enrollment-swift-core" "$RUNNER_TEMP/mac-enrollment-cli" default
 Use native instead of default only when the row uses native for both Swift build
 and test. No new job, runner, signed app, login item, Cloud account or device is
 created. The helper build has a 180s bound; incremental Swift build has 600s;
