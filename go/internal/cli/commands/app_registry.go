@@ -739,6 +739,7 @@ type keyedDeployment struct {
 	manifestDigest string
 	key            []byte
 	sealed         *cloudpb.SealedContentKey
+	validity       time.Duration // what the operator chose for its statements; 0 = the stated default
 }
 
 // newDeploymentKey seals the content key under a fresh deployment key and
@@ -813,6 +814,7 @@ func (op *registryOp) deploy(ctx context.Context, p deployPlan) (*cloudpb.Deploy
 	if err != nil {
 		return d, fmt.Errorf("deployment %s: %w", d.GetId(), err)
 	}
+	kd.validity = p.validity
 	return d, op.signPending(ctx, d, kd, p.appID, keys, nil, moves, resp)
 }
 
@@ -1035,7 +1037,7 @@ func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd 
 	if err != nil {
 		return err
 	}
-	expires, err := cloudrequest.ValidUntil(time.Now(), 0) // the stated default, never Cloud's echo
+	expires, err := cloudrequest.ValidUntil(time.Now(), kd.validity) // the operator's choice, never Cloud's echo
 	if err != nil {
 		return err
 	}
