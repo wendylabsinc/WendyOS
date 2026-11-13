@@ -22,10 +22,13 @@ Orin Nano/NVMe or AGX Orin/NVMe/eMMC developer-kit result cannot qualify another
    driver_raw, signing_public_key, signature_review, builder_source,
    identity_record, recovery_record, authorization_record, network_isolation_record,
    disconnect_seconds; board {device,carrier,storage,serial,ecid,owner,
-   storage_serial,usb_path,serial_console,device_name,usb_address_before,
-   usb_address_after}. Use full source commits and actual files. The two USB
-   endpoints must be observed link-local addresses on port50051 from this same
-   physical board, not invented addresses or another board sharing a hostname.
+   storage_serial,usb_path,serial_console,device_name,usb_address_before}.
+   Use full source commits and actual files. usb_address_before must be the
+   observed pre-flash link-local address on port50051 from this same physical
+   board, not an invented address or another board sharing a hostname. The
+   post-boot endpoint does not exist yet and is not an inventory key: generation
+   refuses usb_address_after and plans no command that addresses the booted
+   device. Those commands are produced in step7 from the observed endpoint.
    The generator supports developer-kit Orin Nano/NVMe and AGX Orin/NVMe/eMMC.
    Record a unique provisioned name @NAME@. Serial/ECID bind the target because the
    first-boot unauthenticated listener's hostname/board checks alone are not
@@ -95,14 +98,23 @@ Case A: install --driver across a genuine powered disconnect
    window, timed from the waiting message, without restarting the CLI. Record the
    actual changed USB interface/address, mDNS hostname and recovery-to-OS device
    transition. Keep the old/new address and kernel observations in the transcript.
+   Then, and after every later first boot in this procedure, obtain the commands
+   that address the booted device from the endpoint actually observed:
+     python3 driver-firstboot-rehearsal.py --observed-address OBSERVED:50051 inventory.json NEW_PRIVATE_OUTPUT
+   It accepts only a link-local endpoint on port50051 for the unchanged
+   inventory, CLI and plan, contacts nothing, and prints verify, info,
+   wifi_status, available, list, registry_install and remove_owned_driver plus
+   whether the endpoint differs from usb_address_before. Keep its output in the
+   transcript. Never reuse commands printed for an earlier boot's endpoint.
    During the disconnected interval, use the serial console to record the new
    boot ID, kernel, absence of /sys/module/wendyos_hello and absence of the exact
    enabled raw path before replug. A module baked into the image or already loaded
    before this upload cannot prove postflash activation.
    Require wendyos-@NAME@, the exact board type and @KERNEL@ before any upload.
    A genuine address change is required for that subcase; if the address remains
-   unchanged, leave address-change acceptance not_run rather than editing interfaces
-   or inventory to pretend it changed. Root's protocol fixture separately exercises
+   unchanged (address_changed false), leave address-change acceptance not_run
+   rather than editing interfaces or inventory to pretend it changed; the printed
+   commands remain valid for the other cases. Root's protocol fixture separately exercises
    wrong hostname/board/old-kernel responses. Do not connect a decoy physical board
    or falsify firmware identity to repeat those refusals here.
 
@@ -114,7 +126,7 @@ Case A: install --driver across a genuine powered disconnect
    start concurrent writers or blindly rerun install. Preserve the flash and driver
    outcomes separately. A missing endpoint or busy module does not prove OS failure.
 
-9. Run generated verify, info and list against the exact new USB endpoint. Through
+9. Run the step7 verify, info and list for the observed USB endpoint. Through
    the same serial console, run these read-only observations; missing tools keep
    acceptance pending rather than installing extra packages:
      date -u
@@ -156,7 +168,9 @@ Case B: separate unenrolled USB registry upload without device egress
     fresh_registry_baseline, which omits --driver but pins the same image and
     --binary --pre-enroll=false --no-wifi. Never reuse an already installed hello
     module as proof of upload. Require list absence and no sys/module/wendyos_hello
-    before this case. Record the serial boot transcript and generated info JSON with the
+    before this case. This is a new first boot: observe its endpoint and rerun
+    step7's --observed-address before using any device-addressing command.
+    Record the serial boot transcript and that info JSON with the
     organization key explicitly present and null. An absent organization key means
     enrollment is unknown and does not qualify as unenrolled. Never read private
     configuration contents. Keep the board on separately powered USB only,
@@ -164,7 +178,7 @@ Case B: separate unenrolled USB registry upload without device egress
     no host Internet sharing, NAT, bridge or forwarding to it. Host Internet access
     remains available for the CLI to fetch the catalog and raw image.
 
-12. Verify generated info has only the intended USB link-local/loopback addresses
+12. Verify that info has only the intended USB link-local/loopback addresses
     and wifi_status reports disconnected. Over serial, capture:
       timeout 15 ip -json address
       timeout 15 ip -json route
@@ -172,7 +186,7 @@ Case B: separate unenrolled USB registry upload without device egress
     Require no device default route or routable address. Independently review the
     host network-isolation record; a disconnected Wi-Fi icon alone is insufficient.
     Do not create/change firewall or routing state with this plan. On this isolated
-    board, run generated available and match the recorded name, version, kernel and module list. This JSON
+    board, run that boot's available and match the recorded name, version, kernel and module list. This JSON
     does not expose signatures or digests: compare those separately against the
     captured published manifest and final raw image. Then run registry_install by NAME. It must emit:
       Device reports no WiFi or routable network address; downloading driver to upload...
@@ -198,7 +212,8 @@ Case C: explicit incomplete-firstboot result
     silently run a retry. A later explicit registry install is a new attempt with
     its own approval/evidence and cannot retroactively turn this result into success.
 
-14. Cleanup only the reserved test module using generated remove_owned_driver in
+14. Cleanup only the reserved test module using remove_owned_driver, printed for
+    the endpoint observed on the current boot, in
     an interactive terminal, after identity/list/source checks and owner approval.
     No --force or reset-all. Require list absence, no module directory, no owned
     raw file, and the actual unload log. If removal is refused or another workload
