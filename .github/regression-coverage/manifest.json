@@ -4210,6 +4210,15 @@
             ".github/regression-coverage/1890-follow-up.json"
           ],
           "result": "Prepared an exact reserved-target physical procedure with two separately inventoried V4L2 cameras, independently reviewed published DETR checkpoint hashes, qualified empty/person scenes, retained media/model input ledger, outage/cooldown/new-camera observations and one authorized Agent restart without redeploy. All physical cases remain not_run. The committed14-behavior decomposition maps the original mixed merge to exact existing tests/evidence and retains real kernel sample-ID joining, full malformed-certificate TLS, unknown-own-scope startup and SensorLink own-tenant residuals. This entry remains partial; procedure readiness does not close its software gaps."
+        },
+        {
+          "tests": [
+            "go/internal/agent/services/v4l2_sample_ledger_linux_test.go",
+            ".github/scripts/test-v4l2-sample-ledger.sh",
+            ".github/scripts/fixtures/v4l2-ledger/decoder_contract.py",
+            "Examples/WendyDataModelApp/test_wendydata.py"
+          ],
+          "result": "Added required real kernel sample-ID\u2192example ONNX prediction\u2192sealed camera byte-index/pixel join and exact receipt-time negative control to existing media job. Local real PyAV B-frame identity/pixel tests and30 example tests pass, including two fail-before ctypes ABI tests independently checked against compiled official Linux headers. Found and corrected H264 rejection and wrong pointer-union layouts in the actual example reader. Normal/control Linux fixtures compile; full kernel/race execution remains pending. No application model_inputs ledger, physical camera, published-model accuracy or OCI grant claim."
         }
       ]
     },
