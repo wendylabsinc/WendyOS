@@ -113,6 +113,59 @@ printf 'private-runtime=%s\\n' "$daemon_directory"
                                     capture_output=True, text=True, timeout=3)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_completed_launcher_is_not_mistaken_for_a_running_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root/'daemon.py'
+            child.write_text('import signal,sys,time\n'
+                             'signal.signal(signal.SIGTERM,lambda *_:sys.exit(0))\n'
+                             'print("ready",flush=True)\n'
+                             'while True: time.sleep(.01)\n')
+            helper = ACTIVE_LAUNCHER
+            # Like PipeWire, the real child handles TERM and exits while
+            # its owner polls inside a function. An early wait or jobs -l
+            # would discard the completed entry and erase the stimulus.
+            shell = ('set -euo pipefail\noutput="$1"\n' + helper +
+                     '\"$2\" "$output/daemon.py" > "$output/daemon.log" 2>&1 &\n'
+                     'daemon_launcher=$!\n'
+                     'trap \'kill -TERM %1 2>/dev/null || true; wait "$daemon_launcher"\' EXIT\n'
+                     'for _ in $(seq 1 200); do\n'
+                     '  if grep -q ready "$output/daemon.log"; then break; fi\n'
+                     '  sleep .01\ndone\n'
+                     'grep -q ready "$output/daemon.log"\n'
+                     'drain() {\n'
+                     '  kill -TERM %1\n'
+                     '  for _ in $(seq 1 30); do\n'
+                     '    if ! launcher_is_active; then break; fi\n'
+                     '    sleep .1\n  done\n'
+                     '  if launcher_is_active; then\n'
+                     '    jobs -l > "$output/final.jobs"\n'
+                     '    echo "Completed launcher incorrectly remains active" >&2; return 91\n'
+                     '  fi\n'
+                     '  wait "$daemon_launcher"\n'
+                     '}\ndrain\n')
+            result = subprocess.run(['bash', '-c', shell, 'completed-launcher', directory, sys.executable],
+                                    capture_output=True, text=True, timeout=7)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
+
+    def test_retained_completed_job_snapshot_is_excluded(self):
+        # Bash retains terminal entries differently across versions and call
+        # sites. Model the observed completed table explicitly, then exercise
+        # the actual predicate and its old unfiltered-query control. The live
+        # child test above separately checks the process wait/exit path.
+        for old_query in (False, True):
+            with self.subTest(old_query=old_query), tempfile.TemporaryDirectory() as directory:
+                helper = ACTIVE_LAUNCHER
+                if old_query:
+                    helper = helper.replace('{ jobs -pr && jobs -ps; }', 'jobs -p')
+                shell = ('set -euo pipefail\noutput="$1"; daemon_launcher=123\n'
+                         'jobs() { case "$1" in -p) echo 123;; -pr|-ps) true;; *) return 99;; esac; }\n'
+                         + helper + 'if launcher_is_active; then exit 91; fi\n')
+                result = subprocess.run(['bash', '-c', shell, 'retained-snapshot', directory],
+                                        capture_output=True, text=True, timeout=3)
+                self.assertEqual(result.returncode, 91 if old_query else 0, result.stderr)
+
     def test_startup_query_kills_term_resistant_owned_command(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
