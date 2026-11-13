@@ -4459,6 +4459,13 @@
             "Examples/WendyDataModelApp/wendydata.py"
           ],
           "result": "Required hosted kernel sample-identity step passed. Artifact14012616040 proves actual Linux-header ABI, reordered H264 identities,12 example predictions joined to sealed camera byte-index offsets and decoded pixels, and exact receipt-time control failure. Managed YAML/HF runtime and both controls also passed in inference job131700219364/artifact14011737370. Other malformed-certificate and unknown-own-scope startup gaps keep1890 partial; no physical-camera or published-model accuracy claim."
+        },
+        {
+          "tests": [
+            "go/internal/agent/mtls/peer_chain_transport_test.go",
+            ".github/scripts/test-mldsa-policy-transport.py"
+          ],
+          "result": "Eight full loopback TLS13 cases pass under race with actual ECDSA possession and ML-DSA issuer signatures. Valid peers exchange nonce bytes; malformed critical extensions and unknown EKU produce actual production verifier errors with zero delivery. Restoring historical missing issuer policy admits application bytes and fails both directions. Required in existing sensor identity/race step, sharing its artifact and seven-minute bound; no extra job. Hosted execution and unknown-own-scope startup remain pending."
         }
       ]
     },

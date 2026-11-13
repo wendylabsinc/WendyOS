@@ -44,9 +44,9 @@
     {
       "original_commit": "3dda11ee3",
       "behavior": "Direct ML-DSA chain policy and unknown EKU rejection",
-      "status": "focused_tests_transport_residual",
-      "tests": "go/internal/agent/mtls/peer_chain_test.go:TestDirectMLDSAChainsEnforcePolicy; go/internal/shared/certs/peer_chain_test.go:TestPermitsUsageRejectsUnknownEKUs",
-      "scope": "Real signed certificate bytes exercise both production verifier callbacks; no complete socket handshake for malformed critical-extension/unknown-EKU matrix. Existing2596 runtime matrix proves valid issuer completion/roles only.",
+      "status": "coverage_added_pending_ci",
+      "tests": "go/internal/agent/mtls/peer_chain_transport_test.go; .github/scripts/test-mldsa-policy-transport.py",
+      "scope": "Eight actual TCP/TLS13 client/server cases use ECDSA endpoint possession under real ML-DSA issuer signatures. Valid chains exchange nonce bytes; leaf/issuer critical extensions and unknown EKU reject before application delivery with an observed production verifier error. All eight pass under race locally; adapted historical missing-issuer-policy control admits bytes and fails both directions. Required in existing race job; hosted execution pending. Missing-own-scope startup remains separate.",
       "related_entries": [
         "2596"
       ],
@@ -120,9 +120,9 @@
     {
       "original_commit": "c66651732",
       "behavior": "Sensor source tenant derives from local certificate and pinned peer identity",
-      "status": "covered_runtime_with_limits",
-      "tests": "go/internal/agent/mcusource/mtls_dialer_test.go; lite_camera_fixture_test.go; source_restart_fixture_test.go",
-      "scope": "Actual authenticated SensorLink stream/reconnect kernel fixtures complement per-pairing pin checks. Legacy numeric-org-only mismatch vs SPIFFE own-tenant remains exact test distinction to verify before declaring that negative complete.",
+      "status": "coverage_added_pending_ci",
+      "tests": "go/internal/agent/mcusource/mtls_identity_transport_test.go; .github/scripts/test-sensor-asset-identity.py",
+      "scope": "Twelve actual TLS/gRPC cases now distinguish legacy and SPIFFE certificate tenant from stale numeric pairing OrgID; wrong tenant/asset fail before RPC dispatch. Local race matrix and adapted pairing-org control pass. Registered in existing race job under2048; hosted execution pending.",
       "related_entries": [
         "2350",
         "1858"

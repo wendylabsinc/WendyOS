@@ -238,11 +238,13 @@ jobs:
         env:
           GOFLAGS: '-gcflags=all=-c=1 -vet=off'
         run: python3 .github/scripts/test-serial-disconnect.py "$RUNNER_TEMP/serial-disconnect"
-      - name: Require sensor tenant identity over real TLS and gRPC
+      - name: Require sensor tenant identity and certificate policy over real TLS
         timeout-minutes: 7
         env:
           GOFLAGS: '-gcflags=all=-c=1 -vet=off'
-        run: python3 .github/scripts/test-sensor-asset-identity.py "$RUNNER_TEMP/sensor-asset-identity"
+        run: |
+          python3 .github/scripts/test-sensor-asset-identity.py "$RUNNER_TEMP/sensor-asset-identity"
+          python3 .github/scripts/test-mldsa-policy-transport.py "$RUNNER_TEMP/mldsa-policy-transport"
       - name: Retain serial disconnect evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -253,6 +255,8 @@ jobs:
             ${{ runner.temp }}/serial-disconnect/sources.json
             ${{ runner.temp }}/sensor-asset-identity/*.log
             ${{ runner.temp }}/sensor-asset-identity/evidence.json
+            ${{ runner.temp }}/mldsa-policy-transport/*.log
+            ${{ runner.temp }}/mldsa-policy-transport/evidence.json
           if-no-files-found: ignore
           retention-days: 7
 
