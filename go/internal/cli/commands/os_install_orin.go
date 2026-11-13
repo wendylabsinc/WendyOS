@@ -625,8 +625,10 @@ func printOrinBadStateHint(w io.Writer, opts t234InstallOptions) {
 	cmd := fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
 	body := strings.Join([]string{
 		thorHintTitle.Render("⚠  Recovery was interrupted — the Jetson may not boot"), "",
-		"QSPI or the rootfs may be partially written. Re-enter Force Recovery mode and retry:",
-		thorHintCmd.Render(cmd),
+		"QSPI or the rootfs may be partially written. Re-enter Force Recovery mode.",
+		"Then retry with the command below.",
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
+	fmt.Fprintln(w, "\nRetry the installation:")
+	fmt.Fprintln(w, cmd)
 }

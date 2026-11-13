@@ -63,3 +63,13 @@ func TestThorRecoveryCommandsBelowBox(t *testing.T) {
 		assertCommandBelowBox(t, output.String(), "setvar RootfsStatusSlot"+slot+" -guid 781E084C-A330-417C-B678-38E696380CB9 -bs -rt -nv =0x00000000")
 	}
 }
+
+func TestOrinRetryCommandsBelowBox(t *testing.T) {
+	for _, board := range []string{orinDeviceType, orinNanoDeviceType} {
+		for _, storage := range []string{"nvme", "sd"} {
+			var output strings.Builder
+			printOrinBadStateHint(&output, t234InstallOptions{DeviceType: board, Storage: storage})
+			assertCommandBelowBox(t, output.String(), "wendy os install --device-type "+board+" --storage "+storage)
+		}
+	}
+}
