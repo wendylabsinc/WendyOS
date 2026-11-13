@@ -4683,7 +4683,7 @@
       "package": "16",
       "status": "partial",
       "audit_finding": "The PR mixes README corrections and documentation-file cleanup. No automated documentation correctness check was found for these changes.",
-      "required_follow_up": "Require current-head hosted standalone installer execution; retain README-only CI trigger, public package-manager/winget installation and other setup/deployment snippets beyond the existing Wendy parser as residuals.",
+      "required_follow_up": "Require current-head hosted standalone installer execution; retain public package-manager/winget installation and other setup/deployment snippets beyond the existing Wendy parser as residuals.",
       "evidence": [
         {
           "tests": [
@@ -4697,7 +4697,7 @@
             ".github/scripts/test-readme-install.py",
             ".github/scripts/readme_install_test.py"
           ],
-          "result": "Local macOS execution passed the actual README curl-to-bash pipeline using unchanged installer bytes over allowlisted loopback HTTP, unpacking and invoking the real retained CLI, checking two matching version outputs and actual MCP config in private HOME. Omitted installation fails at the documented Wendy invocation; omitted onboarding fails the MCP persistence check. Four admission checks pass. Candidate SHA256 c4240e05b00651efa193222cea0fb03dee66272d2db4ab873e5ea1cbec759637 is an older dirty 189b233d build, so current-head hosted proof remains pending. Existing Linux install row reuses its freshly built native Make binary before retained-binary cleanup; no new job. Package managers, public hosting, templates, device execution and README-only workflow triggering are not covered by this increment."
+          "result": "Local macOS execution passed the actual README curl-to-bash pipeline using unchanged installer bytes over allowlisted loopback HTTP, unpacking and invoking the real retained CLI, checking two matching version outputs and actual MCP config in private HOME. Omitted installation fails at the documented Wendy invocation; omitted onboarding fails the MCP persistence check. Four admission checks pass. Candidate SHA256 c4240e05b00651efa193222cea0fb03dee66272d2db4ab873e5ea1cbec759637 is an older dirty 189b233d build, so current-head hosted proof remains pending. Existing Linux install row reuses its freshly built native Make binary before retained-binary cleanup; no new job. The existing Fumadocs build job also links the actual current CLI and runs the same gate, including on README-only changes; the broader Go workflow is not scheduled for README-only edits. Package managers, public hosting, templates and device execution are not covered by this increment."
         }
       ]
     },
