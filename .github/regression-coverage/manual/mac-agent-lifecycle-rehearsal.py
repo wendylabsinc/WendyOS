@@ -100,6 +100,12 @@ def generate(inventory, output):
     records = {name: COMMON.artifact(raw['records'][name]) for name in
                ('identity', 'empty_account', 'authorization', 'signing', 'origin_build', 'candidate_build', 'recovery')}
     cli = COMMON.artifact(raw['cli_binary'])
+    enrollment = None
+    if 'enrollment_peer_binary' in raw:
+        if endpoint_host != '127.0.0.1' or int(port) == 65535:
+            raise ValueError('packaged enrollment requires IPv4 loopback setup and adjacent mTLS port')
+        enrollment = {'peer': COMMON.artifact(raw['enrollment_peer_binary']),
+                      'build_record': COMMON.artifact(raw['records']['enrollment_peer_build'])}
     out = COMMON.new_output(output)
     profile = out/'cli-config'; profile.mkdir(mode=0o700)
     app_id = 'sh.wendy.tests.lifecycle.'+raw['trial']
@@ -124,6 +130,19 @@ def generate(inventory, output):
         'apps': base+['--json', 'device', 'apps', 'list'],
         'remove-heartbeat': base+['device', 'apps', 'remove', app_id, '--force'],
     }
+    enrollment_outputs = []
+    if enrollment:
+        (out/'enrollment-home').mkdir(mode=0o700)
+        action = out/'enrollment-actions.py'
+        action.write_bytes(Path(__file__).with_name('mac-agent-enrollment.py').read_bytes())
+        settings = out/'enrollment-plan.json'
+        settings.write_text(json.dumps({'mac': host, 'cli': cli, 'peer': enrollment['peer'],
+            'candidate': candidate['executable'], 'installed': str(installed), 'port': int(port),
+            'output': str(out), 'source_commit': raw['source_commit'],
+            'peer_build_record': enrollment['build_record']}, indent=2)+'\n')
+        for verb in ('peer', 'enroll', 'apps', 'status'):
+            commands['enrollment-'+verb] = ['python3', str(action), str(settings), verb]
+        enrollment_outputs = [action, settings]
     # Reviewed source overlays for separately built/signed controls. They never
     # change the source checkout or the code seal of an existing package.
     control = out/'controls'; control.mkdir(mode=0o700)
@@ -145,21 +164,29 @@ def generate(inventory, output):
                           ('signed-install-handoff', 'crash-restart', 'clean-exit-stays-stopped',
                            'logout-login', 'host-reboot-login', 'package-update-new-process',
                            'native-app-survives-update', 'disabled-setting', 'historical-controls', 'restoration')]}
+    if enrollment:
+        evidence['audit_entries'].append('2318')
+        evidence['enrollment_peer'] = enrollment
+        evidence['sources'] += [COMMON.artifact(Path(__file__).with_name('mac-agent-enrollment.py')),
+            COMMON.artifact(ROOT/'go/internal/testfixture/macenrollment/main.go')]
+        evidence['cases'] += [{'id': name, 'status': 'not_run', 'observations': []} for name in
+            ('signed-package-enrollment', 'signed-package-enrollment-restart')]
     (out/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
     guide = Path(__file__).with_suffix('.txt').read_text()
     for key, value in {'@TRIAL@': raw['trial'], '@UID@': str(host['uid']), '@ACCOUNT@': host['account'],
                        '@UUID@': host['hardware_uuid'], '@SERIAL@': host['serial'], '@INSTALLED@': str(installed),
                        '@OUT@': str(out), '@APPID@': app_id, '@CANDIDATE@': candidate['executable']['sha256'],
-                       '@ORIGIN@': origin['executable']['sha256']}.items(): guide = guide.replace(key, value)
+                       '@ORIGIN@': origin['executable']['sha256'], '@CANDIDATE_APP@': candidate['bundle']['path']}.items(): guide = guide.replace(key, value)
     guide += '\nExact commands (each is an explicit human action, never executed by generation):\n'
     guardian = ROOT/'.github/scripts/run-owned-media-test.py'
     for name, command in commands.items():
-        duration = 180 if name in ('update', 'restore-origin', 'deploy-heartbeat') else 15
+        duration = 620 if name == 'enrollment-peer' else 120 if name == 'enrollment-enroll' else 180 if name in ('update', 'restore-origin', 'deploy-heartbeat') else 15
         guide += '\n'+name+':\n'+shlex.join(['python3', str(guardian), '--timeout', str(duration), '--', *command])+'\n'
     (out/'procedure.txt').write_text(guide)
     evidence['generated'] = [COMMON.artifact(path) for path in
                              (out/'commands.json', out/'procedure.txt', project/'launch.sh', project/'wendy.json',
                               control/'AppDelegate.swift', control/(LABEL+'.plist'))]
+    evidence['generated'] += [COMMON.artifact(path) for path in enrollment_outputs]
     (out/'evidence.json').write_text(json.dumps(evidence, indent=2)+'\n')
     return evidence
 
