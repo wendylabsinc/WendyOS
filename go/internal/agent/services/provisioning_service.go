@@ -557,6 +557,10 @@ func (s *ProvisioningService) clearCredentialFiles() error {
 	if err := os.RemoveAll(filepath.Join(s.configPath, "cloud-relay")); err != nil {
 		return err
 	}
+	// An interrupted registry pull's staged ciphertext and decrypted layers.
+	if err := os.RemoveAll(filepath.Join(s.configPath, registryPullDir)); err != nil {
+		return fmt.Errorf("removing registry pull staging: %w", err)
+	}
 	if err := os.RemoveAll(filepath.Join(s.configPath, "acme-account-key.pem.d")); err != nil {
 		return fmt.Errorf("removing scoped ACME account keys: %w", err)
 	}
