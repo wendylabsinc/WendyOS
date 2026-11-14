@@ -292,7 +292,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 		selected := map[string]bool{}
 		if resolveErr == nil {
 			for _, id := range ids {
-				if _, ok := cameraDeviceID(id); ok {
+				if isCameraSourceID(id) {
 					selected[id] = true
 				}
 			}

@@ -267,7 +267,7 @@ func (s *DataService) cameraSourcesFor(campaign data.Campaign) []data.Source {
 	}
 	var out []data.Source
 	for _, source := range cameras {
-		if _, ok := cameraDeviceID(source.ID); !ok {
+		if !isCameraSourceID(source.ID) {
 			continue
 		}
 		out = append(out, source)

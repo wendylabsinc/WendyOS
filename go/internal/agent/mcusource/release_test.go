@@ -89,7 +89,7 @@ func (l *removableLoopback) RemoveCamera(id uint32) {
 	}
 }
 
-func TestUnpairReleasesCameraIDsOnlyAfterNodeRemoval(t *testing.T) {
+func TestUnpairReservesCameraIDsEvenAfterNodeRemoval(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		lb := &removableLoopback{busy: busy, nodes: make(map[uint32]bool)}
 		s := NewSupervisor(zap.NewNop(), lb, nil, nil, nil)
@@ -97,7 +97,7 @@ func TestUnpairReleasesCameraIDsOnlyAfterNodeRemoval(t *testing.T) {
 		_ = lb.EnsureNode(context.Background(), first, "old source")
 		s.releaseSource(1)
 		next, _ := s.nodeID(2, 1)
-		if (first == next) == busy {
+		if first == next {
 			t.Fatalf("busy=%v: first=%d next=%d", busy, first, next)
 		}
 	}

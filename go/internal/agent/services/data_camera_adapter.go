@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -61,6 +63,14 @@ func (a *cameraDataAdapter) Discover(ctx context.Context) []data.Source {
 				reason = "camera offline"
 			}
 			out = append(out, data.Source{ID: fmt.Sprintf("ipcamera:%d", dev.GetId()), Kind: "camera", ClockDomain: "IP_CAMERA_STREAM/AGENT_RECEIPT", Healthy: healthy, Detail: detail, Name: ipCameraSourceName(dev.GetName()), UnusableReason: reason})
+			continue
+		}
+		if strings.HasPrefix(dev.GetStableId(), "sensorlink:") {
+			reason := ""
+			if !dev.GetOnline() {
+				reason = "SensorLink camera disconnected or awaiting frames"
+			}
+			out = append(out, data.Source{ID: dev.GetStableId(), Kind: "camera", ClockDomain: "SENSORLINK_RECEIPT", Healthy: dev.GetOnline(), Detail: dev.GetName(), Name: dev.GetName(), UnusableReason: reason, Aliases: []string{"v4l2:" + dev.GetPath()}})
 			continue
 		}
 		domain := "V4L2_BUFFER_TIMESTAMP"
@@ -113,13 +123,53 @@ func cameraDeviceID(sourceID string) (uint32, bool) {
 	return uint32(n), err == nil
 }
 
+// isCameraSourceID recognizes published camera forms without choosing a node.
+func isCameraSourceID(id string) bool {
+	if strings.HasPrefix(id, "sensorlink:") {
+		return true
+	}
+	_, ok := cameraDeviceID(id)
+	return ok
+}
+
+func (s *VideoService) dataCameraDeviceID(sourceID string) (uint32, error) {
+	if strings.HasPrefix(sourceID, "sensorlink:") {
+		return s.streamDeviceID(&agentpb.StreamVideoRequest{StableId: sourceID})
+	}
+	if id, ok := cameraDeviceID(sourceID); ok {
+		return id, nil
+	}
+	return 0, status.Errorf(codes.NotFound, "source %q is not a camera", sourceID)
+}
+
+// Re-resolve stable identities whenever a standby/capture subscriber rejoins.
+func (s *VideoService) joinDataCamera(ctx context.Context, sourceID, key string, devID uint32) (*deviceHub, int, chan *videoFrame, error) {
+	if strings.HasPrefix(sourceID, "sensorlink:") {
+		id, err := s.dataCameraDeviceID(sourceID)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		src, err := s.resolveSource(id)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		devID, key = id, src.key
+	}
+	return s.joinHub(ctx, key, &agentpb.StreamVideoRequest{DeviceId: devID})
+}
+
 func (a *cameraDataAdapter) Start(ctx context.Context, session data.CaptureSession, selected []data.Source) (runningDataCapture, error) {
 	group := &cameraCaptureGroup{}
 	armed := a.takeArmed(session.CampaignKey)
 	for _, source := range selected {
-		devID, ok := cameraDeviceID(source.ID)
-		if !ok {
+		if !isCameraSourceID(source.ID) {
 			continue
+		}
+		devID, resolveErr := a.video.dataCameraDeviceID(source.ID)
+		if resolveErr != nil {
+			_, _ = group.Stop(context.Background())
+			a.disarmAll(armed)
+			return nil, resolveErr
 		}
 		// A campaign that armed this camera for pre-roll flushes its standby ring
 		// into the opening frames and continues live on the same subscription.
@@ -191,8 +241,8 @@ func (a *cameraDataAdapter) Arm(campaignKey string, buffer time.Duration, select
 		return
 	}
 	for _, source := range selected {
-		devID, ok := cameraDeviceID(source.ID)
-		if !ok {
+		devID, resolveErr := a.video.dataCameraDeviceID(source.ID)
+		if resolveErr != nil {
 			continue
 		}
 		if source.Capture != nil && source.Capture.EffectiveMode() == captureModeSnapshot {
@@ -210,7 +260,7 @@ func (a *cameraDataAdapter) Arm(campaignKey string, buffer time.Duration, select
 		// A parameter-less request: arming must never take a running stream from
 		// a viewer, and must never register an explicit holder that would let it
 		// force the parameter-precedence takeover.
-		hub, subID, frames, err := a.video.joinHub(context.Background(), src.key, &agentpb.StreamVideoRequest{DeviceId: devID})
+		hub, subID, frames, err := a.video.joinDataCamera(context.Background(), source.ID, src.key, devID)
 		if err != nil {
 			continue
 		}
@@ -322,7 +372,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	}
 	captureCtx, cancel := context.WithCancel(context.Background())
 	rejoin := func(ctx context.Context) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHub(ctx, src.key, &agentpb.StreamVideoRequest{DeviceId: devID})
+		return a.video.joinDataCamera(ctx, source.ID, src.key, devID)
 	}
 	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
 	go c.run()

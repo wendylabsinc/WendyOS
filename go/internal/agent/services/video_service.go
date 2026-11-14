@@ -30,6 +30,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
@@ -964,8 +965,8 @@ type VideoService struct {
 	// sensorFrames carries SensorLink camera frames to the hub in-process, so
 	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
 	// in tests and builds without sensor pairing, which read the node as before.
-	sensorFrames           *SensorFrameFeed
-	sensorCameraIdentities func() map[uint32]string
+	sensorFrames  *SensorFrameFeed
+	sensorCameras func() map[uint32]mcusource.Camera
 
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
@@ -1276,9 +1277,9 @@ func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpai
 	if s.readStableNames != nil {
 		stable = s.readStableNames()
 	}
-	var sensorIdentities map[uint32]string
-	if s.sensorCameraIdentities != nil {
-		sensorIdentities = s.sensorCameraIdentities()
+	var sensorCameras map[uint32]mcusource.Camera
+	if s.sensorCameras != nil {
+		sensorCameras = s.sensorCameras()
 	}
 	var (
 		devices       []*agentpb.VideoDevice
@@ -1296,9 +1297,8 @@ func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpai
 		// their registries. Those nodes would otherwise glob-enumerate here too
 		// and double-list the camera: once (correctly) from listROS2Cameras or
 		// listIPCameras below, once (bogusly) as an indistinguishable local
-		// device. MCU-band nodes (sensor pairing) have no registry to list
-		// them, so they stay: they are the local V4L2 devices resolveSource
-		// treats them as.
+		// device. MCU-band nodes stay only when the SensorLink supervisor
+		// owns them; its metadata below overrides retained kernel labels.
 		inROS2Band := id >= ros2camera.IDBandStart && id <= ros2camera.IDBandEnd
 		inIPBand := id >= ipcam.IDBandStart && id <= ipcam.IDBandEnd
 		if inROS2Band || inIPBand {
@@ -1330,10 +1330,14 @@ func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpai
 		// the numeric id still addresses it, it is just not stable across a
 		// reboot.
 		dev.StableId = stable[path].stableID()
-		dev.Thermal = probeThermalCamera(path, name)
-		if identity := sensorIdentities[uint32(id)]; identity != "" {
-			dev.StableId = identity
+		if id >= ipcam.MCUBandStart && id <= ipcam.MCUBandEnd && s.sensorCameras != nil {
+			camera, owned := sensorCameras[uint32(id)]
+			if !owned {
+				continue // orphaned kernel node, not a current source
+			}
+			dev.Name, dev.StableId, dev.Online = camera.Name, camera.StableID, camera.Online
 		}
+		dev.Thermal = probeThermalCamera(path, dev.Name)
 		if transport == camera.TransportCSI {
 			csiDeviceIdxs = append(csiDeviceIdxs, len(devices))
 		}
@@ -2442,13 +2446,13 @@ func (s *VideoService) streamDeviceID(req *agentpb.StreamVideoRequest) (uint32, 
 		return 0, status.Error(codes.NotFound, "network camera identity is not registered")
 	}
 	if strings.HasPrefix(stableID, "sensorlink:") {
-		if s.sensorCameraIdentities == nil {
+		if s.sensorCameras == nil {
 			return 0, status.Error(codes.Unimplemented, "SensorLink camera identities are unavailable on this agent")
 		}
 		var matched uint32
 		found := false
-		for id, identity := range s.sensorCameraIdentities() {
-			if identity != stableID {
+		for id, camera := range s.sensorCameras() {
+			if camera.StableID != stableID {
 				continue
 			}
 			if found {
