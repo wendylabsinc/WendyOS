@@ -100,11 +100,40 @@ struct `'wendy project entitlements list'` {
      */
     @Test(
         .disabled(
-            "WDY-1935: 'wendy project entitlements list' writes the entitlement listing to stderr and leaves stdout empty, unlike 'wendy info' / 'wendy cache list'."
+            "Observed 2026-11-10: human listing prints only entitlement types; configured GPIO pins, I2C device and persistent volume name/path are absent. JSON listing preserves these values."
         )
     )
     func `lists entitlements from the current project`() async throws {
-        // TODO: enable once the listing is written to stdout.
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["project", "entitlements", "list", "--json=false"],
+                exit: 0
+            )
+            #expect(result.stderr == "")
+            for field in [
+                "gpio", "4", "17", "i2c", "i2c-1", "persist", "recordings", "/data/recordings",
+            ] {
+                #expect(
+                    result.stdout.contains(field),
+                    "Missing configured entitlement field: \(field)"
+                )
+            }
+            try await LocalCLIAssertions.unchanged(cli)
+            try await LocalCLIAssertions.write(
+                cli,
+                path: "wendy.json",
+                text: #"{"appId":"sh.wendy.e2e","entitlements":[]}"#
+            )
+            let empty = try await LocalCLIAssertions.run(
+                cli,
+                ["project", "entitlements", "list", "--json=false"],
+                exit: 0
+            )
+            #expect(empty.stdout == "No entitlements configured.\n")
+            #expect(empty.stderr == "")
+        }
     }
 
     /**
@@ -112,13 +141,26 @@ struct `'wendy project entitlements list'` {
      preserving configured values such as GPIO pins, I2C devices, and
      persistent volume paths.
      */
-    @Test(
-        .disabled(
-            "WDY-1935: 'wendy project entitlements list --json' writes JSON to stderr instead of stdout."
-        )
-    )
+    @Test
     func `prints JSON entitlements for automation`() async throws {
-        // TODO: enable once JSON entitlements are written to stdout.
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["project", "entitlements", "list", "--json"],
+                exit: 0
+            )
+            #expect(result.stderr == "")
+            let actual = try #require(
+                try JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? NSArray
+            )
+            let expected = try #require(
+                try JSONSerialization.jsonObject(with: Data(LocalCLIAssertions.entitlements.utf8))
+                    as? NSArray
+            )
+            #expect(actual == expected)
+            try await LocalCLIAssertions.unchanged(cli)
+        }
     }
 
     /**

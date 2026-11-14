@@ -196,17 +196,57 @@ struct `'wendy run'` {
     }
 
     /**
-     Rejects positional arguments because this command is entirely flag-driven.
+     Rejects ordinary stray positional arguments while preserving space-separated
+     device values for --hil/--build-host and application arguments after --.
 
      The command reports a usage error instead of treating undocumented input as
      a valid request.
      */
-    @Test(
-        .disabled(
-            "WDY-1934: 'wendy run' silently accepts extra positional arguments because the command has no cobra.NoArgs validator."
-        )
-    )
+    @Test
     func `rejects undocumented positional arguments`() async throws {
-        // TODO: enable when run rejects positional arguments (WDY-1934).
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["run", "unexpected", "--json", "--device", "127.0.0.1:1"],
+                exit: 2,
+                monitorNetwork: true
+            )
+            try LocalCLIAssertions.error(result, code: "cli_usage", exit: 2, message: "unexpected")
+            try await LocalCLIAssertions.unchanged(cli)
+
+            // Both optional flags still accept a space-separated DEVICE. Stop at
+            // a distinct local lifecycle check, before any device/build action.
+            for flags in [
+                ["--hil", "127.0.0.1:1"], ["--build-host", "127.0.0.1:1", "--hil=127.0.0.1:1"],
+            ] {
+                let accepted = try await LocalCLIAssertions.run(
+                    cli,
+                    ["run"] + flags + ["--detach", "--json"],
+                    exit: 1
+                )
+                try LocalCLIAssertions.error(
+                    accepted,
+                    code: "error",
+                    exit: 1,
+                    message: "HIL requires an attached, single-app run"
+                )
+                try await LocalCLIAssertions.unchanged(cli)
+            }
+            // Application arguments after -- pass parsing and reach RunE's
+            // independent environment validation without contacting a target.
+            let accepted = try await LocalCLIAssertions.run(
+                cli,
+                ["run", "--env", "INVALID", "--json", "--", "app-argument", "--app-flag"],
+                exit: 2
+            )
+            try LocalCLIAssertions.error(
+                accepted,
+                code: "cli_usage",
+                exit: 2,
+                message: "must be KEY=VALUE"
+            )
+            try await LocalCLIAssertions.unchanged(cli)
+        }
     }
 }

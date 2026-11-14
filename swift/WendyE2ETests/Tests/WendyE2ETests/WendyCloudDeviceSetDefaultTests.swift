@@ -38,13 +38,15 @@ struct `'wendy cloud device set-default'` {
      reports that a device selection is required, emits no prompt escape
      sequences, and performs no device operation.
      */
-    @Test(
-        .disabled(
-            "WDY-1943: omitted-hostname selection enters physical discovery/picker flow; deterministic non-interactive behavior needs injected discovery fixtures."
-        )
-    )
+    @Test
     func `reports missing device selection in non-interactive mode`() async throws {
-        // TODO: enable with deterministic picker/discovery fixtures (WDY-1943).
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.defaultSelection(
+                cli,
+                command: ["cloud", "device", "set-default"],
+                selectors: [[]]
+            )
+        }
     }
 
     /**
@@ -131,13 +133,15 @@ struct `'wendy cloud device set-default'` {
      Empty or whitespace-only values fail validation without changing the saved
      default device.
      */
-    @Test(
-        .disabled(
-            "WDY-1953: an explicit empty hostname is accepted, saved as an empty default, and reported as success instead of failing validation."
-        )
-    )
+    @Test
     func `requires a nonempty hostname`() async throws {
-        // TODO: enable when empty/whitespace hostnames are rejected (WDY-1953).
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.defaultSelection(
+                cli,
+                command: ["cloud", "device", "set-default"],
+                selectors: [[""], [" \t "]]
+            )
+        }
     }
 
     /**

@@ -112,10 +112,19 @@ struct `'wendy device audio list'` {
      The command reports a usage error instead of treating undocumented input as
      a valid request.
      */
-    @Test(
-        .disabled(
-            "WDY-1934: 'wendy device audio list' silently accepts extra positional arguments because the leaf command has no cobra.NoArgs validator."
-        )
-    )
-    func `rejects undocumented positional arguments`() async throws {}
+    @Test
+    func `rejects undocumented positional arguments`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["device", "audio", "list", "unexpected", "--json", "--device", "127.0.0.1:1"],
+                exit: 2,
+                monitorNetwork: true
+            )
+            try LocalCLIAssertions.error(result, code: "cli_usage", exit: 2, message: "unexpected")
+            #expect(result.readableStderr.contains("wendy device audio list"))
+            try await LocalCLIAssertions.unchanged(cli)
+        }
+    }
 }
