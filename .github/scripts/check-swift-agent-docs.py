@@ -84,9 +84,11 @@ def run(evidence):
     try:
         swiftc = subprocess.check_output(['xcrun', '--find', 'swiftc'], text=True, timeout=15).strip()
         report['swift_version'] = execute([swiftc, '--version'], 'swift-version', 15).strip()
+        # A bare swiftc has no SDK and cannot load the standard library.
+        sdk = subprocess.check_output(['xcrun', '--show-sdk-path'], text=True, timeout=15).strip()
         (work / 'main.swift').write_text(PROBE)
         binary = work / 'configuration'
-        execute([swiftc, '-module-cache-path', str(work / 'modules'), *map(str, SOURCES),
+        execute([swiftc, '-sdk', sdk, '-module-cache-path', str(work / 'modules'), *map(str, SOURCES),
                  str(work / 'main.swift'), '-o', str(binary)], 'compile', 90)
         report['binary_sha256'] = sha(binary)
         default = json.loads(execute([str(binary)], 'default', 10))
