@@ -133,10 +133,10 @@ extension GoClient {
             }
         }
     }
-    func visualEpisode(session: UInt64 = 0, episode: String, selector: String? = nil) async throws -> DataVisualSnapshot {
-        try await Self.visualPerform {
+    func visualEpisode(session: UInt64 = 0, episode: String, selector: String? = nil, galleryMode: Int = 0) async throws -> DataVisualSnapshot {
+        try await Self.visualPerform(queue: galleryMode == 1 ? DataVisualWorker.summaryQueue : galleryMode == 2 ? DataVisualWorker.audioQueue : DataVisualWorker.queue) {
             try Self.withCString(episode) { episode in
-                let result = selector.map { target in Self.withCString(target) { WDVisualEpisodeLoadAt($0, episode) } } ?? WDVisualEpisodeLoad(session, episode)
+                let result = selector.map { target in Self.withCString(target) { galleryMode == 0 ? WDVisualEpisodeLoadAt($0, episode) : WDVisualGalleryDataAt($0, episode, galleryMode == 1 ? 1 : 0) } } ?? WDVisualEpisodeLoad(session, episode)
                 return try Self.decodeVisualSnapshot(result)
             }
         }
@@ -173,11 +173,16 @@ extension GoClient {
 // Episode downloads can be large. Keep them off the shared command queue so
 // device selection, app actions, and other panes remain responsive.
 private enum DataVisualWorker {
+    // Small statistics reads must never queue behind abandoned audio/ROS downloads.
+    static let summaryQueue = DispatchQueue(label: "sh.wendy.gallery-summary", qos: .userInitiated)
+    static let audioQueue = DispatchQueue(label: "sh.wendy.gallery-audio", qos: .userInitiated)
     static let queue = DispatchQueue(label: "sh.wendy.data-visualizer", qos: .userInitiated)
 }
 
 private extension GoClient {
-    static func visualPerform<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
-        try await BlockingWork.run(on: DataVisualWorker.queue, work)
+    static func visualPerform<T: Sendable>(queue: DispatchQueue = DataVisualWorker.queue, _ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await BlockingWork.run(on: queue) {
+            try work()
+        }
     }
 }
