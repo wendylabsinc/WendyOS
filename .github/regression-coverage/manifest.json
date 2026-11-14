@@ -1302,7 +1302,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2676",
       "title": "Use spare mesh slots for faster paths and standby carriers",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Carrier-selection and broker lifecycle tests cover capacity and fallback. Cold-start diagnostics are present in a broad mesh change; live route replacement across native clients is not established.",
       "required_follow_up": "Require the cold broker and spare carrier gate in the existing Linux network job. Real TLS/gVisor TCP and management RPC behavior is covered; kernel-TUN, radio and GUI journeys are not claimed.",
       "evidence": [
@@ -1312,8 +1312,18 @@
             ".github/scripts/test-operator-spare-recovery.sh"
           ],
           "result": "A cold TLS EOF leaves no admissions or RPCs and records a bounded private diagnostic. Production stop/re-enable advances its durable generation, then the same TCP connection survives slow-to-fast carrier selection and fallback through retained standby; management RPCs work in every phase. Local race and isolated capability-free Linux execution pass; missing-diagnostic and eager-standby-retirement controls fail. Required hosted execution remains pending."
+        },
+        {
+          "tests": [
+            "go/internal/cli/sessionbroker/operator_spare_recovery_test.go",
+            ".github/scripts/test-operator-spare-recovery.sh"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320403707/job/131539277189",
+          "runner": "Hosted CI",
+          "result": "Hosted Linux gate passed on b6fd9531a29f41ff8d6df62b5cf565d646e4b7c2. TestOperatorColdFailureRecoversWithSpareCarrierTraffic passed in 21.43 seconds, covering cold EOF diagnostics, generation reset, authenticated management RPC and TCP continuity through faster carrier selection and retained standby fallback. Missing-diagnostic and eager-standby-retirement controls failed in their intended assertions. No kernel-TUN or radio claim."
         }
-      ]
+      ],
+      "resolution": "Required regression gate executed successfully; individual assertions and deliberate regression controls were inspected where applicable."
     },
     {
       "key": "2675",
@@ -1483,7 +1493,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2575",
       "title": "[WN2] Exchange complete device manifests over a binary mesh protocol",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Gossip tests cover descriptor ordering, renewed leaves and unsupported artifacts. The PR also changes publication/recovery across multiple transport processes.",
       "required_follow_up": "Require accepted-service TCP continuity across a real signing failure and recovery after same-principal leaf renewal in the existing Linux network job. Retain both lost-rollback and stale-descriptor negative controls.",
       "evidence": [
@@ -1495,8 +1505,20 @@
             ".github/scripts/test-service-packet-recovery.sh"
           ],
           "result": "Actual production Catalog-to-ControlHub, signing and binary gossip run over TLS/Babel/gVisor. A persisted publisher restarts with a longer-lived leaf while its receiver retains the old identity; accepted advertised TCP survives a signer refusal and subsequent re-signing. Local race and isolated Linux runtime pass; lost-intent rollback and restored fatal stale-descriptor controls fail. This exposed and fixes a real stale-certificate carrier disconnect. Required hosted gate remains pending; no hardware or kernel-TUN claim."
+        },
+        {
+          "tests": [
+            "go/internal/agent/localmesh/service_packet_recovery_test.go",
+            "go/internal/agent/localmesh/service_runtime_fixture_test.go",
+            "go/internal/agent/localmesh/certificate_exchange_stale_test.go",
+            ".github/scripts/test-service-packet-recovery.sh"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320403707/job/131539277189",
+          "runner": "Hosted CI",
+          "result": "Hosted Linux TestServicePublishFailureRecoversTrafficWithRenewedIdentity passed in 18.79 seconds on b6fd9531a29f41ff8d6df62b5cf565d646e4b7c2. Actual renewed signing leaf and complete manifest reached the unchanged receiver; advertised TCP survived publication refusal and re-signing. Removing rollback failed actual TCP at the rejected advertised port 18476. Restoring fatal stale-certificate handling failed renewed-leaf recovery. Both controls were required and failed for their named assertions."
         }
-      ]
+      ],
+      "resolution": "Required regression gate executed successfully; individual assertions and deliberate regression controls were inspected where applicable."
     },
     {
       "key": "2569",
@@ -1555,10 +1577,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2420",
       "title": "Request signed Wendy Net announcements from one neighbour",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The mesh PR contains many codec, lease and gossip tests, but coverage is spread across kernel, transport and recovery suites with different runtime requirements.",
-      "required_follow_up": "Run a multi-node renewal/publication-loss scenario and verify current-leaf binding and bounded recovery.",
-      "evidence": []
+      "required_follow_up": "Require the four-node current-leaf publication-loss recovery gate and both controls in the existing Linux network job. No kernel-TUN, radio or GUI claim.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/publication_loss_packet_test.go",
+            "go/internal/agent/localmesh/publication_loss_fixture_test.go",
+            ".github/scripts/test-publication-loss-packets.sh"
+          ],
+          "result": "Four real TLS/gVisor runtimes form a diamond. The durable publisher restarts with a new signing key while primary DATA is dropped. The receiver withdraws old-key publication authority, keeps unrelated TCP working, and retrieves the exact signed envelope from the alternate supplier after the full production 30-second idle deadline. Local race gate and native Linux capability-free execution pass. Retained timed-out claim and obsolete-leaf-authority controls fail at their intended assertions. Required hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2524",
@@ -2329,9 +2360,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2399",
       "title": "fix(agent): record sensor-link microphones on PipeWire hosts",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests verify source listing and capture-target selection on PipeWire, but do not record audio through a live PipeWire/ALSA bridge.",
-      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "required_follow_up": "Retain the required Linux media gate, exact output assertions and discriminating regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2339,6 +2370,11 @@
             ".github/scripts/test-sensorlink-audio-loopback.sh"
           ],
           "result": "Proposed hosted kernel fixture uses real audioloop Manager writers, two source identities, private live PipeWire, production adapter and ALSA recording, with exact PCM markers in sealed WAVs. Normal and two source-routing mutation variants cross-compile for Linux; offline guards pass. Actual snd-aloop/sample checks remain pending."
+        },
+        {
+          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+          "result": "Required Linux media job passed actual real-ALSA recording with a live private PipeWire daemon. Two SensorLink microphone identities retained exact PCM in sealed WAVs. The PipeWire-only routing control failed to start recording and the crossed-subdevice control failed on microphone identity. Owned daemon/account/module cleanup completed."
         }
       ]
     },
@@ -2347,9 +2383,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2350",
       "title": "Fix Lite sensor connections and verify host loopback support",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Protocol and host-module checks exist. The host-sensor support fixture is hardware-gated, and module presence alone does not verify video/audio delivery.",
-      "required_follow_up": "Execute the authenticated microphone normal/negative controls with the corrected private PipeWire runtime. Camera kernel delivery and its controls have passed; full audio sample delivery remains pending.",
+      "required_follow_up": "Retain the required Linux media gate, exact output assertions and discriminating regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2378,6 +2414,11 @@
           "head": "4c898e0aacce6961d449dcfade759966dc1ed034",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315180056/job/131521484536",
           "result": "The actual authenticated Lite camera normal test and both kernel-pixel/setup-budget controls passed. Audio did not execute: the private daemon UID could not traverse RUNNER_TEMP. The isolated runtime-directory correction is now in PR2875; microphone and full dual-media proof remain pending."
+        },
+        {
+          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+          "result": "Required Linux media job passed authenticated Lite camera delivery through real v4l2loopback decode and microphone delivery through real ALSA capture. Camera exact pixel phases and both controls passed; actual mTLS/WendyCom microphone exact PCM, identity, cancellation and device release passed. Combined setup-budget, wrong channel and missing PCM controls all failed specifically. The shared source address-change gate also passed with both modules alive."
         }
       ]
     },
@@ -2443,9 +2484,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1858",
       "title": "Remote sensor mounting: pair a device's camera & mic (macOS source)",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "SensorLink/audio tests cover reconnect and source resolution, plus simulator fixtures. Complete camera/microphone delivery after source-address change is hardware-gated.",
-      "required_follow_up": "Require the authenticated source address-change gate while both owned media modules remain loaded in the existing Linux media job. Verify exact camera pixels and microphone samples before and after reconnection with stable principal/channel identities. Physical macOS capture drivers and multicast discovery are not claimed.",
+      "required_follow_up": "Retain the required Linux media gate, exact output assertions and discriminating regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2454,6 +2495,11 @@
             ".github/scripts/test-source-restart-loopback.sh"
           ],
           "result": "Actual mTLS/WendyCom camera and microphone protocol fixture passes native race and isolated Linux execution. Hosted gate uses production RunPairing with a resolver changing source IP, actual v4l2loopback decoding and ALSA capture in both phases. Normal and stale-address control compile; actual combined kernel run remains pending."
+        },
+        {
+          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+          "result": "Required Linux media job passed the production source re-resolution/restart journey: both authenticated camera and microphone streams moved from the original source address to the new IP, with stable source/channel identities and exact decoded kernel pixels/PCM before and after. The stale-address control failed specifically because both channels did not reconnect. This is actual Linux kernel endpoint/protocol proof; it does not claim physical Mac capture or multicast-radio execution."
         }
       ]
     },
@@ -2509,10 +2555,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2011",
       "title": "Fix Mac camera stream startup crash",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "The Mac camera startup crash fix changes capture startup, but no direct startup-crash regression was found in the changed tests or current camera tests inspected.",
-      "required_follow_up": "Exercise camera start and stop under actor/concurrency checking with the same callback ordering as the crash.",
-      "evidence": []
+      "required_follow_up": "Run the prepared exact-Mac startup/stop and concurrent capture procedure with the signed instrumented candidate; require fresh decoded frames, unchanged listener process and no actor or AVFoundation configuration diagnostics. Retain physical evidence separately.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-rehearsal.py",
+            ".github/scripts/mac_camera_rehearsal_test.py"
+          ],
+          "result": "Physical Mac acceptance generator and 11 offline checks pass. The plan pins the signed packaged app, source, CLI/decoder, camera identity, listener and disposable authentication profiles. It provides bounded headless capture/decode commands, repeated startup/stop under recorded actor instrumentation, overlapping streams, cancellation/reuse and independent physical release observations. All ten cases and cleanup remain not_run; generation and offline tests perform no native inventory, permission change or hardware access."
+        }
+      ],
+      "resolution": "Detailed physical procedure and bounded observation helper are prepared. Hardware execution is not claimed."
     },
     {
       "key": "2321",
@@ -2549,9 +2604,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1924",
       "title": "WDY-3009: stream Mac cameras to Companion Live",
       "package": "08",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Swift video service tests cover authorization/rate bounds. Real AVFoundation streaming and packaged-app listener behavior remain outside those fixtures.",
-      "required_follow_up": "Require the live plaintext/mTLS VideoService transport suite in existing Swift CI. Prepare and retain a physical AVFoundation and packaged-agent listener procedure for real capture/teardown; controlled source transport tests do not establish that hardware behavior.",
+      "required_follow_up": "Execute the prepared physical packaged-Mac camera procedure for actual capture, listener identity, authentication boundary, sibling continuity and independent AVFoundation teardown. Required real-wire software CI has passed.",
       "evidence": [
         {
           "tests": [
@@ -2559,8 +2614,25 @@
             "swift/WendyAgentCore/Sources/WendyAgent/Services/VideoService.swift"
           ],
           "result": "Twelve focused Swift adapter/transport tests pass locally. Actual loopback HTTP/2 plaintext and mTLS paths reject no/foreign certificates and wrong-role clients before camera access, enforce two sessions, preserve sibling streaming, cancel idle/pre-first-frame captures, handle error/cancel races and reuse exactly two slots. Original production failed both idle wire-cancellation cases: GRPCCore signals the RPC handle instead of cancelling the response producer task. The fix races that handle with frame copy and joins cancellation before release. Hosted execution and actual physical/packaged capture remain pending."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-rehearsal.py",
+            ".github/scripts/mac_camera_rehearsal_test.py"
+          ],
+          "result": "Physical Mac acceptance generator and 11 offline checks pass. The plan pins the signed packaged app, source, CLI/decoder, camera identity, listener and disposable authentication profiles. It provides bounded headless capture/decode commands, repeated startup/stop under recorded actor instrumentation, overlapping streams, cancellation/reuse and independent physical release observations. All ten cases and cleanup remain not_run; generation and offline tests perform no native inventory, permission change or hardware access."
+        },
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTransportTests.swift",
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTests.swift"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43321581504/job/131543307957",
+          "runner": "Hosted Swift core tests",
+          "result": "Both VideoService adapter and production transport suites passed at c633d31b81a9d971fbe4ac9eb0c42a2295899bb2. Real plaintext and mTLS HTTP/2 exercise authority refusal, cancellation before/after frames, two-session capacity, sibling continuity, producer failure races and capacity reuse. Physical AVFoundation capture and exact packaged listener observations are covered by the prepared Mac procedure, with all physical cases not_run."
         }
-      ]
+      ],
+      "resolution": "Software transport regression passed required hosted CI. The remaining physical observations have a detailed executable procedure; no hardware pass is claimed."
     },
     {
       "key": "2192",
@@ -2647,7 +2719,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2078",
       "title": "fix(discovery): hide stale cached LAN devices",
       "package": "09",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Model tests hide cached rows until confirmation and Darwin resolver tests cover lookup failure. The native resolver tests are not selected by the Darwin BLE CI job.",
       "required_follow_up": "Require the native Bonjour resolver, stale-cache visibility and failed-resolve negative control in the existing macOS CLI/device job. The separate physical BLE scan remains outside this native DNS gate.",
       "evidence": [
@@ -2658,15 +2730,26 @@
             "go/internal/cli/commands/discover_stream_test.go"
           ],
           "result": "Native Darwin Bonjour registration/browse/cancellation and failed-resolve cases passed under race checks, as did both stale-cache confirmation cases. The fabricated-host overlay failed all four expected failed-resolution variants. Required hosted macOS execution remains pending; no physical BLE execution is claimed."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-darwin-discovery.sh",
+            "go/internal/shared/discovery/mdns_darwin_test.go",
+            "go/internal/cli/commands/discover_stream_test.go"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320403707/job/131539277337",
+          "runner": "Hosted CI",
+          "result": "Hosted native macOS gate passed on b6fd9531a29f41ff8d6df62b5cf565d646e4b7c2. Actual Bonjour browse, stream, cancellation, failed resolve and resolved-without-TXT tests passed, together with both stale-cache CLI confirmation cases. Restoring fabricated hostnames failed all four failed-resolution variants. The gate rejects skips among selected tests. Physical BLE is outside this DNS regression."
         }
-      ]
+      ],
+      "resolution": "Required regression gate executed successfully; individual assertions and deliberate regression controls were inspected where applicable."
     },
     {
       "key": "2671",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2671",
       "title": "Report active mesh carriers and consistent device names",
       "package": "09",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Go tests cover active BLE selection and Cloud identity binding; desktop mesh/topology tests cover labels. Their workflow trigger coverage is narrower than the backend sources that can change these contracts.",
       "required_follow_up": "Require the existing browser/desktop topology suites when their graph, reporter, component, test, Go backend or protocol sources change. These are non-UI data/transport tests; no visual or click behavior is claimed.",
       "evidence": [
@@ -2678,15 +2761,27 @@
             ".github/scripts/ci_execution_test.py"
           ],
           "result": "All 52 desktop mesh and topology tests passed locally without skips. The existing Browser WASM job already runs all web-client test files and WASM topology tests; push/PR paths now also include their library, Electron, desktop, component and test sources. Hosted execution of the expanded gate remains pending; runner count is unchanged."
+        },
+        {
+          "tests": [
+            "web-client/tests/desktop-mesh.test.mjs",
+            "web-client/tests/mesh-topology.test.mjs",
+            ".github/workflows/go-tests.yml",
+            ".github/scripts/ci_execution_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320403707/job/131539277195",
+          "runner": "Hosted CI",
+          "result": "Hosted Browser WASM job passed on b6fd9531a29f41ff8d6df62b5cf565d646e4b7c2. All 105 web-client tests passed without skips, including the 52 desktop/topology cases for authenticated Cloud bindings, retained labels, unavailable reporters and serial fallback. WASM backend suites also passed. Push and PR triggers include Go, protocol, web-client tests, libraries, Electron, desktop and components. This closes the audited execution-trigger gap without claiming visual UI coverage."
         }
-      ]
+      ],
+      "resolution": "Required regression gate executed successfully; individual assertions and deliberate regression controls were inspected where applicable."
     },
     {
       "key": "2583",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2583",
       "title": "[WN11] Include Lite and CLI routers in the mesh topology UI",
       "package": "09",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Topology tests cover failed reporters, authenticated identity and optional protocol variants. Browser/native reporter fallback and UI execution are not all guaranteed by existing workflow triggers.",
       "required_follow_up": "Require the existing browser/desktop topology suites when their graph, reporter, component, test, Go backend or protocol sources change. These are non-UI data/transport tests; no visual or click behavior is claimed.",
       "evidence": [
@@ -2698,8 +2793,20 @@
             ".github/scripts/ci_execution_test.py"
           ],
           "result": "All 52 desktop mesh and topology tests passed locally without skips. The existing Browser WASM job already runs all web-client test files and WASM topology tests; push/PR paths now also include their library, Electron, desktop, component and test sources. Hosted execution of the expanded gate remains pending; runner count is unchanged."
+        },
+        {
+          "tests": [
+            "web-client/tests/desktop-mesh.test.mjs",
+            "web-client/tests/mesh-topology.test.mjs",
+            ".github/workflows/go-tests.yml",
+            ".github/scripts/ci_execution_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320403707/job/131539277195",
+          "runner": "Hosted CI",
+          "result": "Hosted Browser WASM job passed on b6fd9531a29f41ff8d6df62b5cf565d646e4b7c2. All 105 web-client tests passed without skips, including Lite/CLI router identities, slow/unavailable reporter isolation, equivalent-path fallback and cancellation. Native-browser bridge and WASM suites passed. Expanded push/PR paths require these existing suites for mesh protocol and reporter changes. This closes the audited execution-trigger gap, not a visual interaction claim."
         }
-      ]
+      ],
+      "resolution": "Required regression gate executed successfully; individual assertions and deliberate regression controls were inspected where applicable."
     },
     {
       "key": "49fa7f963",
@@ -2942,6 +3049,11 @@
             ".github/scripts/installed_linux_package_guests_test.py"
           ],
           "result": "Ten artifact tests and nine guest ownership/deadline checks pass. Exact shared release packaging produced all four packages, and dependency provisioning passed for all three pinned distributions. Actual hosted static CLI compilation and booted systemd Agent transactions remain pending; inert local packaging tests are not runtime proof."
+        },
+        {
+          "head": "751a26298cf2a1986442de1ba291138432bd892f",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43319307528/job/131535787788",
+          "result": "Actual Ubuntu22 normal and negative-control package journeys passed. Candidate CLI/Agent2099.01.04-regression-package amd64 served real RPCs before and after a successful upgrade; PID/start identity changed, five-second stable health and retained configuration passed, and removal stayed inactive for eight samples. The successful negative-control upgrade left the service inactive for eight samples as required. Cleanup reported no errors. Ubuntu24 stopped in dependency provisioning because nspawn host timezone synchronization prevented tzdata replacing /etc/localtime; --timezone=off fixture correction is prepared. Ubuntu24/Fedora and nativearm64 remain pending; this is partial distribution evidence, not full2352 closure."
         }
       ]
     },
@@ -3046,7 +3158,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2127",
       "title": "fix(ci): repair Fumadocs audit and runtime guest Go setup",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The fixes touch the docs dependency audit and guest Go setup. The recurring build/scan checks exist, but no isolated guest bootstrap regression was found.",
       "required_follow_up": "Require clean native runtime-guest build, kernel/initramfs inspection and included-tool execution in the existing Linux install job and native arm64 release job; retain Fumadocs npm ci and dependency audit. VM boot, VZ and vsock traffic are separate gaps.",
       "evidence": [
@@ -3057,15 +3169,26 @@
             "swift/WendyAgentMac/RuntimeGuest/README.md"
           ],
           "result": "Actual clean arm64 bootstrap passed with isolated empty Go caches, unchanged build.sh, root module files selected by setup-go and an existing ordinary Docker builder. Kernel 6.12.117-0-virt matched 904 module files; proxy metadata matched Linux/arm64 CGO0. BuildKit/containerd/nerdctl/runc and proxy argument rejection executed from produced initramfs in read-only network-free containers. Seven offline controls pass, including original nested module paths. Native amd64 required CI remains pending; no VM boot or hardware proof."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-runtime-guest-bootstrap.py",
+            ".github/scripts/runtime_guest_bootstrap_test.py",
+            "swift/WendyAgentMac/RuntimeGuest/README.md"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227407",
+          "runner": "Hosted CI",
+          "result": "Native Linux/amd64 clean build passed on a98c1fe40153c8f0dcf2c9ff358e6780abda41e7. Artifact 13991051785 records Go 1.27.4, CGO0 Linux/amd64 proxy, kernel 6.12.117-0-virt and 920 matching module files. BuildKit 0.21.1, containerd 2.1.5, nerdctl 2.1.6, runc 1.3.7 and proxy argument rejection executed from the produced rootfs. This gate passed before the separate Ubuntu 24 package timezone setup failed. The docs lockfile audit passed with zero vulnerabilities in run 43320403707/job/131539277151; the existing hosted docs build remains required. No VM boot, VZ, vsock or hardware execution is claimed."
         }
-      ]
+      ],
+      "resolution": "Required regression gate executed successfully; individual assertions and deliberate regression controls were inspected where applicable."
     },
     {
       "key": "2406",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2406",
       "title": "Support Mosaico with wendy run and wendy install",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "ESP-IDF/toolchain tests cover preparation and target selection. The rootful Linux ownership fix needs a real root-to-user build-output check.",
       "required_follow_up": "Require real ESP-IDF rootful Linux compilation and ownership after success, configuration failure and cancellation, plus an omitted-ownership-restoration control. Reuse the containerd job with a bounded step; no device flash or Mosaico application acceptance is claimed.",
       "evidence": [
@@ -3077,8 +3200,20 @@
             ".github/scripts/fixtures/esp-idf-ownership-2406.md"
           ],
           "result": "Actual pinned ESP-IDF image built the minimal ESP32-C6 app on native arm64: CMake observed UID0, 404 build steps produced a real RISC-V ELF and ESP binary. Intentional configure failure, package tests, Linux normal/control compilation and three cleanup-scope checks pass. The actual non-root Linux caller/rootful Docker ownership assertions and omitted-restore control require hosted execution; macOS Docker execution is not host-ownership proof."
+        },
+        {
+          "tests": [
+            "go/internal/cli/espidftoolchain/project_docker_linux_test.go",
+            ".github/scripts/test-esp-idf-ownership.py",
+            ".github/scripts/esp_idf_ownership_test.py",
+            ".github/scripts/fixtures/esp-idf-ownership-2406.md"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43321581941/job/131543311283",
+          "runner": "Hosted native Linux/amd64, caller 1001:1001 and rootful Docker",
+          "result": "Artifact 13991840361 proves actual pinned ESP-IDF ESP32-C6 compilation and ownership restoration after success, intentional configure failure and cancellation. Normal cases passed in 50.45 seconds, with 404 build steps producing RISC-V ELF and ESP binary. Assertions preserve foreign UID 65534 files, source ownership and outside symlink targets. Omitting ownership restoration failed with generated files left at 0:0 instead of 1001:1001. All owned resources cleaned without errors. No hardware flash claim."
         }
-      ]
+      ],
+      "resolution": "Required hosted firmware build, all three ownership outcomes and the omitted-restoration control executed successfully."
     },
     {
       "key": "1764",
