@@ -426,6 +426,8 @@ An app with `admin` can start, stop, and delete apps and read all device data lo
   **Security**: `admin` is a privileged, deliberate grant equivalent to local device control. Grant it only to fully-trusted first-party apps (e.g. the WendyOS shell). Requires an agent build that serves the local socket.
 </Callout>
 
+An app that only needs the agent's version or the device's name does not need `admin`: every app can read them from the `WENDY_AGENT_VERSION` and `WENDY_DEVICE_NAME` [environment variables](/docs/advanced/cloud/telemetry#environment-variables-injected-into-app-containers).
+
 ## Common Configurations
 
 ### Web Server with Camera

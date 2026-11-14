@@ -277,7 +277,7 @@ Environment variables injected into the container at start. These are deploy-tim
 
 A value may reference an environment variable on the deploying machine as `${VAR}` (or `$VAR`); `wendy run` expands it at deploy time, which keeps secrets out of the file. An entry whose value expands to empty is dropped, so the container falls back to whatever the image sets rather than receiving an empty override.
 
-Keys must be POSIX-portable environment variable names: letters, digits and `_`, not starting with a digit. The agent additionally reserves the `WENDY_`, `LD_` and `DYLD_` prefixes, and Wendy's own variables (`WENDY_APP_ID`, `WENDY_HOSTNAME`, and the OTel exporter settings) always win over an app-supplied value of the same name.
+Keys must be POSIX-portable environment variable names: letters, digits and `_`, not starting with a digit. The agent additionally reserves the `WENDY_`, `LD_` and `DYLD_` prefixes, and Wendy's own variables (`WENDY_APP_ID`, `WENDY_HOSTNAME`, `WENDY_DEVICE_NAME`, `WENDY_AGENT_VERSION`, and the OTel exporter settings) always win over an app-supplied value of the same name. [Environment variables injected into app containers](/docs/advanced/cloud/telemetry#environment-variables-injected-into-app-containers) lists them all.
 
 For multi-service apps, the top-level `env` is the default for every service and `services.<name>.env` overrides it **per key**, so a service can change one variable without dropping the rest:
 
@@ -794,6 +794,8 @@ Grants the container the wendy-agent's **full gRPC over a local unix socket** (`
 An app with `admin` can start, stop, and delete apps and read all device data locally. The socket is bind-mounted **only** into containers that declare `admin` — that mount is the entire trust boundary — and it is never reachable off-device (a unix socket, not TCP). At most one `admin` per app.
 
 > **Security:** `admin` is a privileged, deliberate grant equivalent to local device control. Grant it only to fully-trusted first-party apps (e.g. the WendyOS shell). Requires an agent build that serves the local socket.
+
+An app that only needs the agent's version or the device's name does not need `admin`: every app can read them from the `WENDY_AGENT_VERSION` and `WENDY_DEVICE_NAME` [environment variables](/docs/advanced/cloud/telemetry#environment-variables-injected-into-app-containers).
 
 ---
 
