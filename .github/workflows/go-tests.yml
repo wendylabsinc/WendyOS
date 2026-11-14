@@ -935,6 +935,17 @@ jobs:
         run: CGO_ENABLED=0 go build -o /tmp/wendy-agent ./go/cmd/wendy-agent
       - name: Check setup startup and Avahi failures
         run: python3 .github/scripts/integration-agent-startup.py --agent /tmp/wendy-agent
+      - name: Test resource benchmark accounting and comparisons
+        run: python3 -m unittest discover -s go/benchmarks/agent -p 'test_*.py' -v
+      - name: Exercise resource benchmarks against the Linux agent
+        run: python3 go/benchmarks/agent/smoke.py --agent /tmp/wendy-agent --output /tmp/agent-performance-smoke
+      - name: Upload benchmark smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: agent-performance-smoke
+          path: /tmp/agent-performance-smoke
+          retention-days: 7
 
   vet:
     name: Vet
