@@ -77,7 +77,14 @@ function Start-FixtureProcess($c, [string]$Python, [string]$ServerScript, [int]$
                     if ([Text.Encoding]::ASCII.GetString($buffer) -ne $nonce) { throw 'readiness nonce mismatch' }
                     if ($process.HasExited) { throw "Python exited with code $($process.ExitCode) during readiness" }
                     return "http://127.0.0.1:$value"
-                } catch { $lastProbe = $_.Exception.Message }
+                } catch {
+                    # Once the owned server has answered, a malformed, stalled,
+                    # or wrong-identity body is a failed readiness check. Retrying
+                    # it could accept a later response and replace the original
+                    # diagnostic with a last-moment deadline error.
+                    if ($null -ne $response) { throw }
+                    $lastProbe = $_.Exception.Message
+                }
                 finally { if ($response) { $response.Dispose() }; $request.Abort() }
             }
             Start-Sleep -Milliseconds 50
