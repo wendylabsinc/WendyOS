@@ -1083,6 +1083,11 @@ func main() {
 	wg.Add(1)
 	go func() { defer wg.Done(); logUDPMessageState(ctx, logger, appUDPMessages) }()
 	var localMeshLife meshLifetime
+	// An update restarts the agent without the shutdown at the end of main, so
+	// its restart stops Wendy Net itself. Set before any server is serving.
+	agentRestart := newAgentRestart(logger, &localMeshLife)
+	agentSvc.SetRestartFunc(agentRestart.Schedule)
+	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
 	var localMeshAppClient *meshsession.Client
 	// Persistent VIP table shared by DNS answers, the proxy's reverse
 	// lookup, and every allocation: (tenant UUID, device UUID) ↔ VIP. A
