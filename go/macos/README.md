@@ -1192,3 +1192,10 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+## Android companion
+
+The native Android companion lives in [`../android`](../android/README.md). It
+shares this app's Go backend and has its own Kotlin/Compose UI and Android
+NSD, Bluetooth, camera and VPN adapters. Its README documents build instructions,
+validation and the remaining differences from the Apple apps.

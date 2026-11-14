@@ -1,4 +1,4 @@
-//go:build (!darwin && !linux && !windows) || ios
+//go:build (!darwin && !linux && !windows) || ios || android
 
 package qdl
 
