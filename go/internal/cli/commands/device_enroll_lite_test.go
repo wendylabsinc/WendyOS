@@ -187,8 +187,11 @@ func TestLiteEnrollmentRejectsUnsupportedFirmwareBeforeSetup(t *testing.T) {
 	// Reset support alone does not mean the firmware can request a certificate.
 	// Reject it before prompting for a name, accessing trust or reserving an asset.
 	err := runEnrollLiteDevice(cmd, liteUnenrollUSBTarget(), &config.AuthConfig{}, "\x1b[A", liteEnrollmentOptions{deviceRoots: "/missing.pem"})
-	if err == nil || !strings.Contains(err.Error(), "was built without cloud enrollment support") {
+	if err == nil || !strings.Contains(err.Error(), "does not include Wendy Cloud enrollment") {
 		t.Fatalf("expected firmware capability error before enrollment setup, got %v", err)
+	}
+	if strings.Contains(err.Error(), "rebuild") || strings.Contains(err.Error(), "wendy device enroll") || !strings.Contains(err.Error(), "wendy install") {
+		t.Fatalf("message must name the install step and not rebuild or re-enroll: %v", err)
 	}
 	if !device.closed {
 		t.Fatal("enrollment connection leaked")
