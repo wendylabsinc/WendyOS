@@ -343,6 +343,13 @@ cameras use `sensorlink:<pairing-key>:<channel-id>` and registered IP cameras us
 topic so identical topic names in isolated apps stay distinct. A blank stable ID means the source cannot yet be saved safely as
 a site camera. Marker placement is manual and does not calibrate the camera.
 
+For paired MJPEG cameras, the agent keeps the newest complete pending frame
+for each camera. A slow consumer skips superseded frames instead of replaying
+an older queue. Camera traffic does not evict queued microphone or H.264 frames;
+those keep a bounded FIFO and can still drop incoming frames when full.
+Recordings made from these live camera feeds can therefore contain gaps under
+load. This delivery policy does not guarantee capture of every source frame.
+
 Native clients can discover enrolled SensorLink sources through the selected
 gateway without a terminal UI:
 

@@ -71,16 +71,24 @@ func (t *grpcTransport) FetchManifest(ctx context.Context) (*sensorlinkpb.Sensor
 }
 
 func (t *grpcTransport) Stream(ctx context.Context, channels []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
+	frames := make(channelFrameSink, sensorFIFOFrames)
+	closeStream, err := t.streamFrames(ctx, channels, frames)
+	if err != nil {
+		return nil, nil, err
+	}
+	return frames, closeStream, nil
+}
+
+func (t *grpcTransport) streamFrames(ctx context.Context, channels []uint32, frames frameSink) (func() error, error) {
 	sctx, cancel := context.WithCancel(ctx)
 	stream, err := t.client.StreamSensors(sctx, &agentpbv2.StreamSensorsRequest{ChannelId: channels})
 	if err != nil {
 		cancel()
-		return nil, nil, fmt.Errorf("mcusource: StreamSensors: %w", err)
+		return nil, fmt.Errorf("mcusource: StreamSensors: %w", err)
 	}
-	frames := make(chan *sensorlink.SensorFrame, 8)
 	logger := t.logger.With(zap.Uint32s("channels", append([]uint32(nil), channels...)))
 	go func() {
-		defer close(frames)
+		defer frames.finish()
 		defer cancel()
 		var dropped, droppedTotal uint64
 		var lastDropLog time.Time
@@ -106,13 +114,7 @@ func (t *grpcTransport) Stream(ctx context.Context, channels []uint32) (<-chan *
 			if f == nil {
 				continue
 			}
-			select {
-			case frames <- f:
-			case <-sctx.Done():
-				return
-			default:
-				// Keep the bounded, nonblocking queue so a slow consumer
-				// does not stall the source or accumulate stale frames.
+			if frames.offer(f) {
 				dropped++
 				droppedTotal++
 			}
@@ -125,7 +127,7 @@ func (t *grpcTransport) Stream(ctx context.Context, channels []uint32) (<-chan *
 		}
 	}()
 	closeFn := func() error { cancel(); return nil }
-	return frames, closeFn, nil
+	return closeFn, nil
 }
 
 func (t *grpcTransport) Close() error {
