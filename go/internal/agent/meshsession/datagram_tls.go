@@ -67,7 +67,26 @@ func DialUDPTLS(ctx context.Context, credentials *localmesh.Credentials, peer me
 	if err != nil {
 		return nil, err
 	}
-	opts := udpOptions(options)
+	return newTLSDatagramFlow(conn, peer, maximum, udpOptions(options))
+}
+
+// DialUDPTLSWithDialer carries the same authenticated, port-authorized UDP
+// message protocol over an admitted byte transport such as an app-only Cloud
+// relay. The transport cannot replace the endpoint's SPIFFE or port checks.
+func DialUDPTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, peer meshid.Device, address netip.AddrPort, port uint16, dial func(context.Context, string, string) (net.Conn, error), options ...UDPOptions) (*TLSDatagramFlow, error) {
+	if dial == nil {
+		return nil, errors.New("missing app network dialer")
+	}
+	maximum := uint16(MaxUDPMessageSize)
+	conn, err := dialTLSWithDialer(ctx, credentials, peer, address, port, &maximum, dial)
+	if err != nil {
+		return nil, err
+	}
+	return newTLSDatagramFlow(conn, peer, maximum, udpOptions(options))
+}
+
+func newTLSDatagramFlow(conn *tlsAppConn, peer meshid.Device, maximum uint16, opts UDPOptions) (*TLSDatagramFlow, error) {
+	var err error
 	manager, endpoint := opts.Manager, opts.Endpoint
 	if endpoint != nil {
 		if manager != nil && manager != endpoint.Manager() {

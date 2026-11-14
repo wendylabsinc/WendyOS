@@ -52,6 +52,7 @@ const (
 	avahiIfUnspec    = int32(-1) // AVAHI_IF_UNSPEC: browse every interface
 	avahiProtoUnspec = int32(-1) // AVAHI_PROTO_UNSPEC: either address family
 	avahiProtoInet   = int32(0)  // AVAHI_PROTO_INET: IPv4 only
+	avahiProtoInet6  = int32(1)  // AVAHI_PROTO_INET6: IPv6 only
 
 	avahiDomainLocal = "local"
 )
@@ -250,20 +251,25 @@ func singleObjectPath(body []any) (dbus.ObjectPath, bool) {
 // ServiceBrowser, ResolveService blocks the D-Bus call until it has an answer
 // or times out on Avahi's side).
 //
-// The first attempt pins aprotocol=avahiProtoInet (IPv4-only): most WendyOS
-// devices answer on IPv4, and asking for it directly avoids Avahi racing an
-// AAAA lookup that would otherwise sometimes win and hand back a
-// less-preferred IPv6 address (preferIPv4Addr encodes the same preference for
-// the darwin/dns-sd path). A device with no IPv4 address at all fails that
-// call, so it is retried once with aprotocol=avahiProtoUnspec, which accepts
-// whatever address family Avahi actually has.
+// Resolve the address family on which this service was sighted. Asking for an
+// IPv4 address through an IPv6-only sighting can occupy a worker until timeout;
+// enough local veth/mesh interfaces would starve real remote IPv4 discoveries.
+// Separate IPv4 sightings still let the stream prefer IPv4 when both arrive.
 func resolveAvahiItem(ctx context.Context, conn avahiConn, item avahiItemNew) (MDNSService, bool) {
 	resolveCtx, cancel := context.WithTimeout(ctx, avahiResolveTimeout)
 	defer cancel()
 
+	aprotocol := item.proto
+	if aprotocol != avahiProtoInet && aprotocol != avahiProtoInet6 {
+		aprotocol = avahiProtoUnspec
+	}
 	reply, err := conn.Call(resolveCtx, avahiServerPath, avahiResolveServiceMethod,
-		item.iface, item.proto, item.name, item.stype, item.domain, avahiProtoInet, uint32(0))
+		item.iface, item.proto, item.name, item.stype, item.domain, aprotocol, uint32(0))
 	if err != nil {
+		logMDNSQueryErr(fmt.Sprintf("avahi-resolve %s interface=%d protocol=%d", item.name, item.iface, item.proto), err)
+		if resolveCtx.Err() != nil || aprotocol == avahiProtoUnspec {
+			return MDNSService{}, false
+		}
 		reply, err = conn.Call(resolveCtx, avahiServerPath, avahiResolveServiceMethod,
 			item.iface, item.proto, item.name, item.stype, item.domain, avahiProtoUnspec, uint32(0))
 		if err != nil {

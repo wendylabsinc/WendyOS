@@ -92,6 +92,9 @@ type LANDevice struct {
 	TenantUUID string `json:"tenantUuid,omitempty"`
 	// PrincipalURI is the advertised device identity. TLS must verify it.
 	PrincipalURI string `json:"principalUri,omitempty"`
+	// AppTLSPort advertises the app-only mutually authenticated TLS protocol.
+	// It is an address hint; the peer principal and each app port stay verified.
+	AppTLSPort uint16 `json:"appTlsPort,omitempty"`
 	// Sensorlink is true when Caps contains "sensors" (from the `caps=` TXT
 	// record, or the legacy `sensorlink=true` TXT record it supersedes),
 	// meaning the device can act as a remote sensor source for pairing.
