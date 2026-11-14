@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -216,8 +217,10 @@ func TestSerialDiscoveryRemovesUnpluggedPorts(t *testing.T) {
 // "unflashed" report: a port that a fully-flashed, working board occupies can
 // still fail to open (e.g. "resource busy" — a concurrent probe from another
 // wendy process, or a subprocess that inherited the fd) with no bearing on
-// whether firmware is installed. That must not be recorded as unresponsive.
-func TestSerialDiscoverySkipsContendedPort(t *testing.T) {
+// whether firmware is installed. That must not be recorded as unresponsive —
+// but it must not vanish either: the board is plugged in, so it is listed as
+// Busy, which no consumer reads as "needs firmware".
+func TestSerialDiscoveryMarksContendedPortBusy(t *testing.T) {
 	origResolve, origProbe := resolvePortsFn, probeIdentityFn
 	defer func() { resolvePortsFn, probeIdentityFn = origResolve, origProbe }()
 
@@ -231,11 +234,51 @@ func TestSerialDiscoverySkipsContendedPort(t *testing.T) {
 	d := newTestSerialDiscovery()
 	d.StartScan(0)
 
-	// Give the probe goroutine time to run and (not) record anything.
-	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	devices := d.WaitForIdle(ctx)
 
-	if devices := d.Devices(); len(devices) != 0 {
-		t.Errorf("expected a port that failed to open to be left out entirely, got %+v", devices)
+	want := SerialDevice{Port: "/dev/contended", Busy: true}
+	if len(devices) != 1 || devices[0] != want {
+		t.Errorf("Devices() = %+v, want exactly %+v", devices, want)
+	}
+}
+
+// TestSerialDiscoveryKeepsKnownEntryWhenPortTurnsBusy: a board already
+// classified (here: unflashed) keeps that row when a later probe finds its
+// port held by something else — a failed open says nothing new about it.
+func TestSerialDiscoveryKeepsKnownEntryWhenPortTurnsBusy(t *testing.T) {
+	origResolve, origProbe := resolvePortsFn, probeIdentityFn
+	defer func() { resolvePortsFn, probeIdentityFn = origResolve, origProbe }()
+
+	resolvePortsFn = func() ([]SerialPortInfo, error) {
+		return []SerialPortInfo{{Port: "/dev/unflashed"}}, nil
+	}
+	var mu sync.Mutex
+	busy := false
+	probeIdentityFn = func(port string) (*liteclient.DeviceIdentity, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if busy {
+			return nil, false, errPortBusy
+		}
+		return nil, true, errors.New("no handshake")
+	}
+
+	d := newTestSerialDiscovery()
+	for _, nowBusy := range []bool{false, true} {
+		mu.Lock()
+		busy = nowBusy
+		mu.Unlock()
+		d.StartScan(0)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		devices := d.WaitForIdle(ctx)
+		cancel()
+
+		want := SerialDevice{Port: "/dev/unflashed"}
+		if len(devices) != 1 || devices[0] != want {
+			t.Fatalf("busy=%v: Devices() = %+v, want exactly %+v", nowBusy, devices, want)
+		}
 	}
 }
 
@@ -353,6 +396,9 @@ func TestSerialDiscoveryClearsContendedOncePortOpens(t *testing.T) {
 
 	if got := d.ContendedPorts(); len(got) != 0 {
 		t.Errorf("expected contended state to clear once the port opened, got %v", got)
+	}
+	if devices := d.Devices(); len(devices) != 1 || devices[0].Busy || !devices[0].Responsive {
+		t.Errorf("expected the busy row to be replaced by the identified board, got %+v", devices)
 	}
 }
 
