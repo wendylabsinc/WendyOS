@@ -2549,10 +2549,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1924",
       "title": "WDY-3009: stream Mac cameras to Companion Live",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Swift video service tests cover authorization/rate bounds. Real AVFoundation streaming and packaged-app listener behavior remain outside those fixtures.",
-      "required_follow_up": "Add a controlled stream test that checks unauthenticated refusal, resource limits and cancellation.",
-      "evidence": []
+      "required_follow_up": "Require the live plaintext/mTLS VideoService transport suite in existing Swift CI. Prepare and retain a physical AVFoundation and packaged-agent listener procedure for real capture/teardown; controlled source transport tests do not establish that hardware behavior.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTransportTests.swift",
+            "swift/WendyAgentCore/Sources/WendyAgent/Services/VideoService.swift"
+          ],
+          "result": "Twelve focused Swift adapter/transport tests pass locally. Actual loopback HTTP/2 plaintext and mTLS paths reject no/foreign certificates and wrong-role clients before camera access, enforce two sessions, preserve sibling streaming, cancel idle/pre-first-frame captures, handle error/cancel races and reuse exactly two slots. Original production failed both idle wire-cancellation cases: GRPCCore signals the RPC handle instead of cancelling the response producer task. The fix races that handle with frame copy and joins cancellation before release. Hosted execution and actual physical/packaged capture remain pending."
+        }
+      ]
     },
     {
       "key": "2192",
@@ -3057,10 +3065,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2406",
       "title": "Support Mosaico with wendy run and wendy install",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "ESP-IDF/toolchain tests cover preparation and target selection. The rootful Linux ownership fix needs a real root-to-user build-output check.",
-      "required_follow_up": "Run a containerized ESP-IDF build as root and assert generated files are owned by the invoking user afterward.",
-      "evidence": []
+      "required_follow_up": "Require real ESP-IDF rootful Linux compilation and ownership after success, configuration failure and cancellation, plus an omitted-ownership-restoration control. Reuse the containerd job with a bounded step; no device flash or Mosaico application acceptance is claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/espidftoolchain/project_docker_linux_test.go",
+            ".github/scripts/test-esp-idf-ownership.py",
+            ".github/scripts/esp_idf_ownership_test.py",
+            ".github/scripts/fixtures/esp-idf-ownership-2406.md"
+          ],
+          "result": "Actual pinned ESP-IDF image built the minimal ESP32-C6 app on native arm64: CMake observed UID0, 404 build steps produced a real RISC-V ELF and ESP binary. Intentional configure failure, package tests, Linux normal/control compilation and three cleanup-scope checks pass. The actual non-root Linux caller/rootful Docker ownership assertions and omitted-restore control require hosted execution; macOS Docker execution is not host-ownership proof."
+        }
+      ]
     },
     {
       "key": "1764",
