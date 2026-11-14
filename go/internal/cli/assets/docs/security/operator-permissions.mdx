@@ -1,0 +1,173 @@
+---
+title: Operator permission rollout
+description: Draft certificate authorization policy and verification evidence for WDY-3883 and WDY-4221.
+---
+
+# Operator permission rollout
+
+This is the draft implementation and evidence register for
+[WDY-3883](https://linear.app/wendylabsinc/issue/WDY-3883) and
+[WDY-4221](https://linear.app/wendylabsinc/issue/WDY-4221).
+It is not a passing deployed security assessment. Keep enforcement disabled in
+production until the release blockers below are resolved.
+
+## Certificate contract
+
+The sign-in operator certificate contains identity, without device permissions.
+The CLI uses Cloud's existing signed
+`OperatorCertificateService.RequestEntitledCertificate` RPC when an operation
+needs more. Cloud resolves role permissions and device access entries, and PKI
+issues a separate certificate with a fresh CSR key and the same operator
+principal. Login credentials are not replaced.
+
+The certificate extension is OID `1.3.6.1.4.1.65441.1`, containing a DER sequence
+of UTF8String values. The grammar is
+`entitlement:category:permission[:target]:allow|deny`. Deny takes precedence.
+This implementation accepts exact `device:<UUID>` and all-device targets.
+Site/tag allows grant nothing without authenticated membership metadata;
+relevant site/tag denies fail closed. Invalid DER, duplicate extensions,
+unknown target syntax, oversized extensions, and expired certificates deny.
+The encoded extension limit is 2048 bytes; the entitled lifetime limit is
+15 minutes. Cloud normally issues about five minutes.
+
+The device UUID comes from a canonical device SPIFFE principal, using the
+current mesh identity contract. Legacy numeric IDs and named PKI principals
+are not converted into guessed Cloud asset UUIDs. Migrate or establish an
+authenticated binding before using device-targeted grants with those identities.
+
+The CLI validates the issuer path against its existing login CA trust, the
+fresh public key, the unchanged principal, the validity window, and every
+certificate entitlement's target. The response's separate entitlement list is
+not authorization evidence. Issuance uses an x5c-signed request, not a registered
+key ID, because PKI needs the signing leaf. OAuth and DPoP use the existing
+Cloud connection and refresh path.
+
+## Rollout switch
+
+`WENDY_OPERATOR_PERMISSIONS=audit` is the default. The Go agent logs permission
+refusals with `enforced=false` and permits the operation through the existing
+identity gates. Audit mode is not least-privilege enforcement.
+
+`WENDY_OPERATOR_PERMISSIONS=enforce` rejects requests before dispatch. Unknown
+switch values prevent the protected listener from starting. Read-only identity
+certificates can use only the operations classified as `device:read`. An
+entitled certificate must grant its reads too. An unknown RPC or a classified
+RPC with an empty permission is denied.
+
+The Go agent advertises `operator-permissions-v1`. On supported direct LAN and
+Cloud gRPC connections, the CLI requests a certificate before a privileged RPC,
+opens a separately authenticated connection, and reuses it within its lifetime.
+It never retries an already dispatched mutation with broader credentials and
+never falls back to the login credential after a Cloud refusal. Credentials
+and connections expire in memory. Existing streams end at certificate expiry;
+shells and subscriptions need to reconnect. Older agents without the feature
+advertisement retain the previous CLI connection behavior.
+
+## Operation policy
+
+The exact v1/v2 inventory is
+[`methods.go`](https://github.com/wendylabsinc/WendyOS/blob/codex/wdy-3883-operator-permissions/go/internal/shared/operatorpermission/methods.go).
+A descriptor coverage test requires an explicit entry for every generated agent
+RPC, including methods not registered by the Go agent. There are 194 entries:
+129 have a permission mapping and 65 deny pending a reviewed operation policy.
+The mappings remain subject to security review.
+
+| Permission | Operations |
+| --- | --- |
+| `device:read` | Classified inventory/status reads, including device, driver, container and hardware information |
+| `device:software` | OS/agent updates and driver install/remove |
+| `device:shell` | Host shell, container exec/attach, file sync, remote build and container MCP access |
+| `device:logs` | Kernel logs and telemetry streams |
+| `device:network` | Wi-Fi/Bluetooth changes and hostname changes |
+| `deployment:create` | Image upload/preparation, container creation/removal and storage cleanup |
+| `deployment:control-container` | Start and stop containers |
+| `tunnel:connect` | Classified management TCP/datagram/mesh tunnels |
+
+`device:update` changes Cloud device records; it does not authorize OS updates.
+Container configurations requesting `admin` or `build`, and host post-start
+hooks, additionally require `device:shell`. The checks cover nested service
+configurations and incoming hook metadata. Resource-level checks on existing
+containers still need the review listed below.
+
+## Transport inventory
+
+| Entry point | Draft behavior | Evidence or limitation |
+| --- | --- | --- |
+| Go mTLS gRPC, LAN and Cloud relay | Identity gate, then the shared permission policy for unary and streaming RPCs | Unit/in-process tests; no deployed LAN/Cloud operation qualification |
+| Go native mesh gRPC ingress | Uses the same mTLS server interceptors | Native operator-session certificate acquisition is not wired yet |
+| Go OCI registry | Operator identity and tenant are mandatory even in audit mode; GET/HEAD use read, writes use deployment permission | HTTP dispatch tests; peer devices must use the separately allowlisted staging RPCs |
+| Go BLE management | Existing operator-only TLS admission, then per-command shared permissions and expiry | Actual TLS and framed command loop tested over TCP; radio hardware untested |
+| CLI direct LAN/Cloud gRPC | On-demand entitled credential and bounded connection reuse | Routing tests prove no mutation retry or fallback after refusal |
+| CLI OCI/Swift/Apple Container proxy | Selects the connected operator's entitled deployment credential | No image push against a deployed enforcing device; long-build refresh remains open |
+| Host shell | `device:shell`; the RPC stream terminates at certificate expiry | Interceptor cancellation test; process/PTY cleanup needs device verification |
+| Peer-device gRPC | Existing exact staging/MeshDial/SensorLink allowlist remains separate | Device credentials never gain operator rights from an extension |
+| On-device admin Unix socket | Existing local trusted boundary, outside the network operator interceptors | Not evidence that local workload privileges are least privilege |
+| Unenrolled/bootstrap listeners | Existing provisioning boundary | WDY-3882 trusted local keys is a separate, unmerged dependency |
+| Swift agents and mobile/native clients | Not changed by this Go implementation | Must implement and qualify equivalent behavior before a product-wide claim |
+
+## Local evidence, 11 November 2026
+
+The implementation started from WendyOS main `bdd2a4c6f`. Automated checks cover
+strict extension decoding; wrong tenant, role, target and permission; deny
+precedence; expiry; unknown methods; unary/stream dispatch; host-hook escalation;
+BLE command dispatch; registry write denial; issued-certificate key/principal/
+chain/target validation; x5c signing; and CLI issuance, reuse and refusal routing.
+The core packages pass with Go's race detector. The full CLI command suite passes. The agent package and selected container
+service tests pass on macOS; the Go agent also cross-compiles for Linux arm64.
+These are source-build checks, not tests of a deployed Linux image.
+
+A temporary live probe used an existing signed-in Cloud session and one device
+to call the real issuance route. It issued a certificate with a 4m59s lifetime
+and verified the chain, fresh CSR key and exact target. Its claims included
+`device:shell`, `device:logs`, `device:network`, `device:software`,
+`deployment:*`, and `tunnel:connect`. The saved login certificate had no
+entitlement extension. The probe did not deploy or operate the device and did
+not persist the issued private key. The temporary probe is not part of the test
+suite; account/device identifiers and key material are omitted from this record.
+This proves issuance for that session at that time, not every role or tenant.
+
+## Release blockers
+
+1. Review the 65 denied mappings, especially camera/audio, robotics, data
+   campaigns, clock writes, power management and provisioning. Do not substitute
+   a broad permission merely to make a test pass. Reconcile the policy with the
+   WDY-3882 local owner/operator/viewer interceptor before merging the stacks.
+2. Finish on-demand issuance for native operator mesh/session-broker connections,
+   BLE clients and Swift/mobile agents. Test legacy identity migration explicitly.
+3. Review request and resource authorization beyond method names. In particular,
+   starting existing privileged containers and log output attached to deployment
+   streams must not bypass shell/log permissions. Review tunnel destinations and
+   local admin-socket access independently. Application entitlements are not
+   operator permissions.
+4. Refresh registry credentials on long builds and transfers. The current proxy
+   captures a short-lived credential; expiry must fail closed without replaying
+   a mutation. Verify every retained BuildKit/registry helper and exact target
+   binding, rather than relying only on same-CA server verification.
+5. Qualify revocation separately under WDY-3403. Short lifetimes bound exposure;
+   they do not implement immediate revocation. Test clock bootstrap, issuer
+   expiry, active stream shutdown, renewal and disconnected operation.
+6. Capture deployed evidence for each image/profile and transport. Include agent
+   and CLI digests, firmware/OS, runtime, mode, policy revision, trust/clock state,
+   actor role, target, request, refusal, absence of side effects, and audit event.
+   Test least-privilege and denied accounts, cross-tenant requests, alternate
+   transports, and app/container resource boundaries. Review success-event audit
+   coverage and provider evidence before claiming inherited controls.
+
+## WDY-4221 benchmark mapping
+
+These identifiers and editions come from the
+[WendyOS STIG assessment dated 11 November 2026](https://docs.google.com/document/d/1Y4Wh0eMldSuT_zGQfeqN04Vp-FjfJ83Gw10ULwLhubo/edit).
+They are an engineering mapping, not an approved system baseline or checklist
+result. Deployed status remains unassessed.
+
+| Benchmark | Rule | Draft evidence scope |
+| --- | --- | --- |
+| Container Platform SRG V2R5 | V-233027, SRG-APP-000033-CTR-000095 | Runtime operation permissions and remaining resource authorization |
+| Container Platform SRG V2R5 | V-233026, SRG-APP-000033-CTR-000090 | Registry identity and operation permissions |
+| GPOS SRG V3R4 | V-203636, SRG-OS-000080-GPOS-00048 | Approved logical access policy; host controls remain separate |
+| GPOS SRG V3R4 | V-278974, SRG-OS-000313-GPOS-00124 | Role-to-permission issuance and device authorization |
+| GPOS SRG V3R4 | V-203695, SRG-OS-000324-GPOS-00125 | Privileged-function denial and escalation review |
+| API SRG V1R1 | V-274507, SRG-APP-000033-API-000070 | API authorization and transport consistency |
+| Application Security and Development STIG V6R5 | V-222425, APSC-DV-000460 | Logical access authorization |
+| Application Security and Development STIG V6R5 | V-222429, APSC-DV-000500 | Prevention of unauthorized privileged functions |
+| Application Security and Development STIG V6R5 | V-222431, APSC-DV-000520 | Privileged-function audit; denial logging alone is insufficient |

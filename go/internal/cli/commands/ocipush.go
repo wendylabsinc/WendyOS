@@ -3,6 +3,8 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"net"
 	"net/http"
 	"time"
@@ -74,12 +76,17 @@ func ociLayoutManifestForPlatform(dir, platform string) (v1.Image, error) {
 // here. insecureHTTP tells the caller to parse the registry reference with
 // name.Insecure (plain http://, no TLS at all) rather than use this
 // transport.
-func registryPushTransport(registryAddr string, useMTLS bool) (transport http.RoundTripper, insecureHTTP bool, err error) {
+func registryPushTransport(registryAddr string, useMTLS bool, selected ...*config.CertificateInfo) (transport http.RoundTripper, insecureHTTP bool, err error) {
 	if !useMTLS {
 		return http.DefaultTransport, true, nil
 	}
 
-	certInfo := loadCLICert()
+	var certInfo *config.CertificateInfo
+	if len(selected) > 0 {
+		certInfo = selected[0]
+	} else {
+		certInfo = loadCLICert()
+	}
 	if certInfo == nil || certInfo.PemCertificate == "" || !certInfo.HasPrivateKey() {
 		return nil, false, fmt.Errorf("mTLS connection but no CLI certificates available")
 	}
@@ -114,13 +121,21 @@ func registryPushTransport(registryAddr string, useMTLS bool) (transport http.Ro
 // the same Dockerfile, build-args, and platform — so a raw registry push of
 // the already-built manifest is equivalent to rebuilding and pushing it,
 // without paying for the rebuild.
-func pushOCILayoutToRegistry(ctx context.Context, layoutDir, platform, registryAddr, repo string, useMTLS bool) error {
+func pushOCILayoutToRegistry(ctx context.Context, layoutDir, platform, registryAddr, repo string, useMTLS bool, selected ...*grpcclient.AgentConnection) error {
 	img, err := ociLayoutManifestForPlatform(layoutDir, platform)
 	if err != nil {
 		return err
 	}
 
-	transport, insecureHTTP, err := registryPushTransport(registryAddr, useMTLS)
+	var selectedCert []*config.CertificateInfo
+	if useMTLS && len(selected) > 0 {
+		cert, err := selected[0].CertificateForPermission(ctx, "deployment:create")
+		if err != nil {
+			return err
+		}
+		selectedCert = append(selectedCert, cert)
+	}
+	transport, insecureHTTP, err := registryPushTransport(registryAddr, useMTLS, selectedCert...)
 	if err != nil {
 		return err
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
+	"github.com/wendylabsinc/wendy/go/internal/shared/operatorpermission"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -181,6 +182,10 @@ func NewServerWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logge
 
 func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
 
+	permissions, err := operatorpermission.FromTLS(tlsConfig, logger)
+	if err != nil {
+		return nil, err
+	}
 	known, err := parseCertsFromPEM([]byte(chainPEM))
 	if err != nil {
 		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
@@ -195,10 +200,12 @@ func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.
 		// so that no handler can be reached without a verified client certificate.
 		grpc.ChainUnaryInterceptor(
 			interceptor.UnaryMTLSInterceptor(logger, expected, orgMode),
-			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode)),
+			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode),
+			interceptor.UnaryOperatorPermissionInterceptor(permissions)),
 		grpc.ChainStreamInterceptor(
 			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
-			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode)),
+			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode),
+			interceptor.StreamOperatorPermissionInterceptor(permissions)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{

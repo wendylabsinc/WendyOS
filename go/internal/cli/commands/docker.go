@@ -2388,7 +2388,7 @@ func buildAndPushImageForAgentWithBuilder(ctx context.Context, conn *grpcclient.
 		}
 		defer cleanup()
 
-		if err := buildAndPushImageViaOCILayout(ctx, dir, registryAddr, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput, useMTLS); err != nil {
+		if err := buildAndPushImageViaOCILayout(ctx, conn, dir, registryAddr, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput, useMTLS); err != nil {
 			return maybeRegistryUnavailable(agentOS, conn.Host, dialErr, err)
 		}
 		return nil
@@ -2462,7 +2462,7 @@ func ociLayoutBuildWaitNotice(ctx context.Context, repo string, logOutput io.Wri
 // path. A stable, registry-agnostic BuildKit builder writes a persistent OCI
 // layout; the host then pushes that image to the device. Per-app/service locks
 // protect the lazy OCI files while allowing unrelated deployments to overlap.
-func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer, useMTLS bool) error {
+func buildAndPushImageViaOCILayout(ctx context.Context, conn *grpcclient.AgentConnection, dir, registryAddr, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer, useMTLS bool) error {
 	userCache, err := os.UserCacheDir()
 	if err != nil {
 		return fmt.Errorf("finding user cache directory: %w", err)
@@ -2488,7 +2488,7 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 	}
 
 	fmt.Fprintf(logOutput, "[registry] pushing OCI image to %s/%s:latest\n", registryAddr, repo)
-	if err := pushOCILayoutToRegistry(ctx, layoutDir, platform, registryAddr, repo, useMTLS); err != nil {
+	if err := pushOCILayoutToRegistry(ctx, layoutDir, platform, registryAddr, repo, useMTLS, conn); err != nil {
 		return err
 	}
 	return nil
@@ -2634,7 +2634,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		return resolveErr
 	}
 	defer cleanup()
-	if err := pushOCILayoutToRegistry(ctx, layoutDir, platform, registryAddr, repo, useMTLS); err != nil {
+	if err := pushOCILayoutToRegistry(ctx, layoutDir, platform, registryAddr, repo, useMTLS, conn); err != nil {
 		return maybeRegistryUnavailable(agentOS, conn.Host, dialErr, err)
 	}
 	return nil
@@ -3102,7 +3102,10 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 			// by the Wendy Cloud Root CA, which is not in the macOS system keychain.
 			// Stand up a local HTTP reverse proxy that terminates TLS with mTLS so
 			// the Swift container plugin can push via plain HTTP on 127.0.0.1.
-			certInfo := loadCLICert()
+			certInfo, permissionErr := conn.CertificateForPermission(ctx, "deployment:create")
+			if permissionErr != nil {
+				return "", false, nil, nil, permissionErr
+			}
 			if certInfo == nil {
 				return "", false, nil, nil, commandErrorf(errRegistryAuth, "mTLS connection but no CLI certificates available")
 			}
@@ -3135,7 +3138,10 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 		return conn.RegistryDialer(ctx, port)
 	}
 	if conn.IsMTLS {
-		certInfo := loadCLICert()
+		certInfo, permissionErr := conn.CertificateForPermission(ctx, "deployment:create")
+		if permissionErr != nil {
+			return "", false, nil, nil, permissionErr
+		}
 		if certInfo == nil {
 			return "", false, nil, nil, commandErrorf(errRegistryAuth, "mTLS connection but no CLI certificates available")
 		}

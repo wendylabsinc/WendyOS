@@ -2778,7 +2778,7 @@ func tryPushExistingOCILayout(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 	defer cleanup()
 
-	if err := pushOCILayoutToRegistry(ctx, hint.layoutDir, hint.platform, registryAddr, repo, useMTLS); err != nil {
+	if err := pushOCILayoutToRegistry(ctx, hint.layoutDir, hint.platform, registryAddr, repo, useMTLS, conn); err != nil {
 		if dialErr != nil {
 			if de := dialErr(); isDialRefused(de) {
 				return fmt.Errorf("device registry unreachable: %w", de)
