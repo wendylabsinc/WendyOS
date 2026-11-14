@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +33,7 @@ func (u *Internet) Close() { u.once.Do(func() { u.closed.Store(true); u.Stream.C
 
 func (e *Engine) answerDNS(wire []byte) ([]byte, error) {
 	answer, err := AnswerDNS(wire, e.cfg.Routes)
-	if err != nil || e.cfg.Internet == nil {
+	if err != nil || (e.cfg.Internet == nil && e.dnsFallback == nil) {
 		return answer, err
 	}
 	var local dns.Msg
@@ -44,6 +45,26 @@ func (e *Engine) answerDNS(wire []byte) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 	defer cancel()
+	if e.cfg.Internet == nil {
+		var query dns.Msg
+		if err := query.Unpack(wire); err != nil {
+			return nil, err
+		}
+		if len(query.Question) != 1 || query.Question[0].Qclass != dns.ClassINET {
+			return answer, nil
+		}
+		name := strings.ToLower(dns.Fqdn(query.Question[0].Name))
+		if strings.HasSuffix(name, ".mesh.wendy.dev.") || strings.HasSuffix(name, ".cloud.wendy.dev.") {
+			return answer, nil
+		}
+		response, err := e.dnsFallback(ctx, wire)
+		if err == nil {
+			return response, nil
+		}
+		local.Authoritative = false
+		local.Rcode = dns.RcodeServerFailure
+		return local.Pack()
+	}
 	conn, err := requestRelay(ctx, e.cfg, flowRequest{Token: e.cfg.Token, Kind: "internet-dns"}, 10*time.Second)
 	if err != nil {
 		local.Rcode = dns.RcodeServerFailure
