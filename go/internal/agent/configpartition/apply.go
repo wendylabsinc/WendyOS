@@ -615,6 +615,10 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 // mDNS advertisement reflects that the device is now provisioned. The
 // principal is what mesh peers dial: it is the full device identity, so a
 // sighting cannot be spoofed by re-advertising someone else's id.
+//
+// An empty principal is a device enrolled with a legacy certificate that
+// carries none: the port and tls record are still published, and no principal
+// record is left behind.
 func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal string) {
 	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, func() bool {
 		return restartAvahiDaemon(logger, nil)

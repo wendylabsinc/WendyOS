@@ -642,6 +642,41 @@ func TestUpdateAvahiService_ProvisioningWritesPrincipalTXTRecord(t *testing.T) {
 	}
 }
 
+// A device enrolled with a legacy numeric-organization certificate has no
+// principal to advertise. Starting from the image's default file, which
+// announces the unencrypted setup port, the update must still move the
+// advertisement to the mTLS port: the enrolled agent does not serve the other.
+func TestUpdateAvahiService_ProvisioningWithoutPrincipalAdvertisesMTLS(t *testing.T) {
+	dir := t.TempDir()
+	serviceFile := filepath.Join(dir, "wendyos-mdns.service")
+	imageDefault := strings.Replace(avahiServiceTemplate, "<port>50051</port>", `<port>50051</port>
+    <txt-record>id=device-uuid</txt-record>`, 1)
+	if err := os.WriteFile(serviceFile, []byte(imageDefault), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	restarts := 0
+	updateAvahiService(zap.NewNop(), dir, 50052, true, "", func() bool { restarts++; return true })
+	if restarts != 1 {
+		t.Errorf("restarted avahi %d times, want 1", restarts)
+	}
+
+	got, err := os.ReadFile(serviceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"<port>50052</port>", "<txt-record>tls=true</txt-record>", "<txt-record>id=device-uuid</txt-record>", "<type>_ssh._tcp</type>", "<port>22</port>"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"<port>50051</port>", "principal=", "tls=false"} {
+		if strings.Contains(string(got), unwanted) {
+			t.Errorf("unexpected %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
 	dir := t.TempDir()
 	serviceFile := filepath.Join(dir, "wendyos-mdns.service")

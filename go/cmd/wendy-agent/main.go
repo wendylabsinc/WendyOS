@@ -1902,17 +1902,28 @@ func deviceIdentity(provisioningSvc *services.ProvisioningService) (meshid.Tenan
 // principal is what mesh peers dial and pin, so a sighting of this device
 // cannot be spoofed by re-advertising someone else's id.
 //
-// A provisioned device whose leaf carries no tenant principal is a broken
-// identity, not a naming detail: advertising a zero or numeric id would put a
-// fake claim at the center of the mesh, so the advertisement is left alone
-// and the failure is logged.
+// A provisioned device whose leaf carries no tenant principal (a legacy
+// numeric-organization certificate) has no Wendy Net identity: advertising a
+// zero or numeric id would put a fake claim at the center of the mesh, so no
+// principal is advertised and the gap is logged. The device is still enrolled
+// and serves only mTLS, so the port and tls record are published all the same.
+// Left alone, a service file in the image's default form, or one an OS update
+// reset, keeps announcing the unencrypted setup port that an enrolled agent
+// does not serve, and the device looks unenrolled to everything discovering it.
 func advertiseProvisionedMeshIdentity(logger *zap.Logger, mtlsPort int, provisioningSvc *services.ProvisioningService) {
 	_, device := deviceIdentity(provisioningSvc)
+	advertiseProvisionedDevice(logger, mtlsPort, device, configpartition.UpdateAvahiForProvisioning)
+}
+
+// advertiseProvisionedDevice is advertiseProvisionedMeshIdentity with the
+// identity already read and the avahi update injected.
+func advertiseProvisionedDevice(logger *zap.Logger, mtlsPort int, device meshid.Device, publish func(logger *zap.Logger, mtlsPort int, principal string)) {
 	if device == (meshid.Device{}) {
-		logger.Warn("Provisioned certificate carries no tenant SPIFFE principal; wendy net advertisement not updated")
+		logger.Warn("Provisioned certificate carries no tenant SPIFFE principal; advertising the mTLS port without a wendy net identity")
+		publish(logger, mtlsPort, "")
 		return
 	}
-	configpartition.UpdateAvahiForProvisioning(logger, mtlsPort, device.Principal())
+	publish(logger, mtlsPort, device.Principal())
 }
 
 // ensureCNIBinDir (re)creates agentcontainerd.CNIBinDir with "bridge" and
