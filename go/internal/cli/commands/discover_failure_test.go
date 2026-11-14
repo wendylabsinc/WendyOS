@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,8 +36,8 @@ func TestDiscoveryFailureSurfaces(t *testing.T) {
 		{"refused", "connection_refused", "connection refused", errors.New("rpc error: code = Unavailable desc = dial tcp: connection refused")},
 		{"timeout", "timeout", "probe deadline", context.DeadlineExceeded},
 		{"grpc timeout", "timeout", "probe deadline", status.Error(codes.DeadlineExceeded, "context deadline exceeded")},
-		{"identity", "device_identity_mismatch", "saved pin", identityRefusal("board.local", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotOrg: 76, GotAsset: "472"})},
-		{"key changed", "device_identity_mismatch", "saved pin", &devicepin.PinMismatchError{Key: "board"}},
+		{"identity", "device_identity_mismatch", "identity changed, so the connection was blocked", identityRefusal("board.local", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotOrg: 76, GotAsset: "472"})},
+		{"key changed", "device_identity_mismatch", "certificate key changed, so the connection was blocked", &devicepin.PinMismatchError{Key: "board"}},
 		{"wrong org", "device_org_mismatch", "organization", orgMismatchDeviceError{deviceOrg: 76}},
 		{"TLS alert", "tls_rejected", "wrong device clock", newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))},
 		{"TLS timeout", "timeout", "probe deadline", newTLSHandshakeRejectedError(context.DeadlineExceeded)},
@@ -183,7 +185,7 @@ func TestDiscoveryMultipleAddressFailures(t *testing.T) {
 				}
 				return
 			}
-			if failure := classifyLANProbeFailure(err); failure == nil || failure.Code != tc.code {
+			if failure := classifyLANProbeFailure(models.LANDevice{}, err); failure == nil || failure.Code != tc.code {
 				t.Fatalf("got %+v, want %s", failure, tc.code)
 			}
 		})
@@ -221,7 +223,7 @@ func TestDiscoveryKeepsMTLSFailureWhenPlaintextProbeFails(t *testing.T) {
 			if !errors.Is(err, tc.cause) {
 				t.Fatalf("plaintext RPC swallowed mTLS failure: %v", err)
 			}
-			if failure := classifyLANProbeFailure(err); failure == nil || failure.Code != tc.code {
+			if failure := classifyLANProbeFailure(models.LANDevice{}, err); failure == nil || failure.Code != tc.code {
 				t.Fatalf("got %+v, want %s", failure, tc.code)
 			}
 		})
@@ -238,13 +240,18 @@ func TestDiscoveryRecoveryAdviceFitsTerminal(t *testing.T) {
 	}{
 		{"TLS", newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate")), "wendy device sync-time"},
 		{"identity", identityRefusal("saved-board.local", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotOrg: 76, GotAsset: "472"}), "wendy device unpin saved-board.local"},
+		// The tallest hint: two key fingerprints and a principal, each on a line.
+		{"key", spkiRefusal("saved-board.local", &devicepin.PinMismatchError{
+			Key:  "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/saved-board",
+			Want: "sha256:" + strings.Repeat("0a", 32), Got: "sha256:" + strings.Repeat("f5", 32),
+		}), "wendy device unpin spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/saved-board"},
 	} {
 		for _, width := range []int{80, 120} {
 			for _, count := range []int{1, 30} {
 				t.Run(fmt.Sprintf("%s/%dcols/%ddevices", tc.name, width, count), func(t *testing.T) {
 					dm, _ := newDiscoverModel(context.Background(), defaultOpts(), true).Update(tea.WindowSizeMsg{Width: width, Height: 24})
 					pm, _ := tui.NewPicker().Update(tea.WindowSizeMsg{Width: width, Height: 24})
-					failure := classifyLANProbeFailure(tc.err)
+					failure := classifyLANProbeFailure(models.LANDevice{}, tc.err)
 					for i := 0; i < count; i++ {
 						name := fmt.Sprintf("board-%02d", i)
 						dev := models.LANDevice{ID: name, DisplayName: name, Hostname: name + ".local", Port: 50052, IsMTLS: true, ProbeFailure: failure}
@@ -320,7 +327,7 @@ func TestDiscoveryExplicitTLSAlertPrecedesTransportFailure(t *testing.T) {
 			{"other address refused", errors.Join(newTLSHandshakeRejectedError(errors.New("remote error: tls: "+alert)), errors.New("connection refused"))},
 		} {
 			t.Run(alert+"/"+tc.name, func(t *testing.T) {
-				if got := classifyLANProbeFailure(tc.err); got.Code != "tls_rejected" {
+				if got := classifyLANProbeFailure(models.LANDevice{}, tc.err); got.Code != "tls_rejected" {
 					t.Fatalf("explicit TLS alert became %+v", got)
 				}
 			})
@@ -345,15 +352,16 @@ func TestDiscoveryIdentityRecoveryUsesGoverningPin(t *testing.T) {
 		{"SPKI store identity", spkiRefusal("192.0.2.1", &devicepin.PinMismatchError{Key: "urn:wendy:org:2:asset:344", Want: "sha256:old", Got: "sha256:new"}), []string{"sha256:old", "sha256:new"}, "wendy device unpin urn:wendy:org:2:asset:344"},
 		{"unknown key", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotOrg: 76, GotAsset: "472"}, []string{"asset 344 in organization 2", "asset 472 in organization 76"}, ""},
 		{"tenant mismatch with pin", identityRefusal("board.local", tenantMismatch), []string{"Saved: principal " + wantPrincipal, "Now:   principal " + gotPrincipal}, "wendy device unpin board.local"},
-		{"tenant mismatch without pin", tenantMismatch, []string{"Saved: principal " + wantPrincipal + ". Now: principal " + gotPrincipal + "."}, ""},
+		{"tenant mismatch without pin", tenantMismatch, []string{"Saved: principal " + wantPrincipal + "\nNow:   principal " + gotPrincipal}, ""},
 		{"legacy pin meets principal", identityRefusal("board.local", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotAsset: "lite-test-board", GotPrincipal: gotPrincipal}), []string{"Saved: asset 344 in organization 2", "Now:   principal " + gotPrincipal}, "wendy device unpin board.local"},
-		{"no presented identity without pin", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344"}, []string{"Saved: asset 344 in organization 2. Now: no wendy identity."}, ""},
+		{"no presented identity without pin", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344"}, []string{"Saved: asset 344 in organization 2\nNow:   no wendy identity"}, ""},
 		{"control in key", identityRefusal("board\x1b.local", &certs.IdentityMismatchError{}), nil, ""},
+		{"control in a value", identityRefusal("board.local", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotOrg: 76, GotAsset: "4\x1b[31m72"}), []string{"Now:   asset 4[31m72 in organization 76"}, "wendy device unpin board.local"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			failure := classifyLANProbeFailure(tc.err)
+			failure := classifyLANProbeFailure(models.LANDevice{}, tc.err)
 			text := failure.Message + " " + strings.Join(failure.NextSteps, " ")
-			for _, want := range append(tc.want, "confirmed an intentional identity change") {
+			for _, want := range append(tc.want, "you expected this change") {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %q: %s", want, text)
 				}
@@ -365,10 +373,138 @@ func TestDiscoveryIdentityRecoveryUsesGoverningPin(t *testing.T) {
 			} else if !strings.HasSuffix(text, tc.command) {
 				t.Errorf("expected exact command %q, got %s", tc.command, text)
 			}
-			if text != tui.StripControl(text) {
+			// Line breaks separate the diagnostic's own lines. Nothing else a
+			// terminal acts on may survive.
+			if strings.ReplaceAll(text, "\n", "") != tui.StripControl(text) {
 				t.Errorf("unsafe diagnostic: %q", text)
 			}
 		})
+	}
+}
+
+// The discover hint for a device whose identity or key changed was one line
+// that named only the pin-store key and did not say which of the two had
+// changed (WDY-4295). It names the row, says what was seen in the words the
+// direct commands use, and keeps each long value on a line of its own.
+func TestDiscoveryIdentityFailureSaysWhatChanged(t *testing.T) {
+	const identity = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/thor"
+	const other = "spiffe://wendy.sh/tenant/22222222-2222-4222-8222-222222222222/device/thor"
+	savedKey, nowKey := "sha256:"+strings.Repeat("0a", 32), "sha256:"+strings.Repeat("f5", 32)
+	const blocked = ", so the connection was blocked. "
+	const changedIdentity = "The device may have been reinstalled or re-enrolled, or something else may be answering in its place."
+	const keepIdentity = "Keep the saved identity unless you expected this change."
+	dev := models.LANDevice{ID: "thor", DisplayName: "Thor", Hostname: "wendyos-thor.local", IPAddress: "192.0.2.1", Port: 50052, IsMTLS: true}
+	for _, tc := range []struct {
+		name    string
+		dev     models.LANDevice
+		err     error
+		message string
+		step    string
+	}{
+		{
+			name: "same identity, new key", dev: dev,
+			err: spkiRefusal("wendyos-thor.local", &devicepin.PinMismatchError{Key: identity, DisplayName: "thor", Want: savedKey, Got: nowKey}),
+			message: `Device "Thor" certificate key changed` + blocked +
+				"It presented the same identity with a different certificate key than the one this CLI saved for it. " +
+				"The device may have renewed its certificate, or been reinstalled or re-enrolled, or something else may be answering in its place.\n" +
+				"Saved key: " + savedKey + "\nNow key:   " + nowKey,
+			step: "If you expected this change, run: wendy device unpin " + identity,
+		},
+		{
+			name: "different identity", dev: dev,
+			err: identityRefusal("wendyos-thor.local", &certs.IdentityMismatchError{WantAsset: "thor", GotAsset: "thor", WantPrincipal: identity, GotPrincipal: other}),
+			message: `Device "Thor" identity changed` + blocked +
+				"It presented a different identity than the one this CLI saved for it. " + changedIdentity + "\n" +
+				"Saved: principal " + identity + "\nNow:   principal " + other,
+			step: "If you expected this change, run: wendy device unpin wendyos-thor.local",
+		},
+		{
+			// A certificate that names no Wendy device is not "a different
+			// identity"; the row is named by its hostname when it has no name.
+			name: "no identity presented", dev: models.LANDevice{Hostname: "wendyos-thor.local", IsMTLS: true},
+			err: &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344"},
+			message: `Device "wendyos-thor.local" identity changed` + blocked +
+				"It did not present the identity this CLI saved for it. " + changedIdentity + "\n" +
+				"Saved: asset 344 in organization 2\nNow:   no wendy identity",
+			step: keepIdentity,
+		},
+		{
+			// Nothing typed to read: say only that it was blocked.
+			name: "unexplained refusal", dev: models.LANDevice{DisplayName: "Th\x1b[31mor" + string(rune(0x202e)), IsMTLS: true},
+			err:     errDeviceIdentityRefused,
+			message: `Device "Thor" does not match the identity or certificate key this CLI saved for it` + strings.TrimSuffix(blocked, " "),
+			step:    keepIdentity,
+		},
+		{
+			name: "unnamed row", dev: models.LANDevice{IsMTLS: true},
+			err:     errDeviceIdentityRefused,
+			message: "The device does not match the identity or certificate key this CLI saved for it" + strings.TrimSuffix(blocked, " "),
+			step:    keepIdentity,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The ladder's refusal arrives joined with its last mTLS error.
+			failed := tc.dev
+			failed.ProbeFailure = lanProbeFailure(tc.dev, errors.Join(tc.err, errors.New("rpc error: code = Unavailable desc = authentication handshake failed")), certsForOrgs(1))
+			got := failed.ProbeFailure
+			// One step: the unpin command never stands apart from its condition.
+			if got == nil || got.Code != "device_identity_mismatch" || got.Message != tc.message || !reflect.DeepEqual(got.NextSteps, []string{tc.step}) {
+				t.Fatalf("failure:\n%+v\nwant message:\n%s\nwant step:\n%s", got, tc.message, tc.step)
+			}
+			// One hint: the message, then the step, on a line of its own
+			// whenever the message has lines.
+			separator := " "
+			if strings.Contains(tc.message, "\n") {
+				separator = "\n"
+			}
+			if hint, want := lanProbeHint(&failed), tc.message+separator+tc.step; hint != want {
+				t.Errorf("hint:\n%s\nwant:\n%s", hint, want)
+			}
+		})
+	}
+
+	// How the key change reads on each surface.
+	failed := dev
+	failed.ProbeFailure = lanProbeFailure(dev, spkiRefusal("wendyos-thor.local", &devicepin.PinMismatchError{Key: identity, DisplayName: "thor", Want: savedKey, Got: nowKey}), certsForOrgs(1))
+	collection := &models.DevicesCollection{LANDevices: []models.LANDevice{failed}}
+	text := ansi.Strip(renderDeviceTable(collection))
+	if want := "in its place.\nSaved key: " + savedKey + "\nNow key:   " + nowKey + "\n" +
+		"If you expected this change, run: wendy device unpin " + identity + "\n"; !strings.HasSuffix(text, want) || !strings.Contains(text, "\nThor: Device \"Thor\" certificate key changed") {
+		t.Errorf("text output:\n%s", text)
+	}
+	for _, width := range []int{80, 120} {
+		m, _ := newDiscoverModel(context.Background(), defaultOpts(), true).Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m, _ = m.(discoverModel).Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: failed, ProbeFailed: true}})
+		view := ansi.Strip(m.(discoverModel).View())
+		var lines []string
+		for _, line := range strings.Split(view, "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Errorf("%d columns: line too wide: %q", width, line)
+			}
+			lines = append(lines, strings.TrimRight(line, " "))
+		}
+		// Neither key is cut, and each starts a line: with its label when the
+		// terminal is wide enough, else directly under it.
+		for label, key := range map[string]string{"Saved key:": savedKey, "Now key:": nowKey} {
+			if !slices.Contains(lines, key) && !slices.ContainsFunc(lines, func(line string) bool {
+				return strings.HasPrefix(line, label) && strings.HasSuffix(line, key)
+			}) {
+				t.Errorf("%d columns: %s %s is split or shares a line:\n%s", width, label, key, view)
+			}
+		}
+		if !slices.ContainsFunc(lines, func(line string) bool {
+			return strings.HasPrefix(line, "If you expected this change, run: wendy device unpin")
+		}) {
+			t.Errorf("%d columns: the unpin step does not start a line:\n%s", width, view)
+		}
+	}
+	data, err := json.Marshal(failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"probeFailure":{"code":"device_identity_mismatch","message":"Device \"Thor\" certificate key changed, so the connection was blocked.`; !strings.Contains(string(data), want) ||
+		!strings.Contains(string(data), `\nSaved key: `+savedKey+`\nNow key:   `+nowKey+`","next_steps":["If you expected this change, run: wendy device unpin `+identity+`"]}`) {
+		t.Errorf("JSON:\n%s", data)
 	}
 }
 

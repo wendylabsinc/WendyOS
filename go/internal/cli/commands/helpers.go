@@ -2307,6 +2307,12 @@ func mdnsLocalHint(host string) string {
 // message: the CLI's rewrite of the gRPC error in the middle of the message
 // used to drop everything after it, and JSON mode lists steps separately.
 func defaultDeviceUnreachableError(hostname string, err error) error {
+	// A missing login is not a failure to reach the default: nothing was
+	// dialled, and its own message names the device and the sign-in step.
+	var noLogin missingLoginError
+	if errors.As(err, &noLogin) {
+		return err
+	}
 	steps := []string{"Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."}
 	if hint := strings.TrimPrefix(mdnsLocalHint(hostname), "\n  "); hint != "" {
 		steps = append(steps, hint)
@@ -2992,7 +2998,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// Nothing answered, so no certificate ever arrived and no identity was
 		// ever compared: this refusal is about reachability and says so, and it
 		// is deliberately NOT an errDeviceIdentityRefused (see
-		// errNoAuthenticatedEndpoint).
+		// errNoAuthenticatedEndpoint). With no stored certificate nothing was
+		// dialled at all, and pinnedRefusalError reports the missing login.
 		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
 		failure.pinKey = target.PinKey
 		tenant := ""
