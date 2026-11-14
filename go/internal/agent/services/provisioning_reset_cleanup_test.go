@@ -83,6 +83,11 @@ func TestCloudResetWaitsForResourceCleanupBeforeExposingCompletion(t *testing.T)
 				if status.Code(finished.err) != codes.Unavailable || finished.response != nil {
 					t.Fatalf("cleanup failure reported reset success or retained credentials: %+v", finished)
 				}
+				// The reset is where a person first meets a failed cleanup, so
+				// its answer says what failed, like the refusals that follow.
+				if cause, ok := resetcleanup.Cause(finished.err); !ok || cause != "owned mesh route removal failed" {
+					t.Fatalf("reset failure did not say what cleanup failed on: cause=%q recognised=%v err=%v", cause, ok, finished.err)
+				}
 				assertResetCleanupBlocksEnrollment(t, svc)
 				// Startup's successful owned-resource retry can expose the original
 				// receipt without recreating credentials or changing authorization.

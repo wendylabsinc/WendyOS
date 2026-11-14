@@ -518,7 +518,7 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 
 	if cleanupErr != nil {
 		s.logger.Error("Enrollment credentials erased but resource cleanup failed", zap.Error(cleanupErr))
-		return nil, status.Error(codes.Unavailable, "enrollment credentials erased; resource cleanup incomplete, restart will retry; reset completion unconfirmed")
+		return nil, resetcleanup.Refusal(codes.Unavailable, "enrollment credentials erased; resource cleanup incomplete, restart will retry; reset completion unconfirmed", cleanupErr)
 	}
 	return &agentpb.UnprovisionResponse{}, nil
 }
