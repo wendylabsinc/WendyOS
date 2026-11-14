@@ -1087,7 +1087,11 @@ func (m tourWizardModel) View() string {
 	}
 	inner := w - 10
 	if inner < 40 {
-		inner = 40
+		if tourHasCommandOutput(m.phase) {
+			inner = max(8, inner)
+		} else {
+			inner = 40
+		}
 	}
 
 	var body string
@@ -1166,7 +1170,41 @@ func (m tourWizardModel) View() string {
 		body = ""
 	}
 
-	return wizBorderStyle.Width(inner).Render(body) + "\n"
+	return wizBorderStyle.Width(inner).Render(body) + "\n" + m.viewCommands()
+}
+
+// viewCommands deliberately bypasses the box's styling and width so commands
+// remain complete plain logical lines even on a narrow terminal.
+func (m tourWizardModel) viewCommands() string {
+	switch m.phase {
+	case phaseWelcome:
+		return "\nRestart the tour:\nwendy tour\n"
+	case phaseAptInstall:
+		return "\nRun on your Linux device:\n" + linuxDesktopCommand("", "", linuxDesktopMachineLabel) +
+			"\n\nOr install using APT, in this order:\n" +
+			"curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -\n" +
+			`echo "deb https://apt.wendy.dev stable main" | sudo tee /etc/apt/sources.list.d/wendy.list` + "\n" +
+			"sudo apt update && sudo apt install -y wendy-agent\n"
+	case phaseCloud:
+		var commands string
+		if m.projectPath != "" {
+			commands = "\nDeploy your sample again:\n" + tourSampleRedeployCommand(runtime.GOOS, m.projectPath, m.foundAddr) + "\n"
+		}
+		return commands + "\nSign in to Wendy Cloud:\nwendy auth login\n"
+	case phaseError:
+		var below strings.Builder
+		if m.err != nil {
+			below.WriteString("\nDiagnostics:\n" + messageWithoutNextSteps(m.err) + "\n")
+			if steps := NextSteps(m.err); len(steps) != 0 {
+				below.WriteString("\nSuggested commands (replace any address placeholder):\n" + strings.Join(steps, "\n") + "\n")
+			}
+		}
+		below.WriteString("\nRestart the tour:\nwendy tour --hardware\n")
+		below.WriteString("\nRetry a failed sample from its project directory:\nwendy run\n")
+		return below.String()
+	default:
+		return ""
+	}
 }
 
 // ─── individual phase views ───────────────────────────────────────────────────
@@ -1180,8 +1218,7 @@ func (m tourWizardModel) viewWelcome(w int) string {
 			"  1. Flash WendyOS onto your device\n"+
 			"  2. Boot it and verify the connection\n"+
 			"  3. Deploy and open a working sample app\n\n"+
-			"If anything goes wrong you can restart at any time with:\n") + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy tour") + "\n\n")
+			"If anything goes wrong you can restart at any time with the command below the box.\n") + "\n")
 	sb.WriteString(wizHintStyle.Render("Press Enter to begin"))
 	return sb.String()
 }
@@ -1301,13 +1338,7 @@ func (m tourWizardModel) viewEnterHostname(w int) string {
 func (m tourWizardModel) viewAptInstall(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizTitleStyle.Render("Step 2 — Install the Wendy Agent") + "\n")
-	sb.WriteString(wizSubStyle.Render("Run the following on your Linux device:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render(linuxDesktopCommand("", "", linuxDesktopMachineLabel)) + "\n\n")
-	sb.WriteString(wizBodyStyle.Width(w).Render(
-		"Or using APT:\n") + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render("curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -") + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render(`echo "deb https://apt.wendy.dev stable main" | sudo tee /etc/apt/sources.list.d/wendy.list`) + "\n")
-	sb.WriteString("  " + wizCodeStyle.Render("sudo apt update && sudo apt install -y wendy-agent") + "\n\n")
+	sb.WriteString(wizSubStyle.Width(w).Render("Run the installer command below the box on your Linux device, or use the APT commands below in order.") + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render("Once the agent is installed and the service is running, press Enter.") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Enter to continue"))
 	return sb.String()
@@ -1721,13 +1752,12 @@ func (m tourWizardModel) viewCloud(w int) string {
 		intro = "Your device is up and running."
 	}
 	if m.projectPath != "" {
-		sb.WriteString(wizBodyStyle.Width(w).Render("Your sample answered successfully at "+m.sampleURL()+".\n\nEdit app.py in "+m.projectPath+" and deploy again:\n  "+tourSampleRedeployCommand(runtime.GOOS, m.projectPath, m.foundAddr)+"\n\n") + "\n")
+		sb.WriteString(wizBodyStyle.Width(w).Render("Your sample answered successfully at "+m.sampleURL()+".\n\nEdit app.py in "+m.projectPath+" and deploy again with the command below the box.\n\n") + "\n")
 	}
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		intro+"\n\n"+
 			"When you're ready to manage multiple devices remotely,\n"+
-			"Wendy Cloud can help:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy auth login") + "\n\n")
+			"Wendy Cloud can help. Sign in with the command below the box:") + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		"Wendy Cloud provides:\n"+
 			"  • Remote access to all your devices\n"+
@@ -1750,11 +1780,10 @@ func (m tourWizardModel) viewError(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizErrorStyle.Render("Something went wrong") + "\n\n")
 	if m.err != nil {
-		sb.WriteString(wizBodyStyle.Width(w).Render(m.err.Error()) + "\n\n")
+		sb.WriteString(wizBodyStyle.Width(w).Render("See the diagnostics and suggested commands below the box.") + "\n\n")
 	}
-	sb.WriteString(wizBodyStyle.Width(w).Render("You can restart the tour at any time with:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("wendy tour --hardware") + "\n\n")
-	sb.WriteString(wizBodyStyle.Width(w).Render("If the image was already written, choose the already-installed option. For a failed sample, rerun wendy run from the project directory shown earlier.") + "\n\n")
+	sb.WriteString(wizBodyStyle.Width(w).Render("You can restart the tour at any time with the command below the box.") + "\n\n")
+	sb.WriteString(wizBodyStyle.Width(w).Render("If the image was already written, choose the already-installed option. For a failed sample, use the retry command below from the project directory shown earlier.") + "\n\n")
 	sb.WriteString(wizHintStyle.Render("Press any key to exit"))
 	return sb.String()
 }
@@ -1815,7 +1844,21 @@ func (m tourWizardModel) cmdDiscoveryCheck() tea.Cmd {
 	}
 	return func() tea.Msg {
 		if !m.discoveryStarted.IsZero() && time.Since(m.discoveryStarted) > 2*time.Minute {
-			return tourDiscoveryErrorMsg{err: fmt.Errorf("could not verify %q within two minutes; check power and networking, then run 'wendy discover' (accept USB setup on Linux) or 'wendy install verify --address <name-or-IP>'. Restart with 'wendy tour --hardware' and choose an already installed device", target)}
+			text := fmt.Sprintf("could not verify %q within two minutes; check power and networking, then run 'wendy discover' (accept USB setup on Linux) or 'wendy install verify --address <name-or-IP>'. Restart with 'wendy tour --hardware' and choose an already installed device", target)
+			cause := fmt.Errorf("could not verify %q within two minutes; check power and networking. Accept USB setup on Linux when discovering", target)
+			address := m.hostname
+			if address == "" && target != "" {
+				address = target + ".local"
+			}
+			if address == "" {
+				address = "<name-or-IP>"
+			}
+			quote := shellQuoteArg
+			if runtime.GOOS == "windows" {
+				quote = powershellSingleQuote
+			}
+			return tourDiscoveryErrorMsg{err: withNextStepsText(cause, text,
+				"wendy discover", "wendy install verify --address "+quote(address))}
 		}
 		parent := m.ctx
 		if parent == nil {
@@ -2198,7 +2241,10 @@ func newTourCmd() *cobra.Command {
 			m := newTourWizardModel()
 			m.root = cmd.Root()
 			m.ctx = ctx
-			final, err := tui.RunProgram(tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)))
+			final, err := tui.RunProgram(tea.NewProgram(tourCommandScreenModel{tourWizardModel: m}, tea.WithAltScreen(), tea.WithContext(ctx)))
+			if output, ok := final.(tourCommandScreenModel); ok {
+				final = output.tourWizardModel
+			}
 			if result, ok := final.(tourWizardModel); ok && result.diagnosticStep != "" {
 				step = result.diagnosticStep
 			}

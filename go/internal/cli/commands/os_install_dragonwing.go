@@ -837,18 +837,25 @@ func isEDLAccessErr(err error) bool {
 // dragonwingUSBAccessHint explains how to grant access, which otherwise
 // surfaces only as a raw libusb error code.
 func dragonwingUSBAccessHint() string {
+	return renderDragonwingUSBAccessHint(runtime.GOOS, wendyPackagedRule("70-wendy-qualcomm.rules"))
+}
+
+func renderDragonwingUSBAccessHint(goos string, packaged bool) string {
 	lines := []string{
 		briefTitle.Render("\u26a0  USB access denied"),
 		"",
 		"The board is in EDL mode, but the OS refused wendy access to its USB device.",
 	}
-	if runtime.GOOS == "linux" {
-		lines = []string{lines[0], "", linuxUSBAccessStep("board", wendyPackagedRule("70-wendy-qualcomm.rules"))}
-	} else if runtime.GOOS == "windows" {
+	var commands string
+	if goos == "linux" {
+		step, below := linuxUSBAccessHint("board", packaged)
+		lines = []string{lines[0], "", step}
+		commands = "\n\n" + below
+	} else if goos == "windows" {
 		lines = append(lines, "Run the install command again to install or repair the Qualcomm EDL WinUSB binding.",
 			"Accept the administrator prompt, and close other flashing tools that may have the board open.")
 	} else {
 		lines = append(lines, "Re-run the flash with sudo so wendy can claim the device.")
 	}
-	return briefBorder.Render(strings.Join(lines, "\n"))
+	return briefBorder.Render(strings.Join(lines, "\n")) + commands
 }

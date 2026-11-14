@@ -32,7 +32,8 @@ func TestTourSampleRedeployCommandPreservesPOSIXArguments(t *testing.T) {
 	m := newTourWizardModel()
 	m.projectPath = "/tmp/starter ' \" $WENDY_TEST_QUOTE $(printf expanded) `printf expanded`; #"
 	m.foundAddr = "device ' $WENDY_TEST_QUOTE $(printf expanded) `printf expanded`; #"
-	view := ansi.Strip(m.viewCloud(4096))
+	m.phase, m.width = phaseCloud, 4096
+	view := ansi.Strip(m.View())
 	var command string
 	for _, line := range strings.Split(view, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "wendy run ") {
