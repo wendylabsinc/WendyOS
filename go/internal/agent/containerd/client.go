@@ -56,6 +56,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -1418,11 +1419,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	if err := validateUserEnv(req.GetEnv()); err != nil {
 		return fmt.Errorf("invalid env var in request (SOC2-CC6, NIST-SI-10): %w", err)
 	}
-	var env []string
-	env = append(env, imageSpec.Config.Env...)
-	env = append(env, req.GetEnv()...)
-	env = appendFallbackEnv(env)
-	env = append(env, wendyEnv...)
+	env := mergeContainerEnv(imageSpec.Config.Env, req.GetEnv(), wendyEnv)
 	ros2Env, err := buildROS2Env(appCfg, appID, serviceName)
 	if err != nil {
 		// Fail the create rather than start a ROS 2 container with no
@@ -3155,6 +3152,13 @@ var deviceHostnameWithSuffix = func() string {
 	return h + ".local"
 }
 
+// agentVersion and deviceName supply WENDY_AGENT_VERSION and
+// WENDY_DEVICE_NAME. Tests replace them.
+var (
+	agentVersion = func() string { return version.Version }
+	deviceName   = services.DeviceName
+)
+
 // fallbackContainerEnv holds generic default env entries that are injected
 // only when neither the image config nor the caller defines the same key.
 // Unlike the WENDY_* identity vars (which are appended last so they always
@@ -3178,6 +3182,18 @@ func appendFallbackEnv(env []string) []string {
 		}
 	}
 	return env
+}
+
+// mergeContainerEnv lists a container's environment in the order that decides
+// which source wins, since the last assignment of a key is the one the
+// process sees: the image's env, the deploy's env, the PATH and TERM fallbacks
+// for keys still unset, then the Wendy identity env.
+func mergeContainerEnv(imageEnv, userEnv, wendyEnv []string) []string {
+	var env []string
+	env = append(env, imageEnv...)
+	env = append(env, userEnv...)
+	env = appendFallbackEnv(env)
+	return append(env, wendyEnv...)
 }
 
 // envHasKey reports whether env contains an entry that sets key (an exact
@@ -3208,6 +3224,11 @@ func envHasKey(env []string, key string) bool {
 //   - WENDY_HOSTNAME is set to "{serviceName}.local" so each service has a
 //     distinct hostname identity.
 //   - WENDY_APP_GROUP is set to appID so the service can discover its siblings.
+//
+// For both, WENDY_DEVICE_NAME is the device's name and WENDY_AGENT_VERSION is
+// this agent's version. Like the rest of this env they are written into the
+// container's stored spec when it is created, and a start reuses that spec, so
+// they hold the values of the last deploy until the app is deployed again.
 func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 	// Defence-in-depth: reject non-empty inputs that fail validation at the
 	// injection site so callers can't accidentally inject control characters
@@ -3249,6 +3270,14 @@ func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 	if deviceHost != "" {
 		env = append(env, "WENDY_DEVICE_HOSTNAME="+deviceHost)
 	}
+	// WENDY_DEVICE_NAME and WENDY_AGENT_VERSION are two facts about the host
+	// that an app could otherwise read only over the agent socket, which takes
+	// the admin entitlement. They come from the host and not from the deploy,
+	// so a value that is unknown or cannot be written safely is left out and
+	// the create goes ahead.
+	if name := deviceName(); usableHostEnvValue(name) {
+		env = append(env, "WENDY_DEVICE_NAME="+name)
+	}
 	// WENDY_APP_ID is injected unconditionally (all network modes) so app code
 	// can always read its own identity. The OTel identity vars are injected only
 	// under host networking (in injectOTELEnvIfNeeded) because the OTLP receiver
@@ -3256,7 +3285,17 @@ func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 	if appID != "" {
 		env = append(env, "WENDY_APP_ID="+appID)
 	}
+	if v := agentVersion(); usableHostEnvValue(v) {
+		env = append(env, "WENDY_AGENT_VERSION="+v)
+	}
 	return env, nil
+}
+
+// usableHostEnvValue reports whether a value read from the host can go into a
+// WENDY_* variable: it is known, and it holds none of the characters
+// buildContainerBaseEnv refuses in an app ID or a service name.
+func usableHostEnvValue(value string) bool {
+	return value != "" && !strings.ContainsAny(value, "\x00\n\r=\t")
 }
 
 // validateUserEnv rejects caller-supplied env entries that contain characters

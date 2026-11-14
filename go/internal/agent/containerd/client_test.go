@@ -292,8 +292,8 @@ func TestBuildContainerBaseEnvMultiServiceNoDeviceHostname(t *testing.T) {
 }
 
 // TestBuildContainerBaseEnvIdentityVars documents the full env-var contract
-// for WENDY_HOSTNAME, WENDY_DEVICE_HOSTNAME, WENDY_APP_GROUP, and WENDY_APP_ID
-// across both app types.
+// for WENDY_HOSTNAME, WENDY_DEVICE_HOSTNAME, WENDY_APP_GROUP, WENDY_APP_ID,
+// WENDY_DEVICE_NAME, and WENDY_AGENT_VERSION across both app types.
 //
 // Single-container app  (serviceName == ""):
 //
@@ -308,11 +308,18 @@ func TestBuildContainerBaseEnvMultiServiceNoDeviceHostname(t *testing.T) {
 //	WENDY_DEVICE_HOSTNAME = device hostname          ← always the host mDNS name
 //	WENDY_APP_GROUP       = appID                   ← lets a service discover siblings
 //	WENDY_APP_ID          = appID
+//
+// Both app types, the same in every container on the device:
+//
+//	WENDY_DEVICE_NAME     = device name (e.g. "abc")
+//	WENDY_AGENT_VERSION   = version of the agent that created the container
 func TestBuildContainerBaseEnvIdentityVars(t *testing.T) {
 	const deviceHost = "wendyos-abc.local"
+	const deviceNameValue, agentVersionValue = "abc", "2026.11.13-120000"
 	old := deviceHostnameWithSuffix
 	t.Cleanup(func() { deviceHostnameWithSuffix = old })
 	deviceHostnameWithSuffix = func() string { return deviceHost }
+	stubAgentIdentity(t, agentVersionValue, deviceNameValue)
 
 	tests := []struct {
 		name               string
@@ -384,7 +391,150 @@ func TestBuildContainerBaseEnvIdentityVars(t *testing.T) {
 			if got := envMap["WENDY_APP_ID"]; got != tc.wantAppID {
 				t.Errorf("WENDY_APP_ID = %q, want %q", got, tc.wantAppID)
 			}
+			if got := envMap["WENDY_DEVICE_NAME"]; got != deviceNameValue {
+				t.Errorf("WENDY_DEVICE_NAME = %q, want %q", got, deviceNameValue)
+			}
+			if got := envMap["WENDY_AGENT_VERSION"]; got != agentVersionValue {
+				t.Errorf("WENDY_AGENT_VERSION = %q, want %q", got, agentVersionValue)
+			}
 		})
+	}
+}
+
+// stubAgentIdentity pins the two facts buildContainerBaseEnv reads from the
+// agent and the device, so a test does not depend on the machine it runs on.
+func stubAgentIdentity(t *testing.T, version, name string) {
+	t.Helper()
+	oldVersion, oldName := agentVersion, deviceName
+	t.Cleanup(func() { agentVersion, deviceName = oldVersion, oldName })
+	agentVersion = func() string { return version }
+	deviceName = func() string { return name }
+}
+
+// effectiveEnv resolves env the way the runtime does: the last assignment of a
+// key wins.
+func effectiveEnv(env []string) map[string]string {
+	out := make(map[string]string)
+	for _, kv := range env {
+		if key, value, ok := strings.Cut(kv, "="); ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+// TestBuildContainerBaseEnvIncludesAgentVersionAndDeviceName covers both app
+// types: neither variable depends on the service, so every container of every
+// app reads the same two values.
+func TestBuildContainerBaseEnvIncludesAgentVersionAndDeviceName(t *testing.T) {
+	old := deviceHostnameWithSuffix
+	t.Cleanup(func() { deviceHostnameWithSuffix = old })
+	deviceHostnameWithSuffix = func() string { return "wendyos-orin-nano-pr319.local" }
+	stubAgentIdentity(t, "2026.11.13-120000", "orin-nano-pr319")
+
+	for _, serviceName := range []string{"", "api"} {
+		env, err := buildContainerBaseEnv("com.example.app", serviceName)
+		if err != nil {
+			t.Fatalf("serviceName %q: unexpected error: %v", serviceName, err)
+		}
+		got := effectiveEnv(env)
+		if got["WENDY_AGENT_VERSION"] != "2026.11.13-120000" {
+			t.Errorf("serviceName %q: WENDY_AGENT_VERSION = %q, want %q; env %v",
+				serviceName, got["WENDY_AGENT_VERSION"], "2026.11.13-120000", env)
+		}
+		if got["WENDY_DEVICE_NAME"] != "orin-nano-pr319" {
+			t.Errorf("serviceName %q: WENDY_DEVICE_NAME = %q, want %q; env %v",
+				serviceName, got["WENDY_DEVICE_NAME"], "orin-nano-pr319", env)
+		}
+	}
+}
+
+// An agent that cannot tell its version or the device's name leaves the
+// variable out. An app can tell "not set" from a name; it cannot tell an
+// invented name from a real one.
+func TestBuildContainerBaseEnvOmitsUnknownAgentVersionAndDeviceName(t *testing.T) {
+	stubAgentIdentity(t, "", "")
+
+	env, err := buildContainerBaseEnv("demo-app", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if envHasKey(env, "WENDY_AGENT_VERSION") || envHasKey(env, "WENDY_DEVICE_NAME") {
+		t.Errorf("env sets a variable the agent has no value for; got %v", env)
+	}
+}
+
+// TestBuildContainerBaseEnvOmitsUnsafeAgentVersionAndDeviceName is the same
+// defence-in-depth the app ID and service name get, with one difference: the
+// app ID comes from the deploy and is refused, while these two come from the
+// host, so a value that cannot be written safely is left out and the deploy
+// still goes ahead.
+func TestBuildContainerBaseEnvOmitsUnsafeAgentVersionAndDeviceName(t *testing.T) {
+	old := deviceHostnameWithSuffix
+	t.Cleanup(func() { deviceHostnameWithSuffix = old })
+	deviceHostnameWithSuffix = func() string { return "device.local" }
+
+	unsafe := map[string]string{
+		"NUL":             "robot\x00LD_PRELOAD",
+		"newline":         "robot\nLD_PRELOAD=/tmp/evil.so",
+		"carriage return": "robot\rLD_PRELOAD",
+		"equals sign":     "robot=LD_PRELOAD",
+		"tab":             "robot\tLD_PRELOAD",
+	}
+	for name, value := range unsafe {
+		t.Run(name, func(t *testing.T) {
+			stubAgentIdentity(t, value, value)
+
+			env, err := buildContainerBaseEnv("demo-app", "")
+			if err != nil {
+				t.Fatalf("an unusable host value must not fail the deploy: %v", err)
+			}
+			if envHasKey(env, "WENDY_AGENT_VERSION") || envHasKey(env, "WENDY_DEVICE_NAME") {
+				t.Errorf("env carries an unsafe value; got %q", env)
+			}
+			for _, kv := range env {
+				if strings.Contains(kv, "LD_PRELOAD") {
+					t.Errorf("unsafe value reached the env as %q", kv)
+				}
+			}
+			// The rest of the identity is unaffected.
+			if got := effectiveEnv(env)["WENDY_APP_ID"]; got != "demo-app" {
+				t.Errorf("WENDY_APP_ID = %q, want %q", got, "demo-app")
+			}
+		})
+	}
+}
+
+// TestContainerEnvAgentIdentityCannotBeOverridden pins the two rules that
+// keep WENDY_AGENT_VERSION and WENDY_DEVICE_NAME the agent's own: a deploy
+// that names either key is refused, and a value baked into the image loses
+// to the agent's, which comes later in the list.
+func TestContainerEnvAgentIdentityCannotBeOverridden(t *testing.T) {
+	for _, entry := range []string{"WENDY_AGENT_VERSION=9999.0.0", "WENDY_DEVICE_NAME=someone-else"} {
+		if err := validateUserEnv([]string{"LOG_LEVEL=info", entry}); err == nil {
+			t.Errorf("validateUserEnv accepted %q; the WENDY_ prefix is reserved", entry)
+		}
+	}
+
+	stubAgentIdentity(t, "2026.11.13-120000", "orin-nano-pr319")
+	wendyEnv, err := buildContainerBaseEnv("demo-app", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	imageEnv := []string{"WENDY_AGENT_VERSION=9999.0.0", "WENDY_DEVICE_NAME=someone-else", "PATH=/app/bin"}
+	userEnv := []string{"LOG_LEVEL=info"}
+
+	got := effectiveEnv(mergeContainerEnv(imageEnv, userEnv, wendyEnv))
+
+	if got["WENDY_AGENT_VERSION"] != "2026.11.13-120000" {
+		t.Errorf("WENDY_AGENT_VERSION = %q; the image's value overrode the agent's", got["WENDY_AGENT_VERSION"])
+	}
+	if got["WENDY_DEVICE_NAME"] != "orin-nano-pr319" {
+		t.Errorf("WENDY_DEVICE_NAME = %q; the image's value overrode the agent's", got["WENDY_DEVICE_NAME"])
+	}
+	// The values the agent does not own keep their existing precedence.
+	if got["PATH"] != "/app/bin" || got["LOG_LEVEL"] != "info" {
+		t.Errorf("image PATH or request env lost: PATH=%q LOG_LEVEL=%q", got["PATH"], got["LOG_LEVEL"])
 	}
 }
 
