@@ -408,13 +408,26 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 	defer b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	b.stopVPN()
 	if len(gateway) > 0 && gateway[0] == "auto" {
 		automatic, cfg, err := newAutomaticVPN()
+		if err != nil {
+			return vpn.Config{}, err
+		}
+		b.stopVPN()
 		b.automaticVPN = automatic
 		return cfg, err
 	}
-	dial := reportVPNDialFailures(desktopDial, func(message string) {
+	var err error
+	routes, err = PrepareVPNRoutes(ctx, routes)
+	if err != nil {
+		return vpn.Config{}, err
+	}
+	// Validate route intent before changing a working session, including when
+	// a gateway switch must release the operator's single internet lease.
+	if _, err := vpn.BuildRoutes(routes); err != nil {
+		return vpn.Config{}, err
+	}
+	dial := reportVPNDialFailures(desktopRouteDial(routes), func(message string) {
 		// A full UI event queue must not stall a failed network flow.
 		select {
 		case b.events <- Event{Kind: EventVPNError, Text: message}:
@@ -423,6 +436,13 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 	})
 	var internet *vpn.Internet
 	if len(gateway) > 0 && gateway[0] != "" {
+		if _, matched, err := sessionbroker.ParseMeshSelector(gateway[0]); err != nil || !matched {
+			return vpn.Config{}, errors.New("choose a nearby mesh device as the internet gateway")
+		}
+		// The operator permits only one internet stream. Configuration errors
+		// above preserve the old VPN; opening a replacement gateway requires
+		// releasing that stream first, as before.
+		b.stopVPN()
 		var err error
 		internet, err = openVPNInternet(ctx, gateway[0])
 		if err != nil {
@@ -438,6 +458,8 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 		probes.Close()
 		return vpn.Config{}, err
 	}
+	// Commit the replacement only after its routes and relay are ready.
+	b.stopVPN()
 	b.relay, b.vpnProbes = relay, probes
 	return config, nil
 }

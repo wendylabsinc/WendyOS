@@ -231,7 +231,7 @@ final class GoClient: Sendable {
         let config = pointer.pointee.config
         return VPNConfiguration(endpoint: string(config.endpoint), token: string(config.token),
                                 routes: UnsafeBufferPointer(start: config.routes, count: config.route_count).map {
-            VPNRoute(selector: string($0.selector), name: string($0.name), address: string($0.address), host: string($0.host))
+            VPNRoute(selector: string($0.selector), name: string($0.name), address: string($0.address), host: string($0.host), principal: optionalString($0.principal))
         }, internet: string(config.internet_address4).isEmpty ? nil : VPNInternetConfiguration(
             address4: string(config.internet_address4), address6: string(config.internet_address6), mtu: Int(config.internet_mtu)),
            bootstrapDirectory: string(config.bootstrap_directory), gateway: string(config.gateway))

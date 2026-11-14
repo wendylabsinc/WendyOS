@@ -6,6 +6,7 @@ struct VPNRoute: Codable, Identifiable {
     var name: String
     var address: String
     var host: String
+    var principal: String? = nil
     var id: String { selector }
 }
 struct VPNInternetConfiguration: Codable {
@@ -58,7 +59,7 @@ struct VPNConfiguration: Codable {
         settings.ipv4Settings = ipv4
         settings.mtu = NSNumber(value: internet?.mtu ?? 1400)
         let dns = NEDNSSettings(servers: ["100.64.0.53"])
-        dns.matchDomains = internet == nil ? ["mesh.wendy.dev", "cloud.wendy.dev"] : [""]
+        dns.matchDomains = internet == nil ? ["wendy.internal", "mesh.wendy.dev", "cloud.wendy.dev"] : [""]
         dns.matchDomainsNoSearch = true
         // The cloud dashboard shares this zone. Public names refused by our
         // device resolver must still resolve through the system DNS service.
@@ -73,7 +74,7 @@ struct VPNConfiguration: Codable {
             defer { withExtendedLifetime(strings) {} }
         var cRoutes = routes.map {
             WDRoute(selector: strings.add($0.selector), name: strings.add($0.name),
-                    address: strings.add($0.address), host: strings.add($0.host))
+                    address: strings.add($0.address), host: strings.add($0.host), principal: strings.add($0.principal ?? ""))
         }
         return try cRoutes.withUnsafeMutableBufferPointer { buffer in
             var config = WDVPNConfig(endpoint: strings.add(endpoint), token: strings.add(token),

@@ -35,7 +35,7 @@ func WVPNStart(input *C.WDVPNConfig) *C.char {
 		cfg.Internet = &meshsharing.InternetConfig{Address4: C.GoString(input.internet_address4), Address6: C.GoString(input.internet_address6), MTU: int(input.internet_mtu)}
 	}
 	for _, r := range unsafe.Slice(input.routes, int(input.route_count)) {
-		cfg.Routes = append(cfg.Routes, vpn.Route{Selector: C.GoString(r.selector), Name: C.GoString(r.name), Address: C.GoString(r.address), Host: C.GoString(r.host)})
+		cfg.Routes = append(cfg.Routes, vpn.Route{Selector: C.GoString(r.selector), Name: C.GoString(r.name), Address: C.GoString(r.address), Host: C.GoString(r.host), Principal: C.GoString(r.principal)})
 	}
 
 	cfg, err := platformConfig(cfg)

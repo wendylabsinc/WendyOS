@@ -51,7 +51,13 @@ func (a *automaticVPN) refresh(ctx context.Context, online bool) (vpn.Config, er
 	if err == nil && directory.State == "ready" {
 		routes = []vpn.Route{}
 		for _, device := range directory.Devices {
-			routes = append(routes, vpn.Route{Selector: device.Selector, Name: device.Name})
+			name := device.Name
+			if directory.Truncated {
+				// An omitted device may have the same friendly name. Retain
+				// verified UUID routing until a complete snapshot proves names unique.
+				name = ""
+			}
+			routes = append(routes, vpn.Route{Selector: device.Selector, Name: name, Principal: device.Principal})
 			if device.InternetSharing {
 				candidates = append(candidates, device)
 			}
@@ -111,7 +117,7 @@ func (a *automaticVPN) refresh(ctx context.Context, online bool) (vpn.Config, er
 		}
 	}
 	probes := newVPNProbes(routes, commands.DesktopConnect)
-	relay, cfg, err := vpn.NewRelayWithInternet(routes, desktopDial, probes.Probe, a.internet)
+	relay, cfg, err := vpn.NewRelayWithInternet(routes, desktopRouteDial(routes), probes.Probe, a.internet)
 	if err != nil {
 		probes.Close()
 		if a.internet != nil {

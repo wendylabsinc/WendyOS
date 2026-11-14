@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/miekg/dns"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshsharing"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"net"
 	"net/netip"
 	"net/url"
@@ -21,10 +23,11 @@ const TunnelAddress = "100.64.0.54"
 var devicePrefix = netip.MustParsePrefix("10.99.0.0/16")
 
 type Route struct {
-	Selector string `json:"selector"`
-	Name     string `json:"name"`
-	Address  string `json:"address"`
-	Host     string `json:"host"`
+	Selector  string `json:"selector"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Host      string `json:"host"`
+	Principal string `json:"principal,omitempty"`
 }
 type Config struct {
 	BootstrapDirectory string                      `json:"bootstrapDirectory,omitempty"`
@@ -94,6 +97,19 @@ func BuildRoutes(input []Route) ([]Route, error) {
 				return nil, errors.New("invalid device identifier")
 			}
 		}
+		// A route principal is authenticated inventory metadata, never an
+		// asset-ID guess. Mesh selectors already carry the exact principal.
+		if strings.HasPrefix(r.Selector, "mesh://") {
+			parsed, _, err := routeDevice(r)
+			if err != nil {
+				return nil, err
+			}
+			r.Principal = parsed.Principal()
+		} else if r.Principal != "" {
+			if _, _, err := routeDevice(r); err != nil {
+				return nil, err
+			}
+		}
 		if seen[r.Selector] {
 			return nil, errors.New("duplicate route")
 		}
@@ -112,6 +128,11 @@ func BuildRoutes(input []Route) ([]Route, error) {
 			}
 		}
 		used[id] = true
+		// Only canonical device UUIDs enter the shared private namespace. Legacy
+		// numeric or opaque identifiers keep their original compatibility name.
+		if _, err := meshid.ParseDeviceUUID(strings.ToLower(key)); err == nil && strings.HasPrefix(r.Selector, "mesh://") {
+			zone = meshname.Suffix
+		}
 		r.Address = fmt.Sprintf("10.99.%d.%d", id>>8, id&255)
 		r.Host = "device-" + strings.ToLower(key) + "." + zone
 		if hosts[r.Host] {
@@ -141,9 +162,66 @@ func (c Config) Validate() error {
 		return err
 	}
 	for i, r := range routes {
-		if c.Routes[i].Address != r.Address || c.Routes[i].Host != r.Host {
+		if c.Routes[i].Address != r.Address || !compatibleRouteHost(c.Routes[i], r.Host) {
 			return errors.New("invalid route address or DNS name")
 		}
 	}
 	return nil
+}
+
+// Persisted VPN configurations may still carry the previous generated mesh
+// hostname. Accept only aliases of the same proven device identity; route
+// addresses and selectors are still independently re-derived above.
+func compatibleRouteHost(route Route, canonical string) bool {
+	if strings.EqualFold(route.Host, canonical) {
+		return true
+	}
+	if !strings.HasPrefix(route.Selector, "mesh:") {
+		return false
+	}
+	label, _, ok := deviceDNSLabel(strings.ToLower(dns.Fqdn(route.Host)))
+	want, _, valid := deviceDNSLabel(strings.ToLower(dns.Fqdn(canonical)))
+	if !ok || !valid || label != want || !strings.HasPrefix(label, "device-") {
+		return false
+	}
+	_, err := meshid.ParseDeviceUUID(strings.TrimPrefix(label, "device-"))
+	return err == nil
+}
+
+// routeDevice checks a route's device identity without conflating a Cloud
+// database row ID with its enrolled certificate identity.
+func routeDevice(route Route) (meshid.Device, bool, error) {
+	u, err := url.Parse(route.Selector)
+	if err != nil {
+		return meshid.Device{}, false, err
+	}
+	var expected meshid.Device
+	var tenant string
+	if u.Scheme == "mesh" && u.Host != "" {
+		t, e := meshid.ParseTenant(u.Host)
+		if e != nil {
+			return expected, false, e
+		}
+		expected, e = meshid.ParseDevice(t, strings.TrimPrefix(u.Path, "/"))
+		if e != nil {
+			return expected, false, e
+		}
+		tenant = t.String()
+	} else if u.Scheme == "cloud" {
+		parts := strings.Split(u.Path, "/")
+		if len(parts) == 5 && parts[1] == "tenant" {
+			tenant = parts[2]
+		}
+	}
+	if route.Principal != "" {
+		peer, e := meshid.DeviceFromPrincipal(route.Principal)
+		if e != nil {
+			return expected, false, e
+		}
+		if tenant == "" || peer.Tenant().String() != tenant || expected.IsValid() && peer != expected {
+			return expected, false, errors.New("route principal does not match its selected tenant/device")
+		}
+		return peer, true, nil
+	}
+	return expected, expected.IsValid(), nil
 }

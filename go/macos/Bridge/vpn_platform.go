@@ -8,6 +8,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
 )
 
@@ -18,7 +19,13 @@ func startPlatformVPN(routes []vpn.Route, gateway string) (vpn.Config, error) {
 	if len(routes) == 0 && gateway == "" {
 		return vpn.Config{}, errors.New("select devices or an internet gateway")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	var err error
+	routes, err = backend.PrepareVPNRoutes(ctx, routes)
+	if err != nil {
+		return vpn.Config{}, err
+	}
 	if len(routes) > 0 {
 		routes, err = vpn.BuildRoutes(routes)
 		if err != nil {
@@ -32,8 +39,6 @@ func startPlatformVPN(routes []vpn.Route, gateway string) (vpn.Config, error) {
 	if err = desktop.StopVPN(); err != nil {
 		return vpn.Config{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 	if err := sessionbroker.SetEmbeddedVPNOwned(ctx, true); err != nil {
 		return vpn.Config{}, err
 	}
