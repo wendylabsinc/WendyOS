@@ -115,7 +115,7 @@ func recordingPreview(m *data.Manifest, kind string) ([]uint64, *data.File) {
 	return nil, best
 }
 
-func (b *Backend) RecordingThumbnail(id uint64, selector string, secure bool, episode string, file data.File) ([]byte, error) {
+func (b *Backend) RecordingThumbnail(id uint64, selector string, secure bool, episode string, file data.File) (result []byte, err error) {
 	if episode == "" || !thumbnailEligible(file) {
 		return nil, errors.New("no small preview available")
 	}
@@ -123,7 +123,7 @@ func (b *Backend) RecordingThumbnail(id uint64, selector string, secure bool, ep
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer func() { done(err) }()
 	return readRecordingThumbnail(ctx, conn.DataService, episode, file)
 }
 

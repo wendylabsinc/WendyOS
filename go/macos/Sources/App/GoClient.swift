@@ -39,6 +39,7 @@ final class GoClient: Sendable {
     static let shared = GoClient()
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
     private let accountReads = DispatchQueue(label: "dev.wendy.desktop.accounts", qos: .userInitiated)
+    private let discoveryReads = DispatchQueue(label: "dev.wendy.desktop.discovery", qos: .utility)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
     private let events = DispatchQueue(label: "dev.wendy.desktop.events", qos: .userInitiated)
     private let mobileLifecycle = DispatchQueue(label: "dev.wendy.mobile.lifecycle", qos: .userInitiated)
@@ -133,7 +134,9 @@ final class GoClient: Sendable {
         try await perform { try Self.withCString(cliPath) { try Self.finish(WDInitialize($0)) } }
     }
     func nearbyInventory() async throws -> (devices: [Device], warning: WendyError?) {
-        try await perform {
+        // The backend isolates discovery from device operations; preserve that
+        // isolation here so a network scan cannot queue-block logs or controls.
+        try await BlockingWork.run(on: discoveryReads) {
             guard let result = WDNearby() else { throw WendyError(message: "Missing devices result.") }
             defer { WDDevicesFree(result) }
             let status = result.pointee.status

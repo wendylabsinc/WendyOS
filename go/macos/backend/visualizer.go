@@ -21,7 +21,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recording "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -60,7 +59,7 @@ type VisualVideo struct {
 // camera/playback session. The connection is reused by subsequent Gallery reads.
 func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	// Large device-local indexes can take longer than connection setup. Keep
-	// galleryAcquire's 20-second dial budget while allowing the index to finish.
+	// galleryAcquire's bounded dial budget while allowing the index to finish.
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	conn, release, err := b.galleryAcquire(ctx, selector)
@@ -69,7 +68,7 @@ func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	}
 	defer func() { release(err) }()
 
-	result, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+	result, err := recordingEpisodeIndex(ctx, conn.DataService)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +174,7 @@ func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{})
+	r, err := recordingEpisodeIndex(ctx, conn.DataService)
 	if err != nil {
 		return nil, err
 	}

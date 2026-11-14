@@ -414,6 +414,39 @@ final class MobileTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordingSourcesPreferConnectedCloudOverStaleLAN() async throws {
+        try await initializeIsolatedSandbox()
+        let cloud = Device(id: "cloud://api.wendy.dev:443/tenant/org/asset/board", name: "Board", selector: "cloud://api.wendy.dev:443/tenant/org/asset/board", transport: .cloud, address: "")
+        let lan = Device(id: "spiffe://wendy.sh/tenant/org/device/board", name: "Board", selector: "old:50051", transport: .lan, address: "")
+        let model = AppModel(loadDeviceApps: { [] }, loadDeviceCameras: { [] }, connectDevice: { _, _, _ in
+            DeviceConnection(session: 1, lite: false)
+        })
+        model.initialized = true
+        await model.runMobileMesh(active: false)
+        model.nearby = [lan]
+        await model.connect(cloud)
+        let sources = RecordingSources(model: model)
+        XCTAssertEqual(sources.targets.count, 1)
+        XCTAssertEqual(sources.targets.first?.routes.map(\.selector), [cloud.selector, lan.selector])
+    }
+
+    @MainActor
+    func testLANRetryUsesNewSightingWithoutDroppingSecureIdentity() async {
+        var original = Device(id: "same-device", name: "Board", selector: "old:50051", transport: .lan, address: "")
+        original.requiresMTLS = true
+        let sighting = Device(id: "same-device", name: "Board", selector: "new:50051", transport: .lan, address: "")
+        var selected: Device?
+        let model = AppModel(loadDeviceApps: { [] }, loadDeviceCameras: { [] }, connectDevice: { device, _, _ in
+            selected = device
+            return DeviceConnection(session: 1, lite: false)
+        })
+        model.nearby = [sighting]
+        await model.retryConnection(original)
+        XCTAssertEqual(selected?.selector, sighting.selector)
+        XCTAssertEqual(selected?.requiresMTLS, true)
+    }
+
+    @MainActor
     func testBackgroundDropsDeviceLogsAndForegroundReconnectsSelection() async throws {
         try await initializeIsolatedSandbox()
         let device = Device(id: "local", name: "Local", selector: "local", transport: .lan, address: "")

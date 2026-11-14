@@ -394,8 +394,12 @@ final class AppModel: ObservableObject {
     }
 
     func retryConnection(_ device: Device) async {
-        if device.transport == .cloud {
-            await connect(device, force: true)
+        if device.transport == .cloud || device.transport == .lan || device.transport == .usb {
+            // Reuse the trusted address (or a newer sighting of the same identity).
+            // A full discovery scan on every retry adds seconds before any dial.
+            var current = device.transport == .cloud ? device : nearby.first(where: { $0.id == device.id }) ?? device
+            if device.requiresMTLS { current.requiresMTLS = true }
+            await connect(current, force: true)
             return
         }
         let previous = connectionAttempt
@@ -435,7 +439,9 @@ final class AppModel: ObservableObject {
         var failures = 0
         var lastDiscovery = Date.distantPast
         while !Task.isCancelled && initialized && experienceObserver == observer {
-            do { try await Task.sleep(for: .seconds(failures == 0 ? 15 : min(30, pow(2, Double(min(failures, 5)))))) } catch { return }
+            let retrying = detailError.map(ConnectionRecovery.canRetry) == true
+            let delay = retrying ? min(10, pow(2, Double(min(failures + 1, 4)))) : 15
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard !Task.isCancelled, experienceObserver == observer else { return }
             guard setupSessions == 0 else { continue }
             if let device = selection, connectingDevice == nil,

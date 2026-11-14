@@ -141,6 +141,7 @@ func (t telemetry) StreamLogs(req *pb.StreamLogsRequest, stream grpc.ServerStrea
 type fixtureDevice struct {
 	mu         sync.Mutex
 	address    string
+	socket     string
 	server     *grpc.Server
 	apps       *containers
 	generation int
@@ -162,6 +163,19 @@ func (d *fixtureDevice) setOnline(online bool) (int, error) {
 		pb.RegisterWendyContainerServiceServer(server, d.apps)
 		pb.RegisterWendyAgentServiceServer(server, deviceService{})
 		pb.RegisterWendyTelemetryServiceServer(server, telemetry{generation: d.generation})
+		if d.socket != "" {
+			local, err := net.Listen("unix", d.socket)
+			if err != nil {
+				listener.Close()
+				return d.generation, err
+			}
+			if err := os.Chmod(d.socket, 0600); err != nil {
+				local.Close()
+				listener.Close()
+				return d.generation, err
+			}
+			go server.Serve(local)
+		}
 		d.server = server
 		go server.Serve(listener)
 	} else if !online && d.server != nil {
@@ -172,6 +186,7 @@ func (d *fixtureDevice) setOnline(online bool) (int, error) {
 }
 
 func main() {
+	socket := flag.String("socket", "", "optional private Unix socket for simulator UI tests")
 	recovery := flag.Bool("recovery", false, "enable the loopback controls for the connection recovery test")
 	flag.Parse()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -182,7 +197,7 @@ func main() {
 	}
 	defer web.Close()
 	apps := &containers{port: uint32(web.Addr().(*net.TCPAddr).Port)}
-	device := fixtureDevice{apps: apps, address: "127.0.0.1:0"}
+	device := fixtureDevice{apps: apps, address: "127.0.0.1:0", socket: *socket}
 	if _, err := device.setOnline(true); err != nil {
 		log.Fatal(err)
 	}

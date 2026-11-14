@@ -7,6 +7,9 @@ final class DevicesLensUITests: XCTestCase {
     private func launch(captureLauncher: Bool = false) {
         continueAfterFailure = false
         app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        if let socket = ProcessInfo.processInfo.environment["WENDY_UI_AGENT_SOCKET"] {
+            app.launchEnvironment["WENDY_AGENT_SOCKET"] = socket
+        }
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         if app.buttons["lens.continue"].waitForExistence(timeout: 2) {
@@ -169,6 +172,9 @@ final class DevicesLensUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_BOTTOM_INSETS_FIXTURE"] == "1", "Requires local device fixture")
         continueAfterFailure = false
         app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        if let socket = ProcessInfo.processInfo.environment["WENDY_UI_AGENT_SOCKET"] {
+            app.launchEnvironment["WENDY_AGENT_SOCKET"] = socket
+        }
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
@@ -405,8 +411,19 @@ final class DevicesLensUITests: XCTestCase {
     }
 
     func testDeviceAppLifecycleLogsAndWebPage() throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_APPS_FIXTURE"] == "1",
-                          "Start the loopback app fixture and set TEST_RUNNER_WENDY_UI_APPS_FIXTURE=1.")
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_APPS_FIXTURE"] == "1" &&
+                          ProcessInfo.processInfo.environment["WENDY_UI_AGENT_SOCKET"] == nil,
+                          "Requires a browser-addressable TCP fixture; a Unix socket has no HTTP host.")
+        exerciseAppLifecycle(includeWebPage: true)
+    }
+
+    func testDeviceAppLifecycleAndLogsOverPrivateSocket() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_AGENT_SOCKET"] != nil,
+                          "Requires the private local UI fixture socket.")
+        exerciseAppLifecycle(includeWebPage: false)
+    }
+
+    private func exerciseAppLifecycle(includeWebPage: Bool) {
         launch()
         _ = openDevice("Devices UI QA", source: "local")
         let row = app.buttons["device.apps.row.people-counter"]
@@ -438,11 +455,13 @@ final class DevicesLensUITests: XCTestCase {
         capture("App logs")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(open.waitForExistence(timeout: 10))
-        open.tap()
-        XCTAssertTrue(app.webViews.firstMatch.staticTexts["Fixture dashboard online"].waitForExistence(timeout: 20),
-                      "The selected app’s actual dashboard should load.")
-        capture("App web page")
-        app.buttons["app.browser.done"].tap()
+        if includeWebPage {
+            open.tap()
+            XCTAssertTrue(app.webViews.firstMatch.staticTexts["Fixture dashboard online"].waitForExistence(timeout: 20),
+                          "The selected app’s actual dashboard should load.")
+            capture("App web page")
+            app.buttons["app.browser.done"].tap()
+        }
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         toggle.tap()
         waitForLabel("Start", button: toggle)
@@ -484,7 +503,9 @@ final class DevicesLensUITests: XCTestCase {
         XCTAssertFalse(app.buttons["app.open"].exists)
         capture("App disconnected")
         let nextBoot = try await online(true)
+        let reconnectStarted = Date()
         waitForLabel(initialAction, button: toggle, timeout: 75)
+        print("DEVICE_QA recovered app controls: \(Date().timeIntervalSince(reconnectStarted)) s")
         app.buttons["app.logs"].tap()
         func record(_ boot: Int) -> XCUIElement {
             app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@",
@@ -496,7 +517,9 @@ final class DevicesLensUITests: XCTestCase {
         let cleared = await XCTWaiter.fulfillment(of: [lost], timeout: 60)
         XCTAssertEqual(cleared, .completed, "Records from the previous connection remained visible.")
         let lastBoot = try await online(true)
+        let logsReconnectStarted = Date()
         XCTAssertTrue(record(lastBoot).waitForExistence(timeout: 75), "The same app log page should resume without reselection.")
+        print("DEVICE_QA recovered log stream: \(Date().timeIntervalSince(logsReconnectStarted)) s")
         capture("App logs reconnected")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         waitForLabel(initialAction, button: toggle, timeout: 12)
@@ -728,6 +751,147 @@ final class DevicesLensUITests: XCTestCase {
             back.tap()
         }
         XCTAssertTrue(inventory.isHittable, "Expected the Devices Home inventory cards")
+    }
+
+    func testLiveCampaignDraftAndAskWendySettings() throws {
+        guard let name = ProcessInfo.processInfo.environment["WENDY_UI_DEVICE"], !name.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_WENDY_UI_DEVICE for read-only live QA.")
+        }
+        launch()
+        _ = openDevice(name, source: ProcessInfo.processInfo.environment["WENDY_UI_SOURCE"] ?? "cloud")
+        XCTAssertTrue(app.segmentedControls.buttons["Apps"].waitForExistence(timeout: 30))
+        app.buttons["More device tools"].tap()
+        app.buttons["Campaigns"].tap()
+        let create = app.buttons["Create campaign"].firstMatch
+        XCTAssertTrue(create.waitForExistence(timeout: 15))
+        capture("Live campaign list")
+        create.tap()
+        XCTAssertTrue(app.navigationBars["New campaign"].waitForExistence(timeout: 10))
+        capture("Live campaign draft sources")
+        app.buttons["Cancel"].tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["lens.chat"].tap()
+        let settings = app.buttons["chat.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 15))
+        capture("Live Ask Wendy model state")
+        let enabled = NSPredicate(format: "enabled == true")
+        expectation(for: enabled, evaluatedWith: settings)
+        waitForExpectations(timeout: 30)
+        settings.tap()
+        XCTAssertTrue(app.buttons["Cloud"].waitForExistence(timeout: 10))
+        app.buttons["Cloud"].tap()
+        XCTAssertTrue(app.navigationBars["Cloud models"].waitForExistence(timeout: 10))
+        capture("Live Ask Wendy cloud configuration")
+        app.buttons["Done"].tap()
+    }
+
+    // Read-only live smoke coverage. Timings include XCTest tap/idle overhead;
+    // they are upper bounds for visible readiness, not frame-render benchmarks.
+    func testLiveDevicePagesAndLoadingTimes() throws {
+        guard let name = ProcessInfo.processInfo.environment["WENDY_UI_DEVICE"], !name.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_WENDY_UI_DEVICE for read-only live QA.")
+        }
+        launch()
+        _ = openDevice(name, source: ProcessInfo.processInfo.environment["WENDY_UI_SOURCE"] ?? "cloud")
+        XCTAssertTrue(app.segmentedControls.buttons["Apps"].waitForExistence(timeout: 30))
+        capture("Live Apps")
+        continueAfterFailure = true
+        for page in ["Cameras", "Location", "Settings", "Apps", "Data"] {
+            let start = Date()
+            app.segmentedControls.buttons[page].tap()
+            let marker: XCUIElement
+            switch page {
+            case "Location": marker = app.staticTexts["Home place"]
+            case "Settings": marker = app.buttons["device.settings.Device info"]
+            case "Apps": marker = app.buttons["device.apps.add"]
+            case "Data": marker = app.buttons["All recordings"]
+            default: marker = app.segmentedControls.buttons[page]
+            }
+            XCTAssertTrue(marker.waitForExistence(timeout: 10), "Missing " + page)
+            print("DEVICE_QA navigation \(page): \(Date().timeIntervalSince(start)) s")
+            capture("Live " + page)
+        }
+        app.segmentedControls.buttons["Settings"].tap()
+        for page in ["Device info", "Device management", "Wi-Fi", "Bluetooth", "Audio", "Wendy Mesh", "Notifications", "Pairing", "Logs"] {
+            let row = app.buttons["device.settings." + page]
+            for _ in 0..<5 { if row.exists && row.isHittable { break }; app.swipeUp() }
+            XCTAssertTrue(row.isHittable, "Settings row not reachable: " + page)
+            let start = Date()
+            row.tap()
+            XCTAssertTrue(app.navigationBars[page].waitForExistence(timeout: 10))
+            print("DEVICE_QA settings \(page): \(Date().timeIntervalSince(start)) s")
+            capture("Live settings " + page)
+            app.navigationBars.buttons.firstMatch.tap()
+            XCTAssertTrue(app.segmentedControls.buttons["Settings"].waitForExistence(timeout: 10))
+        }
+    }
+
+    func testLiveDeviceForegroundReconnect() throws {
+        guard let name = ProcessInfo.processInfo.environment["WENDY_UI_DEVICE"], !name.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_WENDY_UI_DEVICE to a live device.")
+        }
+        launch()
+        _ = openDevice(name, source: ProcessInfo.processInfo.environment["WENDY_UI_SOURCE"] ?? "cloud")
+        XCTAssertTrue(app.buttons["device.apps.add"].waitForExistence(timeout: 30))
+        XCUIDevice.shared.press(.home)
+        let started = Date()
+        app.activate()
+        XCTAssertTrue(app.buttons["device.apps.add"].waitForExistence(timeout: 15), "Device controls did not return after foregrounding")
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "device.apps.row.")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "App inventory did not reload on the resumed session")
+        print("DEVICE_QA live Cloud foreground reconnect: \(Date().timeIntervalSince(started)) s")
+        capture("Live Cloud reconnected")
+    }
+
+    func testLiveGalleryPlaybackAndWarmReopen() throws {
+        guard let name = ProcessInfo.processInfo.environment["WENDY_UI_DEVICE"], !name.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_WENDY_UI_DEVICE to a device with recordings.")
+        }
+        launch()
+        _ = openDevice(name, source: ProcessInfo.processInfo.environment["WENDY_UI_SOURCE"] ?? "cloud")
+        XCTAssertTrue(app.segmentedControls.buttons["Data"].waitForExistence(timeout: 30))
+        app.segmentedControls.buttons["Data"].tap()
+        let start = Date()
+        app.buttons["All recordings"].tap()
+        let episode = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "data.episode.")).firstMatch
+        let libraryReady = episode.waitForExistence(timeout: 60)
+        capture("Live Gallery loading outcome")
+        XCTAssertTrue(libraryReady, "No recording library loaded: " + app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
+        print("DEVICE_QA recording library: \(Date().timeIntervalSince(start)) s")
+        capture("Live episode picker")
+        XCTAssertTrue(app.descendants(matching: .any)["data.kindFilter"].firstMatch.exists)
+        episode.tap()
+        XCTAssertTrue(app.buttons["data.play"].isEnabled)
+        let playback = Date()
+        app.buttons["data.play"].tap()
+        XCTAssertTrue(app.buttons["recording.channels"].waitForExistence(timeout: 90), "No playable recording summary or channels")
+        print("DEVICE_QA first recording content: \(Date().timeIntervalSince(playback)) s")
+        let pending = app.descendants(matching: .any)["recording.loadingPlayback"].firstMatch
+        XCTAssertTrue(pending.waitForNonExistence(timeout: 90), "Full playback is still loading")
+        XCTAssertFalse(app.buttons["Retry playback"].exists, "Playback failed after summary loaded")
+        print("DEVICE_QA complete playback: \(Date().timeIntervalSince(playback)) s")
+        capture("Live recording content")
+        app.buttons["recording.channels"].tap()
+        capture("Live recording channels")
+        app.buttons["Done"].firstMatch.tap()
+        // A sheet can expose the presenting device's navigation bar as well.
+        // Return from the foreground playback stack, not that underlying page.
+        let playbackBar = app.navigationBars.element(boundBy: app.navigationBars.count - 1)
+        playbackBar.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["Close recordings"].waitForExistence(timeout: 10))
+        app.buttons["Close recordings"].tap()
+        let warm = Date()
+        if app.tabBars.buttons["Activity"].exists {
+            app.tabBars.buttons["Activity"].tap()
+            app.tabBars.buttons["Data"].tap()
+            let card = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "data.device.", name)).firstMatch
+            XCTAssertTrue(card.waitForExistence(timeout: 5), "Previously loaded recordings disappeared")
+        } else {
+            XCTAssertTrue(app.buttons["All recordings"].waitForExistence(timeout: 5))
+            app.buttons["All recordings"].tap()
+            XCTAssertTrue(episode.waitForExistence(timeout: 5), "Reopening the gallery discarded its cached library")
+        }
+        print("DEVICE_QA warm recording library: \(Date().timeIntervalSince(warm)) s")
     }
 
     private func openDevice(_ name: String, source: String) -> XCUIElement {

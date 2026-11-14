@@ -29,6 +29,18 @@ type galleryConnection struct {
 // Gallery connections are independent of the interactive camera session. Entries
 // share a dial, have bounded idle lifetimes, and are discarded on account changes.
 func (b *Backend) galleryAcquire(ctx context.Context, selector string) (*grpcclient.AgentConnection, func(error), error) {
+	return b.galleryAcquireWith(ctx, selector, func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		dialCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		defer cancel()
+		conn, lite, err := b.connectTarget(dialCtx, selector)
+		if lite != nil {
+			lite.Close()
+		}
+		return conn, err
+	})
+}
+
+func (b *Backend) galleryAcquireWith(ctx context.Context, selector string, dial func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, func(error), error) {
 	p := &b.gallery
 	for {
 		p.mu.Lock()
@@ -87,14 +99,16 @@ func (b *Backend) galleryAcquire(ctx context.Context, selector string) (*grpccli
 		p.entries[selector] = e
 		p.mu.Unlock()
 		// Bound setup, but keep the transport lifetime independent of the first RPC.
-		dialCtx, dialCancel := context.WithTimeout(life, 20*time.Second)
+		// The relay may retain its dial context. Stop only the deadline timer
+		// after setup; the pool owns the successful transport's lifetime.
+		dialCtx, dialCancel := context.WithCancel(life)
+		dialTimer := time.AfterFunc(12*time.Second, dialCancel)
 		stop := context.AfterFunc(ctx, dialCancel)
-		conn, lite, err := b.connectTarget(dialCtx, selector)
+		conn, err := dial(dialCtx)
 		stop()
-		// Agent transports do not retain their dial context (Lite transports do).
-		dialCancel()
-		if lite != nil {
-			lite.Close()
+		dialTimer.Stop()
+		if err == nil {
+			err = dialCtx.Err()
 		}
 		if err == nil && conn == nil {
 			err = errors.New("recordings require a WendyOS agent")
