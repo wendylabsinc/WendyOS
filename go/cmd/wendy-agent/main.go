@@ -1404,6 +1404,17 @@ func main() {
 		}()
 	}
 
+	// The device's registry encryption key (registry plan T10): generated with
+	// the first enrolled identity and registered with Cloud for each identity
+	// the agent loads. Like the roster it stays silent until enrolled.
+	encryptionKey := services.NewDeviceEncryptionKey(logger, configPath)
+	encryptionKey.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		encryptionKey.Run(ctx)
+	}()
+
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
@@ -1554,6 +1565,7 @@ func main() {
 		// peer, until the agent is restarted — so swap in the freshly issued
 		// identity here.
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		encryptionKey.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 		if reportedState != nil {
 			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
@@ -1605,6 +1617,7 @@ func main() {
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
+		encryptionKey.UpdateIdentity("", "", "", "")
 		if reportedState != nil {
 			reportedState.UpdateIdentity("", "", "", "")
 			postbox.UpdateIdentity("", "", "", "")
