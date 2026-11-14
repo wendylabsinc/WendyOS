@@ -112,7 +112,7 @@ struct RecordingEpisodePicker: View {
         .background(MobileLensStyle.background)
         .navigationDestination(item: $player) { id in
             DataVisualizerView(session: 0, deviceName: library.device.title, initialEpisode: id,
-                               recordingDevice: library.device, startPlaying: true)
+                               recordingDevice: library.device, recordingKind: library.episodes.first { $0.id == id }?.kind, startPlaying: true)
                 .id(id).navigationTitle(library.episodes.first { $0.id == id }?.title ?? "Episode")
                 .navigationBarTitleDisplayMode(.inline)
         }

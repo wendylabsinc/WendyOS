@@ -249,6 +249,7 @@ func WDHomeCampaign(session C.uint64_t, name *C.char, trigger C.int32_t) *C.WDVi
 	}
 	return p
 }
+
 //export WDGalleryMetadataAt
 func WDGalleryMetadataAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
 	p := alloc[C.WDGalleryMetadataResult](1)

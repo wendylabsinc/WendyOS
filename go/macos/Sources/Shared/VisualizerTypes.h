@@ -74,4 +74,5 @@ void WDGalleryMetadataFree(WDGalleryMetadataResult *value);
 
 WDVisualSnapshotResult *WDVisualGalleryDataAt(char *selector, char *episode, int summary);
 
+WDVisualSnapshotResult *WDRecordingData(uint64_t request, char *selector, int32_t secure, char *episode, int32_t mode);
 #endif

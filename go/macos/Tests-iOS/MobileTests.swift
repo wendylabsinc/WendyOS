@@ -818,3 +818,12 @@ final class MobileInventoryPresenceTests: XCTestCase {
         XCTAssertLessThan(MobileInventoryPresence.online.rank, MobileInventoryPresence.offline.rank)
     }
 }
+
+extension MobileTests {
+    func testGalleryPlaybackPreservesFullReplayForMixedAndUnknownRecordings() {
+        XCTAssertEqual(MobileRecordingLoadMode.playback(for: .audio), .audio)
+        for kind: MobileRecordingKind? in [nil, .unknown, .mixed, .rosbag, .video, .images, .dataset] {
+            XCTAssertEqual(MobileRecordingLoadMode.playback(for: kind), .full)
+        }
+    }
+}

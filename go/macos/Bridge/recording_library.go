@@ -156,3 +156,8 @@ func WDRecordingExportsFree(p *C.WDRecordingExportsResult) {
 	free(p.status.message)
 	free(p)
 }
+
+//export WDRecordingData
+func WDRecordingData(request C.uint64_t, selector *C.char, secure C.int32_t, episode *C.char, mode C.int32_t) *C.WDVisualSnapshotResult {
+	return visualSnapshotResult(desktop.RecordingData(uint64(request), C.GoString(selector), secure != 0, C.GoString(episode), int(mode)))
+}
