@@ -204,6 +204,14 @@ def main():
     headers = Path("/lib/modules") / release / "build"
     version = run(["dpkg-query", "-W", "-f=${Version}", f"linux-headers-{release}"],
                   capture_output=True).stdout
+    if PINS.get(release, {}).get("version") != version:
+        # Hosted runners roll kernels. Without an audited source the audio gates
+        # are skipped visibly; the other media gates in the job still run.
+        with open(os.environ["GITHUB_ENV"], "a") as env:
+            env.write("WENDY_HOSTED_AUDIO=unavailable\n")
+        print(f"::warning title=Hosted audio gates skipped::No audited ALSA module source for {release} "
+              f"({version}); add its exact-source pin to prepare-hosted-audio-modules.py")
+        return
     pin = validate_headers(headers, release, platform.machine(), version)
     require_empty_stack(pin)
     if not pin["build_soundcore"]:

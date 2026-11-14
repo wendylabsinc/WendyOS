@@ -58,6 +58,29 @@ class AudioModulesTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             modules.validate_headers(root, release, arch, version)
 
+    def test_unpinned_kernel_skips_audio_gates_without_building(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / "env"
+            missing = subprocess.CompletedProcess([], 1)
+            version = subprocess.CompletedProcess([], 0, stdout=AZURE["version"])
+            for release, skipped in [("7.0.0-1018-azure", True), (AZURE_RELEASE, False)]:
+                env_file.write_text("")
+                with self.subTest(release=release), \
+                        patch.dict(os.environ, {"GITHUB_ENV": str(env_file)}), \
+                        patch.object(modules, "host_guard"), \
+                        patch.object(modules.platform, "release", return_value=release), \
+                        patch.object(modules.subprocess, "run", return_value=missing), \
+                        patch.object(modules, "run", return_value=version) as run, \
+                        patch.object(modules, "validate_headers", side_effect=ValueError("reached")) as validate:
+                    if skipped:
+                        modules.main()
+                        validate.assert_not_called()
+                        self.assertEqual(run.call_count, 1)  # Only the header version query.
+                    else:
+                        with self.assertRaisesRegex(ValueError, "reached"):
+                            modules.main()
+                    self.assertEqual(env_file.read_text(), "WENDY_HOSTED_AUDIO=unavailable\n" if skipped else "")
+
     def test_existing_or_loaded_sound_stack_is_never_shadowed(self):
         for loaded, installed in [(True, False), (False, True), (False, False)]:
             with self.subTest(loaded=loaded, installed=installed), \
