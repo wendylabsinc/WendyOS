@@ -1359,7 +1359,7 @@ func (s *ContainerService) ListContainerStats(ctx context.Context, _ *agentpb.Li
 // transport (the device's trusted control channel); there is no per-RPC
 // authorization layer, so the read-only host topology this returns is no more
 // exposed than the existing container-stats RPCs. The call is logged for audit.
-func (s *ContainerService) GetResourceStats(ctx context.Context, _ *agentpb.GetResourceStatsRequest) (*agentpb.GetResourceStatsResponse, error) {
+func (s *ContainerService) GetResourceStats(ctx context.Context, req *agentpb.GetResourceStatsRequest) (*agentpb.GetResourceStatsResponse, error) {
 	s.logger.Info("GetResourceStats")
 	containers, err := s.containerd.GetResourceStats(ctx)
 	if err != nil {
@@ -1375,6 +1375,12 @@ func (s *ContainerService) GetResourceStats(ctx context.Context, _ *agentpb.GetR
 	if mem, memErr := hoststats.ReadMemory(); memErr == nil {
 		host.MemTotalBytes = mem.TotalBytes
 		host.MemAvailableBytes = mem.AvailableBytes
+	}
+	if appID := req.GetGpuAdmissionAppId(); appID != "" {
+		if err := appconfig.ValidateAppID(appID); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid admission app ID")
+		}
+		host.GpuAdmission = s.gpuAdmission(ctx, appID)
 	}
 	host.Gpus = gpuStatsToProto(hoststats.SampleGPU(ctx))
 	host.ThermalZones = thermalZonesToProto(hoststats.ResolveThermal())
