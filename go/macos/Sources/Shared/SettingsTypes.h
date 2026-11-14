@@ -56,6 +56,7 @@ void WDNetworkSettingsFree(WDNetworkSettingsResult *value);
 WDStatus *WDJoinWiFi(uint64_t session, char *ssid, char *password, int32_t security, int32_t hidden);
 WDStatus *WDDisconnectWiFi(uint64_t session);
 WDStatus *WDForgetWiFi(uint64_t session, char *ssid);
+WDStatus *WDSetWiFiPriority(uint64_t session, char *ssid, int32_t priority);
 WDStatus *WDConfigureMesh(uint64_t session, uint32_t changed, uint32_t enabled);
 typedef struct {
     char *name, *address, *device_type;
@@ -121,6 +122,7 @@ WDCampaignNotificationsResult *WDCampaignNotifications(uint64_t session);
 void WDCampaignNotificationsFree(WDCampaignNotificationsResult *value);
 WDStatus *WDSetCampaignNotifications(uint64_t session, char *name, int32_t enabled);
 WDStatus *WDPushRegistration(char *account, uint8_t *token, size_t count, char *topic, int32_t environment, int32_t enabled);
+WDStatus *WDManageDevice(uint64_t session, char *account, char *organization, char *device, char *name, int32_t remove);
 typedef struct {
     char *id, *title, *body;
     double created_at;

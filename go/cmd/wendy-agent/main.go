@@ -829,6 +829,7 @@ func main() {
 		return snapshot()
 	})
 
+
 	registerAllServices := func(srv *grpc.Server) {
 		// Each authenticated listener is created with the device's current tenant.
 		// The app RPC independently requires a same-tenant device principal and

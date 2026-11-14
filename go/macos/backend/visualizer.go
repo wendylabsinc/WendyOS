@@ -21,7 +21,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recording "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -59,7 +58,9 @@ type VisualVideo struct {
 // VisualEpisodesAt reads a device's episode index without replacing the active
 // camera/playback session. The connection is reused by subsequent Gallery reads.
 func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	// Large device-local indexes can take longer than connection setup. Keep
+	// galleryAcquire's bounded dial budget while allowing the index to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	conn, release, err := b.galleryAcquire(ctx, selector)
 	if err != nil {
@@ -67,7 +68,7 @@ func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	}
 	defer func() { release(err) }()
 
-	result, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+	result, err := recordingEpisodeIndex(ctx, conn.DataService)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{})
+	r, err := recordingEpisodeIndex(ctx, conn.DataService)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +218,29 @@ func (b *Backend) VisualEpisodeAt(selector, episode string) (*VisualSnapshot, er
 	return snapshot, err
 }
 
+// VisualGalleryDataAt separates quick measurements from audio; ROS bags stay in the full viewer.
+func (b *Backend) VisualGalleryDataAt(selector, episode string, summary bool) (*VisualSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	conn, release, err := b.galleryAcquire(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	mode := 2
+	if summary {
+		mode = 1
+	}
+	snapshot, err := readVisualEpisodeMode(ctx, conn.DataService, episode, mode)
+	release(err)
+	return snapshot, err
+}
+
 func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode string) (*VisualSnapshot, error) {
+	return readVisualEpisodeMode(ctx, client, episode, 0)
+}
+
+// mode 0 is full replay, 1 is telemetry only, 2 adds audio without ROS bags.
+func readVisualEpisodeMode(ctx context.Context, client pb.DataServiceClient, episode string, mode int) (*VisualSnapshot, error) {
 	r, err := client.Inspect(ctx, &pb.DataInspectRequest{Episode: episode})
 	if err != nil {
 		return nil, err
@@ -269,6 +292,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 	budget := int64(visualTotalLimit)
 	indexes := map[string][]byte{}
 	for _, file := range manifest.Files {
+		if mode != 0 && file.Path != "telemetry.jsonl" {
+			continue
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -303,6 +329,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 	}
 	videoBudget := int64(visualVideoTotalLimit)
 	for _, file := range manifest.Files {
+		if mode != 0 {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -335,7 +364,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 		}
 		out.Videos = append(out.Videos, VisualVideo{Track: track, Path: movie, Times: times})
 	}
-	out.readSensors(ctx, client, episode, manifest)
+	if mode != 1 {
+		out.readSensorsMode(ctx, client, episode, manifest, mode == 0)
+	}
 	if len(out.Samples) >= visualSampleLimit {
 		out.Warnings = append(out.Warnings, "The viewer sample limit was reached. Export the full episode to retain all recorded samples.")
 	}

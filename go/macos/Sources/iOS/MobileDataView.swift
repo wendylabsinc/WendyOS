@@ -2,19 +2,25 @@ import SwiftUI
 import Charts
 
 struct DataVisualizerView: View {
+    @Environment(\.recordingPosters) private var posters
     @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     var initialEpisode: String?
+    var recordingDevice: Device?
+    var recordingKind: MobileRecordingKind?
+    var startPlaying = false
     @State private var episodes: [DataVisualEpisode] = []
     @State private var episode = ""
     @State private var data: DataVisualSnapshot?
     @State private var track = ""
+    @State private var showingChannels = false
     @State private var cursor = 0.0
     @State private var loading = false
     @State private var error: String?
     @State private var generation = 0
     @State private var playing = false
+    @State private var didStartPlayback = false
     @State private var viewport = DataTimelineViewport(start: 0, end: 1)
     @State private var timestamps: [String: [Double]] = [:]
     var body: some View {
@@ -28,12 +34,34 @@ struct DataVisualizerView: View {
                     ForEach(episodes) { Text($0.title + " · " + $0.started.formatted(date: .abbreviated, time: .shortened)).tag($0.id) }
                 }.padding().pickerStyle(.menu)
             }
-            if loading { ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error { FailureView(title: "Could not load recording", error: error) { actions.submit { await load() } } }
+            if loading && data == nil { ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else if let error, data == nil { FailureView(title: "Could not load recording", error: error) { actions.submit { await refresh() } } }
             else if let data {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        Picker("Channel", selection: $track) { ForEach(data.tracks) { Text($0.name).tag($0.id) } }.pickerStyle(.menu)
+                        if loading { ProgressView("Loading playback…").accessibilityIdentifier("recording.loadingPlayback") }
+                        if let error {
+                            Text(PresentedFailure(error).message).font(.footnote).foregroundStyle(.secondary)
+                            Button("Retry playback") { actions.submit { await load() } }
+                        }
+                        Button {
+                            playing = false
+                            showingChannels = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: data.tracks.first { $0.id == track }?.symbol ?? "waveform")
+                                    .font(.title2)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Channel").font(.caption).foregroundStyle(.secondary)
+                                    Text(data.tracks.first { $0.id == track }?.name ?? "Choose a channel")
+                                        .font(.subheadline.weight(.semibold)).lineLimit(2).truncationMode(.middle)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold))
+                            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(MobileLensStyle.card, in: RoundedRectangle(cornerRadius: 18))
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityIdentifier("recording.channels")
                         if let video = data.videos.first(where: { $0.track == track }) {
                             if video.frame(at: cursor) != nil {
                                 DataVisualVideoPlayer(video: video, cursor: cursor, playing: playing, speed: 1, mediaOwner: data.mediaFiles)
@@ -41,6 +69,10 @@ struct DataVisualizerView: View {
                             } else { ContentUnavailableView("No frame at this time", systemImage: "video") }
                         } else if let bytes = data.latest(track: track, at: cursor)?.image, let image = UIImage(data: bytes) {
                             Image(uiImage: image).resizable().scaledToFit()
+                        }
+                        if let segment = data.audio.first(where: { $0.track == track && $0.start <= cursor && cursor < $0.end }) {
+                            MobileRecordingAudio(segment: segment, owner: data.mediaFiles, cursor: cursor, playing: playing)
+                                .id(segment.url).frame(height: 20)
                         }
                         let numeric = data.samples.filter { $0.track == track && $0.value != nil }
                         if !numeric.isEmpty {
@@ -54,15 +86,27 @@ struct DataVisualizerView: View {
                         if let sample = data.latest(track: track, at: cursor) {
                             Text(sample.label).font(.headline)
                             Text(String(format: "Recorded at %+.3f s", sample.seconds)).font(.caption).foregroundStyle(.secondary)
-                            Text(sample.detail).font(.caption.monospaced()).textSelection(.enabled)
+                            DisclosureGroup("Sample details") {
+                                Text(sample.detail).font(.caption.monospaced()).textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                            }.font(.subheadline)
+                                .padding(16).background(MobileLensStyle.card, in: RoundedRectangle(cornerRadius: 16))
                         } else { Text("No sample before the cursor").foregroundStyle(.secondary) }
                         if !data.warnings.isEmpty { Text(data.warnings).font(.caption).foregroundStyle(.secondary) }
                     }.padding()
                 }.refreshable { playing = false; await refresh() }
                 Divider()
-                MobileTimeline(data: data, timestamps: timestamps, cursor: $cursor, playing: $playing, viewport: $viewport)
+                MobileTimeline(data: data, timestamps: timestamps, selectedTrack: $track, cursor: $cursor, playing: $playing, viewport: $viewport)
             } else { ContentUnavailableView("No recordings", systemImage: "film.stack", description: Text("Campaign recordings will appear here."))
                 .mobileRefreshablePlaceholder { await refresh() } }
+        }
+        .background(MobileLensStyle.background)
+        .sheet(isPresented: $showingChannels) {
+            if let data {
+                MobileRecordingChannels(tracks: data.tracks, selection: $track)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
         }
         .task { await refresh() }
         .task(id: playing) {
@@ -79,10 +123,20 @@ struct DataVisualizerView: View {
             }
         }
         .onDisappear { playing = false }
+        .task(id: data.map { ObjectIdentifier($0.mediaFiles) }) {
+            if let data, let recordingDevice, let initialEpisode {
+                await posters?.remember(data, device: recordingDevice, episode: initialEpisode)
+            }
+        }
         .task(id: episode) { if !episode.isEmpty { await load() } }
         .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { actions.submit { await refresh() } }))
     }
     private func refresh() async {
+        if recordingDevice != nil, let initialEpisode {
+            if episode == initialEpisode { await load() }
+            else { episode = initialEpisode }
+            return
+        }
         do {
             episodes = try await GoClient.shared.visualEpisodes(session: session)
             if let initialEpisode { episodes = episodes.filter { $0.id == initialEpisode } }
@@ -94,23 +148,55 @@ struct DataVisualizerView: View {
             else if episode == previous { await load() }
         } catch { self.error = error.localizedDescription }
     }
+    private func show(_ snapshot: DataVisualSnapshot, playback: Bool) {
+        data = snapshot; cursor = snapshot.start
+        viewport = .fitted(start: snapshot.start, end: snapshot.end)
+        timestamps = Dictionary(grouping: snapshot.samples, by: \.track).mapValues { $0.map(\.seconds).sorted() }
+        track = snapshot.videos.first?.track ?? snapshot.audio.first?.track ?? snapshot.tracks.first?.id ?? ""
+        if playback && startPlaying && !didStartPlayback {
+            didStartPlayback = true
+            playing = snapshot.end > snapshot.start
+        }
+    }
     private func load() async {
         generation += 1; let request = generation
-        loading = true; error = nil; playing = false
+        let selectedEpisode = episode
+        loading = true; error = nil; playing = false; data = nil
         do {
-            let snapshot = try await GoClient.shared.visualEpisode(session: session, episode: episode)
+            let snapshot: DataVisualSnapshot
+            if let recordingDevice {
+                let playbackMode = MobileRecordingLoadMode.playback(for: recordingKind)
+                snapshot = try await withThrowingTaskGroup(of: (Bool, DataVisualSnapshot?).self) { group in
+                    group.addTask {
+                        (true, try await GoClient.shared.visualEpisode(device: recordingDevice, episode: selectedEpisode, mode: playbackMode))
+                    }
+                    group.addTask {
+                        (false, try? await GoClient.shared.visualEpisode(device: recordingDevice, episode: selectedEpisode, mode: .summary))
+                    }
+                    defer { group.cancelAll() }
+                    for try await (isPlayback, result) in group {
+                        guard let result else { continue }
+                        if isPlayback { return result }
+                        if request == generation, !Task.isCancelled, !result.tracks.isEmpty {
+                            show(result, playback: false)
+                        }
+                    }
+                    throw CancellationError()
+                }
+            } else {
+                snapshot = try await GoClient.shared.visualEpisode(session: session, episode: selectedEpisode)
+            }
             guard request == generation, !Task.isCancelled else { return }
-            data = snapshot; cursor = snapshot.start
-            viewport = .fitted(start: snapshot.start, end: snapshot.end)
-            timestamps = Dictionary(grouping: snapshot.samples, by: \.track).mapValues { $0.map(\.seconds).sorted() }
-            track = snapshot.videos.first?.track ?? snapshot.tracks.first?.id ?? ""
-        } catch { if request == generation { self.error = error.localizedDescription } }
+            show(snapshot, playback: true)
+        } catch { if request == generation, !Task.isCancelled { self.error = error.localizedDescription } }
         if request == generation { loading = false }
     }
+
 }
 private struct MobileTimeline: View {
     let data: DataVisualSnapshot
     let timestamps: [String: [Double]]
+    @Binding var selectedTrack: String
     @Binding var cursor: Double
     @Binding var playing: Bool
     @Binding var viewport: DataTimelineViewport
@@ -149,7 +235,18 @@ private struct MobileTimeline: View {
                 VStack(spacing: 6) {
                     ForEach(data.tracks) { track in
                         HStack {
-                            Text(track.name).font(.caption2).lineLimit(1).frame(width: 110, alignment: .leading)
+                            Button {
+                                playing = false
+                                selectedTrack = track.id
+                            } label: {
+                                Text(track.name).font(.caption2.weight(selectedTrack == track.id ? .semibold : .regular))
+                                    .lineLimit(2).truncationMode(.middle)
+                                    .frame(width: 110, alignment: .leading).frame(minHeight: 44)
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                                .foregroundStyle(selectedTrack == track.id ? MobileLensStyle.accent : .primary)
+                                .accessibilityLabel("Select \(track.name)")
+                                .accessibilityAddTraits(selectedTrack == track.id ? .isSelected : [])
                             GeometryReader { geometry in
                                 Canvas { context, size in
                                     let values = timestamps[track.id] ?? []
@@ -161,7 +258,7 @@ private struct MobileTimeline: View {
                                         let pixel = Int(x)
                                         guard pixel != lastPixel else { continue }
                                         lastPixel = pixel
-                                        context.fill(Path(CGRect(x: x, y: 3, width: 1.5, height: size.height - 6)), with: .color(.purple))
+                                        context.fill(Path(CGRect(x: x, y: 3, width: 1.5, height: size.height - 6)), with: .color(selectedTrack == track.id ? MobileLensStyle.accent : .secondary.opacity(0.45)))
                                     }
                                     if cursor >= viewport.start && cursor <= viewport.end {
                                         let x = (cursor - viewport.start) / viewport.span * size.width
@@ -172,6 +269,7 @@ private struct MobileTimeline: View {
                                 .contentShape(Rectangle())
                                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                                     playing = false
+                                    selectedTrack = track.id
                                     cursor = viewport.time(at: value.location.x / max(geometry.size.width, 1))
                                 })
                                 .accessibilityLabel("\(track.name) timeline")
@@ -185,12 +283,52 @@ private struct MobileTimeline: View {
                         }
                     }
                 }
-            }.frame(height: min(CGFloat(data.tracks.count) * 30, 150)).scrollIndicators(.visible)
+            }.frame(height: min(CGFloat(data.tracks.count) * 50, 150)).scrollIndicators(.visible)
             Text("\(data.tracks.count) channels · Drag tracks to seek · Pinch to zoom").font(.caption2).foregroundStyle(.secondary)
         }.padding(12)
             .simultaneousGesture(MagnifyGesture().onChanged { value in
                 if zoomOrigin == nil { zoomOrigin = viewport }
                 if let zoomOrigin { viewport = zoomOrigin.zoomed(by: value.magnification, anchor: 0.5, within: bounds) }
             }.onEnded { _ in zoomOrigin = nil })
+    }
+}
+
+private struct MobileRecordingChannels: View {
+    let tracks: [DataVisualTrack]
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+
+    private var filtered: [DataVisualTrack] {
+        tracks.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.kind.localizedCaseInsensitiveContains(search) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(filtered) { track in
+                Button {
+                    selection = track.id
+                    dismiss()
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: track.symbol).frame(width: 24).foregroundStyle(MobileLensStyle.accent)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(track.name).font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                            Text(track.kind.capitalized).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 4)
+                        if selection == track.id {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(MobileLensStyle.accent)
+                        }
+                    }.frame(minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .accessibilityAddTraits(selection == track.id ? .isSelected : [])
+            }
+            .overlay { if filtered.isEmpty { ContentUnavailableView.search(text: search) } }
+            .searchable(text: $search, prompt: "Find a channel")
+            .navigationTitle("Channels")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }.tint(MobileLensStyle.accent)
     }
 }

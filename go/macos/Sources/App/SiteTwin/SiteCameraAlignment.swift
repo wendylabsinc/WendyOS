@@ -37,7 +37,7 @@ enum SiteCameraAlignment {
     }
 
     static func align(model: AppModel, request: SiteAlignmentRequest, feed: CameraFeed,
-                      engine: SiteLocalizationEngine, automatic: Bool = false,
+                      engine: SiteLocalizationEngine, automatic: Bool = false, persist: Bool = true, lensOverride: SiteCameraLens? = nil, expectedRevision: UInt64? = nil,
                       isCurrent: () -> Bool = { true }) async throws -> SiteLocalizationResult {
         let session = request.session, stream = feed.stream, source = request.camera.sourceID
         func check() throws {
@@ -54,10 +54,11 @@ enum SiteCameraAlignment {
         try check()
         guard records.count <= 1 else { throw SiteLocalizationError.invalidResult }
         let record = records.first
+        if let expectedRevision, expectedRevision != (record?.revision ?? 0) { throw WendyError(message: "Camera calibration changed. Reopen calibration and try again.") }
         // An earlier estimate is not a lens measurement. Reusing it here can
         // lock every retry to the same incorrect focal length and distance.
         // The second frame still verifies the newly selected lens below.
-        let measuredLens = record?.lens.flatMap { $0.measured ? $0 : nil }
+        let measuredLens = (lensOverride ?? record?.lens).flatMap { $0.measured ? $0 : nil }
         if automatic, request.camera.position != nil || record?.pose(in: request.site.site, now: Date())?.method == 1 {
             throw WendyError(message: "Manual placement retained.")
         }
@@ -86,8 +87,10 @@ enum SiteCameraAlignment {
               (feed.jpeg?.height ?? feed.decoder.imageSize?.height) == first.height else {
             throw SiteLocalizationError.invalidImage
         }
-        try await GoClient.shared.saveCameraAlignment(session: session, sourceID: source,
-            expectedRevision: record?.revision ?? 0, result: solution)
+        if persist {
+            try await GoClient.shared.saveCameraAlignment(session: session, sourceID: source,
+                expectedRevision: record?.revision ?? 0, result: solution)
+        }
         try check()
         return solution
     }

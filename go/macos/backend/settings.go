@@ -109,7 +109,9 @@ func (b *Backend) JoinWiFi(session uint64, ssid, password string, security int32
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(ssid) == "" || len([]byte(ssid)) > 32 {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	if strings.TrimSpace(ssid) == "" || len([]byte(ssid)) > 32 || strings.ContainsRune(ssid, 0) {
 		return errors.New("enter a Wi-Fi network name of 1–32 bytes")
 	}
 	if security < 0 || security > 6 {
@@ -117,6 +119,9 @@ func (b *Backend) JoinWiFi(session uint64, ssid, password string, security int32
 	}
 	if security == 6 {
 		return errors.New("enterprise Wi-Fi credentials are not supported by this connection form")
+	}
+	if err := validateWiFiPassword(password, security); err != nil {
+		return err
 	}
 	req := &pb.ConnectToWiFiRequest{Ssid: ssid, Password: password, Hidden: &hidden}
 	if security != 0 {
@@ -158,6 +163,8 @@ func (b *Backend) DisconnectWiFi(session uint64) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	value, err := pb.NewWendyWiFiServiceClient(conn.Conn).DisconnectWiFi(ctx, &pb.DisconnectWiFiRequest{})
 	if err != nil {
 		return err
@@ -174,6 +181,8 @@ func (b *Backend) ForgetWiFi(session uint64, ssid string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	if strings.TrimSpace(ssid) == "" {
 		return errors.New("choose a saved Wi-Fi network")
 	}
@@ -183,6 +192,78 @@ func (b *Backend) ForgetWiFi(session uint64, ssid string) error {
 	}
 	return wifiActionResult(value.GetSuccess(), value.GetErrorMessage())
 }
+
+// Uses the existing authenticated session, including Cloud tunnels. Never use
+// Bluetooth onboarding for post-enrollment network management.
+func (b *Backend) SetWiFiPriority(session uint64, ssid string, priority int32) error {
+	ctx, done := b.begin()
+	defer done()
+	if session == 0 {
+		return errors.New("select a device first")
+	}
+	conn, err := b.connection(session)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(ssid) == "" || len([]byte(ssid)) > 32 || strings.ContainsRune(ssid, 0) {
+		return errors.New("choose a saved Wi-Fi network")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	client := pb.NewWendyWiFiServiceClient(conn.Conn)
+	response, err := client.SetWiFiNetworkPriority(ctx, &pb.SetWiFiNetworkPriorityRequest{Ssid: ssid, Priority: priority})
+	if err != nil {
+		return err
+	}
+	if err := wifiActionResult(response.GetSuccess(), response.GetErrorMessage()); err != nil {
+		return err
+	}
+	saved, err := client.ListKnownWiFiNetworks(ctx, &pb.ListKnownWiFiNetworksRequest{})
+	if err != nil {
+		return fmt.Errorf("priority was sent but could not be verified; refresh before trying again: %w", err)
+	}
+	for _, network := range saved.GetNetworks() {
+		if network.GetSsid() == ssid && network.GetPriority() == priority {
+			return nil
+		}
+	}
+	return errors.New("the device has not confirmed the requested priority; refresh before trying again")
+}
+
+func validateWiFiPassword(password string, security int32) error {
+	if strings.ContainsRune(password, 0) {
+		return errors.New("Wi-Fi passwords cannot contain a null character")
+	}
+	// Blank is validated against saved profiles separately; never overwrite them.
+	if password == "" || security == 0 {
+		return nil
+	}
+	n := len([]byte(password))
+	hex := true
+	for _, c := range password {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			hex = false
+		}
+	}
+	switch security {
+	case 1:
+		return errors.New("open networks do not use a password")
+	case 2:
+		if n != 5 && n != 13 && !((n == 10 || n == 26) && hex) {
+			return errors.New("enter a valid WEP key")
+		}
+	case 3, 4:
+		if !(n >= 8 && n <= 63 || n == 64 && hex) {
+			return errors.New("use an 8–63 byte password or a 64-digit hexadecimal key")
+		}
+	case 5:
+		if n > 63 {
+			return errors.New("use a Wi-Fi password of up to 63 bytes")
+		}
+	}
+	return nil
+}
+
 func wifiActionResult(success bool, detail string) error {
 	if success {
 		return nil
