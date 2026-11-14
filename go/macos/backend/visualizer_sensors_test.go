@@ -289,3 +289,32 @@ func TestVisualExportPreservesFilesAndRefusesUnsafeOrUnverifiedArchives(t *testi
 		t.Fatal("exported unsealed recording")
 	}
 }
+
+func TestGalleryStagesDoNotWaitForUnrelatedPayloads(t *testing.T) {
+	c := &visualFixtureClient{manifest: data.Manifest{ID: "episode", State: "complete", CanonicalClock: "CLOCK_BOOTTIME"}, files: map[string][]byte{}}
+	addVisualFile(c, "telemetry.jsonl", "telemetry", []byte(`{"episode_nanos":0,"values":{"memory_free_bytes":123}}`))
+	addVisualFile(c, "audio/mic/a.wav", "audio:mic", audioFixture())
+	addVisualFile(c, "audio/mic/index.jsonl", "audio:mic", []byte(`{"canonical_episode_nanos":2000000000,"canonical_uncertainty_nanos":50000000,"segment":"audio/mic/a.wav","byte_size":4800,"sample_rate":48000,"channels":1,"duration_nanos":50000000}`))
+	addVisualFile(c, "ros2/bag.db3", "ros2:default:domain-0", []byte("not needed for Gallery"))
+	downloads := map[string]bool{}
+	c.mutate = func(chunk *pb.DataDownloadChunk) { downloads[chunk.Path] = true }
+	summary, err := readVisualEpisodeMode(context.Background(), c, "episode", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(downloads) != 1 || !downloads["telemetry.jsonl"] || len(summary.Audio) != 0 || len(summary.Samples) != 1 {
+		t.Fatalf("summary downloads=%v samples=%d", downloads, len(summary.Samples))
+	}
+	media, err := readVisualEpisodeMode(context.Background(), c, "episode", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, a := range media.Audio {
+			_ = os.Remove(a.Path)
+		}
+	}()
+	if len(media.Audio) != 1 || downloads["ros2/bag.db3"] {
+		t.Fatalf("media downloads=%v audio=%d", downloads, len(media.Audio))
+	}
+}
