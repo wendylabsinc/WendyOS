@@ -25,6 +25,7 @@ SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
     "wendy/agent/services/v2/device_info_service.proto"
     "wendy/agent/services/v2/agent_update_service.proto"
     "wendy/agent/services/v2/os_update_service.proto"
+    "wendy/agent/services/v2/power_service.proto"
     "wendy/agent/services/v2/driver_service.proto"
     "wendy/agent/services/v2/arduino_mcu_service.proto"
     "wendy/agent/services/v2/wifi_service.proto"
