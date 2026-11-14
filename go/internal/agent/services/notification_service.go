@@ -167,10 +167,10 @@ func validateNotificationSendRequest(request *systempb.SendRequest) (*cloudpb.No
 		return nil, "", status.Error(codes.InvalidArgument, "notification_id must be a UUID v4")
 	}
 	if !validNotificationText(request.GetTitle(), 120) {
-		return nil, "", status.Error(codes.InvalidArgument, "title must contain 1...120 printable UTF-8 bytes")
+		return nil, "", status.Error(codes.InvalidArgument, "title must contain 1...120 UTF-8 bytes"+notificationTextRule)
 	}
 	if !validNotificationText(request.GetBody(), 2000) {
-		return nil, "", status.Error(codes.InvalidArgument, "body must contain 1...2000 printable UTF-8 bytes")
+		return nil, "", status.Error(codes.InvalidArgument, "body must contain 1...2000 UTF-8 bytes"+notificationTextRule)
 	}
 	switch request.GetSeverity() {
 	case systempb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
@@ -312,6 +312,12 @@ func validNotificationIdentifier(value string, maximumBytes int) bool {
 	}
 	return true
 }
+
+// notificationTextRule spells out what validNotificationText refuses besides
+// length. Cloud's contract for title and body is "no surrounding whitespace or
+// control characters"; a line break is the control character app authors send
+// most, so the refusal names it instead of asking for "printable" text.
+const notificationTextRule = " on one line: no line breaks, tabs or other control characters, and no leading or trailing whitespace"
 
 func validNotificationText(value string, maximumBytes int) bool {
 	if value == "" || len(value) > maximumBytes || strings.TrimSpace(value) != value {
