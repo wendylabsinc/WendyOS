@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
@@ -118,4 +120,58 @@ func TestResetResourceCleanupCannotClearInvalidAuthorization(t *testing.T) {
 	svc.SetResetCleanupError(errors.New("temporary cleanup failure"))
 	svc.SetResetCleanupError(nil)
 	assertResetCleanupBlocksEnrollment(t, svc)
+}
+
+// "Cleanup incomplete" alone leaves a person with nothing to act on: the device
+// refuses to enroll and does not say why. Every refusal names what is failing,
+// in its message for any client and as a detail a client can recognise.
+func TestResetCleanupRefusalsSayWhatIsFailing(t *testing.T) {
+	const cause = "wendy-net policy rule ownership conflict during reset cleanup: family=2 priority=51820 table=51820"
+	svc := NewProvisioningService(zap.NewNop(), t.TempDir())
+	svc.SetResetCleanupError(errors.New(cause))
+	ctx := context.Background()
+	v2 := NewProvisioningServiceV2(svc)
+
+	refusals := []struct {
+		name string
+		code codes.Code
+		call func() error
+	}{
+		{"v1 status", codes.Unavailable, func() error {
+			_, err := svc.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+			return err
+		}},
+		{"v2 status", codes.Unavailable, func() error {
+			_, err := v2.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
+			return err
+		}},
+		{"legacy enrollment", codes.FailedPrecondition, func() error {
+			_, err := svc.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{})
+			return err
+		}},
+		{"ACME enrollment", codes.FailedPrecondition, func() error {
+			_, err := v2.StartACMEProvisioning(ctx, acmeProvisionRequest())
+			return err
+		}},
+	}
+	for _, refusal := range refusals {
+		t.Run(refusal.name, func(t *testing.T) {
+			err := refusal.call()
+			if status.Code(err) != refusal.code {
+				t.Fatalf("code = %v, want %v (err=%v)", status.Code(err), refusal.code, err)
+			}
+			if got, ok := resetcleanup.Cause(err); !ok || got != cause {
+				t.Errorf("resetcleanup.Cause() = %q, %v; want the cleanup failure", got, ok)
+			}
+			if message := status.Convert(err).Message(); !strings.Contains(message, cause) {
+				t.Errorf("message %q does not say what is failing", message)
+			}
+		})
+	}
+
+	// Once cleanup succeeds nothing of it is left on the answers.
+	svc.SetResetCleanupError(nil)
+	if _, err := v2.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}); err != nil {
+		t.Fatalf("status after cleanup = %v, want success", err)
+	}
 }

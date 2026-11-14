@@ -25,6 +25,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/enrolltoken"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -176,6 +177,9 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 // SetResetCleanupError gates enrollment and completion receipts while the agent
 // removes resources from a completed reset. Clearing a transient cleanup error
 // never clears a failure to verify the durable reset authorization itself.
+//
+// The error is what the gated RPCs tell their callers is failing (see
+// resetcleanup.Refusal), so it should name the resource a person can act on.
 func (s *ProvisioningService) SetResetCleanupError(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,7 +222,7 @@ func (s *ProvisioningService) IsProvisioned(_ context.Context, _ *agentpb.IsProv
 		return nil, status.Error(codes.Unavailable, "authorized reset recovery incomplete")
 	}
 	if s.resetCleanupErr != nil {
-		return nil, status.Error(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying")
+		return nil, resetcleanup.Refusal(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying", s.resetCleanupErr)
 	}
 	if s.enrolled {
 		return &agentpb.IsProvisionedResponse{
@@ -253,7 +257,7 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		return nil, status.Error(codes.FailedPrecondition, "authorized reset recovery must finish before enrollment")
 	}
 	if s.resetCleanupErr != nil {
-		return nil, status.Error(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment")
+		return nil, resetcleanup.Refusal(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment", s.resetCleanupErr)
 	}
 	if s.resetRestartPending {
 		return nil, status.Error(codes.FailedPrecondition, "agent must restart after reset before enrollment")
