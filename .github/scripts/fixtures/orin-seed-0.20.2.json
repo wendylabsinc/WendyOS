@@ -1,0 +1,8 @@
+{
+  "device": "jetson-orin-nano",
+  "storage": "nvme",
+  "version": "0.20.2",
+  "url": "https://storage.googleapis.com/wendyos-images-public/images/jetson-orin-nano/0.20.2/wendyos-0.20.2-jetson-orin-nano-nvme.flashpack.tar.zst?generation=1793621477010067",
+  "sha256": "0beef8079b01973a4e7080fafff8047bc3989b8ca10a95567771624820477e56",
+  "size_bytes": 3186995412
+}

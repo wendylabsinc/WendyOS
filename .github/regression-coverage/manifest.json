@@ -1577,7 +1577,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2420",
       "title": "Request signed Wendy Net announcements from one neighbour",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The mesh PR contains many codec, lease and gossip tests, but coverage is spread across kernel, transport and recovery suites with different runtime requirements.",
       "required_follow_up": "Require the four-node current-leaf publication-loss recovery gate and both controls in the existing Linux network job. No kernel-TUN, radio or GUI claim.",
       "evidence": [
@@ -1588,8 +1588,14 @@
             ".github/scripts/test-publication-loss-packets.sh"
           ],
           "result": "Four real TLS/gVisor runtimes form a diamond. The durable publisher restarts with a new signing key while primary DATA is dropped. The receiver withdraws old-key publication authority, keeps unrelated TCP working, and retrieves the exact signed envelope from the alternate supplier after the full production 30-second idle deadline. Local race gate and native Linux capability-free execution pass. Retained timed-out claim and obsolete-leaf-authority controls fail at their intended assertions. Required hosted execution remains pending."
+        },
+        {
+          "head": "d6548a219db321d135bdec5ef6f3be1005df7220",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43324678652/job/131554041888",
+          "result": "Hosted four-node TLS/gVisor publication-loss gate passed TestPublicationLossDiamondRecoversWithCurrentLeaf in35.09s, including the full30-second production retry interval and alternate-supplier current-leaf recovery. Both retained-timed-out-claim and obsolete-leaf-authority controls failed their named behavior assertions. Complete normal/control logs are retained in publication-loss-packets. No physical radio or kernel-TUN coverage is claimed."
         }
-      ]
+      ],
+      "resolution": "Required hosted regression assertions and negative-control outcomes were inspected and passed."
     },
     {
       "key": "2524",
@@ -1755,20 +1761,47 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2261",
       "title": "fix: prefer wired connections over Wi-Fi",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover route choice, advertisement ranking and delayed path moves. Actual multi-interface routing and roaming remain environment-dependent.",
-      "required_follow_up": "Run a network-namespace integration scenario that changes the preferred uplink during a session.",
-      "evidence": []
+      "required_follow_up": "Require the real broker uplink namespace gate and both controls in the existing Linux network job. Verify held-session continuity through preferred-route change and new presence/tunnel source after the session drains. Native kernel execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-broker-uplink-namespace.sh",
+            ".github/scripts/broker_uplink_namespace_test.py",
+            "go/internal/agent/services/broker_uplink_namespace_test.go"
+          ],
+          "result": "Actual TunnelBrokerClient.Run uses TLS presence/tunnel RPCs, kernel source lookup, a reachability probe and unchanged10-second path timers. Two veth routes model Wi-Fi/wired uplinks. Exact-byte tunneled TCP must survive more than two checks after the wired route becomes preferred; after drain, new presence/tunnel traffic must use its source address. Controls disable migration or active-session protection. Native race and ordinary-user Linux wire controls pass; normal/two-control Linux race binaries compile; two offline admission checks and ShellCheck pass. Read-only peer review clear. Registered in the existing network job; privileged namespace normal/control execution remains pending. Physical radio, sysfs hardware classification and Avahi publication are outside this fixture."
+        }
+      ]
     },
     {
       "key": "2224",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2224",
       "title": "cli: reach USB devices when several share the 169.254/16 route",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Link-aware dials/listeners and error translation have tests. Multiple real USB links sharing 169.254/16 are not reproduced in ordinary CI.",
-      "required_follow_up": "Add a multi-interface namespace test and a Windows binding test for two simultaneous USB devices.",
-      "evidence": []
+      "required_follow_up": "Require actual Linux and Windows two-interface169.254/16 routing gates and all five binding/byte-order controls in the existing hosted jobs. Native execution remains pending; simulated adapters do not claim physical USB-driver coverage.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-linklocal-multi-interface.sh",
+            ".github/scripts/linklocal_multi_interface_test.py",
+            "go/internal/cli/linklocal/multi_interface_linux_test.go"
+          ],
+          "result": "Prepared Linux private mount/network/PID namespaces with two real veth peers sharing overlapping 169.254/16 routes. Production Dial, SourceIP and Listen must retain exact device payload/source addresses, callbacks and established sessions through route reversal. Both removed-binding variants compile and require named failures. Two offline admission checks pass. Actual kernel execution is pending on hosted CI; the separate Windows binding requirement remains open. No local privileged or physical USB execution occurred."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-linklocal-windows.py",
+            ".github/scripts/linklocal-windows-network.ps1",
+            ".github/scripts/linklocal_windows_test.py",
+            "go/internal/cli/linklocal/multi_interface_windows_test.go"
+          ],
+          "result": "Prepared hosted-only Windows fixture with two owned Wintun interfaces and real overlapping169.254/16 routes. Production Dial, SourceIP and Listen must return distinct peer data/correct local addresses, including callback and established stream behavior after route reversal. Three controls remove dialing/listening interface binding or restore wrong byte order. Twelve offline admission/lifecycle tests, normal/three-control Windows cross-compiles and PowerShell parsing pass. Guards preserve the preexisting metadata host route and all nonowned routes; refuse preexisting Wintun devices/drivers and overlapping link-local state; drain the exact Windows Job before GUID-specific cleanup. Registered in the existing Windows job. Native execution remains pending; no local driver changes or physical USB execution occurred."
+        }
+      ]
     },
     {
       "key": "2124",
@@ -1936,10 +1969,28 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2086",
       "title": "perf(cli): adaptive chunk compression with stall fallback (WDY-3211)",
       "package": "06",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Compression and stall-watchdog tests cover chunk behavior and timing. Root ownership and long-lived stalled real transports are not fully established by the portable tests.",
-      "required_follow_up": "Add an elevated-state ownership fixture and a blocked transport test that resumes without duplicate content.",
-      "evidence": []
+      "required_follow_up": "Require the real TCP/disk stall gate and elevated cache/session ownership gate, including all seven negative controls, in the existing hosted Linux network job. Root/UID-switch execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-chunk-stall-transport.sh",
+            "go/internal/cli/commands/chunk_stall_transport_test.go",
+            "go/internal/agent/containerd/chunk_stall_fixture.go"
+          ],
+          "result": "Real loopback HTTP/2 runs production ContainerService and disk staging/Bolt storage. The full 30-second watchdog reconnects exactly once with observed gzip headers, reuses retained chunks, reconstructs exact 24 MiB content and drains streams. Native race and unprivileged Linux execution pass. Disabling the watchdog, gzip fallback or retained-content lookup each fails its named assertion. The regression-only store constructor is absent from default builds. Required hosted transport execution and elevated-state ownership remain pending."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-chunk-stall-ownership.sh",
+            ".github/scripts/chunk_stall_ownership_test.py",
+            "go/internal/cli/commands/chunk_stall_ownership_linux_test.go",
+            "go/internal/cli/sessionbroker/ownership_process_linux_test.go"
+          ],
+          "result": "Hosted-only fixture compiles race binaries as the runner, then confines root writes and child UID/GID changes to fresh scratch paths. Cases require root-created cache data to be readable and lockable/updateable by the real runner, elevated Start/Run to reject foreign-owned broker configuration without artifacts or upstream traffic, and a real ordinary-user mTLS/IPC RPC round trip with socket cleanup. Two offline admission tests, ShellCheck, normal/four-control Linux builds and the ordinary-user Linux broker round trip pass. Root cases and the four named regression controls await hosted execution. Registered in the existing Linux network job without another runner."
+        }
+      ]
     },
     {
       "key": "2022",
@@ -2574,10 +2625,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2321",
       "title": "Serve the Mac camera before enrollment, matching Linux",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "CLI tests allow the plaintext Swift camera before enrollment. They mock the agent and do not prove a real unauthenticated camera stream can start.",
-      "required_follow_up": "Add a Swift service-level pre-enrollment stream test while preserving post-enrollment authentication requirements.",
-      "evidence": []
+      "required_follow_up": "Require the production startup camera cases in the existing Swift core job: real plaintext streaming before enrollment and authenticated streaming with unauthenticated refusal after enrollment. Physical capture is separately tracked by1924/2011.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTransportTests.swift"
+          ],
+          "result": "New parameterized productionStartupRegistersCamera starts the actual WendyAgent and its production service list using private state, persisted software-PEM provisioning and controlled capture. Unenrolled plaintext and enrolled mTLS clients list and receive exact frame bytes; a client without its certificate cannot reach camera discovery, and cancellation drains capture before agent stop. Both cases passed. Isolated enrolled-only registration control fails the unenrolled RPC with unimplemented; forced plaintext control fails enrolled authenticated streaming with TLS WRONG_VERSION_NUMBER. Restored transport/adapter suites pass13tests; adjacent startup selection passes7tests in3suites. Internal state/capture seams retain public construction defaults. Registered through existing Swift test discovery; hosted execution pending. No physical AVFoundation pass is claimed."
+        }
+      ]
     },
     {
       "key": "2315",
@@ -2823,10 +2881,40 @@
       "url": "https://github.com/wendylabsinc/wendyos/commit/d11d2e983ddfb1a592e86468bd73458c875082d0",
       "title": "cli: report the config partition written only once it is released",
       "package": "10",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Write, close, unmount, retry and error aggregation have direct tests. The full Orin install rehearsal is opt-in rather than ordinary CI.",
-      "required_follow_up": "Run the rehearsal in a controlled job and fail on skipped seed-verification checks.",
-      "evidence": []
+      "required_follow_up": "Execute the registered full three-pass Orin seed rehearsal and seed-omission control in the existing Nano/NVMe producer row of companion WendyOS-Builder PR356. Preserve full producer archive, real arm64 Agent and private128GiB sparse target; verify complete writer/readback evidence before closure.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-orin-seed-rehearsal.py",
+            ".github/scripts/orin_seed_rehearsal_test.py",
+            ".github/scripts/fixtures/orin-seed-rehearsal-d11d2e983.md",
+            "go/internal/cli/commands/os_install_orin_seed_fixture_test.go",
+            "go/internal/cli/commands/os_install_orin_seed_sim_test.go"
+          ],
+          "result": "Prepared full producer-archive rehearsal with streamed hash/header/XML accounting before allocation, explicit arm64 Agent bytes, private cache and three actual writer passes. Seed-omission control must fail after a complete write and flashed readback. Four portable tests and both actual-file producer helper tests pass locally. Full producer execution and companion workflow registration remain pending; local free capacity is below the preflight minimum. No payload or iteration was removed, and no physical first-boot claim is made."
+        },
+        {
+          "head": "a18e383c36a3aac9eb74d012c7ab4578b67d2a1b",
+          "url": "https://github.com/wendylabsinc/WendyOS-Builder/pull/356",
+          "tests": [
+            "scripts/test-orin-seed-producer.py",
+            "scripts/orin_seed_producer_test.py",
+            ".github/workflows/build.yml",
+            ".github/workflows/scripts-ci.yml"
+          ],
+          "result": "Companion PR356 registers the full writer gate after the existing Nano flashpack build, before upload, using pinned CLI b3af32266cb6c889db7bb42b2a580b5905e2f0cf and the producer artifact on its private job disk. Process-local Go and pinned private libusb preserve publisher setup. Twelve combined producer/manifest checks and an ordinary-user Linux static libusb smoke passed. Hosted Scripts CI passed; actual Nano image/rehearsal job131563455197 is running and full writer proof remains pending. No new job or matrix row was introduced."
+        },
+        {
+          "head": "a18e383c36a3aac9eb74d012c7ab4578b67d2a1b",
+          "cli_head": "b3af32266cb6c889db7bb42b2a580b5905e2f0cf",
+          "url": "https://github.com/wendylabsinc/WendyOS-Builder/actions/runs/43327450044/job/131563455197",
+          "artifact_id": 13995165766,
+          "result": "Actual Nano producer gate passed the complete TestOrinFullInstallSeedSim in64.85s using its 2,742,497,500-byte flashpack SHA2564e96280cb6ce14b6c418ebdfe80664dad78b3e610fbd130fc7ceb4f16d5a24d8, real arm64 Agent SHA256ae1539e658a2f7046da4b808a1754798251a5f9f5086dc52d98ba433c0b46b7b, and full128GiB sparse target. All three actual writer passes completed and verified injected/flashed FAT seed values and Agent bytes, including ext4 replacement on passes2/3 and immutable cached config. Omitted-seed control completed an actual writer pass then failed both injected and flashed wendy.conf readback in13.26s. Evidence reports cleanup_errors empty; normal target allocated26,286,313,472bytes. Artifact retains exact hashes, allocation and normal/control logs. This closes the full host-writer opt-in execution gap; physical first boot remains separately tracked by49fa7f963."
+        }
+      ],
+      "resolution": "The complete producer-archive rehearsal and deliberate seed-omission control executed successfully in the existing Nano CI job. Physical boot is not claimed."
     },
     {
       "key": "2805",
@@ -3036,7 +3124,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2352",
       "title": "Keep wendy-agent running after an apt or dnf upgrade",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Package-script tests mock the service manager and cover upgrade script behavior. They do not install and upgrade the actual DEB/RPM in a running service-manager environment.",
       "required_follow_up": "Require actual installed Agent health and successful normal/control upgrades in fresh booted Ubuntu 22.04, Ubuntu 24.04 and Fedora 44 guests. Verify the current candidate packages, configuration retention and stopped service after removal. Native arm64 release execution remains separate from the amd64 PR gate.",
       "evidence": [
@@ -3054,8 +3142,14 @@
           "head": "751a26298cf2a1986442de1ba291138432bd892f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43319307528/job/131535787788",
           "result": "Actual Ubuntu22 normal and negative-control package journeys passed. Candidate CLI/Agent2099.01.04-regression-package amd64 served real RPCs before and after a successful upgrade; PID/start identity changed, five-second stable health and retained configuration passed, and removal stayed inactive for eight samples. The successful negative-control upgrade left the service inactive for eight samples as required. Cleanup reported no errors. Ubuntu24 stopped in dependency provisioning because nspawn host timezone synchronization prevented tzdata replacing /etc/localtime; --timezone=off fixture correction is prepared. Ubuntu24/Fedora and nativearm64 remain pending; this is partial distribution evidence, not full2352 closure."
+        },
+        {
+          "head": "d6548a219db321d135bdec5ef6f3be1005df7220",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43324678652/job/131554042279",
+          "result": "All six amd64 Ubuntu22, Ubuntu24 and Fedora44 normal/control systemd guest journeys passed using actual candidate CLI/Agent packages. Each normal install and upgrade served real RPCs, changed the service PID/start identity, retained configuration and remained healthy for five seconds; removal stayed inactive for eight samples. Each negative-control upgrade succeeded as a package operation but left the service inactive for eight samples. Guest cleanup reported no errors. Artifact13991699338 retains exact package hashes, transaction logs and observations. This verifies package/service upgrade behavior; native arm64 release and actual GCP upload/consumption are separate acceptance boundaries."
         }
-      ]
+      ],
+      "resolution": "Required hosted regression assertions and negative-control outcomes were inspected and passed."
     },
     {
       "key": "2251",

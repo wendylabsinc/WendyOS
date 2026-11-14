@@ -570,6 +570,26 @@ jobs:
           path: ${{ runner.temp }}/publication-loss-packets
           if-no-files-found: ignore
           retention-days: 7
+      - name: Require full-duration chunk stall recovery over TCP and disk
+        run: bash .github/scripts/test-chunk-stall-transport.sh "$RUNNER_TEMP/chunk-stall-transport"
+      - name: Require elevated cache and session broker ownership boundaries
+        run: bash .github/scripts/test-chunk-stall-ownership.sh "$RUNNER_TEMP/chunk-stall-ownership"
+      - name: Require link-local traffic across competing interface routes
+        run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
+      - name: Require broker uplink migration after active sessions drain
+        run: bash .github/scripts/test-broker-uplink-namespace.sh "$RUNNER_TEMP/broker-uplink"
+      - name: Preserve transfer and interface recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: transfer-interface-recovery
+          path: |
+            ${{ runner.temp }}/chunk-stall-transport/*.log
+            ${{ runner.temp }}/chunk-stall-ownership/*.log
+            ${{ runner.temp }}/linklocal-multi-interface/*.log
+            ${{ runner.temp }}/broker-uplink/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
@@ -991,6 +1011,20 @@ jobs:
           grep -q '^--- PASS: TestUSBDriverSetupPreservesTargetAndVerifiesHelperResult ' "$RUNNER_TEMP/usb-helpers.log"
           grep -q '^--- PASS: TestUSBDriverHelperRegistration ' "$RUNNER_TEMP/usb-helpers.log"
           go test ./go/internal/cli/tegraflash/winusb ./go/internal/cli/qdl -run '^Test(Windows|Signing|Usable|Driver|Compatible|Version|Parse|Instance)' -v -count=1 -timeout 120s
+
+      - name: Require Windows link-local binding across competing routes
+        shell: pwsh
+        run: python .github/scripts/test-linklocal-windows.py "$env:RUNNER_TEMP/linklocal-windows"
+      - name: Preserve Windows interface recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-linklocal-recovery
+          path: |
+            ${{ runner.temp }}/linklocal-windows/**/*.log
+            ${{ runner.temp }}/linklocal-windows/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Rebuild embedded skill tests from a CRLF checkout
         shell: bash
