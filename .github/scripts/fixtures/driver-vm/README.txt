@@ -14,8 +14,9 @@ e2fsprogs to the existing apt dependency installation. Required host tools are o
 Docker, Go from the repository, Python3, curl, qemu-system-x86_64, qemu-img,
 e2fsprogs, tar, findmnt and noninteractive sudo for validated private rootfs
 extraction/mkfs/removal. The host runs the coordinator as its ordinary user.
-No host module load/unload, sysext merge, mount, service change, device access,
-KVM, tap, bridge or guest networking is performed. Kernel mutations happen
+No host module load/unload, sysext merge, mount, service change, tap,
+bridge or guest networking is performed; the only host device opened is
+/dev/kvm, when the runner exposes it. Kernel mutations happen
 only inside the disposable QEMU kernel. Do not bypass the hosted admission.
 
 The guest root is the official Fedora 45 amd64 manifest
@@ -76,7 +77,8 @@ failure is never accepted as a rejected regression.
 Preparation requires 16 GiB free in addition to the caller's existing work. The
 root archive is capped at 3 GiB expanded and 400,000 entries, the base disk at 4 GiB,
 and each of the three overlays is created and removed sequentially. QEMU uses
-2 GiB RAM and two TCG vCPUs. Per-command ceilings are 10 minutes for each Go binary,
+2 GiB RAM and two vCPUs (KVM when available, otherwise TCG, which exceeded
+the guest deadline on hosted runners). Per-command ceilings are 10 minutes for each Go binary,
 20 minutes for the ordinary image build, 3 minutes for export/extraction/mkfs and 10 minutes for
 each boot. All preparation and four boots also share one 25-minute work deadline;
 each command receives the smaller of its own limit and the remaining budget.

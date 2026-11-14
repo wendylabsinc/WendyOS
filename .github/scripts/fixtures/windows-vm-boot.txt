@@ -28,8 +28,8 @@ Pinned inputs
   the private Program Files directory. Actual emulator version and firmware
   size are checked before boot. Extracted executable/firmware hashes are retained.
 
-* WendyOS vm-arm64 0.20.2, published wic.zst, 582023203 bytes,
-  SHA256 f9f3e3ac18936230d1f72a38a097ba3bae5f7e37ccaba663b20dbfcc53849ea3.
+* WendyOS vm-arm64 0.21.0, published wic.zst, 605715600 bytes,
+  SHA256 f4237e58fbded13f661d9c053680ef3622fc0525a7f9fb76df13bb9354e3d762.
   Source: https://storage.googleapis.com/wendyos-images-public/manifests/vm-arm64.json
   Published image path is pinned in the script, not resolved through latest.
   The image supplies the real guest kernel, firmware boot chain and Agent.
@@ -56,7 +56,7 @@ or production source in the normal binary is altered.
 
 The normal CLI starts the VM in the foreground with TCG and a dynamically chosen
 adjacent port pair. The actual `--device vm:NAME device info --read-only --json` path must
-connect to the guest Agent without upgrading/provisioning it and report vm-arm64, arm64, WendyOS 0.20.2 and an Agent
+connect to the guest Agent without upgrading/provisioning it and report vm-arm64, arm64, WendyOS 0.21.0 and an Agent
 version. The Windows TCP table's listener PID must match the private run record,
 and the process's executable path must match the pinned extracted QEMU. This
 prevents an unrelated local Agent from satisfying a boot check.

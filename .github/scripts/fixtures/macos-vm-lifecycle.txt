@@ -2,10 +2,11 @@ Actual macOS VM lifecycle — audits2270,1875 and the VM subset of2060
 
 Existing runner only
 --------------------
-Register in darwin-install-host on macos-15-intel, after that job's actual CLI
-Make build and commands install.test compilation. The Intel runner exercises
-production TCG without pretending nested HVF is available. Other ARM64 rows are
-unchanged. Inspect command -v qemu-system-aarch64 and its --version first; install
+Not registered in hosted CI. Its only hosted execution (macos-15-intel, TCG,
+https://github.com/wendylabsinc/WendyOS/actions/runs/43593970058/job/132444620222)
+passed cancellation, then the guest was still starting its container runtime
+when the production 5-minute simulator wait expired. Run it on the reserved
+ARM64/HVF Mac, after an actual CLI Make build and commands install.test compilation. Inspect command -v qemu-system-aarch64 and its --version first; install
 Homebrew qemu only if absent in this disposable job. Its native binary and
 64MiB edk2-aarch64-code.fd are recorded by SHA256 and version at execution.
 No host networking, hypervisor, service, or kernel configuration is changed.
@@ -22,11 +23,11 @@ existing step timeout to35min and existing job timeout to45min (no added row).
 The wrapper's total32min deadline includes both phases; normal14min/control8min
 are upper bounds, not measured runtime. The outer job budget includes dependency
 setup and its other tests. Reduce bounds only after actual hosted measurements.
-It requires12GiB free before staging one pinned582MB compressed released guest
+It requires12GiB free before staging one pinned606MB compressed released guest
 and sequential16GiB sparse VM disks. The exact release bmap reports
 7,383,041,024 expanded bytes (metadata SHA256
-2fc23f28ca52b11ef59048210cf03c80710071bb71ab49efea64fc1d7cd1a64c,
-https://storage.googleapis.com/wendyos-images-public/images/vm-arm64/0.20.2/wendyos-image-vm-arm64-wendyos.rootfs.wic.bmap).
+cc80175c46ef843763ca76bf02a936af34a4521a7e616c6c6e24d2af2a164dcb,
+https://storage.googleapis.com/wendyos-images-public/images/vm-arm64/0.21.0/wendyos-image-vm-arm64-wendyos.rootfs.wic.bmap).
 The remainder covers the compressed archive, small app/build outputs and guest
 writes; the control begins only after the normal disk is removed. No cold VM/image download was run locally.
 Always retain output/*.log and output/*.json; no disk/binary/media artifacts.
@@ -34,7 +35,7 @@ Register macos_vm_lifecycle_test.py in existing portable automation tests.
 
 Actual assertions
 -----------------
-The published vm-arm64 0.20.2 bytes/size/SHA are shared with the Windows fixture.
+The published vm-arm64 0.21.0 bytes/size/SHA are shared with the Windows fixture.
 Actual CLI vm create writes a fresh private configuration/disk. Production
 ensureSimulatorRunning starts detached QEMU; the fixture's private QMP socket
 pauses its CPU before readiness, verifies the actual Agent cannot answer, and

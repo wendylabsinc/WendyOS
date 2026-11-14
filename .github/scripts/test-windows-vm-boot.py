@@ -28,9 +28,9 @@ PINS={
             'version':'11.1.0','manifest_blob':'bb2abbb27f70181c27f27a1ec5ac5ec490000125',
             'manifest_repository':'microsoft/winget-pkgs',
             'manifest_path':'manifests/s/SoftwareFreedomConservancy/QEMU/11.1.0/SoftwareFreedomConservancy.QEMU.installer.yaml'},
-    'guest':{'url':'https://storage.googleapis.com/wendyos-images-public/images/vm-arm64/0.20.2/wendyos-image-vm-arm64-wendyos.rootfs-20261102113927.wic.zst',
-             'size':582023203,'sha256':'f9f3e3ac18936230d1f72a38a097ba3bae5f7e37ccaba663b20dbfcc53849ea3',
-             'version':'0.20.2','device':'vm-arm64','manifest_url':'https://storage.googleapis.com/wendyos-images-public/manifests/vm-arm64.json'}
+    'guest':{'url':'https://storage.googleapis.com/wendyos-images-public/images/vm-arm64/0.21.0/wendyos-image-vm-arm64-wendyos.rootfs-20261113124536.wic.zst',
+             'size':605715600,'sha256':'f4237e58fbded13f661d9c053680ef3622fc0525a7f9fb76df13bb9354e3d762',
+             'version':'0.21.0','device':'vm-arm64','manifest_url':'https://storage.googleapis.com/wendyos-images-public/manifests/vm-arm64.json'}
 }
 
 
