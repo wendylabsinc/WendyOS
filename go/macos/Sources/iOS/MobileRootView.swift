@@ -160,7 +160,7 @@ struct MobileRootView: View {
                         case .inventory(let inventory):
                             MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
                         case .device(let device):
-                            MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
+                            MobileDeviceView(device: device).id(device.id)
                         case .activity:
                             MobileDeviceActivity(model: model, isVisible: true, segment: $activitySegment, select: select)
                         }
@@ -189,12 +189,6 @@ struct MobileRootView: View {
     private func openActivity() {
         activitySegment = .alerts
         homePath.append(.activity)
-    }
-
-    private func openRecordings(for device: Device) {
-        enter(.devices)
-        recordingPicker = MobileEpisodeRoute(device: device)
-        homeTab = .data
     }
 
     private func enter(_ next: MobileLens) {
@@ -516,6 +510,9 @@ private struct MobileAccountsView: View {
 
     var body: some View {
         actionContent.task { await actions.run() }
+            // Dismiss Settings before the root presents the sign-in browser.
+            // FailureNote must use the same route as the Add account button.
+            .environment(\.failureSignIn, { signIn(false) })
             .preferredColorScheme((MobileAppearance(rawValue: appearance) ?? .system).colorScheme)
     }
 

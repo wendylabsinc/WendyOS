@@ -40,10 +40,14 @@ struct RecordingSources: Hashable {
             if fresh && row.online { routes[id, default: []].append(device) }
             else { unreachable.insert(id) }
         }
-        // Include a device explicitly connected by address, even if it wasn't advertised.
+        // The selected, connected route is already verified. Prefer it over
+        // stale LAN sightings instead of timing those out before trying Cloud.
+        let connected = model.selectedDeviceReady && !model.connectedLite ? model.connected : nil
         if model.selectedDeviceReady, !model.connectedLite, let device = model.connected,
-           device.transport != .cloud, !device.selector.hasPrefix("vm:"),
-           routes[recordingDeviceID(device)] == nil { routes[recordingDeviceID(device)] = [device] }
+           !device.selector.hasPrefix("vm:") {
+            let id = recordingDeviceID(device)
+            routes[id] = (routes[id] ?? []).filter { $0.selector != device.selector } + [device]
+        }
         unavailable = unreachable.subtracting(routes.keys).count
         var knownRoutes = routes
         for row in fleet?.0.devices ?? [] where !row.lite {
@@ -53,6 +57,9 @@ struct RecordingSources: Hashable {
         inventory = knownRoutes.map { MobileRecordingTarget(id: $0.key, routes: $0.value) }.sorted { $0.id < $1.id }
         targets = routes.map { id, devices in
             MobileRecordingTarget(id: id, routes: devices.sorted {
+                if ($0.selector == connected?.selector) != ($1.selector == connected?.selector) {
+                    return $0.selector == connected?.selector
+                }
                 if ($0.transport == .cloud) != ($1.transport == .cloud) { return $1.transport == .cloud }
                 return $0.selector < $1.selector
             })
@@ -84,7 +91,9 @@ struct RecordingRead: Sendable {
     @Published var loading = false
     @Published var unreadAlerts = 0
     @Published var detailProblems: [String: String] = [:]
-    private var generation = 0
+    private var generations: [String: Int] = [:]
+    private var loadingConsumers = Set<String>()
+    private var retainedIDs = Set<String>()
     // In-memory only: MobileRecordingScope is recreated for each account/org.
     // Independent screen refresh counters must not invalidate one another.
     private var lastRefresh: [String: Int] = [:]
@@ -105,9 +114,10 @@ struct RecordingRead: Sendable {
     private var attempted: [String: Set<String>] = [:]
 
     func load(_ targets: [MobileRecordingTarget], refresh: Int, priority: String?, consumer: String = "data", retaining inventory: [MobileRecordingTarget]? = nil) async {
-        generation += 1
-        let run = generation
+        generations[consumer, default: 0] += 1
+        let run = generations[consumer]!
         let knownIDs = Set((inventory ?? targets).map(\.id))
+        retainedIDs = knownIDs
         reads = reads.filter { knownIDs.contains($0.key) }
         refreshedAt = refreshedAt.filter { reads[$0.key] != nil }
         let force = lastRefresh[consumer].map { $0 != refresh } ?? (refresh != 0)
@@ -123,10 +133,17 @@ struct RecordingRead: Sendable {
                 refreshedAt[target.id].map { now().timeIntervalSince($0) >= 30 } != false
         }
         let fetch = self.fetch
-        loading = !pending.isEmpty
-        defer { if generation == run { loading = false } }
+        if pending.isEmpty { loadingConsumers.remove(consumer) }
+        else { loadingConsumers.insert(consumer) }
+        loading = !loadingConsumers.isEmpty
+        defer {
+            if generations[consumer] == run {
+                loadingConsumers.remove(consumer)
+                loading = !loadingConsumers.isEmpty
+            }
+        }
         if !force, let priority, reads[priority]?.library != nil {
-            await loadDetails(for: [priority], run: run)
+            await loadDetails(for: [priority], run: run, consumer: consumer)
         }
         await withTaskGroup(of: RecordingRead.self) { group in
             var remaining = pending.makeIterator()
@@ -134,7 +151,8 @@ struct RecordingRead: Sendable {
                 if !Task.isCancelled, let target = remaining.next() { group.addTask { await fetch(target) } }
             }
             for await read in group {
-                guard !Task.isCancelled, run == generation else { group.cancelAll(); return }
+                guard !Task.isCancelled, run == generations[consumer] else { group.cancelAll(); return }
+                guard retainedIDs.contains(read.target.id) else { continue }
                 var current = read
                 if read.library == nil, let saved = reads[read.target.id]?.library {
                     current.library = saved
@@ -161,18 +179,19 @@ struct RecordingRead: Sendable {
                 if let target = remaining.next() { group.addTask { await fetch(target) } }
             }
         }
-        guard !Task.isCancelled, generation == run else { return }
-        loading = false
-        await loadDetails(for: ordered.map(\.id), run: run)
+        guard !Task.isCancelled, generations[consumer] == run else { return }
+        loadingConsumers.remove(consumer)
+        loading = !loadingConsumers.isEmpty
+        await loadDetails(for: ordered.map(\.id), run: run, consumer: consumer)
     }
 
-    private func loadDetails(for ids: [String], run: Int) async {
+    private func loadDetails(for ids: [String], run: Int, consumer: String) async {
         // One batch per device per round keeps smaller libraries responsive
         // while a board with thousands of recordings is being indexed.
-        while !Task.isCancelled, generation == run {
+        while !Task.isCancelled, generations[consumer] == run {
             var hadWork = false
             for id in ids {
-                guard !Task.isCancelled, generation == run else { return }
+                guard !Task.isCancelled, generations[consumer] == run else { return }
                 guard let read = reads[id], read.problem == nil, let library = read.library else { continue }
                 let visited = attempted[id] ?? []
                 let batch = Array(library.episodes.lazy.filter { !$0.detailsLoaded && !visited.contains($0.id) }
@@ -181,22 +200,73 @@ struct RecordingRead: Sendable {
                 hadWork = true
                 do {
                     let updated = try await fetchDetails(library.device, batch)
-                    guard !Task.isCancelled, generation == run else { return }
+                    guard !Task.isCancelled, generations[consumer] == run else { return }
+                    guard retainedIDs.contains(id), var next = reads[id], let current = next.library else { continue }
                     let known = Dictionary(updated.filter(\.detailsLoaded).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-                    let episodes = library.episodes.map { known[$0.id] ?? $0 }
-                    var next = read
-                    next.library = MobileRecordingLibrary(device: library.device, model: library.model, episodes: episodes, warning: nil)
+                    let requested = Dictionary(batch.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                    let episodes = current.episodes.map { row in
+                        guard let original = requested[row.id], original.bytes == row.bytes,
+                              original.started == row.started, original.title == row.title else { return row }
+                        return known[row.id] ?? row
+                    }
+                    next.library = MobileRecordingLibrary(device: current.device, model: current.model, episodes: episodes, warning: current.warning)
                     reads[id] = next
                     attempted[id, default: []].formUnion(batch.map(\.id))
                     if known.count < batch.count { detailProblems[id] = "Some episode details could not be read on \(library.device.title)." }
                 } catch {
-                    guard !Task.isCancelled, generation == run else { return }
+                    guard !Task.isCancelled, generations[consumer] == run else { return }
                     detailProblems[id] = "\(library.device.title): \(PresentedFailure(error.localizedDescription).details)"
                     attempted[id, default: []].formUnion(library.episodes.lazy.filter { !$0.detailsLoaded }.map(\.id))
                 }
             }
             if !hadWork { return }
         }
+    }
+}
+
+// Open directly over the device page. Switching the containing TabView while
+// presenting its sheet races navigation and can strand the sheet's load task.
+struct MobileDeviceRecordingBrowser: View {
+    @ObservedObject var model: AppModel
+    let device: Device
+    @EnvironmentObject private var catalog: RecordingCatalog
+    @Environment(\.scenePhase) private var phase
+    @Environment(\.dismiss) private var dismiss
+    @State private var refresh = 0
+    private struct LoadKey: Hashable {
+        let active: Bool
+        let target: MobileRecordingTarget
+        let refresh: Int
+    }
+    var body: some View {
+        let sources = RecordingSources(model: model)
+        let id = recordingDeviceID(device)
+        let target = MobileRecordingTarget(id: id, routes: [device])
+        let retained = sources.inventory.contains { $0.id == id } ? sources.inventory : sources.inventory + [target]
+        let key = LoadKey(active: phase != .background && model.mobileScopeIsCurrent, target: target, refresh: refresh)
+        NavigationStack {
+            if let library = catalog.reads[id]?.library {
+                RecordingEpisodePicker(library: library, trigger: nil, issue: catalog.detailProblems[id], retry: { refresh += 1 })
+            } else {
+                Group {
+                    if let problem = catalog.reads[id]?.problem {
+                        FailureView(title: "Could not load recordings", error: problem) { refresh += 1 }
+                    } else {
+                        MobileLoadingPlaceholder(label: "Loading recordings…", style: .recordings).padding(20)
+                    }
+                }.toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Close recordings", systemImage: "xmark") { dismiss() }
+                    }
+                }
+            }
+        }
+        .task(id: key) {
+            guard key.active else { return }
+            await catalog.load([target], refresh: refresh, priority: id, consumer: "device.picker", retaining: retained)
+        }
+        .presentationDetents([.height(640), .large]).presentationCornerRadius(38).presentationDragIndicator(.visible)
+        .presentationBackground(MobileLensStyle.background)
     }
 }
 
@@ -304,6 +374,15 @@ struct MobileLensData: View {
                         }
                     }.toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close recordings", systemImage: "xmark") { picker = nil } } }
                 }
+            }
+            .task(id: LoadKey(active: phase != .background && model.mobileScopeIsCurrent,
+                              targets: targets.filter { $0.id == id }, refresh: refresh, priority: id)) {
+                // The sheet owns its selected-device read even when the Data tab
+                // is being revealed by a navigation transition.
+                guard phase != .background, model.mobileScopeIsCurrent,
+                      let target = targets.first(where: { $0.id == id }) else { return }
+                await catalog.load([target], refresh: refresh, priority: id,
+                                   consumer: "picker", retaining: sources.inventory)
             }
             .presentationDetents([.height(640), .large]).presentationCornerRadius(38).presentationDragIndicator(.visible)
             .presentationBackground(MobileLensStyle.background)

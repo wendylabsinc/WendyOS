@@ -8,7 +8,7 @@ private enum DeviceTool: String, Identifiable { case metrics = "App activity", t
 struct MobileDeviceView: View {
     @EnvironmentObject private var model: AppModel
     let device: Device
-    let openRecordings: () -> Void
+    @State private var showingRecordings = false
     @State private var showingAppearance = false
     @State private var segment = DeviceSegment.apps
     @State private var update: DeviceUpdateSnapshot?
@@ -37,7 +37,7 @@ struct MobileDeviceView: View {
                             case .apps: MobileAppsList(model: model, device: device)
                             case .data:
                                 MobileRecordingSection(model: model, recent: true)
-                                Button(action: openRecordings) {
+                                Button { showingRecordings = true } label: {
                                     LensRow(title: "All recordings", subtitle: "", symbol: "cylinder.split.1x2")
                                 }.buttonStyle(.plain).background(MobileLensStyle.card, in: .rect(cornerRadius: 22))
                             case .location:
@@ -57,6 +57,9 @@ struct MobileDeviceView: View {
             } else { connectionState }
         }.background(MobileLensStyle.background)
             .navigationTitle(device.title).navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingRecordings) {
+                MobileDeviceRecordingBrowser(model: model, device: device)
+            }
             .sheet(isPresented: $showingAppearance) {
                 let key = DeviceAppearanceStore.key(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization, device: device)
                 MobileDeviceAppearanceEditor(device: device, key: key).id(key)

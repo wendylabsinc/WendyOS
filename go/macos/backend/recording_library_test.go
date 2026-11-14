@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,15 +18,42 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type recordingLibraryAgent struct {
 	pb.UnimplementedDataServiceServer
-	block   chan struct{}
-	arrived chan struct{}
+	largeIndex bool
+	block      chan struct{}
+	arrived    chan struct{}
+}
+
+type legacyRecordingIndexClient struct {
+	pb.DataServiceClient
+	calls int
+}
+
+func (c *legacyRecordingIndexClient) Episodes(context.Context, *pb.DataEpisodesRequest, ...grpc.CallOption) (*pb.DataEpisodesResponse, error) {
+	c.calls++
+	if c.calls == 1 {
+		return nil, status.Error(codes.Unimplemented, "Decompressor is not installed for grpc-encoding gzip")
+	}
+	return &pb.DataEpisodesResponse{Episodes: []*pb.DataEpisode{{Id: "legacy"}}}, nil
+}
+
+func TestRecordingIndexFallsBackForAgentWithoutCompression(t *testing.T) {
+	client := &legacyRecordingIndexClient{}
+	index, err := recordingEpisodeIndex(context.Background(), client)
+	if err != nil || len(index.GetEpisodes()) != 1 || client.calls != 2 {
+		t.Fatalf("legacy index: %v, %v, calls=%d", index, err, client.calls)
+	}
 }
 
 func (f *recordingLibraryAgent) Episodes(ctx context.Context, _ *pb.DataEpisodesRequest) (*pb.DataEpisodesResponse, error) {
+	if f.largeIndex {
+		return &pb.DataEpisodesResponse{Episodes: []*pb.DataEpisode{{Id: "large", Name: strings.Repeat("a", 5<<20)}}}, nil
+	}
 	if f.block != nil {
 		close(f.arrived)
 		select {
@@ -261,5 +289,91 @@ func TestRecordingLibraryMixedKinds(t *testing.T) {
 				t.Fatalf("got %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRecordingReadsReuseTransportWithoutSharingCancellation(t *testing.T) {
+	isolatedRecordingAgent(t, &recordingLibraryAgent{})
+	b := New()
+	b.recordings.setActive(true)
+	defer b.galleryReset(true)
+	first := b.BeginRecordingRead()
+	second := b.BeginRecordingRead()
+	defer b.EndRecordingRead(second)
+	_, one, releaseOne, err := b.recordingConnection(first, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, two, releaseTwo, err := b.recordingConnection(second, "fixture", false, time.Second)
+	if err != nil {
+		releaseOne(nil)
+		t.Fatal(err)
+	}
+	defer releaseTwo(nil)
+	if one != two {
+		t.Fatal("index and playback opened separate transports")
+	}
+	b.EndRecordingRead(first)
+	releaseOne(nil)
+	if ctx.Err() != nil {
+		t.Fatal("canceling one reader canceled another")
+	}
+	if _, err := two.DataService.Episodes(ctx, &pb.DataEpisodesRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	b.galleryReset(true)
+	third := b.BeginRecordingRead()
+	defer b.EndRecordingRead(third)
+	if _, _, release, err := b.recordingConnection(third, "fixture", false, time.Second); err == nil {
+		release(nil)
+		t.Fatal("scope reset allowed a stale transport")
+	}
+}
+
+func TestMobileRecordingIndexAcceptsLargeDeviceLibraries(t *testing.T) {
+	isolatedRecordingAgent(t, &recordingLibraryAgent{largeIndex: true})
+	b := New()
+	b.recordings.setActive(true)
+	defer b.galleryReset(true)
+	id := b.BeginRecordingRead()
+	defer b.EndRecordingRead(id)
+	library, err := b.RecordingLibrary(id, "fixture", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(library.Episodes) != 1 {
+		t.Fatalf("episodes: %d", len(library.Episodes))
+	}
+	_, conn, release, err := b.recordingConnection(id, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release(nil)
+	b.conn, b.session = conn, 1
+	rows, err := b.VisualEpisodes(1)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("recent data: %d, %v", len(rows), err)
+	}
+}
+
+func TestRecordingTransportFailureAllowsFreshConnection(t *testing.T) {
+	isolatedRecordingAgent(t, &recordingLibraryAgent{})
+	b := New()
+	b.recordings.setActive(true)
+	defer b.galleryReset(true)
+	id := b.BeginRecordingRead()
+	defer b.EndRecordingRead(id)
+	_, first, release, err := b.recordingConnection(id, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(status.Error(codes.Unavailable, "relay disconnected"))
+	_, second, release, err := b.recordingConnection(id, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release(nil)
+	if first == second {
+		t.Fatal("retry reused a failed relay")
 	}
 }

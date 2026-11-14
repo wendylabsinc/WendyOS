@@ -16,9 +16,13 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/status"
 )
 
-// Each browse/preview/export gets its own cancellation handle and connection.
+// Each browse/preview/export gets its own cancellation handle on a scoped transport.
 // It never reserves or replaces the app's selected device or its live streams.
 type recordingReads struct {
 	mu     sync.Mutex
@@ -66,7 +70,7 @@ func (b *Backend) EndRecordingRead(id uint64) {
 		delete(r.reads, id)
 	}
 }
-func (b *Backend) recordingConnection(id uint64, selector string, secure bool, limit time.Duration) (context.Context, *grpcclient.AgentConnection, func(), error) {
+func (b *Backend) recordingConnection(id uint64, selector string, secure bool, limit time.Duration) (context.Context, *grpcclient.AgentConnection, func(error), error) {
 	b.recordings.mu.Lock()
 	read, ok := b.recordings.reads[id]
 	b.recordings.mu.Unlock()
@@ -74,22 +78,26 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 		return nil, nil, nil, context.Canceled
 	}
 	ctx, cancel := context.WithTimeout(read.ctx, limit)
-	// Separate the dial deadline from the lifetime of a successfully opened
-	// transport. Some relays retain the context supplied to their connector.
-	dialTimer := time.AfterFunc(12*time.Second, cancel)
-	conn, err := commands.DesktopRecordingConnect(ctx, selector, secure)
-	dialTimer.Stop()
-	if err != nil || ctx.Err() != nil {
-		if conn != nil {
-			conn.Close()
-		}
-		if err == nil {
-			err = ctx.Err()
-		}
+	// Share bounded, scope-owned connections across index, metadata, preview
+	// and playback reads. Keep secure LAN policy in the cache identity.
+	key := fmt.Sprintf("recording:%t:%s", secure, selector)
+	conn, release, err := b.galleryAcquireWith(ctx, key, func(dialCtx context.Context) (*grpcclient.AgentConnection, error) {
+		return commands.DesktopRecordingConnect(dialCtx, selector, secure)
+	})
+	if err != nil {
 		cancel()
 		return nil, nil, nil, err
 	}
-	return ctx, conn, func() { cancel(); conn.Close() }, nil
+	return ctx, conn, func(err error) {
+		cancel()
+		// Discard a broken relay so the next read can establish a fresh one.
+		// Canceling one screen must not interrupt another reader.
+		if status.Code(err) == codes.Unavailable {
+			release(err)
+		} else {
+			release(nil)
+		}
+	}, nil
 }
 
 type RecordingEpisode struct {
@@ -106,12 +114,12 @@ type RecordingLibrary struct {
 	Warning, Model string
 }
 
-func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (RecordingLibrary, error) {
+func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (result RecordingLibrary, err error) {
 	ctx, conn, done, err := b.recordingConnection(id, selector, secure, time.Minute)
 	if err != nil {
 		return RecordingLibrary{}, err
 	}
-	defer done()
+	defer func() { done(err) }()
 	// Publish the lightweight index first. Details are fetched progressively by
 	// the scoped mobile catalog, which already retains completed metadata.
 	// Re-inspecting here made every refresh spend up to two seconds repeating
@@ -124,7 +132,7 @@ func (b *Backend) PlayRecording(id uint64, selector string, secure bool, episode
 }
 
 // Keep staged Gallery reads under the mobile request's cancellation and mTLS policy.
-func (b *Backend) RecordingData(id uint64, selector string, secure bool, episode string, mode int) (*VisualSnapshot, error) {
+func (b *Backend) RecordingData(id uint64, selector string, secure bool, episode string, mode int) (result *VisualSnapshot, err error) {
 	if mode < 0 || mode > 2 {
 		return nil, errors.New("invalid recording loading mode")
 	}
@@ -136,10 +144,10 @@ func (b *Backend) RecordingData(id uint64, selector string, secure bool, episode
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer func() { done(err) }()
 	return readVisualEpisodeMode(ctx, conn.DataService, episode, mode)
 }
-func (b *Backend) ExportRecordings(id uint64, selector string, secure bool, episodes []string) ([]string, error) {
+func (b *Backend) ExportRecordings(id uint64, selector string, secure bool, episodes []string) (result []string, err error) {
 	if len(episodes) == 0 {
 		return nil, errors.New("choose recordings to export")
 	}
@@ -147,7 +155,7 @@ func (b *Backend) ExportRecordings(id uint64, selector string, secure bool, epis
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer func() { done(err) }()
 	return exportRecordings(ctx, conn.DataService, episodes)
 }
 func exportRecordings(ctx context.Context, client pb.DataServiceClient, episodes []string) ([]string, error) {
@@ -166,7 +174,7 @@ func exportRecordings(ctx context.Context, client pb.DataServiceClient, episodes
 }
 
 func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (RecordingLibrary, error) {
-	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{})
+	list, err := recordingEpisodeIndex(ctx, client)
 	if err != nil {
 		return RecordingLibrary{}, err
 	}
@@ -187,11 +195,22 @@ func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (Rec
 	return lib, nil
 }
 
+// Large libraries can contain megabytes of names and repeated metadata. Ask
+// gRPC to compress the response, while retaining compatibility with agents
+// that predate compression support. This is a read-only, idempotent request.
+func recordingEpisodeIndex(ctx context.Context, client pb.DataServiceClient) (*pb.DataEpisodesResponse, error) {
+	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
+	if status.Code(err) == codes.Unimplemented {
+		return client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+	}
+	return list, err
+}
+
 const RecordingDetailBatchLimit = 64
 
 // Each continuation reads only the missing IDs selected from the index. On an
 // older Agent this is a bounded set of Inspect RPCs, with no second Episodes RPC.
-func (b *Backend) RecordingDetails(id uint64, selector string, secure bool, ids []string) (RecordingLibrary, error) {
+func (b *Backend) RecordingDetails(id uint64, selector string, secure bool, ids []string) (result RecordingLibrary, err error) {
 	if err := validateRecordingBatch(ids); err != nil {
 		return RecordingLibrary{}, err
 	}
@@ -199,7 +218,7 @@ func (b *Backend) RecordingDetails(id uint64, selector string, secure bool, ids 
 	if err != nil {
 		return RecordingLibrary{}, err
 	}
-	defer done()
+	defer func() { done(err) }()
 	return readRecordingDetails(ctx, conn.DataService, ids)
 }
 func validateRecordingBatch(ids []string) error {
@@ -261,7 +280,7 @@ type savedEpisode[T any] struct {
 }
 
 func inspectSavedEpisodes[T any](ctx context.Context, client pb.DataServiceClient, manifestBudget time.Duration, summarize func(*pb.DataEpisode, *data.Manifest) T) ([]savedEpisode[T], error) {
-	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{})
+	list, err := recordingEpisodeIndex(ctx, client)
 	if err != nil {
 		return nil, err
 	}
