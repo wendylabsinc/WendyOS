@@ -749,7 +749,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -773,7 +772,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -791,7 +789,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366836",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/commands/install_host_linux_test.go",
           "result": "Real GPT/FAT loop disk: two empty lsblk replies precede discovery; installed agent and configuration bytes are read back from the mounted partition."
         }
@@ -809,7 +806,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/commands/install_host_darwin_test.go",
           "result": "An attached hdiutil raw disk returns ENOTTY from Sync, then actual GPT relocation succeeds and independent CRC/backup-header/partition-marker checks pass."
         }
@@ -827,7 +823,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366836",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/commands/install_host_linux_test.go",
           "result": "Two real loop disks exchange paths after ENXIO; GUID/size identify the original, its seeded files are read back and the entire replacement image hash stays unchanged. Only the loop type is adapted to the production disk parser."
         }
@@ -870,7 +865,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/commands/index_marker_darwin_test.go, go/internal/cli/commands/spotlight_darwin_test.go",
           "result": "Actual mounted FAT disk-image volumes retain Spotlight markers after remount; scoped indexing/unmount paths pass success, force, failure and timeout fixtures."
         }
@@ -888,7 +882,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366836",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/commands/install_host_linux_test.go",
           "result": "A real sudo child creates config/cache files; the original user verifies every resulting UID and writes the files again."
         }
@@ -927,7 +920,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/tegraflash/t234/disk_darwin_test.go",
           "result": "Native macOS t234 package passed nested/direct USB trees, path topology, serial and per-LUN media matching."
         }
@@ -954,7 +946,6 @@
           "result": "All 15 cases pass locally; all failed before the preflight fix. The install-session fixture now uses a supported manifest path and passes with -race. New aggregate execution pending."
         },
         {
-          "head": "e4b4c275f7b3a6d075628d738aa96feb48f3204a",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43217773132/job/131181278097",
           "result": "Required Go race job passed the complete CLI commands package, including the ESP32 no-manifest-fetch matrix, Dragonwing progress replay and USB guidance fixture. Native Windows MCP CRLF/stdio import and all installation host jobs also passed at this head."
         }
@@ -975,7 +966,6 @@
           "result": "Windows MCP CRLF and stdio import passed. Linux USB notice fixture remains selected by the ordinary race suite; aggregate rerun pending after correcting the install-session fixture."
         },
         {
-          "head": "e4b4c275f7b3a6d075628d738aa96feb48f3204a",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43217773132/job/131181278097",
           "result": "Required Go race job passed the complete CLI commands package, including the ESP32 no-manifest-fetch matrix, Dragonwing progress replay and USB guidance fixture. Native Windows MCP CRLF/stdio import and all installation host jobs also passed at this head."
         }
@@ -993,7 +983,6 @@
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165367646",
-          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
           "test_file": "go/internal/cli/mcp/skills_test.go",
           "result": "A native Windows checkout explicitly converted to CRLF rebuilt the embedded MCP skills. Frontmatter, preserved resource bytes, advertised tools and real stdio import passed without skips."
         }
@@ -1014,7 +1003,6 @@
           "result": "Actual Firehose session replay passes with two partitions, bounded percentage labels and ACK/NAK completion behavior. IQ9 instructions checked locally; required CI pending."
         },
         {
-          "head": "e4b4c275f7b3a6d075628d738aa96feb48f3204a",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43217773132/job/131181278097",
           "result": "Required Go race job passed the complete CLI commands package, including the ESP32 no-manifest-fetch matrix, Dragonwing progress replay and USB guidance fixture. Native Windows MCP CRLF/stdio import and all installation host jobs also passed at this head."
         }
@@ -1039,7 +1027,6 @@
           "result": "Both agents exercise 12 real process exits: before and after durable key/state writes during initial enrollment, permission repair and legacy migration. Two fresh child processes recover and verify the same enrollment/key, honest initial commit state, stripped legacy key, private file modes and unchanged subsequent-start metadata. Swift also signs a challenge with the recovered key. Premature legacy-key removal mutations fail in both languages. Go provisioning tests pass under -race; all 26 Swift provisioning tests pass. Required CI pending."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         },
@@ -1065,7 +1052,6 @@
           "result": "Five actual child-process exits cover before/after claim, after applying, after decision persistence, and after remote ack before local ack persistence. Two fresh restarts verify action counts, durable outcomes/high-water marks and device-signed acknowledgements. Removing interrupted-entry settlement fails the new test. All postbox tests pass under the race detector."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
@@ -1087,7 +1073,6 @@
           "result": "A real TLS/gRPC fallback server records client leaf bytes. A valid alternative excludes the expired stored session; with all sessions expired, the expired credential reaches the diagnostic handshake and cannot connect. Bypassing the production expiry filter fails the observed-credential assertion. Race run passed."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
@@ -1155,7 +1140,6 @@
           "result": "48 wire-level admission cases cover client/server certificates on LAN TCP, QUIC, first-contact BLE and pinned BLE reconnect. Known-issuer leaf-only exchanges admit the intended device and reject operator, user, service, wrong-tenant and self identities. Existing ECDSA/ML-DSA slow-BLE budget, mixed-version, missing-issuer and real operator-admission suites also pass under -race. Disabling the LAN or BLE self-device guard fails the new matrix. The BLE transport is a deterministic throttled stream, not a physical radio; physical interoperability stays separate under 2534."
         },
         {
-          "head": "711a2d5a1e177c1c25f64303153a8532f7b41164",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875",
           "result": "Required full Linux race suite passed: BLE provider 53.369s and localmesh 150.448s. Both new matrix entry points execute without environment skips. The 48 leaf-only role/tenant/self admission cases and retained slow/mixed-version handshake tests are verified in the stack. Physical radio interoperability remains separately script-ready under 2534."
         }
@@ -1223,7 +1207,6 @@
           "result": "The default/production/development commands select their supported OIDC authorities; only explicit legacy selects the old dashboard. Existing mode, hidden-flag, retired-flag and issuer/callback tests passed under -race. The transition flags remain supported and hidden, so they are retained rather than falsely retired."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
@@ -1245,7 +1228,6 @@
           "result": "Literal URL assertions protect the old dashboard fix under explicit legacy and the currently supported default OIDC authority. A real HTTP callback returns the expected signed-in redirect and authorization code; issuer mismatch/realm validation fixtures also passed under -race."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
@@ -1267,7 +1249,6 @@
           "result": "A real gRPC relay stream and production MCP server exercise denial followed by accepted pairing, initialization, exact catalogue/title/schema output and a successful status call for current and supported older catalogues. Denied-binding frames are ignored both before and after acceptance; response IDs, binding and sequence numbers are checked. Removing the binding guard fails the test. All CloudMCP tests pass under -race."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
@@ -1300,7 +1281,6 @@
           "result": "CI traces show two mkdir lock acquisitions succeeding concurrently, matching uutils/coreutils#13970. A deterministic false-success mkdir fixture failed before an exclusive noclobber PID claim was added and passes afterward. All 32 local POSIX cases pass. Windows and macOS native CI passed on the preceding head; new Linux execution remains pending."
         },
         {
-          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
           "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         },
@@ -1357,7 +1337,6 @@
           "result": "Two real TLS/Babel/gVisor nodes preserve bidirectional TCP across forward/backward certificate-wall jumps, expire the unchanged 15-minute receiver lease while transport remains connected, then stop/join and reconstruct from persisted clock/certificate/origin files to recover traffic. Two local race runs and an isolated capability-free Linux run pass; UTC-coupled scheduling control fails the actual TCP assertion. Hosted required gate remains pending."
         },
         {
-          "head": "80881935847ad1aa99398ea3c41223abfc705456",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315968691/job/131523940942",
           "result": "Required Linux network job passed. Two full runtime tests preserved bidirectional TCP across forward/backward wall changes, expired the unchanged 15-minute receiver lease while the carrier remained live, and recovered traffic after reconstructing both nodes from persisted clock/certificate/origin files. The UTC-coupled scheduling control failed specifically on live TCP after the wall-clock jump."
         }
@@ -1380,7 +1359,6 @@
           "result": "Two real loopback TCP forwarding paths carry relay frames while the renewal socket read is held. Pending and acknowledged renewal cases require live payloads, five successful replacement-path probes, identical signed/persisted lease on presence reconnect, same admitted session and recovered traffic. Ten local race runs plus existing end-to-end tests pass; session-context, discarded-lease and blocking-renewal mutations fail. Loopback gRPC is plaintext; holder proofs and HPKE dial instructions are real. Long-idle keepalive, physical slow radio and kernel routing changes are not claimed."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
           "result": "Required network job passed ten real relay-traffic runs across stalled renewal and simulated path preference changes; context, lease-discard and synchronous-renewal mutations failed. A separate real TLS test preserved the same admitted session over 40 seconds of application silence using unchanged production keepalive; the disabled-keepalive child expired at the 35-second path cutoff and failed with EOF. Physical radio or kernel routing changes are not claimed."
         }
@@ -1404,7 +1382,6 @@
           "result": "Five independent native processes preserve profile identity and explicit disconnect intent through actual broker IPC, authenticated loopback routing and management RPC. The normal journey and omission control pass locally under the race detector; required hosted execution remains pending."
         },
         {
-          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313429618/job/131515134444",
           "result": "Required Linux network job passed. Five fresh native processes completed enable/exit, passive reconnect/disconnect, passive refusal without traffic, explicit resume and passive cleanup. The race-enabled normal journey passed in 46.93 seconds with four real authenticated attachments and withdrawals. Restoring the missing durable-disconnect bit failed at the exact fresh passive automatic-join assertion in 30.95 seconds."
         }
@@ -1430,12 +1407,10 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068104",
-          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
           "result": "Required race job passed bleprovider, btradio, operatormesh and sessionbroker. The relevant non-opt-in issuer/recipe and admission-lock/profile tests are active on Linux. Root independently verified no source/test changes in btradio, operatormesh or sessionbroker between that head and this batch. This proves software boundaries only; native radio outcomes remain physical."
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068157",
-          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
           "result": "Required network gate passed explicit-disconnect intent across native process restarts and cold broker/spare-carrier recovery with actual traffic. Discovery is loopback, so the new reserved Mac/radio procedure is still required for physical discovery."
         }
       ]
@@ -1457,7 +1432,6 @@
           "result": "Live HTTP registry and Agent RPC traffic reproduced an active transfer surviving owning connection closure. The proxy now cancels both owned sockets and joins its relays. Forced late closer registration tests the cache-lock boundary; fresh connections recover. Twenty native race runs passed and restoring lock order or removing relay cancellation failed the intended assertions."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666998",
           "runner": "required Linux network regressions",
           "result": "Twenty live registry race runs and three broker reconnection race runs passed. Restoring the cache lock order, omitting owned socket cancellation, or retaining the retired management client each failed its required assertion."
@@ -1481,7 +1455,6 @@
           "result": "Real TLS management RPC is held across carrier loss. The request and remote handler must cancel, retired gRPC connection must reach Shutdown, and the same IPC client recovers with a fresh management client. Final broker teardown closes the replacement too. Three native race runs passed; omitting retired-client Close fails its Shutdown assertion."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666998",
           "runner": "required Linux network regressions",
           "result": "Twenty live registry race runs and three broker reconnection race runs passed. Restoring the cache lock order, omitting owned socket cancellation, or retaining the retired management client each failed its required assertion."
@@ -1505,7 +1478,6 @@
           "result": "Production TLS client/server, registry, UDP manager and real echo applications prove unrelated/fresh sessions, owner replacement, revocation and recovery progress while one accepted TLS socket write is paused. Twenty race-enabled runs passed in ordinary Linux Docker; direct synchronous TLS writes fail the healthy-flow timeout. Required network-job execution is registered on the existing runner and remains pending."
         },
         {
-          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498192",
           "result": "Required Linux network job passed 20 real TLS/UDP admission, registry replacement, revocation and recovery runs under race detection. Synchronous TLS writes failed the unrelated healthy-flow timeout."
         }
@@ -1538,7 +1510,6 @@
           "result": "Found namespace-only native listener/dial tests were not selected by the existing required operator gate. Added explicit required selection, nonzero PASS markers and skip rejection using the already-built localmesh binary in private namespaces. Hosted runtime remains pending. Existing crossed-provider TLS software tests passed in the ordinary race job; those do not establish native listener/kernel behavior."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
           "artifact": 14015322328,
           "result": "Full Linux network job passed. Actual TestNormalNativeTLSListenerAttachmentAndDrain passed context-cancellation and listener-close cases with zero retained links/leases. TestNormalNativeTLSLANDialsLitePeer passed real socket/TLS/hello and bootstrap control, using a controlled mDNS result in the private interface namespace. Artifact contains both explicit PASS results and no skips. This proves software listener/attachment ownership; physical BLE/WiFi handover is covered only by the prepared exact-target procedure, all cases not_run."
@@ -1593,7 +1564,6 @@
           "result": "Five normal real-RPC renewal race runs passed locally. Three independent exact pre-fix closure mutations reported a data race at both the captured lease read and acknowledged lease replacement. Existing relay traffic script invokes the dedicated gate; hosted execution pending."
         },
         {
-          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781622",
           "result": "Required Linux network job passed5normal real-RPC renewal runs under race and rejected3independent exact pre-fix closure mutations. Each negative control required DATA RACE at both the captured lease read and acknowledged lease replacement source lines; traffic/path tests remain separate."
         }
@@ -1623,7 +1593,6 @@
           "result": "Unchanged production 30-second keepalive preserves three original TLS sockets, lease, presence and session payloads after 40 seconds of application silence across a 35-second idle-expiring TCP proxy. A concurrent child omitting only keepalive loses its same-session read with EOF. Local race validation passes in 42 seconds; hosted invocation is required once. Trust is private to subprocesses, with no system trust changes. Physical route migration is separate from this idle transport contract."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
           "result": "Required network job passed ten real relay-traffic runs across stalled renewal and simulated path preference changes; context, lease-discard and synchronous-renewal mutations failed. A separate real TLS test preserved the same admitted session over 40 seconds of application silence using unchanged production keepalive; the disabled-keepalive child expired at the 35-second path cutoff and failed with EOF. Physical radio or kernel routing changes are not claimed."
         }
@@ -1647,7 +1616,6 @@
           "result": "Four real TLS/gVisor runtimes form a diamond. The durable publisher restarts with a new signing key while primary DATA is dropped. The receiver withdraws old-key publication authority, keeps unrelated TCP working, and retrieves the exact signed envelope from the alternate supplier after the full production 30-second idle deadline. Local race gate and native Linux capability-free execution pass. Retained timed-out claim and obsolete-leaf-authority controls fail at their intended assertions. Required hosted execution remains pending."
         },
         {
-          "head": "d6548a219db321d135bdec5ef6f3be1005df7220",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43324678652/job/131554041888",
           "result": "Hosted four-node TLS/gVisor publication-loss gate passed TestPublicationLossDiamondRecoversWithCurrentLeaf in35.09s, including the full30-second production retry interval and alternate-supplier current-leaf recovery. Both retained-timed-out-claim and obsolete-leaf-authority controls failed their named behavior assertions. Complete normal/control logs are retained in publication-loss-packets. No physical radio or kernel-TUN coverage is claimed."
         }
@@ -1681,7 +1649,6 @@
           "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
           "artifact": 14014893304,
           "result": "Actual namespace/TLS/controller/kernel-policy normal gate passed in30.86s. Retained one dial across three pending steps and17.187s, then verified existing dual-stack recovery and cleanup. Historical withdrawal control fails at pending controller withdrew the live TLS lease before recovery. Downloaded artifact source hashes match current unchanged production/fixture files. Physical BLE timing, firmware and roaming remain covered by the prepared exact-target procedure, all cases not_run."
@@ -1714,7 +1681,6 @@
           "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
           "result": "All eight actual Linux provider/TLS/hello/echo outcomes passed under the race detector; the historical refusal-fallback control failed at its intended transport assertion. Hosted log includes BLE_INTERVAL_PROVIDER_MATRIX_VERIFIED. The exact controller/radio procedure is ready, but HCI outcomes in CI are synthetic and physical firmware qualification remains not_run."
         }
@@ -1740,7 +1706,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068104",
-          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
           "result": "Required race job passed bleprovider, btradio, operatormesh and sessionbroker. The relevant non-opt-in issuer/recipe and admission-lock/profile tests are active on Linux. Root independently verified no source/test changes in btradio, operatormesh or sessionbroker between that head and this batch. This proves software boundaries only; native radio outcomes remain physical."
         }
       ]
@@ -1802,7 +1767,6 @@
           "result": "Unchanged production BlueZ Connect runs over a private real dbus-daemon with a controlled BlueZ peer. Five Linux cases pass: stale-key recovery, hollow-HID recovery, rejected fresh pairing, cancellation during rediscovery and refusal to repair without pair authorization. Assertions cover remove/rediscover/fresh pair/trust/connect order, foreign pairing rejection and actual bus-name withdrawal. Disabling key repair, HID readiness or trust restoration fails intended assertions. Local Linux execution is non-race; required hosted race execution pending. Six offline physical-plan/observer checks pass; reserved vendor peripheral-only reset, real input events, exact identities and restoration are specified, with every hardware case not_run."
         },
         {
-          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325987",
           "result": "Private real D-Bus lifecycle and all three historical controls passed under the hosted Linux race detector. Reserved BlueZ/HID physical procedure is prepared; actual LE/classic key reset and input recovery remain not_run."
         }
@@ -1824,7 +1788,6 @@
           "result": "Real loopback TCP, outer broker mTLS and inner Agent mTLS carry distinct fleet requests and a build-host capability/BuildImage spec, log and terminal result after genuine refused direct TCP. Explicit names select the correct target while a primary-device decoy stays unused. Four direct-only/wrong-name controls fail as expected. Normal local tests pass; optional local race compilation stopped for disk pressure, with no race result claimed. Hosted race execution remains pending. No real BuildKit compilation or physical delivery is claimed."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
           "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
@@ -1846,7 +1809,6 @@
           "result": "Real loopback TCP, outer broker mTLS and inner Agent mTLS carry distinct fleet requests and a build-host capability/BuildImage spec, log and terminal result after genuine refused direct TCP. Explicit names select the correct target while a primary-device decoy stays unused. Four direct-only/wrong-name controls fail as expected. Normal local tests pass; optional local race compilation stopped for disk pressure, with no race result claimed. Hosted race execution remains pending. No real BuildKit compilation or physical delivery is claimed."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
           "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
@@ -1867,7 +1829,6 @@
         },
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2852",
-          "head": "0f38d74cd3b90b09ef417b72d631d9caabfa71e8",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43268520988",
           "result": "Required operator policy job 131358477619 and Go Tests aggregate passed at the final network PR head. Both unchanged pre-operator baselines exercised actual kernel table migration/withdrawal, warm rollback after SIGKILL and DNS cleanup. All selected parent tests had required PASS markers and no skips. Go/test-launcher source is unchanged from the earlier inspected passing b12ed124c kernel job."
         }
@@ -1888,7 +1849,6 @@
           "result": "Added one identical packet scenario for userspace and real kernel TUN backends. It uses cross-tenant identities with the same IPv6 address, rejects invalid principals, reuses the refused link ID, and checks exact IPv6 transit bytes and hop limits. Absent, withdrawn and explicitly unreachable routes must drop packets while a control route on the same carrier remains usable; both restorations must forward again. Userspace passes locally under the Linux race detector. A required isolated Linux CI job runs both backends without skips and requires removal of the kernel tenant guard and retention of a withdrawn userspace route to fail their respective assertions. Kernel execution and mutation checks remain pending CI."
         },
         {
-          "head": "c07ba39a85d6ed7d7c90a72688316cd1010a9cfe",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43268919079/job/131361539489",
           "result": "Identical real IPv6 packet contracts passed for kernel and userspace backends. Removing kernel tenant admission and retaining withdrawn userspace routes each failed the targeted assertion. Required Go aggregate, Swift unit/build and Linux E2E checks passed at this PR head."
         }
@@ -1910,7 +1870,6 @@
         },
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2852",
-          "head": "0f38d74cd3b90b09ef417b72d631d9caabfa71e8",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43268520988",
           "result": "Required Go Tests aggregate and Race tests passed at the final network PR head. The four real D-Bus authentication/Hello cancellation and timeout cases execute on Linux and assert socket closure; the local removed-context mutation failed as required. The separate Swift tests and Linux E2E workflow also passed."
         }
@@ -1935,7 +1894,6 @@
           "result": "Actual TunnelBrokerClient.Run uses TLS presence/tunnel RPCs, kernel source lookup, a reachability probe and unchanged10-second path timers. Two veth routes model Wi-Fi/wired uplinks. Exact-byte tunneled TCP must survive more than two checks after the wired route becomes preferred; after drain, new presence/tunnel traffic must use its source address. Controls disable migration or active-session protection. Native race and ordinary-user Linux wire controls pass; normal/two-control Linux race binaries compile; two offline admission checks and ShellCheck pass. Read-only peer review clear. Registered in the existing network job; privileged namespace normal/control execution remains pending. Physical radio, sysfs hardware classification and Avahi publication are outside this fixture."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658482070",
           "result": "Real TLS tunnel retained exact bytes while the preferred kernel route changed. After its session drained, presence and a new tunnel used the wired source. Disabling migration failed idle source change; ignoring active sessions interrupted the held tunnel and failed exact-byte delivery. The named gate and all controls succeeded before the grouped job hit its35-minute timeout in a later unrelated step. Relevant source is unchanged. The job ceiling is now45 minutes to let the remaining grouped checks run; the cancelled overall job does not qualify the PR as ready."
         }
@@ -1968,7 +1926,6 @@
           "result": "Prepared hosted-only Windows fixture with two owned Wintun interfaces and real overlapping169.254/16 routes. Production Dial, SourceIP and Listen must return distinct peer data/correct local addresses, including callback and established stream behavior after route reversal. Three controls remove dialing/listening interface binding or restore wrong byte order. Twelve offline admission/lifecycle tests, normal/three-control Windows cross-compiles and PowerShell parsing pass. Guards preserve the preexisting metadata host route and all nonowned routes; refuse preexisting Wintun devices/drivers and overlapping link-local state; drain the exact Windows Job before GUID-specific cleanup. Registered in the existing Windows job. Native execution remains pending; no local driver changes or physical USB execution occurred."
         },
         {
-          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325987",
           "result": "Linux two-interface169.254/16 kernel routing passed with exact peers/source addresses, bound replies and established sessions after route reversal; both removed-binding controls failed intended assertions. Windows companion job131643325819 passed native owned-Wintun routing and all three dial/listen/byte-order controls. Physical USB-driver behavior is not inferred."
         }
@@ -1994,7 +1951,6 @@
           "result": "Prepared production runUSBSetup against private NetworkManager and D-Bus, actual veth deletion/recreation with a new interface name/index and unchanged MAC, unrelated-MAC exclusion, saved profile UUID reuse, daemon restart and exact TCP payloads. Private mounts isolate Netplan, NetworkManager and udev rule writes; udev triggers are recorded rather than sent to physical devices. Normal and interface-pinning control Linux race builds and offline fixture checks pass. Dependency provisioning isolates service policy and host sockets, preserves existing policy bytes/identity and requires namespace-drain proof before removing an owned temporary policy. Actual privileged normal/control execution remains pending on the existing hosted networking runner; no physical USB pass is claimed."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658482070",
           "result": "Actual NetworkManager profile creation, recreated interface, daemon restart and traffic journey passed. Restoring interface-name pinning failed its required recreation assertion. This proves the synthetic USB-profile lifecycle, not physical cable/board enumeration. The named gate and all controls succeeded before the grouped job hit its35-minute timeout in a later unrelated step. Relevant source is unchanged. The job ceiling is now45 minutes to let the remaining grouped checks run; the cancelled overall job does not qualify the PR as ready."
         }
@@ -2014,7 +1970,6 @@
           "result": "Added an opt-in real UDP multicast fixture with three separate sender network namespaces, valid signed Roughtime proofs, and the production interface enumeration and five-second refresh interval. It covers two initial links, a third link added during continuous traffic, link-down membership removal, recreation under the same name with a new kernel index, removal while another link remains usable, and cancellation/socket release. Only the clock write is observed. A required CI job runs the race-enabled fixture and rejects skips, then requires a startup-only-membership mutation to fail on the hotplug proof. Linux compilation, portable timesync race tests, Bash syntax, ShellCheck and actionlint pass. Real namespace execution and the mutation check remain pending CI."
         },
         {
-          "head": "9cdde99c7ad83d5475e50ec3a2e6bf728460b2d8",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43268430245/job/131358159481",
           "result": "Real signed multicast proofs reached the receiver over initial links, hotplug, link-down, replacement and removal. The startup-only membership mutation failed on the new time2 interface. The required Go aggregate, Swift unit/build and Linux E2E checks passed at this PR head."
         }
@@ -2039,7 +1994,6 @@
           "result": "Added real systemd-resolved and containerd DNS recovery coverage plus a pinned-upstream negative control in isolated mount/network/PID namespaces. Linux compilation and portable resolver tests passed; no integration pass is claimed before CI executes."
         },
         {
-          "head": "71b902289aa6be64d536b74aefcc27787d9d8230",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43280339195/job/131399639426",
           "result": "Both containerd 1.7 and current passed TestHostNetworkDNSOutage and rejected the pinned-upstream mutation specifically after upstream replacement. The DNS test, launcher and production client are unchanged from PR #2858. All PR #2862 checks passed at this descendant head. The older Darwin BLE failure remains recorded separately."
         }
@@ -2063,7 +2017,6 @@
           "result": "Real battery monitor and RTPS participant capture parsed SPDP packets across private veth paths with fixture wireless metadata. Explicit wireless discovery is a positive control; automatic discovery must use wired paths and emit no packets on a wireless-only host. Normal and omitted-filter Linux binaries compile; required namespace execution and mutation result await CI. No physical radio coverage is claimed."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666998",
           "runner": "required Linux network regressions",
           "result": "All three packet phases passed: explicit wireless control, automatic wired discovery, and wireless-only silence. Omitting the wireless filter produced a captured RTPS packet and failed the required assertion."
@@ -2092,7 +2045,6 @@
           "result": "Prepared real containerd/ROS topology with device-only, wired peripheral and default-uplink publishers. Production CreateContainerWithProgress resolves scope and injects DDS configuration; nonce-bound changing topic payloads must prove allowed visibility and excluded-peer isolation. Unreadable/oversized IPv6 route views must fall back to device-only visibility. Physical-device sysfs markers are fixture-only; actual veth links/routes and DDS transport remain real. Pinned-base ROS image passes ordinary unprivileged process smoke; normal and both control Linux binaries compile, existing scope/route tests pass, and all three cleanup tests pass without skips in ordinary Linux. Direct interruption or uncertain namespace drain retains owned work and records failed cleanup. Registered in existing containerd job without a new runner. Full privileged normal/control execution remains pending. The historical contract intentionally accepts an absent IPv6 table on IPv4-only kernels; this fixture does not change that behavior."
         },
         {
-          "head": "4f2f0d9aa0b3391e2e5cea085cccf45d77376a52",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43346265125/job/131626456277",
           "result": "Actual production container creation and DDS nonce payloads passed: network received device/uplink only, peripherals received device/wired peripheral only, unreadable/oversized IPv6 routes received device only. Restoring old loopback behavior failed missing-device delivery; failing open on unreadable routes failed excluded-uplink isolation. Both required controls and entire containerd job passed. Relevant production and runtime-fixture sources are unchanged in the current branch; no physical interface classification is claimed."
         }
@@ -2120,7 +2072,6 @@
           "result": "Prepared real containerd/ROS topology with device-only, wired peripheral and default-uplink publishers. Production CreateContainerWithProgress resolves scope and injects DDS configuration; nonce-bound changing topic payloads must prove allowed visibility and excluded-peer isolation. Unreadable/oversized IPv6 route views must fall back to device-only visibility. Physical-device sysfs markers are fixture-only; actual veth links/routes and DDS transport remain real. Pinned-base ROS image passes ordinary unprivileged process smoke; normal and both control Linux binaries compile, existing scope/route tests pass, and all three cleanup tests pass without skips in ordinary Linux. Direct interruption or uncertain namespace drain retains owned work and records failed cleanup. Registered in existing containerd job without a new runner. Full privileged normal/control execution remains pending. The historical contract intentionally accepts an absent IPv6 table on IPv4-only kernels; this fixture does not change that behavior."
         },
         {
-          "head": "4f2f0d9aa0b3391e2e5cea085cccf45d77376a52",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43346265125/job/131626456277",
           "result": "Actual production container creation and DDS nonce payloads passed: network received device/uplink only, peripherals received device/wired peripheral only, unreadable/oversized IPv6 routes received device only. Restoring old loopback behavior failed missing-device delivery; failing open on unreadable routes failed excluded-uplink isolation. Both required controls and entire containerd job passed. Relevant production and runtime-fixture sources are unchanged in the current branch; no physical interface classification is claimed."
         }
@@ -2145,12 +2096,10 @@
           "result": "Added actual anonymous-page allocation through a production-created container with a 64 MiB memory budget. The real cgroup must permit a 16 MiB workload and OOM-kill a 96 MiB workload. A 128 MiB combined-limit control must complete and use actual swap. Removing production Swap must let the over-budget workload complete and fail the regression assertion. Linux compilation and uncapped fixture execution passed; real kernel enforcement remains pending on both containerd versions in the existing shared job."
         },
         {
-          "head": "89ff97ea1df6e41892dffbb51503da89a9483716",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43278587930/job/131393525711",
           "result": "Both containerd 1.7 and 2.2.1 passed the real budget fixture. In each, the 16 MiB workload exited zero; the 96 MiB workload exited 137 with one cgroup OOM kill and zero swap. Explicit swap controls exited zero and used 37-38 MB of swap. Removing Swap let the 96 MiB workload exit zero with 94-97 MB of swap, failing the targeted enforcement assertion. Complete PR checks are still pending."
         },
         {
-          "head": "89ff97ea1df6e41892dffbb51503da89a9483716",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43278587930/job/131407235009",
           "result": "All PR checks completed successfully, including the required Go aggregate. Both runtime versions executed the workload and mutation checks in job 131393525711."
         }
@@ -2175,7 +2124,6 @@
           "result": "Added real DriverService Unix gRPC, hash-verified shipped Builder packing/apply scripts, matching Fedora kernel modules and squashfs sysext images. QEMU has no network or host directory/device access. Normal/removal-control binaries compile, portable admission/cleanup tests and ShellCheck pass. Both pinned Builder files are accessible without authentication and match recorded hashes. Full VM execution is pending hosted CI; local disk is below the 16GiB prerequisite. Registered once in the existing containerd job before ESP-IDF image preparation."
         },
         {
-          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219743",
           "tests": [
             "go/internal/agent/services/driver_lifecycle_vm_linux_test.go"
@@ -2183,13 +2131,11 @@
           "result": "Hosted guest booted the real kernel, answered D-Bus/systemd RPC and began the first healthy driver installation, then the host600-second watchdog drained QEMU. Artifact14012323888 reports empty cleanup errors; lifecycle is not verified. Added one bounded guest-only goroutine/systemd/process/journal observation before watchdog expiry, with unchanged test deadlines and assertions. Linux compile and source review pass; runtime diagnosis pending."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898743",
           "artifact": 14014637372,
           "result": "Actual Fedora guest reaches its first healthy driver install, then its console switches to console-getty login. All later45s observer,6min context and7min test-timeout diagnostics are absent before the600s QEMU watchdog. Exact source hashes match. Corrected fixture masks both login services and captures test/observer output through a separate virtio-serial port, keeping boot console independently. Nine portable unit/real-private-PTY checks and ShellCheck pass; no new VM or product defect is claimed. Complete install/replacement/rollback/reboot gate remains pending."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254144",
           "artifact": 14015608712,
           "result": "Independent virtio diagnostics now prove actual first InstallDriver/sysext merge completed46.66s. The expected healthy module version parameter is absent afterward, so lifecycle still fails. The retained evidence cannot distinguish missing merged payload from module lookup/activation. Added actual SquashFS payload byte/list/activation checks before boot and bounded read-only guest mount/receipt/module/vermagic diagnostics after failure. Eleven portable checks and ShellCheck pass. Shipped apply code, assertions and watchdog remain unchanged; no product defect or successful lifecycle is claimed."
@@ -2221,7 +2167,6 @@
           "result": "Actual hosted CLI/Compose/containerd journey passed delayed readiness, service hooks, literal/empty environment overrides and host-network probes, then exposed a product defect at its initial shared-group precondition. GroupRestartAppID guessed ownership from an underscore-containing name, which the valid app-ID parser treats as a single app. New focused tests fail on original code and pass with exact validated persisted label ownership under the race detector. Independent review passes. The complete isolation-removal journey and its controls remain pending after this fix."
         },
         {
-          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219743",
           "tests": [
             "go/internal/agent/containerd/multiapp_lifecycle_integration_test.go",
@@ -2257,7 +2202,6 @@
           "result": "Added real CLI watch, file sync, ContainerService, ContainerLogManager and TelemetryService against private containerd. Checks changed-service replacement, unchanged sibling PID/log continuity, fresh process output and SIGINT cleanup with both apps retained. Linux CGO normal and both control CLIs compile, Linux/amd64 fixture compiles, portable admission and ShellCheck pass. Local namespace creation was denied; actual normal and control execution remains pending in the existing containerd job."
         },
         {
-          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068153",
           "result": "Downloaded watch-container artifact14008013723. Normal real Compose/containerd watch passes changed-service replacement, retained healthy sibling, attached telemetry and interrupt cleanup. Forced-detach control fails at missing initial actual container output; restart-sibling control fails at unchanged sibling restart. Exact integrated fixture/coordinator source bytes match this head. The later separate multiapp1905 test failed its shared-group precondition, so the overall job is not green. macOS native watch has local real-runtime proof and still awaits hosted reconciliation."
         }
@@ -2290,7 +2234,6 @@
           "result": "Hosted-only fixture compiles race binaries as the runner, then confines root writes and child UID/GID changes to fresh scratch paths. Cases require root-created cache data to be readable and lockable/updateable by the real runner, elevated Start/Run to reject foreign-owned broker configuration without artifacts or upstream traffic, and a real ordinary-user mTLS/IPC RPC round trip with socket cleanup. Two offline admission tests, ShellCheck, normal/four-control Linux builds and the ordinary-user Linux broker round trip pass. Root cases and the four named regression controls await hosted execution. Registered in the existing Linux network job without another runner."
         },
         {
-          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325987",
           "result": "Full30-second real TCP/disk stall recovery passed with exact24MiB bytes, retained chunks and drained streams. All three transport controls failed intended assertions. Root-to-real-user cache access/update and mTLS/IPC broker ownership passed; all four ownership controls failed intended assertions. The job later failed in unrelated USB profile setup."
         }
@@ -2321,7 +2264,6 @@
           "result": "Required existing-network-job gate sends actual SPDP/SEDP/sample datagrams over separate loopback/veth interfaces into production participants, requires20 exact positive samples per interface and rejects cross-interface discovery. Removing only production multicast restriction must fail that named boundary. Linux normal/control compilation, ShellCheck and local/self-hosted refusal checks pass; actual kernel/race execution pending. Container observer and other original mixed-merge residuals remain open."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
           "artifact": 14014349861,
           "tests": [
@@ -2331,7 +2273,6 @@
           "result": "Actual per-interface multicast packet isolation passed6.02s with real loopback and wired namespace interfaces. Reverting socket membership filtering fails CROSS_INTERFACE_DISCOVERY by admitting the loopback writer on the wired participant. This closes the packet-filtering boundary only; observer, Patrol runtime, hosted scene/assets and remaining mixed-merge behaviors stay partial."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254252",
           "tests": [
             ".github/scripts/test-g1-coke-review.py",
@@ -2341,7 +2282,6 @@
           "result": "Hosted G1 job passes42 locked review cases, actual SIGINT/SystemExit flock/socket/watchdog cleanup and historical swallowed-interruption control. Real pinned NVIDIA package extraction passes fresh/existing/corrupt/missing cases; the historical existing-file bypass fails exact library byte-identity admission. No hardware, DLA library execution or policy-inference accuracy claim. Hosted scene asset supply and remaining observer/cache/Patrol boundaries remain separately tracked."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254176",
           "artifact": 14014963577,
           "artifact_sha256": "5000cd3b475ef82e0d643a55606a86484ac38ff3158ed3de79d88c1c31ab9295",
@@ -2363,7 +2303,6 @@
           "result": "Added a production StartContainer regression that replaces a CDI file source/destination and environment, removes the old source, and reads the new mounted file inside the restarted task while retaining the container/snapshot identity. The old source is genuinely absent. Normal and skip-refresh binaries compile; hosted runtime execution remains pending. This uses a vendor-document/file fixture, not an actual GPU driver or OS update."
         },
         {
-          "head": "2302c8cba21c7e3de08642056c80639e62b632d4",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43286816536/job/131422524513",
           "result": "Both containerd 1.7 and current passed the display-only creation and renamed-mount restart test, plus unentitled/non-Jetson controls. Omitting display injection failed on missing mounts; omitting refresh failed when runc tried to mount the deleted old source. The container/snapshot identity was retained."
         },
@@ -2473,7 +2412,6 @@
           "result": "Actual test-ci.sh runs against a strict local CLI fixture. Seven supported/legacy NVIDIA device cases require the exact CUDA Dockerfile for both GPU apps. Six unsupported CPU/GPU combinations require zero deploys and two explicit skips. An app exit 17 must produce two failures despite successful deploy commands. Mutating vendor detection to generic hasGpu fails four assertions; selecting CUDA 12 for Thor/Spark fails two. Included in the required offline automation job; hosted CI pending."
         },
         {
-          "head": "71b902289aa6be64d536b74aefcc27787d9d8230",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43280339195/job/131399639753",
           "result": "All 321 offline tests passed without skips. All PR checks subsequently completed successfully, including the required Go aggregate. PR #2862 is ready for review."
         }
@@ -2497,7 +2435,6 @@
           "result": "Existing platform-family tests are now in the unconditional offline suite. New process-level discovery uses renamed Thor/Pi/Dragonwing devices, fails a missing or unauthorized Jetson family, and distinguishes optional discovery from required coverage. The actual workflow scan shell is executed with a local SSH fixture to require --require-platforms for automatic integration and preserve explicit-target/discovery-only exceptions. Hosted CI pending."
         },
         {
-          "head": "71b902289aa6be64d536b74aefcc27787d9d8230",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43280339195/job/131399639753",
           "result": "All 321 offline tests passed without skips. All PR checks subsequently completed successfully, including the required Go aggregate. PR #2862 is ready for review."
         }
@@ -2523,7 +2460,6 @@
           "hardware_execution": "not_run"
         },
         {
-          "head": "2302c8cba21c7e3de08642056c80639e62b632d4",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43286816536/job/131422524513",
           "result": "Both containerd 1.7 and current passed the display-only creation and renamed-mount restart test, plus unentitled/non-Jetson controls. Omitting display injection failed on missing mounts; omitting refresh failed when runc tried to mount the deleted old source. The container/snapshot identity was retained."
         },
@@ -2572,7 +2508,6 @@
           "result": "Added real-kernel incumbent TUN/FIB/UDP forwarding across three real authenticated QUIC duplicate handshakes, with no transient routing registration and a positive admission control after claim release. A late-arbitration mutation reproduces publication before rejection. Linux binaries compile; hosted namespace execution remains pending. The Qualcomm human procedure includes an actual model restart, but physical device renumbering remains separate and unexecuted."
         },
         {
-          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498192",
           "result": "Three authenticated QUIC duplicates were rejected while the original kernel TUN and route kept forwarding UDP. Delaying arbitration failed specifically on transient routing-link publication. The live mesh half is verified; physical NPU renumbering remains separate."
         },
@@ -2628,7 +2563,6 @@
           "result": "Added a real-kernel device-number test for a persisted NPU entitlement. Private character nodes move from tun 10:200 to loop-control 10:237; the restarted container must open the new node through its cgroup and report the new numbers without recreation. A missing node must prevent start. The omit-refresh mutation must fail. Normal and mutant Linux binaries compile; hosted execution is pending. This does not execute a Qualcomm or NVIDIA vendor driver."
         },
         {
-          "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430930927",
           "result": "Both containerd 1.7 and current passed real-kernel device-node restart and missing-node refusal. The restarted unchanged container opened the moved node and reported a:ed instead of a:c8. Omitting device refresh failed specifically on stale a:c8 access. This proves portable device/cgroup repair, not vendor model execution."
         },
@@ -2663,7 +2597,6 @@
           "result": "Added a real-kernel device-number test for a persisted NPU entitlement. Private character nodes move from tun 10:200 to loop-control 10:237; the restarted container must open the new node through its cgroup and report the new numbers without recreation. A missing node must prevent start. The omit-refresh mutation must fail. Normal and mutant Linux binaries compile; hosted execution is pending. This does not execute a Qualcomm or NVIDIA vendor driver."
         },
         {
-          "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430930927",
           "result": "Both containerd 1.7 and current passed real-kernel device-node restart and missing-node refusal. The restarted unchanged container opened the moved node and reported a:ed instead of a:c8. Omitting device refresh failed specifically on stale a:c8 access. This proves portable device/cgroup repair, not vendor model execution."
         },
@@ -2731,7 +2664,6 @@
           "result": "Real GStreamer producer registry contains x264 and VP8 but no h264parse. Initial and late viewers decode actual H.264 with checked RGB pixels. Local race-enabled execution and two specific failure controls passed. Required Linux media job registration reuses the existing runner; hosted execution remains pending."
         },
         {
-          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498195",
           "result": "Required Linux media job decoded 40 initial and 30 late-viewer RGB frames with expected pixels; choosing VP8 or omitting byte-stream caps each failed the targeted regression."
         }
@@ -2756,7 +2688,6 @@
           "result": "Real discovery/ONVIF/RTSP endpoints count connections before pairing and after forgetting/restart, and actual authenticated RTP/H264 capture decodes expected pixels after pairing and persisted-state restart. Three native race runs passed; removing either ONVIF or liveness admission opens unexpected connections. Host discovery/ports and physical loopback are fixture boundaries. A regression-only build tag exposes discovery seams without adding shipped API."
         },
         {
-          "head": "0e3ec727a365647f09117a3d0e252adab840d6f3",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299143815/job/131465612075",
           "runner": "required Linux media job",
           "result": "Actual raw thermal subscriber samples and ONVIF/RTSP pairing lifecycle passed under the race detector. Preview-selection/raw-conversion and missing admission-guard controls failed at the intended sample or unexpected-network assertions."
@@ -2799,7 +2730,6 @@
           "result": "Actual SensorFrameFeed, producer, shared hub and GStreamer deliver decoded pixels to two clients. One cancellation preserves fresh changed output for the other; final cancellation tears down encoder/feed. Three local race runs passed; reverting SensorLink routing fails. Required Linux strace rejects loopback opens by service/codec children; that hosted trace remains pending."
         },
         {
-          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498195",
           "result": "Required Linux media job decoded both subscribers and fresh changed frames after one canceled; strace confirmed no loopback-node open. The reverted SensorLink route failed on the absent device, and final cancellation released encoder/feed."
         }
@@ -2823,7 +2753,6 @@
           "result": "Proposed hosted kernel fixture uses real audioloop Manager writers, two source identities, private live PipeWire, production adapter and ALSA recording, with exact PCM markers in sealed WAVs. Normal and two source-routing mutation variants cross-compile for Linux; offline guards pass. Actual snd-aloop/sample checks remain pending."
         },
         {
-          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
           "result": "Required Linux media job passed actual real-ALSA recording with a live private PipeWire daemon. Two SensorLink microphone identities retained exact PCM in sealed WAVs. The PipeWire-only routing control failed to start recording and the crossed-subdevice control failed on microphone identity. Owned daemon/account/module cleanup completed."
         }
@@ -2862,12 +2791,10 @@
           "result": "Adds actual mTLS/WendyCom Audio descriptor, subscription and changing PCM through production Supervisor, real audioloop Manager/aplay and arecord. Asserts fresh exact PCM, identity/channel, one authenticated connection, cancellation/release and exclusive device reopen. Native transport race checks pass and Linux normal plus three regression controls compile. No hosted PCM execution yet: PR2875 Azure kernel lacks sound modules."
         },
         {
-          "head": "4c898e0aacce6961d449dcfade759966dc1ed034",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315180056/job/131521484536",
           "result": "The actual authenticated Lite camera normal test and both kernel-pixel/setup-budget controls passed. Audio did not execute: the private daemon UID could not traverse RUNNER_TEMP. The isolated runtime-directory correction is now in PR2875; microphone and full dual-media proof remain pending."
         },
         {
-          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
           "result": "Required Linux media job passed authenticated Lite camera delivery through real v4l2loopback decode and microphone delivery through real ALSA capture. Camera exact pixel phases and both controls passed; actual mTLS/WendyCom microphone exact PCM, identity, cancellation and device release passed. Combined setup-budget, wrong channel and missing PCM controls all failed specifically. The shared source address-change gate also passed with both modules alive."
         }
@@ -2890,7 +2817,6 @@
           "result": "Real GStreamer raw branch, fd3 pump and hub deliver all 19,200 16-bit samples unchanged to two subscribers with Y16 metadata, 160x120 dimensions and 320-byte stride. Later frames cannot overwrite a retained frame. Three local race runs and the full script passed; first-advertised UYVY preference and actual GRAY8 conversion fail targeted assertions. Hardware discovery/source bytes are fixtures; hosted Linux execution remains pending."
         },
         {
-          "head": "0e3ec727a365647f09117a3d0e252adab840d6f3",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299143815/job/131465612075",
           "runner": "required Linux media job",
           "result": "Actual raw thermal subscriber samples and ONVIF/RTSP pairing lifecycle passed under the race detector. Preview-selection/raw-conversion and missing admission-guard controls failed at the intended sample or unexpected-network assertions."
@@ -2914,7 +2840,6 @@
           "result": "Actual owner HTTP JPEG feed flows through production shared capture, GStreamer and hub to two decoded pixel consumers. First cancellation preserves fresh changed frames for the second; final cancellation ends feed/encoder; incompatible requests are refused. Normal and race tests pass locally, and stale-pixel/reopen controls fail. Owner/process discovery seam is synthetic. Linux gate requires v4l2src and strace and rejects any physical-camera open; that hosted syscall evidence remains pending. Native hardware contention is not claimed."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482107681",
           "result": "Required Linux media job passed the actual shared-owner HTTP/GStreamer decode test with fresh frames after one consumer leaves. strace gate found no physical-camera opens and required GStreamer library activity; v4l2src was installed. Camera-reopen and stale-pixel controls both failed at their targeted assertions. Native physical camera contention is outside this entry and remains partial under 1739."
         }
@@ -2958,7 +2883,6 @@
           "result": "Actual mTLS/WendyCom camera and microphone protocol fixture passes native race and isolated Linux execution. Hosted gate uses production RunPairing with a resolver changing source IP, actual v4l2loopback decoding and ALSA capture in both phases. Normal and stale-address control compile; actual combined kernel run remains pending."
         },
         {
-          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
           "result": "Required Linux media job passed the production source re-resolution/restart journey: both authenticated camera and microphone streams moved from the original source address to the new IP, with stable source/channel identities and exact decoded kernel pixels/PCM before and after. The stale-address control failed specifically because both channels did not reconnect. This is actual Linux kernel endpoint/protocol proof; it does not claim physical Mac capture or multicast-radio execution."
         }
@@ -3020,7 +2944,6 @@
           "result": "Existing media job now requires the original module to fail the exact OUTPUT completion contract, drains its owned node/module, and rebuilds pinned Builder candidate4828717a recipe patch byte-for-byte. Candidate must pass completion, capture coexistence, no-DQBUF writer reuse, empty poll, STREAMOFF wake and restart, then every unchanged decoded/shared-consumer gate. Source review, Linux test compile, exact patch application, provenance and four portable checks pass. Actual module build/runtime remains pending; candidate branch is published for immutable checkout only, not released. This does not yet establish a new product defect or close1704."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254419",
           "artifact": 14016307539,
           "artifact_sha256": "c55e9bda3a2bbbbcb87f3e7ae52dc420a20c01dc068538520c0113b2f927c91c",
@@ -3451,7 +3374,6 @@
           "result": "Prepared full producer-archive rehearsal with streamed hash/header/XML accounting before allocation, explicit arm64 Agent bytes, private cache and three actual writer passes. Seed-omission control must fail after a complete write and flashed readback. Four portable tests and both actual-file producer helper tests pass locally. Full producer execution and companion workflow registration remain pending; local free capacity is below the preflight minimum. No payload or iteration was removed, and no physical first-boot claim is made."
         },
         {
-          "head": "a18e383c36a3aac9eb74d012c7ab4578b67d2a1b",
           "url": "https://github.com/wendylabsinc/WendyOS-Builder/pull/356",
           "tests": [
             "scripts/test-orin-seed-producer.py",
@@ -3462,7 +3384,6 @@
           "result": "Companion PR356 registers the full writer gate after the existing Nano flashpack build, before upload, using pinned CLI b3af32266cb6c889db7bb42b2a580b5905e2f0cf and the producer artifact on its private job disk. Process-local Go and pinned private libusb preserve publisher setup. Twelve combined producer/manifest checks and an ordinary-user Linux static libusb smoke passed. Hosted Scripts CI passed; actual Nano image/rehearsal job131563455197 is running and full writer proof remains pending. No new job or matrix row was introduced."
         },
         {
-          "head": "a18e383c36a3aac9eb74d012c7ab4578b67d2a1b",
           "cli_head": "b3af32266cb6c889db7bb42b2a580b5905e2f0cf",
           "url": "https://github.com/wendylabsinc/WendyOS-Builder/actions/runs/43327450044/job/131563455197",
           "artifact_id": 13995165766,
@@ -3491,7 +3412,6 @@
           "result": "Locally passed the production first-boot entry point through real loopback ACME directory/EAB/order/CSR/certificate exchanges and gRPC provisioning status under the race detector. Offline cancellation preserves the credential handoff without a durable attempt; delayed availability enrolls once and restart preserves identity/key. Removing the production wait fails specifically on premature durable attempt creation. Registered the gate in the existing race job. The independently reviewed physical procedure separately covers exact-image first boot, no alternate Internet path, setup availability and subsequent Wi-Fi enrollment; hardware cases remain not_run. Hosted gate remains pending."
         },
         {
-          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325859",
           "result": "Hosted real delayed-directory ACME enrollment/gRPC sequence and no-wait control passed. Required race suite passed. The exact-image fresh pre-enrollment physical procedure separately specifies NetworkManager setup, no alternate Internet path and Wi-Fi enrollment; hardware cases remain not_run."
         }
@@ -3668,7 +3588,6 @@
           "result": "Windows physical acceptance now requires actual unplug/changed COM and the same interactive command through capability failure, reinstall, restart, second build and heartbeat. A later independent successful command cannot satisfy recovery. Six offline checks pass; actual hardware remains not_run."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
           "result": "Hosted actual serial discovery and retry PTY cases passed; both historical misclassification controls failed at named boundaries. SERIAL_DISCONNECT_MATRIX_VERIFIED confirms execution. Unix and Windows procedures require actual port disappearance/reappearance and recovery through the same interactive command, followed by heartbeat. No hardware, reset or flashing execution is inferred."
         }
@@ -3693,17 +3612,14 @@
           "result": "Native Windows CI exposed Make/sh expansion of PowerShell LASTEXITCODE, producing an invalid if expression after the build. The native recipe now invokes a .ps1 file so PowerShell receives its own variables intact. Added a real linker-failure case to require nonzero Make exit on all three hosts. Final Windows execution pending."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481613",
           "result": "Linux amd64 actual native Make builds reported both exact sentinels2099.01.02-regression-a and2099.01.03-regression-b and propagated the deliberate real linker failure. Entire job passed. Makefile, PowerShell helper and fixture are byte-identical to the current coverage branch."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481736",
           "result": "Windows amd64 actual native Make builds reported both exact sentinels2099.01.02-regression-a and2099.01.03-regression-b and propagated the deliberate real linker failure. Entire job passed. Makefile, PowerShell helper and fixture are byte-identical to the current coverage branch."
         },
         {
-          "head": "f5b2a3085ad0bcf953f9350a403f8fd5e3eddb88",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356139718/job/131659042618",
           "result": "macOS arm64 actual native Make builds reported both exact sentinels2099.01.02-regression-a and2099.01.03-regression-b and propagated the deliberate real linker failure. Entire job passed. Makefile, PowerShell helper and fixture are byte-identical to the current coverage branch."
         }
@@ -3724,7 +3640,6 @@
           "result": "Five tests parse the actual YAML names and execute only the actual local alarm/report writers. Complete channel names and spaces survive; JSON escaping, success/failure/cancellation/offline reports, and runner recording before a failed disk probe are checked. Removing the YAML quoting reproduces the original truncated job-name failure. No cleanup or Slack action is executed."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481733",
           "result": "All five Janitor YAML/payload cases passed in the hosted offline job, including complete names with spaces/hash characters, escaping, failures/cancellation/offline reporting and identity before a failed disk probe. No messages were sent. Relevant tested files are byte-identical to the current coverage branch."
         }
@@ -3747,7 +3662,6 @@
           "result": "Full test-ci.sh subprocess runs against stateful local CLI/Docker fixtures. Fourteen failure/success scenarios cover transient export, dead daemon, permanent failure, exactly one retry, later-test reporting and user-builder preservation. Five tests pass locally; omitted cleanup/ownership and extra-retry controls fail. Required offline CI execution remains pending."
         },
         {
-          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498214",
           "result": "Required offline job passed all 345 tests, including all OCI retry/dead-daemon/permanent-failure/local-builder isolation cases without skips."
         }
@@ -3841,7 +3755,6 @@
           "result": "Six fixtures execute the actual stale-builder selector with a fake Docker CLI and the actual disk gate with isolated df results. Current-run attempts, foreign names, the user-owned hexadecimal builder name, malformed names and node rows are preserved; stale owned names are removed once. Dry run, missing/invalid run ID, listing failure, removal failure, exact disk threshold, insufficient space and malformed disk inputs are covered. Original script failed active/malformed-selection checks; tightened selection passes. All 308 offline regressions pass. No real Docker builder or cache was accessed."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481733",
           "result": "All six stale-builder/disk-gate cases passed in hosted CI. The production selector retained active, foreign and malformed names and removed only stale owned entries under controlled Docker responses; low-disk and invalid readings stopped work. No real builders were deleted by these fixtures. Relevant tested files are byte-identical to the current coverage branch."
         }
@@ -3868,12 +3781,10 @@
           "result": "Ten artifact tests and nine guest ownership/deadline checks pass. Exact shared release packaging produced all four packages, and dependency provisioning passed for all three pinned distributions. Actual hosted static CLI compilation and booted systemd Agent transactions remain pending; inert local packaging tests are not runtime proof."
         },
         {
-          "head": "751a26298cf2a1986442de1ba291138432bd892f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43319307528/job/131535787788",
           "result": "Actual Ubuntu22 normal and negative-control package journeys passed. Candidate CLI/Agent2099.01.04-regression-package amd64 served real RPCs before and after a successful upgrade; PID/start identity changed, five-second stable health and retained configuration passed, and removal stayed inactive for eight samples. The successful negative-control upgrade left the service inactive for eight samples as required. Cleanup reported no errors. Ubuntu24 stopped in dependency provisioning because nspawn host timezone synchronization prevented tzdata replacing /etc/localtime; --timezone=off fixture correction is prepared. Ubuntu24/Fedora and nativearm64 remain pending; this is partial distribution evidence, not full2352 closure."
         },
         {
-          "head": "d6548a219db321d135bdec5ef6f3be1005df7220",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43324678652/job/131554042279",
           "result": "All six amd64 Ubuntu22, Ubuntu24 and Fedora44 normal/control systemd guest journeys passed using actual candidate CLI/Agent packages. Each normal install and upgrade served real RPCs, changed the service PID/start identity, retained configuration and remained healthy for five seconds; removal stayed inactive for eight samples. Each negative-control upgrade succeeded as a package operation but left the service inactive for eight samples. Guest cleanup reported no errors. Artifact13991699338 retains exact package hashes, transaction logs and observations. This verifies package/service upgrade behavior; native arm64 release and actual GCP upload/consumption are separate acceptance boundaries."
         }
@@ -3898,7 +3809,6 @@
           "result": "Four policy tests execute actual workflow expressions and the real version-classification shell across 32 event/ref/publish/skip combinations; restored shared-group, cancellation and push-hardware policies are rejected. Seven real Git reference/provenance fixture tests pass, including existing mismatched lightweight/annotated tags and concurrent creators. No release dispatch/publication or hardware job was performed. Hosted gate remains pending."
         },
         {
-          "head": "80881935847ad1aa99398ea3c41223abfc705456",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315968691/job/131523941170",
           "result": "All four release-policy cases passed in the required 393-test offline job. Actual workflow expressions and version shell step cover 32 typed event/ref/publish/skip combinations; original stable-run cancellation, shared group and hardware-on-push mutations are rejected. Existing Git tag immutability controls also passed."
         }
@@ -3921,7 +3831,6 @@
           "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "runner": "required Linux offline automation",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666212",
           "result": "All 352 offline tests passed. Seven signing tests executed duplicate-name selection, isolated notary profiles, repeat runs, injected failures/cancellation and mutation controls without skipped test cases."
@@ -3945,7 +3854,6 @@
           "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "runner": "required Linux offline automation",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666212",
           "result": "All 352 offline tests passed. Seven signing tests executed duplicate-name selection, isolated notary profiles, repeat runs, injected failures/cancellation and mutation controls without skipped test cases."
@@ -3969,7 +3877,6 @@
           "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "runner": "required Linux offline automation",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666212",
           "result": "All 352 offline tests passed. Seven signing tests executed duplicate-name selection, isolated notary profiles, repeat runs, injected failures/cancellation and mutation controls without skipped test cases."
@@ -4062,7 +3969,6 @@
           "result": "Review replaced direct-LLB raw-log assumptions with actual installed package build nonces and image-layer digests. Source-only changes must preserve both; package edits must replace both. Eight offline tests pass, including real local pip builds producing distinct nonces, builder ownership refusal and cleanup error propagation. No live container image execution is claimed."
         },
         {
-          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781728",
           "result": "Required Linux job built the native CLI, then built and ran inherited images through Dockerfile and direct LLB. Artifact evidence records14cases: initial/source/environment/package rebuilds plus three expected failures for each backend. Source-only changes preserved installed nonce and layer; package edits changed both. Image runtime asserted imports, parent/child environment, workdir and content; cleanup_errors is empty. Exact executable SHA256 7c9a29ee38f706c7a27e7c8c92f4cf9c0514fd504e4fce176abd9f8f09e6286d."
         }
@@ -4084,7 +3990,6 @@
           "result": "Nine local scenarios exercise the actual init command with localhost archive download, extraction, rendering and configuration reload. Mojo substitutions, invalid tokens, declared C/C++ Lite languages, target and entitlement defaults, unavailable language refusal and existing configuration preservation pass. Four production overlays reproduce the missing Mojo renderer, Swift-only restriction and incorrect Lite defaults. No device build or live template-catalogue claim."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666759",
           "result": "Required Linux race job passed the full commands suite containing the real init/download/extract/render/configuration scenarios. The tested source is unchanged in this child branch; prior local production overlays rejected the original incorrect behavior."
         }
@@ -4106,7 +4011,6 @@
           "result": "Nine local scenarios exercise the actual init command with localhost archive download, extraction, rendering and configuration reload. Mojo substitutions, invalid tokens, declared C/C++ Lite languages, target and entitlement defaults, unavailable language refusal and existing configuration preservation pass. Four production overlays reproduce the missing Mojo renderer, Swift-only restriction and incorrect Lite defaults. No device build or live template-catalogue claim."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666759",
           "result": "Required Linux race job passed the full commands suite containing the real init/download/extract/render/configuration scenarios. The tested source is unchanged in this child branch; prior local production overlays rejected the original incorrect behavior."
         }
@@ -4128,7 +4032,6 @@
           "result": "Eight actual runWithAgent/local Agent-version/subprocess cases cover directory/tar Docker builds, automatic/forced chunking and stopped/hung daemon probes. Each refuses before progress output, image build or deployment; removing the preflight fails at premature progress. Local tests pass, hosted CI pending."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
           "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
@@ -4159,7 +4062,6 @@
           "result": "Review replaced direct-LLB raw-log assumptions with actual installed package build nonces and image-layer digests. Source-only changes must preserve both; package edits must replace both. Eight offline tests pass, including real local pip builds producing distinct nonces, builder ownership refusal and cleanup error propagation. No live container image execution is claimed."
         },
         {
-          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781728",
           "result": "Required Linux job built the native CLI, then built and ran inherited images through Dockerfile and direct LLB. Artifact evidence records14cases: initial/source/environment/package rebuilds plus three expected failures for each backend. Source-only changes preserved installed nonce and layer; package edits changed both. Image runtime asserted imports, parent/child environment, workdir and content; cleanup_errors is empty. Exact executable SHA256 7c9a29ee38f706c7a27e7c8c92f4cf9c0514fd504e4fce176abd9f8f09e6286d."
         }
@@ -4182,7 +4084,6 @@
           "result": "Full merge ancestry confirms this BuildKit change also included legacy/v2 Cloud identity fixes. Existing BuildKit/relay/TLS suites cover their own behavior; six new real lazy-connection constructor cases assert legacy numeric MeshHost versus empty MeshHost for UUID v2 assets, including MCP reconnect. Numeric-v2 mutations fail in both constructors. These are constructor/address checks, not a new relay-handshake claim. Local tests pass, hosted CI pending."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
           "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
@@ -4248,7 +4149,6 @@
           "result": "Source-reviewed actual loopback HTTP fixture runs production lifespan, pinned model, physics and renderer. It requires exact reported degree limits, atomic invalid pose, real joint/frame advance, joined shutdown, refused poll and fresh same-endpoint restart. The historical radians-comparison control must end at the exact HTTP422 out-of-range assertion. Every journey runs in one bounded owned process. Local Python syntax and workflow checks pass; exact shipped-image normal/control execution remains hosted pending. Existing viewer tests are registered for relevant backend and dependency changes; no new UI test or physical-arm acceptance is claimed."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610096",
           "tests": [
             "go/simulator/so101/tests/test_http_lifecycle.py",
@@ -4286,7 +4186,6 @@
           "result": "Windows gate now holds its own default50051 listener, boots without explicit --port, verifies bounded fallback is persisted, drains the foreground VM, releases the blocker and restarts the same disk on the saved port. Actual Agent hostname/publicKey and kernel TCP listener ownership must agree across both boots. Eight portable tests pass. Runtime remains pending; the preceding published PATH-only control reached its intended structured tool_not_found/exit6 launch boundary but normal boot had not run."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254510",
           "tests": [
             ".github/scripts/test-windows-vm-boot.py",
@@ -4315,11 +4214,9 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43364960395/job/131687685632",
-          "head": "bbb14e431e81f3af15631359f0baff3cfdd5e4cc",
           "result": "Pinned Windows QEMU extraction/version execution and actual CLI sparse VM creation passed, but the historical control stopped at the earlier QEMU preflight rather than the required executable-launch failure. Exact source hashes match after Windows CRLF normalization. Owned cleanup passed; normal boot was not_run. Added a compiled production-FindQEMU probe in the same private environment/process chain, including expected file stat, observed ProgramFiles and process architecture. It must pass before the original unchanged control assertion. Diagnostic Windows binary compiles; next hosted execution is required to establish the cause."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254510",
           "tests": [
             ".github/scripts/test-windows-vm-boot.py",
@@ -4348,7 +4245,6 @@
           "result": "Source-hashed ordinary native Linux container evidence passed the unchanged ROS Humble bridge through real Unix gRPC, production UnitreeRobotService and unitree.Connect to a Pion protocol robot. A 1.2-second posture acknowledgement left ROS callbacks, fresh odometry and Stop responsive; Stop completed in0.083s, actual wire move expiry in0.501s and unacknowledged Stop returned failure in0.207s. A late Stop acknowledgement could not complete another pending posture command. Synchronous-posture and disabled-lease controls failed their exact assertions. Owned container/network/image cleanup reported no errors. Root verified evidence source hashes against the integrated files. Registered in the existing go2 matrix row with no new runner; hosted execution pending. No MuJoCo or physical motion claim."
         },
         {
-          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325675",
           "result": "Downloaded hosted summary/normal/control artifacts. Actual ROS Humble bridge/Unix gRPC/Agent/Pion journey passed:30 fresh odometry callbacks during1.2001s posture acknowledgement, Stop0.1048s, real wire lease expiry0.5008s and unacknowledged Stop failure0.2037s. Synchronous-posture and disabled-lease controls failed intended assertions, cleanup errors empty; all four source hashes match integrated files. No physical motion/stopping-distance claim."
         }
@@ -4374,7 +4270,6 @@
           "result": "Production foxgloveServe generates its real ros:humble Dockerfile and installs the published ROS bridge package; there is no prebuilt bridge image in this path. Fixture uses actual deployment through Agent/ContainerService/containerd, exact image and package evidence, nonce-bound increasing ROS CDR strings through WebSocket/ExecContainer/socat, and forwarding-cancellation ownership. Both historical descriptor/target variants compile; native parser and three offline admission tests pass. The existing Go2 ROS matrix execution includes the full gate and controls without another runner. Actual Linux runtime remains pending; local Docker was unavailable."
         },
         {
-          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219619",
           "tests": [
             "go/internal/agent/containerd/ros2_interfaces_test.go",
@@ -4384,7 +4279,6 @@
           "result": "Actual generated-image deployment exposed production CycloneDDS crash on loopback-only hosts: explicit lo plus autodetermine selects lo twice. Narrow external-IPv4 admission fix passes native race cases and original-config local control; full post-fix OCI/WebSocket/CDR and image-bound original-startup control remain required in existing Go2 job."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898614",
           "tests": [
             "go/internal/cli/commands/foxglove_runtime_test.go"
@@ -4392,7 +4286,6 @@
           "result": "Post-fix actual OCI image started CycloneDDS and Foxglove3.6.0, advertised the nonce ROS topic and created a real subscription through the forwarded WebSocket. Normal gate then failed its test-only CDR decoder string-bounds check. Humble rmw_cyclonedds serdata_rmw::resize explicitly rounds serialized buffers to four bytes and zero-fills the tail; corrected independent decoder retains declared string length/NUL and admits only exact zero alignment padding. Targeted native parser cases pass and independent source review is clear. Full normal and three controls remain pending; no end-to-end pass claimed."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254176",
           "artifact": 14016570162,
           "artifact_sha256": "0344b99d4e1a6bb613b177f3ac5e0c5bf2173ef0ce656742696053d938dd887d",
@@ -4499,7 +4392,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219478",
-          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
           "result": "Required hosted offline job passes578 automation tests in113.881s and all443 evaluator tests in32.110s without evaluator skips. Evaluator source and exact-Thor controls/procedure are unchanged in the next local batch. Software gate reconciled; physical model/GPU/tool acceptance remains not_run with executable qualified-target procedure."
         }
       ]
@@ -4521,7 +4413,6 @@
           "result": "Real local RPC/job hosts test transport reconnection without duplicate steps, supervisor death, bounded TERM/timeout and startup, safe artifact retrieval and readiness defaults. A reproduced supervisor-death leak is fixed with an owned process guard. Existing macOS jobops tests pass; Linux cases compile. Final reviewed Linux execution and the lost-supervisor cleanup negative control await required CI."
         },
         {
-          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666759",
           "result": "Required Linux race job passed the full commands suite containing all template scenarios and the jobops suite. Five focused durable-job cases and four TERM/timeout subcases passed; removing supervisor-loss cleanup failed at the owned-process cleanup deadline."
         }
@@ -4562,7 +4453,6 @@
           "result": "Actual app Unix RPC forwarding and campaign delivery reach a local Cloud server requiring verified client certificates. Legacy signatures are checked against received bytes; v2 uses certificate identity. Explicit retries preserve IDs/payloads, transient campaign errors retry and AlreadyExists is terminal. Live tests reproduced private Cloud error text in campaign status/warnings; the fix preserves status codes and retry decisions while replacing the final description. Native race suite and four negative controls pass; hosted CI pending."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
           "result": "Required network job passed Unix app RPC to independently verified local Cloud mTLS, legacy signed payload and v2 certificate identity, retry/duplicate classification and status/log redaction. All four targeted production mutations failed as required."
         }
@@ -4583,12 +4473,10 @@
             "go/internal/agent/services/data_inference_notification_test.go",
             "go/internal/agent/services/data_inference_test.go"
           ],
-          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498452",
           "result": "The required inference-worker job used the Agent locked uv/Python runtime and passed all 100 tests, including an inference exception producing source_error followed by a healthy prediction from the next frame. Tests also bound persistent failures and preserve engine metadata."
         },
         {
-          "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430931049",
           "result": "The required race job passed data and services packages, including real local HTTP notification metadata delivery, Cloud request attribution and top-five detection bounds. These production/test files are unchanged in the current batch."
         }
@@ -4612,7 +4500,6 @@
           "result": "Actual app Unix RPC forwarding and campaign delivery reach a local Cloud server requiring verified client certificates. Legacy signatures are checked against received bytes; v2 uses certificate identity. Explicit retries preserve IDs/payloads, transient campaign errors retry and AlreadyExists is terminal. Live tests reproduced private Cloud error text in campaign status/warnings; the fix preserves status codes and retry decisions while replacing the final description. Native race suite and four negative controls pass; hosted CI pending."
         },
         {
-          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
           "result": "Required network job passed Unix app RPC to independently verified local Cloud mTLS, legacy signed payload and v2 certificate identity, retry/duplicate classification and status/log redaction. All four targeted production mutations failed as required."
         }
@@ -4654,7 +4541,6 @@
           "result": "Added required real kernel sample-ID\u2192example ONNX prediction\u2192sealed camera byte-index/pixel join and exact receipt-time negative control to existing media job. Local real PyAV B-frame identity/pixel tests and30 example tests pass, including two fail-before ctypes ABI tests independently checked against compiled official Linux headers. Found and corrected H264 rejection and wrong pointer-union layouts in the actual example reader. Normal/control Linux fixtures compile; full kernel/race execution remains pending. No application model_inputs ledger, physical camera, published-model accuracy or OCI grant claim."
         },
         {
-          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219459",
           "tests": [
             "go/internal/agent/services/v4l2_sample_ledger_linux_test.go",
@@ -4671,7 +4557,6 @@
           "result": "Eight full loopback TLS13 cases pass under race with actual ECDSA possession and ML-DSA issuer signatures. Valid peers exchange nonce bytes; malformed critical extensions and unknown EKU produce actual production verifier errors with zero delivery. Restoring historical missing issuer policy admits application bytes and fails both directions. Required in existing sensor identity/race step, sharing its artifact and seven-minute bound; no extra job. Hosted execution and unknown-own-scope startup remain pending."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
           "tests": [
             "go/internal/agent/mtls/peer_chain_transport_test.go",
@@ -4680,7 +4565,6 @@
           "result": "Hosted full race job passed all eight real TLS13 ML-DSA-policy cases and twelve sensor tenant TLS/gRPC cases. Historical missing-issuer-policy control admitted application bytes and failed both expected directions; pairing-derived tenant control failed exact intended peer boundaries. Unknown-own-scope actual Agent startup matrix still pending, so the mixed entry remains partial."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254125",
           "artifact": 14015198249,
           "tests": [
@@ -4727,7 +4611,6 @@
           "result": "Twelve actual loopback TCP/TLS and sensorRPC cases cover numeric asset identity derived from the consumer certificate tenant, despite stale pairingOrgID; wrong tenant/asset are refused before dispatch for legacy and SPIFFE scopes. Race normal passes1.100s; original pairing-org assumption fails both intended boundaries. Existing BrowserWASM job131700219405 and automation job131700219478 pass at8b59c8dce. Seven original fixes mapped independently; adapter/browser-worker evidence is not a real browser profile or live Cloud run. Required newMCU hosted gate pending."
         },
         {
-          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
           "result": "Reconciled all seven original fixes in wasm-auth/behavior-map.txt with passing native commands/ACME race packages, BrowserWASM job131714898682 and automation job131714898568 at this head. The twelve actual TLS/gRPC sensor cases pass; restoring pairing-org derivation fails correct-peer TLS/RPC boundaries in both legacy and SPIFFE scopes. Existing controlled OAuth child processes, actual CSR parsing and API-review repair/batching checks cover the selected corrections. No live public Cloud, real browser profile, unrelated Swift UI feature or physical MCU qualification is claimed."
         }
@@ -4750,7 +4633,6 @@
           "result": "Actual Cobra parsing sends optional age presence, explicit zero for --all, requested seconds and dry-run over private UDS gRPC. Invalid arguments produce no prune RPC. The actual p-key command reaches Agent once, retains the default grace period, prevents duplicate concurrent actions and preserves success/refusal results. Focused race tests pass locally; dropped-age and dropped-dry-run controls fail the wire assertions. Required hosted CLI race execution pending."
         },
         {
-          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325859",
           "result": "Complete hosted CLI command race suite passed at the published head, including actual Cobra-to-UDS optional-age/all/dry-run transport and device-top p-key RPC/result tests. Existing Agent cache/GC tests also passed in the race and real-containerd suites. Local dropped-age/dry-run controls already establish wire assertion sensitivity."
         }
@@ -4776,7 +4658,6 @@
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
         },
         {
-          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
           "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
@@ -4806,12 +4687,10 @@
           "result": "Pinned upstream cluster-manager with the example production patch completes a real PIN invitation between two loopback processes, observes paired invitation versus member entries, and retains identity/membership after restart. Both ambiguous and incorrect documentation controls fail against the actual transcript. Local execution passed; required hosted execution pending."
         },
         {
-          "head": "1b2f847c423a556cabc1f8123bb9c3833cb9d2e6",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43331058242/job/131575749692",
           "result": "Hosted race suite passed the CLI commands package, including both non-skipping documented-argument contract tests. Root inspected the workflow invocation and test discovery; source is unchanged in the current batch. The parser validates actual guide argv and typed flags without executing device operations."
         },
         {
-          "head": "1b2f847c423a556cabc1f8123bb9c3833cb9d2e6",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43331057808/job/131575600087",
           "result": "Hosted actual PAIR process transcript passed at pinned upstream 13b68115fa2c9c1d94f1ead1358f8d5a527cfecf with production example patch SHA256 3442e96fc673bf6c573f1e59e9a07f2f608d4ce4d5e9c5aa5d28ae45fd9667cb. cluster:invite-status returned paired, both member entries returned member, and restart retained identity/membership. Ambiguous-original-explanation and substituted-membership-state controls both failed as required. Root inspected exact logs; no GPU, physical discovery or pairctl Unix-hop claim."
         }
@@ -4849,7 +4728,6 @@
           "result": "Actual published Builder nightly20261112T214826 rootfs SPDX3 artifacts for raspberrypi5 and vm-x86-64 passed SHA256/size checks and image-rootfs membership traversal. Installed updater connector, data service and VM persistent-journal/mount file hashes match exact Builder a8084d8 sources. Parsed documentation INI configuration now equals those installed bytes; the original MaxRetentionSec=1month documentation fails the named DOC_PACKAGED_JOURNAL boundary. Five admission controls reject empty/wrong/ambiguous membership, recipe-only file decoys, missing digests and tampered artifacts. This binds packaged configuration for these exact reference images, not current unbuilt source defaults, other machines, real boot ordering, OTA or reboot persistence. Existing Fumadocs job requires the bounded public-artifact check without a new runner; current-head hosted execution pending."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378092028/job/131729216774",
           "artifact": 14016050305,
           "result": "Hosted published-rootfs/configuration comparison passes for both pinned RPi5 and VM x86 images. The original logging documentation fails DOC_PACKAGED_JOURNAL; exact installed file membership and source hashes are retained in docs-built-capabilities artifact. Full docs export and route crawl also pass. No real boot, OTA or physical logging acceptance is claimed."
@@ -4884,7 +4762,6 @@
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
         },
         {
-          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
           "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
@@ -4910,7 +4787,6 @@
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
         },
         {
-          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
           "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
@@ -4948,7 +4824,6 @@
           "result": "Local actual README init argv executed through production Cobra, HTTPS-request translation to owned loopback metadata/archive serving, extraction/rendering and project writes from pinned templates44d5d1ba804c332c1b6787b9812bbcdd4e005aee. The actual generated TypeScript compiled with a locked npm graph and the owned Node process returned the documented hello-world JSON. A wrong-response compiled-handler control fails the exact README_HTTP_BODY assertion. PID/nonce listening receipts and joined owned process groups exclude an unrelated listener. The existing Fumadocs build job reuses its pinned templates checkout and Node/Go installation; hosted current-head execution remains pending. This proves local generation/build/HTTP output, not wendy run, an OCI image or remote device deployment."
         },
         {
-          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378092028/job/131729216774",
           "artifact": 14015621070,
           "result": "Hosted README Unix install pipeline passed with the freshly built candidate CLI6b4022e805de4da4f96444904131ed9baa088ea64af0450395320ffc5d9a685b. Actual installed bytes match; version invocation and installed-binary MCP setup pass. Missing-install and missing-MCP controls are rejected. Source README matches integrated bytes. Public delivery/package managers and actual deployment remain outside this increment."
@@ -4981,7 +4856,6 @@
           "result": "All 11 real HTTP failure controls pass locally. Full exported mirror verifies 210 bounded requests across 55 historical aliases and their destinations for each prefix. Current public /latest is checked independently of the preview revision; no public execution claimed yet."
         },
         {
-          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131518136984",
           "result": "Actual public HTTPS probe completed 210 requests with zero failures. It checked 55 historical aliases and 49 destination routes for both the exact published branch preview and current public latest. Preview response bytes matched the downloaded export, with canonical URLs, fallback links, anchors, robots exclusion and no analytics verified. Artifact 13986973220 records every response status/digest and the exact preview source commit; latest is explicitly an independent public revision."
         }
@@ -5008,7 +4882,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5036,7 +4909,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5071,7 +4943,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5106,7 +4977,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5141,7 +5011,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5169,7 +5038,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5197,7 +5065,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5232,7 +5099,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5267,7 +5133,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5295,7 +5160,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5330,7 +5194,6 @@
         },
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
-          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
           "runner": "GitHub Actions",
           "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
@@ -5420,7 +5283,6 @@
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
         },
         {
@@ -5442,7 +5304,6 @@
           "result": "Actual gh cryptographic verification of the published artifact accepted its exact tag/source commit and signer workflow, and rejected an all-zero source digest. Read-only check; no release or tag was changed."
         },
         {
-          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481733",
           "result": "All seven actual Git/tag/publication-gate scenarios and five provenance workflow cases passed in hosted CI. Moving main, wrong lightweight/annotated tags, concurrent creators, API failures and wrong/missing artifact metadata are covered. Earlier recorded real gh cryptographic artifact verification supplies the distinct attestation boundary; no release was published by this test. Relevant tested files are byte-identical to the current coverage branch."
         }
@@ -5462,7 +5323,6 @@
           "test": ".github/scripts/test-simulator-dependencies.py",
           "job": "simulator-python310",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Both shipped requirement sets install on Python 3.10 and pass pip check, MuJoCo stepping, ONNX CPU load, JPEG round trip and YAML parsing."
         }
       ],
@@ -5481,7 +5341,6 @@
           "test": ".github/scripts/test-simulator-dependencies.py",
           "job": "simulator-python310",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Both Go2 and G1 shipped requirement sets pass actual Python 3.10 installation and native dependency smoke tests."
         }
       ],
@@ -5498,7 +5357,6 @@
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
         },
         {
@@ -5520,7 +5378,6 @@
           "test": "go/macos/Tests/LayoutRegressionTests.swift",
           "job": "native-app-regressions",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Actual ContentView frames remain centered in both axes at two window sizes. Historical pre-fix layout fails the local mutation check."
         }
       ],
@@ -5539,7 +5396,6 @@
           "test": ".github/scripts/test-native-app.sh",
           "job": "native-app-regressions",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Both native targets compile Go archives and Swift code, then pass macOS/iOS suites without unexpected skips."
         }
       ],
@@ -5556,7 +5412,6 @@
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
         },
         {
@@ -5580,7 +5435,6 @@
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
         },
         {
@@ -5592,7 +5446,6 @@
           "result": "Added real hostname/Avahi wire assertions across a fresh boot-path process using pinned WendyOS-Builder scripts, isolated mount/UTS/network/PID namespaces and a separate DNS-probe network namespace. Covers successful removal, EBUSY removal failure, retained config request and successful retry. Product fix returns the removal error before publishing a mismatched name. Portable assertion failed before fix; full configpartition tests passed on macOS and unprivileged Linux. Required namespace integration remains pending CI."
         },
         {
-          "head": "5c28f455d35de6996557e02eab5bcb777a4184d1",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43256653001",
           "result": "Required Go Tests aggregate passed at the hostname PR head, including Race tests and both native-app jobs. Hostname and mDNS restart job 131316574941 passed the actual namespace/Avahi scenarios in 14.77 seconds. Normal rename, an EBUSY stale override, process restart and retry all assert effective hostname plus wire SRV/TXT records. No hardware or full OS boot is claimed."
         }
@@ -5612,7 +5465,6 @@
           "test": "go/internal/cli/commands:TestHandleWriterAtConcurrentWrites",
           "job": "windows-telemetry",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Real Windows handle writer checks every mapped block after concurrent writes; CI requires three PASS records."
         }
       ],
@@ -5629,7 +5481,6 @@
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
         },
         {
@@ -5655,7 +5506,6 @@
           "test": "go/internal/cli/vm:TestWindowsSerialPendingIO,TestWindowsSerialCloseCancelsPendingIO",
           "job": "windows-telemetry",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Real Windows named-pipe pending I/O with GC and cancellation/close races each pass three times. Skips cannot satisfy the job."
         }
       ],
@@ -5674,7 +5524,6 @@
           "test": "go/internal/agent/services:TestGStreamerInProcessRunner,TestGStreamerInProcessRunner_Cancellation",
           "job": "gstreamer-regressions",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Installed GStreamer elements produce actual output and terminate on cancellation under the race detector. Both PASS records required."
         }
       ],
@@ -5693,7 +5542,6 @@
           "test": "go/internal/agent/ipcam:TestLoopbackNodeRemoveDeletesTheNode",
           "job": "camera-node-regression",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
-          "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Real v4l2loopback 0.15.4 kernel module loaded; privileged ioctl node removal test passes without skipping."
         }
       ],
