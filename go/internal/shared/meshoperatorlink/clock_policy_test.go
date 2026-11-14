@@ -53,7 +53,7 @@ func TestExplicitLinkClockLifetimeUsesBaseWithoutExtendingResourceLease(t *testi
 	}
 }
 
-func operatorClockFixture(t *testing.T, nb, na time.Time) (tls.Certificate, *x509.Certificate) {
+func operatorClockFixture(t testing.TB, nb, na time.Time) (tls.Certificate, *x509.Certificate) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
