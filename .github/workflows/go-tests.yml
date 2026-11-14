@@ -634,7 +634,7 @@ jobs:
           sudo apt-get update --error-on=any
           sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules patch libelf-dev gcc-13
           python3 .github/scripts/prepare-hosted-audio-modules.py
-          modinfo snd-aloop
+          grep -qx 'WENDY_HOSTED_AUDIO=unavailable' "$GITHUB_ENV" || modinfo snd-aloop
           gst-inspect-1.0 fakesrc
           gst-inspect-1.0 fdsink
       - name: Compile the physical EGL probe and reject software fallback
@@ -705,6 +705,7 @@ jobs:
         run: bash .github/scripts/test-shared-camera-capture.sh
 
       - name: Record distinct SensorLink microphones through ALSA with live PipeWire
+        if: env.WENDY_HOSTED_AUDIO != 'unavailable'
         run: bash .github/scripts/test-sensorlink-audio-loopback.sh
       - name: Preserve SensorLink audio execution evidence
         if: always()
