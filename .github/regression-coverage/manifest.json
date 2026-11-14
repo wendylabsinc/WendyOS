@@ -1808,10 +1808,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2124",
       "title": "cli: link-local USB-C host profile that follows the device across ports",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "USB profile argument construction has tests; actual NetworkManager replug/port migration is not verified by the helper tests.",
-      "required_follow_up": "Use two simulated USB interfaces and assert the profile reconnects without an interface-name pin.",
-      "evidence": []
+      "required_follow_up": "Require the real NetworkManager profile recreation/restart journey and interface-name-pinning control in the existing Linux networking job. Hosted privileged execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-usb-profile-namespace.sh",
+            ".github/scripts/usb_profile_namespace_test.py",
+            "go/internal/cli/commands/device_usbsetup_namespace_linux_test.go",
+            ".github/scripts/install-usb-profile-dependencies.py",
+            ".github/scripts/usb_profile_dependencies_test.py"
+          ],
+          "result": "Prepared production runUSBSetup against private NetworkManager and D-Bus, actual veth deletion/recreation with a new interface name/index and unchanged MAC, unrelated-MAC exclusion, saved profile UUID reuse, daemon restart and exact TCP payloads. Private mounts isolate Netplan, NetworkManager and udev rule writes; udev triggers are recorded rather than sent to physical devices. Normal and interface-pinning control Linux race builds and offline fixture checks pass. Dependency provisioning isolates service policy and host sockets, preserves existing policy bytes/identity and requires namespace-drain proof before removing an owned temporary policy. Actual privileged normal/control execution remains pending on the existing hosted networking runner; no physical USB pass is claimed."
+        }
+      ]
     },
     {
       "key": "2122",
@@ -1888,20 +1899,46 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2266",
       "title": "Add frameworks.ros2.scope and deprecate discoveryScope",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Manifest and scope tests cover inheritance and route-read failures. Namespace and actual DDS behavior need the runtime suite as well.",
-      "required_follow_up": "Execute isolated network/peripheral scope tests and fail closed on missing IPv6 route information.",
-      "evidence": []
+      "required_follow_up": "Require hosted production container creation and fresh DDS visibility for network/peripheral scopes, including old-loopback and fail-open-route controls, in the existing containerd job. Preserve intentional IPv4-only support; actual hardware interface classification remains outside this synthetic topology.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/containerd/ros2_scope_runtime_test.go",
+            ".github/scripts/prepare-ros-scope-runtime.py",
+            ".github/scripts/test-ros-scope-runtime.sh",
+            ".github/scripts/ros_scope_runtime_test.py",
+            ".github/scripts/fixtures/ros-scope-runtime.md",
+            ".github/scripts/fixtures/ros-scope-transport.py",
+            ".github/scripts/fixtures/ros-scope-smoke.py"
+          ],
+          "result": "Prepared real containerd/ROS topology with device-only, wired peripheral and default-uplink publishers. Production CreateContainerWithProgress resolves scope and injects DDS configuration; nonce-bound changing topic payloads must prove allowed visibility and excluded-peer isolation. Unreadable/oversized IPv6 route views must fall back to device-only visibility. Physical-device sysfs markers are fixture-only; actual veth links/routes and DDS transport remain real. Pinned-base ROS image passes ordinary unprivileged process smoke; normal and both control Linux binaries compile, existing scope/route tests pass, and all three cleanup tests pass without skips in ordinary Linux. Direct interruption or uncertain namespace drain retains owned work and records failed cleanup. Registered in existing containerd job without a new runner. Full privileged normal/control execution remains pending. The historical contract intentionally accepts an absent IPv6 table on IPv4-only kernels; this fixture does not change that behavior."
+        }
+      ]
     },
     {
       "key": "2300",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2300",
       "title": "Let ROS 2 network and peripherals scopes reach device apps",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Scope mapping tests protect the configured network/peripheral values. Actual DDS discovery and device access inside the app still need the runtime fixture.",
-      "required_follow_up": "Exercise both scopes in a container and verify visible topics and permitted peripherals.",
-      "evidence": []
+      "required_follow_up": "Require hosted production container creation and fresh DDS visibility for network/peripheral scopes, including old-loopback and fail-open-route controls, in the existing containerd job. Preserve intentional IPv4-only support; actual hardware interface classification remains outside this synthetic topology.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/containerd/ros2_scope_runtime_test.go",
+            ".github/scripts/prepare-ros-scope-runtime.py",
+            ".github/scripts/test-ros-scope-runtime.sh",
+            ".github/scripts/ros_scope_runtime_test.py",
+            ".github/scripts/fixtures/ros-scope-runtime.md",
+            ".github/scripts/fixtures/ros-scope-transport.py",
+            ".github/scripts/fixtures/ros-scope-smoke.py"
+          ],
+          "result": "Prepared real containerd/ROS topology with device-only, wired peripheral and default-uplink publishers. Production CreateContainerWithProgress resolves scope and injects DDS configuration; nonce-bound changing topic payloads must prove allowed visibility and excluded-peer isolation. Unreadable/oversized IPv6 route views must fall back to device-only visibility. Physical-device sysfs markers are fixture-only; actual veth links/routes and DDS transport remain real. Pinned-base ROS image passes ordinary unprivileged process smoke; normal and both control Linux binaries compile, existing scope/route tests pass, and all three cleanup tests pass without skips in ordinary Linux. Direct interruption or uncertain namespace drain retains owned work and records failed cleanup. Registered in existing containerd job without a new runner. Full privileged normal/control execution remains pending. The historical contract intentionally accepts an absent IPv6 table on IPv4-only kernels; this fixture does not change that behavior."
+        }
+      ]
     },
     {
       "key": "2453",
@@ -2318,10 +2355,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2770",
       "title": "Support 96\u00d796 TOPDON thermometry and temperature-based alerts",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests cover thermal geometry, metadata separation and alert freshness. The example Swift tests are outside the standard WendyAgentCore test command, and real sensor calibration is not checked here.",
-      "required_follow_up": "Run ThermalNotify tests in CI and retain a recorded 96x96 device-frame fixture with expected Celsius values.",
-      "evidence": []
+      "required_follow_up": "Require ThermalNotify tests in the existing macOS job and retain a recorded physical 96x96 TOPDON frame with device/firmware provenance and independently expected Celsius values. Synthetic metadata fixtures do not establish recorded sensor behavior.",
+      "evidence": [
+        {
+          "tests": [
+            "Examples/ThermalNotify/Tests/ThermalNotifyTests/ThermalNotifyTests.swift",
+            "Examples/ThermalNotify/Tests/ThermalNotifyTests/ViewerSourceTests.swift",
+            "Examples/ThermalNotify/Package.resolved",
+            ".github/workflows/go-tests.yml"
+          ],
+          "result": "All 18 existing ThermalNotify tests passed locally. They exercise 96x96 summary geometry, Celsius conversion, malformed/truncated inputs, freshness and frozen summaries, strict alert thresholds, recipient selection and retries. Registered with resolved dependency versions in the existing macOS job and included package changes in both workflow path filters. Hosted execution remains pending. Frame bytes are synthetic; a recorded physical sensor fixture with provenance remains open."
+        }
+      ]
     },
     {
       "key": "2698",
@@ -2377,10 +2424,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2542",
       "title": "feat(data): readable wendy data sources, honest statuses, stable microphone IDs",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Stable microphone IDs and alias migration have direct tests. End-to-end capture after ALSA/PipeWire renumbering is not shown.",
-      "required_follow_up": "Record from the same physical microphone across renumbering and verify the source identity and stream.",
-      "evidence": []
+      "required_follow_up": "Make check-renumber take the numeric identity from the saved pw-dump/arecord -l evidence or from a new DataSource aliases field, then execute both physical ALSA and PipeWire microphone renumbering procedures with unchanged stable source ID, changed numeric alias, serial mapping, distinct decoded PCM challenges and missing-device control.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.py",
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
+            ".github/scripts/linux_media_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics and detailed per-driver/backend acceptance steps. The check-renumber alias comparison cannot run against real wendy --json data sources output: the listing exposes no numeric alias (DataSource has seven fields; PipeWire listings carry no object id), and its offline test passes only on a synthetic aliases key. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
+        }
+      ]
     },
     {
       "key": "2401",
@@ -2525,10 +2581,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1954",
       "title": "agent: let the v4l2 driver pick its own encoder input format",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "A regression checks GStreamer argument construction leaves encoder input format selection to the driver. It does not execute v4l2h264enc on the affected driver.",
-      "required_follow_up": "Add a real pipeline negotiation test on the supported capture/encoder hardware.",
-      "evidence": []
+      "required_follow_up": "Execute actual camera/encoder negotiation on both bcm2835-codec and Qualcomm iris, retaining fixed negotiated input caps, fresh decoded H264 and the historical Qualcomm I420-only failure control.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.py",
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
+            ".github/scripts/linux_media_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics, stable microphone alias comparison and detailed per-driver/backend acceptance steps. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
+        }
+      ],
+      "resolution": "Detailed executable hardware procedure is prepared. Actual physical execution remains not_run."
     },
     {
       "key": "1858",
@@ -2588,9 +2654,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1739",
       "title": "Report contended cameras correctly and share already claimed cameras",
       "package": "08",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover camera-busy diagnosis, shared-source selection and PipeWire parsing. Real camera contention and shared capture can still differ by driver.",
-      "required_follow_up": "Retain portable shared-consumer/cancellation/incompatible-request assertions. Add actual native driver contention and busy-discovery coverage; synthetic owner/process identity does not establish hardware EBUSY behavior.",
+      "required_follow_up": "Execute the real native EBUSY, busy discovery, physical PipeWire/owner sharing, sibling continuity and final release procedure on an exclusive camera. Retain existing portable HTTP sharing coverage separately.",
       "evidence": [
         {
           "tests": [
@@ -2598,8 +2664,17 @@
             ".github/scripts/test-shared-camera-capture.sh"
           ],
           "result": "Actual owner HTTP JPEG feed flows through production shared capture, GStreamer and hub to two decoded pixel consumers. First cancellation preserves fresh changed frames for the second; final cancellation ends feed/encoder; incompatible requests are refused. Normal and race tests pass locally, and stale-pixel/reopen controls fail. Owner/process discovery seam is synthetic. Linux gate requires v4l2src and strace and rejects any physical-camera open; that hosted syscall evidence remains pending. Native hardware contention is not claimed."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.py",
+            ".github/regression-coverage/manual/linux-media-hardware-rehearsal.txt",
+            ".github/scripts/linux_media_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared exact-target Linux media inventory, bounded headless camera capture, read-only console diagnostics, stable microphone alias comparison and detailed per-driver/backend acceptance steps. Each generated matrix plan has nine cases, all not_run. Procedures require actual EBUSY, fresh physical challenge video, fixed encoder caps, source identity across real renumbering, decoded and checksum-verified audio episodes, and owned-process/configuration cleanup. Four offline tests pass using synthetic records and inert CLI children; no camera, microphone, Agent state or hardware configuration was accessed. TOPDON temperature calibration remains separate."
         }
-      ]
+      ],
+      "resolution": "Detailed executable hardware procedure is prepared. Actual physical execution remains not_run."
     },
     {
       "key": "2011",
@@ -2642,20 +2717,40 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2315",
       "title": "Stop the Mac agent crashing when viewing a thermal camera",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Capture-format tests protect the thermal format choice, but do not open the real thermal camera or exercise AVFoundation startup.",
-      "required_follow_up": "Add a recorded device-format fixture and an optional thermal capture smoke test under runtime concurrency checks.",
-      "evidence": []
+      "required_follow_up": "Run the generated exact-Mac thermal startup and repeated/concurrent decoded-capture procedure with recorded runtime concurrency instrumentation, fresh actual device formats and independent active-format observations.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-hardware-rehearsal.py",
+            ".github/regression-coverage/fixtures/topdon-2315-formats.json",
+            ".github/scripts/mac_camera_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared an exact-Mac companion to the existing packaged-camera procedure with seven additional cases, all not_run. Historical TOPDON dimensions are explicitly source-reported, with a fresh target format record required before physical capture. The plan pins instrumented build evidence and camera identities, covers repeated/concurrent thermal capture and actor diagnostics, and provides an explicitly invoked enrolled UVC authorization/range/read-write-readback/restore helper. Fresh human topology confirmation is required; every write uses --no-persist, bounded owned CLI processes and final restoration of the original control. Ten offline tests use synthetic records and inert child processes, including SIGTERM restoration and failed-restore reporting. Generation performs no hardware access or native permission changes; offline success is not a physical pass."
+        }
+      ],
+      "resolution": "Detailed executable physical Mac procedure is prepared. All hardware cases remain not_run."
     },
     {
       "key": "2222",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2222",
       "title": "Enable USB camera controls on enrolled Macs",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Swift tests cover controls and CLI capability routing. Camera UVC behavior on enrolled hardware still requires a live device.",
-      "required_follow_up": "Retain control-range tests and add an enrolled USB-camera control round trip.",
-      "evidence": []
+      "required_follow_up": "Run the explicit enrolled UVC helper with fresh physical camera/topology confirmation and owner-approved control, review server-side authorization refusal evidence, and verify original control restoration and unchanged persisted control settings.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-hardware-rehearsal.py",
+            ".github/regression-coverage/fixtures/topdon-2315-formats.json",
+            ".github/scripts/mac_camera_hardware_rehearsal_test.py"
+          ],
+          "result": "Prepared an exact-Mac companion to the existing packaged-camera procedure with seven additional cases, all not_run. Historical TOPDON dimensions are explicitly source-reported, with a fresh target format record required before physical capture. The plan pins instrumented build evidence and camera identities, covers repeated/concurrent thermal capture and actor diagnostics, and provides an explicitly invoked enrolled UVC authorization/range/read-write-readback/restore helper. Fresh human topology confirmation is required; every write uses --no-persist, bounded owned CLI processes and final restoration of the original control. Ten offline tests use synthetic records and inert child processes, including SIGTERM restoration and failed-restore reporting. Generation performs no hardware access or native permission changes; offline success is not a physical pass."
+        }
+      ],
+      "resolution": "Detailed executable physical Mac procedure is prepared. All hardware cases remain not_run."
     },
     {
       "key": "1924",
@@ -3526,10 +3621,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2242",
       "title": "Stream Go2 data and commands through the agent, with a ROS 2 bridge",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Command acknowledgement, movement expiry and input-validation tests exist. ROS executor responsiveness and physical posture acknowledgements remain device integration concerns.",
-      "required_follow_up": "Run delayed-ack and concurrent ROS callbacks against the simulator transport and verify stop/move deadlines.",
-      "evidence": []
+      "required_follow_up": "Require the real ROS/Unix gRPC/Agent/WebRTC command deadline journey and synchronous-callback/missing-lease controls in the existing go2 simulator row. Hosted execution remains pending; physical posture and stopping distance are separate.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-go2-bridge-deadlines.py",
+            ".github/scripts/fixtures/go2-bridge-deadlines.md",
+            "go/internal/agent/services/unitree_ros_runtime_test.go",
+            "go/ros2/go2-bridge/tests/command_deadlines_test.py"
+          ],
+          "result": "Source-hashed ordinary native Linux container evidence passed the unchanged ROS Humble bridge through real Unix gRPC, production UnitreeRobotService and unitree.Connect to a Pion protocol robot. A 1.2-second posture acknowledgement left ROS callbacks, fresh odometry and Stop responsive; Stop completed in0.083s, actual wire move expiry in0.501s and unacknowledged Stop returned failure in0.207s. A late Stop acknowledgement could not complete another pending posture command. Synchronous-posture and disabled-lease controls failed their exact assertions. Owned container/network/image cleanup reported no errors. Root verified evidence source hashes against the integrated files. Registered in the existing go2 matrix row with no new runner; hosted execution pending. No MuJoCo or physical motion claim."
+        }
+      ]
     },
     {
       "key": "2306",
@@ -3766,9 +3871,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2673",
       "title": "Correct mesh discovery and NVIDIA PAIR documentation",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Documentation corrects mesh discovery and PAIR usage; no command-transcript or example validation was found for the corrected instructions.",
-      "required_follow_up": "Require hosted documented CLI argument checks and the actual pinned PAIR invitation/member-state process transcript, including restart and both incorrect-documentation controls. No GPU, mesh discovery, attach transport or Unix pairctl-hop execution is claimed by the PAIR fixture.",
+      "required_follow_up": "Retain required documented CLI argument checks and the pinned PAIR invitation/member-state transcript with restart and both incorrect-documentation controls.",
       "evidence": [
         {
           "tests": [
@@ -3783,8 +3888,19 @@
             ".github/workflows/fumadocs.yml"
           ],
           "result": "Pinned upstream cluster-manager with the example production patch completes a real PIN invitation between two loopback processes, observes paired invitation versus member entries, and retains identity/membership after restart. Both ambiguous and incorrect documentation controls fail against the actual transcript. Local execution passed; required hosted execution pending."
+        },
+        {
+          "head": "1b2f847c423a556cabc1f8123bb9c3833cb9d2e6",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43331058242/job/131575749692",
+          "result": "Hosted race suite passed the CLI commands package, including both non-skipping documented-argument contract tests. Root inspected the workflow invocation and test discovery; source is unchanged in the current batch. The parser validates actual guide argv and typed flags without executing device operations."
+        },
+        {
+          "head": "1b2f847c423a556cabc1f8123bb9c3833cb9d2e6",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43331057808/job/131575600087",
+          "result": "Hosted actual PAIR process transcript passed at pinned upstream 13b68115fa2c9c1d94f1ead1358f8d5a527cfecf with production example patch SHA256 3442e96fc673bf6c573f1e59e9a07f2f608d4ce4d5e9c5aa5d28ae45fd9667cb. cluster:invite-status returned paired, both member entries returned member, and restart retained identity/membership. Ambiguous-original-explanation and substituted-membership-state controls both failed as required. Root inspected exact logs; no GPU, physical discovery or pairctl Unix-hop claim."
         }
-      ]
+      ],
+      "resolution": "Required hosted command-contract checks and actual pinned PAIR invitation/restart transcript passed, including incorrect-documentation controls."
     },
     {
       "key": "2561",

@@ -1,0 +1,245 @@
+Physical Linux camera and microphone acceptance: 1739, 1954, 2542
+
+This file is a human procedure. Generation only reads local files. Nothing in a
+generated plan is a hardware result. Keep every case not_run until the listed
+observations exist. Do not infer physical identity from a friendly name or a
+successful RPC. Keep recordings outside Git; they can contain private sound or
+images. Use consenting operators and a reserved bench with no other recordings.
+
+Required matrix and provenance
+
+Use a Raspberry Pi 4 with bcm2835-codec and a supported Qualcomm board with
+qcom-iris for 1954. Record board revision, OS/image, kernel, firmware, camera USB
+serial or CSI connector, encoder driver and /dev/video node mappings. Jetson
+nvv4l2h264enc, software x264enc and native camera H264 do not cover this change.
+Use a physical microphone through PipeWire and through native ALSA for 2542,
+in separate reserved sessions/boards. Do not disable the user's audio service
+to manufacture an ALSA case. Native ALSA must be the Agent's observed backend.
+The microphone must have a distinct serial/card identity. Duplicate card IDs
+or names without a verified physical mapping cannot establish this result.
+
+The generator requires actual preflight records. Capture device info, camera
+list and data sources using the candidate CLI and explicit device selector.
+On the board, save uname -a, /etc/os-release, /proc/asound/cards, arecord -l,
+the camera's udevadm properties, and udevadm properties for the microphone's
+actual /dev/snd/controlC<number>. Record USB serial and physical port separately.
+For PipeWire also save pw-dump in the same account/session the Agent uses.
+Save the installed Agent /proc/<MainPID>/exe resolved path and sha256sum, its
+systemctl ExecStart/start timestamp, and the candidate build's source SHA and
+binary hash. A local candidate file alone does not prove what the board runs.
+Pin the original relevant source commits in the report: 517ac062d for 1739,
+9a474f749 for 1954 and eaecf90e3 for 2542. Save a recovery record describing how
+the reserved service configuration and device order will be restored.
+
+Generate a fresh directory for each matrix row:
+  python3 .github/regression-coverage/manual/linux-media-hardware-rehearsal.py generate INVENTORY_JSON NEW_DIRECTORY
+The inventory schema is in that script's docstring. The generated commands.json
+contains argument arrays, not shell text to eval. Every command names the
+reserved device. The exact shell commands are appended below this procedure.
+
+Preflight on the reserved board and operator workstation
+
+1. Reconfirm serial/physical labels and installed hashes immediately before
+   starting. Stop if they differ from inventory. On the workstation:
+     cd @PLAN@
+   Save the exact CLI commands and UTC start/end times with each observation.
+   Run the generated info/cameras/sources/episodes commands separately, redirect
+   each to a NEW file. Confirm there is no active recording and no armed campaign
+   that could start one. Reserve the service exclusively for this procedure.
+   Do not stop or disarm a recording owned by someone else.
+
+2. On the board, run console-capture.sh from a copied plan directory. Its
+   commands are read-only and require v4l2-ctl, udevadm, ALSA tools, GStreamer and
+   systemd. Capture errors as prerequisites; do not omit missing commands and
+   report a pass. Save a full video-node listing and each encoder node's driver:
+     v4l2-ctl --list-devices
+     v4l2-ctl --device="$ENCODER_NODE" --all --list-formats-out
+   ENCODER_NODE must be selected by the operator from the actual driver map.
+   For every session snapshot, retain the boot ID, Agent PID/start time and
+   current camera stable-ID-to-node mapping. The node can change after replug.
+   Re-run udevadm and camera list instead of reusing yesterday's node number.
+
+3. Put a new handwritten challenge '@NONCE@ baseline' in the camera's field of
+   view, move it, then show a different challenge in the second half of capture.
+   Run on the workstation:
+     sh capture-camera.sh baseline
+   It captures for 45 seconds through the actual Agent. Exit 124 is the bounded
+   capture deadline, not success. Early errors, empty files or a frozen stream
+   fail. Save all three baseline files. Decode using the commands in step 8.
+
+1739: actual native contention, shared owner and release
+
+4. On the board, start an owned native capture in a separate foreground terminal
+   against the exact camera node observed above. This needs exclusive bench
+   access and a native camera that rejects a second streaming consumer:
+     timeout --signal=TERM --kill-after=5s 90s gst-launch-1.0 -v v4l2src device="$CAMERA_NODE" ! fakesink sync=false
+   Save its complete output. Confirm fresh buffers and the actual owning PID,
+   start time and /proc/<PID>/fd mapping to the camera. While it remains active,
+   a second independent native capture must return EBUSY/resource busy:
+     timeout --signal=TERM --kill-after=5s 10s v4l2-ctl --device="$CAMERA_NODE" --stream-mmap --stream-count=2 --stream-to=/dev/null
+   Save exit/status output. A generic timeout or unsupported format is not
+   contention proof. If the driver accepts multiple consumers, this row is
+   unavailable; use a physically exclusive camera rather than faking EBUSY.
+   Run the generated cameras command while busy, then:
+     sh capture-camera.sh busy
+   With no shareable owner feed/graph, require an early actionable camera-in-use
+   error identifying this node, not camera absence, encoder failure or a hang.
+   Save discovery output as well; a busy healthy device must not disappear.
+   Let the owned foreground process finish or interrupt its terminal and wait
+   for it to exit. Do not kill a saved numeric PID after it may have been reaped.
+
+5. Exercise a real sharing owner. In the Agent's actual PipeWire session, save
+   pw-dump and match the physical camera through api.v4l2.path plus udev identity.
+   Set PW_CAMERA_SERIAL to that observed node's object.serial, not its reused ID.
+   Start a foreground consumer of that node:
+     timeout --signal=TERM --kill-after=5s 180s gst-launch-1.0 -v pipewiresrc target-object="$PW_CAMERA_SERIAL" ! fakesink sync=false
+   Verify real changing physical frames and a held native camera, then repeat
+   the independent native EBUSY probe. Keep this owner running. On the
+   workstation start shared-a and shared-b in two foreground terminals within
+   two seconds of one another:
+     sh capture-camera.sh shared-a
+     sh capture-camera.sh shared-b
+   Show distinct moving challenges before and AFTER shared-a ends at 40 seconds.
+   shared-b lasts 80 seconds. Decode both and require the second consumer to
+   contain the later physical challenge after the first consumer exits. Save
+   Agent logs showing 'camera held by another client, capturing through
+   PipeWire', its exact node serial and no fallback native-open success.
+   A graph existing without an observed busy native driver is insufficient.
+
+   A genuine application owner publishing /frame.jpg can cover the HTTP sharing
+   branch separately. Retain the actual camera-owning PID/start time, same network
+   namespace and listening socket, image/jpeg plus X-Captured-At-Unix-Ns headers,
+   fresh physical challenges and Agent 'capturing shared JPEG feed from camera
+   owner' log. Use only its documented start/stop procedure. Do not insert a
+   fabricated JPEG server. If unavailable, mark that physical branch not_run;
+   portable shared-HTTP tests remain the evidence for its software behavior.
+
+6. After both Wendy consumers exit, verify their capture/encoder subprocesses
+   have gone while the unrelated sharing owner remains healthy. Stop only the
+   owner created in step 5, wait for its foreground command, and verify no owned
+   camera FDs remain. Run:
+     sh capture-camera.sh released
+   Require fresh direct capture with a new challenge. Save final fd/process and
+   device listings. A surviving owner or encoder prevents cleanup passing.
+
+1954: physical capture/encoder negotiation
+
+7. Complete this independently on BOTH named encoder driver families. Use a
+   camera/mode requiring Agent encoding; a native H264 passthrough cannot prove
+   negotiation. On the reserved Agent, enable GStreamer diagnostic environment
+   through that bench's existing service management procedure:
+     GST_DEBUG=GST_CAPS:6,v4l2*:6
+     GST_DEBUG_NO_COLOR=1
+     GST_DEBUG_FILE=/absolute/private/bench-directory/gst-negotiation.log
+   Use a newly created directory writable by the Agent account. Record the
+   exact temporary configuration, original environment and restoration steps;
+   do not overwrite or remove an existing drop-in. Restart only the reserved
+   Agent, then verify /proc/<MainPID>/environ contains these settings and the
+   installed executable hash still matches. GStreamer children inherit them.
+   Run on the workstation with a fresh moving challenge:
+     sh capture-camera.sh encoder
+   Save journalctl -u wendy-agent for this exact time range, the live child argv,
+   driver/node fd mapping and gst-negotiation.log. Require the production log
+   'GStreamer encoder selected' to say v4l2h264enc. Require negotiated FIXED sink
+   caps at that encoder and its driver node, not merely advertised caps containing
+   both options. Require NV12 on qcom-iris. On bcm2835-codec record the selected
+   I420 or NV12 format and prove that the actual driver supports it. I420 is the
+   original Pi path; selecting another supported format is not itself a failure. Decode H264 with baseline
+   profile and level <= 4.0 at a supported resolution/rate, including Pi 1080p30
+   when supported. If another encoder wins selection or no fixed caps were
+   retained, leave this row unverified. Do not force success by removing plugins.
+
+   Historical control on the reserved Qualcomm board: build a separate candidate
+   from the same source with only encoderSegment's v4l2h264enc input changed from
+   format={I420,NV12} to format=I420. Save the exact patch/source and both binary
+   hashes. Install it by the bench's usual procedure, repeat the same camera
+   request into a separate control directory, and require the actual iris
+   negotiation failure before decoded frames. Restore the reviewed candidate,
+   verify its installed hash, and repeat the successful capture. A missing
+   plugin or dead camera is not a valid control. The old I420 restriction can
+   work on the Pi; its purpose there is compatibility, not an expected failure.
+
+8. Decode EVERY successful video file on the workstation with ffmpeg/ffprobe.
+   Use a new result directory each time and keep stderr and exit statuses:
+     ffprobe -v error -select_streams v:0 -show_streams -show_format -of json "$VIDEO" > "$NEW_PROBE_JSON"
+     ffmpeg -nostdin -v error -i "$VIDEO" -map 0:v:0 -f framemd5 "$NEW_FRAME_MD5"
+     ffmpeg -nostdin -v error -i "$VIDEO" -vf fps=1 "$NEW_FRAME_DIRECTORY/frame-%04d.png"
+   Require clean decode, expected dimensions, multiple changing decoded frames
+   spanning the capture interval and legible newly issued physical challenges.
+   Compare the shared-b frames after shared-a's end timestamp. A nonempty encoded
+   file, changing encoded-byte hash, or a static screenshot is insufficient.
+   Keep generated images outside the repository. For encoder proof also retain
+   probe codec/profile/level and the fixed negotiated driver caps from step 7.
+
+2542: microphone identity through real renumbering
+
+9. Save fresh sources-before.json, raw pw-dump or /proc/asound card IDs, arecord -l
+   and udev serial/port mapping. Select the same stable source ID from the plan,
+   never its numeric alias. Confirm no active recording, then run the generated
+   microphone_before command. Retain the returned episode ID/name. Speak the
+   fresh nonce and 'before', followed by three separated taps near ONLY this
+   microphone while a different microphone hears a different challenge. Record
+   at least 12 seconds. Verify the active episode still has that exact ID/name
+   with the generated episodes command before running stop_owned_episode_only.
+   Since data stop has no episode selector, do not run it if ownership changed.
+   Inspect and download this exact sealed episode into a new directory using
+   the commands below. Require successful checksum verification and complete
+   source status, not a zero-sample or failed capture hidden by RPC success.
+
+10. With no capture active, physically unplug the identified microphone and
+    replug it after another reserved microphone, or reboot the reserved board
+    with the agreed reversed connection order. Do not rename source records or
+    change udev rules to simulate this. Preserve serial and port mapping; if the
+    source uses a port-derived identity, keep its port and change only ordering.
+    For PipeWire require changed numeric object ID/alias with identical node.name;
+    for ALSA require changed card number/alias with identical card ID and PCM
+    device. Capture the actual kernel/session evidence and sources-after.json.
+    Verify the same stable ID resolves to the same physical serial, then run:
+      python3 .github/regression-coverage/manual/linux-media-hardware-rehearsal.py check-renumber sources-before.json sources-after.json --source "$STABLE_SOURCE" --backend "$BACKEND"
+    Save its output. This only verifies the listing contract. Unchanged numeric
+    aliases mean the physical renumber experiment has not happened, not a pass.
+
+11. Run microphone_after using the UNCHANGED stable source ID. Speak a new nonce
+    and 'after', followed by five separated taps. Keep the other microphone's
+    challenge different. Seal only the matching owned episode and inspect and
+    download it as in step 9. Find its audio/<source>/index.jsonl and WAV segments.
+    Require matching manifest source ID and index source/timing metadata,
+    nonzero recorded samples spanning the challenge, 48000 Hz mono 16-bit PCM,
+    verified file hashes and no discontinuity/status failure concealed as success.
+    Decode every WAV, inspect samples and listen to the two physical challenges:
+      ffprobe -v error -show_streams -of json "$WAV" > "$NEW_WAV_PROBE"
+      ffmpeg -nostdin -v error -i "$WAV" -f s16le -acodec pcm_s16le "$NEW_PCM"
+      ffmpeg -nostdin -v info -i "$WAV" -af astats=metadata=1:reset=0 -f null - 2> "$NEW_PCM_STATS"
+    Record reviewer, exact challenge transcript and tap times. Changed/noisy PCM
+    alone cannot prove which microphone supplied it; the distinct physical
+    challenges and serial mappings must agree before and after renumbering.
+
+12. Missing-device control: finish the episode, then disconnect ONLY the selected
+    physical microphone while the other microphone remains present. Save fresh
+    sources and attempt record with the same stable ID in a new owned episode
+    name. Require explicit missing-source failure or honest unavailable capture
+    with no samples attributed to that ID. It must not silently record the other
+    microphone. If an episode was created, seal it only after verifying its ID
+    and inspect its failure evidence. Reconnect the original device, reconfirm
+    identity and capture a final new challenge. Numeric legacy aliases refer to
+    whichever current node owns that number; never expect them to stay stable.
+
+Cleanup and review
+
+13. Wait for all owned foreground capture commands and verify their processes,
+    encoder children and camera FDs are gone. Seal only an episode that still
+    matches the procedure's returned ID/name. Restore temporary debug settings
+    and candidate Agent after any historical control, then verify executable
+    hash, service health and original environment. Restore physical cable/order
+    according to the recovery record. Do not delete other episodes, stop system
+    PipeWire globally, kill unrelated processes or remove an existing drop-in.
+    Retain any uncertain state and report it for the bench owner to reconcile.
+
+14. Save sha256sum of every log, listing, decoded output, challenge record and
+    episode manifest. Add paths/hashes plus UTC intervals and reviewer to each
+    evidence.json case. Report each encoder/audio matrix row separately. Missing
+    hardware, unavailable sharing owner, failed native EBUSY reproduction, absent
+    fixed encoder caps, unchanged numeric alias or absent cleanup proof stays
+    pending. Generation and offline tests never change hardware_execution.
+    TOPDON 2770 calibrated 96x96 thermometry is a separate physical acceptance:
+    these H264/JPEG/PCM captures do not establish raw temperature calibration.

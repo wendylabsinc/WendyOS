@@ -44,8 +44,10 @@ on:
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
       - 'swift/WendyAgentMac/RuntimeGuest/**'
+      - 'swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift'
       - 'Examples/SO101Reader/**'
       - 'Examples/WendyNotify/**'
+      - 'Examples/ThermalNotify/**'
   pull_request:
     paths:
       - '.gitattributes'
@@ -87,8 +89,10 @@ on:
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
       - 'swift/WendyAgentMac/RuntimeGuest/**'
+      - 'swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift'
       - 'Examples/SO101Reader/**'
       - 'Examples/WendyNotify/**'
+      - 'Examples/ThermalNotify/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -338,6 +342,34 @@ jobs:
           done
       - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
         run: bash .github/scripts/test-containerd-versions.sh
+      - name: Prepare real ROS scope image and regression controls
+        run: |
+          python3 .github/scripts/ros_scope_runtime_test.py
+          python3 .github/scripts/prepare-ros-scope-runtime.py --output "$RUNNER_TEMP/ros-scopes"
+      - name: Require actual DDS visibility for network and peripheral scopes
+        run: |
+          runtime="$RUNNER_TEMP/wendy-runtime/current/root"
+          common="$RUNNER_TEMP/wendy-runtime/common/root"
+          runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$common/usr/bin:$common/usr/sbin:$common/bin:$common/sbin:$PATH"
+          for case_name in normal old-loopback fail-open-routes; do
+            binary="$RUNNER_TEMP/ros-scopes/$case_name.test"
+            if [[ $case_name == normal ]]; then binary="$RUNNER_TEMP/containerd.test"; fi
+            sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+              bash .github/scripts/test-ros-scope-runtime.sh "$binary" "$RUNNER_TEMP/ros-scopes" "$case_name"
+          done
+      - name: Preserve ROS scope visibility evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ros-scope-runtime
+          path: |
+            ${{ runner.temp }}/ros-scopes/*.log
+            ${{ runner.temp }}/ros-scopes/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove exported ROS fixture image and controls
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ros-scopes/ros-image.tar" "$RUNNER_TEMP/ros-scopes/old-loopback.test" "$RUNNER_TEMP/ros-scopes/fail-open-routes.test"
       - name: Require rootful ESP-IDF generated-file ownership
         timeout-minutes: 35
         run: python3 .github/scripts/test-esp-idf-ownership.py --output "$RUNNER_TEMP/esp-idf-ownership"
@@ -435,6 +467,8 @@ jobs:
         run: |
           sudo apt-get update --error-on=any
           sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+      - name: Install USB profile dependencies with isolated service policy
+        run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
       - name: Require native Linux SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - name: Compile both packet backends with the race detector
@@ -576,6 +610,8 @@ jobs:
         run: bash .github/scripts/test-chunk-stall-ownership.sh "$RUNNER_TEMP/chunk-stall-ownership"
       - name: Require link-local traffic across competing interface routes
         run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
+      - name: Require USB profile migration across recreated interfaces
+        run: bash .github/scripts/test-usb-profile-namespace.sh "$RUNNER_TEMP/usb-profile-namespace"
       - name: Require broker uplink migration after active sessions drain
         run: bash .github/scripts/test-broker-uplink-namespace.sh "$RUNNER_TEMP/broker-uplink"
       - name: Preserve transfer and interface recovery evidence
@@ -588,6 +624,10 @@ jobs:
             ${{ runner.temp }}/chunk-stall-ownership/*.log
             ${{ runner.temp }}/linklocal-multi-interface/*.log
             ${{ runner.temp }}/broker-uplink/*.log
+            ${{ runner.temp }}/usb-profile-namespace/**/*.log
+            ${{ runner.temp }}/usb-profile-namespace/**/*.json
+            ${{ runner.temp }}/usb-profile-dependencies/*.log
+            ${{ runner.temp }}/usb-profile-dependencies/*.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Require wired-only automatic ROS discovery
@@ -719,6 +759,10 @@ jobs:
         if: matrix.platform == 'macos'
         timeout-minutes: 15
         run: swift test --package-path Examples/WendyNotify
+      - name: Exercise thermal metadata, freshness and notification thresholds
+        if: matrix.platform == 'macos'
+        timeout-minutes: 15
+        run: swift test --package-path Examples/ThermalNotify --force-resolved-versions
       - name: Upload native test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1083,6 +1127,24 @@ jobs:
           uv pip install --python .venv/bin/python -r "go/simulator/$ROBOT/requirements.txt"
           uv pip check --python .venv/bin/python
           .venv/bin/python .github/scripts/test-simulator-dependencies.py
+      - name: Set up Go for the Go2 bridge deadline fixture
+        if: matrix.robot == 'go2'
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: go2-bridge-deadlines
+      - name: Require ROS callbacks and robot transport deadlines
+        if: matrix.robot == 'go2'
+        run: python3 .github/scripts/test-go2-bridge-deadlines.py --output "$RUNNER_TEMP/go2-bridge-deadlines"
+      - name: Preserve Go2 bridge deadline evidence
+        if: always() && matrix.robot == 'go2'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go2-bridge-deadlines
+          path: |
+            ${{ runner.temp }}/go2-bridge-deadlines/*.json
+            ${{ runner.temp }}/go2-bridge-deadlines/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Preserve the existing required "Test" check after splitting its work.
   test:
