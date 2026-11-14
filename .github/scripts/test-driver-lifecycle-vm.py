@@ -255,7 +255,7 @@ RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fix
         console = self.output / (control + "-" + phase + "-console.log")
         require(not log.exists() and not console.exists(), "guest evidence paths already exist")
         append = f"root=/dev/vda rw console=ttyS0 loglevel=4 selinux=0 audit=0 systemd.show_status=false wendy.driver={self.nonce} wendy.control={control} wendy.phase={phase} "
-        command = ["qemu-system-x86_64", "-machine", "q35,accel=tcg", "-cpu", "max", "-smp", "2", "-m", "2048",
+        command = ["qemu-system-x86_64", "-machine", "q35,accel=kvm:tcg", "-cpu", "max", "-smp", "2", "-m", "2048",
                    "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot", "-nic", "none",
                    "-device", "virtio-serial-pci",
                    "-chardev", "file,id=driver-evidence,path=" + str(log),

@@ -112,7 +112,7 @@ class WindowsVMBootTests(unittest.TestCase):
                 VM.validate_lifecycle_port(phase,port,meta,first)
 
     def test_guest_and_listener_cannot_accept_an_unrelated_host_endpoint(self):
-        guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'WendyOS-0.20.2','version':'2026.11.12-135023'}
+        guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos','osVersion':'WendyOS-0.21.0','version':'2026.11.12-135023'}
         VM.validate_guest(guest)
         for key in guest:
             with self.subTest(key=key),self.assertRaises(ValueError):VM.validate_guest(dict(guest,**{key:''}))
@@ -127,17 +127,17 @@ class WindowsVMBootTests(unittest.TestCase):
         # Fields match actual collision-info-38.log from job131729254510.
         # The public CLI hardware JSON does not contain hostname/publicKey.
         guest={'cpuArchitecture':'arm64','deviceType':'vm-arm64','os':'wendyos',
-               'osVersion':'WendyOS-0.20.2','version':'2026.11.12-135023'}
+               'osVersion':'WendyOS-0.21.0','version':'2026.11.12-135023'}
         VM.validate_guest(guest)
         nonce='0123456789abcdef0123456789abcdef'
         identity=dict(guest,address='127.0.0.1:50053',nonce=nonce,hostname='owned-vm',bootId='11111111-2222-4333-8444-555555555555',bootTimeNs=1000000000)
         VM.validate_identity(identity,guest,50053,nonce)
         for key,value in (('address','127.0.0.1:50051'),('nonce','other'),('hostname',''),('bootId',''),('bootTimeNs',0),('bootTimeNs',True),
                           ('version','other'),('cpuArchitecture','amd64'),('deviceType','foreign'),
-                          ('os','linux'),('osVersion','WendyOS-0.20.3')):
+                          ('os','linux'),('osVersion','WendyOS-0.21.1')):
             with self.subTest(key=key),self.assertRaises(ValueError):
                 VM.validate_identity(dict(identity,**{key:value}),guest,50053,nonce)
-        for value in ('0.20.2','0.20.3','WendyOS-0.20.2-extra'):
+        for value in ('0.21.0','0.21.1','WendyOS-0.21.0-extra'):
             with self.subTest(version=value),self.assertRaises(ValueError):
                 VM.validate_guest(dict(guest,osVersion=value))
 

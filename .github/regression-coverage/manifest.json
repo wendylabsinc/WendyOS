@@ -4192,6 +4192,10 @@
             "go/internal/testfixture/windowsvmidentity/main.go"
           ],
           "result": "Actual packaged QEMU11.1.0 booted the pinned WendyOS0.20.2 guest and the candidate CLI read real ARM64 VM information with Agent2026.11.12-135023. Historical executable-lookup control and owned cleanup passed. Normal gate failed because fixture demanded hostname/publicKey from CLI JSON and expected an unprefixed OS version. Corrected schema uses WendyOS-0.20.2; separate bounded read-only production-client RPCs require hostname and kernel boot ID after exact QEMU listener ownership is observed before/after. Restart retains the owned disk identity and hostname, changes real boot ID, and preserves sticky port checks. Ten portable tests, actual loopback RPC race and Windows helper compile pass. Full corrected native boot/restart remains pending; no cryptographic identity claim. The observed Agent release tag resolves to87df018a9f1e7bdd5f0f1529388797e87e57d97e; its exact network_stats.go and hoststats implementation populate BootId from /proc/sys/kernel/random/boot_id and sample CLOCK_BOOTTIME. The introducing commit282aa2293 is an ancestor."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43593970058/job/132444620222",
+          "result": "First hosted execution of the macOS VM lifecycle gate (macos-15-intel, TCG) failed: cancellation recovery passed, then the pinned vm-arm64 guest was still starting its container runtime when the production 5-minute simulator wait expired. The gate is not registered in hosted CI; this entry stays pending until it runs on the reserved ARM64/HVF Mac."
         }
       ]
     },
@@ -4320,6 +4324,10 @@
             "go/internal/cli/commands/vm_lifecycle_darwin_test.go"
           ],
           "result": "Corrected fixture expectation to the actual shipped GetAgentVersion contract: Go Agent supplies hostname, not PublicKey. Same nonempty hostname and same owned regular disk inode must survive restart, alongside new guest boot ID, owned QMP/process/port and actual persisted app HTTP output. No cryptographic identity claim; native runtime execution remains pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43593970058/job/132444620222",
+          "result": "First hosted execution of the macOS VM lifecycle gate (macos-15-intel, TCG) failed: cancellation recovery passed, then the pinned vm-arm64 guest was still starting its container runtime when the production 5-minute simulator wait expired. The gate is not registered in hosted CI; this entry stays pending until it runs on the reserved ARM64/HVF Mac."
         }
       ]
     },
@@ -4360,6 +4368,10 @@
             "go/internal/cli/commands/vm_lifecycle_darwin_test.go"
           ],
           "result": "Corrected fixture expectation to the actual shipped GetAgentVersion contract: Go Agent supplies hostname, not PublicKey. Same nonempty hostname and same owned regular disk inode must survive restart, alongside new guest boot ID, owned QMP/process/port and actual persisted app HTTP output. No cryptographic identity claim; native runtime execution remains pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43593970058/job/132444620222",
+          "result": "First hosted execution of the macOS VM lifecycle gate (macos-15-intel, TCG) failed: cancellation recovery passed, then the pinned vm-arm64 guest was still starting its container runtime when the production 5-minute simulator wait expired. The gate is not registered in hosted CI; this entry stays pending until it runs on the reserved ARM64/HVF Mac."
         }
       ]
     },
