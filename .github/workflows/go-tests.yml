@@ -323,7 +323,7 @@ jobs:
   linux-install-host:
     name: Linux install safety
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
@@ -334,7 +334,20 @@ jobs:
           sudo apt-get update --error-on=any
           sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Verify native Make VERSION in the built CLI
-        run: python3 .github/scripts/test-native-make-version.py
+        run: python3 .github/scripts/test-native-make-version.py --retain-binary "$RUNNER_TEMP/wendy-stagefile-cli"
+      - name: Build and execute inherited Stagefiles with both packaged backends
+        run: python3 .github/scripts/test-stagefile-images.py "$RUNNER_TEMP/wendy-stagefile-cli" --output "$RUNNER_TEMP/stagefile-images"
+      - name: Preserve Stagefile execution evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: stagefile-images-pr
+          path: ${{ runner.temp }}/stagefile-images
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove retained fixture CLI
+        if: always()
+        run: rm -f "$RUNNER_TEMP/wendy-stagefile-cli"
       - name: Compile host fixtures
         run: |
           go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
@@ -619,7 +632,9 @@ jobs:
       - name: Install camera and GStreamer fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules patch libelf-dev gcc-13
+          python3 .github/scripts/prepare-hosted-audio-modules.py
+          grep -qx 'WENDY_HOSTED_AUDIO=unavailable' "$GITHUB_ENV" || modinfo snd-aloop
           gst-inspect-1.0 fakesrc
           gst-inspect-1.0 fdsink
       - name: Compile the physical EGL probe and reject software fallback
@@ -642,12 +657,32 @@ jobs:
           path: .ci-v4l2loopback
           persist-credentials: false
       - name: Build and load WendyOS loopback ABI
+        id: loopback-module
         run: |
+          set -euo pipefail
+          loopback_revision="$(git -C .ci-v4l2loopback rev-parse HEAD)"
+          if [[ "$loopback_revision" != 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4 ]]; then
+            echo "::error::Unexpected v4l2loopback source revision: $loopback_revision"
+            exit 1
+          fi
+          git -C .ci-v4l2loopback diff --exit-code HEAD --
+          # The pinned release's Git checkout includes this development marker.
+          # It makes MODULE_VERSION a git-describe snapshot instead of
+          # the canonical 0.15.4 header version. Remove only the marker, as in
+          # upstream's release tarball; keep the exact source and ABI guard.
+          rm -- .ci-v4l2loopback/.gitversion
           make -C .ci-v4l2loopback
+          loopback_version="$(modinfo -F version .ci-v4l2loopback/v4l2loopback.ko)"
+          if [[ "$loopback_version" != 0.15.4 ]]; then
+            echo "::error::Expected built v4l2loopback version 0.15.4; got <$loopback_version>"
+            exit 1
+          fi
           sudo modprobe videodev
           sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
           sudo udevadm settle
           test -c /dev/v4l2loopback
+      - name: Decode authenticated Lite camera frames through the kernel node
+        run: bash .github/scripts/test-lite-camera-loopback.sh
       - name: Exercise the remove ioctl and require execution
         shell: bash
         env:
@@ -669,12 +704,33 @@ jobs:
       - name: Decode shared app-owned camera capture and reject camera reopens
         run: bash .github/scripts/test-shared-camera-capture.sh
 
+      - name: Record distinct SensorLink microphones through ALSA with live PipeWire
+        if: env.WENDY_HOSTED_AUDIO != 'unavailable'
+        run: bash .github/scripts/test-sensorlink-audio-loopback.sh
+      - name: Preserve SensorLink audio execution evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sensorlink-audio-loopback
+          path: |
+            ${{ runner.temp }}/wendy-sensorlink-audio.*/*.log
+            ${{ runner.temp }}/wendy-lite-camera.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Require actual pipeline output and shutdown
         shell: bash
         run: |
           go test -race ./go/internal/agent/services -run '^TestGStreamerInProcessRunner(_Cancellation)?$' -v -count=1 -timeout 90s | tee "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
+
+      - name: Remove the fixture loopback module after early failure
+        if: always() && steps.loopback-module.outcome == 'success'
+        run: |
+          if test -d /sys/module/v4l2loopback; then
+            sudo rmmod v4l2loopback
+          fi
 
   windows:
     name: Windows CLI
