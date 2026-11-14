@@ -388,6 +388,7 @@ func WDAccounts() *C.WDAccountsResult {
 	for i, item := range items {
 		entry := &unsafe.Slice(p.items, len(items))[i]
 		entry.context, entry.cloud, entry.email = C.CString(item.Context), C.CString(item.Cloud), C.CString(item.Email)
+		entry.organization_id, entry.organization_name = C.CString(item.OrganizationID), C.CString(item.OrganizationName)
 		entry.state = C.WDAccountState(item.State)
 		if item.Active {
 			entry.active = 1
@@ -405,6 +406,8 @@ func WDAccountsFree(p *C.WDAccountsResult) {
 		free(item.context)
 		free(item.cloud)
 		free(item.email)
+		free(item.organization_id)
+		free(item.organization_name)
 	}
 	free(p.items)
 	free(p.status.message)

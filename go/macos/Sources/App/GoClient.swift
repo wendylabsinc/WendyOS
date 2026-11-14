@@ -11,6 +11,7 @@ struct WendyError: LocalizedError {
 final class GoClient: Sendable {
     static let shared = GoClient()
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
+    private let accountReads = DispatchQueue(label: "dev.wendy.desktop.accounts", qos: .userInitiated)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
     private let events = DispatchQueue(label: "dev.wendy.desktop.events", qos: .userInitiated)
     private let mobileLifecycle = DispatchQueue(label: "dev.wendy.mobile.lifecycle", qos: .userInitiated)
@@ -40,7 +41,7 @@ final class GoClient: Sendable {
     }
 
     func account() async throws -> CloudAccount {
-        try await perform {
+        try await BlockingWork.run(on: accountReads) {
             guard let pointer = WDAccount() else { throw WendyError(message: "Missing account result.") }
             defer { WDAccountFree(pointer) }
             try Self.check(pointer.pointee.status)
@@ -49,12 +50,12 @@ final class GoClient: Sendable {
     }
 
     func accounts() async throws -> [SavedAccount] {
-        try await perform {
+        try await BlockingWork.run(on: accountReads) {
             guard let p = WDAccounts() else { throw WendyError(message: "Missing accounts result.") }
             defer { WDAccountsFree(p) }
             try Self.check(p.pointee.status)
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
-                SavedAccount(account: CloudAccount(state: $0.state, context: Self.string($0.context), cloud: Self.string($0.cloud), email: Self.string($0.email)), active: $0.active != 0)
+                SavedAccount(account: CloudAccount(state: $0.state, context: Self.string($0.context), cloud: Self.string($0.cloud), email: Self.string($0.email)), active: $0.active != 0, organizationID: Self.string($0.organization_id), organizationName: Self.string($0.organization_name))
             }
         }
     }
@@ -354,5 +355,7 @@ struct CloudAccount: Equatable {
 struct SavedAccount: Identifiable {
     let account: CloudAccount
     let active: Bool
+    var organizationID: String = ""
+    var organizationName: String = ""
     var id: String { account.context }
 }
