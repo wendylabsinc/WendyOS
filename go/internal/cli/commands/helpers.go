@@ -1500,7 +1500,8 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 // addr for the ladder and its retries, "" when the USB-direct fallback
 // substituted a connection that never touched addr. pinKey is the key the
 // caller derived once for addr and judges the connection under: the ladder
-// and every retry dial under it too.
+// and every retry dial under it too, and a substituted connection is handed
+// back carrying it.
 func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr, pinKey string, isDefault bool) (_ *grpcclient.AgentConnection, dialled string, finished bool, _ error) {
 	startedAt := time.Now()
 	dialled = addr
@@ -1539,7 +1540,10 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
 			// The stored address is unreachable but the same device (verified
 			// by hostname) is on USB — use it directly. It is not the address
-			// that was asked for, so it is never treated as the typed one.
+			// that was asked for, so it is never treated as the typed one. It
+			// is still the device that was asked for, and the caller judges
+			// it under pinKey (see keepAsRequestedDevice).
+			keepAsRequestedDevice(usbConn, pinKey)
 			conn, dialled = usbConn, ""
 		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.
@@ -1573,6 +1577,35 @@ func markTypedVMConnection(conn *grpcclient.AgentConnection, pinKey, dialled str
 	}
 	if name, ok := strings.CutPrefix(pinKey, vmDeviceIDPrefix); ok && name != "" {
 		conn.SimulatorName = name
+	}
+}
+
+// keepAsRequestedDevice makes usbConn — a connection the USB-direct fallback
+// substituted for a named device's own address — the requested device's
+// connection, which is what the front door then judges it as. The fallback
+// dialled it under the USB address's own key, so it arrives carrying that key
+// and that key's answer to "is there a saved identity?" (normally none). Both
+// are about the wrong name, so before the pin check:
+//
+//   - DevicePinKey becomes pinKey. A reconnect after an agent or OS update is
+//     made under the key the connection carries; under the USB address's it
+//     would accept any enrolled board on the cable.
+//   - NoSavedIdentity is cleared when pinKey has a saved identity. The pin
+//     check compares the device with that identity, so this is not a first
+//     contact and must not be announced as one. "Saved" is the ladder's own
+//     reading (see dialTarget.pinned).
+//
+// The mark is only ever cleared, and never for a plaintext connection. Nothing
+// authenticated that peer, whatever is saved: a saved name refuses it (see
+// challengeUnprovisionedDevice), and for an unsaved one it must stay marked so
+// Wi-Fi credentials still need consent (see AgentConnection.UnverifiedPlaintext).
+func keepAsRequestedDevice(usbConn *grpcclient.AgentConnection, pinKey string) {
+	usbConn.DevicePinKey = pinKey
+	if !usbConn.NoSavedIdentity || !usbConn.IsMTLS {
+		return
+	}
+	if _, _, saved := governingPin(pinKey); saved {
+		usbConn.NoSavedIdentity = false
 	}
 }
 
@@ -3851,6 +3884,9 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 			}
 		}
 		conn, brokerHit := (*grpcclient.AgentConnection)(nil), false
+		// dialled is the endpoint conn actually reached: addr, unless the
+		// USB-direct fallback substituted another connection ("" then).
+		dialled := addr
 		if !cfg.disableSessionBroker {
 			conn, brokerHit = connectPinnedSessionKeyed(ctx, addr, pinKey)
 		}
@@ -3890,6 +3926,16 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 				} else if ctx.Err() != nil || cfg.readOnlyMonitoring || stopConnectionRecovery(err) || errors.Is(err, errProvisionedAgentUnauthorized) ||
 					(cfg.enrollmentTrustRecovery && errors.Is(err, errNoAuthenticatedEndpoint)) {
 					return nil, err
+				} else if usbConn, ok := usbDirectFallback(ctx, pinKey); ok {
+					// The same fallback connectToAgentDirect makes, at the same
+					// point: addr is unreachable but the same device (verified by
+					// hostname) is on USB — use it directly. It is not the address
+					// that was asked for, so it is never treated as the typed one.
+					//
+					// It is still the device that was asked for, and the check
+					// below judges it under pinKey (see keepAsRequestedDevice).
+					keepAsRequestedDevice(usbConn, pinKey)
+					conn, dialled = usbConn, ""
 				} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 					// Default device is unreachable — offer interactive recovery.
 					recovered, recErr := handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll, cfg.sameTargetFallback)
@@ -3910,16 +3956,18 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// Judged under the key it was dialled with — unless a local VM started
 		// or stopped meanwhile, which refuses it with nothing recorded or
 		// marked. The typed address goes with it, for a running VM's bare-key
-		// record (see typedVMBarePinKey).
+		// record (see typedVMBarePinKey). A connection the USB fallback
+		// substituted is judged under the same key, the requested device's,
+		// and was never dialled at the typed address.
 		if keyErr := recheckDialPinKey(addr, pinKey); keyErr != nil {
 			conn.Close()
 			return nil, keyErr
 		}
-		if pinErr := enforceDevicePinAt(pinKey, addr, conn); pinErr != nil {
+		if pinErr := enforceDevicePinAt(pinKey, dialled, conn); pinErr != nil {
 			conn.Close()
 			return nil, pinErr
 		}
-		markTypedVMConnection(conn, pinKey, addr)
+		markTypedVMConnection(conn, pinKey, dialled)
 		if !cfg.suppressUpdateCheck {
 			var updateErr error
 			conn, updateErr = checkAndOfferUpdateFn(ctx, conn)
