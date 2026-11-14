@@ -7,6 +7,9 @@ on:
     paths:
       - '.gitattributes'
       - '.github/dependabot.yml'
+      # Read by go/internal/cli/commands/docs_command_contract_test.go.
+      - 'README.md'
+      - 'Examples/NvidiaPAIR/README.md'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -42,6 +45,9 @@ on:
     paths:
       - '.gitattributes'
       - '.github/dependabot.yml'
+      # Read by go/internal/cli/commands/docs_command_contract_test.go.
+      - 'README.md'
+      - 'Examples/NvidiaPAIR/README.md'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -489,6 +495,8 @@ jobs:
         run: bash .github/scripts/test-cloud-notification-contract.sh
       - name: Require live relay traffic through stalled renewal and path changes
         run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
+      - name: Require explicit disconnect intent across native process restarts
+        run: bash .github/scripts/test-operator-native-restart.sh "$RUNNER_TEMP/operator-native-restart"
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream

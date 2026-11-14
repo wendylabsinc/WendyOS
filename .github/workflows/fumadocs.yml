@@ -10,6 +10,8 @@ on:
       - "go/internal/cli/commands/**"
       - "go/cmd/api-surface-snapshot/**"
       - "go/internal/shared/appconfig/wendy.schema.json"
+      # Dockerfile, patches, README and wendy.json read by scripts/test-pair-docs.py.
+      - "Examples/NvidiaPAIR/**"
       - ".github/workflows/fumadocs.yml"
   pull_request:
     branches: [main]
@@ -20,6 +22,8 @@ on:
       - "go/internal/cli/commands/**"
       - "go/cmd/api-surface-snapshot/**"
       - "go/internal/shared/appconfig/wendy.schema.json"
+      # Dockerfile, patches, README and wendy.json read by scripts/test-pair-docs.py.
+      - "Examples/NvidiaPAIR/**"
       - ".github/workflows/fumadocs.yml"
   release:
     types: [published]
@@ -84,6 +88,27 @@ jobs:
 
       - name: Test documentation generators
         run: npm run test:docs
+
+      - name: Exercise HTTP crawl failure controls
+        run: |
+          python3 scripts/crawl-export.test.py
+          python3 scripts/probe-hosted-export.test.py
+
+      - name: Execute documented PAIR invitation and membership semantics
+        working-directory: .
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          fixtures="$(mktemp -d "$RUNNER_TEMP/docs-pair-source.XXXXXX")"
+          trap 'rm -rf "$fixtures"' EXIT
+          git init -q "$fixtures/pair"
+          timeout 120 git -C "$fixtures/pair" fetch -q --depth=1 \
+            https://github.com/NVIDIA/Personal-AI-Router.git \
+            13b68115fa2c9c1d94f1ead1358f8d5a527cfecf
+          git -C "$fixtures/pair" checkout -q --detach FETCH_HEAD
+          python3 .github/scripts/run-owned-media-test.py --timeout 300 -- \
+            python3 go/internal/cli/assets/docs/scripts/test-pair-docs.py \
+            --pair-source "$fixtures/pair"
 
       - name: Verify public npm package versions
         run: |
@@ -232,6 +257,19 @@ jobs:
             fi
           }
 
+          fixtures="$(mktemp -d "${RUNNER_TEMP}/docs-example-trees.XXXXXX")"
+          trap 'rm -rf "$fixtures"' EXIT
+          git init -q "$fixtures/templates"
+          timeout 120 git -C "$fixtures/templates" fetch -q --depth=1 \
+            https://github.com/wendylabsinc/templates.git \
+            44d5d1ba804c332c1b6787b9812bbcdd4e005aee
+          git init -q "$fixtures/native"
+          timeout 120 git -C "$fixtures/native" fetch -q --depth=1 \
+            https://github.com/wendylabsinc/wendy-lite-native-apps.git \
+            73271d49c1c6872ca46e63a36e94012c6fd68f2f
+          examples_checked=0
+          preview_checked=0
+
           while IFS= read -r DEPLOY_PATH; do
             [[ -n "${DEPLOY_PATH}" ]] || continue
             validate_deploy_path "${DEPLOY_PATH}"
@@ -239,6 +277,17 @@ jobs:
             echo "::group::Build ${DEPLOY_PATH}"
             rm -rf out
             NEXT_PUBLIC_BASE_PATH="/${DEPLOY_PATH}" npm run build
+            python3 scripts/crawl-export.py --root out --base "/${DEPLOY_PATH}" \
+              --analytics-id "$NEXT_PUBLIC_GA_MEASUREMENT_ID" \
+              --source-markdown ../../../../../README.md \
+              --source-markdown ../../../../../Examples/NvidiaPAIR/README.md \
+              --report "$RUNNER_TEMP/docs-${DEPLOY_PATH}-crawl.json"
+            if [[ "$examples_checked" == 0 ]]; then
+              python3 scripts/test-example-contract.py --root out \
+                --templates "$fixtures/templates" --native-examples "$fixtures/native"
+              examples_checked=1
+            fi
+            if [[ "$DEPLOY_PATH" == branch-* ]]; then preview_checked=1; fi
             mkdir -p "export/${DEPLOY_PATH}"
             cp -R out/. "export/${DEPLOY_PATH}/"
             (
@@ -248,12 +297,36 @@ jobs:
             echo "::endgroup::"
           done <<< "${DEPLOY_PATHS}"
 
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            test "$preview_checked" = 1
+            # The deployable branch tree is already copied and hashed above.
+            # Validate production routing without copying this proof-only
+            # /latest export into the artifact consumed by the deploy job.
+            rm -rf out
+            NEXT_PUBLIC_BASE_PATH=/latest npm run build
+            python3 scripts/crawl-export.py --root out --base /latest \
+              --analytics-id "$NEXT_PUBLIC_GA_MEASUREMENT_ID" \
+              --source-markdown ../../../../../README.md \
+              --source-markdown ../../../../../Examples/NvidiaPAIR/README.md \
+              --report "$RUNNER_TEMP/docs-latest-crawl.json"
+          fi
+
+
       - name: Upload static site artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fumadocs-static-site
           path: docs/export
           if-no-files-found: error
+
+      - name: Preserve documentation crawl evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-regression-evidence
+          path: ${{ runner.temp }}/docs-*-crawl.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   deploy:
     name: Deploy docs
@@ -271,6 +344,14 @@ jobs:
       name: docs
       url: ${{ needs.build.outputs.url }}
     steps:
+      - name: Check out hosted documentation probe
+        if: startsWith(needs.build.outputs.deploy_path, 'branch-')
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          persist-credentials: false
+          path: regression-source
+          sparse-checkout: go/internal/cli/assets/docs/scripts
+
       - name: Download static site artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -366,6 +447,26 @@ jobs:
             headers="$(curl -fsSI --max-time 30 "${DOCS_URL}index.md")"
             grep -qi '^content-type: text/markdown' <<< "${headers}"
           done <<< "${DEPLOY_PATHS}"
+
+      - name: Verify public preview and historical documentation routes
+        if: startsWith(needs.build.outputs.deploy_path, 'branch-')
+        timeout-minutes: 4
+        env:
+          DEPLOY_PATH: ${{ needs.build.outputs.deploy_path }}
+        run: |
+          set -euo pipefail
+          python3 regression-source/go/internal/cli/assets/docs/scripts/probe-hosted-export.py \
+            --preview-root "out/${DEPLOY_PATH}" --preview-base "/${DEPLOY_PATH}" \
+            --analytics-id G-7SMVRRYVW6 --report "$RUNNER_TEMP/docs-hosted-probe.json"
+
+      - name: Preserve hosted documentation evidence
+        if: always() && startsWith(needs.build.outputs.deploy_path, 'branch-')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-hosted-regression-evidence
+          path: ${{ runner.temp }}/docs-hosted-probe.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Publish root discovery files
         # Agents look for llms.txt at the site root (https://llmstxt.org) and

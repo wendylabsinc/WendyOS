@@ -1346,10 +1346,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2670",
       "title": "Persist explicit operator mesh connection intent",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover disconnect persistence, startup races and explicit resume. They use broker fixtures; native app-to-broker reconnection across app/OS restart remains unverified.",
-      "required_follow_up": "Add a process restart test through the native client, preserving explicit disconnect intent.",
-      "evidence": []
+      "required_follow_up": "Run the required Linux network gate through five native embedded-host processes and the restored missing-disconnect control. Local native Go client coverage does not claim GUI, detached desktop helper, radio or OS reboot execution.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/sessionbroker/operator_native_restart_test.go",
+            ".github/scripts/test-operator-native-restart.sh"
+          ],
+          "result": "Five independent native processes preserve profile identity and explicit disconnect intent through actual broker IPC, authenticated loopback routing and management RPC. The normal journey and omission control pass locally under the race detector; required hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2669",
@@ -1458,15 +1466,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2569",
       "title": "[WN1] Add compact binary encoding for Wendy Net records",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Binary codec and line-ending tests are broad; a presence path-watcher race is included in the PR but is not established by codec coverage.",
-      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "required_follow_up": "Retain the dedicated real-RPC captured-lease race gate in the required network job.",
       "evidence": [
         {
           "tests": [
             ".github/scripts/test-presence-watcher-race.sh"
           ],
           "result": "Five normal real-RPC renewal race runs passed locally. Three independent exact pre-fix closure mutations reported a data race at both the captured lease read and acknowledged lease replacement. Existing relay traffic script invokes the dedicated gate; hosted execution pending."
+        },
+        {
+          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781622",
+          "result": "Required Linux network job passed5normal real-RPC renewal runs under race and rejected3independent exact pre-fix closure mutations. Each negative control required DATA RACE at both the captured lease read and acknowledged lease replacement source lines; traffic/path tests remain separate."
         }
       ]
     },
@@ -2297,9 +2310,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2350",
       "title": "Fix Lite sensor connections and verify host loopback support",
       "package": "08",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Protocol and host-module checks exist. The host-sensor support fixture is hardware-gated, and module presence alone does not verify video/audio delivery.",
-      "required_follow_up": "Verify hosted video and microphone kernel gates. Check whether the original Lite microphone transport scope needs additional authenticated stream coverage before closing the whole entry.",
+      "required_follow_up": "Provide supported kernel sound modules in the existing Linux media job, then execute authenticated Lite microphone and camera normal/negative controls and verify exact sample/pixel delivery and owned cleanup.",
       "evidence": [
         {
           "tests": [
@@ -2315,6 +2328,14 @@
             ".github/scripts/test-lite-camera-loopback.sh"
           ],
           "result": "Real mTLS/WendyCom fixture passes locally under race with delayed TLS and changing JPEG pixels. Hosted test connects the production Supervisor and frame writer to a real v4l2loopback node, decodes ten frames in two phases, verifies identity and node cleanup; two mutation variants cross-compile. Full Linux kernel/decoder execution remains pending. Microphone fixture currently injects PCM at the real audioloop Manager boundary, not over WendyCom."
+        },
+        {
+          "tests": [
+            "go/internal/agent/mcusource/lite_microphone_loopback_linux_test.go",
+            "go/internal/agent/mcusource/lite_camera_fixture_test.go",
+            ".github/scripts/test-sensorlink-audio-loopback.sh"
+          ],
+          "result": "Adds actual mTLS/WendyCom Audio descriptor, subscription and changing PCM through production Supervisor, real audioloop Manager/aplay and arecord. Asserts fresh exact PCM, identity/channel, one authenticated connection, cancellation/release and exclusive device reopen. Native transport race checks pass and Linux normal plus three regression controls compile. No hosted PCM execution yet: PR2875 Azure kernel lacks sound modules."
         }
       ]
     },
@@ -2897,9 +2918,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1764",
       "title": "Wire direct Stagefile LLB builds into the CLI",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Stagefile parser/hash/LLB tests cover many build corrections. Actual image construction and reuse across build backends are not demonstrated by those unit tests.",
-      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "required_follow_up": "Retain both-backend image execution in required Linux CI and the release CLI jobs. The observed run used the native Linux amd64 Make CLI; other release-platform execution is not claimed.",
       "evidence": [
         {
           "tests": [
@@ -2914,6 +2935,11 @@
             ".github/scripts/stagefile_images_test.py"
           ],
           "result": "Review replaced direct-LLB raw-log assumptions with actual installed package build nonces and image-layer digests. Source-only changes must preserve both; package edits must replace both. Eight offline tests pass, including real local pip builds producing distinct nonces, builder ownership refusal and cleanup error propagation. No live container image execution is claimed."
+        },
+        {
+          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781728",
+          "result": "Required Linux job built the native CLI, then built and ran inherited images through Dockerfile and direct LLB. Artifact evidence records14cases: initial/source/environment/package rebuilds plus three expected failures for each backend. Source-only changes preserved installed nonce and layer; package edits changed both. Image runtime asserted imports, parent/child environment, workdir and content; cleanup_errors is empty. Exact executable SHA256 7c9a29ee38f706c7a27e7c8c92f4cf9c0514fd504e4fce176abd9f8f09e6286d."
         }
       ]
     },
@@ -2989,9 +3015,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1698",
       "title": "Fix Stagefile pip overlay inheritance",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The PR includes Stagefile overlay inheritance plus cache/layer changes with multiple tests. Containerd suites improve layer coverage, but packaged Stagefile execution still depends on the separate release smoke test.",
-      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "required_follow_up": "Retain both-backend image execution in required Linux CI and the release CLI jobs. The observed run used the native Linux amd64 Make CLI; other release-platform execution is not claimed.",
       "evidence": [
         {
           "tests": [
@@ -3006,6 +3032,11 @@
             ".github/scripts/stagefile_images_test.py"
           ],
           "result": "Review replaced direct-LLB raw-log assumptions with actual installed package build nonces and image-layer digests. Source-only changes must preserve both; package edits must replace both. Eight offline tests pass, including real local pip builds producing distinct nonces, builder ownership refusal and cleanup error propagation. No live container image execution is claimed."
+        },
+        {
+          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781728",
+          "result": "Required Linux job built the native CLI, then built and ran inherited images through Dockerfile and direct LLB. Artifact evidence records14cases: initial/source/environment/package rebuilds plus three expected failures for each backend. Source-only changes preserved installed nonce and layer; package edits changed both. Image runtime asserted imports, parent/child environment, workdir and content; cleanup_errors is empty. Exact executable SHA256 7c9a29ee38f706c7a27e7c8c92f4cf9c0514fd504e4fce176abd9f8f09e6286d."
         }
       ]
     },
@@ -3305,70 +3336,151 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2795",
       "title": "Fix broken links across the docs site",
       "package": "16",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Documentation links changed without a route/link regression in the PR. A documentation build alone does not prove every referenced destination resolves.",
-      "required_follow_up": "Crawl internal routes and anchors, including redirects for moved command pages.",
-      "evidence": []
+      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/crawl-export.py",
+            "go/internal/cli/assets/docs/scripts/crawl-export.test.py"
+          ],
+          "result": "Actual local Next exports for latest and branch prefixes each passed 591 HTML routes, 1128 HTTP destinations and 55 historical aliases. Ten crawler failure tests pass; restoring the original folder exclusion produces missing routes. Found and fixed a separately broken unattended-install link. Hosted workflow registration remains pending."
+        },
+        {
+          "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2673",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2673",
       "title": "Correct mesh discovery and NVIDIA PAIR documentation",
       "package": "16",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Documentation corrects mesh discovery and PAIR usage; no command-transcript or example validation was found for the corrected instructions.",
-      "required_follow_up": "Run the documented command examples or validate them against the generated CLI reference.",
-      "evidence": []
+      "required_follow_up": "Require hosted documented CLI argument checks and the actual pinned PAIR invitation/member-state process transcript, including restart and both incorrect-documentation controls. No GPU, mesh discovery, attach transport or Unix pairctl-hop execution is claimed by the PAIR fixture.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/docs_command_contract_test.go",
+            "go/internal/cli/assets/docs/scripts/crawl-export.py"
+          ],
+          "result": "Local race checks validate73 actual documented argv across7files through Cobra command resolution and typed flags, including hidden aliases, without executing handlers. Local actual export crawl resolves22 source README references. Parser exposed and fixed invalid wendy apps list instruction. These checks do not execute installers, prove PAIR remote semantics, or establish OS/platform prose claims."
+        },
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/test-pair-docs.py",
+            ".github/workflows/fumadocs.yml"
+          ],
+          "result": "Pinned upstream cluster-manager with the example production patch completes a real PIN invitation between two loopback processes, observes paired invitation versus member entries, and retains identity/membership after restart. Both ambiguous and incorrect documentation controls fail against the actual transcript. Local execution passed; required hosted execution pending."
+        }
+      ]
     },
     {
       "key": "2561",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2561",
       "title": "docs: fix stale Mender, Swift and agent claims; add README feature list",
       "package": "16",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "These are corrections to docs claims about Mender, Swift and the agent. No automated assertion verifies the corrected claims.",
-      "required_follow_up": "Validate executable snippets and bind version/platform claims to generated capabilities where possible.",
-      "evidence": []
+      "required_follow_up": "Verify Wendy command snippets in CI, then bind remaining Mender, Swift and Agent version/platform claims to actual generated capabilities or built artifacts.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/docs_command_contract_test.go",
+            "go/internal/cli/assets/docs/scripts/crawl-export.py"
+          ],
+          "result": "Local race checks validate73 actual documented argv across7files through Cobra command resolution and typed flags, including hidden aliases, without executing handlers. Local actual export crawl resolves22 source README references. Parser exposed and fixed invalid wendy apps list instruction. These checks do not execute installers, prove PAIR remote semantics, or establish OS/platform prose claims."
+        }
+      ]
     },
     {
       "key": "1980",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1980",
       "title": "wendy-lite: fix example name in getting-started doc",
       "package": "16",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The documentation example name was corrected without an example-existence test.",
-      "required_follow_up": "Resolve documented example paths against the example catalogue.",
-      "evidence": []
+      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/check-example-contract.py",
+            "go/internal/cli/assets/docs/scripts/test-example-contract.py"
+          ],
+          "result": "Rendered Lite template and native example references resolve against immutable real upstream Git trees. Baseline and controls for old mismatched prose, missing editable source and nonexistent example directory pass. Does not compile or run the examples, or assert moving-main equivalence. Hosted registration remains pending."
+        },
+        {
+          "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "1958",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1958",
       "title": "wendy-lite: restructure documentation into topic-specific files",
       "package": "16",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The example-repository links were corrected while docs were reorganized. No link-validation fixture was found.",
-      "required_follow_up": "Check external example links and internal redirects after documentation moves.",
-      "evidence": []
+      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/check-example-contract.py",
+            "go/internal/cli/assets/docs/scripts/test-example-contract.py"
+          ],
+          "result": "Rendered Lite template and native example references resolve against immutable real upstream Git trees. Baseline and controls for old mismatched prose, missing editable source and nonexistent example directory pass. Does not compile or run the examples, or assert moving-main equivalence. Hosted registration remains pending."
+        },
+        {
+          "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "1742",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1742",
       "title": "Fix readme",
       "package": "16",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "The PR mixes README corrections and documentation-file cleanup. No automated documentation correctness check was found for these changes.",
-      "required_follow_up": "Check referenced files/routes and executable setup snippets.",
-      "evidence": []
+      "required_follow_up": "Verify README route/file references and Wendy argv in CI; establish executable installer and other setup snippets beyond the Wendy parser.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/docs_command_contract_test.go",
+            "go/internal/cli/assets/docs/scripts/crawl-export.py"
+          ],
+          "result": "Local race checks validate73 actual documented argv across7files through Cobra command resolution and typed flags, including hidden aliases, without executing handlers. Local actual export crawl resolves22 source README references. Parser exposed and fixed invalid wendy apps list instruction. These checks do not execute installers, prove PAIR remote semantics, or establish OS/platform prose claims."
+        }
+      ]
     },
     {
       "key": "2808",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2808",
       "title": "docs: stop preview deploys and moved pages from producing 404s",
       "package": "16",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Sitemap tests cover generated routes, but deployment hostname/preview behavior also depends on hosting configuration.",
-      "required_follow_up": "Crawl preview and production route maps, including old-page redirects.",
-      "evidence": []
+      "required_follow_up": "Require actual served preview bytes to match this revision export, plus public latest alias/destination responses, canonical URLs, anchors and preview robots/analytics. The hosted probe is registered in the existing deployment job; public evidence is pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/crawl-export.py",
+            "go/internal/cli/assets/docs/scripts/crawl-export.test.py",
+            "go/internal/cli/assets/docs/scripts/legacy-route-contract.json"
+          ],
+          "result": "Local latest and branch exports each pass full route/anchor and all55 historical alias checks. Removing the preview policy produced1180 robots/analytics failures. Existing deploy HTTP checks cover homepage/Markdown MIME but not all alias/preview headers; public-host evidence remains missing."
+        },
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/probe-hosted-export.py",
+            "go/internal/cli/assets/docs/scripts/probe-hosted-export.test.py",
+            ".github/workflows/fumadocs.yml"
+          ],
+          "result": "All 11 real HTTP failure controls pass locally. Full exported mirror verifies 210 bounded requests across 55 historical aliases and their destinations for each prefix. Current public /latest is checked independently of the preview revision; no public execution claimed yet."
+        }
+      ]
     },
     {
       "key": "2819",
