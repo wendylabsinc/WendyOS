@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -173,5 +174,29 @@ func TestV2UnenrollResumeHintNamesTheCommand(t *testing.T) {
 	// The device argument is copied into a shell command: keep it one word.
 	if hint := v2UnenrollResumeHint("evil; rm -rf ~", unenrollAsset); !strings.Contains(hint, "--device 'evil; rm -rf ~' --asset-id") {
 		t.Fatalf("unquoted device in hint: %q", hint)
+	}
+}
+
+// A reset authorization refused only for clock skew is still Cloud-signed, so
+// Cloud has deleted and revoked: say so and name the retry, not "uncertain".
+func TestV2UnenrollClockSkewSaysCloudSideIsDone(t *testing.T) {
+	var h resetRetryHarness
+	skew := &unenrollproof.ClockSkewError{Offset: 14 * time.Second, Allowed: 10 * time.Second}
+	ops := h.ops(t, func(int) (*v2AuthorizedReset, error) {
+		return nil, fmt.Errorf("authenticating Cloud reset response: %w", skew)
+	}, func(int) error { return nil }, nil)
+	j := testUnenrollProgress()
+	err := performV2Unenroll(context.Background(), &j, ops)
+	if err == nil || !j.Deleted || j.Reset {
+		t.Fatalf("err = %v, progress = %+v; want deleted, not reset", err, j)
+	}
+	msg := v2UnenrollUnfinished(err, "", j.AssetID).Error()
+	for _, want := range []string{"about 14s behind Cloud's", "already removed this device and revoked its certificate", "Correct this computer's clock, then run: wendy device unenroll --asset-id " + unenrollAsset + " --yes"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "failed/uncertain") {
+		t.Errorf("message calls a finished Cloud side uncertain: %s", msg)
 	}
 }
