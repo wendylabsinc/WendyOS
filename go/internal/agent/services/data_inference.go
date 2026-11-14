@@ -105,7 +105,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 	}
 	wanted := map[string]data.Campaign{}
 	for _, campaign := range campaigns {
-		if campaign.State == "armed" && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
+		if campaign.State == "armed" && (campaign.Thermal != nil || campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
 			wanted[campaign.Name] = campaign
 		}
 	}
@@ -213,6 +213,10 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 	notifyDone := make(chan struct{})
 	go func() { defer close(notifyDone); j.notifications(ctx, j.queue) }()
 	defer func() { cancel(); <-notifyDone }()
+	if j.campaign.Thermal != nil {
+		j.runThermal(ctx)
+		return
+	}
 	if !j.campaign.Inference.IsEnabled() {
 		j.setState("running", nil)
 		<-ctx.Done()
@@ -616,6 +620,15 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 }
 
 func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCampaign, error) {
+	if campaign.Thermal != nil {
+		campaign.ThermalStatus = &data.InferenceStatus{State: "pending"}
+		if s.inference != nil {
+			campaign.ThermalStatus = s.inference.snapshot(campaign.Name, campaign.Revision)
+		}
+		if campaign.State == data.CampaignStateDisarmed {
+			campaign.ThermalStatus = &data.InferenceStatus{State: "disarmed"}
+		}
+	}
 	eventNotifications := campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent
 	if campaign.Inference != nil || eventNotifications {
 		campaign.InferenceStatus = &data.InferenceStatus{State: "disabled"}

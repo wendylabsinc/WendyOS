@@ -497,7 +497,7 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	if parseErr != nil {
 		return nil, status.Error(codes.InvalidArgument, parseErr.Error())
 	}
-	if parsed.Inference.IsEnabled() && (s.inference == nil || s.video == nil) {
+	if (parsed.Inference.IsEnabled() || parsed.Thermal != nil) && (s.inference == nil || s.video == nil) {
 		return nil, status.Error(codes.FailedPrecondition, "agent campaign inference runtime is unavailable")
 	}
 
