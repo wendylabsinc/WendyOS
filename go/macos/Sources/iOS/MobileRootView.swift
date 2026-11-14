@@ -641,11 +641,30 @@ extension AppModel {
                 mobileCloudOrganization = ""
             }
             mobileCloudAccount = account
+            // The saved certificate already scopes this account to its tenant.
+            // Publish that scope before any network work so discovery and saved
+            // sensors do not wait for the optional organization-name lookup.
+            if let saved = accounts.first(where: { $0.id == account }),
+               saved.account.signedIn, !saved.organizationID.isEmpty {
+                mobileCloudOrganization = saved.organizationID
+                if !mobileCloudOrganizations.contains(where: { $0.id == saved.organizationID }) {
+                    mobileCloudOrganizations = [CloudOrganization(id: saved.organizationID,
+                        name: saved.organizationName.isEmpty ? "Organization" : saved.organizationName)]
+                }
+            }
             let organizations = account.isEmpty ? [] : try await loadOrganizations(account)
             guard request == mobileCloudSelectionGeneration else { return }
-            mobileCloudOrganizations = organizations
-            if !organizations.contains(where: { $0.id == mobileCloudOrganization }) {
-                mobileCloudOrganization = organizations.first?.id ?? ""
+            // Keep the credential's organization available if the name service
+            // omits it. This never grants access; device requests authenticate.
+            var choices = organizations
+            if let saved = accounts.first(where: { $0.id == account }), saved.account.signedIn,
+               !saved.organizationID.isEmpty, !choices.contains(where: { $0.id == saved.organizationID }) {
+                choices.append(CloudOrganization(id: saved.organizationID,
+                    name: saved.organizationName.isEmpty ? "Organization" : saved.organizationName))
+            }
+            mobileCloudOrganizations = choices
+            if !choices.contains(where: { $0.id == mobileCloudOrganization }) {
+                mobileCloudOrganization = choices.first?.id ?? ""
             }
         } catch {
             if request == mobileCloudSelectionGeneration && !Task.isCancelled {
