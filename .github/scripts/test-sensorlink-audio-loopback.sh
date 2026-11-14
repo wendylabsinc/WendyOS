@@ -278,3 +278,7 @@ done
 grep -q 'Lite microphone ended before kernel capture became live:' "$output/lite-combined-budget.log"
 grep -q 'Lite microphone did not deliver to its kernel playback writer' "$output/lite-wrong-channel.log"
 grep -Eq 'kernel microphone (consumer did not record two seconds|did not preserve fresh authenticated PCM)' "$output/lite-no-pcm.log"
+
+# Reuse both owned modules before this script releases snd-aloop. The media
+# workflow retains v4l2loopback until its final always-run cleanup step.
+bash .github/scripts/test-source-restart-loopback.sh

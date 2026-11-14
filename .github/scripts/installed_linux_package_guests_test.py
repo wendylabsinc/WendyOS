@@ -72,6 +72,19 @@ class GuestRunnerTests(unittest.TestCase):
                 self.guest.remove_container("wendy-pkg-export")
             command.assert_not_called()
 
+    def test_removed_container_diagnostics_allow_both_docker_casings(self):
+        for message in ("Error: No such object: fixture", "error: no such object: fixture", "No such container: fixture"):
+            response = subprocess.CompletedProcess([], 1, stdout="", stderr=message)
+            with mock.patch.object(self.guest, "captured", return_value=response), mock.patch.object(self.guest, "command") as command:
+                self.guest.containers.add("fixture")
+                self.guest.remove_container("fixture")
+                self.assertNotIn("fixture", self.guest.containers)
+                command.assert_not_called()
+        response = subprocess.CompletedProcess([], 1, stdout="", stderr="no such Docker context: fixture")
+        with mock.patch.object(self.guest, "captured", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "cannot inspect"):
+                self.guest.remove_container("fixture")
+
     def test_mounted_root_or_unowned_directory_is_never_deleted(self):
         root = self.guest.work / "guest"
         root.mkdir()
