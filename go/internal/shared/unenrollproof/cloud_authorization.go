@@ -44,7 +44,11 @@ func VerifyCloudResetDeletion(ctx context.Context, token []byte, cloud, principa
 	if err != nil {
 		return nil, err
 	}
-	if _, err := verifyCloudReset(ctx, token, cloud, principal, fingerprint, deletion, operator, earliest, latest, cliClockSkew); err != nil {
+	key, err := fetchCloudResetKey(ctx, token, cloud, earliest, latest)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifySavedCloudReset(token, key, cloud, principal, fingerprint, deletion, operator, earliest, latest, cliClockSkew); err != nil {
 		return nil, err
 	}
 	return deletion, nil
@@ -97,10 +101,22 @@ func (e *ClockSkewError) Error() string {
 // VerifyCloudReset obtains Cloud keys over authenticated HTTPS to the enrolled
 // issuer only. No operator credential, caller-provided key or URL is forwarded.
 func VerifyCloudReset(ctx context.Context, token []byte, cloud, principal, fingerprint string, deletion []byte, operator *x509.Certificate, earliest, latest time.Time) ([]byte, error) {
-	return verifyCloudReset(ctx, token, cloud, principal, fingerprint, deletion, operator, earliest, latest, 0)
+	key, err := fetchCloudResetKey(ctx, token, cloud, earliest, latest)
+	if err != nil {
+		return nil, err
+	}
+	if err = VerifySavedCloudReset(token, key, cloud, principal, fingerprint, deletion, operator, earliest, latest); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
-func verifyCloudReset(ctx context.Context, token []byte, cloud, principal, fingerprint string, deletion []byte, operator *x509.Certificate, earliest, latest time.Time, skew time.Duration) ([]byte, error) {
+// fetchCloudResetKey is replaced in tests to skip the network.
+var fetchCloudResetKey = cloudResetKey
+
+// cloudResetKey returns the Cloud key that signed token, fetched over HTTPS
+// from the enrolled issuer and checked against the token's signature.
+func cloudResetKey(ctx context.Context, token []byte, cloud string, earliest, latest time.Time) ([]byte, error) {
 	issuer, err := cloudrelay.Issuer(cloud, "")
 	if err != nil {
 		return nil, err
@@ -118,13 +134,7 @@ func verifyCloudReset(ctx context.Context, token []byte, cloud, principal, finge
 	defer transport.CloseIdleConnections()
 	verifier := cloudrelay.Verifier{Issuer: issuer, HTTP: &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	_, key, err := verifier.VerifyResetSignature(ctx, string(token))
-	if err != nil {
-		return nil, err
-	}
-	if err = verifySavedCloudReset(token, key, cloud, principal, fingerprint, deletion, operator, earliest, latest, skew); err != nil {
-		return nil, err
-	}
-	return key, nil
+	return key, err
 }
 
 // VerifySavedCloudReset uses a key authenticated at ORIGINAL reset admission.
@@ -135,7 +145,9 @@ func VerifySavedCloudReset(token, key []byte, cloud, principal, fingerprint stri
 }
 
 // skew widens only the Cloud-clock comparisons (iat, exp, deleted_at); the
-// operator descriptor and certificates keep the caller's own clock.
+// operator descriptor and certificates keep the caller's own clock. A clock
+// refusal is returned only after every binding holds, so it always concerns
+// a reset authorization for this exact device.
 func verifySavedCloudReset(token, key []byte, cloud, principal, fingerprint string, deletion []byte, operator *x509.Certificate, earliest, latest time.Time, skew time.Duration) error {
 	if earliest.IsZero() || latest.Before(earliest) || operator == nil || len(token) > 65536 || len(deletion) > 4096 {
 		return fmt.Errorf("invalid reset verification bounds")
@@ -168,7 +180,7 @@ func verifySavedCloudReset(token, key []byte, cloud, principal, fingerprint stri
 		return err
 	}
 	if mldsa.Verify(pk, []byte(parts[0]+"."+parts[1]), sig, nil) != nil {
-		return fmt.Errorf("Cloud's reset response is not signed by Cloud's published key")
+		return fmt.Errorf("Cloud's reset response is not signed by Cloud's published key; update the wendy CLI with 'wendy update' and retry")
 	}
 	body, err := base64.RawURLEncoding.Strict().DecodeString(parts[1])
 	if err != nil {
@@ -185,17 +197,13 @@ func verifySavedCloudReset(token, key []byte, cloud, principal, fingerprint stri
 		return fmt.Errorf("missing reset claims")
 	}
 	if c.Iss != issuer {
-		return fmt.Errorf("Cloud's reset response comes from %q, not the Cloud this device is enrolled with (%q)", c.Iss, issuer)
+		return fmt.Errorf("Cloud's reset response comes from %q, not the Cloud this device is enrolled with (%q); update the wendy CLI with 'wendy update' and retry", c.Iss, issuer)
 	}
 	if c.Aud != "wendy-agent/unprovision" {
-		return fmt.Errorf("Cloud's response is not a device reset authorization (audience %q)", c.Aud)
+		return fmt.Errorf("Cloud's response is not a device reset authorization (audience %q); update the wendy CLI with 'wendy update' and retry", c.Aud)
 	}
 	if c.Iat < 0 || c.Exp <= c.Iat || c.Exp-c.Iat > 30 {
-		return fmt.Errorf("Cloud's reset authorization has an invalid lifetime")
-	}
-	s := int64(skew / time.Second)
-	if c.Iat > latest.Unix()+s || c.Exp <= latest.Unix()-s {
-		return &ClockSkewError{Offset: time.Duration(c.Iat-latest.Unix()) * time.Second, Allowed: skew}
+		return fmt.Errorf("Cloud's reset authorization has an invalid lifetime; update the wendy CLI with 'wendy update' and retry")
 	}
 	if id, e := uuid.Parse(c.JTI); e != nil || id.String() != c.JTI || id == uuid.Nil {
 		return fmt.Errorf("invalid reset replay identity")
@@ -211,7 +219,7 @@ func verifySavedCloudReset(token, key []byte, cloud, principal, fingerprint stri
 	if err != nil {
 		return err
 	}
-	if deleted.GetId() == "" || deleted.GetOrganizationId() != identity.TenantUUID || deleted.GetDeviceId() != identity.EntityID || deleted.GetDeletedAt() == nil || deleted.GetDeletedAt().CheckValid() != nil || deleted.GetDeletedAt().AsTime().After(earliest.Add(skew)) {
+	if deleted.GetId() == "" || deleted.GetOrganizationId() != identity.TenantUUID || deleted.GetDeviceId() != identity.EntityID || deleted.GetDeletedAt() == nil || deleted.GetDeletedAt().CheckValid() != nil {
 		return fmt.Errorf("Cloud deletion binding mismatch")
 	}
 	var request cloudpb.DeleteAssetRequest
@@ -226,7 +234,17 @@ func verifySavedCloudReset(token, key []byte, cloud, principal, fingerprint stri
 	if !ok || e != nil || parsed.EntityType != certs.EntityUser || parsed.TenantUUID != identity.TenantUUID {
 		return fmt.Errorf("wrong reset operator")
 	}
-	return verifyOperatorReset(c.OperatorJWS, c.Request, request.GetId(), identity.TenantUUID, c.Correlation, operator, earliest, latest)
+	if err = verifyOperatorReset(c.OperatorJWS, c.Request, request.GetId(), identity.TenantUUID, c.Correlation, operator, earliest, latest); err != nil {
+		return err
+	}
+	s := int64(skew / time.Second)
+	if c.Iat > latest.Unix()+s || c.Exp <= latest.Unix()-s {
+		return &ClockSkewError{Offset: time.Duration(c.Iat-latest.Unix()) * time.Second, Allowed: skew}
+	}
+	if deleted.GetDeletedAt().AsTime().After(earliest.Add(skew)) {
+		return fmt.Errorf("Cloud deletion binding mismatch")
+	}
+	return nil
 }
 
 func canonicalObject(raw []byte) bool {

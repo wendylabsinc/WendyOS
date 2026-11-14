@@ -1,6 +1,7 @@
 package unenrollproof
 
 import (
+	"context"
 	"crypto"
 	"crypto/mldsa"
 	"crypto/rand"
@@ -53,7 +54,11 @@ func TestCloudResetClockSkew(t *testing.T) {
 	opURI, _ := url.Parse("spiffe://wendy.sh/tenant/" + tenant + "/operator/op")
 	operator := &x509.Certificate{PublicKey: opKey.Public(), Raw: []byte("operator-leaf"), URIs: []*url.URL{opURI}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
 	// Deleted by a Cloud clock 8 s ahead, a second before it signed.
-	deletion, _ := proto.Marshal(&cloudpb.DeletedAsset{Id: asset, OrganizationId: tenant, DeviceId: device, DeletedAt: timestamppb.New(now.Add(7 * time.Second))})
+	deleted := func(device string) []byte {
+		b, _ := proto.Marshal(&cloudpb.DeletedAsset{Id: asset, OrganizationId: tenant, DeviceId: device, DeletedAt: timestamppb.New(now.Add(7 * time.Second))})
+		return b
+	}
+	deletion := deleted(device)
 	request, _ := proto.Marshal(&cloudpb.DeleteAssetRequest{Id: asset, ExpectedDeviceId: proto.String(device), ResetCertificateSha256: proto.String(fingerprint)})
 	digest, thumb := sha256.Sum256(request), sha256.Sum256(operator.Raw)
 	opJWS := signJWS(t, opKey, map[string]string{"alg": "ML-DSA-65", "kid": base64.RawURLEncoding.EncodeToString(thumb[:])}, map[string]any{
@@ -66,19 +71,20 @@ func TestCloudResetClockSkew(t *testing.T) {
 		t.Fatal(err)
 	}
 	public := cloudKey.Public().(*mldsa.PublicKey).Bytes()
-	token := func(aud string, iat int64) []byte {
+	signed := func(aud string, iat, exp int64, deletion []byte) []byte {
 		return []byte(signJWS(t, cloudKey, map[string]string{"alg": "ML-DSA-65", "kid": "cloud", "typ": "asset-reset-authorization+jws"}, map[string]any{
-			"iss": "https://api.example", "aud": aud, "iat": iat, "exp": iat + 30, "jti": uuid.NewString(), "correlation_id": "clock-test",
+			"iss": "https://api.example", "aud": aud, "iat": iat, "exp": exp, "jti": uuid.NewString(), "correlation_id": "clock-test",
 			"deletion": deletion, "request_body": request, "request_jws": opJWS,
 		}))
 	}
+	token := func(aud string, iat int64) []byte { return signed(aud, iat, iat+30, deletion) }
 	cli := func(tok []byte) error {
 		return verifySavedCloudReset(tok, public, "api.example:443", principal, fingerprint, deletion, operator, now, now, cliClockSkew)
 	}
 	const aud = "wendy-agent/unprovision"
 	n := now.Unix()
 
-	for name, iat := range map[string]int64{"cloud 8s ahead": n + 8, "cloud 35s behind": n - 35} {
+	for name, iat := range map[string]int64{"cloud 8s ahead": n + 8, "cloud 10s ahead": n + 10, "cloud 35s behind": n - 35} {
 		if err := cli(token(aud, iat)); err != nil {
 			t.Fatalf("%s: skew inside the margin refused: %v", name, err)
 		}
@@ -87,14 +93,39 @@ func TestCloudResetClockSkew(t *testing.T) {
 	if err := cli(token(aud, n+15)); !errors.As(err, &skew) || skew.Offset != 15*time.Second || !strings.Contains(err.Error(), "about 15s behind Cloud's") {
 		t.Fatalf("cloud 15s ahead: want clock message, got %v", err)
 	}
+	if err := cli(token(aud, n+11)); !errors.As(err, &skew) {
+		t.Fatalf("cloud 11s ahead: want clock refusal, got %v", err)
+	}
 	if err := cli(token(aud, n-41)); !errors.As(err, &skew) {
 		t.Fatalf("expired 11s ago: want clock refusal, got %v", err)
 	}
 	if err := cli(token("wendy-agent/other", n)); err == nil || errors.As(err, &skew) || !strings.Contains(err.Error(), "not a device reset authorization") {
 		t.Fatalf("wrong audience: want its own message, got %v", err)
 	}
-	// The Agent checks against authenticated time and gets no tolerance.
-	if err := VerifySavedCloudReset(token(aud, n+8), public, "api.example:443", principal, fingerprint, deletion, operator, now, now); !errors.As(err, &skew) {
-		t.Fatalf("zero-tolerance path accepted a future iat: %v", err)
+	if err := cli(signed(aud, n, n, deletion)); err == nil || errors.As(err, &skew) || !strings.Contains(err.Error(), "invalid lifetime") {
+		t.Fatalf("exp <= iat: want lifetime error, got %v", err)
+	}
+	// A Cloud-signed reset for another device must not read as "Cloud removed
+	// this device", however far off the clock is.
+	other := deleted("44444444-4444-4444-8444-444444444444")
+	err = verifySavedCloudReset(signed(aud, n+15, n+45, other), public, "api.example:443", principal, fingerprint, other, operator, now, now, cliClockSkew)
+	if err == nil || errors.As(err, &skew) || !strings.Contains(err.Error(), "binding mismatch") {
+		t.Fatalf("other device with skewed clock: want binding error, got %v", err)
+	}
+
+	// The CLI entry takes the tolerance; the Agent's entries, which check
+	// against authenticated time, take none.
+	orig := fetchCloudResetKey
+	fetchCloudResetKey = func(context.Context, []byte, string, time.Time, time.Time) ([]byte, error) { return public, nil }
+	t.Cleanup(func() { fetchCloudResetKey = orig })
+	ahead := token(aud, n+8)
+	if _, err := VerifyCloudResetDeletion(context.Background(), ahead, "api.example:443", principal, fingerprint, operator, now, now); err != nil {
+		t.Fatalf("CLI entry refused skew inside the margin: %v", err)
+	}
+	if _, err := VerifyCloudReset(context.Background(), ahead, "api.example:443", principal, fingerprint, deletion, operator, now, now); !errors.As(err, &skew) {
+		t.Fatalf("VerifyCloudReset accepted a future iat: %v", err)
+	}
+	if err := VerifySavedCloudReset(ahead, public, "api.example:443", principal, fingerprint, deletion, operator, now, now); !errors.As(err, &skew) {
+		t.Fatalf("VerifySavedCloudReset accepted a future iat: %v", err)
 	}
 }
