@@ -18,6 +18,12 @@ on:
       - 'swift/**'
       - '.github/workflows/build.yml'
       - '.github/scripts/verify-release.py'
+      - '.github/scripts/build-linux-release-cli.sh'
+      - '.github/scripts/build-linux-packages.sh'
+      - '.github/scripts/run-installed-linux-package-guests.py'
+      - '.github/scripts/test-installed-linux-packages.py'
+      - '.github/scripts/fixtures/package-upgrade-2352/**'
+      - 'packaging/linux/**'
   workflow_dispatch:
     inputs:
       publish:
@@ -190,11 +196,6 @@ jobs:
           - artifact-name: wendy-cli-linux-arm64
             goarch: arm64
             runner: ubuntu-24.04-arm
-    env:
-      LIBUSB_VERSION: "1.0.29"
-      # sha256 of libusb-1.0.29.tar.bz2 from the upstream GitHub release
-      # (github.com/libusb/libusb/releases/tag/v1.0.29), computed at pin time.
-      LIBUSB_SHA256: "5977fc950f8d1395ccea9bd48c06b3f808fd3c2c961b44b0c2e6e29fc3a70a85"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -205,53 +206,21 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install musl toolchain
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update --error-on=any && sudo apt-get install -y musl-tools pkg-config build-essential curl bzip2
 
-      - name: Build static libusb (musl, no udev)
+      - name: Build static release CLI
         run: |
           set -euo pipefail
-          curl -fsSL -o libusb.tar.bz2 \
-            "https://github.com/libusb/libusb/releases/download/v${LIBUSB_VERSION}/libusb-${LIBUSB_VERSION}.tar.bz2"
-          echo "${LIBUSB_SHA256}  libusb.tar.bz2" | sha256sum -c -
-          tar -xjf libusb.tar.bz2
-          cd "libusb-${LIBUSB_VERSION}"
-          # libusb without udev needs kernel UAPI headers (linux/netlink.h), which
-          # musl-gcc's include path lacks. Stage just linux/, asm/ and asm-generic/
-          # (libc-agnostic) rather than exposing all of glibc's /usr/include.
-          KINC="${GITHUB_WORKSPACE}/kernel-headers"
-          mkdir -p "$KINC"
-          cp -r /usr/include/linux "$KINC/linux"
-          cp -r "/usr/include/$(gcc -print-multiarch)/asm" "$KINC/asm"
-          cp -r /usr/include/asm-generic "$KINC/asm-generic"
-          CC=musl-gcc CFLAGS="-I$KINC" ./configure --disable-udev --disable-shared \
-            --enable-static --prefix="${GITHUB_WORKSPACE}/libusb-prefix"
-          make -j"$(nproc)"
-          make install
-
-      - name: Build
-        working-directory: go
-        env:
-          CGO_ENABLED: "1"
-          CC: musl-gcc
-          GOARCH: ${{ matrix.goarch }}
-          # gousb resolves libusb via pkg-config; point it at the static build.
-          PKG_CONFIG_PATH: ${{ github.workspace }}/libusb-prefix/lib/pkgconfig
-        run: |
           ARTIFACT="${{ matrix.artifact-name }}"
           VERSION="${{ needs.determine-version.outputs.version }}"
-          LDFLAGS="-s -w -X github.com/wendylabsinc/wendy/go/internal/shared/version.Version=${VERSION}"
-          mkdir -p "../${ARTIFACT}"
-          go build -tags netgo,osusergo \
-            -ldflags "${LDFLAGS} -linkmode external -extldflags -static" \
-            -o "../${ARTIFACT}/wendy" ./cmd/wendy
+          bash .github/scripts/build-linux-release-cli.sh "$VERSION" "${{ matrix.goarch }}" "$ARTIFACT/wendy"
           # libusb is statically linked (LGPL-2.1): ship its attribution/license.
-          cp ../NOTICE "../${ARTIFACT}/NOTICE"
-          # USB access rules and their plugdev group for the AUR package, which
-          # installs from this archive.
-          mkdir -p "../${ARTIFACT}/udev" "../${ARTIFACT}/sysusers.d"
-          cp ../packaging/linux/udev/70-wendy-jetson.rules \
-            ../packaging/linux/udev/70-wendy-qualcomm.rules "../${ARTIFACT}/udev/"
-          cp ../packaging/linux/sysusers/wendy.conf "../${ARTIFACT}/sysusers.d/"
+          cp NOTICE "$ARTIFACT/NOTICE"
+          # USB rules and plugdev group used by the AUR archive consumer.
+          mkdir -p "$ARTIFACT/udev" "$ARTIFACT/sysusers.d"
+          cp packaging/linux/udev/70-wendy-jetson.rules \
+            packaging/linux/udev/70-wendy-qualcomm.rules "$ARTIFACT/udev/"
+          cp packaging/linux/sysusers/wendy.conf "$ARTIFACT/sysusers.d/"
 
       - name: Verify static binary and smoke test
         run: |
@@ -748,7 +717,8 @@ jobs:
   package-linux:
     name: Package Linux (${{ matrix.arch }})
     # Pinned for WDY-4031: Ubuntu 26's rpmbuild writes RPM v4.0 leads that Artifact Registry rejects.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     needs: [determine-version, build, build-cli-linux]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
@@ -757,9 +727,11 @@ jobs:
           - arch: amd64
             goarch: amd64
             rpm-arch: x86_64
+            runner: ubuntu-24.04
           - arch: arm64
             goarch: arm64
             rpm-arch: aarch64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       id-token: write
@@ -767,11 +739,11 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Install FPM dependencies
+      - name: Install package and guest dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev build-essential rpm
-          sudo gem install fpm
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y ruby ruby-dev build-essential rpm cpio libarchive-tools python3 systemd-container
+          sudo gem install fpm -v 1.18.0 --no-document
 
       - name: Download CLI artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -790,208 +762,51 @@ jobs:
           tar -xzf wendy-agent-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
           ls -la
 
-      - name: Prepare package roots
-        run: |
-          set -euo pipefail
-
-          mkdir -p pkgroot/wendy/usr/bin
-          mkdir -p pkgroot/wendy/usr/lib/udev/rules.d
-          mkdir -p pkgroot/wendy/usr/lib/sysusers.d
-          mkdir -p pkgroot/wendy/usr/share/doc/wendy
-          mkdir -p pkgroot/wendy-agent/usr/bin
-          mkdir -p pkgroot/wendy-agent/usr/lib/systemd/system
-          mkdir -p pkgroot/wendy-agent/usr/lib/wendy-agent
-          mkdir -p pkgroot/wendy-agent/etc/default
-          mkdir -p pkgroot/wendy-agent/etc/wendy-agent
-          mkdir -p pkgroot/wendy-agent/etc/avahi/services
-          mkdir -p pkgroot/wendy-agent/var/lib/wendy-agent/storage
-
-          install -m755 ./wendy-cli-linux-${{ matrix.goarch }}/wendy \
-            pkgroot/wendy/usr/bin/wendy
-          # USB access for Jetson recovery flashing (`wendy os install`).
-          install -m644 packaging/linux/udev/70-wendy-jetson.rules \
-            pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-jetson.rules
-          install -m644 packaging/linux/udev/70-wendy-qualcomm.rules \
-            pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-qualcomm.rules
-          # Creates plugdev, which the rules name, where the distro lacks it.
-          install -m644 packaging/linux/sysusers/wendy.conf \
-            pkgroot/wendy/usr/lib/sysusers.d/wendy.conf
-          # libusb is statically linked into wendy (LGPL-2.1): ship its notice.
-          install -m644 NOTICE pkgroot/wendy/usr/share/doc/wendy/NOTICE
-          install -m755 ./wendy-agent-linux-${{ matrix.goarch }}/wendy-agent \
-            pkgroot/wendy-agent/usr/bin/wendy-agent
-
-          install -m644 packaging/linux/systemd/wendy-agent.service \
-            pkgroot/wendy-agent/usr/lib/systemd/system/wendy-agent.service
-          install -m644 packaging/linux/default/wendy-agent \
-            pkgroot/wendy-agent/etc/default/wendy-agent
-          install -m644 packaging/linux/avahi/wendy-agent.service \
-            pkgroot/wendy-agent/etc/avahi/services/wendy-agent.service
-          install -m755 packaging/linux/fpm/wendy-agent-setup-mdns.sh \
-            pkgroot/wendy-agent/usr/lib/wendy-agent/setup-mdns.sh
-
-          # Placeholder config created at install time by package manager.
-          printf "{}\n" > pkgroot/wendy-agent/etc/wendy-agent/config.json
-          chmod 600 pkgroot/wendy-agent/etc/wendy-agent/config.json
-
-      - name: Build .deb packages
+      - name: Build and validate Linux packages with the shared recipe
         run: |
           set -euo pipefail
           VERSION="${{ needs.determine-version.outputs.version }}"
+          bash .github/scripts/build-linux-packages.sh "$VERSION" "${{ matrix.arch }}" \
+            "$GITHUB_WORKSPACE/wendy-cli-linux-${{ matrix.goarch }}/wendy" \
+            "$GITHUB_WORKSPACE/wendy-agent-linux-${{ matrix.goarch }}/wendy-agent" \
+            "$RUNNER_TEMP/linux-packages"
 
-          # Build wendy .deb
-          fpm -s dir -t deb \
-            -n wendy \
-            -v "$VERSION" \
-            --architecture ${{ matrix.arch }} \
-            --description "Wendy CLI - Remote device debugging and deployment" \
-            --url "https://wendy.dev" \
-            --maintainer "Wendy Labs Inc. <support@wendy.dev>" \
-            --license "Proprietary" \
-            --vendor "Wendy Labs Inc." \
-            --category "devel" \
-            --depends "usbutils" \
-            --depends "ca-certificates" \
-            --after-install packaging/linux/fpm/wendy-postinstall.sh \
-            -C pkgroot/wendy \
-            .
-
-          # Build wendy-agent .deb
-          fpm -s dir -t deb \
-            -n wendy-agent \
-            -v "$VERSION" \
-            --architecture ${{ matrix.arch }} \
-            --description "Wendy Agent - Runs on target devices for remote debugging" \
-            --url "https://wendy.dev" \
-            --maintainer "Wendy Labs Inc. <support@wendy.dev>" \
-            --license "Proprietary" \
-            --vendor "Wendy Labs Inc." \
-            --category "devel" \
-            --depends "containerd" \
-            --depends "xdg-dbus-proxy" \
-            --depends "dbus" \
-            --depends "systemd" \
-            --depends "ca-certificates" \
-            --depends "avahi-daemon" \
-            --deb-recommends "nerdctl" \
-            --deb-recommends "network-manager | connman" \
-            --deb-recommends "bluez" \
-            --deb-recommends "v4l2loopback-dkms (>= 0.15.0)" \
-            --config-files /etc/default/wendy-agent \
-            --config-files /etc/wendy-agent/config.json \
-            --config-files /etc/avahi/services/wendy-agent.service \
-            --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
-            --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
-            -C pkgroot/wendy-agent \
-            .
-
-          ls -la *.deb
-
-      - name: Build .rpm packages
+      - name: Require native install, upgrade and recovery controls
         run: |
           set -euo pipefail
-          VERSION="${{ needs.determine-version.outputs.version }}"
-          # RPM doesn't allow hyphens in version, replace with underscores
-          RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            python3 .github/scripts/run-installed-linux-package-guests.py \
+            --packages "$RUNNER_TEMP/linux-packages" \
+            --expected-version "${{ needs.determine-version.outputs.version }}" \
+            --output "$RUNNER_TEMP/package-guests"
 
-          # Artifact Registry requires RPM v4; RPM 6 defaults to v6 packages.
-          # Build wendy .rpm
-          fpm -s dir -t rpm \
-            --rpm-rpmbuild-define "_rpmformat 4" \
-            -n wendy \
-            -v "$RPM_VERSION" \
-            --architecture ${{ matrix.rpm-arch }} \
-            --description "Wendy CLI - Remote device debugging and deployment" \
-            --url "https://wendy.dev" \
-            --maintainer "Wendy Labs Inc. <support@wendy.dev>" \
-            --license "Proprietary" \
-            --vendor "Wendy Labs Inc." \
-            --category "Development/Tools" \
-            --depends "usbutils" \
-            --depends "ca-certificates" \
-            --after-install packaging/linux/fpm/wendy-postinstall.sh \
-            -C pkgroot/wendy \
-            .
-
-          # Build wendy-agent .rpm
-          fpm -s dir -t rpm \
-            --rpm-rpmbuild-define "_rpmformat 4" \
-            -n wendy-agent \
-            -v "$RPM_VERSION" \
-            --architecture ${{ matrix.rpm-arch }} \
-            --description "Wendy Agent - Runs on target devices for remote debugging" \
-            --url "https://wendy.dev" \
-            --maintainer "Wendy Labs Inc. <support@wendy.dev>" \
-            --license "Proprietary" \
-            --vendor "Wendy Labs Inc." \
-            --category "Development/Tools" \
-            --depends "containerd" \
-            --depends "xdg-dbus-proxy" \
-            --depends "dbus" \
-            --depends "systemd" \
-            --depends "ca-certificates" \
-            --depends "avahi" \
-            --rpm-tag "Recommends: v4l2loopback >= 0.15.0" \
-            --config-files /etc/default/wendy-agent \
-            --config-files /etc/wendy-agent/config.json \
-            --config-files /etc/avahi/services/wendy-agent.service \
-            --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
-            --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
-            --rpm-posttrans packaging/linux/fpm/wendy-agent-posttrans.sh \
-            -C pkgroot/wendy-agent \
-            .
-
-          ls -la *.rpm
-
-      - name: Validate package metadata
+      - name: Record release package guest evidence
+        if: always()
         run: |
           set -euo pipefail
+          if [[ -d "$RUNNER_TEMP/package-guests" && ! -L "$RUNNER_TEMP/package-guests" ]]; then
+            sudo chown -R --no-dereference "$(id -u):$(id -g)" "$RUNNER_TEMP/package-guests"
+          fi
+          python3 - <<'PY_EVIDENCE'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'package-guests'
+          for path in sorted(root.rglob('*.log')):
+              print(f'--- {path.relative_to(root)} ---')
+              print(path.read_text(errors='replace')[-6000:])
+          for path in sorted(root.glob('*-manifest.json')):
+              print(f'--- {path.name} ---')
+              print(path.read_text())
+          summary = root / 'summary.json'
+          if summary.exists():
+              print(summary.read_text())
+          PY_EVIDENCE
 
-          WENDY_DEB=$(ls -1 wendy_*_${{ matrix.arch }}.deb | head -1)
-          WENDY_AGENT_DEB=$(ls -1 wendy-agent_*_${{ matrix.arch }}.deb | head -1)
-          WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
-          WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
-
-          # rpm can read v6 packages that Artifact Registry rejects. RPM v4
-          # uses a 3.0 lead; check it explicitly before publishing artifacts.
-          for package in "$WENDY_RPM" "$WENDY_AGENT_RPM"; do
-            lead=$(od -An -tx1 -N6 "$package" | tr -d ' \n')
-            if [[ "$lead" != "edabeedb0300" ]]; then
-              echo "::error file=$package::Expected an RPM v4 package with a 3.0 lead, got $lead"
-              exit 1
-            fi
-          done
-
-          dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
-          dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"
-          dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
-          dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
-          dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/sysusers.d/wendy.conf" > /dev/null
-          dpkg-deb -c "$WENDY_DEB" | grep "usr/share/doc/wendy/NOTICE" > /dev/null
-          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*containerd"
-          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*dbus"
-          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*systemd"
-          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*ca-certificates"
-          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "usr/lib/systemd/system/wendy-agent.service" > /dev/null
-          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "etc/default/wendy-agent" > /dev/null
-          dpkg-deb -c "$WENDY_AGENT_DEB" | grep "etc/avahi/services/wendy-agent.service" > /dev/null
-          dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*avahi-daemon"
-
-          rpm -qp --requires "$WENDY_RPM" | grep "^usbutils" > /dev/null
-          rpm -qp --requires "$WENDY_RPM" | grep "^ca-certificates" > /dev/null
-          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^containerd" > /dev/null
-          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^dbus" > /dev/null
-          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^systemd" > /dev/null
-          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^ca-certificates" > /dev/null
-          rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^avahi" > /dev/null
-          rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
-          rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
-          rpm -qpl "$WENDY_RPM" | grep "/usr/lib/sysusers.d/wendy.conf" > /dev/null
-          rpm -qpl "$WENDY_RPM" | grep "/usr/share/doc/wendy/NOTICE" > /dev/null
-          rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendy-agent.service" > /dev/null
-          rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/default/wendy-agent" > /dev/null
-          rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/avahi/services/wendy-agent.service" > /dev/null
-          rpm -qp --scripts "$WENDY_AGENT_RPM" | grep "^posttrans scriptlet" > /dev/null
+      - name: Stage verified packages for release
+        run: |
+          set -euo pipefail
+          mv -- "$RUNNER_TEMP/linux-packages/"*.deb "$RUNNER_TEMP/linux-packages/"*.rpm .
 
       - name: Attest Linux packages
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3

@@ -1312,10 +1312,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2675",
       "title": "Use persisted clock trust and monotonic mesh announcement lifetimes",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Clock/announcement tests cover monotonic lifetimes, recovery and persisted trust; this broad change also touches several transport and route state machines.",
-      "required_follow_up": "Add a repeatable suspend/reboot/clock-jump scenario across two communicating nodes and verify expiry and recovery.",
-      "evidence": []
+      "required_follow_up": "Require the two-node packet/runtime restart gate and wall-clock scheduling control in Linux CI. The full production receiver lease advances through existing injectable clocks; actual OS suspend, radio and kernel-TUN execution are not claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/clock_packet_restart_test.go",
+            "go/internal/agent/localmesh/clock_runtime_fixture_test.go",
+            ".github/scripts/test-clock-packet-restart.sh"
+          ],
+          "result": "Two real TLS/Babel/gVisor nodes preserve bidirectional TCP across forward/backward certificate-wall jumps, expire the unchanged 15-minute receiver lease while transport remains connected, then stop/join and reconstruct from persisted clock/certificate/origin files to recover traffic. Two local race runs and an isolated capability-free Linux run pass; UTC-coupled scheduling control fails the actual TCP assertion. Hosted required gate remains pending."
+        }
+      ]
     },
     {
       "key": "2674",
@@ -2769,20 +2778,38 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2504",
       "title": "fix(ci): build Linux packages on ubuntu-24.04",
       "package": "11",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Release packaging now runs on Ubuntu 24.04. Building packages checks some compatibility, but does not prove clean install and upgrade behavior on the supported target distributions.",
-      "required_follow_up": "Install and upgrade the produced packages in the supported distro matrix.",
-      "evidence": []
+      "required_follow_up": "Retain real native package installation/upgrade coverage and verify Artifact Registry upload plus repository consumption for the exact candidate hashes in an authorized release context. Local package transactions do not prove external repository acceptance.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/build-linux-packages.sh",
+            ".github/scripts/test-installed-linux-packages.py",
+            ".github/scripts/run-installed-linux-package-guests.py"
+          ],
+          "result": "Audit correction: 2504 changed the packaging host to avoid Artifact Registry RPM rejection, not a glibc ABI problem. Fix 2521 already forced RPM format 4 and asserted the six-byte produced-artifact lead. Shared recipe retains that assertion and new artifact tests inspect actual packages. External GCP acceptance remains unverified."
+        }
+      ]
     },
     {
       "key": "2521",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2521",
       "title": "fix(ci): build RPM v4 packages for Artifact Registry",
       "package": "11",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "The packaging workflow requests RPM v4. No artifact-format assertion or Artifact Registry acceptance test was found.",
-      "required_follow_up": "Inspect the resulting RPM format and test repository upload plus install in a disposable release job.",
-      "evidence": []
+      "required_follow_up": "Retain real native package installation/upgrade coverage and verify Artifact Registry upload plus repository consumption for the exact candidate hashes in an authorized release context. Local package transactions do not prove external repository acceptance.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/build-linux-packages.sh",
+            ".github/scripts/test-installed-linux-packages.py",
+            ".github/scripts/run-installed-linux-package-guests.py"
+          ],
+          "result": "Audit correction: 2504 changed the packaging host to avoid Artifact Registry RPM rejection, not a glibc ABI problem. Fix 2521 already forced RPM format 4 and asserted the six-byte produced-artifact lead. Shared recipe retains that assertion and new artifact tests inspect actual packages. External GCP acceptance remains unverified."
+        }
+      ]
     },
     {
       "key": "2353",
@@ -2806,20 +2833,40 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2352",
       "title": "Keep wendy-agent running after an apt or dnf upgrade",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Package-script tests mock the service manager and cover upgrade script behavior. They do not install and upgrade the actual DEB/RPM in a running service-manager environment.",
-      "required_follow_up": "Run package upgrade tests and assert the agent PID/service returns to healthy state.",
-      "evidence": []
+      "required_follow_up": "Require actual installed Agent health and successful normal/control upgrades in fresh booted Ubuntu 22.04, Ubuntu 24.04 and Fedora 44 guests. Verify the current candidate packages, configuration retention and stopped service after removal. Native arm64 release execution remains separate from the amd64 PR gate.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-installed-linux-packages.py",
+            ".github/scripts/run-installed-linux-package-guests.py",
+            ".github/scripts/test-linux-packages-pr.sh",
+            ".github/scripts/installed_linux_packages_test.py",
+            ".github/scripts/installed_linux_package_guests_test.py"
+          ],
+          "result": "Ten artifact tests and nine guest ownership/deadline checks pass. Exact shared release packaging produced all four packages, and dependency provisioning passed for all three pinned distributions. Actual hosted static CLI compilation and booted systemd Agent transactions remain pending; inert local packaging tests are not runtime proof."
+        }
+      ]
     },
     {
       "key": "2251",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2251",
       "title": "Protect stable releases and run integration tests only for releases",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Workflow conditions protect stable releases and limit hardware jobs. Later release-priority tests cover scheduling, but publication/tag protection is not fully exercised.",
-      "required_follow_up": "Test release/ref/event combinations and prevention of stable-release overwrite.",
-      "evidence": []
+      "required_follow_up": "Require current-source release policy tests and immutable-tag regressions in the existing offline CI job. Original fix af463f100 protected queued stable jobs from cancellation and limited hardware entry points; it did not implement a new tag-overwrite mechanism.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/release_policy_test.py",
+            ".github/scripts/tag-built-commit_test.py",
+            ".github/scripts/release_provenance_test.py"
+          ],
+          "result": "Four policy tests execute actual workflow expressions and the real version-classification shell across 32 event/ref/publish/skip combinations; restored shared-group, cancellation and push-hardware policies are rejected. Seven real Git reference/provenance fixture tests pass, including existing mismatched lightweight/annotated tags and concurrent creators. No release dispatch/publication or hardware job was performed. Hosted gate remains pending."
+        }
+      ]
     },
     {
       "key": "1825",
@@ -3213,10 +3260,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2485",
       "title": "Add WendyNotify push notification example",
       "package": "14",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Swift example tests cover notification errors and HTML escaping. Example tests are outside the standard WendyAgentCore suite, and the per-run link/token design changed during the PR.",
-      "required_follow_up": "Run the example tests in CI and assert current access-control behavior without leaking a token in page content or logs.",
-      "evidence": []
+      "required_follow_up": "Run all WendyNotify example tests in the existing macOS job, including live loopback HTTP and private Unix-socket notification RPC, intentional anonymous access, service refusal/history and credential exclusion. No real push delivery is required for this access-control regression.",
+      "evidence": [
+        {
+          "tests": [
+            "Examples/WendyNotify/Tests/WendyNotifyTests/RequestPathTests.swift",
+            ".github/workflows/go-tests.yml"
+          ],
+          "result": "All eight Swift example tests pass locally. The real HTTP/production sender path forwards exactly two intended requests to an inert private gRPC service; random Authorization/query/form and refusal-trailer credentials remain absent from HTML, application logs and forwarded data. URI-logging and form-echo mutations fail. Hosted execution pending."
+        }
+      ]
     },
     {
       "key": "2066",
@@ -3336,9 +3391,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2795",
       "title": "Fix broken links across the docs site",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Documentation links changed without a route/link regression in the PR. A documentation build alone does not prove every referenced destination resolves.",
-      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "required_follow_up": "Retain the required rendered branch/latest crawls and pinned upstream example contracts. Example existence and editable-source checks do not claim physical compilation/flashing or moving-main compatibility.",
       "evidence": [
         {
           "tests": [
@@ -3349,6 +3404,11 @@
         },
         {
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
+          "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
       ]
     },
@@ -3400,9 +3460,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1980",
       "title": "wendy-lite: fix example name in getting-started doc",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The documentation example name was corrected without an example-existence test.",
-      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "required_follow_up": "Retain the required rendered branch/latest crawls and pinned upstream example contracts. Example existence and editable-source checks do not claim physical compilation/flashing or moving-main compatibility.",
       "evidence": [
         {
           "tests": [
@@ -3413,6 +3473,11 @@
         },
         {
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
+          "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
       ]
     },
@@ -3421,9 +3486,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1958",
       "title": "wendy-lite: restructure documentation into topic-specific files",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The example-repository links were corrected while docs were reorganized. No link-validation fixture was found.",
-      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "required_follow_up": "Retain the required rendered branch/latest crawls and pinned upstream example contracts. Example existence and editable-source checks do not claim physical compilation/flashing or moving-main compatibility.",
       "evidence": [
         {
           "tests": [
@@ -3434,6 +3499,11 @@
         },
         {
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
+          "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
       ]
     },
@@ -3460,9 +3530,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2808",
       "title": "docs: stop preview deploys and moved pages from producing 404s",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Sitemap tests cover generated routes, but deployment hostname/preview behavior also depends on hosting configuration.",
-      "required_follow_up": "Require actual served preview bytes to match this revision export, plus public latest alias/destination responses, canonical URLs, anchors and preview robots/analytics. The hosted probe is registered in the existing deployment job; public evidence is pending.",
+      "required_follow_up": "Retain exact-preview artifact comparison and public latest compatibility checks in the existing deployment job. This covers the 55 historical aliases and preview indexing/analytics policy, not every public route, root hosting rewrites or browser execution.",
       "evidence": [
         {
           "tests": [
@@ -3479,6 +3549,11 @@
             ".github/workflows/fumadocs.yml"
           ],
           "result": "All 11 real HTTP failure controls pass locally. Full exported mirror verifies 210 bounded requests across 55 historical aliases and their destinations for each prefix. Current public /latest is checked independently of the preview revision; no public execution claimed yet."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131518136984",
+          "result": "Actual public HTTPS probe completed 210 requests with zero failures. It checked 55 historical aliases and 49 destination routes for both the exact published branch preview and current public latest. Preview response bytes matched the downloaded export, with canonical URLs, fallback links, anchors, robots exclusion and no analytics verified. Artifact 13986973220 records every response status/digest and the exact preview source commit; latest is explicitly an independent public revision."
         }
       ]
     },

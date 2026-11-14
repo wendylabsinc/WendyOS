@@ -37,10 +37,11 @@ on:
       - 'scripts/test-package-chatgpt-plugin.py'
       - 'scripts/pin-cli.sh'
       - 'scripts/test/plugin-launcher/**'
-      - 'packaging/linux/fpm/**'
+      - 'packaging/linux/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
       - 'Examples/SO101Reader/**'
+      - 'Examples/WendyNotify/**'
   pull_request:
     paths:
       - '.gitattributes'
@@ -75,10 +76,11 @@ on:
       - 'scripts/test-package-chatgpt-plugin.py'
       - 'scripts/pin-cli.sh'
       - 'scripts/test/plugin-launcher/**'
-      - 'packaging/linux/fpm/**'
+      - 'packaging/linux/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
       - 'Examples/SO101Reader/**'
+      - 'Examples/WendyNotify/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -329,7 +331,7 @@ jobs:
   linux-install-host:
     name: Linux install safety
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
@@ -338,7 +340,8 @@ jobs:
       - name: Install disposable block-device tools
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
+          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config musl-tools ruby ruby-dev build-essential rpm cpio libarchive-tools systemd-container curl bzip2
+          sudo gem install fpm -v 1.18.0 --no-document
       - name: Verify native Make VERSION in the built CLI
         run: python3 .github/scripts/test-native-make-version.py --retain-binary "$RUNNER_TEMP/wendy-stagefile-cli"
       - name: Build and execute inherited Stagefiles with both packaged backends
@@ -372,6 +375,20 @@ jobs:
         run: |
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
+      - name: Verify package artifact and guest cleanup controls
+        run: |
+          python3 .github/scripts/installed_linux_packages_test.py
+          python3 .github/scripts/installed_linux_package_guests_test.py
+      - name: Require native Agent package upgrades on Ubuntu and Fedora
+        run: bash .github/scripts/test-linux-packages-pr.sh "$RUNNER_TEMP/package-regressions"
+      - name: Preserve package upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: installed-linux-packages-pr
+          path: ${{ runner.temp }}/package-regressions
+          if-no-files-found: ignore
+          retention-days: 7
 
   network-regressions:
     name: Linux network regressions
@@ -497,6 +514,8 @@ jobs:
         run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
       - name: Require explicit disconnect intent across native process restarts
         run: bash .github/scripts/test-operator-native-restart.sh "$RUNNER_TEMP/operator-native-restart"
+      - name: Require persisted clock trust and packet expiry across restarts
+        run: bash .github/scripts/test-clock-packet-restart.sh "$RUNNER_TEMP/clock-packet-restart"
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
@@ -620,6 +639,10 @@ jobs:
         env:
           APP_PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/test-native-app.sh "$APP_PLATFORM"
+      - name: Exercise WendyNotify HTTP and private notification socket
+        if: matrix.platform == 'macos'
+        timeout-minutes: 15
+        run: swift test --package-path Examples/WendyNotify
       - name: Upload native test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
