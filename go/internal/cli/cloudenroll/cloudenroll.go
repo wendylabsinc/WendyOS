@@ -73,6 +73,13 @@ const maxMintAttempts = 4
 // tenant. Cloud names only the field, never the holder.
 var ErrDeviceUUIDTaken = errors.New("device UUID already in use")
 
+// ErrDeviceNameTaken is Cloud's pre-mint refusal of a name another device
+// in the organization already holds (names compare without regard to case).
+// Cloud marks a taken device UUID or mesh suffix with the colliding-field
+// trailer; a taken name carries none, so an AlreadyExists without that
+// trailer is the name.
+var ErrDeviceNameTaken = errors.New("device name taken")
+
 // DeviceUUIDTaken reports whether err is Cloud's EnrollDevice refusal of the
 // device UUID itself: AlreadyExists with the colliding-field trailer naming
 // device_id or mesh_suffix. A name duplicate carries no such trailer, and a
@@ -146,7 +153,7 @@ func mintOnce(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config
 		// Cloud validates the name and its unique indexes BEFORE relaying to
 		// pki-core, so nothing was minted. Saying so is the point: the operator
 		// otherwise assumes they just spent a single-use credential.
-		return cfg, "", fmt.Errorf("Cloud refused this enrollment before minting anything, so no credential was spent: %w", err)
+		return cfg, "", fmt.Errorf("Cloud refused this enrollment before minting anything, so no credential was spent: %w: %w", ErrDeviceNameTaken, err)
 	case codes.InvalidArgument:
 		return cfg, "", fmt.Errorf("Cloud refused this enrollment before minting anything, so no credential was spent: %w", err)
 	}

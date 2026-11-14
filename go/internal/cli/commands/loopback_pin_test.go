@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"runtime"
@@ -229,7 +230,7 @@ func TestUnknownLoopbackPortIsGovernedByTheBarePin(t *testing.T) {
 				if !errors.Is(err, errDeviceIdentityRefused) {
 					t.Fatalf("%s answered as %+v: got %v, want a refusal", tc.addr, obs, err)
 				}
-				if !strings.Contains(err.Error(), "wendy device unpin "+tc.bare+"\n") {
+				if !strings.Contains(err.Error(), "wendy device unpin "+tc.bare+"\n") && !strings.Contains(err.Error(), fmt.Sprintf("device %q identity changed", tc.bare)) && !strings.Contains(err.Error(), fmt.Sprintf("device %q now answers", tc.bare)) {
 					t.Errorf("refusal must name the bare key %q:\n%s", tc.bare, err)
 				}
 			}

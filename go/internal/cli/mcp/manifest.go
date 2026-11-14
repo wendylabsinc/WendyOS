@@ -27,6 +27,8 @@ type ToolManifest struct {
 // relayExcluded are built-in tools a hosted chat never gets: those that take
 // a credential from the chat (both stores ban collecting one), the hidden
 // container_attach alias, and wendy_tools (the relay serves one fixed set).
+// A served tool with an optional nested credential refuses it instead; see
+// relayCredentialArgument.
 var relayExcluded = []string{"wifi_connect", "provisioning_start", "container_attach", "wendy_tools"}
 
 // inManifest reports whether the relay channel serves name: built-in tools

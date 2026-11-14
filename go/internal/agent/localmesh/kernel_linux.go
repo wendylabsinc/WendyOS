@@ -456,6 +456,11 @@ func ipNet(p netip.Prefix) *net.IPNet {
 }
 
 func (k *Kernel) AddPeer(id babel.LinkID, peer meshid.Device) (*os.File, error) {
+	// Match the userspace backend's tenant boundary before allocating a TUN.
+	// Device UUIDs (and therefore mesh addresses) can collide across tenants.
+	if !peer.IsValid() || peer.Tenant() != k.device.Tenant() {
+		return nil, errors.New("mesh peer is outside the network tenant")
+	}
 	if id == 0 || uint64(id) > 0xffffffff {
 		return nil, errors.New("kernel link incarnation out of range")
 	}

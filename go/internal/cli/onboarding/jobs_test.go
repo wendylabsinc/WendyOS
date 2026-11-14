@@ -313,7 +313,7 @@ func TestInstallationJobsRejectUnsupportedAndUnsafeRecords(t *testing.T) {
 
 func TestInstallationJobsIncludeBoardAndHostPhysicalInstructions(t *testing.T) {
 	for host, prompt := range map[string]string{"darwin": "choose Ignore", "windows": "choose Cancel"} {
-		steps := strings.Join(targetInstructions(&Plan{Method: "usb-recovery", DeviceType: "jetson-orin-nano", HostOS: host}), " ")
+		steps := strings.Join(targetInstructions(&Job{Plan: &Plan{Method: "usb-recovery", DeviceType: "jetson-orin-nano", HostOS: host}}), " ")
 		for _, want := range []string{"FC REC to GND", "pins 9 and 10", "remove the jumper", prompt} {
 			if !strings.Contains(steps, want) {
 				t.Fatalf("%s instructions omit %q", host, want)

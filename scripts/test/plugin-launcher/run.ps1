@@ -7,6 +7,7 @@ $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $Script:Failures = 0
 $Script:Passes = 0
 $V = '2026.10.01-000000'
+. (Join-Path $PSScriptRoot 'fixture_process.ps1')
 
 function New-StubExe([string]$Path, [string]$Version) {
     New-Item -ItemType Directory -Force -Path (Split-Path $Path) | Out-Null
@@ -58,15 +59,12 @@ function New-Release($c, [string]$Version) {
 }
 
 function Start-Fixtures($c) {
-    $port = Join-Path $c.T 'port'
-    $c.Server = Start-Process -FilePath $Script:Python -ArgumentList @("`"$Repo\scripts\test\plugin-launcher\fixture_server.py`"", "`"$($c.Fix)`"", "`"$port`"") -PassThru -WindowStyle Hidden
-    for ($i = 0; $i -lt 100 -and -not (Test-Path $port); $i++) { Start-Sleep -Milliseconds 100 }
-    $env:WENDY_CLI_DOWNLOAD_BASE = "http://127.0.0.1:$(Get-Content $port)"
+    $env:WENDY_CLI_DOWNLOAD_BASE = Start-FixtureProcess $c $Script:Python (Join-Path $PSScriptRoot 'fixture_server.py')
 }
 
 function Stop-Case($c) {
-    if ($c.Server) { Stop-Process -Id $c.Server.Id -Force -ErrorAction SilentlyContinue }
-    Remove-Item -Recurse -Force $c.T -ErrorAction SilentlyContinue
+    Stop-FixtureProcess $c
+    if (-not $c.Keep) { Remove-Item -Recurse -Force $c.T -ErrorAction SilentlyContinue }
 }
 
 function Invoke-Cmd($c, [string[]]$CliArgs, [string]$Stdin = '') {
@@ -119,6 +117,22 @@ function Test-ChecksumMismatchInstallsNothing($c) {
     if (Test-Path (Join-Path $env:WENDY_CONFIG_DIR "cli\$V")) { throw 'nothing may be installed' }
 }
 
+function Test-TruncatedDownloadCanRetry($c) {
+    New-Release $c $V
+    $marker = Join-Path $c.Fix 'truncate-downloads'
+    Start-Fixtures $c
+    # Fault injection begins after the fixture's independent readiness probe.
+    Set-Content $marker 'truncate every asset'
+    $r = Invoke-Cmd $c @('mcp', 'serve')
+    Assert-Equal $r.Code 1 'truncated download exit'
+    Assert-Equal $r.Out '' 'no partial CLI ran'
+    if (Test-Path (Join-Path $env:WENDY_CONFIG_DIR "cli\$V")) { throw 'partial release was installed' }
+    Remove-Item $marker
+    $r = Invoke-Cmd $c @('mcp', 'serve')
+    Assert-Equal $r.Code 0 'complete retry exit'
+    Assert-Equal $r.Out "stub-wendy $V args:[mcp][serve]" 'complete retry runs verified CLI'
+}
+
 function Test-PathWendyNewEnoughIsUsed($c) {
     New-Release $c $V
     New-StubExe (Join-Path $c.T 'stubbin\wendy.exe') '2026.11.01-000000'
@@ -138,6 +152,7 @@ function Test-StdinReachesCli($c) {
 $Script:Sh = (Get-Command sh.exe -ErrorAction SilentlyContinue).Source
 if (-not $Script:Sh) { $Script:Sh = Join-Path $env:ProgramFiles 'Git\usr\bin\sh.exe' }
 $Script:Python = (Get-Command python.exe -ErrorAction Stop).Source
+& (Join-Path $PSScriptRoot 'fixture_process_test.ps1') -Python $Script:Python
 $savedPath = $env:PATH
 $cases = Get-ChildItem function:Test-* | Select-Object -ExpandProperty Name
 if ($args.Count -gt 0) { $cases = $args }

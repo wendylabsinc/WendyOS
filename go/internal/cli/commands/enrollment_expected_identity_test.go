@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"net"
 	"testing"
 	"time"
@@ -43,7 +42,8 @@ func TestExplicitEnrollmentSetupIsSeparateFromManagement(t *testing.T) {
 		want        bool
 	}{
 		{"explicit unprovisioned setup", "unprovisioned", true, true},
-		{"ordinary management refuses missing identity", "unprovisioned", false, false},
+		{"ordinary management reaches an unprovisioned device", "unprovisioned", false, true},
+		{"ordinary management refuses an enrolled plaintext answer", "enrolled", false, false},
 		{"enrolled device is not a setup endpoint", "enrolled", true, false},
 		{"unknown provisioning state is refused", "unknown", true, false},
 	} {
@@ -75,9 +75,6 @@ func TestExplicitEnrollmentSetupIsSeparateFromManagement(t *testing.T) {
 			}
 			if (err == nil) != tc.want {
 				t.Fatalf("setup connection error=%v, want allowed=%v", err, tc.want)
-			}
-			if !tc.explicit && !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-				t.Fatalf("ordinary management did not require its expected identity: %v", err)
 			}
 		})
 	}

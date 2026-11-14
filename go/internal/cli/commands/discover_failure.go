@@ -123,12 +123,14 @@ func lanIdentityFailure(err error) *models.ProbeFailure {
 	var pin *devicepin.PinMismatchError
 	var identity *certs.IdentityMismatchError
 	switch {
+	case errors.As(err, &pin):
+		// The SPKI store's own key: the dialled name is often an IP that keys
+		// nothing an unpin could clear.
+		key = pin.Key
+		details = fmt.Sprintf("Saved certificate key: %s. Presented certificate key: %s.", pin.Want, pin.Got)
 	case errors.As(err, &refusal) && refusal.diagnostic != nil:
 		key = refusal.diagnostic.hostname
 		details = refusal.diagnostic.details
-	case errors.As(err, &pin):
-		key = pin.Key
-		details = fmt.Sprintf("Saved certificate key: %s. Presented certificate key: %s.", pin.Want, pin.Got)
 	case errors.As(err, &identity):
 		saved, now := identityMismatchSides(identity)
 		details = fmt.Sprintf("Saved: %s. Now: %s.", saved, now)

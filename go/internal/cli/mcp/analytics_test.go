@@ -65,6 +65,7 @@ func TestToolAnalyticsProtocol(t *testing.T) {
 			{name: "handler error", tool: "device_info", err: errors.New("private-host: private failure"), command: "wendy mcp device_info", errorClass: "other"},
 			{name: "built-in panic", tool: "device_info", panicValue: errors.New("private-host: private panic"), command: "wendy mcp device_info", errorClass: "other"},
 			{name: "canceled", tool: "device_info", err: fmt.Errorf("private context: %w", context.Canceled), command: "wendy mcp device_info", errorClass: "context_canceled"},
+			{name: "cancelled result", tool: "device_info", result: errResult(errCodeCancelled, "private cancellation"), command: "wendy mcp device_info", errorClass: "cancelled"},
 			{name: "deadline", tool: "device_info", err: context.DeadlineExceeded, command: "wendy mcp device_info", errorClass: "context_deadline"},
 			{name: "unstructured error", tool: "device_info", result: mcpgo.NewToolResultError("private failure"), command: "wendy mcp device_info", errorClass: "tool_error"},
 			{name: "app success", tool: "private_app__private_tool", result: mcpgo.NewToolResultText("private output"), command: "wendy mcp container_tool"},
@@ -150,6 +151,10 @@ func TestToolAnalyticsProtocol(t *testing.T) {
 				}
 				if tc.errorClass != "" {
 					want["error_class"] = tc.errorClass
+				}
+				if tc.errorClass == "context_canceled" || tc.errorClass == "cancelled" {
+					want["success"] = "true"
+					want["outcome"] = "cancelled"
 				}
 				// Exact fields also guard against arguments, result text, and
 				// arbitrary names or error codes leaking into the payload.

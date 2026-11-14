@@ -23,9 +23,13 @@ print(f"GPU count: {device_count}")
 for i in range(device_count):
     print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
 
-# Quick matrix multiply to verify compute works
-x = torch.randn(256, 256, device="cuda")
-y = torch.randn(256, 256, device="cuda")
+# A deterministic result and explicit synchronization catch asynchronous driver
+# failures. Merely allocating tensors or printing z.device is not a compute pass.
+x = torch.ones(256, 256, device="cuda")
+y = torch.ones(256, 256, device="cuda")
 z = torch.matmul(x, y)
+torch.cuda.synchronize()
+torch.testing.assert_close(z.cpu(), torch.full((256, 256), 256.0), rtol=0, atol=0)
 print(f"Compute test: matmul {z.shape} on {z.device}")
+print("CUDA computation completed; all 65536 result elements equal 256")
 print("PASS: GPU entitlement verified")

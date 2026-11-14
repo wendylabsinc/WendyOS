@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.gitattributes'
+      - '.github/dependabot.yml'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -20,16 +21,27 @@ on:
       - '.github/workflows/**'
       - '.github/actions/setup-go-ci/**'
       - '.github/actions/release-priority/**'
+      - '.github/actions/check-runner-disk/**'
       - '.github/scripts/**'
+      - '.github/ci-tests/memory-budget/**'
       - '.github/ci-tests/host-sensor-loopback/**'
+      - '.github/ci-tests/python-gpu/**'
+      - '.github/ci-tests/python-onnx-gpu/**'
+      - '.github/regression-coverage/manual/**'
       - 'plugins/**'
       - 'scripts/sync-agent-skills.py'
       - 'scripts/package-chatgpt-plugin.py'
       - 'scripts/test-package-chatgpt-plugin.py'
+      - 'scripts/pin-cli.sh'
+      - 'scripts/test/plugin-launcher/**'
       - 'packaging/linux/fpm/**'
+      - 'swift/Scripts/SetupSigningCI.sh'
+      - 'swift/Scripts/Build.sh'
+      - 'Examples/SO101Reader/**'
   pull_request:
     paths:
       - '.gitattributes'
+      - '.github/dependabot.yml'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -44,13 +56,23 @@ on:
       - '.github/workflows/**'
       - '.github/actions/setup-go-ci/**'
       - '.github/actions/release-priority/**'
+      - '.github/actions/check-runner-disk/**'
       - '.github/scripts/**'
+      - '.github/ci-tests/memory-budget/**'
       - '.github/ci-tests/host-sensor-loopback/**'
+      - '.github/ci-tests/python-gpu/**'
+      - '.github/ci-tests/python-onnx-gpu/**'
+      - '.github/regression-coverage/manual/**'
       - 'plugins/**'
       - 'scripts/sync-agent-skills.py'
       - 'scripts/package-chatgpt-plugin.py'
       - 'scripts/test-package-chatgpt-plugin.py'
+      - 'scripts/pin-cli.sh'
+      - 'scripts/test/plugin-launcher/**'
       - 'packaging/linux/fpm/**'
+      - 'swift/Scripts/SetupSigningCI.sh'
+      - 'swift/Scripts/Build.sh'
+      - 'Examples/SO101Reader/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -60,6 +82,29 @@ permissions:
   contents: read
 
 jobs:
+  plugin-launcher:
+    uses: ./.github/workflows/plugin-launcher.yml
+
+  dependency-security:
+    uses: ./.github/workflows/security.yml
+
+  automation-regressions:
+    name: Offline automation regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+      - name: Install the review SDK and fixture dependencies
+        run: python -m pip install -r .github/scripts/requirements-regression-tests.txt
+      - name: Exercise review, event and failure contracts without publishing
+        run: python .github/scripts/run-automation-regressions.py
+
   shared-grpc-api-contracts:
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
@@ -120,6 +165,7 @@ jobs:
   unit-tests:
     name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -136,9 +182,12 @@ jobs:
         # Keep the compiler's per-package concurrency workaround for race
         # builds, but let Go build and test packages in parallel. Vet has its
         # own required job, so do not repeat it in every race build.
-        # -timeout is per package: internal/cli/commands alone took 115s of
-        # the former 120s under -race on main (2026-10-06).
-        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
+        # -timeout is per package: internal/cli/commands alone took 296.146s
+        # of the former 300s under -race on main 08a9cb01 (2026-11-11).
+        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 600s
+
+      - name: Require bounded job supervision and transport recovery
+        run: bash .github/scripts/test-job-supervisor-lifetime.sh "$RUNNER_TEMP/job-supervisor-lifetime"
 
       - name: Fuzz stream boundaries and sparse flash ranges
         run: |
@@ -170,17 +219,9 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   containerd-regressions:
-    name: Containerd lifecycle regressions (${{ matrix.runtime }})
+    name: Containerd lifecycle, DNS and resource regressions
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runtime: '1.7'
-            package: containerd=1.7.12-0ubuntu4
-          - runtime: current
-            package: containerd
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
@@ -192,44 +233,448 @@ jobs:
         run: |
           go test -c -o "$RUNNER_TEMP/containerd.test" ./go/internal/agent/containerd
           go test -c -o "$RUNNER_TEMP/rtps.test" ./go/internal/rtps
-      - name: Extract test runtime without replacing the runner's daemon
+          go build -trimpath -o "$RUNNER_TEMP/memory-workload" ./.github/ci-tests/memory-budget
+      - name: Compile CDI provisioning and restart negative controls
         env:
-          CONTAINERD_PACKAGE: ${{ matrix.package }}
+          CGO_ENABLED: '0'
+        shell: bash
         run: |
-          sudo apt-get update
-          mkdir -p "$RUNNER_TEMP/wendy-runtime"
-          cd "$RUNNER_TEMP/wendy-runtime"
-          apt-get download "$CONTAINERD_PACKAGE" runc busybox-static
-          for package in ./*.deb; do dpkg-deb --extract "$package" root; done
-      - name: Test replacement, restoration and layer repair
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/containerd/client.go').resolve()
+          text = source.read_text()
+          root = Path(os.environ['RUNNER_TEMP'])
+          changes = {
+              'cdi-display-omitted': ('return appCfg.HasEntitlement(appconfig.EntitlementDisplay) && boardDetect().IsJetson()', 'return false'),
+              'cdi-refresh-omitted': ('c.refreshNvidiaCDIForStart(ctx, container, appName, containerLabels)', '// regression mutation: retain stale driver mounts'),
+              'device-refresh-omitted': ('refresh := localoci.RefreshHostDeviceNumbers(&spec)', 'refresh := localoci.DeviceRefresh{}'),
+          }
+          for name, (old, new) in changes.items():
+              assert text.count(old) == 1, name
+              mutation = root / (name + '.go')
+              mutation.write_text(text.replace(old, new))
+              (root / (name + '.json')).write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
+          PY
+          for mutation in cdi-display-omitted cdi-refresh-omitted device-refresh-omitted; do
+            go test -overlay "$RUNNER_TEMP/$mutation.json" -c -o "$RUNNER_TEMP/$mutation.test" ./go/internal/agent/containerd
+          done
+      - name: Compile the uncapped-swap negative control
+        env:
+          CGO_ENABLED: '0'
+        shell: bash
         run: |
-          runtime="$RUNNER_TEMP/wendy-runtime/root"
-          sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
-            bash .github/scripts/test-containerd-regressions.sh "$RUNNER_TEMP/containerd.test"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/oci/resources.go').resolve()
+          text = source.read_text()
+          needle = 'Limit: memBytes, Swap: memBytes'
+          assert text.count(needle) == 1
+          root = Path(os.environ['RUNNER_TEMP'])
+          mutation = root / 'memory-uncapped.go'
+          mutation.write_text(text.replace(needle, 'Limit: memBytes'))
+          (root / 'memory-overlay.json').write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
+          PY
+          go test -overlay "$RUNNER_TEMP/memory-overlay.json" -c -o "$RUNNER_TEMP/memory-uncapped.test" ./go/internal/agent/containerd
+      - name: Compile the pinned-upstream negative control
+        env:
+          CGO_ENABLED: '0'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/containerd/host_dns.go').resolve()
+          text = source.read_text()
+          old = 'nameserver 127.0.0.53'
+          assert text.count(old) == 1
+          root = Path(os.environ['RUNNER_TEMP'])
+          mutation = root / 'host_dns_pinned.go'
+          mutation.write_text(text.replace(old, 'nameserver 192.0.2.53'))
+          (root / 'host-dns-overlay.json').write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
+          PY
+          go test -overlay "$RUNNER_TEMP/host-dns-overlay.json" -c -o "$RUNNER_TEMP/host-dns-pinned.test" ./go/internal/agent/containerd
+      - name: Extract both runtimes without replacing the runner daemon
+        run: |
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y systemd-resolved dbus iproute2 util-linux
+          root="$RUNNER_TEMP/wendy-runtime"
+          mkdir -p "$root/common"
+          (
+            cd "$root/common"
+            apt-get download runc busybox-static
+            for package in ./*.deb; do dpkg-deb --extract "$package" root; done
+          )
+          for runtime_version in 1.7 current; do
+            package=containerd
+            if [[ "$runtime_version" == 1.7 ]]; then package=containerd=1.7.12-0ubuntu4; fi
+            mkdir -p "$root/$runtime_version"
+            (
+              cd "$root/$runtime_version"
+              apt-get download "$package"
+              for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
+            )
+          done
+      - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
+        run: bash .github/scripts/test-containerd-versions.sh
 
-      - name: Check real DDS network namespace isolation
+  linux-install-host:
+    name: Linux install safety
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: install-host
+      - name: Install disposable block-device tools
         run: |
-          command -v ip unshare
-          tests='TestHostNetworkContainersAndBatteryShareTwoParticipants|TestIsolatedNamespaceUsesSeparateParticipant|TestAutomaticHostInterfaceResolvesBeforePoolLookup'
-          sudo "$RUNNER_TEMP/rtps.test" -test.run "^($tests)$" -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/rtps-results"
-          for test in ${tests//|/ }; do
-            grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Verify native Make VERSION in the built CLI
+        run: python3 .github/scripts/test-native-make-version.py
+      - name: Compile host fixtures
+        run: |
+          go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
+          go test -c -o "$RUNNER_TEMP/t234.test" ./go/internal/cli/tegraflash/t234
+      - name: Require loop-device and actual sudo ownership regressions
+        shell: bash
+        env:
+          WENDY_INSTALL_HOST_TESTS: '1'
+        run: |
+          "$RUNNER_TEMP/install.test" -test.run '^(TestInstallLoopRetriesDelayedPartitionDiscovery|TestInstallLoopReconnectNeverWritesReplacementDisk|TestSudoHandBackRealOwnership)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
+          for test in TestInstallLoopRetriesDelayedPartitionDiscovery TestInstallLoopReconnectNeverWritesReplacementDisk TestSudoHandBackRealOwnership; do
+            grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
+          done
+      - name: Require exclusive recovery writer access on a mounted loop disk
+        shell: bash
+        run: |
+          sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
+          grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
+
+  network-regressions:
+    name: Linux network regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: network-regressions
+      - name: Install network fixture dependencies
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+      - name: Require native Linux SO-101 reader regressions
+        run: python3 .github/scripts/run-so101-reader-regressions.py
+      - name: Compile both packet backends with the race detector
+        run: go test -race -c -o "$RUNNER_TEMP/packet-backends.test" ./go/internal/cli/netmesh
+      - name: Require identical tenant and route behavior
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/packet-backends.test" | tee "$RUNNER_TEMP/packet-backends.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/packet-backends.log"; then exit 1; fi
+          for backend in userspace kernel; do
+            grep -q -- "--- PASS: TestPacketBackendContract/$backend " "$RUNNER_TEMP/packet-backends.log"
+          done
+      - name: Prove tenant admission and route withdrawal assertions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          kernel = Path('go/internal/agent/localmesh/kernel_linux.go').resolve()
+          guard = '\tif !peer.IsValid() || peer.Tenant() != k.device.Tenant() {\n\t\treturn nil, errors.New("mesh peer is outside the network tenant")\n\t}\n'
+          text = kernel.read_text()
+          assert text.count(guard) == 1
+          variants = [('tenant', kernel, text.replace(guard, ''))]
+          userspace = Path('go/internal/cli/netmesh/network.go').resolve()
+          text = userspace.read_text()
+          needle = '\tn.routes = next\n'
+          assert text.count(needle) == 1
+          retain = '\tfor address, id := range n.routes { if _, ok := next[address]; !ok { next[address] = id } }\n'
+          variants.append(('withdrawal', userspace, text.replace(needle, retain + needle)))
+          for name, source, text in variants:
+              mutated = root / (name + '-mutation.go')
+              mutated.write_text(text)
+              (root / (name + '-overlay.json')).write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PY
+          for mutation in tenant withdrawal; do
+            go test -race -overlay="$RUNNER_TEMP/$mutation-overlay.json" -c -o "$RUNNER_TEMP/$mutation.test" ./go/internal/cli/netmesh
+            if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/$mutation.test" 2>&1 | tee "$RUNNER_TEMP/$mutation.log"; then
+              echo "$mutation mutation unexpectedly passed" >&2
+              exit 1
+            fi
+          done
+          grep -q 'foreign tenant acquired a packet port' "$RUNNER_TEMP/tenant.log"
+          grep -q 'unrouted packet reached carrier: withdrawn' "$RUNNER_TEMP/withdrawal.log"
+
+      - name: Compile real multicast receiver with the race detector
+        run: go test -race -c -o "$RUNNER_TEMP/multicast.test" ./go/internal/agent/timesync
+      - name: Require delivery across interface hotplug and removal
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-multicast-interfaces.sh "$RUNNER_TEMP/multicast.test" | tee "$RUNNER_TEMP/multicast.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/multicast.log"; then exit 1; fi
+          grep -q '^--- PASS: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast.log"
+      - name: Prove the fixture rejects startup-only subscriptions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/timesync/multicast.go').resolve()
+          text = source.read_text()
+          needle = 'func (m *Manager) refreshMulticast(conn multicastPacketConn, group net.Addr, joined map[int]net.Interface) {'
+          assert text.count(needle) == 1
+          mutated = Path(os.environ['RUNNER_TEMP']) / 'multicast-startup-only.go'
+          mutated.write_text(text.replace(needle, needle + '\nif len(joined) > 0 { return }'))
+          overlay = Path(os.environ['RUNNER_TEMP']) / 'multicast-overlay.json'
+          overlay.write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PY
+          go test -race -overlay="$RUNNER_TEMP/multicast-overlay.json" -c -o "$RUNNER_TEMP/multicast-startup-only.test" ./go/internal/agent/timesync
+          if sudo .github/scripts/test-multicast-interfaces.sh "$RUNNER_TEMP/multicast-startup-only.test" 2>&1 | tee "$RUNNER_TEMP/multicast-startup-only.log"; then
+            echo 'Startup-only multicast subscriptions unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'multicast proof never arrived on time2' "$RUNNER_TEMP/multicast-startup-only.log"
+          grep -q '^--- FAIL: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast-startup-only.log"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Main immediately before #2579. Compile its real ownership and
+          # cleanup paths unchanged to prove warm rollback compatibility.
+          ref: ceef5cfa15f6739b04559a365a617e1dd287ae47
+          path: .ci/operator-baseline
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Original rollback baseline documented with the kernel fixture.
+          ref: 581bff3a8aeb368680f346a9785934eef14848d7
+          path: .ci/operator-original-baseline
+          persist-credentials: false
+      - name: Compile current and pre-operator agent paths
+        run: |
+          test "$(git -C .ci/operator-baseline rev-parse HEAD)" = ceef5cfa15f6739b04559a365a617e1dd287ae47
+          test "$(git -C .ci/operator-original-baseline rev-parse HEAD)" = 581bff3a8aeb368680f346a9785934eef14848d7
+          go test -c -o "$RUNNER_TEMP/operator-current.test" ./go/internal/agent/localmesh
+          for baseline in operator-baseline operator-original-baseline; do
+            (
+              cd ".ci/$baseline"
+              go test -c -o "$RUNNER_TEMP/$baseline.test" ./go/internal/agent/localmesh
+              test -z "$(git status --porcelain)"
+            )
+          done
+      - name: Require live registry and management connection lifetimes
+        run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
+      - name: Require Cloud notification identity, retry and redaction contracts
+        run: bash .github/scripts/test-cloud-notification-contract.sh
+      - name: Require live relay traffic through stalled renewal and path changes
+        run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
+      - name: Require wired-only automatic ROS discovery
+        run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
+      - name: Require TLS UDP admission and recovery under a stalled stream
+        run: bash .github/scripts/test-tls-udp-admission.sh "$RUNNER_TEMP/tls-udp-admission"
+      - name: Require duplicate rejection with an incumbent forwarding route
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/operator-current.test" TestDuplicateCarrierPreservesLiveRoute | tee "$RUNNER_TEMP/duplicate-route.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/duplicate-route.log"; then exit 1; fi
+          grep -q '^--- PASS: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-route.log"
+      - name: Prove rejection happens before routing publication
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          source = Path('go/internal/agent/localmesh/node.go').resolve()
+          text = source.read_text()
+          guard = '\tif !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {\n\t\treturn nil\n\t}\n'
+          bind = '\tBindConnectionLink(ctx, p.id, p.cost, p.signalCapacityRetire)\n'
+          assert text.count(guard) == 1 and text.count(bind) == 1
+          # Reproduce the original ordering: publish a link before arbitration.
+          mutated = root / 'duplicate-late-admission.go'
+          mutated.write_text(text.replace(guard, '').replace(bind, guard + bind))
+          (root / 'duplicate-late-admission.json').write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PYCODE
+          go test -overlay="$RUNNER_TEMP/duplicate-late-admission.json" -c -o "$RUNNER_TEMP/duplicate-late-admission.test" ./go/internal/agent/localmesh
+          if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/duplicate-late-admission.test" TestDuplicateCarrierPreservesLiveRoute 2>&1 | tee "$RUNNER_TEMP/duplicate-late-admission.log"; then
+            echo 'Late duplicate arbitration unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'rejected duplicate published a routing link' "$RUNNER_TEMP/duplicate-late-admission.log"
+          grep -q '^--- FAIL: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-late-admission.log"
+      - name: Require operator routing, warm rollback and DNS cleanup
+        shell: bash
+        run: |
+          set -o pipefail
+          for baseline in operator-baseline operator-original-baseline; do
+            sudo .github/scripts/test-operator-policy.sh "$RUNNER_TEMP/operator-current.test" "$RUNNER_TEMP/$baseline.test" | tee "$RUNNER_TEMP/$baseline.log"
+            if grep -q -- '--- SKIP:' "$RUNNER_TEMP/$baseline.log"; then
+              echo 'Required operator policy coverage skipped a case' >&2
+              exit 1
+            fi
+            for name in TestKernelOperatorPolicyIsolatedNamespace TestKernelOperatorWarmRollbackIsolatedNamespace TestHostDNSPolicyCleanupAcrossMountNamespace; do
+              grep -q "^--- PASS: $name " "$RUNNER_TEMP/$baseline.log"
+            done
           done
 
-  darwin-regressions:
-    name: Darwin BLE regressions
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: wendylabsinc/WendyOS-Builder
+          ref: 954d4e8680c3e5ef6c5fc7b6179902149cebd830
+          path: .ci/hostname-builder
+          persist-credentials: false
+      - name: Compile the actual rename and startup paths
+        run: go test -c -o "$RUNNER_TEMP/hostname.test" ./go/internal/agent/configpartition
+      - name: Require hostname and wire advertisement after process restart
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-hostname-restart.sh "$RUNNER_TEMP/hostname.test" "$PWD/.ci/hostname-builder" | tee "$RUNNER_TEMP/hostname-restart.log"
+          grep -q '^--- PASS: TestDeviceNameRestartIntegration ' "$RUNNER_TEMP/hostname-restart.log"
+
+  darwin-install-host:
+    name: macOS CLI and device regressions
     runs-on: macos-15
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: '1'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Require native macOS SO-101 reader regressions
+        run: python3 .github/scripts/run-so101-reader-regressions.py
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test direct and nested USB disk discovery
+        shell: bash
+        run: |
+          go test ./go/internal/cli/tegraflash/t234 -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/disk-discovery.log"
+          grep -q '^--- PASS: TestParseUMSDisksNestedHub ' "$RUNNER_TEMP/disk-discovery.log"
+          grep -q '^--- PASS: TestParseUMSDisksDirect ' "$RUNNER_TEMP/disk-discovery.log"
+      - name: Install CLI native dependencies
+        run: brew install libusb pkg-config
+      - name: Verify native Make VERSION in the built CLI
+        run: python3 .github/scripts/test-native-make-version.py
+      - name: Compile raw-device and target-scoped preparation tests
+        run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
+      - name: Require disposable disk image regressions
+        shell: bash
+        run: |
+          sudo env WENDY_E2E_DISKIMAGE=1 "$RUNNER_TEMP/install.test" -test.run '^(TestRelocateGPTDarwinRawDiskImage|TestMarkFATVolumes_DiskImage|TestStopTargetIndexing|TestStopTargetIndexingNoMountedFAT|TestUnmountDarwinDisk)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
+          for test in TestRelocateGPTDarwinRawDiskImage TestMarkFATVolumes_DiskImage TestStopTargetIndexing TestStopTargetIndexingNoMountedFAT TestUnmountDarwinDisk; do
+            grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
+          done
+
+  native-app-regressions:
+    name: Native app regressions (${{ matrix.platform }})
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos, ios]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Exercise the native BLE bridge without a radio
-        run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: '26.5'
+      - name: Install native build dependencies
+        run: brew install xcodegen pkg-config libusb cmake ninja
+      - name: Build and test native app
+        env:
+          APP_PLATFORM: ${{ matrix.platform }}
+        run: bash .github/scripts/test-native-app.sh "$APP_PLATFORM"
+      - name: Upload native test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-app-results-${{ matrix.platform }}
+          path: go/macos/Build/RegressionResults.xcresult
+          if-no-files-found: warn
+
+  media-regressions:
+    name: Linux media regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: media-regressions
+      - name: Install camera and GStreamer fixture dependencies
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev
+          gst-inspect-1.0 fakesrc
+          gst-inspect-1.0 fdsink
+      - name: Compile the physical EGL probe and reject software fallback
+        shell: bash
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror .github/regression-coverage/manual/fixtures/jetson-display/main.c -o "$RUNNER_TEMP/display-probe" -lEGL -lGLESv2
+          if timeout 20 "$RUNNER_TEMP/display-probe" > "$RUNNER_TEMP/display-probe.log" 2>&1; then
+            echo 'CPU-only runner unexpectedly passed NVIDIA EGL verification' >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/display-probe.log"
+          grep -q '^Starting display-only NVIDIA EGL probe$' "$RUNNER_TEMP/display-probe.log"
+          grep -Eq '^FAIL: (no EGL devices|no NVIDIA EGL display)' "$RUNNER_TEMP/display-probe.log"
+          if grep -q '^PASS:' "$RUNNER_TEMP/display-probe.log"; then exit 1; fi
+      # Match the WendyOS 0.15.4 ABI; Ubuntu's older package has different ioctls.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: v4l2loopback/v4l2loopback
+          ref: 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4
+          path: .ci-v4l2loopback
+          persist-credentials: false
+      - name: Build and load WendyOS loopback ABI
+        run: |
+          make -C .ci-v4l2loopback
+          sudo modprobe videodev
+          sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
+          sudo udevadm settle
+          test -c /dev/v4l2loopback
+      - name: Exercise the remove ioctl and require execution
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          trap 'sudo rmmod v4l2loopback' EXIT
+          go test -c -o "$RUNNER_TEMP/ipcam.test" ./go/internal/agent/ipcam
+          sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
+          grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
+
+      - name: Decode H264 without a producer parser and require regression controls
+        run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Require camera pairing before ONVIF and RTSP connections
+        run: bash .github/scripts/test-camera-pairing-admission.sh
+      - name: Preserve 16-bit thermal samples through the real raw tap
+        run: bash .github/scripts/test-thermal-raw-capture.sh
+      - name: Decode shared SensorLink capture and reject loopback opens
+        run: bash .github/scripts/test-sensorlink-capture.sh
+      - name: Decode shared app-owned camera capture and reject camera reopens
+        run: bash .github/scripts/test-shared-camera-capture.sh
+
+      - name: Require actual pipeline output and shutdown
+        shell: bash
+        run: |
+          go test -race ./go/internal/agent/services -run '^TestGStreamerInProcessRunner(_Cancellation)?$' -v -count=1 -timeout 90s | tee "$RUNNER_TEMP/gstreamer.log"
+          grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
+          grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
 
   windows:
     name: Windows CLI
@@ -280,13 +725,16 @@ jobs:
       - name: Build browser WASM assets
         run: npm --prefix web-client run build:wasm
 
-      # The worker and credential store as a page loads them. Lifecycle
-      # scripts are skipped: only fake-indexeddb is needed, not Electron.
+      # These suites use local protocol and process fixtures. They do not launch
+      # Electron or contact live devices, so native install scripts are unnecessary.
       - name: Run browser bridge tests
         run: |
           npm --prefix web-client ci --ignore-scripts --no-audit --no-fund
-          node web-client/tests/credential-store.test.mjs
-          node web-client/tests/wendy-web-bridge.test.mjs
+          node --test web-client/tests/*.test.mjs
+
+      - name: Build the web client with its resolved tooling
+        working-directory: web-client
+        run: npx --no-install vinext build
 
       - name: Run WASM tests in Node
         env:
@@ -296,7 +744,7 @@ jobs:
         run: go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth ./go/internal/shared/flock -count=1 -timeout 120s
 
   windows-telemetry:
-    name: Windows telemetry
+    name: Windows native regressions
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -310,6 +758,12 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Install GNU Make for the native Windows recipe
+        shell: pwsh
+        run: choco install make --yes --no-progress
+      - name: Verify native Make VERSION in the built CLI
+        run: python .github/scripts/test-native-make-version.py
+
       # Native execution covers Windows identity files and process shutdown,
       # including CLI/MCP identity sharing across WENDY_CONFIG_DIR overrides.
       # Delivery tests redirect requests to local HTTP receivers.
@@ -319,6 +773,14 @@ jobs:
       - name: Test analytics
         working-directory: go
         run: go test ./internal/cli/analytics -count=1 -timeout 120s
+
+      # Cross-compilation cannot catch shared file-offset corruption. Use the
+      # actual Windows handle writer against a temporary image, never a drive.
+      - name: Test concurrent Windows NVMe writes
+        shell: bash
+        run: |
+          go test ./go/internal/cli/commands -run '^TestHandleWriterAtConcurrentWrites$' -v -count=3 -timeout 120s | tee "$RUNNER_TEMP/disk-writes.log"
+          test "$(grep -c '^--- PASS: TestHandleWriterAtConcurrentWrites ' "$RUNNER_TEMP/disk-writes.log")" = 3
 
       - name: Test analytics preferences with shared identity
         working-directory: go
@@ -336,6 +798,31 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/cli/commands -run '^(TestEnsureQEMUOnWindows|TestSimulatorWithoutDetachedSupport|TestDiscoverKeepsScanningWhenSimulatorNeedsForegroundStart|TestDiscoverSimulatorGuidanceFitsPopulatedTerminal|TestVMStorage|TestVMImageSpace|TestVMCreate)' -v -count=1 -timeout 120s
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test pending Windows serial I/O and close races
+        shell: bash
+        run: |
+          go test ./go/internal/cli/vm -run '^TestWindowsSerial(PendingIO|CloseCancelsPendingIO)$' -v -count=3 -timeout 120s | tee "$RUNNER_TEMP/serial.log"
+          test "$(grep -c '^--- PASS: TestWindowsSerialPendingIO ' "$RUNNER_TEMP/serial.log")" = 3
+          test "$(grep -c '^--- PASS: TestWindowsSerialCloseCancelsPendingIO ' "$RUNNER_TEMP/serial.log")" = 3
+
+      - name: Test USB driver helpers and EDL framing without hardware
+        shell: bash
+        run: |
+          go test ./go/internal/cli/commands -run '^TestUSBDriver' -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/usb-helpers.log"
+          grep -q '^--- PASS: TestUSBDriverSetupPreservesTargetAndVerifiesHelperResult ' "$RUNNER_TEMP/usb-helpers.log"
+          grep -q '^--- PASS: TestUSBDriverHelperRegistration ' "$RUNNER_TEMP/usb-helpers.log"
+          go test ./go/internal/cli/tegraflash/winusb ./go/internal/cli/qdl -run '^Test(Windows|Signing|Usable|Driver|Compatible|Version|Parse|Instance)' -v -count=1 -timeout 120s
+
+      - name: Rebuild embedded skill tests from a CRLF checkout
+        shell: bash
+        run: |
+          git -c core.autocrlf=true -c core.eol=crlf checkout-index --force --all
+          python -c "from pathlib import Path; p=Path('go/internal/cli/mcp/skills_test.go'); assert b'\r\n' in p.read_bytes(), 'checkout did not exercise CRLF'"
+          go test ./go/internal/cli/mcp -run '^Test(SkillFrontmatter.*|BundledSkill.*|SkillsImportOverStdio)$' -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/skill-lines.log"
+          for test in TestSkillFrontmatterWindowsLineEndings TestSkillFrontmatterPreservesAllFields TestSkillFrontmatterLineEndingsPreserveResourceBytes TestSkillsImportOverStdio; do
+            grep -q "^--- PASS: $test " "$RUNNER_TEMP/skill-lines.log"
+          done
 
   # The agent embeds this Python worker and runs it on devices for campaign
   # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
@@ -363,11 +850,33 @@ jobs:
       - name: Run worker unit tests
         run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
 
+  simulator-python310:
+    name: ROS Humble simulator dependencies (${{ matrix.robot }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        robot: [go2, g1]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.10.9'
+      - name: Install the shipped requirements on Python 3.10
+        env:
+          ROBOT: ${{ matrix.robot }}
+        run: |
+          uv venv --managed-python --python 3.10 .venv
+          uv pip install --python .venv/bin/python -r "go/simulator/$ROBOT/requirements.txt"
+          uv pip check --python .venv/bin/python
+          .venv/bin/python .github/scripts/test-simulator-dependencies.py
+
   # Preserve the existing required "Test" check after splitting its work.
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -380,7 +889,15 @@ jobs:
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
-          DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
+          MEDIA_RESULT: ${{ needs.media-regressions.result }}
+          SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
+          NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
+          AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
+          DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
+          NETWORK_RESULT: ${{ needs.network-regressions.result }}
+          LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
+          DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
+          PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -394,7 +911,15 @@ jobs:
           test "$STARTUP_RESULT" = success
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
-          test "$DARWIN_RESULT" = success
+          test "$MEDIA_RESULT" = success
+          test "$SIMULATOR_PYTHON_RESULT" = success
+          test "$NATIVE_APP_RESULT" = success
+          test "$AUTOMATION_RESULT" = success
+          test "$DEPENDENCY_SECURITY_RESULT" = success
+          test "$NETWORK_RESULT" = success
+          test "$LINUX_INSTALL_RESULT" = success
+          test "$DARWIN_INSTALL_RESULT" = success
+          test "$PLUGIN_LAUNCHER_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
@@ -428,6 +953,9 @@ jobs:
       - name: Run go vet
         working-directory: go
         run: go vet ./...
+
+      - name: Build and execute the API detector
+        run: python3 .github/scripts/api-snapshot-smoke.py
 
   format:
     name: Format Check
@@ -474,6 +1002,8 @@ jobs:
         run: bash .github/scripts/agent-package-scripts_test.sh
       - name: integration device selection tests
         run: python3 .github/scripts/integration-discover_test.py
+      - name: gate credential refresh tests
+        run: python3 .github/scripts/refresh-gate-auth_test.py
       - name: host sensor loopback CI tests
         run: |
           sh -n .github/ci-tests/host-sensor-loopback/check.sh

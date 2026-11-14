@@ -17,6 +17,10 @@ func syncWriteFile(path string, data []byte, perm os.FileMode) error {
 	return atomicfile.Write(path, data, perm)
 }
 
+// Separate the provisioning write boundary so subprocess tests can terminate
+// before or after a real durable write without replacing the persistence code.
+var provisioningWriteFile = syncWriteFile
+
 // provisioningFileMatches avoids replacing an already correct state file on startup.
 // Lstat and opened-file identity checks prevent accepting a symlink as the
 // state file; a changed, unreadable or incorrectly permissioned path uses the
@@ -85,7 +89,7 @@ func writeProvisioningFile(configPath, name string, data []byte) error {
 	if provisioningFileMatches(path, data, 0o600) {
 		return nil
 	}
-	if err := syncWriteFile(path, data, 0o600); err != nil {
+	if err := provisioningWriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil

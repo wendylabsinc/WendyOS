@@ -302,7 +302,9 @@ func flushVolume(mountPath string) {
 	_ = exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).Run()
 }
 
-func ejectDisk(d drive) {
+// ejectDisk takes a fixed disk offline. A nil error means Windows holds no
+// volume of it any more and the drive is safe to remove.
+func ejectDisk(d drive) error {
 	// Skip the offline call for removable targets — Windows rejects
 	// Set-Disk -IsOffline $true on USB / SD / MMC and on the PCIE card
 	// readers that report as SCSI but are flagged removable by
@@ -315,12 +317,11 @@ func ejectDisk(d drive) {
 	// writeConfigPartition's deferred cleanup already removed the drive
 	// letters, and the user pulls the media to "eject" it physically.
 	if d.IsRemovable {
-		return
+		return nil
 	}
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot eject %s: %v\n", d.DevicePath, err)
-		return
+		return fmt.Errorf("cannot eject %s: %w", d.DevicePath, err)
 	}
 	// Idempotent: writeConfigPartition's deferred cleanup already took the
 	// disk offline. This catches the path where the user invoked something
@@ -344,6 +345,7 @@ func ejectDisk(d drive) {
 	)
 	out, err := exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to take disk %d offline (it may still be online with assigned drive letters): %v: %s\n", diskNum, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("failed to take disk %d offline (it may still be online with assigned drive letters): %s: %w", diskNum, strings.TrimSpace(string(out)), err)
 	}
+	return nil
 }

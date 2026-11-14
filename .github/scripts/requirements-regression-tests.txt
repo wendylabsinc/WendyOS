@@ -1,0 +1,3 @@
+# Match the SDK exercised by the review workflows, including request-schema tests.
+anthropic==0.97.0
+PyYAML==6.0.3

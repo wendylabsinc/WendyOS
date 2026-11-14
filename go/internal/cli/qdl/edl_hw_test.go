@@ -1,8 +1,12 @@
 package qdl
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,18 +31,16 @@ func TestHardwareEDLHandshake(t *testing.T) {
 		t.Fatalf("expected exactly one EDL device, found %d; disconnect other EDL devices", len(devices))
 	}
 
-	// A connection of its own, unlike the install: that reads the id on the
-	// connection it flashes with, where SWITCH_MODE hands the live session to
-	// the image transfer. Re-opening here does not exercise that handover.
-	id, err := ReadChipIDFor(devices[0])
-	if err != nil {
-		t.Fatalf("ReadChipIDFor: %v", err)
+	if expected := os.Getenv("WENDY_HW_EDL_INSTANCE"); expected != "" && !strings.EqualFold(devices[0].Instance, expected) {
+		t.Fatalf("selected device %q differs from authorized instance %q", devices[0].Instance, expected)
 	}
-	t.Logf("chip id: msm_id %#x", id.MsmID)
 
 	prog, err := os.ReadFile(filepath.Join(bundle, "prog_firehose_ddr.elf"))
 	if err != nil {
 		t.Fatalf("reading programmer: %v", err)
+	}
+	if expected := os.Getenv("WENDY_HW_EDL_PROGRAMMER_SHA256"); expected != "" && fmt.Sprintf("%x", sha256.Sum256(prog)) != expected {
+		t.Fatal("programmer bytes differ from the authorized checksum")
 	}
 
 	conn, err := Open(devices[0])
@@ -47,6 +49,19 @@ func TestHardwareEDLHandshake(t *testing.T) {
 	}
 	defer conn.Close() //nolint:errcheck
 	t.Logf("claimed %s", conn.Info())
+	// Use the install's actual sequence on one connection. SWITCH_MODE must
+	// leave the live Sahara session ready for the programmer image transfer.
+	id, err := ReadChipID(conn)
+	if err != nil {
+		t.Fatalf("ReadChipID: %v", err)
+	}
+	t.Logf("chip id: msm_id %#x", id.MsmID)
+	if expected := os.Getenv("WENDY_HW_EDL_EXPECT_MSM"); expected != "" {
+		want, err := strconv.ParseUint(expected, 0, 32)
+		if err != nil || id.MsmID != uint32(want) {
+			t.Fatalf("chip ID %#x differs from expected %s: %v", id.MsmID, expected, err)
+		}
+	}
 
 	start := time.Now()
 	err = UploadProgrammer(conn, "prog_firehose_ddr.elf", prog, func(sent, total int64) {

@@ -122,6 +122,13 @@ type ServerVerifyOpts struct {
 	// A certificate without a matching identity is rejected. Older org/asset
 	// identities remain supported; omission is never a compatibility mode.
 	ExpectedIdentity *WendyIdentity
+	// FirstContact accepts a nil ExpectedIdentity for a device the caller has
+	// no saved binding for. Everything else still runs: the chain to ChainPEM,
+	// the server-auth usage, a Wendy device (asset) identity on the leaf, the
+	// legacy org check and the PinStore. Only the comparison against a saved
+	// identity is skipped, because there is none. The device still decides
+	// whether it accepts the caller's certificate.
+	FirstContact bool
 	// OnServerIdentity, when non-nil, is called with the server leaf's Wendy
 	// identity BEFORE chain verification and the org-mismatch check — so the
 	// observed org is captured on every outcome (success, chain-verify failure,
@@ -263,22 +270,24 @@ var ErrExpectedDeviceIdentity = errors.New("expected device identity required; o
 // actual verification. Go's built-in verifier cannot parse ML-DSA chain certs
 // and there is no TLS hostname over L2CAP or passthrough gRPC targets.
 func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionState) error, error) {
-	if opts.ExpectedIdentity == nil {
+	if opts.ExpectedIdentity == nil && !opts.FirstContact {
 		return nil, ErrExpectedDeviceIdentity
 	}
-	// Retain a value snapshot so changing caller-owned options cannot change
-	// the identity accepted by an established transport or a resumed session.
-	expected := *opts.ExpectedIdentity
-	if expected.EntityType != EntityAsset || expected.EntityID == "" || !expected.Scope().Known() {
-		return nil, ErrExpectedDeviceIdentity
-	}
-	if expected.Principal != "" {
-		parsed, err := ParsePrincipal(expected.Principal)
-		if err != nil || parsed.EntityType != EntityAsset || parsed.TenantUUID != expected.TenantUUID || parsed.EntityID != expected.EntityID {
+	if opts.ExpectedIdentity != nil {
+		// Retain a value snapshot so changing caller-owned options cannot change
+		// the identity accepted by an established transport or a resumed session.
+		expected := *opts.ExpectedIdentity
+		if expected.EntityType != EntityAsset || expected.EntityID == "" || !expected.Scope().Known() {
 			return nil, ErrExpectedDeviceIdentity
 		}
+		if expected.Principal != "" {
+			parsed, err := ParsePrincipal(expected.Principal)
+			if err != nil || parsed.EntityType != EntityAsset || parsed.TenantUUID != expected.TenantUUID || parsed.EntityID != expected.EntityID {
+				return nil, ErrExpectedDeviceIdentity
+			}
+		}
+		opts.ExpectedIdentity = &expected
 	}
-	opts.ExpectedIdentity = &expected
 	if opts.ChainPEM == "" {
 		return nil, fmt.Errorf("chain PEM is required to verify device server certificate")
 	}
@@ -350,7 +359,13 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		// Step 2b: exact device identity check. Deliberately after the org check
 		// so a cross-org impostor still reports OrgMismatchError, whose remedy
 		// (fetch that org's cert) differs from this one's (wrong device).
-		if !hasIdentity || identity.EntityType != EntityAsset {
+		if opts.ExpectedIdentity == nil {
+			// First contact: nothing saved to compare against, but the leaf
+			// must still name a Wendy device.
+			if !hasIdentity || identity.EntityType != EntityAsset {
+				return fmt.Errorf("device certificate names no Wendy device identity")
+			}
+		} else if !hasIdentity || identity.EntityType != EntityAsset {
 			return &IdentityMismatchError{
 				WantOrg:       opts.ExpectedIdentity.OrgID,
 				WantAsset:     opts.ExpectedIdentity.EntityID,
@@ -363,7 +378,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		// back to the legacy scope+id triple otherwise, so a pin recorded
 		// before the SPIFFE cutover and one recorded after each compare in
 		// their own terms rather than across them.
-		if !identity.SameEntity(*opts.ExpectedIdentity) {
+		if opts.ExpectedIdentity != nil && !identity.SameEntity(*opts.ExpectedIdentity) {
 			return &IdentityMismatchError{
 				WantOrg:       opts.ExpectedIdentity.OrgID,
 				WantAsset:     opts.ExpectedIdentity.EntityID,

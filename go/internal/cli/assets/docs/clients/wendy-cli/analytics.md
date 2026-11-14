@@ -65,7 +65,7 @@ Every event is an anonymous JSON object. The fields sent are:
 | `command_name` | string | Canonical command path, e.g. `"wendy device wifi connect"` |
 | `command_root` | string | Top-level command token |
 | `duration_ms` | integer | Command duration in milliseconds |
-| `success` | boolean | Whether the command completed without error |
+| `success` | boolean | `false` for failures; completed work, lifecycle progress, and explicit cancellation use `true`. Use the event and `properties.outcome` to distinguish completion from progress or cancellation |
 | `error_class` | string | Bounded enum describing the error category (never free-form error text) |
 | `cli_version` | string | CLI version string |
 | `os` | string | Operating system (`GOOS`) |
@@ -82,6 +82,10 @@ The installer emits `install_started`, `install_progress`, and `install_finished
 Runs emit `run_started`, `run_progress`, and `run_finished`. `app_started` is emitted immediately when the agent acknowledges container start, before attached logs end. `app_ready` is emitted only after the attached run's configured readiness check succeeds. A failed check emits `app_readiness_failed` with a canned diagnostic even when the attached command continues streaming logs. Detached runs do not claim readiness. Multi-service, Compose, fleet and provider paths do not yet all report these application milestones; command success must not substitute for a missing acknowledgement.
 
 Lifecycle properties include the current `stage` and `step`, `outcome`, `entrypoint` (`cli`, `mcp`, or `tour`), interactive-terminal status, duration and a subprocess exit code when available. Run diagnostics retain `unknown` for checks not actually observed, including authentication and build prerequisites. Recognized project and selected/reachable target checks become true only after their corresponding operations succeed. Tour events may include the selected route (`physical`, `simulator`, or `existing_device`). Failures include a stable `error_code` and an `error_detail` selected from fixed remediation sentences. Unknown failures use `step_failed` and a diagnostic-report instruction; they do not assert a root cause. No arbitrary error text is sent.
+
+Start/progress events and explicit cancellations are not errors. They carry `success=true` with `outcome=started` or `outcome=cancelled`. Cancelled CLI commands, MCP calls, and deployments retain their bounded cancellation class and add `outcome=cancelled`; this does not change command exit codes or award completion milestones. Deadlines, panics, usage errors, and unclassified failures still carry `success=false`. An unknown outcome is not promoted to success.
+
+Older releases recorded progress and cancellation as `success=false`. For historical command-error reports, filter to `event='command_executed'` and `success=false`, excluding the `context_canceled`, `user_cancelled`, and `cancelled` classes. Do not sum command failures with lifecycle failures from the same operation. Completion reports must use the terminal event and outcome, rather than `success=true` alone.
 
 MCP tools use an attempt ID per call. The run subprocess inherits that ID. Durable installation jobs preserve their attempt ID across worker processes and first-boot verification. IDs do not identify people or join browser sessions to CLI installations. Installation method is currently `unknown`; acquisition source and OS version are unavailable and are not inferred from shell environment variables.
 

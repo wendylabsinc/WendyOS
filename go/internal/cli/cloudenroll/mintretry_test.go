@@ -199,6 +199,9 @@ func TestMintEABDoesNotRegenerateOnOtherRefusals(t *testing.T) {
 			if errors.Is(err, ErrDeviceUUIDTaken) {
 				t.Fatal("name refusal mistyped as a UUID collision")
 			}
+			if !errors.Is(err, ErrDeviceNameTaken) {
+				t.Fatalf("an AlreadyExists without a UUID trailer is the name: %v", err)
+			}
 			if status.Code(err) != codes.AlreadyExists {
 				t.Fatalf("refusal was not surfaced: %v", err)
 			}
@@ -206,6 +209,17 @@ func TestMintEABDoesNotRegenerateOnOtherRefusals(t *testing.T) {
 				t.Fatalf("Cloud saw %d enrollments, want 1", len(fake.seen))
 			}
 		})
+	}
+}
+
+// A taken device UUID is never reported as a taken name.
+func TestMintEABTakenUUIDIsNotATakenName(t *testing.T) {
+	auth := testAuth(t)
+	cfg := testEnrollmentConfig(t, auth, uuid.NewString())
+	fake := &fakeEnrollment{collide: func(string) string { return "device_id" }}
+	_, _, err := MintEAB(context.Background(), dialFake(t, fake), auth, cfg, "edge-one", nil)
+	if !errors.Is(err, ErrDeviceUUIDTaken) || errors.Is(err, ErrDeviceNameTaken) {
+		t.Fatalf("taken UUID: %v", err)
 	}
 }
 

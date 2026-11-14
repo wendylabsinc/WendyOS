@@ -52,13 +52,19 @@ attachments changed. `--force` skips prompts, not target selection, privileges o
 the separate internal-drive protection. Never add `--yes-overwrite-internal` to
 work around an unexplained refusal.
 
-Through MCP, supported image installs run as a saved job. `os_install_start`
-returns a `job_id` and physical instructions without erasing anything. After the
-user completes them, `os_install_resume(job_id=...)` probes the hardware and
-returns a target fingerprint. Resume with that exact `target_id` and
-`confirm_erase=true` only once the user authorizes that target. Poll
-`os_install_status`; jobs survive MCP restarts. If it returns a terminal command
-for elevation, give it to the user rather than collecting a password.
+Through MCP, supported image installs run as a saved job. Ask for the device
+name and Wi-Fi first: `os_install_start` takes `device_name` and
+`wifi=[{ssid, password}]`, or `no_wifi=true`; omitting both means an
+auto-generated name and no Wi-Fi. It returns a `job_id`, the choice under
+`provisioning` (never passwords) and physical instructions without erasing
+anything. Hosted chats refuse Wi-Fi passwords: the user can run
+`wendy install jobs start ... --wifi ssid=<name>,password=<pw>` in a terminal
+and share the `job_id`. After the user completes the instructions,
+`os_install_resume(job_id=...)` probes the hardware and returns a target
+fingerprint. Resume with that exact `target_id` and `confirm_erase=true` only
+once the user authorizes that target. Poll `os_install_status`; jobs survive MCP
+restarts. If it returns a terminal command for elevation, give it to the user
+rather than collecting a password.
 
 Otherwise, execute the returned argument array through the host terminal using `wendy install`.
 Keep its output visible for flash stages and errors. Elevation, recovery buttons,
@@ -66,8 +72,9 @@ power cycling and cable changes may need the user. Do not run the interactive
 `wendy tour` in an agent pipe, or apply a short tool timeout to an ongoing flash.
 If a flash is interrupted, inspect its phase before retrying.
 
-Choose a device name and networking before executing: `--device-name`, WiFi
-preseed options, or `--no-wifi` for Ethernet. Use the user's existing credential
+Choose a device name and networking before executing: `--device-name`,
+`--wifi ssid=<name>,password=<pw>`, or `--no-wifi` for Ethernet; without a
+terminal one Wi-Fi choice is required. Use the user's existing credential
 input mechanism; keep passwords and enrollment tokens out of reusable commands,
 PRs and logs. Cloud pre-enrollment is optional. `provisioning_start` enrolls an
 already running agent; it cannot install an OS on a blank board.

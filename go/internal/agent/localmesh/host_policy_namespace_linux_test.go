@@ -20,11 +20,12 @@ func TestHostDNSPolicyCleanupAcrossMountNamespace(t *testing.T) {
 	}
 	cmd := exec.Command("unshare", "--mount", "--propagation", "private", os.Args[0], "-test.run=^TestHostDNSPolicyCleanupProcess$", "-test.v")
 	cmd.Env = append(os.Environ(), "WENDY_DNS_POLICY_PROCESS=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	// A pattern that matches no test also exits 0: require the child's own pass.
+	if err != nil || !strings.Contains(string(out), "\n--- PASS: TestHostDNSPolicyCleanupProcess (") {
 		t.Fatalf("DNS cleanup: %v\n%s", err, out)
-	} else {
-		t.Log(string(out))
 	}
+	t.Log(string(out))
 }
 
 // Only this subprocess sees the temporary /etc and /run. Exercise the real

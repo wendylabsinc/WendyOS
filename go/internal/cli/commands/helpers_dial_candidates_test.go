@@ -163,10 +163,9 @@ func TestPinnedUnprovisionedDeviceIsToldHowToUnpin(t *testing.T) {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		"answers unprovisioned",
-		"wendy device unpin orin",
-		"If you intentionally unenrolled, reset, reflashed",
-		"keep the pin and verify the device first",
+		"now answers as a device that is not enrolled",
+		"reinstalled or reset",
+		changedIdentityStep,
 		addr + " answered without TLS",
 		fmt.Sprintf("%s (port %d: answered without TLS; port %d: connection refused)", host, port, port+1),
 	} {
@@ -184,7 +183,7 @@ func TestPinnedUnprovisionedDeviceIsToldHowToUnpin(t *testing.T) {
 		error
 		CLIMessage() string
 	}
-	if !errors.As(err, &styled) || !strings.Contains(styled.CLIMessage(), "wendy device unpin orin") {
+	if !errors.As(err, &styled) || !strings.Contains(styled.CLIMessage(), changedIdentityStep) {
 		t.Errorf("styled rendering lost the recovery command:\n%v", err)
 	}
 	// Still the same refusal to every caller that branches on it: enrollment's
@@ -256,8 +255,8 @@ func TestPinnedRefusalOffersUnpinOnlyWhenTheDeviceAnsweredWithoutTLS(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			failure := pinnedHostNoAuthenticatedEndpointError("wendyos-hack-device-7.local", candidates, tc.attempts, tc.certSeen)
 			msg := failure.Error()
-			if got := strings.Contains(msg, "wendy device unpin wendyos-hack-device-7.local"); got != tc.wantUnpin {
-				t.Errorf("offers unpin = %v, want %v:\n%s", got, tc.wantUnpin, msg)
+			if got := strings.Contains(msg, changedIdentityStep) && failure.accept != nil; got != tc.wantUnpin {
+				t.Errorf("offers confirmation = %v, want %v:\n%s", got, tc.wantUnpin, msg)
 			}
 			// Only the unprovisioned refusal carries a styled rendering: the CLI
 			// entry point restyles anything in the chain that has one, and a
@@ -402,10 +401,10 @@ func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
 			t.Errorf("the walk continued to %s after a wrong-device abort:\n  %s", cand, err.Error())
 		}
 	}
-	// A genuine mismatch keeps the unpin escape hatch — here the identity really
-	// was compared and really did not match.
-	if !strings.Contains(err.Error(), "device unpin") {
-		t.Errorf("a real mismatch must still name the unpin escape hatch:\n  %s", err.Error())
+	// A genuine mismatch can be confirmed interactively — here the identity
+	// really was compared and really did not match.
+	if !strings.Contains(err.Error(), changedIdentityStep) {
+		t.Errorf("a real mismatch must say how to accept the new identity:\n  %s", err.Error())
 	}
 }
 
@@ -715,8 +714,9 @@ func TestDialAddrScopesBucketsToThePrimary(t *testing.T) {
 }
 
 // A reachable plaintext agent and an extra dead candidate cannot authorize a
-// downgrade: missing identity fails before TLS, and an expected identity still
-// forbids plaintext when no candidate authenticates it.
+// downgrade: with no saved identity the plaintext answer must prove it is an
+// unenrolled device, and an expected identity still forbids plaintext when no
+// candidate authenticates it.
 func TestExtraDeadCandidateDoesNotEnablePlaintextFallback(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	setPinCache(t)
@@ -738,10 +738,11 @@ func TestExtraDeadCandidateDoesNotEnablePlaintextFallback(t *testing.T) {
 		expected *certs.WendyIdentity
 		wantErr  error
 	}{
-		{"missing identity", nil, certs.ErrExpectedDeviceIdentity},
+		{"missing identity", nil, nil},
 		{"expected identity", &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, errNoAuthenticatedEndpoint},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			plaintextAddrs = nil
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			target := newDialTargetCandidates("orin.local", candidates)
@@ -750,6 +751,13 @@ func TestExtraDeadCandidateDoesNotEnablePlaintextFallback(t *testing.T) {
 			if conn != nil {
 				conn.Close()
 				t.Fatal("connected without an authenticated device identity")
+			}
+			if tc.wantErr == nil {
+				// The fake plaintext connection cannot report NotProvisioned.
+				if err == nil {
+					t.Fatal("unproven plaintext answer was accepted")
+				}
+				return
 			}
 			if !errors.Is(err, tc.wantErr) || !blocksUnauthenticatedFallback(err) {
 				t.Fatalf("err = %v, want %v blocking unauthenticated fallback", err, tc.wantErr)

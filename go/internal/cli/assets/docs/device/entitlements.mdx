@@ -304,6 +304,19 @@ replugging a device; a running task is not remounted in place.
   intended device connected if physical-device identity matters.
 </Callout>
 
+### Arduino UNO Q microcontroller (`arduino-bridge`) Entitlement
+
+The UNO Q's STM32 runs an Arduino sketch next to WendyOS. Name the sketch folder with [`mcu`](/docs/apps/wendy.json#mcu), and `wendy run` compiles it and flashes it before the container deploy. `arduino-bridge` lets the app talk to the sketch through Arduino's router, the same Bridge that Arduino App Lab uses. Modulino modules sit on the microcontroller's Qwiic bus, so Linux reaches them only this way.
+
+```json
+{
+    "mcu": { "sketch": "sketch" },
+    "entitlements": [{ "type": "arduino-bridge" }]
+}
+```
+
+The container gets the host directory `/run/arduino-router`, the `arduino-router` group, and `APP_SOCKET=unix:///run/arduino-router/router.sock` (unless the app's `env` sets it). Arduino's Python package `arduino-router-bridge` reads `APP_SOCKET`.
+
 ### Persist Entitlement
 
 The persist entitlement creates a persistent storage volume that survives container restarts. Data written to the mounted path is stored on the host device and persists across application updates and reboots.

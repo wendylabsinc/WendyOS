@@ -24,9 +24,31 @@ var ErrDevicesUnresolved = errors.New("CDI device nodes could not be resolved on
 var ErrDeviceNotFound = errors.New("device not found in CDI spec")
 
 // ApplyCDIDevice applies a named CDI device from a CDI specification to an OCI spec.
-// It adds device nodes, mounts, environment variables, and hooks.
+// It adds device nodes, mounts, environment variables, and hooks, and records
+// what it added so RefreshAppliedEdits can replace it when the host's list changes.
 func ApplyCDIDevice(spec *oci.Spec, cdiSpec *CDISpecification, deviceName string) error {
-	// Find the device in the CDI spec.
+	edits, err := editsFor(cdiSpec, deviceName)
+	if err != nil {
+		return err
+	}
+
+	// Edits are applied even when some nodes fail to resolve, so a caller that
+	// treats device provisioning as best-effort (a display-only app) still gets
+	// the library mounts and env. A caller that cannot function without the
+	// device (a gpu entitlement) must fail on this error rather than start a
+	// container that is missing the hardware it asked for.
+	envStart := 0
+	if spec.Process != nil {
+		envStart = len(spec.Process.Env)
+	}
+	applyErr := applyContainerEdits(spec, edits)
+	recordAppliedEdits(spec, edits, envStart)
+	return applyErr
+}
+
+// editsFor returns everything a named device contributes to a container: the
+// spec's global edits followed by the device's own.
+func editsFor(cdiSpec *CDISpecification, deviceName string) (*CDIContainerEdits, error) {
 	var device *CDIDevice
 	for i := range cdiSpec.Devices {
 		if cdiSpec.Devices[i].Name == deviceName {
@@ -35,32 +57,46 @@ func ApplyCDIDevice(spec *oci.Spec, cdiSpec *CDISpecification, deviceName string
 		}
 	}
 	if device == nil {
-		return fmt.Errorf("device %q: %w", deviceName, ErrDeviceNotFound)
+		return nil, fmt.Errorf("device %q: %w", deviceName, ErrDeviceNotFound)
 	}
 
-	// Apply global container edits if present.
-	var errs []error
-	if cdiSpec.ContainerEdits != nil {
-		errs = append(errs, applyContainerEdits(spec, cdiSpec.ContainerEdits))
+	var edits CDIContainerEdits
+	for _, part := range []*CDIContainerEdits{cdiSpec.ContainerEdits, &device.ContainerEdits} {
+		if part == nil {
+			continue
+		}
+		edits.DeviceNodes = append(edits.DeviceNodes, part.DeviceNodes...)
+		edits.Mounts = append(edits.Mounts, part.Mounts...)
+		edits.Env = append(edits.Env, part.Env...)
+		edits.Hooks = append(edits.Hooks, part.Hooks...)
 	}
-
-	// Apply device-specific container edits.
-	edits := &device.ContainerEdits
-	errs = append(errs, applyContainerEdits(spec, edits))
-
-	// Edits are applied even when some nodes fail to resolve, so a caller that
-	// treats device provisioning as best-effort (a display-only app) still gets
-	// the library mounts and env. A caller that cannot function without the
-	// device (a gpu entitlement) must fail on this error rather than start a
-	// container that is missing the hardware it asked for.
-	return errors.Join(errs...)
+	return &edits, nil
 }
 
 func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) error {
+	// 1. Add device nodes.
+	err := applyDeviceNodes(spec, edits.DeviceNodes)
+
+	// 2. Add mounts.
+	spec.Mounts = append(spec.Mounts, ociMounts(edits.Mounts)...)
+
+	// 3. Add environment variables.
+	if len(edits.Env) > 0 {
+		spec.Process.Env = append(spec.Process.Env, edits.Env...)
+	}
+
+	// 4. Add hooks.
+	applyHooks(spec, edits.Hooks)
+
+	return err
+}
+
+// applyDeviceNodes adds CDI device nodes to spec, each with the cgroup rule
+// that allows it. A node the host cannot resolve is skipped and reported.
+func applyDeviceNodes(spec *oci.Spec, nodes []CDIDeviceNode) error {
 	var errs []error
 
-	// 1. Add device nodes.
-	for _, node := range edits.DeviceNodes {
+	for _, node := range nodes {
 		major, minor, err := resolveDeviceNumbers(&node)
 		if err != nil {
 			// Never substitute a placeholder pair for a node we could not
@@ -112,31 +148,12 @@ func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) error {
 		})
 	}
 
-	// 2. Add mounts.
-	for _, mount := range edits.Mounts {
-		mountType := mount.Type
-		if mountType == "" {
-			mountType = "bind"
-		}
-		options := mount.Options
-		if options == nil {
-			options = []string{"rbind", "nosuid", "nodev", "ro"}
-		}
-		spec.Mounts = append(spec.Mounts, oci.Mount{
-			Destination: mount.ContainerPath,
-			Type:        mountType,
-			Source:      mount.HostPath,
-			Options:     options,
-		})
-	}
+	return errors.Join(errs...)
+}
 
-	// 3. Add environment variables.
-	if len(edits.Env) > 0 {
-		spec.Process.Env = append(spec.Process.Env, edits.Env...)
-	}
-
-	// 4. Add hooks.
-	for _, cdiHook := range edits.Hooks {
+// applyHooks adds CDI hooks to the lifecycle stages they name.
+func applyHooks(spec *oci.Spec, hooks []CDIHook) {
+	for _, cdiHook := range hooks {
 		ociHook := oci.Hook{
 			Path: cdiHook.Path,
 			Args: cdiHook.Args,
@@ -165,8 +182,28 @@ func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) error {
 			spec.Hooks.Poststop = append(spec.Hooks.Poststop, ociHook)
 		}
 	}
+}
 
-	return errors.Join(errs...)
+// ociMounts converts CDI mounts to the OCI mounts a container receives.
+func ociMounts(mounts []CDIMount) []oci.Mount {
+	out := make([]oci.Mount, 0, len(mounts))
+	for _, mount := range mounts {
+		mountType := mount.Type
+		if mountType == "" {
+			mountType = "bind"
+		}
+		options := mount.Options
+		if options == nil {
+			options = []string{"rbind", "nosuid", "nodev", "ro"}
+		}
+		out = append(out, oci.Mount{
+			Destination: mount.ContainerPath,
+			Type:        mountType,
+			Source:      mount.HostPath,
+			Options:     options,
+		})
+	}
+	return out
 }
 
 // resolveDeviceNumbers returns major/minor numbers for a CDI device node.

@@ -670,6 +670,8 @@ class Accelerator(accelerator.Accelerator):
         return None
 
     def run_builder(self, job, timeout):
+        if len(sys.argv) > 4 and sys.argv[4] == "cache-only":
+            raise AssertionError("cached restart unexpectedly launched a builder")
         accelerator.EngineCache(job["engine_dir"]).store(job["key"], job["fields"], b"plan", 1)
         return "done", ""
 
@@ -737,6 +739,57 @@ print("python print while importing")
         self.assertIn("[TRT] [W] write(2) to fd 1 while importing", stderr)
         self.assertIn("[TRT] [W] C stdio to stdout while importing", stderr)
         self.assertIn("python print while importing", stderr)
+
+    def test_fresh_workers_reuse_persisted_engine_without_corrupting_protocol(self):
+        """Exercise disk cache and fd ownership across real process boundaries.
+
+        GPU calls remain scripted here. The physical rehearsal verifies the
+        installed TensorRT/CUDA stack after Agent and board restart.
+        """
+        import hashlib
+        import json
+        import pathlib
+        import subprocess
+        import sys
+        import tempfile
+        here = str(pathlib.Path(__file__).resolve().parent)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            package = root / "bindings" / "tensorrt"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(self.NOISY_TENSORRT)
+            engines = root / "engines"
+            original = None
+            for attempt, mode in enumerate(("build", "cache-only", "cache-only")):
+                with self.subTest(attempt=attempt):
+                    process = subprocess.run(
+                        [sys.executable, "-u", "-c", self.LAZY_SCRIPT, here,
+                         str(package.parent), str(engines), mode],
+                        input=json.dumps({"backend": "yolo_onnx", "rate": 2}).encode() + b"\n",
+                        capture_output=True, timeout=60)
+                    self.assertEqual(process.returncode, 0, process.stderr.decode(errors="replace"))
+                    messages = [json.loads(line) for line in process.stdout.decode().splitlines()]
+                    self.assertEqual(messages[0]["type"], "ready")
+                    self.assertEqual({m["type"] for m in messages[1:]}, {"accelerator"})
+                    status = messages[-1]["accelerator"]
+                    self.assertEqual(status["active"], "tensorrt")
+                    self.assertEqual(status["engine"]["state"], "ready")
+                    self.assertEqual(status["engine"]["cached"], attempt > 0)
+                    self.assertTrue(status["parity"]["passed"])
+                    self.assertGreater(status["parity"]["frames"], 0)
+                    if attempt:
+                        self.assertFalse(any(m.get("accelerator", {}).get("engine", {}).get("state")
+                                             in ("scheduled", "queued", "building") for m in messages))
+                    for noise in ("write(2) to fd 1", "C stdio to stdout", "python print"):
+                        self.assertIn(noise, process.stderr.decode())
+                    files = sorted(engines.glob("*/engine.*"))
+                    self.assertEqual({p.name for p in files}, {"engine.json", "engine.plan"})
+                    snapshot = {str(p.relative_to(engines)): (hashlib.sha256(p.read_bytes()).hexdigest(),
+                                                           p.stat().st_mtime_ns) for p in files}
+                    if original is None:
+                        original = snapshot
+                    else:
+                        self.assertEqual(snapshot, original, "restart rewrote the persisted engine")
 
 
 if __name__ == "__main__":
