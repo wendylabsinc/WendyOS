@@ -47,6 +47,15 @@ Renaming it does not change that identity.
   to trust its setup connection again. Accept only after confirming that it is
   the device you reset. A failed enrollment preserves the previous saved identity.
 - If it is already enrolled, [remove the old enrollment](./unenroll.md) first.
+- If enrollment stops with `reset resource cleanup must finish before enrollment`
+  or `reset resource cleanup incomplete`, the device was reset but its agent
+  cannot finish removing the network setup of the previous enrollment. The
+  message ends with what is failing, for example a network rule or interface
+  the agent does not own. The agent retries every few seconds, and enrollment
+  stays closed until it succeeds. If it does not clear within a minute, restart
+  the device: rules and routes left over from before the reset are gone after
+  a reboot. The device stays reachable meanwhile, so `wendy device info`,
+  `wendy device logs` and `wendy device update` still work.
 
 ## Flags
 

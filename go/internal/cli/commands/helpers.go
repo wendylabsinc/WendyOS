@@ -36,6 +36,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -3024,6 +3025,16 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
 	state, err := deviceProvisioning(probeCtx, conn)
 	cancel()
+	if _, cleaningUp := resetcleanup.Cause(err); cleaningUp {
+		// The device was reset and cannot finish removing what its previous
+		// enrollment left on the host. It is unenrolled, so the setup port is
+		// all it serves, and it withholds its enrollment state until the
+		// cleanup succeeds. Refusing it here would leave no way to read its
+		// logs, update its agent or reboot it, which is how it recovers. The
+		// trust is the same as for NotProvisioned: the device's own word.
+		conn.NoSavedIdentity = true
+		return conn, walk.lastMTLSErr, nil
+	}
 	if err != nil {
 		conn.Close()
 		return nil, walk.lastMTLSErr, err
