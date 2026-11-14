@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -31,38 +32,28 @@ import (
 // Every accepted connection is counted, including a liveness dial that sends
 // no request. Its pixels are generated in memory; there are no image assets.
 type cameraAdmissionServer struct {
-	http          *httptest.Server
-	rtsp          net.Listener
-	httpConns     atomic.Int32
-	httpRequests  atomic.Int32
-	rtspConns     atomic.Int32
-	rtspPlays     atomic.Int32
-	authenticated atomic.Int32
-	mu            sync.Mutex
-	connections   []net.Conn
-	wg            sync.WaitGroup
-	closing       bool
-	accessUnit    []byte
-	sps, pps      []byte
+	http                *httptest.Server
+	rtsp                net.Listener
+	httpConns           atomic.Int32
+	httpRequests        atomic.Int32
+	rtspConns           atomic.Int32
+	rtspPlays           atomic.Int32
+	rtpAccessUnits      atomic.Int64
+	authenticated       atomic.Int32
+	mu                  sync.Mutex
+	connections         []net.Conn
+	wg                  sync.WaitGroup
+	closing             bool
+	accessUnit          []byte
+	alternateAccessUnit atomic.Pointer[[]byte] // set before starting a client; synthetic freshness fixture
+	phase               atomic.Int32
+	sps, pps            []byte
 }
 
 func newCameraAdmissionServer(t *testing.T, ctx context.Context, launch string) *cameraAdmissionServer {
 	t.Helper()
 	f := &cameraAdmissionServer{}
-	jpegFrame := sensorLinkColorFrame(t, color.RGBA{R: 240, A: 255}).Data
-	encoder := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "jpegparse", "!", "jpegdec", "!", "videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "tune=zerolatency", "key-int-max=1", "byte-stream=true", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1")
-	encoder.Stdin = bytes.NewReader(bytes.Repeat(jpegFrame, 3))
-	var diagnostics bytes.Buffer
-	encoder.Stderr = &diagnostics
-	encoded, err := encoder.Output()
-	if err != nil {
-		t.Fatalf("RTSP fixture encode: %v: %s", err, diagnostics.String())
-	}
-	starts := annexBKeyframeStarts(encoded)
-	if len(starts) < 2 {
-		t.Fatal("RTSP fixture did not encode complete H.264 keyframes")
-	}
-	f.accessUnit = encoded[starts[0]:starts[1]]
+	f.accessUnit = encodeAdmissionAccessUnit(t, ctx, launch, color.RGBA{R: 240, A: 255})
 	// Read SPS/PPS from the real encoder for the RTSP session description.
 	for _, nal := range bytes.Split(f.accessUnit, []byte{0, 0, 1})[1:] {
 		nal = bytes.TrimRight(nal, "\x00")
@@ -86,6 +77,7 @@ func newCameraAdmissionServer(t *testing.T, ctx context.Context, launch string) 
 		}
 	}
 	f.http.Start()
+	var err error
 	f.rtsp, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		f.http.Close()
@@ -124,6 +116,34 @@ func newCameraAdmissionServer(t *testing.T, ctx context.Context, launch string) 
 		f.http.Close()
 	})
 	return f
+}
+
+func encodeAdmissionAccessUnit(t *testing.T, ctx context.Context, launch string, left color.RGBA) []byte {
+	t.Helper()
+	// JPEG bytes carry no cadence. Declare the same 25fps used by RTP below,
+	// so decoded caps and the kernel loopback time-per-frame are finite.
+	jpegFrame := sensorLinkColorFrame(t, left).Data
+	encoder := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "image/jpeg,framerate=25/1", "!", "jpegparse", "!", "jpegdec", "!", "videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "tune=zerolatency", "key-int-max=1", "byte-stream=true", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1")
+	// Synthetic frame generation must not truncate the live producer's debug
+	// file when another test reuses the already initialized in-process library.
+	for _, variable := range os.Environ() {
+		if !strings.HasPrefix(variable, "GST_DEBUG_FILE=") && !strings.HasPrefix(variable, "GST_DEBUG=") {
+			encoder.Env = append(encoder.Env, variable)
+		}
+	}
+	encoder.Env = append(encoder.Env, "GST_DEBUG=0")
+	encoder.Stdin = bytes.NewReader(bytes.Repeat(jpegFrame, 3))
+	var diagnostics bytes.Buffer
+	encoder.Stderr = &diagnostics
+	encoded, err := encoder.Output()
+	if err != nil {
+		t.Fatalf("RTSP fixture encode: %v: %s", err, diagnostics.String())
+	}
+	starts := annexBKeyframeStarts(encoded)
+	if len(starts) < 2 {
+		t.Fatal("RTSP fixture did not encode complete H.264 keyframes")
+	}
+	return encoded[starts[0]:starts[1]]
 }
 
 func (f *cameraAdmissionServer) serveONVIF(w http.ResponseWriter, req *http.Request) {
@@ -204,6 +224,11 @@ func (f *cameraAdmissionServer) serveRTSP(conn net.Conn) {
 			if !respond("200 OK", "Session: fixture\r\nRange: npt=0.000-\r\n", "") {
 				return
 			}
+			// The 20-second deadline bounds only the RTSP handshake. PLAY must
+			// remain alive across the kernel test's idle-grace observations.
+			if err := conn.SetDeadline(time.Time{}); err != nil {
+				return
+			}
 			f.rtspPlays.Add(1)
 			f.sendRTP(conn)
 			return
@@ -215,12 +240,21 @@ func (f *cameraAdmissionServer) serveRTSP(conn net.Conn) {
 
 func (f *cameraAdmissionServer) sendRTP(conn net.Conn) {
 	payloader := &codecs.H264Payloader{}
-	payloads := payloader.Payload(1200, f.accessUnit)
 	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
 	var seq uint16
 	var timestamp uint32
 	for range ticker.C {
+		// Bound a stalled peer independently of the session's total lifetime.
+		// Fixture cleanup closes this owned connection and joins the sender.
+		if err := conn.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return
+		}
+		accessUnit := f.accessUnit
+		if alternate := f.alternateAccessUnit.Load(); f.phase.Load() == 1 && alternate != nil {
+			accessUnit = *alternate
+		}
+		payloads := payloader.Payload(1200, accessUnit)
 		for i, payload := range payloads {
 			packet, _ := (&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: seq, Timestamp: timestamp, SSRC: 2650, Marker: i == len(payloads)-1}, Payload: payload}).Marshal()
 			header := []byte{'$', 0, 0, 0}
@@ -230,6 +264,7 @@ func (f *cameraAdmissionServer) sendRTP(conn net.Conn) {
 			}
 			seq++
 		}
+		f.rtpAccessUnits.Add(1)
 		timestamp += 3600
 	}
 }

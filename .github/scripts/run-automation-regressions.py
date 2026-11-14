@@ -39,6 +39,7 @@ SUITES = (
     "stagefile_images_test.py",
     "sensorlink_audio_loopback_test.py",
     "hosted_audio_modules_test.py",
+    "v4l2_output_queue_module_test.py",
     "lite_camera_cleanup_test.py",
     "integration-discover_test.py",
 )

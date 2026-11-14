@@ -92,6 +92,12 @@ var ErrStaleManifest = errors.New("stale wendy net manifest")
 // or unauthorized manifests; certificate renewal may need an in-flight leaf.
 var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
 
+// ErrSupersededManifest reports an envelope that predates the current leaf or
+// does not verify under it, at a revision its origin has already replaced, as
+// a neighbour relays after a fresh-key renewal. It is never authenticated:
+// callers drop it without a shared receipt or failing the relaying carrier.
+var ErrSupersededManifest = errors.New("superseded wendy net manifest")
+
 // ErrManifestOutlivesCertificate can await an explicitly advertised renewed
 // leaf, but normal admission still enforces the verified replacement lifetime.
 var ErrManifestOutlivesCertificate = errors.New("manifest outlives certificate")
@@ -365,13 +371,22 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	// The selected path is independently trusted at the local verification
 	// clock. Static signed dates belong to the signing leaf's window; a newer
 	// issuer's NotBefore does not date an already-signed announcement.
+	// A revision below the admitted floor is refused whatever its date or
+	// signature. Only that outcome is renamed in the two checks below: a
+	// current or newer revision that fails either one is still rejected.
 	if time.UnixMilli(m.Issued).Before(leaf.NotBefore) {
+		if d.superseded(owner, m.Revision, now) {
+			return false, ErrSupersededManifest
+		}
 		return false, errors.New("manifest predates authenticating certificate")
 	}
 	if time.UnixMilli(m.Expires).After(leaf.NotAfter) || time.UnixMilli(m.Expires).After(id.NotAfter) {
 		return false, ErrManifestOutlivesCertificate
 	}
 	if !validManifestSignature(w, leaf) {
+		if d.superseded(owner, m.Revision, now) {
+			return false, ErrSupersededManifest
+		}
 		return false, ErrInvalidManifestSignature
 	}
 	binding := manifestSignatureBinding{leafHash: certificateHash(chain[0]), valid: true}
@@ -450,6 +465,19 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 		d.handoffs[owner] = restrictHandoffCertificate(held, d.entries[owner])
 	}
 	return true, nil
+}
+
+// superseded reports whether Accept would refuse this revision as stale even
+// with a valid signature. It reads the same replay floor and admits nothing.
+func (d *Directory) superseded(owner string, revision uint64, now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.expireLocked(now)
+	if receipt, ok := d.history[owner]; ok && revision < receipt.Revision {
+		return true
+	}
+	old, ok := d.entries[owner]
+	return ok && revision < old.manifest.Revision
 }
 
 // validManifestSignature is shared by admission and renewal revalidation so
