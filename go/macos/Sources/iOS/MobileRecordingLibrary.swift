@@ -205,10 +205,14 @@ extension GoClient {
         }
     }
 
-    func visualEpisode(device: Device, episode: String) async throws -> DataVisualSnapshot {
-        try await readRecordings(device: device) { request, selector, secure in
+    private static let recordingSummaryQueue = DispatchQueue(label: "dev.wendy.recording-summary", qos: .userInitiated)
+    private static let recordingAudioQueue = DispatchQueue(label: "dev.wendy.recording-audio", qos: .userInitiated)
+
+    func visualEpisode(device: Device, episode: String, mode: MobileRecordingLoadMode = .full) async throws -> DataVisualSnapshot {
+        let queue = mode == .summary ? Self.recordingSummaryQueue : mode == .audio ? Self.recordingAudioQueue : Self.recordingQueue
+        return try await readRecordings(device: device, queue: queue) { request, selector, secure in
             try Self.withCString(episode) {
-                try Self.decodeVisualSnapshot(WDRecordingPlay(request, selector, secure, $0))
+                try Self.decodeVisualSnapshot(WDRecordingData(request, selector, secure, $0, mode.rawValue))
             }
         }
     }
@@ -230,4 +234,10 @@ extension GoClient {
             }
         }
     }
+}
+
+// Full replay remains the fallback for unknown or mixed content.
+enum MobileRecordingLoadMode: Int32, Sendable {
+    case full = 0, summary = 1, audio = 2
+    static func playback(for kind: MobileRecordingKind?) -> Self { kind == .audio ? .audio : .full }
 }

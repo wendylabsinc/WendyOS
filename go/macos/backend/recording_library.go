@@ -120,12 +120,24 @@ func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (Rec
 }
 
 func (b *Backend) PlayRecording(id uint64, selector string, secure bool, episode string) (*VisualSnapshot, error) {
-	ctx, conn, done, err := b.recordingConnection(id, selector, secure, 5*time.Minute)
+	return b.RecordingData(id, selector, secure, episode, 0)
+}
+
+// Keep staged Gallery reads under the mobile request's cancellation and mTLS policy.
+func (b *Backend) RecordingData(id uint64, selector string, secure bool, episode string, mode int) (*VisualSnapshot, error) {
+	if mode < 0 || mode > 2 {
+		return nil, errors.New("invalid recording loading mode")
+	}
+	limit := 90 * time.Second
+	if mode == 0 {
+		limit = 5 * time.Minute
+	}
+	ctx, conn, done, err := b.recordingConnection(id, selector, secure, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	return readVisualEpisode(ctx, conn.DataService, episode)
+	return readVisualEpisodeMode(ctx, conn.DataService, episode, mode)
 }
 func (b *Backend) ExportRecordings(id uint64, selector string, secure bool, episodes []string) ([]string, error) {
 	if len(episodes) == 0 {

@@ -8,6 +8,7 @@ struct DataVisualizerView: View {
     let deviceName: String
     var initialEpisode: String?
     var recordingDevice: Device?
+    var recordingKind: MobileRecordingKind?
     var startPlaying = false
     @State private var episodes: [DataVisualEpisode] = []
     @State private var episode = ""
@@ -33,11 +34,16 @@ struct DataVisualizerView: View {
                     ForEach(episodes) { Text($0.title + " · " + $0.started.formatted(date: .abbreviated, time: .shortened)).tag($0.id) }
                 }.padding().pickerStyle(.menu)
             }
-            if loading { ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error { FailureView(title: "Could not load recording", error: error) { actions.submit { await refresh() } } }
+            if loading && data == nil { ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else if let error, data == nil { FailureView(title: "Could not load recording", error: error) { actions.submit { await refresh() } } }
             else if let data {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        if loading { ProgressView("Loading playback…").accessibilityIdentifier("recording.loadingPlayback") }
+                        if let error {
+                            Text(PresentedFailure(error).message).font(.footnote).foregroundStyle(.secondary)
+                            Button("Retry playback") { actions.submit { await load() } }
+                        }
                         Button {
                             playing = false
                             showingChannels = true
@@ -142,28 +148,50 @@ struct DataVisualizerView: View {
             else if episode == previous { await load() }
         } catch { self.error = error.localizedDescription }
     }
+    private func show(_ snapshot: DataVisualSnapshot, playback: Bool) {
+        data = snapshot; cursor = snapshot.start
+        viewport = .fitted(start: snapshot.start, end: snapshot.end)
+        timestamps = Dictionary(grouping: snapshot.samples, by: \.track).mapValues { $0.map(\.seconds).sorted() }
+        track = snapshot.videos.first?.track ?? snapshot.audio.first?.track ?? snapshot.tracks.first?.id ?? ""
+        if playback && startPlaying && !didStartPlayback {
+            didStartPlayback = true
+            playing = snapshot.end > snapshot.start
+        }
+    }
     private func load() async {
         generation += 1; let request = generation
-        loading = true; error = nil; playing = false
+        let selectedEpisode = episode
+        loading = true; error = nil; playing = false; data = nil
         do {
             let snapshot: DataVisualSnapshot
             if let recordingDevice {
-                snapshot = try await GoClient.shared.visualEpisode(device: recordingDevice, episode: episode)
+                let playbackMode = MobileRecordingLoadMode.playback(for: recordingKind)
+                snapshot = try await withThrowingTaskGroup(of: (Bool, DataVisualSnapshot?).self) { group in
+                    group.addTask {
+                        (true, try await GoClient.shared.visualEpisode(device: recordingDevice, episode: selectedEpisode, mode: playbackMode))
+                    }
+                    group.addTask {
+                        (false, try? await GoClient.shared.visualEpisode(device: recordingDevice, episode: selectedEpisode, mode: .summary))
+                    }
+                    defer { group.cancelAll() }
+                    for try await (isPlayback, result) in group {
+                        guard let result else { continue }
+                        if isPlayback { return result }
+                        if request == generation, !Task.isCancelled, !result.tracks.isEmpty {
+                            show(result, playback: false)
+                        }
+                    }
+                    throw CancellationError()
+                }
             } else {
-                snapshot = try await GoClient.shared.visualEpisode(session: session, episode: episode)
+                snapshot = try await GoClient.shared.visualEpisode(session: session, episode: selectedEpisode)
             }
             guard request == generation, !Task.isCancelled else { return }
-            data = snapshot; cursor = snapshot.start
-            viewport = .fitted(start: snapshot.start, end: snapshot.end)
-            timestamps = Dictionary(grouping: snapshot.samples, by: \.track).mapValues { $0.map(\.seconds).sorted() }
-            track = snapshot.videos.first?.track ?? snapshot.audio.first?.track ?? snapshot.tracks.first?.id ?? ""
-            if startPlaying && !didStartPlayback {
-                didStartPlayback = true
-                playing = snapshot.end > snapshot.start
-            }
-        } catch { if request == generation { self.error = error.localizedDescription } }
+            show(snapshot, playback: true)
+        } catch { if request == generation, !Task.isCancelled { self.error = error.localizedDescription } }
         if request == generation { loading = false }
     }
+
 }
 private struct MobileTimeline: View {
     let data: DataVisualSnapshot

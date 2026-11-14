@@ -67,10 +67,12 @@ void WDRecordingThumbnailFree(WDRecordingThumbnailResult *value);
 WDVisualSnapshotResult *WDRecordingPlay(uint64_t request, char *selector, int32_t secure, char *episode);
 WDRecordingExportsResult *WDRecordingExport(uint64_t request, char *selector, int32_t secure, char **episodes, size_t count);
 void WDRecordingExportsFree(WDRecordingExportsResult *value);
-#endif
 
 typedef struct { WDStatus status; char *json; } WDGalleryMetadataResult;
 WDGalleryMetadataResult *WDGalleryMetadataAt(char *selector, char *episode);
 void WDGalleryMetadataFree(WDGalleryMetadataResult *value);
 
 WDVisualSnapshotResult *WDVisualGalleryDataAt(char *selector, char *episode, int summary);
+
+WDVisualSnapshotResult *WDRecordingData(uint64_t request, char *selector, int32_t secure, char *episode, int32_t mode);
+#endif
