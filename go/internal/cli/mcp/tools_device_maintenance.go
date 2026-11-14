@@ -27,9 +27,14 @@ func (s *mcpServer) registerDeviceMaintenanceTools(srv *server.MCPServer) {
 	logs = append(logs, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("device_os_logs", logs...), s.handleDeviceOSLogs)
 	update := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Update only the connected device's agent, then verify its running version or hash and reconnect. May interrupt the agent connection. OS updates are separate."),
+		mcpgo.WithDescription("Update only the connected device's agent, then verify its running version or hash and reconnect. May interrupt the agent connection. OS updates are separate. " +
+			"A device enrolled with Cloud v1 stops being reachable through Wendy Cloud once it runs a current agent, so that update is refused with " +
+			string(errCodeConfirmationRequired) + " until the user agrees and allow_cloud_v1_disconnect is true."),
 		mcpgo.WithBoolean("nightly", mcpgo.DefaultBool(false)),
 		mcpgo.WithString("binary_path", mcpgo.Description("Optional local agent binary or macOS agent bundle; otherwise download the release")),
+		mcpgo.WithBoolean(allowCloudV1DisconnectParam,
+			mcpgo.Description("Update even though it disconnects a device enrolled with Cloud v1 from Wendy Cloud until it is enrolled again. Set only after the user has agreed; default false."),
+		),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300)),
 	}
 	update = append(update, destructive()...)
@@ -159,6 +164,15 @@ func (s *mcpServer) handleDeviceUpdateAgent(ctx context.Context, req mcpgo.CallT
 		}
 		args = append(args, "--binary", path)
 	}
+	if value, present := req.GetArguments()[allowCloudV1DisconnectParam]; present {
+		allow, valid := value.(bool)
+		if !valid {
+			return errResult(errCodeInvalidArgument, allowCloudV1DisconnectParam+" must be a boolean"), nil
+		}
+		if allow {
+			args = append(args, allowCloudV1DisconnectFlag)
+		}
+	}
 	if !s.agentUpdateMu.TryLock() {
 		return errResult(errCodeInvalidArgument, "an agent update is already in progress in this MCP session"), nil
 	}
@@ -170,6 +184,11 @@ func (s *mcpServer) handleDeviceUpdateAgent(ctx context.Context, req mcpgo.CallT
 		runner = executeRunCommand
 	}
 	output, truncated, runErr := runner(updateCtx, args, target, 16384)
+	// The CLI refused before it uploaded anything: the device and this
+	// session's connection are as they were.
+	if message, refused := cloudV1DisconnectRefusal(output, runErr); refused {
+		return errResult(errCodeConfirmationRequired, message), nil
+	}
 	result := map[string]any{"target": target, "os_update": "not_requested", "output_truncated": truncated}
 	response, parseErr := parseAgentUpdateResult(output)
 	if runErr != nil || updateCtx.Err() != nil || parseErr != nil {
@@ -227,6 +246,38 @@ func (s *mcpServer) handleDeviceUpdateAgent(ctx context.Context, req mcpgo.CallT
 	r := okResult(result)
 	r.IsError = runErr != nil || updateCtx.Err() != nil || parseErr != nil
 	return r, nil
+}
+
+const (
+	// allowCloudV1DisconnectFlag is the `wendy device update` flag that agrees
+	// to take a device enrolled with Cloud v1 off Wendy Cloud. The CLI names it
+	// in the refusal it returns without it.
+	allowCloudV1DisconnectFlag  = "--allow-cloud-v1-disconnect"
+	allowCloudV1DisconnectParam = "allow_cloud_v1_disconnect"
+)
+
+// cloudV1DisconnectRefusal recognises the CLI updater declining to update a
+// device enrolled with Cloud v1, and returns what to tell the caller. The
+// refusal is the failed run's JSON error envelope, which names the flag.
+func cloudV1DisconnectRefusal(output string, runErr error) (string, bool) {
+	if runErr == nil || !strings.Contains(output, allowCloudV1DisconnectFlag) {
+		return "", false
+	}
+	message := "This update would disconnect the device from Wendy Cloud, because it is enrolled with Cloud v1."
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var envelope struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &envelope) == nil && envelope.Error.Message != "" {
+			message = envelope.Error.Message
+			break
+		}
+	}
+	return message + " Nothing was changed. Ask the user, then retry with " + allowCloudV1DisconnectParam +
+		"=true if they agree. Enrolling the device again afterwards needs a direct connection to it (local network or USB), not Wendy Cloud.", true
 }
 
 type agentUpdateResult struct{ Status, Version, Message string }

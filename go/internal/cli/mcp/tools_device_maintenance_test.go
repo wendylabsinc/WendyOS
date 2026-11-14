@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -149,5 +151,79 @@ func TestAgentUpdateRequiresVerifiedCLIResult(t *testing.T) {
 	}
 	if _, err := parseAgentUpdateResult(strings.Repeat("x", 100)); err == nil {
 		t.Fatal("accepted non-JSON output")
+	}
+}
+
+// A device enrolled with Cloud v1 drops off Wendy Cloud once it runs a current
+// agent, and the CLI updater refuses that without consent. The tool reports
+// the refusal as a question for the user and leaves the session alone, instead
+// of an unverified update of an agent that "may have restarted".
+func TestAgentUpdateAsksBeforeDisconnectingCloudV1Device(t *testing.T) {
+	s := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Fatal("reconnected although nothing was changed")
+		return nil, nil
+	})
+	current := &grpcclient.AgentConnection{Host: "thor", Addr: "thor:50051"}
+	s.SetConn(current)
+	refusal := `{"error":{"code":"error","exit":1,"message":"Not updated: this would disconnect thor from Wendy Cloud. It is enrolled with the older Wendy Cloud (Cloud v1).","retryable":false,"next_steps":["To update anyway, pass --allow-cloud-v1-disconnect."]}}`
+	var ran []string
+	s.updateAgentCommandFn = func(_ context.Context, args []string, _ commandTarget, _ int) (string, bool, error) {
+		ran = args
+		return refusal + "\n", false, errors.New("exit status 1")
+	}
+	r, err := s.handleDeviceUpdateAgent(context.Background(), callToolReq("device_update_agent", nil))
+	if err != nil || !r.IsError {
+		t.Fatalf("refusal reported as success: %v %v", r, err)
+	}
+	if slices.Contains(ran, "--allow-cloud-v1-disconnect") {
+		t.Fatalf("consented on the user's behalf: %v", ran)
+	}
+	out := structuredMap(t, r)
+	message, _ := out["message"].(string)
+	if out["error_code"] != string(errCodeConfirmationRequired) ||
+		!strings.Contains(message, "disconnect thor from Wendy Cloud") ||
+		!strings.Contains(message, "allow_cloud_v1_disconnect=true") {
+		t.Fatalf("refusal does not ask for consent: %+v", out)
+	}
+	if s.GetConn() != current {
+		t.Fatal("dropped the connection of a device that was not changed")
+	}
+}
+
+func TestAgentUpdatePassesCloudV1DisconnectConsent(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     map[string]any
+		wantFlag bool
+	}{
+		{"consent given", map[string]any{"allow_cloud_v1_disconnect": true}, true},
+		{"consent withheld", map[string]any{"allow_cloud_v1_disconnect": false}, false},
+		{"not mentioned", nil, false},
+	} {
+		s := New(&config.Config{}, nil)
+		s.SetConn(&grpcclient.AgentConnection{Host: "thor", Addr: "thor:50051"})
+		var ran []string
+		s.updateAgentCommandFn = func(_ context.Context, args []string, _ commandTarget, _ int) (string, bool, error) {
+			ran = args
+			return `{"status":"success","version":"2"}`, false, nil
+		}
+		r, err := s.handleDeviceUpdateAgent(context.Background(), callToolReq("device_update_agent", tc.args))
+		if err != nil || r.IsError {
+			t.Fatalf("%s: %v %v", tc.name, r, err)
+		}
+		if got := slices.Contains(ran, "--allow-cloud-v1-disconnect"); got != tc.wantFlag {
+			t.Errorf("%s: ran %v, flag passed = %v, want %v", tc.name, ran, got, tc.wantFlag)
+		}
+	}
+
+	s := New(&config.Config{}, nil)
+	s.SetConn(&grpcclient.AgentConnection{Host: "thor", Addr: "thor:50051"})
+	s.updateAgentCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		t.Fatal("ran the update with an invalid consent value")
+		return "", false, nil
+	}
+	r, err := s.handleDeviceUpdateAgent(context.Background(), callToolReq("device_update_agent", map[string]any{"allow_cloud_v1_disconnect": "yes"}))
+	if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != string(errCodeInvalidArgument) {
+		t.Fatalf("accepted a non-boolean consent: %v %v", r, err)
 	}
 }

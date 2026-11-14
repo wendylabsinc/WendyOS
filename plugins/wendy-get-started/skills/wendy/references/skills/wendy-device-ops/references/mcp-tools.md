@@ -16,8 +16,12 @@ the enabled set, so list every group you still need.
   password returns `CONFIRMATION_REQUIRED`: tell the user the password is sent
   unencrypted, and retry with `allow_unverified_device=true` only if they agree.
 - Updates (`setup`): `device_update_agent` (`nightly`, `binary_path`) updates only
-  the agent, verifies it and reconnects. `os_update` starts an OS update;
-  `os_update_status` reports whether it committed or rolled back, and why.
+  the agent, verifies it and reconnects. It returns `CONFIRMATION_REQUIRED` when
+  the update would take a device enrolled with Cloud v1 off Wendy Cloud: tell
+  the user it stays unreachable through Cloud until enrolled again over a direct
+  connection, and retry with `allow_cloud_v1_disconnect=true` only if they agree.
+  `os_update` starts an OS update; `os_update_status` reports whether it
+  committed or rolled back, and why.
 - Cameras and Bluetooth (`hardware`): `camera_list`, `camera_controls`,
   `camera_set_control`, `camera_snapshot(device_id=...)` (activates the camera,
   so ask first), `bluetooth_scan`, `bluetooth_connect` and `bluetooth_disconnect`.

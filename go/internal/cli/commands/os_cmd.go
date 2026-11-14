@@ -239,6 +239,7 @@ func newOSUpdateCmd() *cobra.Command {
 	var prNumber int
 	var noDrivers bool
 	var driversDir string
+	var allowCloudV1Disconnect bool
 
 	cmd := &cobra.Command{
 		Use:   "update [artifact-path]",
@@ -302,7 +303,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 			}
 
 			// Step 2: Ensure the agent is at the latest release before updating the OS.
-			conn, err = ensureAgentUpToDate(ctx, conn, versionResp, nightly)
+			conn, err = ensureAgentUpToDate(ctx, conn, versionResp, nightly, allowCloudV1Disconnect)
 			if err != nil {
 				return err
 			}
@@ -471,6 +472,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 	cmd.Flags().BoolVar(&noDrivers, "no-drivers", false,
 		"Update even though driver add-ons will not be staged for the target kernel; skips staging and the confirmation")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "OTA-update to the image built by wendyos-builder PR #N (debug build; mutually exclusive with a positional artifact path and --artifact-url)")
+	cmd.Flags().BoolVar(&allowCloudV1Disconnect, allowCloudV1DisconnectFlag, false, allowCloudV1DisconnectUsage)
 
 	return cmd
 }
@@ -1565,14 +1567,18 @@ func progressLabel(phase string, percent int32) string {
 // uploads it (causing the agent to restart), waits for it to come back, and
 // returns a fresh connection. If the agent is already current or the check fails
 // non-fatally, the original connection is returned unchanged.
-func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, versionResp *agentpb.GetAgentVersionResponse, nightly bool) (*grpcclient.AgentConnection, error) {
+//
+// Updating the agent of a device enrolled with Cloud v1 can take it off Wendy
+// Cloud; confirmCloudV1Disconnect asks first, or refuses without a terminal
+// unless allowCloudV1Disconnect is set.
+func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, versionResp *agentpb.GetAgentVersionResponse, nightly, allowCloudV1Disconnect bool) (*grpcclient.AgentConnection, error) {
 	agentVer := versionResp.GetVersion()
 	arch := versionResp.GetCpuArchitecture()
 	osName := versionResp.GetOs()
 
 	fmt.Printf("Agent version: %s — checking for updates...\n", agentVer)
 
-	latestVer, _, err := resolveAgentVersion(nightly)
+	latestVer, _, err := resolveAgentVersionFn(nightly)
 	if err != nil {
 		fmt.Printf("Could not check for agent updates: %v\n", err)
 		return conn, nil
@@ -1588,8 +1594,12 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return conn, nil
 	}
 
+	if err := confirmCloudV1Disconnect(ctx, conn, versionResp, latestVer, allowCloudV1Disconnect); err != nil {
+		return conn, err
+	}
+
 	fmt.Printf("Updating agent: %s → %s\n", agentVer, latestVer)
-	if err := performAgentUpdate(ctx, conn, osName, arch, nightly); err != nil {
+	if err := performAgentUpdateFn(ctx, conn, osName, arch, nightly); err != nil {
 		return nil, fmt.Errorf("agent update failed: %w", err)
 	}
 	conn.Close()

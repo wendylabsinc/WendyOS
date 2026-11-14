@@ -162,6 +162,10 @@ since boot. `device_update_agent` is in `setup`: it updates only the agent and
 verifies the result through the existing CLI updater. It preserves the connected
 device selector and reconnects unless another device was selected during the
 update. A timeout is an unconfirmed update, not proof that no change occurred.
+A device enrolled with Cloud v1 leaves Wendy Cloud once it runs a current agent,
+so that update returns `CONFIRMATION_REQUIRED` and changes nothing. Ask the user,
+then retry with `allow_cloud_v1_disconnect=true` if they agree; see
+[Devices enrolled with Cloud v1](/docs/advanced/clients/wendy-cli/commands/device/update#devices-enrolled-with-cloud-v1).
 
 `cloud_tunnel_list` shows only forwards owned by this MCP server. Use their IDs
 with `cloud_tunnel_close` to release listeners and active connections. Closing an

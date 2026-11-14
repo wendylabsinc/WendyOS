@@ -46,7 +46,7 @@ Hosts that are not WendyOS OTA targets — including macOS, Windows, unknown pla
 
 1. **Validate target identity** — query the agent and confirm the target is a WendyOS OTA target. Exits immediately with an error if not.
 2. **Check minimum OS version** — if the device reports a WendyOS version older than 0.17.0, exit non-zero with guidance to reflash using `wendy os install`. Dev builds, empty, and unparseable versions are allowed through. This check runs before the agent is updated, so no agent update is wasted on a device that must be reflashed.
-3. **Update the agent** — ensure the agent binary is at the latest release before proceeding with the OS image update. GitHub release lookups use the `GITHUB_TOKEN` environment variable when present, and fall back to unauthenticated requests otherwise.
+3. **Update the agent** — ensure the agent binary is at the latest release before proceeding with the OS image update. GitHub release lookups use the `GITHUB_TOKEN` environment variable when present, and fall back to unauthenticated requests otherwise. If that update would take a device enrolled with Cloud v1 off Wendy Cloud, the command asks first and stops here when you decline; see [Devices enrolled with Cloud v1](#devices-enrolled-with-cloud-v1).
 4. **Re-query version** — query the agent's version again after the agent update.
 5. **Validate OTA support** — confirm the device advertises the `wendyos-update` featureset.
 6. **Resolve artifact** — if no artifact or URL was provided, look up the latest OTA artifact for the device's reported `device_type`. If the device type is missing or not recognized, shows a warning and prompts the user to select the correct device type.
@@ -57,6 +57,26 @@ Hosts that are not WendyOS OTA targets — including macOS, Windows, unknown pla
 11. **Report the outcome** — query the device for the post-update commit/rollback verdict and print it. The command exits non-zero when the update was rolled back.
 
 ---
+
+## Devices enrolled with Cloud v1
+
+The agent update in step 3 can end a device's Wendy Cloud access: a device
+enrolled with Cloud v1 (the older Wendy Cloud) is reachable through Wendy Cloud
+only while it runs an agent older than `2026.10.22-080351`. When the update
+would install a newer agent on such a device, `wendy os update` shows the same
+warning as [`wendy device update`](../device/update.md#devices-enrolled-with-cloud-v1)
+and asks before going on, defaulting to No. Declining stops the command before
+anything on the device changes.
+
+Without a terminal the command does not ask. It exits non-zero and names the
+flag that agrees to the disconnect:
+
+```sh
+wendy os update --allow-cloud-v1-disconnect
+```
+
+Run it when you can reach the device directly (local network or USB), then
+enroll the device again as described in [Moving to Cloud v2](/docs/cloud-migration).
 
 ## Jetson A/B preparation
 
@@ -205,6 +225,7 @@ Thor or ESP32 targets. `--pr` is mutually exclusive with `--nightly`,
 | `--nightly` | false | Use nightly/pre-release builds for auto-selection |
 | `--drivers-dir` | — | Stage driver add-ons for the target kernel from local `.raw` files in this directory instead of the registry, for networks with no internet access. |
 | `--no-drivers` | false | Update even though driver add-ons will not be staged for the target kernel; skips both the staging and its confirmation. |
+| `--allow-cloud-v1-disconnect` | false | Update the agent even though that disconnects a device enrolled with Cloud v1 from Wendy Cloud until it is enrolled again. Required without a terminal; see [Devices enrolled with Cloud v1](#devices-enrolled-with-cloud-v1). |
 
 A positional argument (a local `.wendy` file path, or a directory containing one) can be used instead of `--artifact-url`.
 

@@ -3244,6 +3244,8 @@ func markUpdateCheckPassed(host string) {
 // the agent to restart, returning a fresh connection. On decline, or if the
 // upload fails, the original conn is returned unchanged. If the upload succeeds
 // but the agent does not come back, conn is closed and an error is returned.
+// A device the update would disconnect from Wendy Cloud (see
+// cloudV1DisconnectRisk) is told so instead of being offered the update.
 func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) (*grpcclient.AgentConnection, error) {
 	if jsonOutput {
 		return conn, nil
@@ -3294,6 +3296,14 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
 	fmt.Fprintf(terminaloutput.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s).")+"\n", agentVer, version.Version)
+	// This offer is one keypress, defaulting to Yes, in the middle of another
+	// command. It is not made for a device the update would take off Wendy
+	// Cloud; `wendy device update` explains that and asks on its own terms.
+	// The offer installs the latest release, whose version is not known here.
+	if risk := cloudV1DisconnectRisk(ctx, conn, resp, ""); risk != nil {
+		fmt.Fprintln(terminaloutput.Stderr, risk.offerSkippedNotice())
+		return conn, nil
+	}
 	if !confirmFn("Update the agent now?") {
 		return conn, nil
 	}
@@ -3344,6 +3354,9 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 	fmt.Fprintf(terminaloutput.Stderr, "Uploading to device...\n")
 	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
 }
+
+// performAgentUpdateFn is a seam over performAgentUpdate for tests.
+var performAgentUpdateFn = performAgentUpdate
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers
 // GetAgentVersion or 60 s elapse, and gives up at once if a different device

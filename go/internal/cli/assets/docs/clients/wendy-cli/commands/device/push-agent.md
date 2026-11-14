@@ -15,6 +15,16 @@ An unconfirmed upload is expected rather than exceptional here: the agent restar
 wendy device push-agent <path-to-agent-binary>
 ```
 
+## Devices enrolled with Cloud v1
+
+A current agent connects to Wendy Cloud only for a device enrolled with Cloud v2,
+so pushing one onto a device that is enrolled with Cloud v1 and still runs an
+agent older than `2026.10.22-080351` takes it off Wendy Cloud until it is enrolled
+again. `push-agent` warns and asks first, as
+[`wendy device update`](./update.md#devices-enrolled-with-cloud-v1) does. Without
+a terminal it exits non-zero before uploading; pass `--allow-cloud-v1-disconnect`
+to push anyway.
+
 ## When to use this
 
 Use `push-agent` when you need a patched or development agent running on a device to capture verbose engine diagnostics (e.g. raw EFI variables via `wendy os update-status --json`) without SSH access. For routine agent updates, use [`wendy device update`](./update.md).

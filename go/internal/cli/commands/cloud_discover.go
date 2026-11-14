@@ -469,7 +469,7 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.
 	id := asset.key
 
 	return func() tea.Msg {
-		latestVer, _, err := resolveAgentVersion(false)
+		latestVer, _, err := resolveAgentVersionFn(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
@@ -489,6 +489,10 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.
 			arch = cpuArch
 		}
 		if note := agentAlreadyAtReleaseNote(name, resp.GetVersion(), latestVer); note != "" {
+			conn.Close()
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, note: note, version: resp}
+		}
+		if note := discoverCloudV1Note(ctx, conn, resp, latestVer, name, "wendy cloud device update"); note != "" {
 			conn.Close()
 			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, note: note, version: resp}
 		}

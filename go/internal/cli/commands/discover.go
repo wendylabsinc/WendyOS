@@ -1214,7 +1214,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 		pinKey = selectedKeys[0]
 	}
 	return func() tea.Msg {
-		latestVer, _, err := resolveAgentVersion(false)
+		latestVer, _, err := resolveAgentVersionFn(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
@@ -1228,6 +1228,10 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("querying device: %w", err)}
 		}
 		if note := agentAlreadyAtReleaseNote(name, versionResp.GetVersion(), latestVer); note != "" {
+			conn.Close()
+			return discoverUpdateDoneMsg{deviceName: name, note: note}
+		}
+		if note := discoverCloudV1Note(ctx, conn, versionResp, latestVer, name, "wendy device update"); note != "" {
 			conn.Close()
 			return discoverUpdateDoneMsg{deviceName: name, note: note}
 		}

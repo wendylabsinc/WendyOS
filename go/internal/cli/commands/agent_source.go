@@ -198,6 +198,10 @@ func downloadAgentArtifactFromGCS(baseURL string, m *agentManifest, osName, arch
 	return bin, version, nil
 }
 
+// resolveAgentVersionFn is a seam over resolveAgentVersion, for tests of the
+// update paths that must stop before anything is downloaded.
+var resolveAgentVersionFn = resolveAgentVersion
+
 // resolveAgentArtifact returns the wendy-agent release artifact for
 // osName/arch, preferring GCS (to avoid GitHub rate limits) and falling back
 // to GitHub releases on any GCS miss. On darwin the payload is the raw

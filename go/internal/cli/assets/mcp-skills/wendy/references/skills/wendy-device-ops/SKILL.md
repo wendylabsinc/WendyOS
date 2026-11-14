@@ -122,6 +122,8 @@ wendy --json device update --nightly --device <hostname>
 wendy --json device update --binary ./path/to/wendy-agent --device <hostname>
 ```
 
+If the update fails naming `--allow-cloud-v1-disconnect`, nothing was changed: the device is enrolled with Cloud v1 and a current agent would take it off Wendy Cloud until it is enrolled again over a direct connection. Tell the user, and add the flag only if they agree.
+
 ## With MCP tools
 
 Read [MCP tools and groups](references/mcp-tools.md) before device operations.

@@ -47,6 +47,8 @@ clipboard/JSON output (see below).
 
 Pressing `u` on a highlighted device downloads the latest agent release from GitHub, uploads it to the device via the broker tunnel, and waits for the agent to restart (up to 60 seconds). A status message is shown during the update and the version column refreshes automatically on completion.
 
+A device enrolled with Cloud v1 that still runs an agent older than `2026.10.22-080351` is not updated this way: a current agent would take it off Wendy Cloud, and the table cannot ask. The status line says so and names `wendy cloud device update`, which explains the consequence and asks. See [Devices enrolled with Cloud v1](../device/update.md#devices-enrolled-with-cloud-v1).
+
 ## JSON output
 
 When run non-interactively (output is piped) or with `--json`, a JSON array is written to stdout. Each element contains:

@@ -142,6 +142,7 @@ func newDeviceListCmd() *cobra.Command {
 // patched agent on a device (e.g. to capture verbose engine diagnostics),
 // not part of the normal update workflow.
 func newDevicePushAgentCmd() *cobra.Command {
+	var allowCloudV1Disconnect bool
 	cmd := &cobra.Command{
 		Use:    "push-agent <path-to-agent-binary>",
 		Short:  "Upload a locally-built agent binary to the device (dev/diagnostic)",
@@ -159,6 +160,16 @@ func newDevicePushAgentCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
+
+			// The version the device runs decides whether this push can cost it
+			// its Wendy Cloud connection. A failed probe leaves it unknown.
+			installed, known := conn.CachedAgentVersion()
+			if !known {
+				installed, _ = conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+			}
+			if err := confirmCloudV1Disconnect(ctx, conn, installed, "", allowCloudV1Disconnect); err != nil {
+				return err
+			}
 
 			h := sha256.Sum256(binaryData)
 			sha256Hex := hex.EncodeToString(h[:])
@@ -201,6 +212,7 @@ func newDevicePushAgentCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&allowCloudV1Disconnect, allowCloudV1DisconnectFlag, false, allowCloudV1DisconnectUsage)
 	return cmd
 }
 
@@ -2677,6 +2689,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 	var assumeYes bool
 	var artifactURL string
 	var prNumber int
+	var allowCloudV1Disconnect bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -2686,6 +2699,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			"--nightly selects the nightly channel for both the agent and the OS. " +
 			"--artifact-url applies a specific OS update artifact instead of the manifest's latest; this works over the cloud tunnel (the device downloads the artifact directly from the URL). " +
 			"--pr N applies the OS image built by wendyos-builder PR #N instead of the manifest's latest — an unhardened debug build for testing PRs on hardware; it also works over the cloud tunnel. --pr cannot be combined with --artifact-url or --json. " +
+			"A device enrolled with Cloud v1 that still runs an agent older than " + cloudV1TunnelRemovedIn + " stops being reachable through Wendy Cloud once its agent is updated, until it is enrolled again over a direct connection. The command warns and asks first; without a terminal it stops before uploading unless --" + allowCloudV1DisconnectFlag + " is given (--yes does not cover this). " +
 			"macOS agents receive the signed app-bundle zip (wendy-agent-macos-<arch>.zip) instead of a Linux binary; --binary accepts one of those zips for dev pushes to a Mac agent.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := robotAgentMaintenanceContext(cmd.Context())
@@ -2747,6 +2761,11 @@ func newDeviceUpdateCmd() *cobra.Command {
 						}
 					}
 				}
+				// A local binary has no known version; it is treated as a
+				// current build.
+				if err := confirmCloudV1Disconnect(ctx, conn, preUpdateVersion, "", allowCloudV1Disconnect); err != nil {
+					return err
+				}
 			} else {
 				// Auto-download: detect arch, resolve the release version, and
 				// download the binary only when the device isn't already on it.
@@ -2772,7 +2791,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// metadata, so an already-current device never downloads the
 				// tarball. Record it so an upload whose confirmation was lost to
 				// a mid-stream agent restart can still be verified.
-				resolvedVer, source, err := resolveAgentVersion(nightly)
+				resolvedVer, source, err := resolveAgentVersionFn(nightly)
 				if err != nil {
 					return fmt.Errorf("resolving agent version: %w", err)
 				}
@@ -2788,6 +2807,10 @@ func newDeviceUpdateCmd() *cobra.Command {
 					agentUpdateVerified(preUpdateVersion.GetVersion(), resolvedVer)
 
 				if !agentAlreadyCurrent {
+					// Asked before the download, so declining costs nothing.
+					if err := confirmCloudV1Disconnect(ctx, conn, preUpdateVersion, resolvedVer, allowCloudV1Disconnect); err != nil {
+						return err
+					}
 					if !jsonOutput {
 						releaseType := "stable"
 						if nightly {
@@ -2957,6 +2980,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Apply an available OS update without prompting")
 	cmd.Flags().StringVar(&artifactURL, "artifact-url", "", "Apply this OS update artifact URL instead of the manifest's latest")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "OTA-update the OS to the image built by wendyos-builder PR #N (debug build; mutually exclusive with --artifact-url and --json)")
+	cmd.Flags().BoolVar(&allowCloudV1Disconnect, allowCloudV1DisconnectFlag, false, allowCloudV1DisconnectUsage)
 
 	return cmd
 }
