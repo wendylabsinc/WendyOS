@@ -136,6 +136,42 @@ Service discovery can cross intermediate Wendy Net devices without a direct
 connection to the publishing device. Discovery is not an application health
 check: verify an actual request to the discovered server.
 
+## Connect to a known device
+
+An app can also connect to a specific enrolled device without browsing or
+publishing a DNS-SD service. Keep the client in network mode `mesh`, and publish
+the server's incoming ports as above. Use either name with the **published**
+port:
+
+```text
+jetson.wendy.internal:18080
+device-<device-uuid>.wendy.internal:18080
+```
+
+The friendly name is scoped to the client's enrolled organization. Current
+device names are lowercase DNS labels; hyphens are preserved, so `jetson-a` and
+`jetson--a` name different devices. The `device-<uuid>` form is reserved for
+identity-based lookup and uses the device UUID in its certificate, rather than
+an older numeric Cloud asset ID.
+
+The agent can learn friendly names from LAN mDNS, the currently signed Wendy
+Net device directory, or the organization's Cloud roster. A discovered name
+still needs a reachable Wendy Net application route.
+
+These names resolve to addresses in the calling host's own `10.99.0.0/16`
+mapping table. A DNS answer is not proof of reachability: the connection must
+still authenticate the exact tenant/device principal and pass the destination's
+running-app port authorization. Keep the hostname in configuration; do not copy
+a resolved virtual IP between devices.
+
+Existing UUID names under `mesh.wendy.internal` and `cloud.wendy.dev`, and the
+older org-qualified friendly aliases, remain accepted. The new short friendly
+form does not require knowing or fetching an organization slug.
+
+A fresh friendly-name lookup collects LAN announcements for up to three seconds
+so a quick reply cannot hide a delayed conflicting name. Conflicting device
+identities return no address; use the UUID form to select one device explicitly.
+
 ## Try the complete Python example
 
 [Download the publisher and client](/media/mesh-mdns.zip), or use

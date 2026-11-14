@@ -17,12 +17,16 @@ import (
 	"go.uber.org/zap"
 )
 
-var meshDNSSuffixRE = `(?:` + regexp.QuoteMeta(meshname.Suffix) + `|` + regexp.QuoteMeta(meshname.LegacySuffix) + `)`
+var meshDNSSuffixRE = func() string {
+	var suffixes []string
+	for _, suffix := range meshname.Suffixes() {
+		suffixes = append(suffixes, regexp.QuoteMeta(suffix))
+	}
+	return `(?:` + strings.Join(suffixes, `|`) + `)`
+}()
 
-// canonicalUUIDRE matches the canonical textual UUID form (lowercase,
-// hyphenated) that meshid enforces at every identity boundary. Uppercase or
-// unhyphenated spellings are deliberately not accepted: they would resolve to
-// a device the peer's own identity never produces.
+// canonicalUUIDRE matches the canonical hyphenated UUID form after DNS ASCII
+// case folding. Device identity parsing still receives the canonical spelling.
 const canonicalUUIDRE = `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
 
 // meshNameRE accepts the canonical device-<uuid> form of the private mesh
@@ -32,7 +36,15 @@ var meshNameRE = regexp.MustCompile(`^device-(` + canonicalUUIDRE + `)\.` + mesh
 // friendlyNameRE matches <devicename>.<org-slug>.mesh.wendy.internal. and its
 // legacy alias. It never overlaps meshNameRE: the device form has one label
 // before the suffix, while this form has two.
-var friendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.([a-z0-9-]+)\.` + meshDNSSuffixRE + `\.$`)
+var friendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.([a-z0-9-]+)\.(?:` + regexp.QuoteMeta(meshname.PreviousSuffix) + `|` + regexp.QuoteMeta(meshname.LegacySuffix) + `)\.$`)
+
+var shortFriendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.` + regexp.QuoteMeta(meshname.Suffix) + `\.$`)
+
+// ExactResolver resolves short names without collapsing valid repeated hyphens.
+// Legacy org-qualified aliases continue to use Resolver.Resolve.
+type ExactResolver interface {
+	ResolveExact(name string) (meshid.Device, bool)
+}
 
 // Resolver maps a normalized device name to that device's principal within
 // this device's own tenant, and reports this device's own org slug. It is
@@ -52,8 +64,8 @@ type meshIdentity struct {
 	vips   *VIPTable
 }
 
-// DNSServer answers device-<uuid>.mesh.wendy.internal with the device's mesh
-// VIP and forwards every other query to the host's upstream resolver. One UDP
+// DNSServer answers short device names under wendy.internal and compatibility
+// aliases with the device's VIP, forwarding other zones to the host resolver. One UDP
 // listener is bound per app bridge gateway address, refcounted by the number
 // of running meshed containers behind that bridge.
 type DNSServer struct {
@@ -207,13 +219,28 @@ func (s *DNSServer) handle(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 	q := r.Question[0]
-	lower := strings.ToLower(q.Name)
+	lower := strings.Map(func(c rune) rune {
+		if c >= 'A' && c <= 'Z' {
+			return c + ('a' - 'A')
+		}
+		return c
+	}, q.Name)
 	if m := meshNameRE.FindStringSubmatch(lower); m != nil {
 		s.answerDevice(w, r, q, m[1])
 		return
 	}
 	if m := friendlyNameRE.FindStringSubmatch(lower); m != nil {
 		s.answerFriendly(w, r, q, m[1], m[2])
+		return
+	}
+	if m := shortFriendlyNameRE.FindStringSubmatch(lower); m != nil {
+		s.answerShortFriendly(w, r, q, m[1])
+		return
+	}
+	// The private namespace is owned locally. Invalid shapes must not leak to
+	// an upstream resolver or acquire an unrelated public answer.
+	if lower == meshname.Suffix+"." || strings.HasSuffix(lower, "."+meshname.Suffix+".") {
+		s.reply(w, r, dns.RcodeNameError)
 		return
 	}
 	s.forward(w, r)
@@ -232,6 +259,34 @@ func (s *DNSServer) answerDevice(w dns.ResponseWriter, r *dns.Msg, q dns.Questio
 	}
 	device, err := meshid.ParseDevice(id.tenant, uuidText)
 	if err != nil {
+		s.reply(w, r, dns.RcodeNameError)
+		return
+	}
+	s.answerAllocated(w, r, q, id.vips, device)
+}
+
+// answerShortFriendly needs only the enrolled tenant, not a Cloud-learned org
+// slug. It therefore works before the first roster sync and on offline LAN or
+// mesh paths. Resolution supplies a name binding; dialing still authenticates
+// the exact principal and separately authorizes the destination port.
+func (s *DNSServer) answerShortFriendly(w dns.ResponseWriter, r *dns.Msg, q dns.Question, name string) {
+	name, valid := meshname.FriendlyLabel(name)
+	s.mu.Lock()
+	resolver, id := s.resolver, s.identity
+	s.mu.Unlock()
+	if !valid || resolver == nil || id == nil {
+		s.reply(w, r, dns.RcodeNameError)
+		return
+	}
+	exact, supports := resolver.(ExactResolver)
+	if !supports {
+		// A legacy normalizing resolver cannot distinguish valid repeated
+		// hyphens, so it must not answer the exact short-name namespace.
+		s.reply(w, r, dns.RcodeNameError)
+		return
+	}
+	device, ok := exact.ResolveExact(name)
+	if !ok || device.Tenant() != id.tenant {
 		s.reply(w, r, dns.RcodeNameError)
 		return
 	}

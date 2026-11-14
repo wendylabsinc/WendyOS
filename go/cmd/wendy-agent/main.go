@@ -1199,11 +1199,10 @@ func main() {
 			if meshCtx.Err() != nil {
 				return
 			}
-			name, _ := os.Hostname()
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
-						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
+						Name: services.FriendlyDeviceName(), NameSource: services.FriendlyDeviceName, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
 						Agent:        services.MeshAgentMetadata(),
 						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
 						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
@@ -1354,16 +1353,26 @@ func main() {
 	// than never starting at all.
 	meshRoster = services.NewMeshRoster(logger, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 	meshBrowse := func(ctx context.Context) ([]models.LANDevice, error) {
-		col, err := discovery.Discover(ctx, discovery.DiscoveryOptions{
-			Types:   []models.InterfaceType{models.InterfaceLAN},
-			Timeout: 1 * time.Second,
-		})
-		if err != nil {
+		// The resolver's budget can end at the scan deadline. Keep confirmed
+		// sightings collected before that deadline rather than letting the
+		// general discovery wrapper discard them with context.DeadlineExceeded.
+		// They remain hints: connection establishment proves the principal.
+		devices, err := discovery.CollectLANUntilTimeout(ctx, discovery.StreamOptions{}, services.FriendlyNameLANBrowseBudget)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			return nil, err
 		}
-		return col.LANDevices, nil
+		return devices, nil
 	}
 	meshResolver := services.NewMeshResolver(logger, meshRoster, meshBrowse)
+	meshResolver.SetMeshSnapshot(func() localmesh.NodeSnapshot {
+		localMeshMu.RLock()
+		snapshot := localMeshSnapshot
+		localMeshMu.RUnlock()
+		if snapshot == nil {
+			return localmesh.NodeSnapshot{}
+		}
+		return snapshot()
+	})
 	// The tenant mesh names resolve under follows the roster's provisioned
 	// identity; unset until provisioning completes.
 	var meshTenant meshid.Tenant
