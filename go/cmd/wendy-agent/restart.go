@@ -10,10 +10,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 )
 
-// newAgentRestart is how the agent restarts itself after an update. Nothing
-// asks the agent to stop then: it exits on its own and systemd starts it
-// again, so the shutdown at the end of main never runs (see agentShutdown for
-// that one).
+// newAgentRestart is how the agent restarts itself after an update or a
+// renewed certificate. Nothing asks the agent to stop then: it exits on its
+// own and systemd starts it again, so the shutdown at the end of main never
+// runs (see agentShutdown for that one).
 //
 // Wendy Net is the one thing stopped first. Its link, TUNs, policy rules and
 // routes outlive the process. The next agent reclaims them only when it is a

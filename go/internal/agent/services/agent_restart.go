@@ -23,9 +23,9 @@ const (
 	agentRestartStopTimeout = 5 * time.Second
 )
 
-// AgentRestart restarts the agent into the binary an update just committed.
-// The agent exits and whatever runs it (systemd, with Restart=always) starts
-// it again.
+// AgentRestart restarts the agent after it committed something only a new
+// process picks up: an updated binary, a renewed certificate. The agent exits
+// and whatever runs it (systemd, with Restart=always) starts it again.
 //
 // That exit skips the shutdown at the end of main, so Stop is for state the
 // next agent must not inherit. Apps keep running across an agent restart; Stop

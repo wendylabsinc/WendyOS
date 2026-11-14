@@ -1637,12 +1637,13 @@ func main() {
 	}
 
 	// Renew the device certificate before it expires, with a fresh ML-DSA-65
-	// key. The renewed identity loads through the same clean restart.
+	// key. The renewed identity loads through the restart an update uses,
+	// which stops Wendy Net before the agent exits.
 	// ponytail: restart per renewal (once per lifetime/3); swap in place if
 	// restarts start to hurt.
 	go provisioningSvc.RunRenewal(ctx, func() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
-		os.Exit(0)
+		agentRestart.Schedule()
 	})
 
 	if accessPolicy.AllowsNetwork {
