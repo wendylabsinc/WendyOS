@@ -65,7 +65,7 @@ func TestDialFactoryLogsOnceWithoutIdentity(t *testing.T) {
 	w := workerWithIdentity(t, zap.New(core), "", "", "")
 
 	for range 3 {
-		client, closeFn, err := w.dialFactory(context.Background())
+		client, closeFn, err := w.dialFactory(context.Background(), w.IngestEndpoint())
 		if !errors.Is(err, errNoIdentity) {
 			t.Fatalf("err = %v, want errNoIdentity", err)
 		}

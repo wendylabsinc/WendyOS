@@ -1747,15 +1747,19 @@ func main() {
 	// and gating on it would silently leave every sealed episode unuploaded
 	// until the quota evicted it.
 	dataTransferWorker := services.NewDataTransferWorker(logger, dataManager, provisioningSvc)
-	// WENDY_DATA_INGEST_URL names the DataIngestService endpoint episode uploads
-	// dial (ingest.data.wendy.sh in dev). There is no fallback: the enrolled
-	// cloud host does not serve DataIngestService. Unset disables uploads, the
-	// worker says so once, and sealed episodes stay queued on the device.
-	// Identity is the enrolled device certificate presented in the TLS
-	// handshake; no request header carries it.
+	// By default a device uploads NOTHING: an episode leaves the device only
+	// when its campaign names a destination (upload.destination), so data is not
+	// sent to the cloud without intent. A campaign opts in to Wendy Cloud with
+	// the alias `upload.destination: wendy`, or names a host for a staging or
+	// self-hosted platform. WENDY_DATA_INGEST_URL sets a device-wide DEFAULT
+	// destination for dev and test (a host or the `wendy` alias) that applies to
+	// campaigns that name none; a campaign destination still wins per episode.
+	// There is no fallback to the enrolled cloud host: it does not serve
+	// DataIngestService. Identity is the enrolled device certificate presented in
+	// the TLS handshake; no request header carries it.
 	if v := os.Getenv("WENDY_DATA_INGEST_URL"); v != "" {
 		dataTransferWorker.SetIngestEndpoint(v)
-		logger.Info("data transfer worker: ingest endpoint", zap.String("url", v))
+		logger.Info("data transfer worker: device-wide default upload destination set", zap.String("url", v))
 	}
 	wg.Add(1)
 	go func() {
