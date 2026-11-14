@@ -12,6 +12,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -173,5 +175,39 @@ func TestV2UnenrollResumeHintNamesTheCommand(t *testing.T) {
 	// The device argument is copied into a shell command: keep it one word.
 	if hint := v2UnenrollResumeHint("evil; rm -rf ~", unenrollAsset); !strings.Contains(hint, "--device 'evil; rm -rf ~' --asset-id") {
 		t.Fatalf("unquoted device in hint: %q", hint)
+	}
+}
+
+// A device that answers "credentials erased, cleanup incomplete" has been
+// reset. The authenticated reset cannot be retried: the device no longer holds
+// the identity that retry needs, and it serves only its setup port, which this
+// computer refuses while it still has the device's identity saved. The advice
+// has to be what actually works: clear the saved identity and enroll again.
+func TestV2UnenrollFailureHintAfterAnErasedButUnfinishedReset(t *testing.T) {
+	refusal := resetcleanup.Refusal(codes.Unavailable,
+		"enrollment credentials erased; resource cleanup incomplete, restart will retry; reset completion unconfirmed",
+		errors.New(`interface "wendy0" is not owned by wendy-net`))
+	err := fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed after 1 attempt(s): %w", refusal)
+
+	hint := v2UnenrollFailureHint(err, "robot.local", unenrollAsset)
+	for _, want := range []string{"erased its enrollment", "wendy device unpin robot.local", "wendy device enroll --device robot.local"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint %q lacks %q", hint, want)
+		}
+	}
+	for _, unwanted := range []string{"may still hold its enrollment keys", "--asset-id", "--force"} {
+		if strings.Contains(hint, unwanted) {
+			t.Errorf("hint %q still offers a reset that cannot run: %q", hint, unwanted)
+		}
+	}
+	// The device argument is copied into shell commands: keep it one word.
+	if hint := v2UnenrollFailureHint(err, "evil; rm -rf ~", unenrollAsset); !strings.Contains(hint, "wendy device unpin 'evil; rm -rf ~'") {
+		t.Errorf("unquoted device in hint: %q", hint)
+	}
+
+	// Any other unconfirmed reset keeps the commands that finish it.
+	other := fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed after 4 attempt(s): %w", errAgentRefusedReset)
+	if got, want := v2UnenrollFailureHint(other, "robot.local", unenrollAsset), v2UnenrollResumeHint("robot.local", unenrollAsset); got != want {
+		t.Errorf("hint for a refused reset = %q, want the resume commands %q", got, want)
 	}
 }

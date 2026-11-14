@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -221,6 +222,30 @@ func v2UnenrollResumeHint(device, assetID string) string {
 	return fmt.Sprintf("the device did not confirm its reset and may still hold its enrollment keys; retry the authenticated reset with: wendy device unenroll%s --asset-id %s --yes; "+
 		"if that keeps failing, Cloud no longer lists this device and 'wendy device unenroll%s --force --yes' clears only its local enrollment",
 		target, shellQuoteArg(assetID), target)
+}
+
+// v2UnenrollFailureHint is what to do after the Cloud deletion went through
+// and the device reset did not confirm.
+//
+// One answer is different from the rest: the device, over the verified
+// connection, says it erased its enrollment but could not finish cleaning up
+// (see resetcleanup). That reset happened. Retrying it cannot work, because
+// the device no longer holds the identity the authenticated reset needs and
+// serves only its setup port, which this computer refuses for as long as it
+// has the device's old identity saved. What works is to clear that saved
+// identity and enroll the device again once its cleanup is done.
+func v2UnenrollFailureHint(err error, device, assetID string) string {
+	if _, erased := resetcleanup.Cause(err); !erased {
+		return v2UnenrollResumeHint(device, assetID)
+	}
+	unpin, enroll := "wendy device unpin <device>", "wendy device enroll"
+	if device != "" {
+		unpin = "wendy device unpin " + shellQuoteArg(device)
+		enroll += " --device " + shellQuoteArg(device)
+	}
+	return fmt.Sprintf("the device erased its enrollment and Cloud no longer lists it, but it has not finished removing that enrollment's network setup, so it cannot be enrolled yet. "+
+		"It now answers only on its setup port, which this computer refuses while it still has the device's old identity saved: clear it with '%s', then enroll the device again with '%s' once the cleanup is done",
+		unpin, enroll)
 }
 
 func directUnenrollPeerFingerprint(conn *grpcclient.AgentConnection, verifiedPeer *grpcpeer.Peer, principal certs.WendyIdentity) (string, error) {
@@ -434,7 +459,7 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		fmt.Println(string(out))
 	}
 	if err != nil && j.Deleted && !j.Reset {
-		return fmt.Errorf("%w; %s", err, v2UnenrollResumeHint(deviceFlag, j.AssetID))
+		return fmt.Errorf("%w; %s", err, v2UnenrollFailureHint(err, deviceFlag, j.AssetID))
 	}
 	if err != nil {
 		return err
