@@ -1,0 +1,142 @@
+{
+  "appId": "sh.wendy.spare-compute",
+  "version": "0.1.0",
+  "platform": "linux",
+  "restartPolicy": "unless-stopped",
+  "env": {
+    "SOURCE_REPOSITORY": "https://github.com/wendylabsinc/WendyOS.git",
+    "SOURCE_REF": "main",
+    "WORKER_INDEX": "0",
+    "WORKER_COUNT": "1"
+  },
+  "services": {
+    "supervisor": {
+      "context": ".",
+      "env": {
+        "ROLE": "supervisor",
+        "IDLE_SECONDS": "60",
+        "MAX_FOREIGN_CORES": "0.25",
+        "RESERVE_GIB": "4",
+        "START_FREE_GIB": "12",
+        "MODEL_START_FREE_GIB": "140",
+        "MODEL_START_FREE_MIB": "180000",
+        "GPU_INDEX": "0"
+      },
+      "resources": {
+        "cpus": "0.25",
+        "memory": "128Mi",
+        "pids": 64
+      },
+      "entitlements": [
+        {
+          "type": "admin"
+        },
+        {
+          "type": "persist",
+          "name": "spare-control",
+          "path": "/control"
+        }
+      ]
+    },
+    "worker": {
+      "context": ".",
+      "dependsOn": [
+        "supervisor"
+      ],
+      "env": {
+        "ROLE": "worker",
+        "WORKER_CPUS": "2",
+        "MIN_FREE_GIB": "10"
+      },
+      "resources": {
+        "cpus": "2",
+        "memory": "4Gi",
+        "pids": 512
+      },
+      "entitlements": [
+        {
+          "type": "network",
+          "mode": "bridge"
+        },
+        {
+          "type": "persist",
+          "name": "spare-control",
+          "path": "/control"
+        },
+        {
+          "type": "persist",
+          "name": "spare-tests",
+          "path": "/state"
+        }
+      ]
+    },
+    "reviewer": {
+      "context": ".",
+      "dependsOn": [
+        "supervisor"
+      ],
+      "env": {
+        "ROLE": "review",
+        "MODEL_BASE_URL": "http://model:8000/v1",
+        "MODEL_NAME": "Qwen/Qwen3.8-Flash-Next"
+      },
+      "resources": {
+        "cpus": "1",
+        "memory": "1Gi",
+        "pids": 128
+      },
+      "entitlements": [
+        {
+          "type": "network",
+          "mode": "bridge"
+        },
+        {
+          "type": "persist",
+          "name": "spare-control",
+          "path": "/control"
+        },
+        {
+          "type": "persist",
+          "name": "spare-reviews",
+          "path": "/state"
+        }
+      ]
+    },
+    "model": {
+      "context": "model",
+      "dependsOn": [
+        "supervisor"
+      ],
+      "env": {
+        "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+        "CUDA_VISIBLE_DEVICES": "0",
+        "WORKLOAD_COMMAND": "[\"python3\",\"-m\",\"vllm.entrypoints.openai.api_server\",\"--model\",\"Qwen/Qwen3.8-Flash-Next-FP8\",\"--served-model-name\",\"Qwen/Qwen3.8-Flash-Next\",\"--host\",\"0.0.0.0\",\"--port\",\"8000\",\"--max-model-len\",\"32768\",\"--max-num-seqs\",\"1\",\"--gpu-memory-utilization\",\"0.80\",\"--reasoning-parser\",\"qwen3\"]"
+      },
+      "resources": {
+        "cpus": "4",
+        "memory": "128Gi",
+        "pids": 1024
+      },
+      "entitlements": [
+        {
+          "type": "network",
+          "mode": "bridge"
+        },
+        {
+          "type": "gpu"
+        },
+        {
+          "type": "persist",
+          "name": "spare-control",
+          "path": "/control"
+        },
+        {
+          "type": "persist",
+          "name": "spare-models",
+          "path": "/cache"
+        }
+      ]
+    }
+  },
+  "isolation": "isolated"
+}
