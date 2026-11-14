@@ -97,6 +97,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceEnrollmentStatusCmd(),
 		newDeviceRenameCmd(),
 		newDevicePowerModeCmd(),
+		newDeviceRebootCmd(),
 		newDeviceUpdateCmd(),
 		newLegacyDeviceLocalMeshCmd(),
 		newDeviceSyncTimeCmd(),
