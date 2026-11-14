@@ -1,0 +1,125 @@
+Windows packaged QEMU boot and connection, audit 2325
+
+Existing job invocation, from repository root:
+  python .github/scripts/test-windows-vm-boot.py "$env:RUNNER_TEMP/windows-vm-boot"
+
+Run in the existing native Windows x64 row. Allow a 26-minute step timeout and
+at least 35 minutes for the row including its other tests. The fixture itself
+has a 25-minute wall deadline, with shorter per-child and 10-minute boot bounds.
+No new runner, Hyper-V, nested virtualization, privileged kernel setup, physical
+board, user VM, package-manager install, or machine-wide PATH modification.
+
+The required existing tools are Go, Python, Git, Windows PowerShell 5.1 and
+7-Zip. GITHUB_ACTIONS must be true and output must be a fresh directory below
+RUNNER_TEMP. The script refuses missing tools rather than installing them.
+At least 12 GiB free space is required. QEMU uses ordinary software TCG and
+user-mode networking; the guest is the actual published ARM64 WendyOS image.
+
+Pinned inputs
+
+* QEMU Windows x64 11.1.0, qemu-w64-setup-20260811.exe, 206615928 bytes,
+  SHA256 f98a8aeb5f7faea9765b6dee28316c266cd179d80354a2fed8e50176f9a2e59f.
+  Source: microsoft/winget-pkgs, SoftwareFreedomConservancy.QEMU/11.1.0
+  installer manifest Git blob bb2abbb27f70181c27f27a1ec5ac5ec490000125.
+  https://github.com/microsoft/winget-pkgs/blob/master/manifests/s/SoftwareFreedomConservancy/QEMU/11.1.0/SoftwareFreedomConservancy.QEMU.installer.yaml
+  The script contains the exact HTTPS download URL. It extracts this NSIS
+  package as data with 7-Zip; it never executes the installer or changes its
+  registry/uninstaller state. All executable/DLL/firmware files remain inside
+  the private Program Files directory. Actual emulator version and firmware
+  size are checked before boot. Extracted executable/firmware hashes are retained.
+
+* WendyOS vm-arm64 0.21.0, published wic.zst, 605715600 bytes,
+  SHA256 f4237e58fbded13f661d9c053680ef3622fc0525a7f9fb76df13bb9354e3d762.
+  Source: https://storage.googleapis.com/wendyos-images-public/manifests/vm-arm64.json
+  Published image path is pinned in the script, not resolved through latest.
+  The image supplies the real guest kernel, firmware boot chain and Agent.
+  This checks current CLI compatibility with that released Agent; it does not
+  claim to boot an Agent rebuilt from the current WendyOS checkout.
+
+Both downloads reject redirects/proxies and require exact byte length/SHA256.
+A child-process deadline bounds slow headers and body reads as well as the
+in-process size/time check. No download/hash failure is accepted as a skip.
+
+Observed journey
+
+The actual current CLI and historical control are built with the existing Go
+cache. Candidate/source/artifact hashes and revision are retained. The CLI sees
+a fresh WENDY_CONFIG_DIR and a PATH without QEMU, while ProgramFiles points to
+the private extracted package. Thus discovery and firmware lookup must traverse
+the real Windows installation-path fallback, including spaces in the path.
+
+The CLI creates a private 16-GiB sparse VM from the pinned compressed image.
+Before boot, the exact original Spec.Binary PATH-only behavior is restored in a
+Go overlay and compiled. Its real CLI start must return structured tool_not_found exit 6 at the named missing
+executable lookup, not at download/build/firmware/port validation. No assertion
+or production source in the normal binary is altered.
+
+The normal CLI starts the VM in the foreground with TCG and a dynamically chosen
+adjacent port pair. The actual `--device vm:NAME device info --read-only --json` path must
+connect to the guest Agent without upgrading/provisioning it and report vm-arm64, arm64, WendyOS 0.21.0 and an Agent
+version. The Windows TCP table's listener PID must match the private run record,
+and the process's executable path must match the pinned extracted QEMU. This
+prevents an unrelated local Agent from satisfying a boot check.
+
+The documented Ctrl-A x console sequence exits this foreground QEMU. This is an
+intentional power-off of a disposable disk copy, not proof of guest graceful
+shutdown. The original CLI must exit successfully, `vm list --json` must report
+only this VM stopped, and both forwarded ports must be bindable again. The CLI
+then removes only its stopped private VM without --force.
+
+Ownership and retained results
+
+A Python launcher waits for a fresh nonce before spawning anything. Its owner
+assigns it to a retained kill-on-close Windows Job first, then writes that nonce.
+All Go/compiler/extractor/CLI/QEMU children inherit the Job. Every command has a
+deadline. Cancellation is recorded while the bounded Job drain runs; repeated
+signals cannot interrupt cleanup. The final result is rejected on interruption
+or unproven drain. No saved PID, global process-name kill, user config or user VM
+is used for cleanup.
+
+Upload only *.log and *.json from the output directory, not executables, package,
+firmware or disk images. Preserve failed output until the owned Job has drained.
+WINDOWS_VM_BOOT_VERIFIED plus evidence.json status passed and cleanup passed are
+required. A cross-compile or offline Python pass is not a Windows boot result.
+Native Windows runtime execution remains pending until the hosted gate runs.
+
+This closes the boot/discovery requirement only after actual hosted success.
+It does not exercise WinGet's machine-wide installer, interactive prompt rendering,
+WSL2, physical USB, enrolled-agent TLS, or automatic Windows VM detachment (which
+is explicitly unsupported in production). Existing installer-policy tests remain
+separate from the real package extraction and VM boot proof.
+
+VM lifecycle extension for2270/2060:
+The same private guest now boots twice. The first foreground start omits --port
+while the fixture owns a live listener on default50051. Actual CLI runstate,
+metadata and kernel listener ownership must agree on a later bounded port span.
+After Ctrl-A x joins the owned QEMU/CLI and both VM ports can be rebound, the
+fixture closes only its default-port obstruction. Restarting the SAME disk with
+--port still omitted must keep the saved fallback, create a new run timestamp,
+reach the real pinned WendyOS Agent again and drain before removal. No extra
+artifact download, VM disk, QEMU installation or runner is introduced; the same
+25-minute overall deadline applies and must fail rather than skip an incomplete
+second boot. Windows automatic detached start/QMP app forwarding is explicitly
+unsupported in production; this does not pretend to exercise those Unix paths.
+
+Schema and restart observations
+
+Hosted job 131729254510 booted the exact pinned image and reached the Agent;
+collision-info-38.log reported osVersion WendyOS-0.20.2. The fixture then failed
+because it expected hostname/publicKey in CLI hardware JSON. Those fields are
+not emitted there, and the Linux Agent does not populate the optional publicKey
+RPC field. This correction does not claim a cryptographic device identity.
+
+The CLI hardware assertion uses its actual exact OS-version spelling. After
+checking the kernel listener owner, a separately built read-only helper calls
+GetAgentVersion for the persistent hostname and GetNetworkStats for the actual
+kernel boot ID and boot-time sample. The response must match the CLI's version,
+OS, architecture and device type. The listener owner is checked again afterward.
+The restarted guest must retain its hostname and the same owned disk file ID,
+path and size, keep the previously asserted VM metadata/port, and return a new
+nonzero kernel boot UUID and a new VM run timestamp. Both boots still require
+foreground-process drain and forwarded-port reclamation. The helper has a
+10-second RPC deadline and runs in the same retained Windows Job as the CLI.
+
+Portable real gRPC tests and Windows cross-compilation verify the helper without
+booting a VM. Full corrected native Windows lifecycle acceptance remains pending.

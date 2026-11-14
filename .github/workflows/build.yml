@@ -971,6 +971,7 @@ jobs:
   publish-linux-repos:
     name: Publish to GCP Artifact Registry
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [determine-version, package-linux, test-templates, integration-tests]
     if: |
       always() &&
@@ -983,6 +984,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
       - name: Download all .deb packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -1006,27 +1011,36 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Upload APT packages
+      - name: Upload exact candidates and require native repository consumption
+        timeout-minutes: 40
+        env:
+          WENDY_STABLE_RELEASE: 'true'
+          REPOSITORY_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          PACKAGE_VERSION: ${{ needs.determine-version.outputs.version }}
         run: |
-          echo "Uploading .deb packages to Artifact Registry..."
-          for deb in packages/deb/*.deb; do
-            echo "Uploading $deb"
-            gcloud artifacts apt upload wendy-apt \
-              --location=us-central1 \
-              --project=${{ vars.GCP_PROJECT_ID }} \
-              --source="$deb"
-          done
+          python3 .github/scripts/publish-linux-repositories.py \
+            --project "$REPOSITORY_PROJECT" --version "$PACKAGE_VERSION" \
+            --packages packages --evidence "$RUNNER_TEMP/repository-consumer-evidence"
 
-      - name: Upload YUM packages
-        run: |
-          echo "Uploading .rpm packages to Artifact Registry..."
-          for rpm in packages/rpm/*.rpm; do
-            echo "Uploading $rpm"
-            gcloud artifacts yum upload wendy-yum \
-              --location=us-central1 \
-              --project=${{ vars.GCP_PROJECT_ID }} \
-              --source="$rpm"
-          done
+      - name: Retain upload and native repository acceptance receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: linux-repository-consumer-evidence
+          path: |
+            ${{ runner.temp }}/repository-consumer-evidence/plan.json
+            ${{ runner.temp }}/repository-consumer-evidence/upload-receipts.json
+            ${{ runner.temp }}/repository-consumer-evidence/result.json
+            ${{ runner.temp }}/repository-consumer-evidence/deb-packages.json
+            ${{ runner.temp }}/repository-consumer-evidence/rpm-packages.json
+            ${{ runner.temp }}/repository-consumer-evidence/*.log
+            ${{ runner.temp }}/repository-consumer-evidence/*-dependencies.txt
+            ${{ runner.temp }}/repository-consumer-evidence/*-helper-hashes.txt
+            ${{ runner.temp }}/repository-consumer-evidence/*/result.json
+            ${{ runner.temp }}/repository-consumer-evidence/*/metadata.log
+            ${{ runner.temp }}/repository-consumer-evidence/*/download.log
+          retention-days: 14
+          if-no-files-found: warn
 
   publish-agent-gcs:
     name: Publish agent to GCS

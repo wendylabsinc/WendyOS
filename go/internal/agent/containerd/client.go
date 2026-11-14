@@ -3342,16 +3342,18 @@ const cycloneDDSInlineConfig = `<CycloneDDS><Domain><SharedMemory><Enable>false<
 // every interface and no longer discovers anything beyond the device.
 //
 // interfaces limits discovery to the given peripheral interfaces; with none,
-// CycloneDDS picks the device's interface as it does without a configuration.
+// autodetermine retains CycloneDDS selection when an external IPv4 interface
+// exists. It must be false on loopback-only hosts: selecting lo explicitly and
+// again through autodetermine makes CycloneDDS refuse to create the domain.
 // The names come from rtps.PeripheralInterfaces, which only returns kernel
 // interface names, so they are safe to place in the XML.
-func cycloneDDSBeyondDeviceConfig(interfaces []string) string {
+func cycloneDDSBeyondDeviceConfig(interfaces []string, autodetermine bool) string {
 	var b strings.Builder
 	b.WriteString(`<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/>`)
 	for _, name := range interfaces {
 		b.WriteString(`<NetworkInterface name="` + name + `"/>`)
 	}
-	if len(interfaces) == 0 {
+	if autodetermine {
 		b.WriteString(`<NetworkInterface autodetermine="true"/>`)
 	}
 	b.WriteString(`</Interfaces></General>`)
@@ -3412,7 +3414,15 @@ func buildROS2Env(appCfg *appconfig.AppConfig, appID, serviceName string) ([]str
 		env = append(env, "RMW_IMPLEMENTATION="+rmw)
 		if rmw == appconfig.ROS2DefaultRMW {
 			if scope == appconfig.ROS2ScopePeripherals || scope == appconfig.ROS2ScopeNetwork {
-				env = append(env, "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(peripherals))
+				autodetermine := false
+				if scope == appconfig.ROS2ScopeNetwork {
+					var err error
+					autodetermine, err = ros2HasExternalIPv4()
+					if err != nil {
+						return nil, fmt.Errorf("finding network interfaces for frameworks.ros2: %w", err)
+					}
+				}
+				env = append(env, "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(peripherals, autodetermine))
 			} else {
 				env = append(env, "CYCLONEDDS_URI="+cycloneDDSInlineConfig)
 			}
@@ -3893,7 +3903,19 @@ var _ services.GroupRestarter = (*Client)(nil)
 // restart through RestartGroup instead of an independent StartContainer, which
 // would leave a secondary attached to the primary's now-dead namespace.
 func (c *Client) GroupRestartAppID(ctx context.Context, appName string) (string, bool) {
-	appID, svcName, err := ParseContainerName(appName)
+	// Underscores are valid in app IDs, so a container name alone cannot
+	// distinguish a service from a single-container app. Use its persisted
+	// ownership and require those labels to reconstruct this exact name.
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return "", false
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return "", false
+	}
+	appID, svcName, err := containerOwnerFromLabels(appName, labels)
 	if err != nil || svcName == "" {
 		return "", false
 	}

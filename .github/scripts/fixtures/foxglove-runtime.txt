@@ -1,0 +1,140 @@
+Audit 2306: actual generated Foxglove app deployment and ROS/WebSocket delivery
+
+The audit's "published bridge image" wording does not describe production.
+Original fix 9ffc87755d09721f9278710c0aca1460c037bb44 and current foxgloveServe
+generate a Dockerfile FROM ros:humble which installs the published ROS package
+ros-humble-foxglove-bridge, CycloneDDS and socat. This fixture builds that exact
+generated recipe through the production deployFoxgloveApp/runWithAgent path.
+It does not replace the bridge with a protocol mock or a hand-built test image.
+
+Required execution: existing simulator-python310 job, only matrix.robot == 'go2'
+(the existing "ROS Humble simulator dependencies (go2)" Ubuntu 24.04 row).
+Keep its shipped requirements and Go2 bridge deadline gate. Do not add this to
+containerd-regressions: its driver VM/baseline/watch work already fills its
+50-minute budget. No additional matrix row or runner is needed.
+
+After the existing Go setup, install pkg-config and libusb-1.0-0-dev in the
+ordinary disposable hosted runner. Docker/buildx, util-linux/unshare, iproute2,
+sudo and Python3 are also required. Obtain containerd and runc by extracting
+Ubuntu's native packages into an owned directory, without installing/replacing
+the runner's Docker daemon packages or changing host service configuration:
+
+  sudo apt-get update --error-on=any
+  sudo apt-get install -y pkg-config libusb-1.0-0-dev util-linux iproute2
+  runtime="$RUNNER_TEMP/foxglove-runtime-tools"
+  mkdir -p "$runtime"
+  (
+    cd "$runtime"
+    apt-get download containerd runc
+    for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
+  )
+  runtime_path="$runtime/root/usr/bin:$runtime/root/usr/sbin:$runtime/root/bin:$runtime/root/sbin:$PATH"
+  env PATH="$runtime_path" python3 .github/scripts/test-foxglove-runtime.py --output "$RUNNER_TEMP/foxglove-runtime"
+
+The coordinator preserves this explicit PATH through sudo into the private
+namespace. Commands-package compilation requires CGO_ENABLED=1 for libusb.
+The runner's installed Go must match go.mod (the existing Go setup does this).
+The full fixture must run once, including both controls; no runtime is skipped
+on a failed dependency or unsupported environment.
+
+The coordinator compiles the normal binary and two historical overlays, reuses
+one uniquely named production OCI-export buildx builder across fresh isolated
+cases, and removes only that builder/config after known namespace drain. The
+production Docker builder can start its ordinary hosted BuildKit helper; do not
+run this hosted-only namespace entrypoint or OCI-export path on a developer host.
+No daemon settings/default builder, image registry publication, host module,
+host service or physical device changes are part of the test. Each runtime has
+private mount/PID/network namespaces, only loopback networking, a private /run
+and /var/lib, an actual ContainerService/AgentService UDS and private containerd.
+The local Docker control socket is the only host runtime socket rebound inside.
+Docker performs public build-input downloads; the ROS bridge itself has no
+external network interface or Cloud credentials. Docker's client also exchanges
+registry authorization tokens, so daemon access alone is insufficient. Before
+unshare, the owned launch shell opens the original network namespace on FD9.
+Inside the private mount namespace it verifies that identity, pins the namespace
+with a private bind mount, and closes FD9. Only the Docker PATH wrapper enters
+that pinned network namespace; the Agent, ROS publisher and bridge remain in the
+private network. The helper verifies original network inode plus private mount/
+PID identities and absolute SHA256-pinned Docker/nsenter executables before exec.
+It preserves exact argv, private HOME/config, PID namespace and guardian process
+group. The original resolver file is copied and privately rebound across /run
+replacement. No host resolver, mount, route or daemon configuration is changed.
+Portable helper tests check refusal and literal child argv/environment only;
+actual setns, registry exchange and deployment require the hosted full gate.
+
+Acceptance requires actual image digest and installed package versions, the
+actual generated Dockerfile/config hashes, a negotiated bridge subprotocol,
+advertisement of a fresh nonce-specific std_msgs/msg/String channel, and five
+strictly increasing independently decoded CDR messages through the real local
+WebSocket -> ExecContainer -> socat -> bridge path. Forward cancellation must
+drain the CLI while the single deployed bridge remains running. The private
+namespace then drains the publisher, app, shim and daemon before work removal.
+
+The named-service descriptor control must build/run the old layout, carry the
+real ROS bytes, then fail the observed single-container layout assertion. Current
+Agent exec can resolve a single named service, so a fabricated handshake failure
+is not required for that control. The old forwarding-target control must have a
+real deployed image/packages and fail on the actual absent legacy container name.
+Build, package-download, timeout or unrelated RPC errors cannot pass a control.
+
+The whole coordinator has a 20-minute work deadline, with a separate bounded
+cleanup allowance; normal runtime is capped at 12 minutes and warm controls at
+3 minutes each, all sharing the overall budget. It requires 8 GiB free before
+starting. Actual cold duration/peak disk still require hosted measurement before
+claiming a measured duration. Reserve 25 minutes for the fixture step
+(20-minute work budget, up to 3 minutes bounded cleanup, plus launch margin),
+and 15 minutes for package preparation plus the existing Go2 work: a 40-minute outer budget
+for the Go2 row only is a conservative upper allocation, not a measured runtime.
+The G1 row remains at 15 minutes. Per-compile/per-case timings are emitted in
+evidence.json so this allocation can be reduced after the first hosted run.
+No additional runner/job is requested.
+
+Retain top-level *.log, evidence.json and overlay *.json, and per-case Dockerfile,
+wendy.json, image-digest.txt, installed-packages.txt and containerd.log in the
+existing job's small diagnostic artifact. Do not upload docker-config, test
+binaries, build cache, images or containerd roots. Unknown drain or ownership
+retains the named work/builder, fails acceptance and records cleanup errors.
+
+Portable checks:
+  python3 -m unittest discover -s .github/scripts -p foxglove_runtime_test.py -v
+  go test -tags regression_foxglove ./go/internal/cli/commands -run '^TestFoxgloveRuntimeMessageAdmission$' -count=1
+  WENDY_FOXGLOVE_EXPORT=NEW_PRIVATE_DIRECTORY go test -tags regression_foxglove ./go/internal/cli/commands -run '^TestFoxgloveExportGeneratedBuild$' -count=1 -v
+
+The last command only exports the production-generated recipe/config. An owner
+may build those exact files with an existing ordinary Docker driver for a local
+package smoke test; it does not establish real Agent/containerd deployment.
+No hardware acceptance, actual robot ROS topic, Foxglove desktop UI, simulator
+creation or hosted success follows from portable parser/generation tests.
+
+Loopback-only CycloneDDS startup regression (2026-11-13)
+  Hosted run 43368990597 / job 131700219619 built and deployed the actual bridge,
+  then CycloneDDS aborted with: lo: the same interface may not be selected twice.
+  This is a production startup defect on a valid loopback-only host: explicit lo
+  plus autodetermine selects the same interface twice. CycloneDDS defaults to
+  IPv4 and ranks loopback last among eligible UP/addressed interfaces:
+  https://cyclonedds.io/docs/cyclonedds/latest/config/network_interfaces.html
+
+  The Agent now retains automatic external selection only when the observed
+  host has an UP, non-loopback IPv4 candidate. Down, unaddressed and IPv6-only
+  interfaces cannot satisfy the default transport. Observation errors fail
+  explicitly. Loopback, localhost peer and participant index remain enabled;
+  ordinary external hosts retain the original auto selection and SUBNET scope.
+  Interface changes between creation and ROS startup still need app restart;
+  this change does not introduce dynamic DDS reconfiguration.
+
+  The existing gate adds duplicate-loopback as a fourth case, restoring exactly
+  the original unconditional autodetermine expression. It must deploy the same
+  immutable image and generated inputs as the fully successful normal case,
+  then fail with CycloneDDS's actual duplicate-interface diagnostic. Because a
+  failed startup cannot exec dpkg-query, only this control uses the previously
+  validated package list from that identical image. Normal/other controls retain
+  their direct package observation. Both image provenance and terminal startup
+  logs are captured even if the app exits before the first running-state poll.
+  The test still waits for RUNNING or an actual recorded termination reason,
+  rather than racing exec against a merely created container.
+
+  Normal still requires the actual forwarded WebSocket, five changing DDS CDR
+  payloads and a running app after forwarding cancellation. No artificial eth
+  interface is added. The existing 20-minute overall/25-minute step budgets and
+  owned cleanup remain unchanged. Local source/race/admission checks do not
+  establish full post-fix OCI startup; required hosted execution remains pending.

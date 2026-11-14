@@ -1,0 +1,124 @@
+{
+  "audit_entry": "2022",
+  "overall": "partial",
+  "purpose": "Map the six mixed-merge fixes to actual behavior and explicit residuals; this is not a CI-pass or hardware-acceptance ledger.",
+  "entries": [
+    {
+      "commit": "441ab9ce1bbc4cd9fcae4812c8a40fee08368082",
+      "behaviors": [
+        {
+          "boundary": "Literal loopback control listeners; remote HIL requires a token before binding",
+          "proof": "test_transport_boundaries.py opens actual physical and FSM listeners, verifies socket address and HTTP bytes; historical wildcard defaults fail before the accept loop starts. Existing test_review_regressions.py checks HIL admission with real socket creation.",
+          "remaining": "Full Coke and inference listeners and authenticated remote HIL requests need the locked review/runtime gate; the existing HIL cases establish token preconditions, not a complete authenticated remote exchange."
+        },
+        {
+          "boundary": "Do not replay a side-effecting POST after losing its reply; retain deactivation identity until success",
+          "proof": "Actual HTTP peer receives the POST then closes before replying. Server receipts prove exactly one operation; explicit deactivation retry retains the same ID. GET still retries. Both pre-fix behaviors fail named controls.",
+          "remaining": null
+        },
+        {
+          "boundary": "Discard cached and in-flight embeddings when camera stream changes",
+          "proof": "Actual worker thread is held in an old encode while a new stream arrives; cached/admitted old snapshots fail, new bytes publish, old encode is discarded, worker joins. Historical stream-retention control fails.",
+          "remaining": "No camera driver/model accuracy claim."
+        },
+        {
+          "boundary": "Stop entry before further motion; propagate KeyboardInterrupt/SystemExit after disarm cleanup; reject frozen camera",
+          "proof": "Existing review tests cover stopped entry and stale readiness. New test_physical_interruption.py uses actual SIGINT/SystemExit, private socket release receipts, independent-process flock contention/reacquisition, the actual watchdog join and fresh owner recovery through production ExactPolicyUnitreeIO. Both normal cases and the original broad-handler control pass locally; required in the existing G1 row and42+ locked review cases.",
+          "remaining": "The supplied backend deliberately never opens DDS or motor publishers. Actual SDK publisher teardown and robot physical stop acceptance remain separate."
+        },
+        {
+          "boundary": "Inference status omits session ID; error and unknown POST close the connection; active HTTP handlers drain",
+          "proof": "Existing locked review suite has real HTTP error/reconnect and unknown-POST checks, session expiration checks and actual inference/physical handler drain. New transport subset independently runs the physical drain; daemon-handler control fails.",
+          "remaining": "Locked inference-server suite is required hosted evidence; physical drain is a later lifecycle supplement, not a claim that its daemon flag appeared in this original commit."
+        },
+        {
+          "boundary": "Initialize base simulation without virtual reset; first scene epoch, default reference stepping and 43-joint effort field",
+          "proof": "test_scene_runtime.py and test-coke-scene-runtime.py execute the original seven hash-pinned expert assets through actual MuJoCo3.12.0. All2400 default CokeScene steps match production Simulation qpos/qvel; real RGBD, initial/reset epochs, terminal no-op and joint_effort43 are asserted. Native macOS normal passes in approximately10s; three original reset/default-step/field controls fail exact JUnit assertions. See scene-and-interruption.md.",
+          "remaining": "Hosted G1 scene execution needs the original expert files supplied outside Git through an approved artifact source and libosmesa6. The repo intentionally has no download URL; no unavailable or skipped hosted gate is claimed. No frozen-policy or physical accuracy proof. expert-ci-input.json gives the exact seven-file/184393202-byte CI storage contract; no approved remote source was found in the documented scoped searches."
+        },
+        {
+          "boundary": "Always extract DLA compiler from verified packaged artifact instead of trusting existing host file",
+          "proof": "test-coke-dla-package.py pins the actual2,791,444-byte NVIDIA36.4.3 package to the unchanged production checksum, validates Debian metadata and exact8,159,168-byte AArch64 ELF output. ExistingG1 job executes unchanged bootstrap at its real vendor path in private mount/PID/network namespaces: fresh extraction, replacement of an untrusted existing library, checksum/missing-package refusal without modifying that existing library, and exact historical existing-file bypass failure. Local native dpkg-deb extraction/hash/ELF and hosted-only refusal pass; source review clear. Hosted job131729254252 at2debcbb5 now passes fresh/existing/corrupt/missing cases and rejects the historical existing-file bypass.",
+          "remaining": "No package installation, library loading, physical Jetson or GPU acceptance is claimed."
+        },
+        {
+          "boundary": "Local web assets and motion gating configuration",
+          "proof": "UI vendor changes are outside the requested non-UI focus.",
+          "remaining": "Example Docker/configuration deployment and physical motion admission are not inferred from HTTP tests."
+        }
+      ]
+    },
+    {
+      "commit": "95f6c1c52",
+      "behaviors": [
+        {
+          "boundary": "Production RTPS multicast socket only receives on joined interfaces",
+          "proof": "TestMulticastPacketsStayOnTheirJoinedInterface runs two real production participants on private loopback/veth interfaces. Actual external-namespace SPDP/SEDP plus exact binary samples must reach only the appropriate participant. test-rtps-multicast-isolation.sh requires normal and a named pre-fix control removing the production multicast restriction. Both binaries compile. Actual hosted job131714898807 at50ce4945a passed real interface/sample delivery and the named CROSS_INTERFACE_DISCOVERY control.",
+          "remaining": "Container observer and physical middleware interoperability remain separate."
+        },
+        {
+          "boundary": "Lifecycle observer uses host discovery scope; lidar interruption does not swallow SystemExit",
+          "proof": "lidar_probe_test.py now executes the actual production main/options parser in separate Python interpreters with a subscriber-boundary injected SystemExit73 or KeyboardInterrupt. SystemExit retains exit73, KeyboardInterrupt retains clean exit0, and the exact old broad catch reproduces swallowed exit0. All21 native tests pass; existing Go TestLidarProbe invokes this suite in required race CI. TestROSObserverHostRuntime adds actual production Observer subscription/callback/snapshot and source-hashed config inside production-created OCI containers against real controlled DDS using the shipped Go2 Cyclone configuration. Normal, explicit other-domain isolation and fresh post-control delivery are required; original app discovery scope is separately classified as rejected or compatible, never silently counted as a passing historical negative control. Linux/arm64 CGO0 compile and portable source/image admission checks passed.",
+          "remaining": "Hosted actual Observer/OCI/DDS normal and isolation execution remains pending. Current legacy app scope maps device/loopback after the scope migration, so original config sensitivity must be observed rather than presumed. The fixture does not execute HTTP StatusReader/main, MuJoCo physics, VM identity or physical middleware; subscriber termination fixtures do not establish physical sensor teardown."
+        }
+      ]
+    },
+    {
+      "commit": "499da6870",
+      "behaviors": [
+        {
+          "boundary": "Patrol accepts positive-infinity scan gaps only with explicit opt-in and usable front data; rejects invalid capture timestamps even with arrival-time freshness opt-in",
+          "proof": "Existing policy/callback tests cover malformed values. New patrol_transport_test.py runs actual ros_app.py subprocess CLI/DDS subscriptions, status, Trigger recovery and 0.55 m/s sport requests. Five journeys cover strict defaults, independent flags, advancing/zero/repeated captures, required front returns, obstacle/timeout stops and finite kinematic route completion. The existing Go2 deadline image/job requires normal plus three exact controls; portable control-admission checks pass locally. Hosted job131729254176 at2debcbb5 passes all five normal journeys and three named controls; artifact14014963577 has matching source hashes.",
+          "remaining": "The sensor peer is kinematic, not MuJoCo locomotion or physical motor/perception accuracy."
+        }
+      ]
+    },
+    {
+      "commit": "44be244bc",
+      "behaviors": [
+        {
+          "boundary": "macOS source-cache root stays writable through rename, then becomes read-only under the cache lock; cleanup retains ownership until protected",
+          "proof": "test-g1-cache-publication.py runs actual native filesystem source-cache publication with the real embedded payload, readonly payload/writeable-root probes, cross-process flock exclusion, actual final-chmod denial in a per-process sandbox, owned cleanup/foreign-tree retention, retry and same-inode reuse. Native -race normal and four discriminating contract/ownership/protection/lock controls pass on macOS27. Registered in the existing macOS15 CLI/device row; see mac-source-cache.md.",
+          "remaining": "Original uninstrumented same-parent publication sequence still succeeds on local macOS27; its EACCES report is not reproduced. Native same-parent/cross-parent behavior and original-sequence compatibility are recorded separately from the required contract controls. Hosted macOS15 execution/sensitivity remains pending. No simulator boot/model download/robot claim."
+        }
+      ]
+    },
+    {
+      "commit": "0ce66ce4d",
+      "behaviors": [
+        {
+          "boundary": "Real voice WebSocket uses backend-compatible upgrade without Origin and with Bearer authentication; errors are bounded/redacted and cancellation closes reads",
+          "proof": "TestLiveWebSocketProtocolWithLocalServer exchanges actual WebSocket startup/audio/delegation/reply/close; TestLiveUpgrade* covers actual HTTP failure responses, redirect refusal and cancellation. Focused race tests pass locally; existing full Go unit jobs already execute the package.",
+          "remaining": "Live provider/account and physical audio are outside this software transport proof."
+        }
+      ]
+    },
+    {
+      "commit": "0937bbd02",
+      "behaviors": [
+        {
+          "boundary": "Delayed transcript survives beyond two seconds; metadata alone retains results; actual new speech invalidates corrections; interrupt prevents stale audio before and after backpressure",
+          "proof": "Existing TestLiveDelegationWaitsForTranscriptBeyondTwoSeconds/MetadataWithoutFreshSpeechKeepsCurrentResult/LateCorrectionInvalidatesOldReplyWhenSpeechArrives/PlaybackGuardRejectsWriteStartingAfterInterrupt plus TestVoiceAudioGuard* exercise real concurrent session/queue behavior. Focused race tests pass locally and package is in existing Go unit jobs.",
+          "remaining": "Physical speaker/microphone and third-party service timing are not claimed; TUI display changes excluded from non-UI scope."
+        }
+      ]
+    }
+  ],
+  "new_gates": {
+    "transport": "python .github/scripts/test-g1-coke-transports.py --output NEW_DIRECTORY; NumPy required; five real HTTP/thread cases and six source-bound controls, no skips.",
+    "locked_review": "uv run --project Examples/G1CokeDemo --frozen --group dev --python 3.12 python .github/scripts/test-g1-coke-review.py --output NEW_DIRECTORY; exact lock versions and all 42+ current review/transport cases required.",
+    "runner": "Existing G1 simulator row can run the lightweight gate after shipped NumPy installation, then the separate exact Coke Python 3.12 runtime. It must retain the existing Python 3.10 simulator compatibility check. No additional job or matrix entry.",
+    "packet_isolation": "bash .github/scripts/test-rtps-multicast-isolation.sh NEW_DIRECTORY in the existing disposable Linux network job. Requires Go race compiler, sudo, iproute2 and util-linux; no additional runner. Never run its privileged namespace on a user host.",
+    "dla_package": "python3 .github/scripts/test-coke-dla-package.py --output NEW_RUNNER_TEMP_DIRECTORY in existingG1 job. Exact public artifact, real dpkg-deb extraction and strict historical control; no new runner.",
+    "physical_cleanup": "python .github/scripts/test-coke-physical-cleanup.py --output NEW_DIRECTORY in the exact existing Coke runtime; two actual OS/thread cleanup cases and historical handler control, required in existing G1 job.",
+    "recorded_scene": "python .github/scripts/test-coke-scene-runtime.py --expert VERIFIED_ORIGINAL_DIRECTORY --output NEW_DIRECTORY; local actual model/replay/render normal+three controls passed. Hosted registration pending exact external artifact supply, never skip or synthesize missing inputs.",
+    "patrol_ros": "Existing test-go2-bridge-deadlines.py now runs five native ROS Patrol journeys and three source controls using its already-built image/private network; no new image build or runner. Actual hosted normal and three controls pass at2debcbb5, job131729254176.",
+    "mac_source_cache": "python3 .github/scripts/test-g1-cache-publication.py --output NEW_DIRECTORY in existing native macOS CLI/device job. Actual filesystem+kernel permission+four controls required; uninstrumented historical sequence separately classified, never counted as a negative control when compatible."
+  },
+  "not_claimed": [
+    "Physical robot/camera/motor access",
+    "Actual ROS network isolation from socket-policy assertions",
+    "Model or simulator accuracy from a controlled worker",
+    "Full audit closure from the required review suite alone"
+  ]
+}

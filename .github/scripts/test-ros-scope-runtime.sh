@@ -49,10 +49,17 @@ CLEANUP
   WENDY_ROS_SCOPE_PARENT_mnt=$(readlink /proc/self/ns/mnt)
   WENDY_ROS_SCOPE_PARENT_net=$(readlink /proc/self/ns/net)
   WENDY_ROS_SCOPE_PARENT_pid=$(readlink /proc/self/ns/pid)
-  python3 - "$prepared" <<'VERIFY'
+  python3 - "$prepared" "$(realpath "$(dirname "$0")/../..")" <<'VERIFY'
 import hashlib,json,pathlib,sys
 root=pathlib.Path(sys.argv[1]);manifest=json.loads((root/'manifest.json').read_text())
 assert manifest['status']=='prepared' and not manifest['cleanup_errors']
+assert manifest['staged_sha256'], 'staged observer/source identities missing'
+for name, expected in manifest['staged_sha256'].items():
+    assert pathlib.Path(name).name == name
+    path=root/'context'/name
+    assert path.is_file() and not path.is_symlink() and hashlib.sha256(path.read_bytes()).hexdigest()==expected, 'staged runtime source changed'
+for name, expected in manifest['source_sha256'].items():
+    assert hashlib.sha256((pathlib.Path(sys.argv[2]) / name).read_bytes()).hexdigest()==expected, 'prepared fixture differs from current source'
 hash=hashlib.sha256()
 with (root/'ros-image.tar').open('rb') as archive:
     for block in iter(lambda: archive.read(1<<20),b''):hash.update(block)
@@ -70,6 +77,8 @@ VERIFY
   set -e
   if [[ $case_name == normal ]]; then
     [[ $result == 0 ]]
+    grep -q '^--- PASS: TestROSObserverHostRuntime ' "$prepared/$case_name.log"
+    grep -q 'ROS_OBSERVER_HOST_RUNTIME_VERIFIED' "$prepared/$case_name.log"
     grep -q '^--- PASS: TestROS2ScopeRuntimeVisibility ' "$prepared/$case_name.log"
     if grep -q '^--- SKIP:' "$prepared/$case_name.log"; then exit 1; fi
   else
@@ -130,7 +139,7 @@ ip netns exec peripheral ip link set cable0 up
 # marker in this private mount; actual interfaces/routes and DDS remain real.
 mkdir -p /run/ros-sys-net/{lo,uplink0/device,periph0/device}
 mount --bind /run/ros-sys-net /sys/class/net
-export WENDY_ROS_SCOPE_NAMESPACE=1 WENDY_ROS_SCOPE_WORK="$work"
+export WENDY_ROS_SCOPE_NAMESPACE=1 WENDY_ROS_SCOPE_WORK="$work" WENDY_ROS_SCOPE_PREPARED="$prepared"
 export WENDY_ROS_SCOPE_ARCHIVE="$prepared/ros-image.tar"
 WENDY_ROS_SCOPE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$prepared/manifest.json")
 export WENDY_ROS_SCOPE_IMAGE
@@ -149,4 +158,6 @@ for ((attempt=0; attempt<100; attempt++)); do
 done
 ctr --address "$socket" version
 export WENDY_CONTAINERD_INTEGRATION="$socket"
-exec "$binary" -test.run '^TestROS2ScopeRuntimeVisibility$' -test.v -test.count=1 -test.timeout=120s
+selection='^TestROS2ScopeRuntimeVisibility$'
+if [[ $case_name == normal ]]; then selection='^(TestROS2ScopeRuntimeVisibility|TestROSObserverHostRuntime)$'; fi
+exec "$binary" -test.run "$selection" -test.v -test.count=1 -test.timeout=120s

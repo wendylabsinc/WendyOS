@@ -160,6 +160,54 @@ class AcceleratorRenumberingTests(unittest.TestCase):
                 self.generator.generate(inventory, root / "bundle")
             self.assertFalse((root / "bundle").exists())
 
+    def test_catalog_selects_storage_and_verifies_actual_downloaded_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            emmc, nvme = root / "emmc.wendy", root / "nvme.wendy"
+            emmc.write_bytes(b"SYNTHETIC EMMC ARTIFACT")
+            nvme.write_bytes(b"SYNTHETIC NVME ARTIFACT")
+            row = {}
+            for prefix, path in (("ota_update", emmc), ("nvme_ota_update", nvme)):
+                row.update({prefix + "_path": "images/jetson-agx-orin/0.20.1/" + path.name,
+                            prefix + "_checksum": hashlib.sha256(path.read_bytes()).hexdigest(),
+                            prefix + "_size_bytes": path.stat().st_size})
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"device_id": "jetson-agx-orin", "versions": {"0.20.1": row}}))
+            for storage, expected in (("emmc", emmc), ("nvme", nvme)):
+                with patch.object(self.generator.subprocess, "Popen", side_effect=AssertionError("catalog executed a process")):
+                    catalog = self.generator.artifact_catalog(manifest, "jetson-agx-orin", storage)
+                    verified = self.generator.verify_catalog_artifact(catalog, "0.20.1", expected)
+                self.assertEqual(verified["renumbering_qualification"], "not_observed")
+                self.assertEqual(verified["sha256"], hashlib.sha256(expected.read_bytes()).hexdigest())
+                self.assertTrue(verified["url"].endswith(expected.name))
+                other = nvme if storage == "emmc" else emmc
+                with self.assertRaisesRegex(ValueError, "size or SHA256"):
+                    self.generator.verify_catalog_artifact(catalog, "0.20.1", other)
+            with self.assertRaisesRegex(ValueError, "device_id"):
+                self.generator.artifact_catalog(manifest, "jetson-agx-thor", "nvme")
+            with self.assertRaisesRegex(ValueError, "storage"):
+                self.generator.artifact_catalog(manifest, "jetson-agx-orin", "ufs")
+
+    def test_catalog_does_not_substitute_install_or_unpinned_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid = {"ota_update_path": "images/jetson-agx-thor/0.20.1/image.wendy",
+                     "ota_update_checksum": "a" * 64, "ota_update_size_bytes": 1024}
+            variants = {"raw-install": {**valid, "ota_update_path": "images/board/image.wic"},
+                        "mutable": {**valid, "ota_update_path": "images/board/latest/image.wendy"},
+                        "traversal": {**valid, "ota_update_path": "../image.wendy"},
+                        "no-digest": {**valid, "ota_update_checksum": ""},
+                        "bad-size": {**valid, "ota_update_size_bytes": True},
+                        "valid": valid}
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"device_id": "jetson-agx-thor", "versions": variants}))
+            catalog = self.generator.artifact_catalog(manifest, "jetson-agx-thor", "nvme")
+            # Thor uses the base OTA row when no NVMe override is published.
+            self.assertEqual(list(catalog["versions"]), ["valid"])
+            self.assertEqual(catalog["versions"]["valid"]["manifest_field"], "ota_update")
+            self.assertEqual(len(catalog["unavailable"]), 5)
+            self.assertEqual(catalog["renumbering_qualification"], "not_observed")
+
 
 if __name__ == "__main__":
     unittest.main()

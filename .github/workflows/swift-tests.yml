@@ -19,9 +19,28 @@ on:
   pull_request:
     paths:
       - 'swift/**'
+      - 'go/internal/cli/assets/docs/development/debugging.md'
+      - '.github/scripts/check-swift-agent-docs.py'
+      - '.github/scripts/swift_agent_docs_test.py'
       - 'Proto/**'
       - '.github/workflows/**'
       - '.github/scripts/restore-trusted-build-cache.sh'
+      - '.github/scripts/test-watch-session.sh'
+      - '.github/scripts/test-mac-agent-termination.py'
+      - '.github/scripts/test-mac-location-permission.py'
+      - '.github/scripts/fixtures/mac-agent-termination.swift'
+      - '.github/scripts/run-owned-media-test.py'
+      - 'go.mod'
+      - 'go.sum'
+      - 'go/cmd/wendy/**'
+      - 'go/internal/cli/commands/watch*'
+      - 'go/internal/cli/commands/run*'
+      - 'go/internal/cli/commands/native*'
+      - 'go/internal/cli/commands/filesync*'
+      - 'go/internal/cli/grpcclient/**'
+      - 'go/internal/shared/appconfig/**'
+      - 'go/internal/shared/config/**'
+      - 'go/internal/shared/env/**'
   schedule:
     - cron: '37 3 * * *'
   workflow_dispatch:
@@ -52,6 +71,21 @@ jobs:
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Verify documented Swift Agent configuration
+        timeout-minutes: 4
+        run: python3 .github/scripts/check-swift-agent-docs.py --evidence "$RUNNER_TEMP/swift-agent-docs"
+
+      - name: Retain compiled Agent documentation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: swift-agent-docs
+          path: |
+            ${{ runner.temp }}/swift-agent-docs/result.json
+            ${{ runner.temp }}/swift-agent-docs/*.log
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Capture selected Xcode version
         id: xcode
@@ -86,10 +120,62 @@ jobs:
       - name: Test Mac network-access migration
         run: bash swift/Scripts/NetworkAccessPreferences_test.sh
 
+      - name: Require real Mac Agent acknowledgement and exit watchdog
+        run: python3 .github/scripts/test-mac-agent-termination.py --output "$RUNNER_TEMP/mac-agent-termination"
+
+      - name: Retain Mac Agent termination evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mac-agent-termination
+          path: |
+            ${{ runner.temp }}/mac-agent-termination/*.json
+            ${{ runner.temp }}/mac-agent-termination/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require Location decisions and the real unanswered timeout
+        timeout-minutes: 10
+        run: |
+          python3 .github/scripts/run-owned-media-test.py --timeout 60 -- bash swift/Scripts/TestLocationPermissionRequest.sh
+          python3 .github/scripts/test-mac-location-permission.py "$RUNNER_TEMP/location-permission"
+
+      - name: Preserve Location permission evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: location-permission
+          path: |
+            ${{ runner.temp }}/location-permission/**/*.log
+            ${{ runner.temp }}/location-permission/**/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run swift test
         working-directory: swift
         shell: bash
         run: bash ./Scripts/Test.sh
+
+      - name: Set up Go for the watch transport fixture
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: swift-watch
+
+      - name: Install watch CLI build dependencies
+        run: brew install pkg-config libusb
+
+      - name: Require live watch redeployment and interrupt cleanup
+        timeout-minutes: 25
+        run: bash .github/scripts/test-watch-session.sh "$RUNNER_TEMP/watch-session" "$GITHUB_WORKSPACE/swift/Build/SwiftPM"
+
+      - name: Retain watch transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: watch-session
+          path: ${{ runner.temp }}/watch-session/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Archive SwiftPM build cache
         id: archive_swiftpm

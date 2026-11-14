@@ -1,0 +1,187 @@
+Audit1682: reserved Jetson capsule durability and firmware consumption
+
+Generation is offline. Every case starts not_run. This supplements the separate
+2341 rootfs-only plan; that plan supplies pinned identity, binaries and the
+read-only snapshot helper, not evidence that a capsule has ever applied. No
+commands below are run by generation. Run this only on reserved serial @SERIAL@.
+Generate on the host with:
+  python3 .github/regression-coverage/manual/jetson-capsule-rehearsal.py inventory.json /absolute/new-output-directory
+
+Preparation and admission
+
+1. Supply inventory JSON with ab_plan pointing to the exact generated2341
+   evidence.json. Keep all its hashed inputs, generated files and pinned updater
+   checkout available. Supply archive, descriptor, payload_inspection and capsule
+   paths for ONE new capsule-bearing .wendy release. The descriptor contains url,
+   sha256, size_bytes, storage, artifact_name and artifact_version. The inspection
+   must independently bind artifact_sha256, rootfs_sha256, agent_sha256,
+   updater_sha256, bootloader_marker_present:true, capsule_path exactly
+   /opt/nvidia/UpdateCapsule/tegra-bl.cap, capsule_sha256, capsule_size_bytes and
+   reviewer. Inspect the actual rootfs marker /var/lib/wendyos/update-bootloader;
+   manifest bootloader_update alone does not select this path. The generator
+   verifies archive/compressed-payload hashes but does not mount/decompress the
+   rootfs or authenticate NVIDIA's capsule signature. Producer inspection and
+   vendor signature/board compatibility qualification are required separately.
+
+2. Supply transition fields from_firmware, to_firmware, from_esrt_version,
+   to_esrt_version, esrt_firmware_guid, vendor_qualification,
+   antirollback_compatible:true and recovery_independently_verified:true. Also
+   supply transition_record, recovery_record, power_isolation_record and
+   authorization_record files, boot_seconds (60..900), power_off_seconds (10..120).
+   These are independently reviewed lab records, never inferred from filenames.
+   The expected transition is @FROM@ -> @TO@, ESRT firmware class @GUID@.
+   A no-op/reinstalled version cannot prove capsule consumption. Do not downgrade
+   firmware or alter ESRT/EFI variables to manufacture a transition. Review secure
+   boot/signing policy, ratchets and lowest_supported_version before admission.
+
+3. Recovery must already be qualified for the exact ECID, carrier, root disk and
+   firmware family. Preserve an independently verified, vendor-supported recovery
+   image/tool version and the physical recovery procedure, storage backup and
+   serial console. Firmware updates can advance anti-rollback state: a filesystem
+   backup does not guarantee firmware rollback. Never reuse the same forward
+   transition twice by assuming reflashing rootfs restores old firmware. Cases A
+   and B require independent reserved baseline boards, or an explicitly qualified
+   recovery that restores the complete permitted initial firmware state. Otherwise
+   run one case and retain the other not_run.
+
+4. Owner authorization must cover the exact physical board/storage, firmware
+   transition, possible recovery write and the separate acknowledged-stage power
+   interruption. Identify every power feed including USB, batteries and PoE;
+   isolate only the reserved target. The power record names the physical connector
+   or exact controlled outlet, human operator and independent loss-of-power
+   indication. No generic network switch API is supplied. Maintain stable power
+   throughout firmware programming. Do not interrupt NVIDIA capsule processing.
+   No production application, model, credential or unrelated volume is removed.
+
+5. Before each case run the prepared2341 snapshot helper from the local serial
+   console, with its exact config and observed initial slot. Use its 180-second
+   outer bound. Require exact DT serial/SoC, GPT APP/APP_b/ESP roles and UUIDs,
+   parent disk serial, active root/boot chains, binary hashes, healthy Agent and
+   no pending deployment. Agent SHA256 @AGENT@; updater SHA256 @UPDATER@.
+   Preserve boot ID, serial UEFI banner, OS version, firmware version and L4T.
+   Existing pending deployment is a STOP: the volatile-zero Orin pending-readiness
+   exception remains unfixed; do not erase state or invoke mark-good to bypass it.
+
+6. Read firmware observations locally, without changing them:
+     date -u
+     cat /proc/sys/kernel/random/boot_id
+     timeout 15 nvbootctrl get-current-slot
+     timeout 15 nvbootctrl -t rootfs get-current-slot
+     timeout 15 nvbootctrl dump-slots-info
+     timeout 15 find /sys/firmware/efi/esrt/entries -maxdepth 2 -type f -print
+   From the enumerated entries, identify exactly one fw_class matching @GUID@;
+   retain fw_class, fw_version, lowest_supported_fw_version, last_attempt_version
+   and last_attempt_status from that entry. Names/entries unavailable on this
+   firmware mean the corresponding ESRT acceptance remains pending, not zero.
+   Preserve the firmware banner as independent version evidence. Record the raw
+   bytes/attributes of the enumerated OsIndications-* efivar, without writing it:
+     timeout 15 find /sys/firmware/efi/efivars -maxdepth 1 -name 'OsIndications-*' -print
+   Read the one actual path with od -An -tx1. The first four bytes are attributes;
+   FILE_CAPSULE_DELIVERY is bit2 of the following little-endian uint64 value.
+   Do not confuse attributes with the value or assume a missing variable is zero.
+
+7. Resolve ESP /dev/disk/by-partuuid/@ESP@ against the validated GPT layout.
+   Identify any existing mount using:
+     timeout 15 findmnt -rn -S /dev/disk/by-partuuid/@ESP@ -o SOURCE,TARGET,FSTYPE,OPTIONS
+   If already mounted, inspect that exact mount and do not remount/unmount it.
+   If unmounted, the owner may create a fresh private directory with mktemp -d
+   /tmp/ci1682-esp.XXXXXXXX and mount ONLY that partition there, read-only:
+     ESP_VIEW=$(mktemp -d /tmp/ci1682-esp.XXXXXXXX)
+     timeout --signal=TERM --kill-after=5s 15s mount -t vfat -o ro /dev/disk/by-partuuid/@ESP@ "$ESP_VIEW"
+   ESP_VIEW must be the exact newly created directory, never an existing path.
+   Independently verify findmnt --mountpoint "$ESP_VIEW" reports the expected
+   resolved device and ro,vfat before reading. After observations, unmount only
+   this newly owned mount with the same timeout and rmdir only the empty owned
+   directory. An uncertain mount/unmount completion is a stop; leave the directory
+   for exact-owner recovery, never recursively delete it. No fsck/repair/write.
+   Capture whether EFI/UpdateCapsule/TEGRA_BL.Cap already exists. A stale capsule
+   or active FILE_CAPSULE_DELIVERY bit invalidates the clean baseline; use qualified
+   recovery rather than deleting someone else's staged update.
+
+Case A: actual Agent update and firmware consumption
+
+8. Start continuous serial capture BEFORE the generated agent_capsule_update.
+   This exact CLI command uploads the pinned Agent and requests the immutable
+   capsule artifact. Observe installation for at most @INSTALL@ seconds; retain
+   failure/stall evidence and inspect the exact target if that window expires. Do
+   not start a second writer or cut power to interrupt an in-progress installation.
+   It must run in text mode because --artifact-url rejects
+   --json. Record installed/source OS version and actual reboot path. On 0.17.0
+   and 0.18.0 the Agent logs the WDY-2200 systemd handover; newer/unknown versions
+   use sync followed by immediate reboot. A modern-only run does not exercise
+   the older clean-handover case. Historical affected releases require their own
+   qualified forward transition/recovery, not a spoofed OS-version file.
+
+9. Retain the actual staging/reboot transcript. Do not race an ESP mount against
+   the running installer or attempt to pause firmware programming. Within @BOOT@
+   seconds observe a NEW boot ID, actual UEFI capsule processing, firmware @TO@,
+   exact ESRT class and expected new fw_version/last_attempt_version, success
+   last_attempt_status, and the expected newly installed root/boot chain. Correlate
+   the old/new versions and capsule identity with the reviewed transition. An old
+   status0, a changed rootfs alone, or the updater accepting a successful boot
+   with unreadable ESRT is insufficient for this stricter physical acceptance.
+
+10. Require target rootfs version @VERSION@, the installation's verified payload
+    digest @PAYLOAD@ and status/history matching that artifact/slot. Do not hash a
+    live writable root partition and compare it to the producer image after boot.
+    Capture bounded current-boot Agent/updater journals and check commit completes
+    with no pending state or rollback. Repeat the read-only baseline observations.
+    Firmware normally CONSUMES the staged capsule; record file/indication state,
+    but absence alone is neither success nor loss. A remaining capsule with no
+    fresh firmware transition fails this case. Once stable, run generated
+    console_reboot_after_success and require a second new boot ID, persistent new
+    firmware/root identity and healthy Agent within @BOOT@ seconds.
+
+Case B: storage durability after acknowledged staging, before reboot
+
+11. Restore the separately qualified initial state or use the second reserved
+    baseline board and regenerate its exact identity plan. Repeat steps5..7.
+    Through local serial console invoke generated console_stage_without_reboot.
+    Pinned wendyos-update install writes/stages and returns WITHOUT rebooting.
+    Observe at most @INSTALL@ seconds. Wait for successful exit and the pending
+   swapped state; retain complete
+    terminal output and generated console_status. An interrupted/failed install
+    is not eligible for the power cut. Do not invoke Agent's rebooting update in
+    this case, and do not have any automatic reboot service running concurrently.
+
+12. Before any reboot, observe the exact staged ESP capsule by step7: size @SIZE@
+    and SHA256 @CAPSULE@ at EFI/UpdateCapsule/TEGRA_BL.Cap; record OsIndications
+    FILE_CAPSULE_DELIVERY, boot_attempted, bl-version-before and pending state.
+    Require the correct target slot/artifact/payload. Close the owned read-only
+    view before proceeding. The updater has already called file fsync, rename and
+    filesystem syncfs before acknowledging staging. A mount/unmount or diagnostic
+    read may change cache/writeback timing; this case tests post-acknowledgement
+    cold-start persistence, not loss of an unflushed Agent write window.
+
+13. With the OS still running at the staged prompt, no reboot requested and no
+    capsule programming underway, the authorized operator removes ONLY the exact
+    recorded target power feeds. Record external evidence that power was lost;
+    leave off for @OFF@ seconds. Restore stable power once. Record uninterrupted
+    serial boot and repeat steps9..10, including fresh firmware application and
+    second-boot persistence. If a reset/firmware transition already began, do NOT
+    make the cut; mark this attempt not_run and retain the timing evidence.
+    On boot failure stop at @BOOT@ seconds and use the independently qualified
+    recovery procedure. Do not loop uncontrolled power cuts or rewrite EFI state.
+
+Remaining timing-specific acceptance — explicitly pending
+
+14. Agent sync-to-reboot fault injection and the 60-second stuck-clean-shutdown
+    fallback are separate cases. They need a qualified external trigger/capture
+    rig with exact board/outlet ownership, measured trigger latency, proof of the
+    sync/reboot boundary, and protection against cutting power once firmware
+    programming starts. No such rig or command is supplied here. Keep both cases
+    not_run until that exact reviewed procedure exists. Do not stop PID1, hang
+    filesystems, unload storage drivers or disable watchdogs on an ad-hoc target.
+
+15. An omit-Agent-sync negative control against this CURRENT updater can still
+    succeed because its copyFileSync already fsyncs/renames/syncfs the ESP. That
+    success cannot prove the Agent fix irrelevant, and failure must not be forced
+    by casually removing updater durability calls. A historical affected stack
+    requires exact Agent/OS/updater source+binary identities, qualified compatible
+    capsule transition and independently authorized recovery. Keep original
+    fault sensitivity pending unless such a discriminating control is recorded.
+
+For each executed case retain source/binary/artifact/capsule hashes, identity and
+pre/post snapshots, external power timings, serial transcript, ESRT/current boot
+logs, actual exit results, recovery outcome and reviewer. Record failed separately
+from not_run; generation itself never updates a physical result to passed.

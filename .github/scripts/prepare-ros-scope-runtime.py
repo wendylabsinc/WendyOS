@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import uuid
 
@@ -37,7 +38,12 @@ def main():
         'go/internal/agent/containerd/ros2_scope_runtime_test.go',
         '.github/scripts/test-ros-scope-runtime.sh',
         '.github/scripts/fixtures/ros-scope-transport.py',
-        '.github/scripts/fixtures/ros-scope-smoke.py')}
+        '.github/scripts/fixtures/ros-scope-smoke.py',
+        '.github/scripts/fixtures/ros-observer-transport.py',
+        'go/simulator/go2/integration/lifecycle/observer/observe.py',
+        'go/simulator/go2/integration/lifecycle/observer/wendy.json',
+        'go/simulator/go2/cyclonedds.xml',
+        'go/internal/agent/containerd/ros2_observer_runtime_test.go')}
     def interrupted(signum, frame):
         raise InterruptedError(f'interrupted by signal {signum}')
     previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
@@ -53,13 +59,26 @@ def main():
         arch = output(['docker', 'info', '--format', '{{.Architecture}}'])
         arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}[arch]
         evidence['architecture'] = arch
+        context = destination/'context'
+        context.mkdir()
+        staged = {
+            'ros-scope-transport.py': '.github/scripts/fixtures/ros-scope-transport.py',
+            'ros-scope-smoke.py': '.github/scripts/fixtures/ros-scope-smoke.py',
+            'observer-transport.py': '.github/scripts/fixtures/ros-observer-transport.py',
+            'production-observe.py': 'go/simulator/go2/integration/lifecycle/observer/observe.py',
+            'observer-wendy.json': 'go/simulator/go2/integration/lifecycle/observer/wendy.json',
+            'go2-cyclonedds.xml': 'go/simulator/go2/cyclonedds.xml',
+        }
+        for target, source_path in staged.items():shutil.copyfile(ROOT/source_path, context/target)
+        evidence['staged_sha256'] = {name: hashlib.sha256((context/name).read_bytes()).hexdigest() for name in staged}
         dockerfile = destination/'Dockerfile'
         dockerfile.write_text('FROM '+BASE+'\n'
-            'RUN apt-get update && apt-get install -y --no-install-recommends ros-humble-rmw-cyclonedds-cpp && rm -rf /var/lib/apt/lists/*\n'
+            'RUN apt-get update && apt-get install -y --no-install-recommends ros-humble-rmw-cyclonedds-cpp ros-humble-nav-msgs && rm -rf /var/lib/apt/lists/*\n'
             'ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n'
-            'COPY ros-scope-transport.py /scope.py\nCOPY ros-scope-smoke.py /smoke.py\n')
+            'COPY ros-scope-transport.py /scope.py\nCOPY ros-scope-smoke.py /smoke.py\n'
+            'COPY observer-transport.py production-observe.py observer-wendy.json go2-cyclonedds.xml /\n')
         run('image-build', ['docker', 'buildx', 'build', '--builder', builder, '--load', '--label', label,
-            '--tag', image, '--file', str(dockerfile), str(ROOT/'.github/scripts/fixtures')], 480)
+            '--tag', image, '--file', str(dockerfile), str(context)], 480)
         run('image-smoke', ['docker', 'run', '--name', container, '--label', label,
             '--network', 'none', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--read-only',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m', '--user', f'{os.getuid()}:{os.getgid()}',
@@ -77,7 +96,8 @@ def main():
         source = client.read_text()
         beginning = source.index('func cycloneDDSBeyondDeviceConfig(')
         ending = source.index('\n}\n', beginning)+2
-        replacement = source[:beginning]+'func cycloneDDSBeyondDeviceConfig(interfaces []string) string { return cycloneDDSInlineConfig }'+source[ending:]
+        signature = source[beginning:source.index('{', beginning)]
+        replacement = source[:beginning]+signature+'{ return cycloneDDSInlineConfig }'+source[ending:]
         routes = ROOT/'go/internal/rtps/peripherals.go'
         route_source = routes.read_text()
         before = 'if err != nil {\n\t\treturn nil, nil\n\t}'

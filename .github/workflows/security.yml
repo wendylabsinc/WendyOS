@@ -1,21 +1,9 @@
 name: Security
 
 on:
+  # Go Tests calls this for every affected PR and gates its Test result on it.
+  # A second pull_request trigger repeats all three scans for the same source.
   workflow_call:
-  pull_request:
-    branches: [main]
-    # Prose-only docs edits do not need a scan; docs dependency edits do.
-    paths:
-      - 'go/**'
-      - '!go/internal/cli/assets/docs/**'
-      - 'Proto/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'web-client/package.json'
-      - 'web-client/package-lock.json'
-      - 'go/internal/cli/assets/docs/package.json'
-      - 'go/internal/cli/assets/docs/package-lock.json'
-      - '.github/workflows/security.yml'
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:

@@ -1,0 +1,268 @@
+Reserved Mac account: signed Agent lifecycle, audits 2314 and 1786
+
+All cases start not_run. Generation reads/hashes local artifacts and writes a
+private plan; it does not install an app, launch a process, use launchctl, change
+login items, access Keychain or log anyone out. Only the named owner executes the
+commands below on reserved Mac serial @SERIAL@, hardware UUID @UUID@, account
+@ACCOUNT@, UID @UID@. Never use the developer's current account or installed Agent.
+The account must contain no Agent, registration, deployed apps, identity or personal
+credentials before the test. Keep another administrator/recovery session available.
+
+Acceptance is an actual signed bundle and ServiceManagement/launchd lifecycle.
+The isolated AgentRelauncher subprocess check proves the 500ms acknowledgement
+window and 10s hung-quit watchdog; it does not prove AppKit, LaunchServices, login,
+bundle replacement, privacy permissions, native app adoption or launchd supervision.
+Windows/Linux and hardware permission dialogs are outside this procedure.
+
+Prepare and qualify the exact packages
+
+1. Supply inventory.json with trial (32 lowercase hex), source_commit and
+   origin_source_commit (full SHAs); cli_binary; origin_bundle, origin_zip,
+   candidate_bundle, candidate_zip; installed_bundle; endpoint; reserved_account_empty
+   true; mac {serial,hardware_uuid,os_build,owner,account,uid}; records
+   {identity,empty_account,authorization,signing,origin_build,candidate_build,recovery}.
+   All records are existing nonempty local files. Do not put tokens or private
+   signing keys in the inventory. ZIPs must each contain one top-level app; their
+   executable, Info.plist and embedded launch-agent plist must match the separately
+   inventoried bundle. Candidate and origin executable hashes must differ, even
+   if WLWendyAgentVersion is the same. Retain actual signing TeamIdentifier,
+   designated requirement, hardened-runtime/notarization result, source revision,
+   architecture, build command and source-to-package provenance in the records.
+
+2. Generate outside any checkout:
+     python3 mac-agent-lifecycle-rehearsal.py inventory.json NEW_PRIVATE_OUTPUT
+   Both inputs stay in archival directories outside the installed destination.
+   Do not modify a sealed package after signing. On the reserved Mac verify each
+   archival app with /usr/bin/codesign --verify --deep --strict --verbose=2 APP,
+   /usr/sbin/spctl --assess --type execute --verbose=4 APP, and record the actual
+   /usr/bin/codesign -dv --verbose=4 APP output. Both must be Developer ID signed
+   by the same expected team with sh.wendy.WendyAgentMac identity and compatible
+   native architecture. An ad-hoc dev escape hatch does not pass this signed case.
+   Verify all plan artifact hashes again immediately before any action. A rebuilt
+   artifact requires a new plan. Never disable Gatekeeper, SIP or signature checks.
+
+3. Log into the reserved Aqua account. Read, do not change, its identity:
+     /usr/bin/id -u
+     /usr/bin/id -un
+     /usr/bin/sw_vers -buildVersion
+     /usr/sbin/ioreg -rd1 -c IOPlatformExpertDevice
+   Match UID @UID@, account @ACCOUNT@, the pinned OS build, serial and UUID above.
+   Record a missing `launchctl print gui/@UID@/sh.wendy.WendyAgentMac`, missing
+   installed path @INSTALLED@ and no WendyAgentMac processes owned by this UID.
+   Inspect System Settings Login Items as well: no preexisting legacy main-app or
+   launch-agent entry may be reused. If anything exists, stop and reserve a fresh
+   account; do not remove unrelated state or reset the system background-task DB.
+
+4. With explicit owner installation authorization, create only this account's
+   Applications directory if needed and use /usr/bin/ditto ORIGIN_APP @INSTALLED@
+   while the destination is absent. Verify the copied app's signature and executable
+   hash @ORIGIN@. Do not copy into /Applications or overwrite an existing app. Keep
+   recovery packages outside that path. Use generated open-installed. Grant only
+   owner-approved prompts; record permission state without changing TCC databases.
+   Prepare the new private CLI profile at @OUT@/cli-config for this exact localhost
+   Agent; approve its independently observed identity as required. No existing user
+   CLI profile or Keychain reference may be copied. The generated commands always
+   select this private profile and the explicit loopback endpoint.
+   Generate the output as this reserved account, or regenerate there from the
+   reviewed inventory: the private output, CLI profile, heartbeat project and future
+   receipt must be owned and writable by UID @UID@. Verify ownership and access
+   before deployment; do not loosen another account's directory permissions.
+
+Launchd persistence and duplicate prevention: 2314
+
+5. Within 75s require generated job output to show one running launchd PID and the
+   installed executable path. Record PID, UID and `ps -p PID -o pid=,ppid=,lstart=,command=`;
+   confirm it belongs to this account and the exact installed executable. Require
+   generated info success and exactly one Agent process for this installed app.
+   Startup handoff may temporarily have two processes; after the deadline it must
+   converge to one. Open the same installed app again using generated open-installed.
+   The temporary outside-launchd process must hand off/quit without a second listener.
+   Record launchd and Agent logs around registration; persistent EX_CONFIG/fallback
+   to an unsupervised process does not satisfy this supervision case.
+
+6. Only after the exact job/path/PID checks, run generated crash-owned-agent. This
+   sends SIGABRT to that named job, never a saved PID or a process-name kill. Within
+   75s require a different PID/birth time, same installed executable and successful
+   info. Keep the crash report and launchd restart observations. A manually reopened
+   app cannot count. Repeat once, observing a new process each time. Do not run
+   heartbeat/native apps yet; this phase isolates Agent persistence.
+
+7. Select the app's ordinary Quit in this reserved session. This is the small
+   unavoidable human AppKit action; no UI automation or screenshot is acceptance.
+   Confirm clean exit and no Agent restart for 20s, with no successful info endpoint.
+   Do not use bootout or SIGTERM to simulate ordinary Quit. Then actually log out
+   and log back into the same reserved account, without invoking open. Within75s
+   require launchd to start the Agent and info to work. Repeat after an owner-approved
+   host reboot plus login; record changed boot session and new PID. A lock/unlock,
+   shell exit or killing the process is not a logout/reboot substitute.
+
+8. Record the app's Launch at Login preference and the OS approval state. Disable
+   using the app's supported setting; require handoff to one unsupervised process
+   and no registered launch-agent restart after it quits. Login again and require
+   no automatic Agent. Reopen manually and restore the setting, then requalify
+   supervision. If OS Login Items has explicitly denied approval, record the
+   requiresApproval path and its refusal to silently register; only the owner may
+   restore approval. A missing/denied environment remains not_run for positive
+   supervision, not an automatic success or a request to bypass policy.
+
+Update with a live native app: 1786 plus 2314 upgrade handoff
+
+9. Reconfirm origin is running under launchd and its current signature/path/version.
+   Generated deploy-heartbeat deploys only @APPID@ from @OUT@/heartbeat. It runs a
+   shell counter for at most900s and appends trial/PID/counter to the owned
+   @OUT@/heartbeat.log. No sensor, network server, credential or external service
+   is used. Require at least five increasing counters with the exact trial, then
+   record the native app PID and birth time from ps. The real app must also appear
+   running in generated apps. Do not infer readiness from detached deploy success.
+
+10. Run generated update; retain full stdout, stderr and status. It uploads the exact
+    candidate ZIP, commits replacement, waits for the Agent and compares the new
+    Agent's launch-time executable hash with the executable extracted from that ZIP.
+    It must exit 0 with JSON status success, never up-to-date, timeout or a version-only
+    match. Current device info does not expose binary_sha256; do not invent that
+    field. The pinned CLI's update verification is the RPC hash evidence. Separately
+    verify installed executable @CANDIDATE@ and codesign after replacement, a new
+    launchd PID/birth time, candidate version via info and exactly one Agent within75s.
+    A disk hash alone cannot prove the old process stopped.
+
+11. The native heartbeat must continue through this update with the same PID and
+    birth time and increasing counter; no counter reset/new child is allowed.
+    Require at least five fresh counters after Agent verification and list the app
+    through the new Agent. Keep every row across the handoff and record pauses.
+    This is the original failure boundary: update must not run ordinary Quit's
+    native-app teardown or wedge on the active update RPC. Do not stop/redeploy the
+    app to make this pass. Finish within the 900s fixture lifetime. Repeat a same-version
+    update between independently built, different executable hashes if those reviewed
+    packages are available; equal version strings cannot substitute for hash proof.
+
+12. With no other work in the account, test the candidate's crash restart and real
+    logout/login once more. Native PID preservation is required across self-update,
+    not across an OS logout/reboot. Record real adoption/output after login separately.
+
+Discriminating controls, requiring separately built signed packages
+
+13. @OUT@/controls contains two source overlays; generation never signs or installs
+    them. Build each independently from the exact candidate source in a separate
+    disposable checkout using the recorded release build/sign/notarization recipe.
+    For persistence control replace only the source launch-agent plist with generated
+    sh.wendy.WendyAgentMac.plist: RunAtLoad true and KeepAlive false retain initial
+    launch but remove crash supervision, the behavior missing before2314. Rebuild
+    the embedded resource, sign and verify normally. Require an initially running
+    registered job and successful info, then actual SIGABRT and no automatic restart
+    for75s. A registration/signature/setup failure does not qualify this control.
+    In the separate exact-source checkout, copy only the appropriate overlay to
+    swift/WendyAgentMac/LaunchAgents/sh.wendy.WendyAgentMac.plist or
+    swift/WendyAgentMac/Sources/AppDelegate.swift. Retain git diff and verify every
+    other source against the candidate build record. The existing release entry is:
+      make -C CONTROL_CHECKOUT/swift agent-release VERSION=REVIEWED_VERSION OUTPUT_DIR=FRESH_BUILD_OUTPUT
+    Use only the owner's existing reviewed signing setup: Build.sh consumes
+    KEYCHAIN_PATH, SIGNING_IDENTITY, NOTARY_PROFILE, APP_PROVISIONING_PROFILE_PATH
+    and NET_PROXY_PROVISIONING_PROFILE_PATH as in the release workflow. Do not
+    create/import credentials or bypass missing provisioning. Never use agent-start,
+    reset settings/permissions or the --dev build as a substitute. Capture the
+    produced signed ZIP/app and rerun the same identity/signature/archive checks.
+
+14. For update control replace only WendyAgentMac/Sources/AppDelegate.swift with
+    generated AppDelegate.swift. It restores the original1786 update handler's call
+    to performQuit instead of performUpdateQuit. Retain current protocol and package
+    layout. Install this signed control as the running ORIGIN, then deploy the native
+    heartbeat and update to the unmodified candidate. Require actual accepted upload
+    and evidence that the old native PID stopped/counter ceased or the update hung
+    after commit; an authentication/upload/signature refusal is not sensitivity.
+    Restore the unmodified origin and repeat the identical case successfully.
+    Archive each control's exact source overlay, build log, signed app/ZIP hashes
+    and before/after process transcript. Until qualified control packages are built
+    and these failures observed, historical-controls remains not_run. The actual
+    45s watchdog process control is separate; it cannot prove the AppKit/launchd path.
+
+Restoration and retained evidence
+
+15. Stop/remove only @APPID@ with generated remove-heartbeat; require no remaining
+    fixture native PID and counters stopped. Disable Launch at Login through the
+    app and quit normally; require the exact job unregistered/no running process.
+    Do not delete an installed bundle while its job is active. Archive evidence
+    before removing this trial's installed bundle and output. The account owner may
+    then remove the disposable account using the ordinary approved system procedure.
+    Do not delete another account, launchd label, app, preference domain or Keychain.
+    If update leaves the Agent unreachable, use the reserved recovery session and
+    approved original package; preserve failure logs before any reinstall. Record
+    recovery as recovery, never a passing restart. Unproven cleanup stays failed.
+
+16. Attach OS/build/signature/identity records, every actual command/exit, PID+birth
+    transitions, launchd registration/error observations, CLI update hash-verification
+    outcome and continuous heartbeat rows. Assign pass only to individually observed
+    cases; unfinished login, denial, controls, reboot or cleanup remains not_run.
+    Logs and packages may contain local paths: retain them in the private review
+    artifact store, never commit signing material or screenshots to the repository.
+
+Optional audit 2318: actual signed-package v2 enrollment
+
+This extension is emitted only when inventory.enrollment_peer_binary and
+records.enrollment_peer_build are supplied. Otherwise both packaged enrollment
+cases remain unprepared. Build the local software peer from the exact reviewed
+source revision using `go build -o PRIVATE_PATH ./go/internal/testfixture/macenrollment`.
+Record full source SHA, Go version, command and binary SHA256 in the build record.
+The peer's fresh random test CA/credentials are never production credentials.
+Generation hashes the binary/source/build record and emits enrollment-plan.json
+plus four bounded enrollment-* commands. It executes none of them.
+
+Use a separate fresh reserved-account trial for this extension. Reuse steps 1-3
+for hardware/account/package/signature/recovery admission, but install the pinned
+CANDIDATE with `/usr/bin/ditto @CANDIDATE_APP@ @INSTALLED@` into the absent path.
+Do not enroll the origin package or reuse an account already changed by another
+trial. Confirm macOS 26+ and no provisioning.json, device-key.pem or .provisioned
+in this account's Library/Application Support/sh.wendy.WendyAgentMac before
+opening the app. The reserved account must have no preexisting Agent Keychain
+identity. Never inspect, clear or replace another account's Keychain items.
+Keep another administrator session for recovery. Do not approve remote access:
+the app must listen only on the plan's loopback setup endpoint.
+
+A. Verify candidate executable SHA256 @CANDIDATE@ and actual codesign/spctl
+   results. Run generated open-installed. Before continuing, record launchctl
+   job state and the exact listener PID/path owned by UID @UID@. Every generated
+   enrollment command checks serial/UUID/OS/account, candidate hash/signature and
+   that the loopback listener belongs to that exact app path and UID. A different
+   listener or changed package is a refusal, never an invitation to kill it.
+
+B. In a second terminal in the reserved account, run generated enrollment-peer.
+   It creates only @OUT@/enrollment-peer and exits on Ctrl-C or its ten-minute
+   lifetime. Wait for its atomically written ready.json; do not print/copy it,
+   since it contains disposable operator private-key material. All Cloud/ACME
+   services bind random 127.0.0.1 ports. The Agent uses its ordinary signed-app
+   provisioning path and actual software/SE key selection; no test factory is
+   injected into the package. This local PKI accepts the real signed CSR and
+   binds the issued principal to the CLI-minted UUID. It is not production PKI.
+
+C. Run generated enrollment-enroll. The wrapper uses only the generated private
+   CLI profile and the supported local-development Cloud plaintext setting;
+   ACME is local HTTP. Actual device management must switch to mTLS. Record
+   complete CLI stdout/stderr and exit 0, never secrets from ready.json. Grant an
+   OS Keychain/Secure Enclave prompt only after verifying that it names this
+   pinned app and reserved account; denial, unavailable service or timeout is a
+   failed/pending case, not success. No public Cloud registration is performed.
+
+D. Run enrollment-apps and enrollment-status, retaining both outputs. apps must
+   complete successfully through the CLI's saved exact-identity mTLS binding.
+   status must report the same minted principal, candidate hash, current Agent
+   PID, certificate hash and actual key backing, with exactly one Cloud mint,
+   account, order and finalization. A nominal enrollment message alone is not
+   acceptance. Preserve only public fingerprints/counters, not private keys.
+
+E. Quit this reserved app normally, observe its old PID gone and no successful
+   mTLS listener, then run open-installed again. Record a NEW Agent PID and same
+   candidate executable. Repeat enrollment-apps and enrollment-status without
+   enrolling again. Principal, certificate hash and key backing must be unchanged,
+   and all issuance counts must still equal 1. This proves signed app startup
+   reloads the durable identity and serves v2 after a real process restart.
+   The peer must remain alive for both observations. Expiry requires a new fresh
+   account/trial; never reset the issued identity just to repeat this test.
+
+F. Ctrl-C the owned peer and observe it exited. Quit the reserved app and confirm
+   no Agent or fixture process remains for this trial. Archive public evidence,
+   package/source hashes and logs outside the reserved account, with secrets
+   excluded. The owner then retires the dedicated account using the documented
+   recovery process, removing its entire test Keychain/state as an account, not
+   a broad Keychain command. Never run device unenroll as a cleanup substitute:
+   current direct-PKI reset is intentionally refused without Cloud authorization.
+   Retain uncertain state and report failure if process/account cleanup is not
+   confirmed. All packaged cases remain not_run until these observations exist.

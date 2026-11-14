@@ -65,3 +65,41 @@ Here, "peripherals" means discovery on directly attached network interfaces.
 Neither original PR grants character-device access, so serial/PTY permission
 tests would cover a different feature. Hardware enumeration and actual robot
 or sensor traffic remain outside this synthetic topology's claims.
+
+## Audit2022 observer transport
+
+The normal case additionally runs `TestROSObserverHostRuntime` in the same
+private runtime, using the same imported ROS image. Preparation copies the
+current production lifecycle `observe.py`, `wendy.json` and Go2
+`cyclonedds.xml` byte-for-byte into the owned image context; source, staged
+bytes and exported image are hash checked before runtime. The executed
+observer also reports the three image-file hashes. `ros-humble-nav-msgs` is
+the only additional image dependency; no new image build or runner is added.
+
+An actual production-created OCI publisher uses the shipped Go2 Cyclone file
+and publishes nonce-bound, advancing Odometry. The unchanged production
+Observer class owns subscription, freshness accounting and snapshot; a subclass
+only verifies payload ownership and sequence before invoking its callback.
+Normal observer delivery, an explicit other-domain isolation control and a
+second normal observer must all complete. The second normal's first counter
+must exceed the preceding positive observation, so a dead source cannot alone
+satisfy exclusion. Each observation is8seconds, the publisher has a60second
+ceiling, and the original150second outer namespace deadline bounds the whole
+normal suite (including OCI I/O drains). Expected added runtime is roughly
+35seconds; this estimate is not measured hosted acceptance.
+
+The original95f6c1c52 changed only `discoveryScope: app` to `host` with explicit
+domain0. Laterb8b5222f8 migrated that to `scope: network`; current legacy `app`
+maps to device/loopback. The Go2 source itself uses loopback and unicast peers,
+so current middleware may support the old configuration too. The fixture runs
+that exact config change as a separately classified observation: either
+`ROS_OBSERVER_LEGACY_APP_REJECTED` or `ROS_OBSERVER_LEGACY_APP_COMPATIBLE` must
+record actual behavior. Compatibility is never counted as a historical
+negative-control success. The required domain-isolation control is explicitly
+semantic, not falsely attributed to the original fix.
+
+This gate exercises actual OCI/middleware/production observer transport, not
+`observe.py`'s HTTP StatusReader/main, simulator VM identity, MuJoCo physics,
+motors, dashboard rendering or physical robot middleware. Those claims require
+their own full lifecycle evidence. Full normal/control runtime remains pending
+until the hosted existing containerd job executes these assertions.
