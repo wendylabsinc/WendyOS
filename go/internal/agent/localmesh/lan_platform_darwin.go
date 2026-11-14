@@ -44,12 +44,12 @@ func scanLANInterfaces(ethernet, wifi bool) ([]lanInterface, error) {
 		if !known || iface.Flags&(net.FlagUp|net.FlagRunning|net.FlagMulticast) != net.FlagUp|net.FlagRunning|net.FlagMulticast {
 			continue
 		}
-		cost, transport := EthernetLinkCost, "ethernet"
+		cost, transport := EthernetLinkCost, CarrierEthernet
 		if isWiFi {
 			if !wifi {
 				continue
 			}
-			cost, transport = WiFiLinkCost, "infrastructure-wifi"
+			cost, transport = WiFiLinkCost, CarrierInfrastructureWiFi
 		} else if !ethernet {
 			continue
 		}

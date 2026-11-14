@@ -48,10 +48,26 @@ type PeerLink struct {
 	queue     ipQueueSnapshotter
 }
 
+// LAN carrier labels. App QUIC startup relies on these exact values through
+// PeerLink.DirectLAN, so the LAN classifiers and carrierName share them.
+const (
+	CarrierEthernet           = "ethernet"
+	CarrierInfrastructureWiFi = "infrastructure-wifi"
+)
+
+// DirectLAN reports a carrier over this device's own Ethernet or
+// infrastructure Wi-Fi. The label alone proves nothing about forwarding;
+// callers must pair it with ForwardingReady and the installed route.
+func (l PeerLink) DirectLAN() bool {
+	return l.Transport == CarrierEthernet || l.Transport == CarrierInfrastructureWiFi
+}
+
 type carrierContextKey struct{}
 
-// WithCarrier labels a carrier's established connection for diagnostics. It
-// carries no authentication or routing authority and never changes link cost.
+// WithCarrier labels a carrier's established connection. It carries no
+// authentication or routing authority and never changes link cost. Besides
+// diagnostics, a LAN label selects app QUIC startup only alongside an installed
+// route through that exact link.
 func WithCarrier(ctx context.Context, carrier string) context.Context {
 	return context.WithValue(ctx, carrierContextKey{}, carrier)
 }
@@ -59,7 +75,7 @@ func WithCarrier(ctx context.Context, carrier string) context.Context {
 func carrierName(ctx context.Context, fallback string) string {
 	carrier, _ := ctx.Value(carrierContextKey{}).(string)
 	switch carrier {
-	case "ethernet", "infrastructure-wifi", "tcp", "nan", "ble", "quic", "tls-stream":
+	case CarrierEthernet, CarrierInfrastructureWiFi, "tcp", "nan", "ble", "quic", "tls-stream":
 		return carrier
 	default:
 		return fallback
