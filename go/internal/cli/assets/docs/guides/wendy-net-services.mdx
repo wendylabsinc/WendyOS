@@ -180,6 +180,19 @@ A fresh friendly-name lookup collects LAN announcements for up to three seconds
 so a quick reply cannot hide a delayed conflicting name. Conflicting device
 identities return no address; use the UUID form to select one device explicitly.
 
+The CLI also accepts these names in `--device` without a desktop VPN. Its
+friendly-name selection needs an authenticated mesh directory, Cloud inventory,
+or a previously trusted device binding for an offline LAN peer. An mDNS name by
+itself cannot create that trust binding. UUID selection uses the currently
+selected organization's identity.
+
+For example, select a device by its friendly name or UUID:
+
+```sh
+wendy --device jetson.wendy.internal device info
+wendy --device device-${DEVICE_UUID}.wendy.internal device info
+```
+
 ## Try the complete Python example
 
 [Download the publisher and client](/media/mesh-mdns.zip), or use

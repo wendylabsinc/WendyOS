@@ -304,6 +304,9 @@ var connectOperatorMeshSelector = sessionbroker.ConnectOperator
 var describeOperatorMeshTarget = sessionbroker.DescribeOperatorTarget
 
 func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpdate bool) (*SelectedDevice, bool, error) {
+	if selected, matched, err := connectPrivateDeviceAlias(ctx, device, suppressUpdate); matched {
+		return selected, true, err
+	}
 	if external, matched, err := resolveLiteBLESelector(ctx, device); matched {
 		if err != nil {
 			return nil, true, err
