@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -125,8 +126,9 @@ func getInterfaceIP(ctx context.Context, bsdName string) string {
 	return ""
 }
 
-// linkSpeedRe matches speed values in ifconfig media lines, e.g. "1000baseT", "10Gbase-T".
-var linkSpeedRe = regexp.MustCompile(`(\d+\.?\d*)(G)?base`)
+// linkSpeedRe matches speed values in ifconfig media lines, e.g. "1000baseT",
+// "10Gbase-T", "2500Base-T". macOS capitalises "Base" for some link types.
+var linkSpeedRe = regexp.MustCompile(`(?i)(\d+\.?\d*)(G)?base`)
 
 func getInterfaceLinkSpeed(ctx context.Context, bsdName string) string {
 	cmd := exec.CommandContext(ctx, "ifconfig", bsdName)
@@ -134,7 +136,13 @@ func getInterfaceLinkSpeed(ctx context.Context, bsdName string) string {
 	if err != nil {
 		return ""
 	}
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	return linkSpeedFromIfconfig(string(out))
+}
+
+// linkSpeedFromIfconfig returns the link speed named on ifconfig's media line,
+// or "" when the line names none.
+func linkSpeedFromIfconfig(output string) string {
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.Contains(line, "media:") {
@@ -145,15 +153,18 @@ func getInterfaceLinkSpeed(ctx context.Context, bsdName string) string {
 			return ""
 		}
 		speed := matches[1]
-		if matches[2] == "G" {
+		if matches[2] != "" {
 			return speed + " Gbps"
 		}
-		var mbps float64
-		fmt.Sscanf(speed, "%f", &mbps)
-		if mbps >= 1000 {
-			return fmt.Sprintf("%.0f Gbps", mbps/1000)
+		mbps, err := strconv.ParseFloat(speed, 64)
+		if err != nil {
+			return ""
 		}
-		return fmt.Sprintf("%.0f Mbps", mbps)
+		if mbps >= 1000 {
+			// 2500 is 2.5 Gbps: keep the fraction rather than rounding it.
+			return strconv.FormatFloat(mbps/1000, 'f', -1, 64) + " Gbps"
+		}
+		return strconv.FormatFloat(mbps, 'f', -1, 64) + " Mbps"
 	}
 	return ""
 }
