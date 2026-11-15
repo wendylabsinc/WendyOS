@@ -5,9 +5,18 @@ description: Install WendyOS on a Jetson Orin Nano or AGX Orin developer kit ove
 
 <Figure src="/images/get-started/jetson-orin-nano-wendy-run.webp" alt="Overhead view of a Jetson Orin Nano developer kit with a webcam, connected by USB-C to a laptop whose terminal shows an app being deployed" caption="A Jetson Orin Nano running WendyOS, connected to a laptop by one USB-C cable while an app deploys to it." />
 
-This page installs WendyOS on a **Jetson Orin Nano developer kit** over USB.
-Current recovery releases install the boot firmware and OS together. An
-NVMe-to-USB adapter is needed only for the separate rootfs-only workflow below.
+This page installs WendyOS on a **Jetson Orin Nano developer kit**. There are two
+ways to do it, and the right one depends on what you have on your desk:
+
+| | Install over USB (recommended) | Install with an NVMe adapter |
+| --- | --- | --- |
+| Extra part | A jumper wire or jumper cap | An NVMe-to-USB adapter |
+| What it installs | WendyOS and the Jetson's boot firmware | WendyOS only |
+| A brand-new Jetson | Always works | May not boot, if its factory firmware is too old |
+
+The Orin Nano has no recovery button. To install over USB you briefly connect two
+pins with a jumper, which usually is not in the box. A female-to-female jumper
+wire costs about a dollar. If you can get one, use [Install over USB](#install-over-usb).
 
 <Callout title="Other Jetson boards">
   The same steps work for **AGX Orin developer kits**: choose `jetson-agx-orin` and select NVMe or eMMC.
@@ -16,15 +25,24 @@ NVMe-to-USB adapter is needed only for the separate rootfs-only workflow below.
   and keep its vendor Ubuntu installation.
 </Callout>
 
-## Full USB recovery
+## What you need
 
-You need the developer kit and power supply, an NVMe SSD installed in the Orin
-Nano, a USB data cable, and a development machine with the current Wendy CLI
-([install it](/docs/installation/cli)).
-AGX Orin can use its onboard eMMC instead of NVMe.
+- The developer kit and its power supply
+- An NVMe SSD installed in the Orin Nano
+- A USB-C data cable. A charge-only cable does not work.
+- For the USB install, a jumper wire or jumper cap. For the adapter install, an NVMe-to-USB adapter.
+- The Wendy CLI on your computer ([install it](/docs/installation/cli))
 
-Full recovery **erases QSPI and all partitions on the selected OS storage,
-including `/data`**. Review that scope before you start.
+<Accordions>
+  <Accordion title="Where to buy the parts">
+    <JetsonBuyersTable />
+  </Accordion>
+</Accordions>
+
+## Install over USB
+
+This erases everything on the Jetson's SSD, including `/data`, and replaces its
+boot firmware. AGX Orin can install to its onboard eMMC instead of NVMe.
 
 1. Connect the computer to the Jetson's recovery USB-C port using a data cable.
    On AGX Orin, use the USB-C port next to the 40-pin header.
@@ -33,10 +51,11 @@ including `/data`**. Review that scope before you start.
      <source src="/videos/installation/jetson-mac-usb-cable.mp4" type="video/mp4" />
    </video>
 
-2. On Orin Nano, disconnect power, bridge **FC REC** to **GND** (pins 9–10 on
-   the button header under the module), then reconnect power. Remove the jumper
-   after recovery mode is entered. Check the header labels for your board revision.
-   On AGX Orin, hold Force Recovery, tap Reset/Power, then release Force Recovery.
+2. Put the Jetson into recovery mode. Disconnect power, then use the jumper to
+   connect **FC REC** to **GND**: pins 9 and 10 on the button header under the
+   module. Check the header labels for your board revision. Reconnect power, and
+   once the Jetson is in recovery mode you can remove the jumper. On AGX Orin,
+   hold Force Recovery, tap Reset/Power, then release Force Recovery.
 
    <video width="100%" autoPlay loop muted playsInline>
      <source src="/videos/installation/jetson-power-cable-insertion.mp4" type="video/mp4" />
@@ -64,14 +83,15 @@ prompt still appears, choose **Ignore**, not Initialize or Eject. On Windows, al
 installer's required driver/elevation step and cancel any request to format the
 newly attached raw disk. The installer reports these platform-specific steps.
 
-## Rootfs-only SD/NVMe imaging
+## Install with an NVMe adapter
 
-Use this when the Jetson already has boot firmware compatible with the selected
-WendyOS release. This path **does not update QSPI**. Writing an image successfully
-does not prove the existing firmware can boot it.
+Use this if you have no jumper. You write WendyOS to the SSD from your computer,
+then put the SSD back in the Jetson. The Jetson keeps its current boot firmware, so
+if it does not boot afterwards, its firmware is too old for this WendyOS release
+and you need to [install over USB](#install-over-usb) instead.
 
-Connect the SSD with an NVMe-to-USB adapter, or an SD card reader for a supported
-Orin Nano SD image:
+Take the SSD out of the Jetson and connect it to your computer with an NVMe-to-USB
+adapter, or use an SD card reader for a supported Orin Nano SD image:
 
 <video width="100%" autoPlay loop muted playsInline>
   <source src="/videos/installation/jetson-nvme-mac-adapter.mp4" type="video/mp4" />
@@ -83,7 +103,7 @@ wendy install --rootfs-only
 ```
 
 Pick **Jetson Orin Nano** and the drive, and check its size before confirming.
-For AGX Orin, rootfs-only imaging supports NVMe; eMMC uses full recovery.
+For AGX Orin, this method supports NVMe only; eMMC installs over USB.
 
 After writing and ejecting, insert the SSD/card in the Jetson and power it on.
 
@@ -92,13 +112,13 @@ After writing and ejecting, insert the SSD/card in the Jetson and power it on.
 </video>
 
 This video walks through the whole NVMe adapter method, from flashing the SSD to
-your first app. It shows this section's steps, not full USB recovery.
+your first app. It shows this method, not the USB install.
 
 <YouTubeVideo id="TtDJAtBUEZI" title="Getting Started with WendyOS on NVIDIA Jetson Orin Nano" />
 
 ## Verify first boot
 
-Allow the board to boot, then discover it:
+Whichever method you used, let the board boot, then find it:
 
 ```sh
 wendy discover
