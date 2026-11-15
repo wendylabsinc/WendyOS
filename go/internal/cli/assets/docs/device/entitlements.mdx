@@ -5,7 +5,7 @@ description: Configure hardware access and permissions for your WendyOS applicat
 
 ## Understanding Entitlements
 
-Entitlements are permissions that grant your application access to hardware resources and system capabilities on your WendyOS device. By default, applications run in isolated containers with minimal privileges. Entitlements allow you to selectively enable access to features like networking, GPU, video capture, audio, and Bluetooth.
+Entitlements are permissions that grant your application access to hardware resources and system capabilities on your WendyOS device. By default, applications run in isolated containers with minimal privileges. Entitlements allow you to selectively enable access to features like networking, GPU, NPU, video capture, audio, and Bluetooth.
 
 <Callout type="info">
   Entitlements apply to WendyOS container targets (`linux`/`wendyos`) and `wendy-lite`. Native macOS (`darwin`) apps run non-containerized and do not use the WendyOS entitlement system.
@@ -138,6 +138,23 @@ When enabled, this entitlement:
 <Callout type="info">
   **Hardware-specific behavior**: What the `gpu` entitlement exposes depends on the device — NVIDIA GPU access on Jetson, and VideoCore board telemetry on Raspberry Pi. See [GPU access](/docs/hardware/gpu#raspberry-pi-board-telemetry) for the details.
 </Callout>
+
+### NPU Entitlement
+
+The NPU entitlement gives your application the Hexagon NPU on Qualcomm Dragonwing boards, for on-device inference with QNN or Genie.
+
+```json
+{
+  "type": "npu"
+}
+```
+
+When enabled, this entitlement:
+- Grants the FastRPC device nodes and `/dev/dma_heap/system`
+- Injects the board's FastRPC transport library and DSP files
+- Sets `FASTRPC_PROCESS_ATTRS` and `MACHINE_NAME`
+
+Your image bundles the rest of the Qualcomm AI Runtime. See [NPU access](/docs/hardware/npu) for an example Dockerfile.
 
 ### Display Entitlement
 
