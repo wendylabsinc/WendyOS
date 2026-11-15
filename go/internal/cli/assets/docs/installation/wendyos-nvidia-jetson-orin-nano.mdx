@@ -44,40 +44,40 @@ wire costs about a dollar. If you can get one, use [Install over USB](#install-o
 This erases everything on the Jetson's SSD, including `/data`, and replaces its
 boot firmware. AGX Orin can install to its onboard eMMC instead of NVMe.
 
-1. Connect the computer to the Jetson's recovery USB-C port using a data cable.
-   On AGX Orin, use the USB-C port next to the 40-pin header.
+1. Install the NVMe SSD, if it is not already in. With power disconnected, turn
+   the Jetson over, slide the SSD into the M.2 Key M slot at an angle, press it
+   flat and fasten it with its screw.
 
-   <video width="100%" autoPlay loop muted playsInline>
-     <source src="/videos/installation/jetson-mac-usb-cable.mp4" type="video/mp4" />
-   </video>
+   <Figure src="/images/installation/orin-nano-nvme.gif" alt="The underside of a Jetson Orin Nano: an NVMe SSD slides into the M.2 Key M slot at an angle, presses flat, and a screw fastens it" />
 
-2. Put the Jetson into recovery mode. Disconnect power, then use the jumper to
-   connect **FC REC** to **GND**: pins 9 and 10 of J14, the 12-pin header under
-   the module on the edge opposite the USB ports. Check the header labels for your
-   board revision. Reconnect power, and once the Jetson is in recovery mode you
-   can remove the jumper. On AGX Orin, hold Force Recovery, tap Reset/Power, then
-   release Force Recovery.
+2. Fit the jumper. It connects **FC REC** to **GND**: pins 9 and 10 of J14, the
+   12-pin header under the module on the edge opposite the USB ports. Check the
+   header labels for your board revision. On AGX Orin there is no jumper: hold
+   Force Recovery, tap Reset/Power, then release Force Recovery.
 
-   <video width="100%" autoPlay loop muted playsInline aria-label="A jumper cap sliding onto pins 9 (GND) and 10 (FC REC) of the J14 header under the Jetson module">
-     <source src="/videos/installation/jetson-orin-nano-recovery-jumper.mp4" type="video/mp4" />
-   </video>
+   <Figure src="/images/installation/orin-nano-recovery-jumper.gif" alt="A jumper cap sliding onto pins 9 (GND) and 10 (FC REC) of the J14 header under the Jetson module" />
 
-   <video width="100%" autoPlay loop muted playsInline>
-     <source src="/videos/installation/jetson-power-cable-insertion.mp4" type="video/mp4" />
-   </video>
+3. Connect the Jetson's USB-C port to your computer with a data cable, then plug
+   in power. With the jumper in place, the Jetson starts in recovery mode, and
+   you can then remove the jumper. On AGX Orin, use the USB-C port next to the
+   40-pin header.
 
-3. Run the installer and pick the Jetson it finds in recovery mode:
+   <Figure src="/images/installation/orin-nano-usb-c-power.gif" alt="A USB-C cable plugging into the Jetson's USB-C port, then the power plug into its barrel jack" />
+
+4. Run the installer:
 
    ```sh
    wendy install
    ```
 
-   The CLI downloads and verifies the image, asks for your password when it
+   Pick **Jetson Orin Nano**, then **Full flash over USB-C**. The installer repeats
+   these steps and asks whether the Jetson is in recovery mode; answer **Yes**.
+   It then downloads and verifies the image, asks for your password when it
    needs it, and shows flash progress.
 
-   <CliShot flow="os-install" step="select-device-type" alt="The Wendy CLI prompting you to choose a device type before flashing WendyOS" />
+   <Figure src="/images/installation/orin-nano-wendy-install.gif" alt="A terminal running wendy install: choosing Jetson Orin Nano and full flash over USB-C, then the installer's recovery instructions and the question whether the target is in recovery mode" />
 
-4. Keep power and USB attached through final success. Follow the installer’s
+5. Keep power and USB attached through final success. Follow the installer’s
    reboot or power-cycle instruction to leave recovery mode.
 
 The installer also asks for a device name and Wi-Fi.
@@ -112,9 +112,7 @@ For AGX Orin, this method supports NVMe only; eMMC installs over USB.
 
 After writing and ejecting, insert the SSD/card in the Jetson and power it on.
 
-<video width="100%" autoPlay loop muted playsInline>
-  <source src="/videos/installation/jetson-nvme-bottom-insertion.mp4" type="video/mp4" />
-</video>
+<Figure src="/images/installation/orin-nano-nvme.gif" alt="The underside of a Jetson Orin Nano: an NVMe SSD slides into the M.2 Key M slot at an angle, presses flat, and a screw fastens it" />
 
 This video walks through the whole NVMe adapter method, from flashing the SSD to
 your first app. It shows this method, not the USB install.
