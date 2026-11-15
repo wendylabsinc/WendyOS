@@ -8,15 +8,15 @@ description: Install WendyOS on a Jetson Orin Nano or AGX Orin developer kit ove
 This page installs WendyOS on a **Jetson Orin Nano developer kit**. There are two
 ways to do it, and the right one depends on what you have on your desk:
 
-| | Install over USB (recommended) | Install with an NVMe adapter |
+| | Option A: Install over USB (recommended) | Option B: Install with an NVMe adapter |
 | --- | --- | --- |
 | Extra part | A jumper wire or jumper cap | An NVMe-to-USB adapter |
 | What it installs | WendyOS and the Jetson's boot firmware | WendyOS only |
 | A brand-new Jetson | Always works | May not boot, if its factory firmware is too old |
 
 The Orin Nano has no recovery button. To install over USB you briefly connect two
-pins with a jumper, which usually is not in the box. A female-to-female jumper
-wire costs about a dollar. If you can get one, use [Install over USB](#install-over-usb).
+pins with a jumper. A female-to-female jumper wire costs about a dollar. If you
+can get one, use [Option A](#option-a-install-over-usb).
 
 <Callout title="Other Jetson boards">
   The same steps work for **AGX Orin developer kits**: choose `jetson-agx-orin` and select NVMe or eMMC.
@@ -28,10 +28,19 @@ wire costs about a dollar. If you can get one, use [Install over USB](#install-o
 ## What you need
 
 - The developer kit and its power supply
-- An NVMe SSD installed in the Orin Nano
+- An NVMe SSD
 - A USB-C data cable. A charge-only cable does not work.
-- For the USB install, a jumper wire or jumper cap. For the adapter install, an NVMe-to-USB adapter.
+- For Option A, a jumper wire or jumper cap. For Option B, an NVMe-to-USB adapter.
 - The Wendy CLI on your computer ([install it](/docs/installation/cli))
+
+<Callout type="warn" title="Not in the box">
+  The Jetson Orin Nano Developer Kit does not come with an NVMe SSD, a jumper for
+  Option A, or an NVMe-to-USB adapter for Option B. Get them before you start.
+</Callout>
+
+Install WendyOS on an NVMe SSD. We strongly recommend against using a microSD
+card: it is much slower than NVMe and wears out quickly under an operating
+system's constant writes.
 
 <Accordions>
   <Accordion title="Where to buy the parts">
@@ -39,7 +48,7 @@ wire costs about a dollar. If you can get one, use [Install over USB](#install-o
   </Accordion>
 </Accordions>
 
-## Install over USB
+## Option A: Install over USB
 
 This erases everything on the Jetson's SSD, including `/data`, and replaces its
 boot firmware. AGX Orin can install to its onboard eMMC instead of NVMe.
@@ -88,15 +97,15 @@ prompt still appears, choose **Ignore**, not Initialize or Eject. On Windows, al
 installer's required driver/elevation step and cancel any request to format the
 newly attached raw disk. The installer reports these platform-specific steps.
 
-## Install with an NVMe adapter
+## Option B: Install with an NVMe adapter
 
 Use this if you have no jumper. You write WendyOS to the SSD from your computer,
 then put the SSD back in the Jetson. The Jetson keeps its current boot firmware, so
 if it does not boot afterwards, its firmware is too old for this WendyOS release
-and you need to [install over USB](#install-over-usb) instead.
+and you need [Option A](#option-a-install-over-usb) instead.
 
-Take the SSD out of the Jetson and connect it to your computer with an NVMe-to-USB
-adapter, or use an SD card reader for a supported Orin Nano SD image:
+Connect the SSD to your computer with an NVMe-to-USB adapter. If it is already in
+the Jetson, take it out first:
 
 <video width="100%" autoPlay loop muted playsInline>
   <source src="/videos/installation/jetson-nvme-mac-adapter.mp4" type="video/mp4" />
