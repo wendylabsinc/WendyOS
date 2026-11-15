@@ -52,10 +52,15 @@ boot firmware. AGX Orin can install to its onboard eMMC instead of NVMe.
    </video>
 
 2. Put the Jetson into recovery mode. Disconnect power, then use the jumper to
-   connect **FC REC** to **GND**: pins 9 and 10 on the button header under the
-   module. Check the header labels for your board revision. Reconnect power, and
-   once the Jetson is in recovery mode you can remove the jumper. On AGX Orin,
-   hold Force Recovery, tap Reset/Power, then release Force Recovery.
+   connect **FC REC** to **GND**: pins 9 and 10 of J14, the 12-pin header under
+   the module on the edge opposite the USB ports. Check the header labels for your
+   board revision. Reconnect power, and once the Jetson is in recovery mode you
+   can remove the jumper. On AGX Orin, hold Force Recovery, tap Reset/Power, then
+   release Force Recovery.
+
+   <video width="100%" autoPlay loop muted playsInline aria-label="A jumper cap sliding onto pins 9 (GND) and 10 (FC REC) of the J14 header under the Jetson module">
+     <source src="/videos/installation/jetson-orin-nano-recovery-jumper.mp4" type="video/mp4" />
+   </video>
 
    <video width="100%" autoPlay loop muted playsInline>
      <source src="/videos/installation/jetson-power-cable-insertion.mp4" type="video/mp4" />
