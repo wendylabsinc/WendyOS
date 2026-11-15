@@ -23,37 +23,40 @@ Nano, a USB data cable, and a development machine with the current Wendy CLI
 ([install it](/docs/installation/cli)).
 AGX Orin can use its onboard eMMC instead of NVMe.
 
-First inspect a read-only installation plan:
-
-```sh
-wendy install plan --device-type jetson-orin-nano --carrier developer-kit --storage nvme
-```
-
-For AGX Orin, pass `--device-type jetson-agx-orin` and explicitly choose
-`--storage nvme` or `--storage emmc`. The plan resolves the release and published
-recovery artifact. If the selected release has no recovery artifact, choose a
-recovery release or deliberately use compatible rootfs-only media; do not treat
-an old raw image as a full firmware recovery.
-
 Full recovery **erases QSPI and all partitions on the selected OS storage,
-including `/data`**. Review that scope before running the returned command.
+including `/data`**. Review that scope before you start.
 
 1. Connect the computer to the Jetson's recovery USB-C port using a data cable.
    On AGX Orin, use the USB-C port next to the 40-pin header.
+
+   <video width="100%" autoPlay loop muted playsInline>
+     <source src="/videos/installation/jetson-mac-usb-cable.mp4" type="video/mp4" />
+   </video>
+
 2. On Orin Nano, disconnect power, bridge **FC REC** to **GND** (pins 9–10 on
    the button header under the module), then reconnect power. Remove the jumper
    after recovery mode is entered. Check the header labels for your board revision.
    On AGX Orin, hold Force Recovery, tap Reset/Power, then release Force Recovery.
-3. Keep only the intended recovery-mode Jetson attached for unattended flashing.
-   Run the planned command, or start `wendy install` and select full recovery.
-   The CLI handles download, verification, host privileges and flash progress.
+
+   <video width="100%" autoPlay loop muted playsInline>
+     <source src="/videos/installation/jetson-power-cable-insertion.mp4" type="video/mp4" />
+   </video>
+
+3. Run the installer and pick the Jetson it finds in recovery mode:
+
+   ```sh
+   wendy install
+   ```
+
+   The CLI downloads and verifies the image, asks for your password when it
+   needs it, and shows flash progress.
+
+   <CliShot flow="os-install" step="select-device-type" alt="The Wendy CLI prompting you to choose a device type before flashing WendyOS" />
+
 4. Keep power and USB attached through final success. Follow the installer’s
    reboot or power-cycle instruction to leave recovery mode.
 
-Choose a first-boot device name and networking during setup. For explicit flags,
-use `--device-name`, WiFi preseed options, or `--no-wifi` for Ethernet. Optional
-`--pre-enroll` requires the intended Wendy Cloud login. See the
-[installation command reference](/docs/advanced/clients/wendy-cli/commands/os/install).
+The installer also asks for a device name and Wi-Fi.
 
 On macOS, the terminal may need Full Disk Access. `wendy` claims the flashing
 disks so macOS neither mounts them nor asks about unreadable disks; if such a
@@ -67,42 +70,61 @@ Use this when the Jetson already has boot firmware compatible with the selected
 WendyOS release. This path **does not update QSPI**. Writing an image successfully
 does not prove the existing firmware can boot it.
 
-Connect the SSD with an NVMe-to-USB adapter (or an SD card reader for a supported
-Orin Nano SD artifact), then inspect the host drives:
+Connect the SSD with an NVMe-to-USB adapter, or an SD card reader for a supported
+Orin Nano SD image:
+
+<video width="100%" autoPlay loop muted playsInline>
+  <source src="/videos/installation/jetson-nvme-mac-adapter.mp4" type="video/mp4" />
+</video>
+
 
 ```sh
-wendy os list-drives --all --json
-wendy install plan --device-type jetson-orin-nano --carrier developer-kit \
-  --rootfs-only --storage nvme --drive <confirmed-drive-path>
+wendy install --rootfs-only
 ```
 
-Review the path, model and capacity, then run the planned command. For AGX Orin,
-rootfs-only imaging supports NVMe; eMMC uses recovery. A recovery release must
-publish an explicit rootfs-only artifact for the requested storage.
+Pick **Jetson Orin Nano** and the drive, and check its size before confirming.
+For AGX Orin, rootfs-only imaging supports NVMe; eMMC uses full recovery.
 
 After writing and ejecting, insert the SSD/card in the Jetson and power it on.
-The older [NVMe adapter walkthrough](https://youtu.be/TtDJAtBUEZI) illustrates
-physical media handling; it is not the full USB recovery procedure.
+
+<video width="100%" autoPlay loop muted playsInline>
+  <source src="/videos/installation/jetson-nvme-bottom-insertion.mp4" type="video/mp4" />
+</video>
+
+This video walks through the whole NVMe adapter method, from flashing the SSD to
+your first app. It shows this section's steps, not full USB recovery.
+
+<YouTubeVideo id="TtDJAtBUEZI" title="Getting Started with WendyOS on NVIDIA Jetson Orin Nano" />
 
 ## Verify first boot
 
 Allow the board to boot, then discover it:
 
 ```sh
-wendy discover --json
-wendy install verify --address <expected-name-or-IP> \
-  --expected-os-version <planned-version> --expected-device-type jetson-orin-nano
+wendy discover
 ```
 
-Use `jetson-agx-orin` for an AGX installation. Match the expected name/address,
-not an unrelated device from the discovery results. Record the returned public
-key for subsequent identity checks. Add `--require-enrollment` if cloud enrollment
-was requested. See [agent-assisted setup](/docs/installation/agent-assisted-setup)
-for the equivalent MCP tools and a complete verification flow.
+<CliShot flow="discover" step="devices" alt="The Wendy CLI listing discovered WendyOS devices on the network" />
 
-For a board on USB-C, `wendy discover` lists a link-local address such as
-`fe80::…%en31`; pass it to `--address` as printed. `--expected-os-version`
-accepts either `0.19.5` or `WendyOS-0.19.5`.
+Your Jetson appears under the device name you chose.
+
+<Accordions>
+  <Accordion title="Scripted installs and verification">
+    Every prompt has a flag, so installs can run without a terminal. For example:
+
+    ```sh
+    wendy install --device-type jetson-orin-nano --device-name lab-orin --no-wifi --force
+    ```
+
+    Use `jetson-agx-orin` and `--storage nvme` or `--storage emmc` for AGX Orin.
+    `wendy install plan` describes an installation as JSON without writing
+    anything, and `wendy install verify` checks first boot at an explicit
+    address. For a board on USB-C, pass the link-local address that
+    `wendy discover` prints, such as `fe80::…%en31`. Coding agents use the same
+    steps through MCP; see [agent-assisted setup](/docs/installation/agent-assisted-setup).
+    All flags are in the [installation command reference](/docs/advanced/clients/wendy-cli/commands/os/install).
+  </Accordion>
+</Accordions>
 
 Continue with [the app tutorial](/docs/getting-started/app#2-create-an-app) to create and run
 your first app, then inspect its container and logs and test its output. Flash completion, first boot
