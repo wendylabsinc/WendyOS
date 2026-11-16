@@ -950,3 +950,93 @@ func TestMergePickerItemTakesNoCableFromAnotherDevice(t *testing.T) {
 		t.Errorf("WiredAddresses = %v from another device, want nil", got)
 	}
 }
+
+// A USB board that also answers on the network over its USB link is one
+// board: the USB scan must not add a second row with no address or agent.
+func TestDiscoverTableItemsListsAUSBBoardOnce(t *testing.T) {
+	collection := &models.DevicesCollection{
+		USBDevices: []models.USBDevice{
+			{Name: "WendyOS Device brave-otter", DisplayName: "WendyOS Device brave-otter", USBVersion: "USB 3.0", NetworkInterface: "en11"},
+		},
+		LANDevices: []models.LANDevice{
+			{
+				ID:               "7d9c1f0e-0000-4000-8000-000000000001",
+				DisplayName:      "Brave Otter",
+				Hostname:         "wendyos-brave-otter.local",
+				IPAddress:        "fe80::5741:1%en11",
+				NetworkInterface: "en11",
+				USB:              "WendyOS Device brave-otter (en11) 2.5 Gbps",
+				AgentVersion:     "2026.11.13-154136",
+			},
+		},
+	}
+
+	items := discoverTableItems(collection)
+	if len(items) != 1 {
+		var names []string
+		for _, item := range items {
+			names = append(names, item.info.Name+" ["+item.info.Type+"]")
+		}
+		t.Fatalf("got %d rows, want 1: %v", len(items), names)
+	}
+	if got := items[0].info.Name; got != "Brave Otter" {
+		t.Fatalf("row name = %q, want the network row", got)
+	}
+	if got := items[0].picker.USB; got != "WendyOS Device brave-otter (en11) 2.5 Gbps" {
+		t.Fatalf("row USB detail = %q, want the USB link summary", got)
+	}
+}
+
+// The interface a board answers on is also carried by its other addresses
+// when the row leads with a Wi-Fi address.
+func TestDiscoverTableItemsListsAUSBBoardOnceWhenWiFiLeads(t *testing.T) {
+	collection := &models.DevicesCollection{
+		USBDevices: []models.USBDevice{
+			{Name: "WendyOS Device brave-otter", DisplayName: "WendyOS Device brave-otter", NetworkInterface: "en11"},
+		},
+		LANDevices: []models.LANDevice{
+			{
+				DisplayName:      "Brave Otter",
+				Hostname:         "wendyos-brave-otter.local",
+				IPAddress:        "192.168.1.207",
+				Addresses:        []string{"192.168.1.207", "fe80::5741:1%EN11"},
+				NetworkInterface: "en0",
+			},
+		},
+	}
+
+	if items := discoverTableItems(collection); len(items) != 1 {
+		t.Fatalf("got %d rows, want 1", len(items))
+	}
+}
+
+// A USB board with no network row is still worth listing: it is plugged in
+// but not answering. So is one whose interface the scan could not tell, and
+// one whose interface carries no device.
+func TestDiscoverTableItemsKeepsAUSBBoardWithNoNetworkRow(t *testing.T) {
+	collection := &models.DevicesCollection{
+		USBDevices: []models.USBDevice{
+			{Name: "WendyOS Device silent", DisplayName: "WendyOS Device silent", NetworkInterface: "en12"},
+			{Name: "WendyOS Device unknown-port", DisplayName: "WendyOS Device unknown-port"},
+		},
+		LANDevices: []models.LANDevice{
+			{
+				DisplayName:      "Brave Otter",
+				Hostname:         "wendyos-brave-otter.local",
+				IPAddress:        "fe80::5741:1%en11",
+				NetworkInterface: "en11",
+			},
+		},
+	}
+
+	items := discoverTableItems(collection)
+	var usbRows []string
+	for _, item := range items {
+		if item.info.Type == "USB" {
+			usbRows = append(usbRows, item.info.Name)
+		}
+	}
+	if len(items) != 3 || len(usbRows) != 2 {
+		t.Fatalf("got %d rows with USB rows %v, want 3 rows and both USB boards", len(items), usbRows)
+	}
+}

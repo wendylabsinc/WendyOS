@@ -6,21 +6,15 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
+	"fmt"
 	"io"
-	"math/big"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,17 +22,24 @@ import (
 	containerdclient "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	agentruntime "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
+	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
+	"github.com/wendylabsinc/wendy/go/internal/shared/buildassignment"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
+	"github.com/wendylabsinc/wendy/go/internal/testutil/deliverypki"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // This test needs real BuildKit/buildctl, a fresh containerd daemon, and an empty
@@ -73,22 +74,26 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
-	rootPEM, issue := deliveryIssuer(t)
-	tenant, err := meshid.ParseTenant(rpcTestDeliveryTenant)
+	f := deliverypki.New(t)
+	rootPEM := f.Chain
+	target, builder := f.TargetID, mustDeliveryDevice(t, deliverypki.BuilderPrincipal)
+	targetCert, targetKey := f.Target.PEM, f.Target.Key
+	builderCert, builderKey := f.Builder.PEM, f.Builder.Key
+	primary := f.Mint(t, deliverypki.OperatorPrincipal)
+	operatorCert, operatorKey := primary.PEM, primary.Key
+	targetManager := f.Manager(t)
+	workerManager := delivery.NewManager(t.TempDir(), "localhost:5000/", func() (string, string) { return builderCert, rootPEM })
+	t.Cleanup(workerManager.Close)
+	rt.SetDeliverySource(targetManager.Get)
+	registryTLS, err := mtls.NewTLSConfig(targetCert, rootPEM, targetKey, logger, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := meshid.ParseDevice(tenant, "22222222-2222-4222-8222-222222222222")
+	registryServer, err := registry.Start(ctx, containerdAddr, "127.0.0.1:5000", logger, registryTLS, registry.WithDeliveryAuthorization(targetManager.Get, interceptor.OrgModeStrict))
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder, err := meshid.ParseDevice(tenant, "33333333-3333-4333-8333-333333333333")
-	if err != nil {
-		t.Fatal(err)
-	}
-	targetCert, targetKey := issue(2, target.Principal())
-	builderCert, builderKey := issue(3, builder.Principal())
-	operatorCert, operatorKey := issue(4, "spiffe://wendy.sh/tenant/"+rpcTestDeliveryTenant+"/operator/build-test")
+	t.Cleanup(func() { registryServer.Shutdown(context.Background()) })
 	start := func(cert, key string, register func(*grpc.Server), opts ...grpc.ServerOption) string {
 		t.Helper()
 		srv, err := mtls.NewServer(cert, rootPEM, key, logger, time.Time{}, certs.Scope{TenantUUID: rpcTestDeliveryTenant}, interceptor.OrgModeStrict, opts...)
@@ -108,7 +113,8 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 	calls := map[string]int{}
 	record := func(method string) { mu.Lock(); calls[method]++; mu.Unlock() }
 	targetAddr := start(targetCert, targetKey, func(s *grpc.Server) {
-		agentpb.RegisterWendyContainerServiceServer(s, services.NewContainerService(logger, rt))
+		agentpb.RegisterWendyContainerServiceServer(s, services.NewContainerService(logger, rt, services.WithDeliverySource(targetManager.Get, interceptor.OrgModeStrict)))
+		agentpbv2.RegisterWendyBuildDeliveryServiceServer(s, services.NewBuildDeliveryService(targetManager.Get, rt))
 	}, grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
 		record(info.FullMethod)
 		return next(ctx, req)
@@ -118,7 +124,7 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 	}))
 	contextTar := new(bytes.Buffer)
 	tw := tar.NewWriter(contextTar)
-	for name, body := range map[string]string{"Dockerfile": "FROM scratch\nCOPY marker.txt /marker.txt\n", "marker.txt": "F1 real BuildKit to device-authorized PrepareImage\n"} {
+	for name, body := range map[string]string{"Dockerfile": "FROM scratch\nCOPY marker.txt /marker.txt\n", "marker.txt": "real BuildKit to operator-authorized PrepareImage and registry\n"} {
 		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}); err != nil {
 			t.Fatal(err)
 		}
@@ -138,14 +144,14 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := services.NewBuildService(logger, services.BuildServiceOptions{
-		ConfigPath: buildConfig, StateDir: t.TempDir(), BuildkitAddress: buildkitAddr,
-		Chunks: deliveryContext(contextTar.Bytes()), Peers: deliveryPeer(targetAddr), PushTLS: pushTLS,
+		ConfigPath: buildConfig, StateDir: t.TempDir(), BuildkitAddress: buildkitAddr, DeliverySource: workerManager.Get,
 		ResolveTarget: func(id string) (services.DeliveryTarget, error) {
 			if id != target.UUID().String() {
-				return services.DeliveryTarget{}, os.ErrNotExist
+				return services.DeliveryTarget{}, fmt.Errorf("unknown target %s", id)
 			}
 			return services.DeliveryTarget{Device: target, AssetUUID: id}, nil
 		},
+		Chunks: deliveryContext(contextTar.Bytes()), Peers: deliveryPeer{agent: targetAddr, registry: "127.0.0.1:5000"}, PushTLS: pushTLS,
 	})
 	builderAddr := start(builderCert, builderKey, func(s *grpc.Server) { agentpbv2.RegisterWendyBuildServiceServer(s, svc) })
 	operatorTLS, err := mtls.NewClientTLSConfigExpectingDevice(operatorCert, rootPEM, operatorKey, logger, builder)
@@ -157,17 +163,54 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cc.Close()
+	buildClient := agentpbv2.NewWendyBuildServiceClient(cc)
+	baseSpec := &agentpbv2.BuildSpec{
+		AppId: "f1-delivery", Platform: "linux/" + runtime.GOARCH, Chunking: agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE,
+		Context:     &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{contextHash[:]}},
+		PushTargets: []*agentpbv2.PushTarget{{AssetUuid: target.UUID().String(), RegistryPort: 5000, Repository: "f1-delivery:latest"}},
+		Definition:  &agentpbv2.BuildSpec_DockerfileBuild{DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"}},
+	}
+	legacyStream, err := buildClient.BuildImage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyStream.Send(&agentpbv2.BuildImageRequest{Spec: baseSpec}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyStream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacyStream.Recv(); status.Code(err) != codes.PermissionDenied ||
+		!strings.Contains(status.Convert(err).Message(), "Update the wendy CLI") {
+		t.Fatalf("legacy build stream returned %v, want PermissionDenied with upgrade hint", err)
+	}
 	firstUploads := 0
-	for iteration := range 2 {
-		stream, err := agentpbv2.NewWendyBuildServiceClient(cc).BuildImage(ctx)
+	for iteration := range 3 {
+		stream, err := buildClient.BuildImage(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		spec := &agentpbv2.BuildSpec{
-			AppId: "f1-delivery", Platform: "linux/" + runtime.GOARCH, Chunking: agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE,
-			Context:     &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{contextHash[:]}},
-			PushTargets: []*agentpbv2.PushTarget{{AssetUuid: target.UUID().String(), RegistryPort: 5000, Repository: "f1-delivery:latest"}},
-			Definition:  &agentpbv2.BuildSpec_DockerfileBuild{DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"}},
+		spec := proto.Clone(baseSpec).(*agentpbv2.BuildSpec)
+		if iteration == 2 {
+			spec.Chunking = agentpbv2.ChunkingMode_CHUNKING_MODE_OFF
+		}
+		input, err := buildassignment.InputSHA256(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims := f.Claims("f1-delivery:latest")
+		claims.InputSHA256 = input
+		if prior, err := rt.ImageDigest(ctx, "localhost:5000/f1-delivery:latest"); err == nil {
+			claims.ExpectedDigest = prior
+		}
+		spec.PushTargets[0].DeliveryAuthorizationJws = f.Sign(t, claims)
+		snapshot, err := targetManager.Get()
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec.PushTargets[0].DeliverySession, err = snapshot.Store.Admit(spec.PushTargets[0].DeliveryAuthorizationJws, primary.Leaf)
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := stream.Send(&agentpbv2.BuildImageRequest{Spec: spec}); err != nil {
 			t.Fatal(err)
@@ -193,6 +236,9 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 		}
 		if result == nil || len(result.GetDeliveries()) != 1 || !result.GetDeliveries()[0].GetDelivered() {
 			t.Fatalf("build/delivery %d did not finish: %v", iteration+1, result)
+		}
+		if _, done, err := snapshot.Store.CompletedOutput(spec.PushTargets[0].GetDeliverySession(), f.Builder.Leaf); err != nil || !done {
+			t.Fatalf("target did not complete delivery %d: %v", iteration, err)
 		}
 		if iteration == 0 {
 			mu.Lock()
@@ -254,45 +300,22 @@ func (data deliveryContext) OpenChunkStream(context.Context, [][32]byte) io.Read
 
 // Discovery is fixed to the loopback test target; the production delivery
 // dialer still performs its pinned TLS handshake with the builder's device key.
-type deliveryPeer string
+type deliveryPeer struct{ agent, registry string }
 
-func (addr deliveryPeer) DialTarget(ctx context.Context, _ services.DeliveryTarget, _ uint16) (net.Conn, string, error) {
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", string(addr))
+func (peer deliveryPeer) DialTarget(ctx context.Context, _ services.DeliveryTarget, port uint16) (net.Conn, string, error) {
+	addr := peer.agent
+	if port == 5000 {
+		addr = peer.registry
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	return conn, "lan-direct", err
 }
 
-func deliveryIssuer(t *testing.T) (string, func(int64, string) (string, string)) {
+func mustDeliveryDevice(t *testing.T, principal string) meshid.Device {
 	t.Helper()
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	device, err := meshid.DeviceFromPrincipal(principal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "isolated build-delivery test"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), BasicConstraintsValid: true, IsCA: true, KeyUsage: x509.KeyUsageCertSign}
-	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-	return rootPEM, func(serial int64, principal string) (string, string) {
-		t.Helper()
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		uri, err := url.Parse(principal)
-		if err != nil {
-			t.Fatal(err)
-		}
-		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: []*url.URL{uri}}
-		der, err := x509.CreateCertificate(rand.Reader, leaf, ca, &key.PublicKey, caKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
-	}
+	return device
 }

@@ -38,9 +38,11 @@ countdown expires. No request is retried automatically.
 Limits: 10 accepted notifications per minute per device app; three **Cloud
 over-limit** refusals within ten minutes cause a 15-minute quarantine and a Wendy
 Security notification to owners/admins. There are at most 100 selectors and 100
-recipients, title is 1–120 printable UTF-8 bytes, body is 1–2000 printable UTF-8
-bytes, and links must target the sending device, for example
-`wendy://devices/current/live`. The Agent also enforces a short burst limit.
+recipients, title is 1–120 UTF-8 bytes, body is 1–2000 UTF-8 bytes, and links
+must target the sending device, for example `wendy://devices/current/live`. Title
+and body are each one line: a line break, tab or other control character is
+refused, and so is leading or trailing whitespace. The Agent also enforces a short
+burst limit.
 
 Deployment through Cloud works. The older CLI used for validation refuses port
 8080 through Cloud v2, so page access with that CLI requires the device LAN.

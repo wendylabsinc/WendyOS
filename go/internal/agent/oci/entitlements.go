@@ -148,6 +148,10 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			if err := applySerial(spec, ent); err != nil {
 				return err
 			}
+		case appconfig.EntitlementArduinoBridge:
+			if err := applyArduinoBridge(spec); err != nil {
+				return err
+			}
 		case appconfig.EntitlementDisplay:
 			applyDisplay(spec)
 			if !didSetDeviceCapabilities {
