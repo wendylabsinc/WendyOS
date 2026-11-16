@@ -763,6 +763,16 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	return h.broadcast(frame)
 }
 
+// sampleGap reports that frames were lost between two a subscriber took in
+// turn. produce numbers a source's frames without a break, so the hub dropping
+// one for a slow subscriber, or a producer restart, shows as a jump in the
+// identities that subscriber sees. Unlike dequeueDrops it needs no call paired
+// with the channel receive, so it still holds for frames that waited in a ring
+// or a drain buffer. Zero is a frame nobody numbered and proves nothing.
+func sampleGap(prev, next uint64) bool {
+	return prev != 0 && next != 0 && next != prev+1
+}
+
 // broadcast delivers a frame to the subscribers that want its kind — encoded
 // video to viewers, VIDEO_CODEC_RAW frames to raw subscribers — dropping for
 // slow consumers. Returns false when there are no subscribers left (producer
