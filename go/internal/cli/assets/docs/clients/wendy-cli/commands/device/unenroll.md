@@ -58,24 +58,6 @@ wendy device unenroll --device <device-address> --asset-id <asset-id> --yes
 If that keeps failing, Cloud no longer lists the device, so `--force` (below)
 clears its local enrollment. For Lite, reconnect USB and rerun the same command.
 
-One failure is different. If the error says
-`enrollment credentials erased; resource cleanup incomplete`, the device did
-reset: it erased its keys, but its agent could not finish removing the network
-setup of the old enrollment, and the error ends with what it failed on. The
-commands above cannot run against it, because the device no longer has the
-identity they authenticate. It answers only on its setup port, which this
-computer refuses while it still has the device's old identity saved. To get it
-back:
-
-```sh
-wendy device unpin <device-address>
-wendy device enroll --device <device-address>
-```
-
-The agent retries its cleanup every few seconds, and enrollment stays closed
-until it succeeds. If it does not clear within a minute, restart the device:
-rules and routes left over from before the reset are gone after a reboot.
-
 Older numeric Cloud enrollments reset locally before Cloud cleanup. They require
 an owner or administrator account. If cleanup fails, run the exact Cloud removal
 command printed in the error; it retains the old enrollment details needed to
