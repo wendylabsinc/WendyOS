@@ -48,6 +48,7 @@ func TestCommandErrorClass(t *testing.T) {
 		{"agent down", agentNotListeningError{addr: "secret.local", cause: privateCause}, "device_unreachable"},
 		{"simulator", fmt.Errorf("private VM: %w", errSimulatorUnavailable), "simulator_unavailable"},
 		{"pinned unreachable", &noAuthenticatedEndpointError{msg: "secret.local"}, "device_unreachable"},
+		{"pinned, no login", missingLoginError{refusal: &noAuthenticatedEndpointError{msg: "secret.local"}}, "auth_required"},
 		{"auth required", config.ErrNotLoggedIn, "auth_required"},
 		{"auth ambiguous", config.ErrMultipleSessions, "auth_session_ambiguous"},
 		{"certificate response", cloudCertError{message: "secret.local"}, "auth_certificate_failed"},

@@ -38,6 +38,13 @@ func (m *meshLifetime) Start(parent context.Context, start func(context.Context,
 	})
 }
 
+// Started reports whether Start ever launched the workers.
+func (m *meshLifetime) Started() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started
+}
+
 func (m *meshLifetime) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.stopped = true
