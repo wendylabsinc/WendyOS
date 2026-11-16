@@ -22,6 +22,7 @@ on:
       - '.github/actions/setup-go-ci/**'
       - '.github/actions/release-priority/**'
       - '.github/actions/check-runner-disk/**'
+      - '.github/actions/setup-macos-ci/**'
       - '.github/scripts/**'
       - '.github/ci-tests/memory-budget/**'
       - '.github/ci-tests/host-sensor-loopback/**'
@@ -57,6 +58,7 @@ on:
       - '.github/actions/setup-go-ci/**'
       - '.github/actions/release-priority/**'
       - '.github/actions/check-runner-disk/**'
+      - '.github/actions/setup-macos-ci/**'
       - '.github/scripts/**'
       - '.github/ci-tests/memory-budget/**'
       - '.github/ci-tests/host-sensor-loopback/**'
@@ -117,7 +119,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Verify shared contract pin is on service-protos master
+      - name: Verify shared contract pin is on service-protos main
         run: |
           source Proto/shared-grpc-api-contracts.sh
           check_shared_grpc_api_contracts_ancestry
@@ -565,12 +567,17 @@ jobs:
     permissions:
       contents: read
     name: macOS CLI and device regressions
-    runs-on: macos-15
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos-ci
+
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
@@ -602,7 +609,9 @@ jobs:
 
   native-app-regressions:
     name: Native app regressions (${{ matrix.platform }})
-    runs-on: macos-26
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -612,6 +621,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos-ci
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
