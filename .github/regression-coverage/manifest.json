@@ -3611,7 +3611,7 @@
           "result": "Actual shell entry points tested with source download failure, rejected pin, invalid aliases/exceptions, failed export/compilation, and generated drift. Committed file hashes remain unchanged on failure."
         },
         {
-          "test": ".github/workflows/go-tests.yml:shared-grpc-api-contracts",
+          "test": ".github/workflows/shared-grpc-api-contracts.yml:shared-grpc-api-contracts",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711219",
           "result": "Real pinned source policy, generators and generated output checks passed."
         },
@@ -3639,7 +3639,7 @@
           "result": "Actual shell entry points tested with source download failure, rejected pin, invalid aliases/exceptions, failed export/compilation, and generated drift. Committed file hashes remain unchanged on failure."
         },
         {
-          "test": ".github/workflows/go-tests.yml:shared-grpc-api-contracts",
+          "test": ".github/workflows/shared-grpc-api-contracts.yml:shared-grpc-api-contracts",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711219",
           "result": "Real pinned source policy, generators and generated output checks passed."
         }
@@ -3661,7 +3661,7 @@
           "result": "Actual shell entry points tested with source download failure, rejected pin, invalid aliases/exceptions, failed export/compilation, and generated drift. Committed file hashes remain unchanged on failure."
         },
         {
-          "test": ".github/workflows/go-tests.yml:shared-grpc-api-contracts",
+          "test": ".github/workflows/shared-grpc-api-contracts.yml:shared-grpc-api-contracts",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711219",
           "result": "Real pinned source policy, generators and generated output checks passed."
         }

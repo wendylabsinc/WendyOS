@@ -107,40 +107,6 @@ jobs:
       - name: Exercise review, event and failure contracts without publishing
         run: python .github/scripts/run-automation-regressions.py
 
-  shared-grpc-api-contracts:
-    name: Shared gRPC API contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Verify shared contract pin is on service-protos master
-        run: |
-          source Proto/shared-grpc-api-contracts.sh
-          check_shared_grpc_api_contracts_ancestry
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
-        with:
-          version: '1.75.0'
-          setup_only: true
-          pr_comment: false
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: '34.0'
-          repo-token: ${{ github.token }}
-      - name: Install pinned Go generators
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
-      - name: Check shared gRPC API contracts
-        run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
-
   babel:
     permissions:
       contents: read
@@ -966,12 +932,11 @@ jobs:
       contents: read
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher, workflow-security, analytics-queries]
+    needs: [babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher, workflow-security, analytics-queries]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
         env:
-          SHARED_GRPC_API_CONTRACTS_RESULT: ${{ needs.shared-grpc-api-contracts.result }}
           BABEL_RESULT: ${{ needs.babel.result }}
           RACE_RESULT: ${{ needs.unit-tests.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
@@ -993,7 +958,6 @@ jobs:
           ANALYTICS_QUERIES_RESULT: ${{ needs.analytics-queries.result }}
           WORKFLOW_SECURITY_RESULT: ${{ needs.workflow-security.result }}
         run: |
-          test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
           test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
           test "$WINDOWS_RESULT" = success
