@@ -438,7 +438,9 @@ func TestRelayPoolRefusalAndGrantExpiry(t *testing.T) {
 		t.Fatalf("refusal: %v", err)
 	}
 	poolEcho(t, sibling)
-	grant.claims.RelayExp = time.Now().Unix() + 1
+	// Whole-second claims: +1 can leave under a millisecond for the join when
+	// this runs at the end of a second. +2 leaves between one and two seconds.
+	grant.claims.RelayExp = time.Now().Unix() + 2
 	broker.mu.Lock()
 	broker.grants[artifact] = grant
 	broker.mu.Unlock()
