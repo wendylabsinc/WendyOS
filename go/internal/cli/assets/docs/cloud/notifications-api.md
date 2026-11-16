@@ -6,7 +6,7 @@ operator-facing Wendy Notifications in a Wendy Cloud organization.
 ## Proto package
 
 `wendycloud.v1` is defined in `Proto/cloud/notifications.proto`. The UUID-native
-`wendycloud.v2` service comes from the [shared catalogue](https://github.com/wendylabsinc/service-protos/blob/master/wendycloud/v2/notifications.proto)
+`wendycloud.v2` service comes from the [shared catalogue](https://github.com/wendylabsinc/service-protos/blob/main/wendycloud/v2/notifications.proto)
 at the revision selected by `Proto/shared-grpc-api-contracts.sh`.
 
 ## App-facing API (`wendy.system.v1`)
