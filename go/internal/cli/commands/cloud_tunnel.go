@@ -557,7 +557,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if clouddefaults.FindAssetByNameOrID(allAssets, deviceName) == nil {
 			return resolveErr
 		}
-		return commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
+		return cloudDeviceOfflineError(deviceName)
 	case errors.Is(resolveErr, errNoCloudDevicesEnrolled):
 		allAssets, err := fetchAll()
 		if err != nil {
@@ -566,10 +566,28 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if len(allAssets) == 0 {
 			return resolveErr
 		}
-		return commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
+		return cloudAllDevicesOfflineError(len(allAssets))
 	default:
 		return resolveErr
 	}
+}
+
+// cloudOfflineListStep names the command that also lists offline devices.
+const cloudOfflineListStep = "List all enrolled devices with 'wendy cloud discover --all --json'."
+
+// cloudDeviceOfflineError says a device named in Cloud is enrolled but
+// reported offline. Both Cloud generations report it with these words. What
+// to do about it is attached as next steps, which JSON mode lists separately.
+func cloudDeviceOfflineError(name string) error {
+	return withNextSteps(commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline", name),
+		"Check the device's power and network connection, then retry.", cloudOfflineListStep)
+}
+
+// cloudAllDevicesOfflineError is cloudDeviceOfflineError for a command given
+// no device, when every one of the count enrolled devices is reported offline.
+func cloudAllDevicesOfflineError(count int) error {
+	return withNextSteps(commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline", count),
+		"Check their power and network connections, then retry.", cloudOfflineListStep)
 }
 
 func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string) (*cloudpb.Asset, error) {

@@ -438,6 +438,10 @@ type devicePinDiagnostic struct {
 	// saved one. It is explained like an SSH host-key change and can be
 	// accepted at an interactive prompt (see acceptChangedIdentity).
 	changed bool
+	// keyChanged marks a changed device that presented the saved identity
+	// with a different certificate key (the SPKI store's rejection). It is
+	// confirmed like any other change; only the wording differs.
+	keyChanged bool
 	// unenrolled marks a saved device that now answers as not enrolled,
 	// confirmed the same way; accepting forgets the saved identity.
 	unenrolled bool
@@ -445,14 +449,35 @@ type devicePinDiagnostic struct {
 
 const changedIdentityStep = "To accept the new identity, run this command once in a terminal and confirm."
 
+// changedKeyStep is changedIdentityStep for a changed certificate key.
+const changedKeyStep = "To accept the new key, run this command once in a terminal and confirm."
+
+// changedIdentityExplanation says what a changed device presented and what
+// may explain it. keyChanged is the saved identity with a different
+// certificate key, which is also what a certificate renewal looks like: the
+// agent renews with a fresh key. `wendy discover` shows the same sentences
+// (lanIdentityFailure).
+func changedIdentityExplanation(keyChanged bool) []string {
+	if keyChanged {
+		return []string{
+			"It presented the same identity with a different certificate key than the one this CLI saved for it.",
+			"The device may have renewed its certificate, or been reinstalled or re-enrolled, or something else may be answering in its place.",
+		}
+	}
+	return []string{
+		"It presented a different identity than the one this CLI saved for it.",
+		"The device may have been reinstalled or re-enrolled, or something else may be answering in its place.",
+	}
+}
+
 // changedIdentityWarning is the explanation shown before the confirmation
 // prompt, and the body of the refusal when there is no terminal to ask.
 func (d devicePinDiagnostic) changedIdentityWarning(styled bool) string {
 	heading := fmt.Sprintf("Warning: device %q identity changed.", d.hostname)
-	explanation := []string{
-		"It presented a different identity than the one this CLI saved for it.",
-		"The device may have been reinstalled or re-enrolled, or something else may be answering in its place.",
+	if d.keyChanged {
+		heading = fmt.Sprintf("Warning: device %q certificate key changed.", d.hostname)
 	}
+	explanation := changedIdentityExplanation(d.keyChanged)
 	if d.unenrolled {
 		heading = fmt.Sprintf("Warning: device %q now answers as a device that is not enrolled.", d.hostname)
 		explanation = []string{
@@ -475,7 +500,11 @@ func (d devicePinDiagnostic) changedIdentityWarning(styled bool) string {
 
 func (d devicePinDiagnostic) message(styled bool) string {
 	if d.changed || d.unenrolled {
-		return d.changedIdentityWarning(styled) + "\n\n" + changedIdentityStep
+		step := changedIdentityStep
+		if d.keyChanged {
+			step = changedKeyStep
+		}
+		return d.changedIdentityWarning(styled) + "\n\n" + step
 	}
 	heading := d.heading
 	command := "wendy device unpin " + shellQuoteArg(d.hostname)

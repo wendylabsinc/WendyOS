@@ -53,6 +53,11 @@ public actor WendyAgent {
         self.reportedVersion = reportedVersion
         self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
         self.probesLinuxContainerRuntime = probesLinuxContainerRuntime
+        let registryStore = BlobStore(root: WendyAgentPaths.stateDirectory)
+        self.deliveryAuthority = BuildDeliveryAuthority(
+            directory: WendyAgentPaths.stateDirectory.appendingPathComponent("build-delivery"),
+            images: registryStore
+        )
     }
 
     public func start() async throws {
@@ -253,6 +258,7 @@ public actor WendyAgent {
     /// Rebuilt (with callbacks re-wired) every time the main server starts so the
     /// next provision/unprovision transition still fires.
     private var provisioningService: ProvisioningService?
+    private let deliveryAuthority: BuildDeliveryAuthority
     /// Whether the main server is currently running in mTLS mode (provisioned) as
     /// opposed to plaintext (unprovisioned).
     private var mainServerIsMTLS = false
@@ -379,11 +385,29 @@ public actor WendyAgent {
             },
             onUnprovisioned: { [weak self] in
                 Task { await self?.handleUnprovisioned() }
+            },
+            onBeforeUnprovisioned: { [authority = self.deliveryAuthority] in
+                try await authority.closeAndRemove()
             }
         )
         let info = await provisioningService.provisioningInfo()
         // When enrolled, run mTLS on `port + 1`; otherwise plaintext on `port`.
         let certs = info.enrolled ? await provisioningService.provisioningCerts() : nil
+        let (deliveryOrgMode, _) = ClientCertAuthorizer.OrgEnforcementMode.parse(
+            ProcessInfo.processInfo.environment["WENDY_MTLS_ORG_ENFORCEMENT"]
+        )
+        do {
+            try await deliveryAuthority.configure(
+                certPEM: certs?.certPEM,
+                chainPEM: certs?.chainPEM,
+                orgMode: deliveryOrgMode
+            )
+        } catch {
+            logger.error(
+                "Operator delivery disabled: durable authorization recovery failed",
+                metadata: ["error": "\(error)"]
+            )
+        }
 
         // SECURITY: accepted risk, matching the Linux agent. Before enrollment
         // the camera, like the other services here, is reachable without
@@ -406,6 +430,13 @@ public actor WendyAgent {
             RobotArmService(path: stateDirectory.appendingPathComponent("robot-arm-bindings.json")),
             provisioningService,
             ProvisioningServiceV2(v1: provisioningService),
+            BuildDeliveryService(
+                authority: deliveryAuthority,
+                expectedScope: certs.flatMap {
+                    ClientCertAuthorizer.scope(fromLeafPEM: $0.certPEM)
+                },
+                orgMode: deliveryOrgMode
+            ),
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
             videoService,
@@ -736,7 +767,8 @@ public actor WendyAgent {
             tls: enrolled,
             assetID: enrolled ? info?.assetID : nil,
             orgID: enrolled ? info?.orgID : nil,
-            caps: enrolled ? ["sensors"] : []
+            caps: enrolled ? ["sensors"] : [],
+            principalURI: enrolled ? info?.principalURI : nil
         )
 
         let runtime = try await advertiser.start()
@@ -958,7 +990,8 @@ public actor WendyAgent {
                 tls: tls,
                 routes: .pushAndPull,
                 label: "push"
-            )
+            ),
+            authority: self.deliveryAuthority
         )
         let logger = self.logger
         self.pushRegistryTask = Task {

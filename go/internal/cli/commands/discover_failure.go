@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,7 +20,7 @@ import (
 // Discovery reports observations, not diagnoses inferred from an mDNS TLS flag.
 // Messages are controlled text: raw transport errors may contain credentials,
 // terminal controls or misleading recovery advice from older connection paths.
-func classifyLANProbeFailure(err error) *models.ProbeFailure {
+func classifyLANProbeFailure(dev models.LANDevice, err error) *models.ProbeFailure {
 	if err == nil {
 		return nil
 	}
@@ -27,7 +28,7 @@ func classifyLANProbeFailure(err error) *models.ProbeFailure {
 	var notListening agentNotListeningError
 	switch {
 	case isLANIdentityFailure(err):
-		return lanIdentityFailure(err)
+		return lanIdentityFailure(dev, err)
 	case expiredLoginFrom(err) != nil:
 		login := expiredLoginFrom(err)
 		return probeFailure("login_expired", login.message(), login.loginStep)
@@ -58,16 +59,22 @@ func missingLANCredentials() *models.ProbeFailure {
 	return probeFailure("credentials_missing", "This CLI has no client certificates to try the device's advertised secure endpoint.", "Run 'wendy auth login' with an account that can access the device's organization.")
 }
 
+// lanProbeHint is the failure as one hint: its message, then its steps. A
+// message laid out in lines keeps each step on a line of its own.
 func lanProbeHint(lan *models.LANDevice) string {
 	if lan == nil || lan.ProbeFailure == nil {
 		return ""
 	}
-	return strings.Join(append([]string{lan.ProbeFailure.Message}, lan.ProbeFailure.NextSteps...), " ")
+	separator := " "
+	if strings.Contains(lan.ProbeFailure.Message, "\n") {
+		separator = "\n"
+	}
+	return strings.Join(append([]string{lan.ProbeFailure.Message}, lan.ProbeFailure.NextSteps...), separator)
 }
 
 // Only observed local credential state warrants credential recovery advice.
 func lanProbeFailure(dev models.LANDevice, err error, credentials []config.CertificateInfo) *models.ProbeFailure {
-	failure := classifyLANProbeFailure(err)
+	failure := classifyLANProbeFailure(dev, err)
 	if failure == nil || !dev.IsMTLS {
 		return failure
 	}
@@ -116,8 +123,26 @@ func isLANIdentityFailure(err error) bool {
 	return errors.Is(err, errDeviceIdentityRefused) || errors.As(err, &identity) || errors.As(err, &pin)
 }
 
-func lanIdentityFailure(err error) *models.ProbeFailure {
-	message := "The device identity or certificate key differs from the saved pin; the connection was blocked."
+// lanIdentityFailure explains a device blocked because its identity or its
+// certificate key changed, in the words the direct commands use for the same
+// refusal (devicePinDiagnostic.changedIdentityWarning). It names the device as
+// its discovery row does, and says which of the two changed when the error
+// shows it.
+func lanIdentityFailure(dev models.LANDevice, err error) *models.ProbeFailure {
+	device := "The device"
+	if name := tui.StripControl(discovery.SanitiseDisplayName(firstNonEmpty(dev.DisplayName, dev.Hostname))); name != "" {
+		device = fmt.Sprintf("Device %q", name)
+	}
+	// Without a typed cause only the refusal itself is known.
+	change, saved := "does not match the identity or certificate key this CLI saved for it", "identity"
+	var explanation []string
+	identityChanged := func(presentedAnother bool) {
+		change, explanation = "identity changed", changedIdentityExplanation(false)
+		if !presentedAnother {
+			// A certificate that names no Wendy device is not another identity.
+			explanation[0] = "It did not present the identity this CLI saved for it."
+		}
+	}
 	var key, details string
 	var refusal *deviceIdentityRefusalError
 	var pin *devicepin.PinMismatchError
@@ -125,27 +150,32 @@ func lanIdentityFailure(err error) *models.ProbeFailure {
 	switch {
 	case errors.As(err, &pin):
 		// The SPKI store's own key: the dialled name is often an IP that keys
-		// nothing an unpin could clear.
-		key = pin.Key
-		details = fmt.Sprintf("Saved certificate key: %s. Presented certificate key: %s.", pin.Want, pin.Got)
+		// nothing an unpin could clear. It is the identity the device presented,
+		// and the unpin step is where it is shown.
+		key, saved = pin.Key, "key"
+		change, explanation = "certificate key changed", changedIdentityExplanation(true)
+		details = fmt.Sprintf("Saved key: %s\nNow key:   %s", pin.Want, pin.Got)
 	case errors.As(err, &refusal) && refusal.diagnostic != nil:
-		key = refusal.diagnostic.hostname
-		details = refusal.diagnostic.details
+		key, details = refusal.diagnostic.hostname, refusal.diagnostic.details
+		identityChanged(refusal.diagnostic.changed)
 	case errors.As(err, &identity):
-		saved, now := identityMismatchSides(identity)
-		details = fmt.Sprintf("Saved: %s. Now: %s.", saved, now)
+		was, now := identityMismatchSides(identity)
+		details = fmt.Sprintf("Saved: %s\nNow:   %s", was, now)
+		identityChanged(identity.GotPrincipal != "" || identity.GotAsset != "")
 	}
-	// Render only known diagnostic fields, with terminal controls removed.
-	if key != "" {
-		message += fmt.Sprintf(" Saved pin: %s.", tui.StripControl(key))
+	message := strings.Join(append([]string{device + " " + change + ", so the connection was blocked."}, explanation...), " ")
+	// Render only known diagnostic fields, one to a line, with terminal
+	// controls removed.
+	for _, line := range strings.Split(details, "\n") {
+		if line = tui.StripControl(line); line != "" {
+			message += "\n" + line
+		}
 	}
-	if details != "" {
-		message += " " + tui.StripControl(strings.ReplaceAll(details, "\n", " "))
-	}
-	step := "Verify which device is answering. Keep the saved pin unless you have confirmed an intentional identity change."
-	// Never suggest a modified key: it could clear a different pin.
+	// One step, so the command never stands apart from its condition. Never
+	// suggest a modified key: it could clear a different pin.
+	step := "Keep the saved " + saved + " unless you expected this change."
 	if key != "" && tui.StripControl(key) == key {
-		step += " After confirming, run: wendy device unpin " + shellQuoteArg(key)
+		step = "If you expected this change, run: wendy device unpin " + shellQuoteArg(key)
 	}
 	return probeFailure("device_identity_mismatch", message, step)
 }
