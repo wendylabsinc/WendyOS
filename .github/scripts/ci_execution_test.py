@@ -128,6 +128,7 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
                              "swift/Scripts/SetupSigningCI.sh", "swift/Scripts/Build.sh",
                              "swift/WendyAgentMac/RuntimeGuest/Dockerfile",
                              "swift/WendyAgentMac/RuntimeGuest/rootfs/init",
+                             "swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift",
                              "Examples/SO101Reader/reader.py", "Examples/SO101Reader/test_reader.py",
                              "web-client/tests/desktop-mesh.test.mjs", "web-client/tests/mesh-topology.test.mjs",
                              "web-client/electron/service.mjs", "web-client/desktop/types.ts",
