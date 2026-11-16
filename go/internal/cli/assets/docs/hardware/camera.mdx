@@ -343,6 +343,33 @@ cameras use `sensorlink:<pairing-key>:<channel-id>` and registered IP cameras us
 topic so identical topic names in isolated apps stay distinct. A blank stable ID means the source cannot yet be saved safely as
 a site camera. Marker placement is manual and does not calibrate the camera.
 
+### USB cameras that share a serial number
+
+A `by-id:` value is built from the camera's vendor, model and serial number, so
+it follows the camera to any USB port. A `by-path:` value names the USB port
+instead, so it changes when the camera moves to another port.
+
+Two cameras of the same model can report the same serial number, or none. This
+is common with low-cost cameras. They would both get the same `by-id:` value,
+which cannot say which camera is meant. While both are connected:
+
+- Each camera is listed with a `by-path:` value. Keep each one on its port:
+  moving it to another port changes its stable ID.
+- Connecting the second camera changes the first camera's stable ID from
+  `by-id:` to `by-path:`. Disconnecting it changes the ID back.
+- A request that uses the shared `by-id:` value fails with an error that lists
+  the `by-path:` values to use instead. The agent does not pick one of the two
+  cameras. This applies to `StreamVideoRequest.stable_id`,
+  `wendy device camera view --stable-id`, and reading or saving camera metadata
+  for that value.
+
+If you saved the `by-id:` value before the second camera was connected, replace
+it with the `by-path:` value from `wendy device camera list --json`, and save the
+camera's metadata again under the new value.
+
+When only one of the two cameras is connected, it is listed with the shared
+`by-id:` value whichever camera it is. The agent cannot tell them apart then.
+
 Native clients can discover enrolled SensorLink sources through the selected
 gateway without a terminal UI:
 
