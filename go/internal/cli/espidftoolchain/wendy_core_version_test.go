@@ -146,9 +146,45 @@ func TestWendyCoreVersionApplyRefusesChangedManifest(t *testing.T) {
 	if err != nil || setup == nil {
 		t.Fatalf("setup = %v, %v", setup, err)
 	}
-	writeCoreFixture(t, dir, map[string]string{"main/idf_component.yml": manifest + "# edited\n"})
+	writeCoreFixture(t, dir, map[string]string{"main/idf_component.yml": manifest + "# edited\n", "dependencies.lock": "manifest_hash: old\n"})
 	if err := setup.Apply(); err == nil || !strings.Contains(err.Error(), "changed during setup") {
 		t.Fatalf("Apply = %v, want a changed-file error", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dependencies.lock")); err != nil {
+		t.Errorf("a refused Apply deleted dependencies.lock: %v", err)
+	}
+}
+
+// The lock records the commit of the old version: Apply deletes it, so that
+// the next configure solves the dependencies again.
+func TestWendyCoreVersionApplyDeletesLock(t *testing.T) {
+	manifest := "dependencies:\n  wendy_core:\n    git: https://github.com/wendylabsinc/wendy-lite.git\n"
+	for _, hasLock := range []bool{true, false} {
+		t.Run(map[bool]string{true: "lock", false: "no lock"}[hasLock], func(t *testing.T) {
+			dir := t.TempDir()
+			files := map[string]string{"main/idf_component.yml": manifest}
+			if hasLock {
+				files["dependencies.lock"] = "dependencies:\n  wendy_core:\n    version: 61f89d838d89eea236dcfd6d583d117ff75084a5\n"
+			}
+			writeCoreFixture(t, dir, files)
+			setup, _, err := PrepareWendyCoreVersion(dir, testLiteVersion)
+			if err != nil || setup == nil {
+				t.Fatalf("setup = %v, %v", setup, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "dependencies.lock")); (err == nil) != hasLock {
+				t.Fatalf("Prepare changed dependencies.lock: %v", err)
+			}
+			if err := setup.Apply(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "dependencies.lock")); !os.IsNotExist(err) {
+				t.Errorf("dependencies.lock after Apply: %v, want deleted", err)
+			}
+			data, _ := os.ReadFile(filepath.Join(dir, "main/idf_component.yml"))
+			if !strings.Contains(string(data), `version: "`+testLiteVersion+`"`) {
+				t.Errorf("manifest not pinned:\n%s", data)
+			}
+		})
 	}
 }
 

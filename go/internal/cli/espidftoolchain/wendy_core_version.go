@@ -13,13 +13,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const componentManifest = "main/idf_component.yml"
+const (
+	componentManifest = "main/idf_component.yml"
+	// dependencyLock is the lock file of the ESP-IDF component manager.
+	dependencyLock = "dependencies.lock"
+)
 
 // WendyCoreVersionSetup pins the wendy_core dependency of
 // main/idf_component.yml to a Wendy Lite version. It is prepared before the
 // user confirms it.
 type WendyCoreVersionSetup struct {
 	manifestPath string
+	lockPath     string
 	// Current is the version in the manifest, "" when it has none: the
 	// default branch of the repository.
 	Current string
@@ -143,6 +148,7 @@ func PrepareWendyCoreVersion(projectPath, version string) (setup *WendyCoreVersi
 	}
 	return &WendyCoreVersionSetup{
 		manifestPath: path,
+		lockPath:     filepath.Join(projectPath, dependencyLock),
 		Current:      current,
 		Version:      version,
 		original:     data,
@@ -151,9 +157,14 @@ func PrepareWendyCoreVersion(projectPath, version string) (setup *WendyCoreVersi
 }
 
 // Apply writes the pinned version. It refuses to write when the manifest
-// changed since PrepareWendyCoreVersion. No idf.py run is needed: ESP-IDF
-// configures the project again when the manifest changes, and the component
-// manager then fetches the version.
+// changed since PrepareWendyCoreVersion.
+//
+// It then deletes dependencies.lock, as idf.py update-dependencies does: the
+// lock records the commit of the old version, for wendy_core and for the
+// wendy-lite components it requires. No idf.py run is needed here. The next
+// configure (idf.py set-target, or the build, as the manifest is a configure
+// input) solves all the dependencies again and writes a new lock. Other
+// dependencies may then move to newer versions.
 func (s *WendyCoreVersionSetup) Apply() error {
 	current, err := os.ReadFile(s.manifestPath)
 	if err != nil {
@@ -164,6 +175,9 @@ func (s *WendyCoreVersionSetup) Apply() error {
 	}
 	if err := os.WriteFile(s.manifestPath, s.updated, 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", componentManifest, err)
+	}
+	if err := os.Remove(s.lockPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s changed, but deleting %s failed: %w; delete it by hand", componentManifest, dependencyLock, err)
 	}
 	return nil
 }

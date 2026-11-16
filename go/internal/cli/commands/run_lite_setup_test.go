@@ -464,7 +464,7 @@ func TestProviderBuildOffersWendyCoreVersion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			writeLiteProject(t, dir, map[string]string{"main/idf_component.yml": manifest})
+			writeLiteProject(t, dir, map[string]string{"main/idf_component.yml": manifest, "dependencies.lock": "manifest_hash: old\n"})
 			prompts := stubLiteRepairs(t, tc.interactive, func(string) bool { return tc.accept }, nil)
 			p := &sequenceProvider{errs: []error{versionErr}}
 			_, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", tc.opts)
@@ -474,12 +474,16 @@ func TestProviderBuildOffersWendyCoreVersion(t *testing.T) {
 			if p.builds != tc.wantBuilds {
 				t.Errorf("builds = %d, want %d", p.builds, tc.wantBuilds)
 			}
-			if tc.interactive && (len(*prompts) != 1 || (*prompts)[0] != "Change the wendy_core dependency to 6e2ae72 now?") {
+			if tc.interactive && (len(*prompts) != 1 || (*prompts)[0] != "Update main/idf_component.yml and rebuild dependencies.lock now?") {
 				t.Errorf("prompts = %q", *prompts)
 			}
 			data, _ := os.ReadFile(filepath.Join(dir, "main/idf_component.yml"))
 			if pinned := strings.Contains(string(data), `version: "`+testLiteVersion+`"`); pinned != tc.wantPinned {
 				t.Errorf("pinned = %v, want %v:\n%s", pinned, tc.wantPinned, data)
+			}
+			// The pin deletes the lock, so that the build solves again.
+			if _, err := os.Stat(filepath.Join(dir, "dependencies.lock")); os.IsNotExist(err) != tc.wantPinned {
+				t.Errorf("dependencies.lock deleted = %v, want %v", os.IsNotExist(err), tc.wantPinned)
 			}
 		})
 	}
@@ -504,7 +508,7 @@ func TestProviderBuildRepairsInSequence(t *testing.T) {
 	want := []string{
 		"Create sdkconfig.defaults.wendy now?",
 		"Add the line to CMakeLists.txt and create sdkconfig.defaults now?",
-		"Change the wendy_core dependency to 6e2ae72 now?",
+		"Update main/idf_component.yml and rebuild dependencies.lock now?",
 	}
 	if p.builds != 4 || !reflect.DeepEqual(*prompts, want) {
 		t.Fatalf("builds = %d, prompts = %q; want 4, %q", p.builds, *prompts, want)

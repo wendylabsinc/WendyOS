@@ -178,8 +178,8 @@ func setupWendyCoreVersion(projectPath string, e *providers.WendyCoreVersionErro
 	}
 	short := litebuild.ShortVersion(e.Version)
 	cliLogln("main/idf_component.yml uses %s of wendy_core, but the device runs Wendy Lite %s.", providers.WendyCoreVersionText(setup.Current), short)
-	cliLogln("Wendy will set version: %q in the wendy_core dependency. The build then fetches that version.", setup.Version)
-	if !assumeYes && !confirmFn(fmt.Sprintf("Change the wendy_core dependency to %s now?", short)) {
+	cliLogln("Wendy will set version: %q in the wendy_core dependency of main/idf_component.yml, and rebuild dependencies.lock. Other dependencies in dependencies.lock may be updated as well.", setup.Version)
+	if !assumeYes && !confirmFn("Update main/idf_component.yml and rebuild dependencies.lock now?") {
 		return ErrUserCancelled
 	}
 	if err := setup.Apply(); err != nil {
