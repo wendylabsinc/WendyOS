@@ -60,6 +60,21 @@ permissions:
   contents: read
 
 jobs:
+  native-h264-regression:
+    name: Native H.264 late-viewer regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+      - name: Decode late viewers and recordings
+        run: bash .github/scripts/test-native-h264-parameter-sets.sh
   shared-grpc-api-contracts:
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
