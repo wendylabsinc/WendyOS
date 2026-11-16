@@ -92,7 +92,7 @@ def generate(inventory, output):
     commands = {
         "plan": [cli, "install", "plan", *selection],
         "job_start_prefix": [cli, "install", "jobs", "start", *selection, "--device-name", board["device_name"]],
-        "pre_enroll_fresh_install": [cli, "install", "--device-type", board["device"], "--storage", board["storage"], "--version", release["version"], "--binary", records["agent_binary"]["path"], "--device-name", board["device_name"], "--no-wifi", "--pre-enroll"],
+        "pre_enroll_fresh_install": [cli, "install", "--rootfs-only=false", "--device-type", board["device"], "--storage", board["storage"], "--version", release["version"], "--binary", records["agent_binary"]["path"], "--device-name", board["device_name"], "--no-wifi", "--pre-enroll"],
         "wifi_setup": [cli, "device", "wifi", "connect", "--device", board["management_address"], "--ssid", board["ssid"], "--allow-unverified-device"],
         "wifi_status": [cli, "--json", "device", "wifi", "status", "--device", board["management_address"]],
         "verify": [cli, "install", "verify", "--address", board["management_address"], "--expected-device-type", board["device"], "--expected-os-version", release["version"], "--timeout", "30s"],

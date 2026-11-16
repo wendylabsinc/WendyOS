@@ -141,9 +141,13 @@ Execute and observe
    incomplete drain is a failed case requiring owned app stop/recovery.
 
 Evidence and cleanup
-8. Export generated export argv's raw stdout to a private .tar file, stderr to
-   a separate log; do not let a JSON or terminal wrapper modify tar bytes. Bound
-   export to 300s. Hash the archive. Inspect it safely before extraction, retaining
+8. Save the generated export command's stdout to a private results.b64 file and
+   stderr to a separate log. The remote Python process reads tar through a pipe
+   and base64-encodes it, so the attach PTY carries text rather than archive bytes.
+   Require exit zero, then decode locally with strict validation:
+     python3 -c 'import base64,pathlib; p=pathlib.Path("results.b64"); data=p.read_bytes().replace(b"\r",b"").replace(b"\n",b""); pathlib.Path("results.tar").open("xb").write(base64.b64decode(data,validate=True))'
+   Any mixed terminal diagnostics cause decoding to fail. Bound export to 300s.
+   Hash the archive. Inspect it safely before extraction, retaining
    the real image digest/OCI inventory, board+boot+Agent identity, source/project
    hashes, model verification, GPU observations, full normal and control reports,
    actual process/deadline records and operator acceptance notes. Recheck the

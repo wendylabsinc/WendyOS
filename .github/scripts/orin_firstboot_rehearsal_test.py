@@ -45,6 +45,7 @@ class OrinFirstBootTests(unittest.TestCase):
             self.assertIn("--carrier", commands["plan"])
             self.assertNotIn("--carrier", commands["pre_enroll_fresh_install"])
             self.assertIn("--binary", commands["pre_enroll_fresh_install"])
+            self.assertIn("--rootfs-only=false", commands["pre_enroll_fresh_install"])
             self.assertNotIn("--binary", commands["job_start_prefix"])
             self.assertIn("--no-wifi", commands["pre_enroll_fresh_install"])
             self.assertNotIn("--force", commands["pre_enroll_fresh_install"])

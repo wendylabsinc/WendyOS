@@ -1051,14 +1051,27 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Upload exact candidates and require native repository consumption
+      - name: Upload exact candidates to Artifact Registry
+        timeout-minutes: 25
+        env:
+          WENDY_STABLE_RELEASE: 'true'
+          REPOSITORY_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          PACKAGE_VERSION: ${{ needs.determine-version.outputs.version }}
+        run: |
+          python3 .github/scripts/publish-linux-repositories.py --phase upload \
+            --receipts "$RUNNER_TEMP/repository-upload-receipts.json" \
+            --project "$REPOSITORY_PROJECT" --version "$PACKAGE_VERSION" \
+            --packages packages --evidence "$RUNNER_TEMP/repository-upload-evidence"
+
+      - name: Verify native consumption of uploaded packages
         timeout-minutes: 40
         env:
           WENDY_STABLE_RELEASE: 'true'
           REPOSITORY_PROJECT: ${{ vars.GCP_PROJECT_ID }}
           PACKAGE_VERSION: ${{ needs.determine-version.outputs.version }}
         run: |
-          python3 .github/scripts/publish-linux-repositories.py \
+          python3 .github/scripts/publish-linux-repositories.py --phase consume \
+            --receipts "$RUNNER_TEMP/repository-upload-receipts.json" \
             --project "$REPOSITORY_PROJECT" --version "$PACKAGE_VERSION" \
             --packages packages --evidence "$RUNNER_TEMP/repository-consumer-evidence"
 
@@ -1068,6 +1081,8 @@ jobs:
         with:
           name: linux-repository-consumer-evidence
           path: |
+            ${{ runner.temp }}/repository-upload-receipts.json
+            ${{ runner.temp }}/repository-upload-evidence/*.log
             ${{ runner.temp }}/repository-consumer-evidence/plan.json
             ${{ runner.temp }}/repository-consumer-evidence/upload-receipts.json
             ${{ runner.temp }}/repository-consumer-evidence/result.json

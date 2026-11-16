@@ -46,7 +46,7 @@ func TestDirectMLDSAPolicyOverTLS(t *testing.T) {
 					}
 					if invalid && policy == "leaf-unknown-eku" {
 						edits = append(edits, func(tbs *tbsCertificate) {
-							eku, err := buildEKUExt([]asn1.ObjectIdentifier{{1, 2, 3, 99}})
+							eku, err := buildEKUExt([]asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 1}, {1, 3, 6, 1, 5, 5, 7, 3, 2}, {1, 2, 3, 99}})
 							if err != nil {
 								t.Fatal(err)
 							}

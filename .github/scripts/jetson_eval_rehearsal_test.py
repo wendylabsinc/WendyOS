@@ -1,4 +1,8 @@
 """Offline preparation and actual local HTTP timeout-report plumbing; no GPU/device."""
+import base64
+import io
+import subprocess
+import tarfile
 import importlib.util
 import json
 import os
@@ -77,7 +81,18 @@ class JetsonEvalPlans(unittest.TestCase):
             self.assertIn('WENDY_SECRET_STORE=file', commands['deploy'])
             self.assertIn('240s', commands['controls'])
             self.assertIn('600s', commands['verify'])
-            self.assertEqual(commands['export'][-6:], ['tar', '-C', '/results', '-cf', '-', '.'])
+            self.assertEqual(commands['export'][-3:-1], ['python3', '-c'])
+            results = root / 'results'; results.mkdir()
+            payload = bytes(range(256)) * 257
+            (results / 'binary.dat').write_bytes(payload)
+            script = commands['export'][-1].replace("'/results'", repr(str(results)))
+            encoded = subprocess.check_output([sys.executable, '-c', script], timeout=5)
+            # attach's terminal converts LF to CRLF; the documented decoder
+            # removes only those line endings before strict base64 validation.
+            terminal = encoded.replace(b'\n', b'\r\n')
+            archive = base64.b64decode(terminal.replace(b'\r', b'').replace(b'\n', b''), validate=True)
+            with tarfile.open(fileobj=io.BytesIO(archive)) as saved:
+                self.assertEqual(saved.extractfile('./binary.dat').read(), payload)
 
     def test_refuses_wrong_board_unreserved_secrets_or_unbound_binary(self):
         for fault in ('board', 'reserved', 'apps', 'endpoint', 'hash', 'secret'):

@@ -27,7 +27,7 @@ SPEC.loader.exec_module(GUARDIAN)
 # Fedora 45 official amd64 manifest (2026-11-02); systemd >=260 is required
 # by the unchanged Builder apply script's --always-refresh option.
 BASE = "docker.io/library/fedora@sha256:53d138f25f6738257c78553d51369b662efc0e0eb1cd1556a2fe0ad5a115be88"
-BUILDER = "f72a1b354c80523dc2b092e52e38e44fe56c8d5a"
+BUILDER = "60d345a78b94694d5d63219c0ef7f47e8701f1a7"
 SOURCES = {
     "recipes-core/wendyos-sysext-apply/files/wendyos-sysext-apply.sh": "ee68d5fdd1bf76378e221e94a58da3c016325e930ebdc73143d7721d31ece9e9",
     "scripts/pack-sysext.sh": "482d6e4e7408478b222ec63d12b35d1dbfcf3fe7f3b5ba2062a04bb289e5baa4",

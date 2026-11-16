@@ -61,7 +61,7 @@ class DriverFirstbootTests(unittest.TestCase):
             self.assertEqual(install[0],"env")
             self.assertIn("WENDY_CONFIG_DIR="+str((root/"out/cli-config").resolve()),install)
             self.assertIn("WENDY_SECRET_STORE=file",install)
-            for flag in ("--driver","--binary","--pre-enroll=false","--no-wifi"):self.assertIn(flag,install)
+            for flag in ("--driver","--binary","--pre-enroll=false","--no-wifi","--rootfs-only=false"):self.assertIn(flag,install)
             self.assertEqual(install[install.index("--driver")+1],"wendyos-hello")
             self.assertEqual(install[install.index("--binary")+1],str(Path(data["agent_binary"]).resolve()))
             self.assertNotIn("--driver",commands["fresh_registry_baseline"])

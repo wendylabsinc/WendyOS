@@ -107,10 +107,18 @@ def execute(args):
             source=(ROOT/path).resolve();raw=source.read_text()
             if raw.count(before)!=1:raise ValueError('mutation site changed: '+name)
             replacement=output/(name+'.go');replacement.write_text(raw.replace(before,after))
-            overlay=output/(name+'.json');overlay.write_text(json.dumps({'Replace':{str(source):str(replacement)}}))
+            replacements={str(source):str(replacement)}
+            if name=='empty-camera-label':
+                helper=ROOT/'go/internal/agent/containerd/helpers.go'
+                original=helper.read_text()
+                if original.count('v = "present=true"')!=1:raise ValueError('container marker site changed')
+                changed=output/'empty-camera-label-helpers.go'
+                changed.write_text(original.replace('v = "present=true"','v = ""'))
+                replacements[str(helper)]=str(changed)
+            overlay=output/(name+'.json');overlay.write_text(json.dumps({'Replace':replacements}))
             command(['env','CGO_ENABLED=0','go','test','-tags','regression_go2_h264','-overlay',str(overlay),'-c','./go/internal/agent/containerd','-o',str(output/(name+'.test'))],600)
         evidence['binary_sha256']={path.name:ARCHIVE.sha(path.read_bytes()) for path in output.glob('*.test')}
-        source_files=['.github/scripts/test-go2-recorded-replay.py','.github/scripts/go2_recording_archive.py','.github/scripts/go2_replay_admission.py','.github/scripts/run-go2-recorded-kernel.sh','.github/scripts/run-owned-media-test.py','.github/scripts/cleanup-owned-go2-camera.py','go/internal/testfixture/go2video/admission.go','go/internal/testfixture/go2video/recorded.go','go/internal/agent/containerd/go2_h264_loopback_linux_test.go','go/internal/agent/services/go2_h264_capture_linux_test.go',*(row[1] for row in mutations)]
+        source_files=['.github/scripts/test-go2-recorded-replay.py','.github/scripts/go2_recording_archive.py','.github/scripts/go2_replay_admission.py','.github/scripts/run-go2-recorded-kernel.sh','.github/scripts/run-owned-media-test.py','.github/scripts/cleanup-owned-go2-camera.py','go/internal/testfixture/go2video/admission.go','go/internal/testfixture/go2video/recorded.go','go/internal/agent/containerd/go2_h264_loopback_linux_test.go','go/internal/agent/services/go2_h264_capture_linux_test.go','go/internal/agent/containerd/helpers.go',*(row[1] for row in mutations)]
         evidence['source_hashes']={path:ARCHIVE.sha((ROOT/path).read_bytes()) for path in source_files}
         host_pid_namespace=os.readlink('/proc/self/ns/pid')
         for name,expected in [('normal',None),*((row[0],row[4]) for row in mutations)]:

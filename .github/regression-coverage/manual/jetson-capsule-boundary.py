@@ -100,7 +100,7 @@ def generate(inventory,output):
         # the public manifest offers, and omitting it prompts on a terminal.
         # JSON mode uploads and verifies the Agent, then skips the OS step.
         device_commands["deploy_"+variant]=[cli["path"],"--json",*command]
-        device_commands["update_"+variant]=[cli["path"],*command,"--yes","--artifact-url",artifact_url]
+        device_commands["update_"+variant]=[cli["path"],"device","update","--device",board["address"],"--yes","--artifact-url",artifact_url]
     (out/"device-commands.json").write_text(json.dumps(device_commands,indent=2)+"\n")
     guide=(HERE/"jetson-capsule-boundary.txt").read_text()
     for key,value in {"@SERIAL@":board["serial"],"@NONCE@":nonce,"@OS@":data["running_os"],"@UPDATER@":legacy["sha256"],"@SOURCE@":str(source),"@OUTPUT@":str(out)}.items():guide=guide.replace(key,value)

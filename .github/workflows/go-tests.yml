@@ -44,6 +44,10 @@ on:
       - 'packaging/linux/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
+      - 'swift/Scripts/ValidateMac*'
+      - 'swift/WendyAgentMac/Sources/**'
+      - 'swift/WendyAgentMac/LaunchAgents/**'
+      - 'swift/Makefile'
       - 'swift/WendyAgentMac/RuntimeGuest/**'
       - 'swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift'
       - 'Examples/SO101Reader/**'
@@ -94,6 +98,10 @@ on:
       - 'packaging/linux/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
+      - 'swift/Scripts/ValidateMac*'
+      - 'swift/WendyAgentMac/Sources/**'
+      - 'swift/WendyAgentMac/LaunchAgents/**'
+      - 'swift/Makefile'
       - 'swift/WendyAgentMac/RuntimeGuest/**'
       - 'swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift'
       - 'Examples/SO101Reader/**'
@@ -138,7 +146,9 @@ jobs:
           sudo apt-get install -y libarchive-tools
           python -m pip install -r .github/scripts/requirements-regression-tests.txt
       - name: Exercise review, event and failure contracts without publishing
-        run: python .github/scripts/run-automation-regressions.py
+        run: |
+          python .github/scripts/run-automation-regressions.py
+          python -m unittest discover -s Examples/WendyDataModelApp -p 'test_*.py'
       - name: Require eval accounting, tool guards and process deadlines
         run: python .github/scripts/run-eval-regressions.py
 

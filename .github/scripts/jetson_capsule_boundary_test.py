@@ -62,6 +62,8 @@ class CapsuleBoundaryTests(unittest.TestCase):
                     self.assertIn("--json",command);self.assertIn("--binary",command)
             self.assertEqual({name.split("_",1)[0] for name in commands},{"deploy","update"})
             self.assertIn("--yes",commands["update_fixed"])
+            for name,command in commands.items():
+                if name.startswith("update_"):self.assertNotIn("--binary",command)
             self.assertIn("--artifact-url",commands["update_fixed"])
             self.assertNotIn("--json",commands["update_fixed"])
             self.assertEqual(set(json.loads((out/"sync-only/overlay.json").read_text())["Replace"]),{str((Path(data["agent_source"])/M.AGENT_PATH).resolve())})

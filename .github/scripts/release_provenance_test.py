@@ -49,7 +49,9 @@ def assert_provenance(test, workflow):
                                  'deb-packages.json', 'rpm-packages.json', '*.log',
                                  '*-dependencies.txt', '*-helper-hashes.txt',
                                  '*/result.json', '*/metadata.log', '*/download.log'}
-                test.assertEqual(set(path.splitlines()), {prefix + p for p in receipt_paths})
+                test.assertEqual(set(path.splitlines()), {prefix + p for p in receipt_paths} | {
+                    '${{ runner.temp }}/repository-upload-receipts.json',
+                    '${{ runner.temp }}/repository-upload-evidence/*.log'})
                 continue
             test.assertIn(name, ancestors, f'{name}: release must wait for this producer')
             test.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in previous),

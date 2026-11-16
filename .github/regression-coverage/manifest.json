@@ -2267,7 +2267,7 @@
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
           "artifact": 14014349861,
           "tests": [
-            "go/internal/shared/rtps/multicast_isolation_linux_test.go",
+            "go/internal/rtps/multicast_isolation_linux_test.go",
             ".github/scripts/test-rtps-multicast-isolation.sh"
           ],
           "result": "Actual per-interface multicast packet isolation passed6.02s with real loopback and wired namespace interfaces. Reverting socket membership filtering fails CROSS_INTERFACE_DISCOVERY by admitting the loopback writer on the wired participant. This closes the packet-filtering boundary only; observer, Patrol runtime, hosted scene/assets and remaining mixed-merge behaviors stay partial."
@@ -3952,7 +3952,7 @@
       "package": "12",
       "status": "verified",
       "audit_finding": "Stagefile parser/hash/LLB tests cover many build corrections. Actual image construction and reuse across build backends are not demonstrated by those unit tests.",
-      "required_follow_up": "Retain both-backend image execution in required Linux CI and the release CLI jobs. The observed run used the native Linux amd64 Make CLI; other release-platform execution is not claimed.",
+      "required_follow_up": "Retain both-backend image execution in Go Tests Linux install safety. The release CLI job runs only the offline smoke test. The observed run used the native Linux amd64 Make CLI; other release-platform execution is not claimed.",
       "evidence": [
         {
           "tests": [
@@ -4045,7 +4045,7 @@
       "package": "12",
       "status": "verified",
       "audit_finding": "The PR includes Stagefile overlay inheritance plus cache/layer changes with multiple tests. Containerd suites improve layer coverage, but packaged Stagefile execution still depends on the separate release smoke test.",
-      "required_follow_up": "Retain both-backend image execution in required Linux CI and the release CLI jobs. The observed run used the native Linux amd64 Make CLI; other release-platform execution is not claimed.",
+      "required_follow_up": "Retain both-backend image execution in Go Tests Linux install safety. The release CLI job runs only the offline smoke test. The observed run used the native Linux amd64 Make CLI; other release-platform execution is not claimed.",
       "evidence": [
         {
           "tests": [
@@ -4176,7 +4176,7 @@
             ".github/scripts/macos_vm_lifecycle_test.py",
             ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
           ],
-          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Not registered in hosted CI: the Intel runner exceeded the CLI boot deadline. Full normal/control execution remains pending on a reserved ARM64 Mac. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
         },
         {
           "tests": [
@@ -4314,7 +4314,7 @@
             ".github/scripts/macos_vm_lifecycle_test.py",
             ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
           ],
-          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent hostname/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent hostname/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Not registered in hosted CI: the Intel runner exceeded the CLI boot deadline. Full normal/control execution remains pending on a reserved ARM64 Mac. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
         },
         {
           "result": "Original fixes0a3c57ff89c6c8e187a76351d918478aff2c06d1 and26e76bc5715b4ec430c63abc84bb0f4e28bd4ea7 distinguish app QMP forwarding/reconnection from picker rendering. New fixture retains production discovery and forwarding APIs and an actual persisted guest app; no background/QMP promise is made for Windows, where the product requires foreground mode."
@@ -4358,7 +4358,7 @@
             ".github/scripts/macos_vm_lifecycle_test.py",
             ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
           ],
-          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent hostname/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent hostname/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Not registered in hosted CI: the Intel runner exceeded the CLI boot deadline. Full normal/control execution remains pending on a reserved ARM64 Mac. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
         },
         {
           "result": "Original simulator correction c9f63eb09530072cfef12836d2980d0cac051a45 preserved authentication refusal while retrying cold-boot reachability and respecting caller cancellation. New fixture cancels only after observing actual waitForSimulatorAgent while QEMU is paused, then resumes that same VM and completes real Agent/app requests. It does not count cancellation before operation entry or mocked readiness as recovery."

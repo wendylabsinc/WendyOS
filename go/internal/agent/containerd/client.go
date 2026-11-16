@@ -1446,6 +1446,12 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		// ROS_DOMAIN_ID, which silently lands it on the global default domain 0.
 		return fmt.Errorf("resolving ROS 2 environment for %q: %w", appID, err)
 	}
+	for _, entry := range ros2Env {
+		if entry == "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(nil, false) {
+			c.logger.Info("ROS discovery uses loopback only at container creation; recreate the app after network interfaces change",
+				zap.String(logfields.AppID, appID))
+		}
+	}
 	env = append(env, ros2Env...)
 	env = injectOTELEnvIfNeeded(env, appCfg, appID)
 

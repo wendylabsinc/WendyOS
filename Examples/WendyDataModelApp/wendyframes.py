@@ -14,6 +14,7 @@ import fcntl
 import logging
 import mmap
 import os
+import re
 import select
 import time
 from dataclasses import dataclass
@@ -151,8 +152,21 @@ class H264Frames:
         self._source_id = source_id
         self._next = 0
         self._pending = {}
+        self._awaiting_keyframe = True
+        self._startup_dropped = 0
 
     def decode(self, payload, sample_id, boottime, dropped):
+        if self._awaiting_keyframe:
+            # The Agent repeats SPS/PPS with IDRs. A new reader can attach
+            # mid-GOP; those pictures cannot be decoded without prior state.
+            kinds = {match[1][0] & 31 for match in re.finditer(b"\x00\x00(?:\x00)?\x01(.)", payload, re.DOTALL)}
+            if not kinds:
+                raise RuntimeError("H264 access unit could not be decoded with a trustworthy identity")
+            if 5 not in kinds:
+                self._startup_dropped += 1 + dropped
+                return []
+            self._awaiting_keyframe = False
+            dropped += self._startup_dropped
         if len(self._pending) >= 128:
             raise RuntimeError("H264 decoder retained too many unreturned sample identities")
         self._next += 1
@@ -240,6 +254,14 @@ class CameraNode:
             return self._decoded.popleft()
         return self._read_buffer()
 
+    def read_ready(self):
+        """Read at most one ready access unit; it may produce no picture."""
+        if getattr(self, "_decoder", None) is not None:
+            if not self._decoded:
+                self._read_buffer()
+            return self._decoded.popleft() if self._decoded else None
+        return self._read_buffer()
+
     def _read_buffer(self):
         buf = _Buffer()
         buf.type, buf.memory = V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP
@@ -275,7 +297,7 @@ class CameraNode:
         return arr if self.pixelformat == PIX_BGR24 else cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
     def readable(self) -> bool:
-        """Whether another frame is already waiting, without blocking."""
+        """Whether a decoded picture or encoded access unit is waiting."""
         return bool(getattr(self, "_decoded", None)) or bool(select.select([self._fd], [], [], 0)[0])
 
     def frames(self):
@@ -315,7 +337,12 @@ def freshest_frames(node: CameraNode):
         # Anything still queued is staler than what we just took. Poll with a
         # zero timeout so this never blocks: an empty queue is the common case.
         while node.readable():
-            frame = node.read()
+            newer = node.read_ready()
+            if newer is None:
+                # Packet readiness does not promise a decoded picture. Yield
+                # the frame already available instead of blocking for more.
+                break
+            frame = newer
             discarded += 1
         yield frame, discarded
 

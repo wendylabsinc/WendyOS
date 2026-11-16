@@ -148,7 +148,12 @@ def generate(inventory, output):
                 "error": prefix + ["device", "attach", app, "--", "cat", "/results/last-error.txt"],
                 "verify": prefix + ["device", "attach", app, "--", "timeout", "--kill-after=10s", "600s", "python3", "/opt/harness/rehearsal-controls.py", "verify"],
                 "controls": prefix + ["device", "attach", app, "--", "timeout", "--kill-after=10s", "240s", "python3", "/opt/harness/rehearsal-controls.py", "controls"],
-                "export": prefix + ["device", "attach", app, "--", "tar", "-C", "/results", "-cf", "-", "."],
+                "export": prefix + ["device", "attach", app, "--", "python3", "-c",
+                    "import base64,subprocess,sys\n"
+                    "p=subprocess.Popen(['tar','-C','/results','-cf','-','.'],stdout=subprocess.PIPE)\n"
+                    "for block in iter(lambda:p.stdout.read(49152),b''):\n"
+                    " print(base64.b64encode(block).decode(),flush=True)\n"
+                    "sys.exit(p.wait())"],
                 "stop": prefix + ["device", "apps", "stop", app],
                 "remove": prefix + ["device", "apps", "remove", app, "--force"]}
     guardian = root / ".github/scripts/run-owned-media-test.py"

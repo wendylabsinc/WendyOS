@@ -143,13 +143,14 @@ class WindowsVMBootTests(unittest.TestCase):
 
     def test_restart_requires_same_disk_hostname_and_a_new_kernel_boot(self):
         disk={'path':'owned/disk.img','device':1,'inode':17,'size':16*1024**3}
-        before={'hostname':'owned-vm','bootId':'11111111-2222-4333-8444-555555555555'}
+        before={'version':'0.21.0','hostname':'owned-vm','bootId':'11111111-2222-4333-8444-555555555555'}
         after=dict(before,bootId='22222222-2222-4333-8444-555555555555')
         initial={'startedAt':'first'};restarted={'startedAt':'second'}
         VM.validate_restart(restarted,after,disk,initial,before,disk)
         for state,identity,current_disk in (
             (initial,after,disk),({},after,disk),(restarted,before,disk),
             (restarted,dict(after,hostname='foreign-vm'),disk),
+            (restarted,dict(after,version='nightly'),disk),
             (restarted,after,dict(disk,inode=18)),
             (restarted,after,dict(disk,path='foreign/disk.img')),
             (restarted,after,dict(disk,size=8*1024**3)),
