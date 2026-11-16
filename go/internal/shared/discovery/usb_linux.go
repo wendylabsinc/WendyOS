@@ -61,10 +61,38 @@ func discoverUSBAt(root string) ([]models.USBDevice, error) {
 		if !ok {
 			continue
 		}
+		dev.NetworkInterface = usbNetworkInterface(dir, name)
 		devices = append(devices, dev)
 	}
 
 	return devices, nil
+}
+
+// usbNetworkInterface returns the network interface the USB device at dir
+// presents (sysfs lists it as <device>/<device>:<config>.<interface>/net/<name>),
+// or "" when it presents none or several.
+func usbNetworkInterface(dir, device string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var found []string
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), device+":") {
+			continue
+		}
+		nets, err := os.ReadDir(filepath.Join(dir, entry.Name(), "net"))
+		if err != nil {
+			continue
+		}
+		for _, net := range nets {
+			found = append(found, net.Name())
+		}
+	}
+	if len(found) != 1 {
+		return ""
+	}
+	return found[0]
 }
 
 // readSysfsAttr reads a single sysfs attribute file, returning its trimmed

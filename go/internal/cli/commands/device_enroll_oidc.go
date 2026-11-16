@@ -2,12 +2,14 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -72,7 +74,14 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 	defer cloudConn.Close()
 
 	fmt.Printf("Enrolling %s with PKI...\n", name)
-	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
+	var assetID string
+	err = retryTakenDeviceName(&name, isInteractiveTerminal(), "--name", func(name string) (err error) {
+		cfg, assetID, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
+		return err
+	})
+	if errors.Is(err, tui.ErrCancelled) {
+		return nil, ErrUserCancelled
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -43,3 +43,9 @@ WDVisualSnapshotResult *WDVisualEpisodeLoad(uint64_t session, char *episode);
 WDVisualSnapshotResult *WDVisualEpisodeLoadAt(char *selector, char *episode);
 void WDVisualSnapshotFree(WDVisualSnapshotResult *value);
 #endif
+
+typedef struct { WDStatus status; char *json; } WDGalleryMetadataResult;
+WDGalleryMetadataResult *WDGalleryMetadataAt(char *selector, char *episode);
+void WDGalleryMetadataFree(WDGalleryMetadataResult *value);
+
+WDVisualSnapshotResult *WDVisualGalleryDataAt(char *selector, char *episode, int summary);
