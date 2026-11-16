@@ -175,7 +175,8 @@ func (r *operatorTargets) localManagement(stream grpc.ServerStream, a *activity)
 	r.liteStreams++
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); r.liteStreams--; r.mu.Unlock() }()
-	dial, cancel := context.WithTimeout(ctx, 15*time.Second)
+	// Match the routed Lite TCP budget; the enclosing caller deadline still wins.
+	dial, cancel := context.WithTimeout(ctx, 45*time.Second)
 	conn, err := r.packetDial(dial, "tcp", address)
 	cancel()
 	if err != nil {

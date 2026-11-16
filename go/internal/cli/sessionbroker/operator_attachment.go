@@ -125,12 +125,12 @@ func (a *operatorAttachment) DialContext(ctx context.Context, network, address s
 	return current.session.DialContext(ctx, network, address)
 }
 
-func (a *operatorAttachment) DialAppTLS(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
+func (a *operatorAttachment) DialApp(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
 	current, err := a.snapshot()
 	if err != nil {
 		return nil, err
 	}
-	return current.session.DialAppTLS(ctx, peer, port)
+	return current.session.DialApp(ctx, peer, port)
 }
 
 func (a *operatorAttachment) run(ctx context.Context) error {

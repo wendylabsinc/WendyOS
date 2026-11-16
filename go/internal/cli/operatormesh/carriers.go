@@ -15,6 +15,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/directstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
@@ -102,6 +103,13 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	cfg := s.routerConfig
 	cfg.Router = peer
 	cfg.IssuerCandidates = s.Node.Credentials.TLSIssuerCandidates
+	if s.direct != nil && candidate.Transport == carriers.BLE {
+		cfg.RouterDirect = meshoperatorlink.RouterDirectConfig{PhysicalBLE: true, Capability: directstream.CapabilityVersion | directstream.CapabilityTLS | directstream.CapabilityQUIC, Eligible: func(peer meshid.Device, state tls.ConnectionState) bool {
+			digest, _, err := s.Node.Credentials.DirectSessionIdentity(peer, state)
+			return err == nil && s.direct.AcceptsDirectCarrier(peer, digest)
+		}}
+
+	}
 	link, err := meshoperatorlink.RouterClient(ctx, secure, cfg)
 	if err != nil {
 		return err
@@ -120,14 +128,16 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		s.linkMu.Lock()
 		delete(s.links, link)
 		s.choosePreferredLocked()
-		// A management stream belongs to this peer's physical carriers. An
-		// indefinite router can encounter many peers over its lifetime; retain
-		// no gRPC reconnect loop after the last usable carrier disappears.
+		// Legacy management streams belong to physical carriers. Retained
+		// native streams instead have an authenticated logical owner whose
+		// watcher retires the client on session death, not a carrier outage.
 		var retired *grpcclient.AgentConnection
 		if !s.hasDirectPeerLocked(peer) {
 			s.agentMu.Lock()
-			retired = s.agentClients[peer]
-			delete(s.agentClients, peer)
+			if s.agentOwners[peer] == nil {
+				retired = s.agentClients[peer]
+				delete(s.agentClients, peer)
+			}
 			s.agentMu.Unlock()
 		}
 		s.linkMu.Unlock()
@@ -136,7 +146,11 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		}
 	}()
 	ctx = localmesh.WithLinkAttachmentReceiver(ctx, candidate.AttachedLink)
-	return s.Node.AttachOperatorRouterLink(localmesh.WithCarrier(ctx, candidate.Transport), link, candidate.Cost)
+	ctx = localmesh.WithCarrier(ctx, candidate.Transport)
+	if s.direct != nil && candidate.Transport == carriers.BLE {
+		ctx = localmesh.WithDirectBLECarrier(ctx)
+	}
+	return s.Node.AttachOperatorRouterLink(ctx, link, candidate.Cost)
 }
 
 func (s *Session) choosePreferredLocked() {

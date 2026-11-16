@@ -21,7 +21,7 @@ func newDeviceMeshForwardCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "forward <local-port>:<remote-port>",
 		Short: "Forward a local TCP port to a running mesh app",
-		Long:  "Listen on loopback and open an authorized app stream through the selected device's authenticated agent connection, or native app TLS for a routed Lite service. Mesh selectors reuse their retained operator router. Lite ports must be declared in the current signed manifest; destination WAS1 admission still checks the running app. Each connection owns its own stream; the listener supports up to eight simultaneous connections.",
+		Long:  "Listen on loopback and open an authorized app stream through the selected device's authenticated agent connection, or a native app stream for a routed Lite service. Mesh selectors reuse their retained operator router. Lite ports must be declared in the current signed manifest; destination admission still checks the running app. Each connection owns its own stream; the listener supports up to eight simultaneous connections.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			localPort, remotePort, udp, err := parseTunnelArg(args[0])

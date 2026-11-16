@@ -38,8 +38,8 @@ func (r *operatorTargets) appServiceTopology(ctx context.Context, target meshid.
 }
 
 // DialOperatorApp opens a declared Lite TCP service through the retained Node.
-// The broker verifies destination TLS and ordinary WAS1 running-app admission;
-// the public manifest only selects the service and never replaces that check.
+// The broker uses the negotiated direct epoch or destination TLS with WAS1.
+// Both paths check the running app; the manifest only selects the service.
 func DialOperatorApp(ctx context.Context, selector string, port uint16) (net.Conn, error) {
 	if port == 0 {
 		return nil, status.Error(codes.InvalidArgument, "mesh app port must be nonzero")
