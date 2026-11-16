@@ -87,9 +87,15 @@ jobs:
     permissions:
       contents: read
 
+  validate-simulator:
+    name: SO-101 simulator validation
+    uses: ./.github/workflows/so101-simulator.yml
+    permissions:
+      contents: read
+
   pre-release-checks:
     name: Pre-release checks
-    needs: [validate-go, validate-swift, validate-e2e, validate-sbom, test-templates]
+    needs: [validate-go, validate-swift, validate-e2e, validate-sbom, validate-simulator, test-templates]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

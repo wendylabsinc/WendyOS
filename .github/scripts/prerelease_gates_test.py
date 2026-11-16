@@ -15,8 +15,11 @@ class PrereleaseGatesTests(unittest.TestCase):
         build = workflow('build.yml')['jobs']
         suites = {'validate-go': 'go-tests.yml', 'validate-swift': 'swift-tests.yml',
                   'validate-e2e': 'swift-e2e-tests.yml', 'validate-sbom': 'sbom.yml'}
-        self.assertEqual(set(build['pre-release-checks']['needs']), set(suites) | {'test-templates'})
-        for name, filename in suites.items():
+        # These suites also keep a narrow PR trigger for the files only they test.
+        scoped = {'validate-simulator': 'so101-simulator.yml'}
+        self.assertEqual(set(build['pre-release-checks']['needs']),
+                         set(suites) | set(scoped) | {'test-templates'})
+        for name, filename in {**suites, **scoped}.items():
             with self.subTest(workflow=filename):
                 self.assertEqual(build[name]['uses'], './.github/workflows/' + filename)
                 self.assertNotIn('if', build[name])
@@ -28,6 +31,19 @@ class PrereleaseGatesTests(unittest.TestCase):
                 self.assertIn('workflow_dispatch', events)
                 self.assertNotIn('pull_request', events)
                 self.assertNotIn('push', events)
+        for filename in scoped.values():
+            with self.subTest(workflow=filename):
+                events = workflow(filename)['on']
+                self.assertIn('workflow_call', events)
+                self.assertIn('workflow_dispatch', events)
+                self.assertNotIn('push', events)
+
+    def test_simulator_prs_run_only_for_the_runtime_image_and_viewer(self):
+        paths = workflow('so101-simulator.yml')['on']['pull_request']['paths']
+        self.assertIn('go/simulator/so101/**', paths)
+        self.assertIn('web-client/desktop/**', paths)
+        # The PR Go unit tests cover Go-only changes; see pr-checks.yml.
+        self.assertFalse([path for path in paths if path.startswith('go/internal/')])
 
     def test_required_contract_context_is_reported_for_every_pr(self):
         checks = workflow('pr-checks.yml')

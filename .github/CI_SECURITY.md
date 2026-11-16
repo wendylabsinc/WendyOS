@@ -77,7 +77,9 @@ their own relevant path filters. AI review triggers are unchanged.
 
 The full Go suite (including race tests, cross-platform regressions, plugin
 launchers, dependency scans and automation fixtures), Swift builds/tests, Swift
-E2E and SBOM tests run through `build.yml` before publishing. The `Pre-release
+E2E, SBOM tests and the SO-101 simulator suite run through `build.yml` before
+publishing. PRs run the simulator suite only when the runtime image or the
+desktop viewer changes. The `Pre-release
 checks` job requires every suite and the template tests to succeed. A failed,
 cancelled or skipped suite blocks GitHub releases, agent uploads, installer
 uploads and Linux repository publication. This applies to both pre-releases on
