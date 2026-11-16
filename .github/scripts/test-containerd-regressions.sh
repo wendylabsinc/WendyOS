@@ -2,6 +2,7 @@
 # Run on an ephemeral Linux CI runner, using only a private containerd daemon.
 set -euo pipefail
 binary=${1:?usage: test-containerd-regressions.sh /path/to/containerd.test}
+tests=${2:-^TestIntegration}
 if [[ $(id -u) != 0 ]]; then
   echo 'Containerd snapshot integration tests require root on the CI runner.' >&2
   exit 1
@@ -56,20 +57,20 @@ if [[ $ready != true ]]; then
   echo 'Private containerd did not become ready.' >&2
   exit 1
 fi
-"$binary" -test.list '^TestIntegration' > "$work/expected"
-if ! grep -q '^TestIntegration' "$work/expected"; then
+"$binary" -test.list "$tests" > "$work/expected"
+if ! grep -q '^Test' "$work/expected"; then
   echo 'The test binary contains no containerd integration tests.' >&2
   exit 1
 fi
 WENDY_CONTAINERD_INTEGRATION="$socket" "$binary" \
-  -test.run '^TestIntegration' -test.v -test.count=1 -test.timeout=300s | tee "$work/results"
+  -test.run "$tests" -test.v -test.count=1 -test.timeout=300s | tee "$work/results"
 # A skipped or accidentally unmatched test must not produce a green CI job.
 if grep -q '^--- SKIP:' "$work/results"; then
   echo 'An integration test was skipped.' >&2
   exit 1
 fi
 while IFS= read -r name; do
-  [[ "$name" == TestIntegration* ]] || continue
+  [[ "$name" == Test* ]] || continue
   if ! grep -Fq -- "--- PASS: $name (" "$work/results"; then
     echo "Missing passing result for $name" >&2
     exit 1

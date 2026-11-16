@@ -275,13 +275,11 @@ func TestSetDefaultClearsPinForHostPortDevice(t *testing.T) {
 	}
 }
 
-// TestEnforceDeviceIdentityHardFails covers the approved policy change: a
-// mismatch is refused identically in every mode, with no prompt.
-//
-// The arrangement is deliberately the one the old code let through — an
-// interactive TTY, where a user could answer "yes" — because that answer is
-// precisely what an attacker needs. "The human consented" is not evidence about
-// which device answered, so it must not be a way through.
+// TestEnforceDeviceIdentityHardFails covers the identity check itself: a
+// mismatch is refused identically in every mode, and the check never prompts.
+// Since the owner's 2026-11-13 ruling ("Treat it SSH style and ask for
+// confirmation") only a command's front door may ask, after this refusal
+// (see acceptChangedIdentity); declining keeps the pin, as asserted here.
 func TestEnforceDeviceIdentityHardFails(t *testing.T) {
 	// Org 7 asset 43 against a pin for org 7 asset 42: both devices are
 	// legitimately enrolled in the same organisation and cloud, so only the
@@ -302,8 +300,8 @@ func TestEnforceDeviceIdentityHardFails(t *testing.T) {
 	if interactiveErr == nil {
 		t.Fatal("interactive mismatch: want a refusal, got nil — a prompt is still deciding this")
 	}
-	if !strings.Contains(interactiveErr.Error(), "wendy device unpin wendy-thor.local") {
-		t.Errorf("refusal %q does not name the command that resolves it", interactiveErr)
+	if !strings.Contains(interactiveErr.Error(), changedIdentityStep) {
+		t.Errorf("refusal %q does not name the step that resolves it", interactiveErr)
 	}
 
 	// A prompt answered "yes" would have re-pinned to asset 43. The original pin
@@ -454,8 +452,8 @@ func TestEnforceDeviceIdentityAppliesToNonDefault(t *testing.T) {
 		t.Fatal("connectToAgent returned no error for a --device host whose certificate contradicts its pin")
 	}
 	if !strings.Contains(err.Error(), `device "wendy-thor.local" identity changed`) ||
-		!strings.Contains(err.Error(), "wendy device unpin wendy-thor.local") {
-		t.Fatalf("err = %v, want the identity refusal naming the device and the unpin escape hatch", err)
+		!strings.Contains(err.Error(), changedIdentityStep) {
+		t.Fatalf("err = %v, want the identity refusal naming the device and how to accept it", err)
 	}
 	if dialedPinKey != "wendy-thor.local" {
 		t.Errorf("dial was constrained by pin key %q, but the check was made against \"wendy-thor.local\"; a host pinned under one key and verified under another is unenforced", dialedPinKey)
@@ -562,8 +560,8 @@ func TestPickerEnforcesPinBeforeAgentUpdate(t *testing.T) {
 		t.Errorf("refused selection = %+v, want nil — a refusal must not hand back a usable target", sel)
 	}
 	if !strings.Contains(err.Error(), `device "wendyos-agx-orin.local" identity changed`) ||
-		!strings.Contains(err.Error(), "wendy device unpin wendyos-agx-orin.local") {
-		t.Fatalf("err = %v, want the identity refusal naming the picked device and the unpin escape hatch", err)
+		!strings.Contains(err.Error(), changedIdentityStep) {
+		t.Fatalf("err = %v, want the identity refusal naming the picked device and how to accept it", err)
 	}
 	if pin := readPins()["wendyos-agx-orin"]; pin.OrgID != 9 {
 		t.Errorf("pin after refusal = %+v, want the original org 9 intact", pin)
