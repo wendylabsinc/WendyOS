@@ -207,6 +207,8 @@ func requestAppPort(ctx context.Context, conn *quic.Conn, port uint16, magic [4]
 // Server accepts mutually authenticated app sessions. It rejects a requested
 // port unless the live app registry owns its verified container endpoint.
 type Server struct {
+	quicStarting   bool
+	direct         *DirectManager
 	credentials    *localmesh.Credentials
 	authorizer     Authorizer
 	tickets        *localmesh.TicketStore
@@ -236,12 +238,15 @@ func (s *Server) SetRouteSnapshot(snapshot func() localmesh.NodeSnapshot) {
 
 func (s *Server) listenConfig() *quic.Config {
 	config := quicConfig()
+	config.MaxIncomingStreams += int64(s.promotionStreamCapacity())
 	config.GetConfigForClient = func(info *quic.ClientInfo) (*quic.Config, error) {
 		var snapshot func() localmesh.NodeSnapshot
 		if routes := s.routes.Load(); routes != nil {
 			snapshot = *routes
 		}
-		return serverQUICConfig(snapshot, info.RemoteAddr), nil
+		selected := serverQUICConfig(snapshot, info.RemoteAddr)
+		selected.MaxIncomingStreams += int64(s.promotionStreamCapacity())
+		return selected, nil
 	}
 	return config
 }
@@ -287,9 +292,32 @@ func (s *Server) TLSConfig() *tls.Config {
 
 // Run calls ready, when supplied, after binding the QUIC listener.
 func (s *Server) Run(ctx context.Context, addr string, ready ...func()) error {
+	return s.runQUIC(ctx, func(ctx context.Context) (net.PacketConn, error) { return listenAppPackets(ctx, s.credentials, addr) }, ready...)
+}
+
+// ServeQUIC serves the normal authenticated application protocol on a supplied
+// packet socket, including userspace mesh stacks. It owns and closes packets
+// on every return, including refusal to start a second listener.
+func (s *Server) ServeQUIC(ctx context.Context, packets net.PacketConn, ready ...func()) error {
+	if packets == nil {
+		return errors.New("missing app QUIC packet socket")
+	}
+	defer packets.Close()
+	return s.runQUIC(ctx, func(context.Context) (net.PacketConn, error) { return packets, nil }, ready...)
+}
+
+func (s *Server) runQUIC(ctx context.Context, listen func(context.Context) (net.PacketConn, error), ready ...func()) error {
+	s.mu.Lock()
+	if s.closed || s.quicStarting || s.listener != nil {
+		s.mu.Unlock()
+		return net.ErrClosed
+	}
+	s.quicStarting = true
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.quicStarting = false; s.mu.Unlock() }()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	packets, err := listenAppPackets(runCtx, s.credentials, addr)
+	packets, err := listen(runCtx)
 	if err != nil {
 		return err
 	}
@@ -393,7 +421,13 @@ func (s *Server) serve(parent context.Context, conn *quic.Conn) {
 		}
 	}()
 	protocol := &sessionProtocol{}
-	capacity := 8
+	promotionCapacity := s.promotionStreamCapacity()
+	capacity := 8 + promotionCapacity
+	if promotionCapacity != 0 {
+		// Extra admission belongs to retained handoff, not additional ordinary TCP
+		// opens. Preserve the legacy eight-stream backend limit independently.
+		protocol.tcpSlots = make(chan struct{}, 8)
+	}
 	if localmesh.ApplicationProtocol(conn.ConnectionState().TLS.NegotiatedProtocol) == multiplexALPN {
 		protocol.mux = newUDPMultiplexer(conn)
 		protocol.tcpSlots = make(chan struct{}, 8)
@@ -462,6 +496,15 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	_ = stream.SetDeadline(time.Now().Add(appSessionSetupTimeout))
 	var hello [6]byte
 	if _, err := io.ReadFull(stream, hello[:]); err != nil {
+		return
+	}
+	if string(hello[:4]) == "WDC1" || string(hello[:4]) == "WDP1" {
+		if !protocol.admit(false) {
+			return
+		}
+		raw := &promotedQUICStream{Stream: stream, conn: conn, mux: protocol.mux, udpManager: s.udpManager}
+		defer raw.Close()
+		s.servePromotion(conn.Context(), raw, conn.ConnectionState().TLS, hello)
 		return
 	}
 	port := binary.BigEndian.Uint16(hello[4:])

@@ -16,6 +16,7 @@ type udpSession struct {
 	cancel  context.CancelFunc
 	flow    interface{ Close() error }
 	retired bool
+	direct  bool
 	tls     bool
 }
 
@@ -43,6 +44,16 @@ func (c *Client) dialUDPWithConfig(ctx context.Context, peer meshid.Device, addr
 	if c == nil {
 		return nil, net.ErrClosed
 	}
+	release, err := c.acquireApplication(ctx, peer)
+	if err != nil {
+		return nil, err
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			release()
+		}
+	}()
 	if peer == c.credentials.Device {
 		return nil, ErrNoRoute
 	}
@@ -54,6 +65,7 @@ func (c *Client) dialUDPWithConfig(ctx context.Context, peer meshid.Device, addr
 		c.mu.Unlock()
 		return nil, net.ErrClosed
 	}
+	entry.direct = c.direct != nil && c.direct.cfg.DatagramBytes != 0
 	c.udpSessions[entry] = struct{}{}
 	c.mu.Unlock()
 	opts := udpOptions(options)
@@ -64,7 +76,15 @@ func (c *Client) dialUDPWithConfig(ctx context.Context, peer meshid.Device, addr
 			opts.Manager = c.udpManager
 		}
 	}
-	flow, err := c.dialMultiplexedUDP(setupCtx, peer, address, port, opts, config)
+	direct, handled, err := c.dialDirectDatagram(setupCtx, entry, peer, port, opts)
+	var flow *DatagramFlow
+	if handled {
+		if err == nil {
+			flow = &DatagramFlow{direct: direct}
+		}
+	} else {
+		flow, err = c.dialMultiplexedUDP(setupCtx, peer, address, port, opts, config)
+	}
 	c.mu.Lock()
 	valid := err == nil && !c.closed && !entry.retired
 	if !valid {
@@ -82,7 +102,9 @@ func (c *Client) dialUDPWithConfig(ctx context.Context, peer meshid.Device, addr
 		}
 		return nil, net.ErrClosed
 	}
+	transferred = true
 	go func() {
+		defer release()
 		<-flow.Done()
 		c.mu.Lock()
 		delete(c.udpSessions, entry)

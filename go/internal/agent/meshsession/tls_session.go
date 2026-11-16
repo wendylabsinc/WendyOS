@@ -247,8 +247,17 @@ func dialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, 
 // As for QUIC TCP streams, a temporary carrier withdrawal alone does not revoke
 // an authenticated flow; signed packet admission still gates every routed hop.
 func (c *Client) DialTLS(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16) (net.Conn, error) {
+	return c.DialUpper(ctx, peer, func(ctx context.Context) (net.Conn, error) { return c.dialTLS(ctx, peer, address, port) })
+}
+func (c *Client) dialTLS(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16) (net.Conn, error) {
 	if c == nil {
 		return nil, ErrNoRoute
+	}
+	if port == 0 || !address.IsValid() || address.Port() == 0 {
+		return nil, errors.New("invalid wendy net TLS app dial")
+	}
+	if conn, owned, err := c.dialDirect(ctx, peer, port); owned {
+		return conn, err
 	}
 	setup, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -438,6 +447,9 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, lifetime *se
 	defer stopSession()
 	var hello [6]byte
 	if _, err := io.ReadFull(secure, hello[:]); err != nil {
+		return
+	}
+	if s.servePromotion(session, secure, secure.ConnectionState(), hello) {
 		return
 	}
 	port := binary.BigEndian.Uint16(hello[4:])
