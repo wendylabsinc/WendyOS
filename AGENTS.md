@@ -17,12 +17,19 @@ asset to satisfy the PR demonstration requirement.
 ## Pull request descriptions
 
 Every PR description opens with one short paragraph for people, then uses only
-the applicable sections below, in this order. The opening paragraph:
+the applicable sections below, in this order. When an issue exists, link it on
+the first line, then the opening paragraph:
 
 ```markdown
+- **Closes:** [WDY-1234 Problem title](https://linear.app/wendylabsinc/issue/WDY-1234/problem-title)
+
 > **In plain terms:** One short paragraph on what this PR changes for the people
-> using it, and why.
+> using it, and why. Do not repeat the linked issue.
 ```
+
+Use **Closes** only when the PR fully resolves the issue, **Advances** for a
+partial delivery, **Related** for context without claimed progress. The issue
+stays the problem statement; the PR is the record of the change.
 
 Then the sections, in this order. Keep each section concise and describe only what changed. Omit
 sections that do not apply instead of writing `None` or describing unchanged
