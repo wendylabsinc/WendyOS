@@ -8,6 +8,8 @@ on:
       - 'scripts/pin-cli.sh'
       - 'scripts/test/plugin-launcher/**'
       - '.github/workflows/plugin-launcher.yml'
+      - '.github/actions/setup-macos-ci/**'
+      - '.github/actions/check-runner-disk/**'
       - '.gitattributes'
   push:
     branches: [main]
@@ -16,6 +18,8 @@ on:
       - 'scripts/pin-cli.sh'
       - 'scripts/test/plugin-launcher/**'
       - '.github/workflows/plugin-launcher.yml'
+      - '.github/actions/setup-macos-ci/**'
+      - '.github/actions/check-runner-disk/**'
       - '.gitattributes'
 
 permissions:
@@ -27,11 +31,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: ubuntu-latest
+            runner: '{"labels":"ubuntu-latest"}'
+          - os: macOS
+            runner: '{"group":"wendy-mac","labels":["self-hosted","macOS","ARM64"]}'
+    runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-macos-ci
+        if: runner.os == 'macOS'
       - name: shellcheck
         if: runner.os == 'Linux'
         run: shellcheck -s sh plugins/wendy/scripts/wendy scripts/pin-cli.sh scripts/test/plugin-launcher/run.sh

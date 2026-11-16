@@ -7,10 +7,12 @@ name: Swift Tests
 # run artifacts, not actions/cache entries, because other workflows running in
 # main's context could write main-scoped cache entries (see
 # .github/scripts/restore-trusted-build-cache.sh). Restored outputs are only
-# reusable at the same absolute path, which hosted runners keep.
+# reusable at the same absolute path, so archives are also scoped to the
+# self-hosted runner name.
 #
 # SECURITY: Pull requests reuse dependency outputs compiled by main's own
-# workflow on ephemeral GitHub-hosted runners, the same trust as main's source.
+# workflow. The wendy-mac group must enforce the isolation described in
+# .github/CI_SECURITY.md between PR jobs and release credentials.
 # The restore verifies GitHub's recorded SHA-256 digest of each archive and
 # rejects entries that could escape the workspace before and after extracting
 # it into a staging directory. First-party code is always rebuilt.
@@ -22,6 +24,8 @@ on:
       - 'Proto/**'
       - '.github/workflows/**'
       - '.github/scripts/restore-trusted-build-cache.sh'
+      - '.github/actions/setup-macos-ci/**'
+      - '.github/actions/check-runner-disk/**'
   schedule:
     - cron: '37 3 * * *'
   workflow_dispatch:
@@ -40,7 +44,9 @@ env:
 jobs:
   test:
     name: Run WendyAgentCore Tests
-    runs-on: macos-15
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     permissions:
       actions: read
       contents: read
@@ -48,6 +54,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos-ci
+
+      - name: Install build cache tools
+        shell: bash
+        run: |
+          missing=()
+          for formula in gh gnu-tar zstd; do
+            brew list --versions "$formula" >/dev/null 2>&1 || missing+=("$formula")
+          done
+          if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -68,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_CACHE_WORKFLOW_FILE: swift-tests.yml
         shell: bash
-        run: .github/scripts/restore-trusted-build-cache.sh swiftpm-build-xcode-${{ steps.xcode.outputs.version }} swift/Build/SwiftPM
+        run: .github/scripts/restore-trusted-build-cache.sh swiftpm-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }} swift/Build/SwiftPM
 
       - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
         with:
@@ -100,14 +117,14 @@ jobs:
           set -euo pipefail
           # GNU tar keeps the nanosecond mtimes incremental builds compare.
           gtar --posix -cf - swift/Build/SwiftPM \
-            | zstd -T0 -3 -q -o "$RUNNER_TEMP/swiftpm-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
+            | zstd -T0 -3 -q -o "$RUNNER_TEMP/swiftpm-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
 
       - name: Upload SwiftPM build cache
         if: ${{ !cancelled() && steps.archive_swiftpm.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: swiftpm-build-xcode-${{ steps.xcode.outputs.version }}
-          path: ${{ runner.temp }}/swiftpm-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst
+          name: swiftpm-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }}
+          path: ${{ runner.temp }}/swiftpm-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }}.tar.zst
           compression-level: 0
           retention-days: 2
           if-no-files-found: error
@@ -117,11 +134,24 @@ jobs:
       actions: read
       contents: read
     name: Build WendyAgentMac app
-    runs-on: macos-15
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos-ci
+
+      - name: Install build cache tools
+        shell: bash
+        run: |
+          missing=()
+          for formula in gh gnu-tar zstd; do
+            brew list --versions "$formula" >/dev/null 2>&1 || missing+=("$formula")
+          done
+          if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -144,7 +174,7 @@ jobs:
         shell: bash
         run: |
           .github/scripts/restore-trusted-build-cache.sh \
-            xcode-build-xcode-${{ steps.xcode.outputs.version }} \
+            xcode-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }} \
             swift/Build/CI/PackageCache swift/Build/CI/SourcePackages swift/Build/Xcode
 
       - name: Resolve Swift package dependencies
@@ -196,14 +226,14 @@ jobs:
           # GNU tar keeps the nanosecond mtimes incremental builds compare.
           gtar --posix -cf - --exclude=swift/Build/Xcode/Logs \
             swift/Build/CI/PackageCache swift/Build/CI/SourcePackages swift/Build/Xcode \
-            | zstd -T0 -3 -q -o "$RUNNER_TEMP/xcode-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
+            | zstd -T0 -3 -q -o "$RUNNER_TEMP/xcode-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
 
       - name: Upload Xcode build cache
         if: ${{ !cancelled() && steps.archive_xcode.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: xcode-build-xcode-${{ steps.xcode.outputs.version }}
-          path: ${{ runner.temp }}/xcode-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst
+          name: xcode-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }}
+          path: ${{ runner.temp }}/xcode-build-${{ runner.name }}-xcode-${{ steps.xcode.outputs.version }}.tar.zst
           compression-level: 0
           retention-days: 2
           if-no-files-found: error

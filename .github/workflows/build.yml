@@ -295,7 +295,9 @@ jobs:
 
   build-go-macos:
     name: ${{ matrix.artifact-name }}
-    runs-on: macos-26
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     needs: [determine-version]
     # Attest SLSA build provenance in the job that produces the archive, so the
     # provenance reflects the actual build environment (not a downstream job).
@@ -315,6 +317,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos-ci
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -425,7 +429,9 @@ jobs:
 
   build-agent-macos-app:
     name: wendy-agent-macos-app
-    runs-on: macos-26
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     needs: [determine-version, build-macos-runtime-guest]
     permissions:
@@ -437,6 +443,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos-ci
+
+      - name: Install build cache tools
+        shell: bash
+        run: |
+          missing=()
+          for formula in gh gnu-tar zstd; do
+            brew list --versions "$formula" >/dev/null 2>&1 || missing+=("$formula")
+          done
+          if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
       - name: Download runtime guest
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
