@@ -19,6 +19,7 @@ import (
 	"time"
 
 	quic "github.com/quic-go/quic-go"
+
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
@@ -94,6 +95,10 @@ type nodeEvent struct {
 // authenticated QUIC connections and pass them to Attach; no NAN concepts appear
 // in routing or service synchronization. Parallel links have distinct LinkIDs.
 type Node struct {
+	directCapability uint32
+	directHandler    DirectCarrierHandler
+	directEligible   func(meshid.Device, [32]byte) bool
+
 	// operatorAgent is configured through SetOperatorAgent under gate.
 	operatorAgent func(context.Context, net.Conn) error
 
@@ -923,12 +928,48 @@ func (n *Node) AttachStream(ctx context.Context, peer meshid.Device, conn net.Co
 	if err := n.verifyPeerCertificates(peer, tlsConn.ConnectionState().PeerCertificates); err != nil {
 		return err
 	}
-	boundPeer, err := openStreamHelloPeer(ctx, conn, n.Credentials.Device, peer, StreamALPN)
+	n.gate.RLock()
+	capability, handler, eligible := n.directCapability, n.directHandler, n.directEligible
+	n.gate.RUnlock()
+	var deferredCapability uint32
+	if eligible != nil {
+		digest, _, err := n.Credentials.directIdentities(peer, tlsConn.ConnectionState())
+		if err != nil {
+			return err
+		}
+		if !eligible(peer, digest) {
+			if capability != 0 {
+				deferredCapability = capability
+			}
+			capability = 0
+		}
+	}
+	if !IsDirectBLECarrier(ctx) {
+		capability = 0
+		deferredCapability = 0
+		handler = nil
+	}
+	boundPeer, selected, deferred, err := openStreamHelloDeferred(ctx, conn, n.Credentials.Device, peer, StreamALPN, capability, deferredCapability)
 	if err != nil {
 		return err
 	}
 	peer = boundPeer
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn))
+	link := newNegotiatedStreamNodeLink(conn, 128, selected != 0)
+	if selected != 0 && handler != nil {
+		state := tlsConn.ConnectionState()
+		digest, role, err := n.Credentials.directIdentities(peer, state)
+		if err != nil {
+			_ = link.Close()
+			return err
+		}
+		admission := DirectCarrierAdmission{Deferred: deferred, IdentityDigest: digest, Role: role, Self: n.Credentials.Device, Peer: peer, Selected: selected, TLS: state, Records: link}
+		return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, link, func(ctx context.Context, id babel.LinkID) error {
+			admission.Link = id
+			admission.Cost = cost
+			return serveDirectCarrier(ctx, admission, handler)
+		})
+	}
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, link)
 }
 
 func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certificate) error {
@@ -993,8 +1034,11 @@ func (p *nodePeer) wakeControl() {
 	}
 }
 
-func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink) error {
+func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink, direct ...func(context.Context, babel.LinkID) error) error {
 	defer link.Close()
+	if len(direct) > 1 || (len(direct) == 1 && direct[0] == nil) {
+		return errors.New("invalid direct carrier owner")
+	}
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
@@ -1018,8 +1062,11 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 		defer wg.Done()
 		n.closePeerOnDone(ctx, cancel, p)
 	}()
-	done := make(chan error, 4)
+	done := make(chan error, 4+len(direct))
 	worker := func(f func() error) { wg.Add(1); go func() { defer wg.Done(); done <- f() }() }
+	if len(direct) == 1 {
+		worker(func() error { return direct[0](ctx, p.id) })
+	}
 	worker(func() error { return n.writeControls(ctx, p) })
 	worker(func() error { return n.readControls(ctx, p) })
 	worker(func() error { return n.readTUN(ctx, p) })
