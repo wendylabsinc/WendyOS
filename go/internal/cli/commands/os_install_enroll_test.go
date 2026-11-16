@@ -6,12 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -524,5 +529,72 @@ func TestACMEPreEnrollmentSkips(t *testing.T) {
 		preEnrollOptions{mode: preEnrollSkip}, true, &name)
 	if err != nil || got != nil {
 		t.Fatalf("skip: bake=%v err=%v; want nil,nil", got, err)
+	}
+}
+
+// takenFirst enrolls every name but taken, which Cloud refuses as held by
+// another device; it records the names tried.
+func takenFirst(t *testing.T, taken string) *[]string {
+	t.Helper()
+	var tried []string
+	preEnrollACMEFn = func(_ context.Context, _ *config.AuthConfig, name string) (*acmeEnrollmentBake, error) {
+		tried = append(tried, name)
+		if name == taken {
+			return nil, fmt.Errorf("Cloud refused this enrollment before minting anything, so no credential was spent: %w: %w",
+				cloudenroll.ErrDeviceNameTaken, status.Error(codes.AlreadyExists, "another device in this organization is already named "+taken))
+		}
+		return &acmeEnrollmentBake{DeviceID: "d"}, nil
+	}
+	return &tried
+}
+
+// A taken name asks for another one and tries again; the new name is what
+// the install then writes, and nothing else is asked.
+func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
+	stubEnrollPrompts(t)
+	tried := takenFirst(t, "hackathon-display")
+	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "hackathon-display-2", nil }
+	name := "hackathon-display"
+	var out []byte
+	stdout := captureStdout(t, func() {
+		var err error
+		out, err = mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}, interactive: true}, &name)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if name != "hackathon-display-2" || len(out) == 0 || fmt.Sprint(*tried) != "[hackathon-display hackathon-display-2]" {
+		t.Fatalf("name %q, tried %v", name, *tried)
+	}
+	if !strings.Contains(stdout, "The name hackathon-display is already used by another device in this organization.") || strings.Contains(stdout, "rpc error") {
+		t.Fatalf("output:\n%s", stdout)
+	}
+}
+
+// Without a terminal a taken name ends the install with the short message
+// and the one next step.
+func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
+	stubEnrollPrompts(t)
+	takenFirst(t, "hackathon-display")
+	name := "hackathon-display"
+	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}}, &name)
+	want := "The name hackathon-display is already used by another device in this organization. Names are unique per organization, regardless of upper and lower case. Choose another name. Pass a different name with --device-name."
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// Stopping at the new-name question keeps the existing way out: continue
+// without enrollment, or cancel the install.
+func TestPreEnrollTakenNameStopKeepsTheWayOut(t *testing.T) {
+	stubEnrollPrompts(t)
+	takenFirst(t, "hackathon-display")
+	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "", tui.ErrCancelled }
+	asked := false
+	confirmContinueUnenrolled = func() (bool, error) { asked = true; return false, nil }
+	name := "hackathon-display"
+	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}, interactive: true}, &name)
+	if !asked || !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("asked %v, err %v", asked, err)
 	}
 }

@@ -224,15 +224,19 @@ func TestInstallCommandRunsInOneSession(t *testing.T) {
 	fetchInstallMainManifest = func(context.Context, int) (*mainManifest, error) {
 		sawInteractive = isInteractiveTerminal()
 		sawOutput = tui.PromptWriter()
-		return &mainManifest{}, nil
+		// Stop at alias validation after observing the live session. ESP32
+		// targets now correctly fail before any manifest lookup.
+		return &mainManifest{Devices: map[string]manifestDevice{
+			"session-fixture": {AliasOf: "raspberry-pi-5", AliasStorage: "sd"},
+		}}, nil
 	}
 
 	cmd := newOSInstallCmd()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--device-type", "esp32-c6", "--no-wifi"})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("ESP32 --device-type unexpectedly accepted")
+	cmd.SetArgs([]string{"--device-type", "session-fixture", "--storage", "nvme", "--no-wifi"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "always installs to sd") {
+		t.Fatalf("expected fixture alias storage rejection, got %v", err)
 	}
 	if !sawInteractive || sawOutput != terminal {
 		t.Fatalf("during the run: interactive=%v output=%v; want true and the terminal", sawInteractive, sawOutput)
@@ -484,5 +488,21 @@ func TestStderrPromptWriterFollowsPromptOutput(t *testing.T) {
 	t.Cleanup(tui.SetPromptOutput(&out))
 	if got := stderrPromptWriter(); got != &out {
 		t.Fatalf("with a prompt output: %v; want it", got)
+	}
+}
+
+// The access-denied line is one plain sentence with one step that works on
+// every distro: no udev or group vocabulary, which would be wrong on Arch.
+func TestUSBAccessDeniedLine(t *testing.T) {
+	got := usbAccessDeniedLine("Jetson")
+	for _, want := range []string{"Jetson", "over USB", "again with sudo"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q: %q", want, got)
+		}
+	}
+	for _, jargon := range []string{"udev", "plugdev", "libusb", "\n"} {
+		if strings.Contains(got, jargon) {
+			t.Errorf("must not contain %q: %q", jargon, got)
+		}
 	}
 }
