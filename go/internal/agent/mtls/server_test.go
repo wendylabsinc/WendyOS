@@ -48,6 +48,8 @@ func TestPKIDeviceTLSRequiresSameTenantOnFullAndResumedSessions(t *testing.T) {
 			if cfg.VerifyConnection == nil {
 				t.Fatal("PKI tenant gate was not installed")
 			}
+			// This test isolates tenant policy; real resumed-chain checks have separate tests.
+			cfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error { return nil }
 			for _, resumed := range []bool{false, true} {
 				for _, tc := range []struct {
 					principal string

@@ -13,6 +13,7 @@ import (
 	circlSign "github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 var (
@@ -306,6 +307,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			return fmt.Errorf("device presented no TLS certificate")
 		}
 		leaf := cs.PeerCertificates[0]
+		revocation.Default.Offer(cs.OCSPResponse)
 
 		// Best-effort: surface the server's observed Wendy identity before any
 		// verification step so callers can report a cross-org mismatch even when
@@ -324,7 +326,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		for _, cert := range cs.PeerCertificates[1:] {
 			intermediates.AddCert(cert)
 		}
-		_, stdErr := leaf.Verify(x509.VerifyOptions{
+		paths, stdErr := leaf.Verify(x509.VerifyOptions{
 			Roots:         caPool,
 			Intermediates: intermediates,
 			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -339,7 +341,15 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
 				return stdErr
 			}
-			if err := VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
+			if err := VerifyLivePeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
+				return err
+			}
+		}
+
+		if stdErr == nil {
+			// A device certificate is refused only on positive evidence: the
+			// CLI must still reach a device it cannot fetch a CRL for.
+			if err := revocation.Default.CheckPaths(paths, time.Now(), revocation.RevokedOnly); err != nil {
 				return err
 			}
 		}

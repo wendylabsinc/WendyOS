@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 const (
@@ -35,6 +36,7 @@ type peerPathCache struct {
 }
 
 type peerPathEntry struct {
+	revision                    uint64
 	key                         [sha256.Size]byte
 	chain                       [][]byte
 	bytes                       int
@@ -129,7 +131,7 @@ func (c *peerPathCache) observe() {
 
 func (entry peerPathEntry) current(now peerPathClockSample) bool {
 	age := now.monotonic.Sub(entry.verifiedClock)
-	return age >= 0 && age < peerPathCacheAge && now.wall.Before(entry.expires)
+	return entry.revision == revocation.Default.Revision() && age >= 0 && age < peerPathCacheAge && now.wall.Before(entry.expires)
 }
 
 // verify retains the caller's wall/effective bounds for the selected path.
@@ -151,6 +153,7 @@ func (c *peerPathCache) verifyWindow(chain [][]byte, wall, effective time.Time, 
 	c.mu.Lock()
 	started, canReuse := c.sampleLocked()
 	generation := c.generation
+	revision := revocation.Default.Revision()
 	if element := c.entries[key]; cacheable && element != nil {
 		entry := element.Value.(peerPathEntry)
 		if !entry.current(started) {
@@ -181,7 +184,7 @@ func (c *peerPathCache) verifyWindow(chain [][]byte, wall, effective time.Time, 
 	defer c.mu.Unlock()
 	finished, stillCurrent := c.sampleLocked()
 	age := finished.monotonic.Sub(started.monotonic)
-	if !canReuse || !stillCurrent || generation != c.generation || !finished.wall.Before(expires) ||
+	if revision != revocation.Default.Revision() || !canReuse || !stillCurrent || generation != c.generation || !finished.wall.Before(expires) ||
 		!wall.Before(expires) || !effective.Before(expires) || age < 0 || age >= peerPathCacheAge {
 		return window, nil
 	}
@@ -196,7 +199,7 @@ func (c *peerPathCache) verifyWindow(chain [][]byte, wall, effective time.Time, 
 	for c.recency.Len() >= c.maxEntries || c.bytes+size > c.maxBytes {
 		c.remove(c.recency.Back())
 	}
-	entry := peerPathEntry{key: key, chain: copyChain, bytes: size, verifiedWall: wall, verifiedClock: started.monotonic, verifiedEffective: effective, expires: expires, notBefore: window.NotBefore}
+	entry := peerPathEntry{revision: revision, key: key, chain: copyChain, bytes: size, verifiedWall: wall, verifiedClock: started.monotonic, verifiedEffective: effective, expires: expires, notBefore: window.NotBefore}
 	c.entries[key] = c.recency.PushFront(entry)
 	c.bytes += size
 	return window, nil
