@@ -94,6 +94,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
@@ -113,6 +115,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Verify shared contract pin is on service-protos master
         run: |
           source Proto/shared-grpc-api-contracts.sh
@@ -138,6 +142,8 @@ jobs:
         run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
 
   babel:
+    permissions:
+      contents: read
     name: Babel tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -146,6 +152,8 @@ jobs:
         working-directory: go/babel
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -163,11 +171,15 @@ jobs:
         run: go vet ./...
 
   unit-tests:
+    permissions:
+      contents: read
     name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
@@ -219,11 +231,15 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   containerd-regressions:
+    permissions:
+      contents: read
     name: Containerd lifecycle, DNS and resource regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go-ci
         with:
           cache-name: containerd-regressions
@@ -326,6 +342,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go-ci
         with:
           cache-name: install-host
@@ -360,6 +378,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go-ci
         with:
           cache-name: network-regressions
@@ -542,11 +562,15 @@ jobs:
           grep -q '^--- PASS: TestDeviceNameRestartIntegration ' "$RUNNER_TEMP/hostname-restart.log"
 
   darwin-install-host:
+    permissions:
+      contents: read
     name: macOS CLI and device regressions
     runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
@@ -586,6 +610,8 @@ jobs:
         platform: [macos, ios]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -613,6 +639,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go-ci
         with:
           cache-name: media-regressions
@@ -677,10 +705,14 @@ jobs:
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
 
   windows:
+    permissions:
+      contents: read
     name: Windows CLI
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
@@ -704,11 +736,15 @@ jobs:
           go test -c -o /dev/null ./internal/cli/commands
 
   wasm:
+    permissions:
+      contents: read
     name: Browser WASM
     runs-on: runs-on,runner=2cpu-linux-x64
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go and Node
         uses: ./.github/actions/setup-go-ci
@@ -744,6 +780,8 @@ jobs:
         run: go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth ./go/internal/shared/flock -count=1 -timeout 120s
 
   windows-telemetry:
+    permissions:
+      contents: read
     name: Windows native regressions
     runs-on: windows-latest
     timeout-minutes: 20
@@ -751,6 +789,8 @@ jobs:
       CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -837,6 +877,8 @@ jobs:
         working-directory: go/internal/agent/inference
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -849,6 +891,19 @@ jobs:
       # The same locked environment the agent builds on a device.
       - name: Run worker unit tests
         run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
+
+  workflow-security:
+    name: Workflow security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Audit workflow trust boundaries
+        run: bash .github/scripts/workflow-audit.sh
 
   # The report queries under go/scripts/analytics only run against a real
   # PostgreSQL; without one their tests skip, so nothing else covers them.
@@ -872,6 +927,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Run report query tests
         working-directory: go/scripts/analytics
@@ -889,6 +946,8 @@ jobs:
         robot: [go2, g1]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: '0.10.9'
@@ -903,9 +962,11 @@ jobs:
 
   # Preserve the existing required "Test" check after splitting its work.
   test:
+    permissions:
+      contents: read
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher, analytics-queries]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher, workflow-security, analytics-queries]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -930,6 +991,7 @@ jobs:
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
           ANALYTICS_QUERIES_RESULT: ${{ needs.analytics-queries.result }}
+          WORKFLOW_SECURITY_RESULT: ${{ needs.workflow-security.result }}
         run: |
           test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
           test "$BABEL_RESULT" = success
@@ -951,13 +1013,18 @@ jobs:
           test "$DARWIN_INSTALL_RESULT" = success
           test "$PLUGIN_LAUNCHER_RESULT" = success
           test "$ANALYTICS_QUERIES_RESULT" = success
+          test "$WORKFLOW_SECURITY_RESULT" = success
 
   agent-startup:
+    permissions:
+      contents: read
     name: Agent setup startup
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
         with:
@@ -979,10 +1046,14 @@ jobs:
           retention-days: 7
 
   vet:
+    permissions:
+      contents: read
     name: Vet
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
@@ -1000,10 +1071,14 @@ jobs:
         run: python3 .github/scripts/api-snapshot-smoke.py
 
   format:
+    permissions:
+      contents: read
     name: Format Check
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -1024,10 +1099,14 @@ jobs:
           fi
 
   shell-tests:
+    permissions:
+      contents: read
     name: Install script tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: shellcheck install scripts
         run: shellcheck go/internal/cli/assets/docs/agent.sh go/internal/cli/assets/docs/cli.sh
       - name: shellcheck agent package scripts
