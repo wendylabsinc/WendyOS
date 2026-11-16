@@ -18,8 +18,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"go.uber.org/zap"
 )
+
+// resetChild is a variable so tests can observe each agent start.
+var resetChild = oomscore.ResetChild
 
 type Config struct {
 	Store        Store
@@ -319,6 +323,9 @@ func (s *Supervisor) runChild(ctx context.Context, d Decision, t *Trial) runResu
 	// Its own group, so helpers it leaves behind can be cleaned up the way
 	// systemd did when it restarted the agent itself.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The supervisor is protected; every agent must start at 0 instead of
+	// inheriting that.
+	resetChild(cmd)
 
 	version := d.Version
 	if d.Role == RoleImage {

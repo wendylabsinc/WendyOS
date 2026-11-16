@@ -158,6 +158,34 @@ func TestRunStartsTheImageAgentWithoutAnUpdate(t *testing.T) {
 	h.eventually("the image agent runs", func() bool { return h.status().Role == RoleImage && h.status().PID > 0 })
 }
 
+func TestRunChildStartsEveryAgentThroughTheScoreReset(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	old := resetChild
+	resetChild = func(cmd *exec.Cmd) {
+		mu.Lock()
+		paths = append(paths, cmd.Path)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { resetChild = old })
+	seen := func(p string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(paths, p)
+	}
+
+	h := newHarness(t)
+	h.start()
+	h.eventually("the image agent starts through the reset", func() bool { return seen(h.sup.cfg.ImageAgent) })
+	h.stop()
+
+	h = newHarness(t)
+	sum := dropInInbox(t, h.store, "new", Incoming{RemoteVia: "lan", Explicit: true})
+	trial := h.store.BinPath(sum)
+	h.start()
+	h.eventually("the trial agent starts through the reset", func() bool { return seen(trial) })
+}
+
 func TestRunApprovesATrialThatPassesItsChecks(t *testing.T) {
 	h := newHarness(t)
 	sum := dropInInbox(t, h.store, "new", Incoming{RemoteVia: "lan", Explicit: true})

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	"go.uber.org/zap"
@@ -127,6 +128,9 @@ func run() int {
 		return 1
 	}
 	defer log.Sync()
+	if err := oomscore.Protect(); err != nil {
+		log.Warn("supervisor OOM protection unavailable", zap.Error(err))
+	}
 
 	self, _ := os.Executable()
 	store := supervisor.Store{Dir: storeDir}
