@@ -46,8 +46,12 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // The router's packet path is idle during this RPC/lease test, like an idle
@@ -64,6 +68,8 @@ type operatorBrokerAgent struct {
 	agentpb.UnimplementedWendyAgentServiceServer
 	principal string
 	calls     atomic.Int32
+	held      chan struct{}
+	stopped   chan struct{}
 }
 
 func (s *operatorBrokerAgent) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
@@ -80,6 +86,12 @@ func (s *operatorBrokerAgent) GetAgentVersion(ctx context.Context, _ *agentpb.Ge
 		return nil, fmt.Errorf("operator role was not preserved")
 	}
 	s.calls.Add(1)
+	if s.held != nil && len(metadata.ValueFromIncomingContext(ctx, "regression-hold")) != 0 {
+		close(s.held)
+		<-ctx.Done()
+		close(s.stopped)
+		return nil, ctx.Err()
+	}
 	return &agentpb.GetAgentVersionResponse{Version: "retained-operator", Hostname: "router.fixture"}, nil
 }
 func TestOperatorBrokerNormalConcurrentInvocationsRenewAndIdle(t *testing.T) {
@@ -161,11 +173,16 @@ func TestOperatorBrokerNormalCredentialRenewalRejoins(t *testing.T) {
 func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	var extraSources []carriers.Source
 	var fixtureSource carriers.Source
+	openedSessions := make(chan *operatormesh.Session, 8)
 	previousOpen := openOperatorSession
 	t.Cleanup(func() { openOperatorSession = previousOpen })
 	openOperatorSession = func(ctx context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
 		options.CarrierSources = append([]carriers.Source{fixtureSource}, extraSources...)
-		return operatormesh.Open(ctx, options)
+		session, err := operatormesh.Open(ctx, options)
+		if algorithm == "P256-reconnect" && err == nil {
+			openedSessions <- session
+		}
+		return session, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -285,6 +302,9 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		t.Fatal(err)
 	}
 	service := &operatorBrokerAgent{principal: principal}
+	if algorithm == "P256-reconnect" {
+		service.held, service.stopped = make(chan struct{}), make(chan struct{})
+	}
 	agentpb.RegisterWendyAgentServiceServer(server, service)
 	serverDone := make(chan struct{})
 	go func() { defer close(serverDone); _ = server.Serve(ingress) }()
@@ -605,14 +625,56 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		}
 		expectedWithdrawals++
 	}
+	var recoveredManagement *grpcclient.AgentConnection
 	if algorithm == "P256-reconnect" || algorithm == "P256-roam" {
 		original := <-proofs
 		firstSocket := <-carrierSockets
+		var session *operatormesh.Session
+		var retired *grpcclient.AgentConnection
+		pending := make(chan error, 1)
+		if algorithm == "P256-reconnect" {
+			session = <-openedSessions
+			retired, err = session.AgentConnectionForPeer(ctx, router)
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				_, err := warm.AgentService.GetAgentVersion(metadata.NewOutgoingContext(ctx, metadata.Pairs("regression-hold", "1")), &agentpb.GetAgentVersionRequest{})
+				pending <- err
+			}()
+			select {
+			case <-service.held:
+			case <-time.After(2 * time.Second):
+				t.Fatal("live management request did not reach the authenticated router")
+			}
+		}
 		if algorithm == "P256-roam" {
 			useAlternate.Store(true)
 			socket.Close() // The old address no longer accepts connections.
 		}
 		firstSocket.Close() // Ordinary peer restart / carrier loss.
+		if retired != nil {
+			select {
+			case err := <-pending:
+				if err == nil || status.Code(err) == codes.DeadlineExceeded {
+					t.Fatalf("pending management request did not fail with carrier loss: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("pending management request survived carrier loss")
+			}
+			select {
+			case <-service.stopped:
+			case <-time.After(time.Second):
+				t.Fatal("remote management handler survived carrier loss")
+			}
+			retireCtx, stop := context.WithTimeout(ctx, time.Second)
+			defer stop()
+			for state := retired.Conn.GetState(); state != connectivity.Shutdown; state = retired.Conn.GetState() {
+				if !retired.Conn.WaitForStateChange(retireCtx, state) {
+					t.Fatal("lost carrier retained its management client")
+				}
+			}
+		}
 		// The local context probe must not depend on the original peer still
 		// answering an agent RPC; it remains usable during recovery itself.
 		statusUntil := time.Now().Add(800 * time.Millisecond)
@@ -661,6 +723,13 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		}
 		if starts.Load() != 1 || handshakes.Load() != 2 || admitted.Load() != 2 {
 			t.Fatal("reconnect replaced broker instead of retaining IPC", starts.Load(), handshakes.Load(), admitted.Load())
+		}
+		if retired != nil {
+			fresh, err := session.AgentConnectionForPeer(ctx, router)
+			if err != nil || fresh == retired {
+				t.Fatalf("reconnected carrier reused its retired management client: %v", err)
+			}
+			recoveredManagement = fresh
 		}
 		expectedWithdrawals = 2
 	}
@@ -730,6 +799,9 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	case <-complete:
 	case <-time.After(5 * time.Second):
 		t.Fatal("full-node work retained an idle broker")
+	}
+	if recoveredManagement != nil && recoveredManagement.Conn.GetState() != connectivity.Shutdown {
+		t.Fatal("broker shutdown retained its replacement management client")
 	}
 	until := time.After(5 * time.Second)
 	for withdrawn.Load() != expectedWithdrawals {
