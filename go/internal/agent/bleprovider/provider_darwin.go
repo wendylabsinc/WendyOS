@@ -167,7 +167,7 @@ func dialDarwin(ctx context.Context, cfg Config, address string, adv Advertiseme
 	if cfg.Selection != nil && !cfg.Selection.AllowRadio(peer, localmesh.RadioBLE) {
 		return nil
 	}
-	if err := cfg.Node.AttachStream(localmesh.WithCarrier(localmesh.WithConnectionLease(ctx, lease), "ble"), peer, secure, LinkCost); err != nil {
+	if err := cfg.Node.AttachStream(localmesh.WithDirectBLECarrier(localmesh.WithConnectionLease(ctx, lease)), peer, secure, LinkCost); err != nil {
 		return fmt.Errorf("mesh stream: %w", err)
 	}
 	return nil
