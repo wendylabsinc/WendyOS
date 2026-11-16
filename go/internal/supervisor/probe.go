@@ -73,13 +73,6 @@ func listensOn(pid, port int) bool {
 	return false
 }
 
-// remoteSeen reports whether the agent with this pid recorded a call from a
-// remote client over via ("lan" or "relay"). The pid keeps an old mark from counting.
-func remoteSeen(dir string, pid int, via string) bool {
-	data, err := os.ReadFile(filepath.Join(dir, "remote-seen."+via))
-	return err == nil && strings.TrimSpace(string(data)) == strconv.Itoa(pid)
-}
-
 // emergency is the way back to the image agent when every /data agent is bad.
 func emergency(flagPath, cmdlinePath string) bool {
 	if _, err := os.Stat(flagPath); err == nil {
@@ -153,23 +146,6 @@ func AliveProbe(sock string) func(context.Context) error {
 // ServingProbe reports whether pid listens on port or port+1 (mTLS).
 func ServingProbe(port int) func(pid int) bool {
 	return func(pid int) bool { return listensOn(pid, port) || listensOn(pid, port+1) }
-}
-
-// UpdateMark is where the agent names itself while it applies an update: an
-// agent upload, an online update or an OS update.
-const UpdateMark = "update-running"
-
-// UpdatingFunc reports whether the agent with pid is applying an update; the
-// pid keeps a mark left by a crashed agent from counting.
-func UpdatingFunc(dir string) func(pid int) bool {
-	return func(pid int) bool {
-		data, err := os.ReadFile(filepath.Join(dir, UpdateMark))
-		return err == nil && strings.TrimSpace(string(data)) == strconv.Itoa(pid)
-	}
-}
-
-func RemoteSeenFunc(dir string) func(pid int, via string) bool {
-	return func(pid int, via string) bool { return remoteSeen(dir, pid, via) }
 }
 
 func EmergencyFunc(flagPath, cmdlinePath string) func() bool {

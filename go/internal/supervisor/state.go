@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,6 +96,30 @@ const ViaCloud = "cloud"
 
 // viaRelay is a client that came in through the cloud relay.
 const viaRelay = "relay"
+
+// remoteSeen reports whether the agent with this pid recorded a call from a
+// remote client over via ("lan" or "relay"). The pid keeps an old mark from counting.
+func remoteSeen(dir string, pid int, via string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "remote-seen."+via))
+	return err == nil && strings.TrimSpace(string(data)) == strconv.Itoa(pid)
+}
+
+// UpdateMark is where the agent names itself while it applies an update: an
+// agent upload, an online update or an OS update.
+const UpdateMark = "update-running"
+
+// UpdatingFunc reports whether the agent with pid is applying an update; the
+// pid keeps a mark left by a crashed agent from counting.
+func UpdatingFunc(dir string) func(pid int) bool {
+	return func(pid int) bool {
+		data, err := os.ReadFile(filepath.Join(dir, UpdateMark))
+		return err == nil && strings.TrimSpace(string(data)) == strconv.Itoa(pid)
+	}
+}
+
+func RemoteSeenFunc(dir string) func(pid int, via string) bool {
+	return func(pid int, via string) bool { return remoteSeen(dir, pid, via) }
+}
 
 // ReplacesImage is Incoming.Replaces for an update fetched while no agent on
 // /data was approved.
