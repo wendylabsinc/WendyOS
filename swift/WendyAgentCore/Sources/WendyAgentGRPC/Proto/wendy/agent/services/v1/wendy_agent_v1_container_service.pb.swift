@@ -951,6 +951,10 @@ public nonisolated struct Wendy_Agent_Services_V1_GetResourceStatsRequest: Senda
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Opt-in bounded NVIDIA process inventory for this managed app. Empty skips
+  /// the additional query. Unknown/older agents leave gpu_admission absent.
+  public var gpuAdmissionAppID: String = String()
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -1047,6 +1051,16 @@ public nonisolated struct Wendy_Agent_Services_V1_HostStats: @unchecked Sendable
   public var hasNetwork: Bool {_storage._network != nil}
   /// Clears the value of `network`. Subsequent reads from it will return its default value.
   public mutating func clearNetwork() {_uniqueStorage()._network = nil}
+
+  /// Present only for opt-in admission queries. Missing is never evidence of idle.
+  public var gpuAdmission: Wendy_Agent_Services_V1_GpuAdmissionStats {
+    get {_storage._gpuAdmission ?? Wendy_Agent_Services_V1_GpuAdmissionStats()}
+    set {_uniqueStorage()._gpuAdmission = newValue}
+  }
+  /// Returns true if `gpuAdmission` has been explicitly set.
+  public var hasGpuAdmission: Bool {_storage._gpuAdmission != nil}
+  /// Clears the value of `gpuAdmission`. Subsequent reads from it will return its default value.
+  public mutating func clearGpuAdmission() {_uniqueStorage()._gpuAdmission = nil}
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1284,6 +1298,70 @@ public nonisolated struct Wendy_Agent_Services_V1_PrepareImageResponse: Sendable
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+}
+
+/// Admission observations are separate from best-effort display statistics.
+public nonisolated struct Wendy_Agent_Services_V1_GpuAdmissionStats: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// False when any inventory or app-ownership observation is incomplete.
+  public var valid: Bool = false
+
+  public var unavailableReason: String = String()
+
+  public var devices: [Wendy_Agent_Services_V1_GpuAdmissionDevice] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_GpuAdmissionDevice: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var index: UInt32 = 0
+
+  public var uuid: String = String()
+
+  /// Includes compute, graphics and other contexts outside the requested app.
+  /// A context counts as foreign even when utilization is zero.
+  public var foreignProcess: Bool = false
+
+  /// False for display-active, MIG or otherwise unsupported configurations.
+  public var supported: Bool = false
+
+  /// True only for positively identified Jetson shared-system-memory hardware.
+  public var unifiedMemory: Bool = false
+
+  /// Optional: missing utilization/memory must never be read as numeric zero.
+  public var utilizationPercent: Double {
+    get {_utilizationPercent ?? 0}
+    set {_utilizationPercent = newValue}
+  }
+  /// Returns true if `utilizationPercent` has been explicitly set.
+  public var hasUtilizationPercent: Bool {self._utilizationPercent != nil}
+  /// Clears the value of `utilizationPercent`. Subsequent reads from it will return its default value.
+  public mutating func clearUtilizationPercent() {self._utilizationPercent = nil}
+
+  public var memoryFreeBytes: UInt64 {
+    get {_memoryFreeBytes ?? 0}
+    set {_memoryFreeBytes = newValue}
+  }
+  /// Returns true if `memoryFreeBytes` has been explicitly set.
+  public var hasMemoryFreeBytes: Bool {self._memoryFreeBytes != nil}
+  /// Clears the value of `memoryFreeBytes`. Subsequent reads from it will return its default value.
+  public mutating func clearMemoryFreeBytes() {self._memoryFreeBytes = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _utilizationPercent: Double? = nil
+  fileprivate var _memoryFreeBytes: UInt64? = nil
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
@@ -2879,18 +2957,29 @@ nonisolated extension Wendy_Agent_Services_V1_ListContainerStatsResponse: SwiftP
 
 nonisolated extension Wendy_Agent_Services_V1_GetResourceStatsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetResourceStatsRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}gpu_admission_app_id\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    // Load everything into unknown fields
-    while try decoder.nextFieldNumber() != nil {}
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.gpuAdmissionAppID) }()
+      default: break
+      }
+    }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.gpuAdmissionAppID.isEmpty {
+      try visitor.visitSingularStringField(value: self.gpuAdmissionAppID, fieldNumber: 1)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_GetResourceStatsRequest, rhs: Wendy_Agent_Services_V1_GetResourceStatsRequest) -> Bool {
+    if lhs.gpuAdmissionAppID != rhs.gpuAdmissionAppID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2937,7 +3026,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetResourceStatsResponse: SwiftPro
 
 nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".HostStats"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cpu_total_jiffies\0\u{3}cpu_idle_jiffies\0\u{3}cpu_count\0\u{3}mem_total_bytes\0\u{3}mem_available_bytes\0\u{1}gpus\0\u{3}thermal_zones\0\u{1}battery\0\u{1}network\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cpu_total_jiffies\0\u{3}cpu_idle_jiffies\0\u{3}cpu_count\0\u{3}mem_total_bytes\0\u{3}mem_available_bytes\0\u{1}gpus\0\u{3}thermal_zones\0\u{1}battery\0\u{1}network\0\u{3}gpu_admission\0")
 
   fileprivate class _StorageClass {
     var _cpuTotalJiffies: UInt64 = 0
@@ -2949,6 +3038,7 @@ nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, 
     var _thermalZones: [Wendy_Agent_Services_V1_ThermalZone] = []
     var _battery: Wendy_Agent_Services_V1_BatteryStats? = nil
     var _network: Wendy_Agent_Services_V1_NetworkStats? = nil
+    var _gpuAdmission: Wendy_Agent_Services_V1_GpuAdmissionStats? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2968,6 +3058,7 @@ nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, 
       _thermalZones = source._thermalZones
       _battery = source._battery
       _network = source._network
+      _gpuAdmission = source._gpuAdmission
     }
   }
 
@@ -2995,6 +3086,7 @@ nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, 
         case 7: try { try decoder.decodeRepeatedMessageField(value: &_storage._thermalZones) }()
         case 8: try { try decoder.decodeSingularMessageField(value: &_storage._battery) }()
         case 9: try { try decoder.decodeSingularMessageField(value: &_storage._network) }()
+        case 10: try { try decoder.decodeSingularMessageField(value: &_storage._gpuAdmission) }()
         default: break
         }
       }
@@ -3034,6 +3126,9 @@ nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, 
       try { if let v = _storage._network {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 9)
       } }()
+      try { if let v = _storage._gpuAdmission {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 10)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -3052,6 +3147,7 @@ nonisolated extension Wendy_Agent_Services_V1_HostStats: SwiftProtobuf.Message, 
         if _storage._thermalZones != rhs_storage._thermalZones {return false}
         if _storage._battery != rhs_storage._battery {return false}
         if _storage._network != rhs_storage._network {return false}
+        if _storage._gpuAdmission != rhs_storage._gpuAdmission {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -3517,6 +3613,110 @@ nonisolated extension Wendy_Agent_Services_V1_PrepareImageResponse: SwiftProtobu
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V1_PrepareImageResponse, rhs: Wendy_Agent_Services_V1_PrepareImageResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_GpuAdmissionStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GpuAdmissionStats"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}valid\0\u{3}unavailable_reason\0\u{1}devices\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.valid) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.unavailableReason) }()
+      case 3: try { try decoder.decodeRepeatedMessageField(value: &self.devices) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.valid != false {
+      try visitor.visitSingularBoolField(value: self.valid, fieldNumber: 1)
+    }
+    if !self.unavailableReason.isEmpty {
+      try visitor.visitSingularStringField(value: self.unavailableReason, fieldNumber: 2)
+    }
+    if !self.devices.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.devices, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_GpuAdmissionStats, rhs: Wendy_Agent_Services_V1_GpuAdmissionStats) -> Bool {
+    if lhs.valid != rhs.valid {return false}
+    if lhs.unavailableReason != rhs.unavailableReason {return false}
+    if lhs.devices != rhs.devices {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_GpuAdmissionDevice: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GpuAdmissionDevice"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0\u{1}uuid\0\u{3}foreign_process\0\u{1}supported\0\u{3}unified_memory\0\u{3}utilization_percent\0\u{3}memory_free_bytes\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.index) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.uuid) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.foreignProcess) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self.supported) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.unifiedMemory) }()
+      case 6: try { try decoder.decodeSingularDoubleField(value: &self._utilizationPercent) }()
+      case 7: try { try decoder.decodeSingularUInt64Field(value: &self._memoryFreeBytes) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.index != 0 {
+      try visitor.visitSingularUInt32Field(value: self.index, fieldNumber: 1)
+    }
+    if !self.uuid.isEmpty {
+      try visitor.visitSingularStringField(value: self.uuid, fieldNumber: 2)
+    }
+    if self.foreignProcess != false {
+      try visitor.visitSingularBoolField(value: self.foreignProcess, fieldNumber: 3)
+    }
+    if self.supported != false {
+      try visitor.visitSingularBoolField(value: self.supported, fieldNumber: 4)
+    }
+    if self.unifiedMemory != false {
+      try visitor.visitSingularBoolField(value: self.unifiedMemory, fieldNumber: 5)
+    }
+    try { if let v = self._utilizationPercent {
+      try visitor.visitSingularDoubleField(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._memoryFreeBytes {
+      try visitor.visitSingularUInt64Field(value: v, fieldNumber: 7)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_GpuAdmissionDevice, rhs: Wendy_Agent_Services_V1_GpuAdmissionDevice) -> Bool {
+    if lhs.index != rhs.index {return false}
+    if lhs.uuid != rhs.uuid {return false}
+    if lhs.foreignProcess != rhs.foreignProcess {return false}
+    if lhs.supported != rhs.supported {return false}
+    if lhs.unifiedMemory != rhs.unifiedMemory {return false}
+    if lhs._utilizationPercent != rhs._utilizationPercent {return false}
+    if lhs._memoryFreeBytes != rhs._memoryFreeBytes {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

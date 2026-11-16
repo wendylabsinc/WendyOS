@@ -44,9 +44,16 @@ struct BonjourAdvertiserTests {
             tls: true,
             assetID: 42,
             orgID: 2,
-            caps: []
+            caps: [],
+            principalURI:
+                "spiffe://wendy.sh/tenant/22f35004-d638-4b5c-869f-b815974d6eae/device/4c386c9d-9351-47b1-b176-19099e7e0fa2"
         )
         let f = fields(data)
+        #expect(
+            f.contains(
+                "principal=spiffe://wendy.sh/tenant/22f35004-d638-4b5c-869f-b815974d6eae/device/4c386c9d-9351-47b1-b176-19099e7e0fa2"
+            )
+        )
         #expect(f.contains("tls=true"))
         #expect(f.contains("assetid=42"))
         #expect(f.contains("orgid=2"))

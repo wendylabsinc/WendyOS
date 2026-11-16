@@ -140,6 +140,10 @@ errors and rate limit.
 - Device-app sources may create 10 accepted Notifications per minute. The agent
   also smooths bursts locally. Repeated Cloud rate-limit violations can
   quarantine that app/device source for 15 minutes.
+- The title is 1 to 120 UTF-8 bytes and the body is 1 to 2,000. Each is one
+  line: a line break, tab or other control character is refused with
+  `INVALID_ARGUMENT`, and so is leading or trailing whitespace. Join the lines
+  of a multi-line message before sending it.
 - Generate a new UUID v4 for each Notification. Reusing an accepted ID returns
   `ALREADY_EXISTS`; a request rejected locally does not claim the UUID.
 - Device-originated deep links are restricted to the source device. Use

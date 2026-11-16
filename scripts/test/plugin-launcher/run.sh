@@ -357,6 +357,21 @@ test_rosetta_shell_installs_arm64() {
   assert_eq "$(requests_for "wendy-cli-darwin-arm64-$V.tar.gz")" "1" "fetched darwin-arm64"
 }
 
+test_truncated_download_can_retry() {
+  make_release "$V"
+  pin "$V" "$V"
+  touch "$FIX/truncate-downloads"
+  serve
+  sh "$L" mcp serve >"$T/out" 2>"$T/err"
+  assert_eq "$?" "1" "truncated download exit"
+  assert_eq "$(cat "$T/out")" "" "no partial CLI ran"
+  [ ! -d "$WENDY_CONFIG_DIR/cli/$V" ] || fail_case "partial release was installed"
+  rm "$FIX/truncate-downloads"
+  out=$(sh "$L" mcp serve 2>"$T/retry.err")
+  assert_eq "$?" "0" "complete retry exit"
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "complete retry runs verified CLI"
+}
+
 test_other_os_is_unsupported() {
   make_release "$V"
   pin "$V" "$V"
@@ -389,6 +404,20 @@ test_concurrent_launches_download_once() {
   assert_eq "$(cat "$T/out1")" "stub-wendy $V args:[mcp][serve]" "first launcher"
   assert_eq "$(cat "$T/out2")" "stub-wendy $V args:[mcp][serve]" "second launcher"
   assert_eq "$(requests_for "$(host_asset)")" "1" "one download"
+}
+
+test_concurrent_launches_reject_false_mkdir_success() {
+  # uutils/coreutils#13970: under contention mkdir can report success even
+  # after EEXIST. Model that result deterministically for the lock only.
+  cat >"$STUB/mkdir" <<EOF
+#!/bin/sh
+if [ "\${1:-}" = "\$WENDY_CONFIG_DIR/cli/.lock" ]; then
+  exec "$T/sysbin/mkdir" -p "\$@"
+fi
+exec "$T/sysbin/mkdir" "\$@"
+EOF
+  chmod 755 "$STUB/mkdir"
+  test_concurrent_launches_download_once
 }
 
 test_killed_launcher_still_completes_install() {
@@ -497,6 +526,16 @@ run_case() {
   CASE_FAILED=0
   setup
   "$1"
+  if [ "$CASE_FAILED" != 0 ]; then
+    # These are synthetic fixture logs, never a user's launcher directory.
+    # Preserve evidence for process races before teardown removes the case.
+    for fixture_log in "$T/server.err" "$FIX/requests.log" "$T/out1" "$T/err1" "$T/out2" "$T/err2" "$WENDY_CONFIG_DIR/cli/install.log"; do
+      if [ -f "$fixture_log" ]; then
+        echo "    fixture log: $fixture_log"
+        sed 's/^/      /' "$fixture_log"
+      fi
+    done
+  fi
   teardown
   if [ "$CASE_FAILED" = 0 ]; then
     PASSES=$((PASSES + 1))
