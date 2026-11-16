@@ -119,7 +119,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Verify shared contract pin is on service-protos master
+      - name: Verify shared contract pin is on service-protos main
         run: |
           source Proto/shared-grpc-api-contracts.sh
           check_shared_grpc_api_contracts_ancestry

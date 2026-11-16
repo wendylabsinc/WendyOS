@@ -41,29 +41,29 @@ class SharedContractsTests(unittest.TestCase):
     def git(self, repository, *args):
         return subprocess.check_output(["git", "-C", str(repository), *args], env=self.env, text=True).strip()
 
-    def test_authoritative_policy_accepts_ancestor_and_refuses_off_master_pin(self):
+    def test_authoritative_policy_accepts_ancestor_and_refuses_off_main_pin(self):
         repository = self.root / "policy-repo"
-        subprocess.run(["git", "init", "-q", "-b", "master", str(repository)], env=self.env, check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repository)], env=self.env, check=True)
         self.git(repository, "config", "user.name", "Fixture")
         self.git(repository, "config", "user.email", "fixture@example.invalid")
         self.git(repository, "commit", "--allow-empty", "-qm", "base")
         ancestor = self.git(repository, "rev-parse", "HEAD")
         self.git(repository, "switch", "-qc", "untrusted")
-        self.git(repository, "commit", "--allow-empty", "-qm", "not on master")
-        off_master = self.git(repository, "rev-parse", "HEAD")
-        self.git(repository, "switch", "-q", "master")
+        self.git(repository, "commit", "--allow-empty", "-qm", "not on main")
+        off_main = self.git(repository, "rev-parse", "HEAD")
+        self.git(repository, "switch", "-q", "main")
         self.git(repository, "commit", "--allow-empty", "-qm", "current policy")
         policy = self.root / "check-pin.sh"
-        policy.write_text('#!/bin/bash\nset -euo pipefail\ngit -C "$POLICY_REPO" merge-base --is-ancestor "$1" master\n')
+        policy.write_text('#!/bin/bash\nset -euo pipefail\ngit -C "$POLICY_REPO" merge-base --is-ancestor "$1" main\n')
         self.executable("curl", '''#!/bin/bash
 set -euo pipefail
-[[ "$*" == *"https://raw.githubusercontent.com/wendylabsinc/service-protos/master/tools/check-pin.sh"* ]] || exit 99
+[[ "$*" == *"https://raw.githubusercontent.com/wendylabsinc/service-protos/main/tools/check-pin.sh"* ]] || exit 99
 [[ "${FAIL_FETCH:-0}" != 1 ]] || exit 22
 while [ "$1" != --output ]; do shift; done
 cp "$POLICY_SCRIPT" "$2"
 ''')
         script = 'source "$1"; SHARED_GRPC_API_CONTRACTS_REF="$2"; check_shared_grpc_api_contracts_ancestry'
-        for pin, expected in ((ancestor, 0), (off_master, 1)):
+        for pin, expected in ((ancestor, 0), (off_main, 1)):
             with self.subTest(pin=pin):
                 result = self.shell(script, CONTRACTS, pin, POLICY_REPO=str(repository), POLICY_SCRIPT=str(policy))
                 self.assertEqual(result.returncode, expected, result.stderr)
