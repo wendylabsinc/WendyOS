@@ -26,11 +26,14 @@ const maxControlBytes = 16384 + 256
 
 // ClientConfig binds the actual primary operator certificate and installation.
 type ClientConfig struct {
-	Identity meshoperator.VerifiedOperator
-	Signer   crypto.Signer
-	Instance meshoperator.InstanceID
-	Router   meshid.Device
-	Roots    []*x509.Certificate
+	// RouterDirect is opt-in for a physically verified BLE carrier with a
+	// registered direct session owner and promotion support.
+	RouterDirect RouterDirectConfig
+	Identity     meshoperator.VerifiedOperator
+	Signer       crypto.Signer
+	Instance     meshoperator.InstanceID
+	Router       meshid.Device
+	Roots        []*x509.Certificate
 	// IssuerCandidates supplies locally known, untrusted CA candidates when
 	// known-CA TLS omitted them. It must retain every wire certificate first;
 	// the original primary roots, peer pin, role and validity checks still apply.
@@ -71,6 +74,8 @@ func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandid
 }
 
 type control struct {
+	Deferred    uint32                  `cbor:"directDeferred,omitempty"`
+	Direct      uint32                  `cbor:"direct,omitempty"`
 	AgentWindow uint32                  `cbor:"w,omitempty"` // Optional hello/ready receive-window maximum.
 	Stream      uint32                  `cbor:"s,omitempty"`
 	Credit      uint32                  `cbor:"c,omitempty"`
@@ -236,6 +241,9 @@ func readFrame(r io.Reader) (byte, []byte, error) {
 	limit := uint32(maxControlBytes)
 	if header[0] == 5 {
 		limit = MaxRouterControl
+	}
+	if header[0] == 6 {
+		limit = maxDirectRecord
 	}
 	if n == 0 || n > limit {
 		return 0, nil, errors.New("invalid operator frame size")

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/directstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
@@ -23,11 +24,34 @@ import (
 // delegated endpoint handshake. Adjacent management shares this actual TLS.
 const RouterALPN = "wendy-net-operator-router/1"
 const MaxRouterControl = (64 << 10) + 4
+const maxDirectRecord = directstream.MaxFlowFrame
+
+// RouterDirectConfig is set only by a physical carrier provider after its
+// session owner and promoted transport are installed. Zero preserves legacy IO.
+type RouterDirectConfig struct {
+	PhysicalBLE bool
+	Capability  uint32
+	Eligible    func(meshid.Device, tls.ConnectionState) bool
+}
+
+func (c RouterDirectConfig) capability() (uint32, error) {
+	if !directstream.ValidCapability(c.Capability) {
+		return 0, errors.New("invalid operator direct capability")
+	}
+	if !c.PhysicalBLE {
+		return 0, nil
+	}
+	return c.Capability, nil
+}
 
 // RouterLink reuses the bounded management credit ring and its lifetime owner.
 // Only the routing queues are new: their contents remain opaque here and are
 // validated by the shared localmesh Node. No delegated route is installed.
 type RouterLink struct {
+	directSelected uint32
+	directDeferred bool
+	directTransmit chan []byte
+	directRecords  chan []byte
 	*Link
 	peer                meshid.Device
 	packets             chan []byte
@@ -38,6 +62,9 @@ type RouterLink struct {
 	transmitWake        chan struct{}
 	lastReceivedRouting atomic.Bool
 }
+
+func (l *RouterLink) DirectCapability() uint32 { return l.directSelected }
+func (l *RouterLink) DirectDeferred() bool     { return l.directDeferred }
 
 func (l *RouterLink) Peer() meshid.Device                  { return l.peer }
 func (l *RouterLink) ConnectionState() tls.ConnectionState { return l.conn.ConnectionState() }
@@ -75,6 +102,10 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 			_ = c.NetConn().Close()
 		}
 	}()
+	localDirect, err := cfg.RouterDirect.capability()
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Instance == (meshoperator.InstanceID{}) || !cfg.Identity.Operator().IsValid() {
 		return nil, errors.New("missing operator router installation")
 	}
@@ -85,8 +116,15 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if len(c.ConnectionState().PeerCertificates) == 0 {
 		return nil, errors.New("missing router identity")
 	}
+	var localDeferred uint32
+	if cfg.RouterDirect.Eligible != nil && !cfg.RouterDirect.Eligible(cfg.Router, c.ConnectionState()) {
+		if localDirect != 0 {
+			localDeferred = localDirect
+		}
+		localDirect = 0
+	}
 	offeredWindow := agentWindowOffer(c)
-	if err = writeControl(c, control{Kind: "operator-router-hello", Instance: cfg.Instance, AgentWindow: offeredWindow}); err != nil {
+	if err = writeControl(c, control{Kind: "operator-router-hello", Instance: cfg.Instance, Direct: localDirect, Deferred: localDeferred, AgentWindow: offeredWindow}); err != nil {
 		return nil, err
 	}
 	reply, err := readControl(c)
@@ -100,6 +138,10 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if err != nil {
 		return nil, err
 	}
+	selected, deferred := directstream.NegotiatedCarrier(localDirect, localDeferred, reply.Direct, reply.Deferred)
+	if (!deferred && (selected != reply.Direct || reply.Deferred != 0)) || (deferred && (selected != reply.Deferred || reply.Direct != 0)) {
+		return nil, errors.New("invalid operator direct selection")
+	}
 	peer, err := meshid.PeerFromPrincipal(cfg.Identity.Operator().Principal())
 	if err != nil {
 		return nil, err
@@ -108,10 +150,11 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if err != nil {
 		return nil, err
 	}
-	l, err := routerReadyWithValidity(ctx, c, cfg.Router, self, false, minTime(expires, cfg.Identity.NotAfter()), nil, nil, nil, window)
+	l, err := routerReadyWithDirectValidity(ctx, c, cfg.Router, self, false, minTime(expires, cfg.Identity.NotAfter()), nil, nil, nil, selected, window)
 	if err != nil {
 		return nil, err
 	}
+	l.directDeferred = deferred
 	ok = true
 	return l, nil
 }
@@ -121,13 +164,13 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 // An optional issuer completer supports known-CA TLS presentations while
 // retaining the original primary trust, role, tenant and validity checks.
 func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
-	return acceptRouter(ctx, c, tenant, roots, nil, nil, agent, candidates...)
+	return acceptRouter(ctx, c, tenant, roots, nil, nil, RouterDirectConfig{}, agent, candidates...)
 }
 
 // AcceptRouterWithTimePolicy applies the explicitly selected mesh clock policy
 // to the primary credential and its lifetime, without changing IO budgets.
 func AcceptRouterWithTimePolicy(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy certs.CertificateTimePolicy, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (*RouterLink, error) {
-	return acceptRouter(ctx, c, tenant, roots, &policy, nil, agent, candidates...)
+	return acceptRouter(ctx, c, tenant, roots, &policy, nil, RouterDirectConfig{}, agent, candidates...)
 }
 
 // AcceptRouterWithTimePolicyAndOwn also requires the receiver's current,
@@ -137,10 +180,19 @@ func AcceptRouterWithTimePolicyAndOwn(ctx context.Context, c *tls.Conn, tenant m
 	if own == nil {
 		return nil, errors.New("missing own operator receiver credential verifier")
 	}
-	return acceptRouter(ctx, c, tenant, roots, &policy, own, agent, candidates...)
+	return acceptRouter(ctx, c, tenant, roots, &policy, own, RouterDirectConfig{}, agent, candidates...)
 }
 
-func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy *certs.CertificateTimePolicy, own func() (time.Time, error), agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
+// AcceptRouterWithDirect adds optional BLE negotiation to the existing primary
+// identity, clock-policy and own-credential verification path.
+func AcceptRouterWithDirect(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy certs.CertificateTimePolicy, own func() (time.Time, error), direct RouterDirectConfig, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (*RouterLink, error) {
+	if own == nil {
+		return nil, errors.New("missing own operator receiver credential verifier")
+	}
+	return acceptRouter(ctx, c, tenant, roots, &policy, own, direct, agent, candidates...)
+}
+
+func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy *certs.CertificateTimePolicy, own func() (time.Time, error), direct RouterDirectConfig, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
 	stop, err := routerBegin(ctx, c)
 	if err != nil {
 		return nil, err
@@ -152,6 +204,10 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 			_ = c.NetConn().Close()
 		}
 	}()
+	localDirect, err := direct.capability()
+	if err != nil {
+		return nil, err
+	}
 	s := c.ConnectionState()
 	if len(candidates) > 1 || len(s.PeerCertificates) == 0 || len(s.PeerCertificates) > 16 {
 		return nil, errors.New("the router returned an invalid TLS certificate bundle")
@@ -231,21 +287,35 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err != nil {
 		return nil, err
 	}
+	var localDeferred uint32
+	if direct.Eligible != nil && !direct.Eligible(peer, s) {
+		if localDirect != 0 {
+			localDeferred = localDirect
+		}
+		localDirect = 0
+	}
+	selected, deferred := directstream.NegotiatedCarrier(localDirect, localDeferred, hello.Direct, hello.Deferred)
 	window, selectedWindow, err := selectAgentWindow(agentWindowOffer(c), hello.AgentWindow)
 	if err != nil {
 		return nil, err
 	}
-	if err = writeControl(c, control{Kind: "operator-router-ready", AgentWindow: selectedWindow}); err != nil {
+	reply := control{Kind: "operator-router-ready", Direct: selected, AgentWindow: selectedWindow}
+	if deferred {
+		reply.Direct = 0
+		reply.Deferred = selected
+	}
+	if err = writeControl(c, reply); err != nil {
 		return nil, err
 	}
 	var clock func() time.Time
 	if policy != nil {
 		clock = func() time.Time { return policy.BaseTime(policy.WallTime()) }
 	}
-	l, err := routerReadyWithValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent, window)
+	l, err := routerReadyWithDirectValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent, selected, window)
 	if err != nil {
 		return nil, err
 	}
+	l.directDeferred = deferred
 	ok = true
 	return l, nil
 }
@@ -266,12 +336,21 @@ func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.De
 }
 
 func routerReadyWithValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error, window uint32) (*RouterLink, error) {
+	return routerReadyWithDirectValidity(ctx, c, peer, self, server, expires, clock, verifyExpiry, agent, 0, window)
+}
+
+func routerReadyWithDirectValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error, selected, window uint32) (*RouterLink, error) {
 	base, err := readyWithAgentWindow(ctx, c, self.MeshAddress(), server, expires, clock, verifyExpiry, window)
 	if err != nil {
 		return nil, err
 	}
 	base.agentHandler, base.agentContext = agent, ctx
 	l := &RouterLink{Link: base, peer: peer, packets: make(chan []byte, 32), controls: make(chan []byte, 8), transmit: make(chan []byte, 32), routing: make(chan []byte, 32), receivedRouting: make(chan []byte, 32), transmitWake: make(chan struct{}, 1)}
+	l.directSelected = selected
+	if selected != 0 {
+		l.directTransmit = make(chan []byte, 32)
+		l.directRecords = make(chan []byte, 32)
+	}
 	base.workers.Add(2)
 	go func() { defer base.workers.Done(); defer base.Close(); _ = l.readRouter() }()
 	go func() { defer base.workers.Done(); defer base.Close(); l.writeDatagrams() }()
@@ -316,6 +395,15 @@ func (l *RouterLink) readRouter() error {
 				return io.EOF
 			case queue <- data:
 			default: // Datagram overload must not stop parsing routing/management.
+			}
+		case 6:
+			if l.directSelected == 0 {
+				return errors.New("operator direct lane not negotiated")
+			}
+			select {
+			case l.directRecords <- data:
+			case <-l.done:
+				return io.EOF
 			}
 		case 5:
 			select {
@@ -437,29 +525,30 @@ func (l *RouterLink) routerWrite(kind byte, data []byte) error {
 }
 
 func (l *RouterLink) writeDatagrams() {
-	lastRouting := false
+	lastRouting, lastDirect := false, false
 	for {
 		select {
 		case <-l.done:
 			return
 		case <-l.transmitWake:
 		}
-		for len(l.routing)+len(l.transmit) > 0 {
+		for len(l.routing)+len(l.transmit)+len(l.directTransmit) > 0 {
 			// Select only after acquiring the physical writer. Babel arriving
 			// while an earlier metadata frame drains can take this boundary.
 			// The lock alternates with already waiting management/control,
-			// and nextDatagram alternates Babel with waiting IP.
+			// and the queued scheduler alternates direct/datagram turns,
+			// with Babel/IP alternating within each datagram turn.
 			l.writeMu.lockRouting()
 			if !l.Live() {
 				l.writeMu.Unlock()
 				return
 			}
-			data, ok := l.nextDatagram(&lastRouting)
+			kind, data, ok := l.nextRouterFrame(&lastDirect, &lastRouting)
 			if !ok {
 				l.writeMu.Unlock()
 				return
 			}
-			err := l.Link.writeFrame(4, data)
+			err := l.Link.writeFrame(kind, data)
 			l.writeMu.Unlock()
 			if err != nil {
 				_ = l.Close()
@@ -508,3 +597,70 @@ func (l *RouterLink) nextDatagram(lastRouting *bool) ([]byte, bool) {
 // This byte is the existing net packet discriminator (IP=1, Babel=2), not
 // an operator framing extension. Payload validation remains in the Node.
 func routerBabel(data []byte) bool { return len(data) > 0 && data[0] == 2 }
+
+// Alternate direct records with datagrams; the datagram lane independently
+// alternates Babel/IP. A saturated application cannot consume the Babel reserve.
+func (l *RouterLink) nextRouterFrame(lastDirect, lastRouting *bool) (byte, []byte, bool) {
+	if !*lastDirect || len(l.routing)+len(l.transmit) == 0 {
+		select {
+		case data := <-l.directTransmit:
+			*lastDirect = true
+			return 6, data, true
+		default:
+		}
+	}
+	if len(l.routing)+len(l.transmit) > 0 {
+		data, ok := l.nextDatagram(lastRouting)
+		*lastDirect = false
+		return 4, data, ok
+	}
+	return 0, nil, false
+}
+
+// TrySendDirectRecord transfers COPY ownership without blocking the session
+// actor. Queue pressure returns false,nil; the caller retains/retries its record.
+func (l *RouterLink) TrySendDirectRecord(data []byte) (bool, error) {
+	if l.directSelected == 0 || len(data) == 0 || len(data) > directstream.MaxFlowFrame {
+		return false, errors.New("direct lane unavailable or invalid record size")
+	}
+	if !l.policyLive() {
+		return false, net.ErrClosed
+	}
+	select {
+	case <-l.done:
+		return false, net.ErrClosed
+	default:
+	}
+	if len(l.directTransmit) == cap(l.directTransmit) {
+		return false, nil
+	}
+	copyData := bytes.Clone(data)
+	select {
+	case <-l.done:
+		return false, net.ErrClosed
+	case l.directTransmit <- copyData:
+		wake(l.transmitWake)
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+func (l *RouterLink) ReceiveDirectRecord(ctx context.Context) ([]byte, error) {
+	if l.directSelected == 0 {
+		return nil, errors.New("direct lane not negotiated")
+	}
+	if !l.policyLive() {
+		return nil, net.ErrClosed
+	}
+	select {
+	case data := <-l.directRecords:
+		if !l.policyLive() {
+			return nil, net.ErrClosed
+		}
+		return data, nil
+	case <-l.done:
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}

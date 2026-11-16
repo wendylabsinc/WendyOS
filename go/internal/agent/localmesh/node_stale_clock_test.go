@@ -150,9 +150,12 @@ func (c *staleClockBufferedConn) Close() error {
 
 // TLS runs over net.Pipe: the real pinned certificate verifier and Node stream
 // hello/control/gossip/Babel readers still execute, with no OS network traffic.
-func connectStaleClockNodes(t *testing.T, a, b *Node) func() {
+func connectStaleClockNodes(t *testing.T, a, b *Node, carrier ...func(context.Context) context.Context) func() {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if len(carrier) > 0 {
+		ctx = carrier[0](ctx)
+	}
 	aConfig, err := a.Credentials.PeerTLS(b.Credentials.Device)
 	if err != nil {
 		cancel()

@@ -94,6 +94,20 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	if err != nil {
 		return err
 	}
+	if id.BindNode != nil {
+		release, bindErr := id.BindNode(node)
+		if bindErr != nil {
+			if release != nil {
+				release()
+			}
+			_ = node.Stop()
+			_ = node.kernel.Close()
+			return bindErr
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	if id.Agent != nil {
 		metadata := *id.Agent
 		node.advertisement.Agent = &metadata
