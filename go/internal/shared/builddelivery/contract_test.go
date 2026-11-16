@@ -31,16 +31,16 @@ type fixture struct {
 	mint           func(string) (string, string)
 }
 
-func newFixture(t *testing.T) fixture {
+func newFixture(t testing.TB) fixture {
 	return newFixtureAt(t, time.Now().Truncate(time.Second))
 }
 
-func newFixtureAt(t *testing.T, now time.Time) fixture {
+func newFixtureAt(t testing.TB, now time.Time) fixture {
 	t.Helper()
 	return newFixtureWithParameters(t, now, mldsa.MLDSA65())
 }
 
-func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Parameters) fixture {
+func newFixtureWithParameters(t testing.TB, now time.Time, parameters mldsa.Parameters) fixture {
 	t.Helper()
 	rootKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
@@ -93,7 +93,7 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 	claims := Claims{Version: Version, JobID: uuid.NewString(), Operator: operator, Target: target.Principal(), Builder: builderPrincipal, BuilderSPKI: Fingerprint(builder), Reference: "lab/app:latest", InputSHA256: encode(make([]byte, 32)), IssuedAt: now.Unix(), AdmitBefore: now.Add(time.Minute).Unix(), ValidUntil: now.Add(time.Hour).Unix(), Operations: []string{"stage", "publish"}, MaxBytes: 1 << 30}
 	return fixture{now: now, roots: []*x509.Certificate{root}, target: target, builder: builder, builderChain: [][]byte{builder.Raw, rootDER}, claims: claims, op: op, key: key, chain: chain, mint: mint}
 }
-func (f fixture) sign(t *testing.T, c Claims) string {
+func (f fixture) sign(t testing.TB, c Claims) string {
 	t.Helper()
 	j, err := Sign(c, f.op, f.chain, f.key)
 	if err != nil {

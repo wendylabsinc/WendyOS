@@ -35,6 +35,11 @@ func diagnoseRunStreamFailure(ctx context.Context, conn *grpcclient.AgentConnect
 	var category error
 	if !started {
 		phase = "during app start"
+		if status.Code(cause) == codes.FailedPrecondition {
+			return classifyCommandError(errProjectTargetMismatch, &runStreamFailure{
+				phase: phase, cause: cause, message: deviceRefusalOr(cause, "starting container").Error(),
+			})
+		}
 		if !lost {
 			// The device answered with an error. That is the failure, not a
 			// lost connection, so report it rather than a network check.

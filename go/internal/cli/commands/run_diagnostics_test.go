@@ -101,6 +101,43 @@ func TestAttachedRunPathsPreserveRunningAppAfterConnectionLoss(t *testing.T) {
 	}
 }
 
+func TestRunStartRefusalPreservesDeviceMessageClassAndPhase(t *testing.T) {
+	for _, path := range []string{"new", "existing", "existing-detached", "macos"} {
+		t.Run(path, func(t *testing.T) {
+			cause := status.Error(codes.FailedPrecondition, "port 8000 is already used by app other.app")
+			client := &scriptedContainerClient{stream: &deploymentAckStream{err: cause}}
+			conn := &grpcclient.AgentConnection{ContainerService: client}
+			cfg := &appconfig.AppConfig{AppID: "app"}
+			ctx := runContextAtStep(t, "build")
+			var err error
+			switch path {
+			case "new":
+				err = streamRunContainerWithStarted(ctx, conn, client.stream, cfg, runOptions{}, nil)
+			case "existing", "existing-detached":
+				err = startExistingContainer(ctx, conn, cfg, runOptions{detach: path == "existing-detached"})
+			case "macos":
+				conn.ContainerService = macOSScriptedClient{client}
+				err = runMacOSNativeContainer(ctx, conn, cfg, &agentpb.CreateContainerRequest{AppName: cfg.AppID}, runOptions{})
+			}
+			if err == nil {
+				t.Fatal("device refusal was ignored")
+			}
+			if ExecutionErrorClass(err) != "project_target_mismatch" || !strings.Contains(err.Error(), "the device refused the app: port 8000") || strings.Contains(err.Error(), "rpc error") {
+				t.Fatalf("device refusal lost: %v (%s)", err, ExecutionErrorClass(err))
+			}
+			if got := runPhaseFailure(ctx, err).Error(); !strings.HasPrefix(got, "run failed during app start: ") {
+				t.Fatalf("wrong phase: %s", got)
+			}
+			if path != "existing-detached" && !errors.Is(err, cause) {
+				t.Fatalf("stream cause lost: %v", err)
+			}
+			if client.lists() != 0 || len(client.stops()) != 0 {
+				t.Fatal("refusal inspected or stopped a possibly unrelated app")
+			}
+		})
+	}
+}
+
 func TestRecentRuntimeOutputIsBoundedPrivateAndFailureOnly(t *testing.T) {
 	old := jsonOutput
 	jsonOutput = true

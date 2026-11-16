@@ -23,7 +23,7 @@ def package_root(tmp_path):
     return tmp_path, manifest
 
 
-def test_derivative_changes_exactly_two_files_and_preserves_inputs(package_root):
+def test_derivative_changes_declared_files_and_preserves_inputs(package_root):
     root, manifest = package_root
     output = root / "generated"
     original = {entry["path"]: (root / entry["path"]).read_bytes()
@@ -35,7 +35,17 @@ def test_derivative_changes_exactly_two_files_and_preserves_inputs(package_root)
         relative = path[len(SOURCE_PREFIX):]
         if (output / relative).read_bytes() != data:
             changed.append(relative)
-    assert set(changed) == PATCHES.keys()
+    assert set(changed) == PATCHES.keys() == {
+        "unitree_go/msg/SportModeState.msg", "unitree_api/msg/Response.msg",
+        "unitree_go/CMakeLists.txt", "unitree_api/CMakeLists.txt",
+    }
+    for package in ("unitree_api", "unitree_go"):
+        cmake = (output / package / "CMakeLists.txt").read_text()
+        lookup = cmake.index("find_library(builtin_interfaces__rosidl_generator_c_LIB")
+        assert lookup < cmake.index("find_package(ament_cmake REQUIRED)")
+        assert 'if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")' in cmake
+        assert 'PATHS "/opt/ros/$ENV{ROS_DISTRO}/lib"' in cmake
+        assert "NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED" in cmake
     assert b"PathPoint[10] path_point" in (output / "unitree_go/msg/SportModeState.msg").read_bytes()
     assert b"uint8[] binary" in (output / "unitree_api/msg/Response.msg").read_bytes()
     provenance_bytes = (output / "wendy-compatibility.json").read_bytes()
@@ -58,11 +68,16 @@ def test_modified_source_rejected_before_output_write(package_root):
     assert not output.exists()
 
 
-def test_changed_derivative_fails_offline_check(package_root):
+@pytest.mark.parametrize("relative", [
+    "unitree_go/msg/SportModeState.msg",
+    "unitree_go/CMakeLists.txt",
+    "unitree_api/CMakeLists.txt",
+])
+def test_changed_derivative_fails_offline_check(package_root, relative):
     root, manifest = package_root
     output = root / "generated"
     prepare(root, output, manifest)
-    derived = output / "unitree_go/msg/SportModeState.msg"
+    derived = output / relative
     derived.write_text("invalid")
     assert prepare(root, output, manifest, check=True) == 1
     assert derived.read_text() == "invalid"

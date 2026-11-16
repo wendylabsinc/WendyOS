@@ -1188,6 +1188,8 @@ func multiServiceCreateConfig(appCfg *appconfig.AppConfig, name string, svc *app
 		Frameworks:  appCfg.Frameworks,
 		Readiness:   svc.Readiness,
 		Hooks:       svc.Hooks,
+		// Tells the device whether the app still has a sketch.
+		MCU: appCfg.MCU,
 	}
 	cfg.Entitlements = append(append([]appconfig.Entitlement{}, appCfg.Entitlements...), svc.Entitlements...)
 	cfg.Entitlements = deduplicateEntitlements(cfg.Entitlements)
@@ -1288,10 +1290,10 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 				AppName: containerName,
 			})
 			if err != nil {
-				return fmt.Errorf("starting service %s: %w", name, err)
+				return deviceRefusalOr(err, "starting service "+name)
 			}
 			if err := awaitStarted(stream); err != nil {
-				return fmt.Errorf("waiting for service %s to start: %w", name, err)
+				return deviceRefusalOr(err, "waiting for service "+name+" to start")
 			}
 		}
 		cliLogln("App group %s running in detached mode.", appID)
@@ -1320,11 +1322,11 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			})
 			if err != nil {
 				startCancel()
-				return fmt.Errorf("starting service %s: %w", name, err)
+				return deviceRefusalOr(err, "starting service "+name)
 			}
 			if err := awaitStarted(stream); err != nil {
 				startCancel()
-				return fmt.Errorf("waiting for service %s to start: %w", name, err)
+				return deviceRefusalOr(err, "waiting for service "+name+" to start")
 			}
 			startCancel()
 			runner.startAsync(runCtx, svcLifecycleCfgs[name])
@@ -1370,13 +1372,13 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			runCancel()
 			wg.Wait()
 			runner.reap()
-			return fmt.Errorf("starting service %s: %w", name, err)
+			return deviceRefusalOr(err, "starting service "+name)
 		}
 		if _, err := stream.Recv(); err != nil && err != io.EOF {
 			runCancel()
 			wg.Wait()
 			runner.reap()
-			return fmt.Errorf("waiting for service %s to start: %w", name, err)
+			return deviceRefusalOr(err, "waiting for service "+name+" to start")
 		}
 		// This service's task is running (Started ack received). Fire its
 		// readiness→announce→postStart sequence on a goroutine so a slow or

@@ -130,7 +130,7 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 			AppName: appName,
 		})
 		if startErr != nil {
-			return nil, false, fmt.Errorf("starting container: %w", startErr)
+			return nil, false, deviceRefusalOr(startErr, "starting container")
 		}
 		return startStream, false, nil
 	}
@@ -301,7 +301,7 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 			break
 		}
 		if recvErr != nil {
-			return fmt.Errorf("creating container: %w", recvErr)
+			return deviceRefusalOr(recvErr, "creating container")
 		}
 
 		switch r := resp.GetResponseType().(type) {
@@ -344,7 +344,7 @@ func isUnimplementedRPCError(err error) bool {
 func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
 	resp, err := svc.CreateContainer(ctx, req)
 	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+		return deviceRefusalOr(err, "creating container")
 	}
 	noteImageDigest(ctx, resp.GetImageDigest())
 	return nil
@@ -389,7 +389,7 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 				return
 			}
 			if recvErr != nil {
-				createErr = fmt.Errorf("creating container: %w", recvErr)
+				createErr = deviceRefusalOr(recvErr, "creating container")
 				if !progressDone {
 					prog.Send(tui.ProgressDoneMsg{Err: createErr})
 				}
@@ -471,7 +471,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 			if isUnimplementedRPCError(err) {
 				return fallbackCreateContainerWithoutProgress(ctx, svc, req)
 			}
-			return fmt.Errorf("creating container: %w", err)
+			return deviceRefusalOr(err, "creating container")
 		}
 		err = createContainerWithProgressPlain(stream)
 		if isUnimplementedRPCError(err) {
@@ -488,7 +488,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		if isUnimplementedRPCError(err) {
 			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
 		}
-		return fmt.Errorf("creating container: %w", err)
+		return deviceRefusalOr(err, "creating container")
 	}
 	if err := createContainerWithProgressTUI(cancel, stream, !progressHintsOff(ctx)); err != nil {
 		if isUnimplementedRPCError(err) {
@@ -1191,7 +1191,7 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	noteWaitReadyApp(ctx, appCfg.AppID)
 
 	if err := appCfg.Validate(); err != nil {
-		return commandErrorf(errConfigInvalid, "invalid wendy.json: %w", err)
+		return invalidAppConfigError(err)
 	}
 	activationStep(ctx, "connect", map[string]string{"project_recognized": "true"})
 	if err := warnAppConfigFile(cfgPath); err != nil {
@@ -1271,6 +1271,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	// Provider-based run path.
 	if target.External != nil && target.Provider != nil {
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "provider targets"); err != nil {
+			return err
+		}
+		if err := rejectMCUForProvider(appCfg); err != nil {
 			return err
 		}
 		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, appCfg.Entitlements, opts)
@@ -1456,10 +1459,10 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return deviceRefusalOr(err, "starting container")
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return deviceRefusalOr(err, "waiting for container start")
 		}
 		opts.reportDeployStarted()
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
@@ -1475,10 +1478,10 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return deviceRefusalOr(err, "starting container")
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return deviceRefusalOr(err, "waiting for container start")
 		}
 		opts.reportDeployStarted()
 		startCancel()
@@ -1500,7 +1503,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		AppName: appCfg.ContainerName(),
 	})
 	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
+		return deviceRefusalOr(err, "starting container")
 	}
 
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
@@ -1558,7 +1561,7 @@ func macOSNativeCreateContainerError(err error, appCfg *appconfig.AppConfig) err
 	if appCfg != nil && appCfg.Brewfile != "" {
 		return fmt.Errorf("creating container (including brew bundle): %w", err)
 	}
-	return fmt.Errorf("creating container: %w", err)
+	return deviceRefusalOr(err, "creating container")
 }
 
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
@@ -2251,7 +2254,14 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			return err
 		}
 	}
-	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
+	if err := preflightHostPorts(ctx, conn, appCfg); err != nil {
+		return err
+	}
+	mcu, err := preflightMCU(ctx, conn, cwd, appCfg, opts)
+	if err != nil {
+		return err
+	}
+	if err := registerCloudAppsFn(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
 	}
 	if opts.release != nil {
@@ -2262,7 +2272,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	metrics := newDeployMetrics(opts)
 	metrics.ctx = ctx
-	err := runWithAgentRecorded(ctx, conn, cwd, appCfg, opts, metrics)
+	err = deployMCU(ctx, conn, mcu, appCfg, opts)
+	if err == nil {
+		err = runWithAgentRecordedFn(ctx, conn, cwd, appCfg, opts, metrics)
+	}
 	metrics.emit(err)
 	if opts.release != nil {
 		if recErr := opts.release.outcome(err); recErr != nil {
@@ -2271,6 +2284,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	return err
 }
+
+// runWithAgentRecordedFn lets tests see whether the container deploy ran.
+var runWithAgentRecordedFn = runWithAgentRecorded
 
 func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions, metrics *deployMetrics) error {
 	// The start sites that receive the agent's Started acknowledgement report
@@ -2915,10 +2931,10 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return inRunPhase("app start", fmt.Errorf("starting container: %w", err))
+			return inRunPhase("app start", deviceRefusalOr(err, "starting container"))
 		}
 		if err := awaitStarted(stream); err != nil {
-			return inRunPhase("app start", fmt.Errorf("waiting for container start: %w", err))
+			return inRunPhase("app start", deviceRefusalOr(err, "waiting for container start"))
 		}
 		opts.reportDeployStarted()
 		if !isRobotTour(ctx) {
@@ -2944,10 +2960,10 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return inRunPhase("app start", fmt.Errorf("starting container: %w", err))
+			return inRunPhase("app start", deviceRefusalOr(err, "starting container"))
 		}
 		if err := awaitStarted(stream); err != nil {
-			return inRunPhase("app start", fmt.Errorf("waiting for container start: %w", err))
+			return inRunPhase("app start", deviceRefusalOr(err, "waiting for container start"))
 		}
 		opts.reportDeployStarted()
 		startCancel()
@@ -3006,7 +3022,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 					AppName: appCfg.ContainerName(),
 				})
 				if startErr != nil {
-					return inRunPhase("app start", fmt.Errorf("starting container: %w", startErr))
+					return inRunPhase("app start", deviceRefusalOr(startErr, "starting container"))
 				}
 				outStream = startStream
 				stdinAttempted = false
