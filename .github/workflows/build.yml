@@ -774,7 +774,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     needs: [determine-version, build, build-cli-linux]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -889,7 +889,7 @@ jobs:
     name: Package Windows MSI (${{ matrix.arch }})
     runs-on: windows-latest
     needs: [determine-version, build]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       id-token: write
       contents: read
