@@ -29,6 +29,50 @@ const maxHostnameLen = 63
 // ReassertHostnameAdvertisement.
 const avahiServiceFile = "/etc/avahi/services/wendyos-mdns.service"
 
+// deviceNamePath holds the name the device was given when WendyOS was
+// installed, chosen or generated. The hostname derived from it is
+// "wendyos-<name>"; see configpartition.applyDeviceName.
+const deviceNamePath = "/etc/wendyos/device-name"
+
+// DeviceName returns the name this device goes by: the one set with 'wendy
+// device rename', else the one it was given at install, else the host's own
+// name. The first two are what the mDNS advertisement carries as its `name`
+// record, in the same order of precedence (see ReassertHostnameAdvertisement),
+// so this is the name 'wendy discover' lists the device under, which it shows
+// title-cased ("orin-nano-pr319" as "Orin Nano Pr319").
+//
+// A host that is not a WendyOS image has neither file and goes by its
+// hostname. The name the device has in Wendy Cloud is not consulted: the agent
+// is never told it. 'wendy device rename' sets both, but 'wendy device enroll'
+// names the Cloud record without renaming the device, so the two can differ.
+//
+// It returns "" when the host has no name to give.
+func DeviceName() string {
+	return deviceName(explicitHostnamePath, deviceNamePath, os.Hostname)
+}
+
+// deviceName is the testable core of DeviceName, with the two name files and
+// the hostname lookup injected.
+func deviceName(renamePath, installPath string, hostname func() (string, error)) string {
+	for _, path := range []string{renamePath, installPath} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // absent on a device never renamed, or not a WendyOS image
+		}
+		// Both files hold a name the device publishes as a DNS label. Anything
+		// else is not a name it goes by, so the next source is used instead.
+		if name := strings.TrimSpace(string(data)); validHostname(name) {
+			return name
+		}
+	}
+	host, err := hostname()
+	if err != nil {
+		return ""
+	}
+	// macOS reports its hostname with the mDNS domain attached.
+	return strings.TrimSuffix(strings.TrimSpace(host), ".local")
+}
+
 // validHostname reports whether name is a valid DNS label suitable for use as a
 // literal hostname: 1–63 characters, starting with a lowercase letter, followed
 // by lowercase letters, digits, or hyphens, and not ending in a hyphen.

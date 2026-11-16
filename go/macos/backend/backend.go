@@ -721,8 +721,8 @@ func (b *Backend) Account() (commands.DesktopAccountInfo, error) {
 	return commands.DesktopAccount()
 }
 
-func (b *Backend) Accounts() ([]commands.DesktopAccountInfo, error) {
+func (b *Backend) Accounts() ([]SavedAccountInfo, error) {
 	_, done := b.begin()
 	defer done()
-	return commands.DesktopAccounts()
+	return savedAccountInfos()
 }
