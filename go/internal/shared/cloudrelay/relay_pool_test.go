@@ -712,15 +712,19 @@ func TestRelayPoolCapacityWaitHonorsAdmissionExpiry(t *testing.T) {
 		t.Cleanup(release)
 	}
 	artifact, grant := broker.grant(t, endpoint)
-	grant.claims.Exp = time.Now().Unix() + 1
+	// Whole-second claims: +2 leaves between one and two seconds to be waiting.
+	grant.claims.Exp = time.Now().Unix() + 2
 	grant.claims.RelayExp = time.Now().Unix() + 30
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	started := time.Now()
-	if _, err := join(ctx, endpoint, artifact, grant.claims, grant.key, pb.JoinRole_JOIN_ROLE_CALLER, v, "wendy-agent"); !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	_, err := join(ctx, endpoint, artifact, grant.claims, grant.key, pb.JoinRole_JOIN_ROLE_CALLER, v, "wendy-agent")
+	// Nobody cancelled this session. Logs and callers must see a timeout and
+	// its reason, since cancellations are routinely treated as uninteresting.
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || !errors.Is(err, errRelayPoolBusy) {
 		t.Fatalf("expired waiting admission: %v", err)
 	}
-	if time.Since(started) > 2*time.Second {
+	if time.Since(started) > 3*time.Second {
 		t.Fatal("waited for relay expiry instead of admission expiry")
 	}
 	if dials.Load() != relayPoolLimit {

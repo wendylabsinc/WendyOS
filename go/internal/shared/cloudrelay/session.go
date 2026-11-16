@@ -24,6 +24,9 @@ type Session struct {
 	closed    bool
 }
 
+// errRelayAdmissionExpired is a timeout: nobody cancelled the session.
+var errRelayAdmissionExpired = fmt.Errorf("Cloud relay grant expired before admission: %w", context.DeadlineExceeded)
+
 func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c claims, key *ecdsa.PrivateKey, role pb.JoinRole, verifier *Verifier, service string) (*Session, error) {
 	ctx, cancel := context.WithDeadline(ctx, time.Unix(c.RelayExp, 0))
 	// Admission, including waiting for pool capacity, must finish before Exp.
@@ -32,7 +35,9 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 		cancel()
 		return nil, context.DeadlineExceeded
 	}
-	timer := time.AfterFunc(time.Until(admissionDeadline), cancel)
+	// Cancelling the relay context above still ends this one and frees it.
+	ctx, expire := context.WithCancelCause(ctx)
+	timer := time.AfterFunc(time.Until(admissionDeadline), func() { expire(errRelayAdmissionExpired) })
 	defer timer.Stop()
 	ctx = metadata.NewOutgoingContext(ctx, metadata.MD{})
 	conn, release, err := verifier.relays.acquire(ctx, relayPoolKey{endpoint: broker.Endpoint, audience: broker.Audience, role: role, management: service == "wendy-agent"}, verifier.dialRelay)

@@ -2,6 +2,8 @@ package cloudrelay
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -98,6 +100,10 @@ func (p *relayPool) removeLocked(entry *relayTransport) {
 	p.wakeLocked()
 }
 
+// errRelayPoolBusy marks a session that ran out of time while every connection
+// slot carried another session.
+var errRelayPoolBusy = errors.New("all Cloud relay connections are in use")
+
 func relayHealthy(entry *relayTransport) bool {
 	if entry.retired {
 		return false
@@ -120,9 +126,19 @@ func (p *relayPool) leaseLocked(entry *relayTransport) (*grpc.ClientConn, func()
 }
 
 func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(string) (*grpc.ClientConn, error)) (*grpc.ClientConn, func(), error) {
+	// The cause separates an expired grant from a caller's cancellation. A
+	// session that also waited for a slot says so: a full pool is otherwise
+	// invisible in the error.
+	busy := false
+	stopped := func() error {
+		if busy {
+			return fmt.Errorf("%w: %w", errRelayPoolBusy, context.Cause(ctx))
+		}
+		return context.Cause(ctx)
+	}
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+		if ctx.Err() != nil {
+			return nil, nil, stopped()
 		}
 		p.mu.Lock()
 		if p.changed == nil {
@@ -167,7 +183,7 @@ func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(str
 			case <-changed:
 				continue
 			case <-ctx.Done():
-				return nil, nil, ctx.Err()
+				return nil, nil, stopped()
 			}
 		}
 		if len(p.entries) >= relayPoolLimit && idle != nil {
@@ -186,11 +202,12 @@ func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(str
 			}
 			changed := p.changed
 			p.mu.Unlock()
+			busy = true
 			select {
 			case <-changed:
 				continue
 			case <-ctx.Done():
-				return nil, nil, ctx.Err()
+				return nil, nil, stopped()
 			}
 		}
 		entry := &relayTransport{key: key, refs: 1, created: time.Now(), ready: make(chan struct{})}
@@ -213,9 +230,9 @@ func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(str
 		p.wakeLocked()
 		p.mu.Unlock()
 		release := p.release(entry)
-		if err := ctx.Err(); err != nil {
+		if ctx.Err() != nil {
 			release()
-			return nil, nil, err
+			return nil, nil, stopped()
 		}
 		return conn, release, nil
 	}
