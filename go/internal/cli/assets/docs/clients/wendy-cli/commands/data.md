@@ -539,9 +539,10 @@ gone, and the agent logs that too. Cameras that deliver fewer frames than the
 rate are not reported as a slow model, and neither is the CPU while a TensorRT
 engine is on its way.
 
-Each report from the model process, about every 10 seconds, is also published
-as OpenTelemetry metrics of the agent (`service.name` `wendy-agent`, scope
-`wendy.data.inference`):
+Each report from the model process is also published as OpenTelemetry metrics
+of the agent (`service.name` `wendy-agent`, scope `wendy.data.inference`). Reports
+are sent between frames, at most one every 10 seconds, so a slow model reports
+less often.
 
 | Metric | Type | Value |
 |---|---|---|
