@@ -22,42 +22,31 @@ attributes:
 		"spram_size": int64(0),
 		"wendy_net":  true,
 	}
-	wantProfile := "board: 'yes'\nflash_size: 8MiB\nspram_size: 0\nwendy_net: true"
+	wantProfile := `{"board":"yes","flash_size":"8MiB","spram_size":0,"wendy_net":true}`
 	if got := m.BuildProfile(inputs); got != wantProfile {
 		t.Errorf("BuildProfile = %q, want %q", got, wantProfile)
 	}
 	if got := m.BuildProfile(nil); got != "" {
 		t.Errorf("BuildProfile(nil) = %q, want empty", got)
 	}
-	wantLine := `CONFIG_WENDY_BUILD_PROFILE="a: \"x\"\\nb: c\\d"`
-	if got := BuildProfileLine("a: \"x\"\nb: c\\d"); got != wantLine {
+	wantLine := `CONFIG_WENDY_BUILD_PROFILE="{\"a\":\"x\\\\y\"}"`
+	if got := BuildProfileLine(`{"a":"x\\y"}`); got != wantLine {
 		t.Errorf("BuildProfileLine = %s, want %s", got, wantLine)
 	}
 }
 
-// TestYAMLString checks the output of yaml.safe_dump({"k": s}) with PyYAML
-// 6.0.3 for each string.
-func TestYAMLString(t *testing.T) {
+// TestJSONString checks the output of json.dumps(s, ensure_ascii=False)
+// with Python 3 for each string.
+func TestJSONString(t *testing.T) {
 	for in, want := range map[string]string{
-		"seeed_xiao": "seeed_xiao",
-		"esp32c6":    "esp32c6",
-		"4MiB":       "4MiB",
-		"yes":        "'yes'",
-		"Off":        "'Off'",
-		"123":        "'123'",
-		"0x1F":       "'0x1F'",
-		"1.5":        "'1.5'",
-		"null":       "'null'",
-		"":           "''",
-		"a b":        "a b",
-		"2024-01-02": "'2024-01-02'",
-		"it's":       "it's",
-		"a/b":        "a/b",
-		"-x":         "-x",
-		"a.b-c":      "a.b-c",
+		"seeed_xiao": `"seeed_xiao"`,
+		"4MiB":       `"4MiB"`,
+		"":           `""`,
+		`a"b\c`:      `"a\"b\\c"`,
+		"<&>":        `"<&>"`,
 	} {
-		if got := yamlString(in); got != want {
-			t.Errorf("yamlString(%q) = %s, want %s", in, got, want)
+		if got := jsonString(in); got != want {
+			t.Errorf("jsonString(%q) = %s, want %s", in, got, want)
 		}
 	}
 }

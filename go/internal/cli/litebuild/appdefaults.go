@@ -27,10 +27,11 @@ const VersionOption = "CONFIG_WENDY_VERSION"
 // app project does not have, so AppDefaultsText leaves them out.
 const partitionTablePrefix = "CONFIG_PARTITION_TABLE_"
 
-// ParseBuildProfile reads a build profile, the flat YAML text that
-// BuildProfile writes and CONFIG_WENDY_BUILD_PROFILE stores, into input
-// values. An unknown attribute or a value that the attribute does not
-// accept is an error. An empty text gives no values.
+// ParseBuildProfile reads a build profile, the JSON text that BuildProfile
+// writes and CONFIG_WENDY_BUILD_PROFILE stores, into input values. It uses
+// a YAML parser: JSON is YAML, and older Wendy Lite versions wrote flat
+// YAML, one "name: value" per line. An unknown attribute or a value that the
+// attribute does not accept is an error. An empty text gives no values.
 func ParseBuildProfile(m *Model, text string) (map[string]any, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
@@ -200,6 +201,9 @@ func CheckAppDefaults(projectPath, version, profile string) (AppDefaultsStatus, 
 	status := AppDefaultsStatus{
 		State:   AppDefaultsOutdated,
 		Version: values[VersionOption],
+		// Older Wendy Lite versions wrote flat YAML with the 2 characters
+		// \n between the lines. Configuration values have no \n, so this
+		// does not change a JSON profile.
 		Profile: strings.ReplaceAll(values[BuildProfileOption], `\n`, "\n"),
 	}
 	if status.Version == version && sameProfile(status.Profile, profile) {

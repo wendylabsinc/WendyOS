@@ -377,7 +377,7 @@ func TestProviderBuildOffersLiteAppDefaults(t *testing.T) {
 				t.Fatal(readErr)
 			}
 			for _, want := range []string{
-				`CONFIG_WENDY_BUILD_PROFILE="board: c61_board\\ncloud_tunnel: true"` + "\n" + `CONFIG_WENDY_VERSION="` + testLiteVersion + `"`,
+				`CONFIG_WENDY_BUILD_PROFILE="{\"board\":\"c61_board\",\"cloud_tunnel\":true}"` + "\n" + `CONFIG_WENDY_VERSION="` + testLiteVersion + `"`,
 				"CONFIG_WENDY_CLOUD_TUNNEL=y",
 				"from wendy-lite 6e2ae72:master_config.yaml",
 			} {

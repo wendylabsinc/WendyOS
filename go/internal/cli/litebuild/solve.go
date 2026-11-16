@@ -1,8 +1,8 @@
 package litebuild
 
 import (
+	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -346,11 +346,13 @@ func (m *Model) Assignments(inputs map[string]any) []string {
 	return items
 }
 
-// BuildProfile returns the input values as flat YAML, one "name: value" per
-// line, in declaration order, as build_profile in conf_model.py. No inputs
-// give "".
+// BuildProfile returns the input values as a JSON object on one line, in
+// declaration order, as build_profile in conf_model.py (json.dumps with
+// separators=(",", ":") and ensure_ascii=False), for example
+// {"board":"m5_stamp_s3","app_type":"native"}. JSON is YAML, so
+// ParseBuildProfile reads it. No inputs give "".
 func (m *Model) BuildProfile(inputs map[string]any) string {
-	var lines []string
+	var items []string
 	for _, a := range m.Order {
 		v := inputs[a.Name]
 		if v == nil {
@@ -361,77 +363,38 @@ func (m *Model) BuildProfile(inputs map[string]any) string {
 		case bool:
 			text = fmt.Sprint(x)
 		case int64:
+			// A size with a unit is a text ("8MiB"), as to_yaml gives it.
 			if s := sizeText(x); strings.ContainsAny(s, "KMG") {
-				text = yamlString(s)
+				text = jsonString(s)
 			} else {
 				text = s
 			}
 		default:
-			text = yamlString(fmt.Sprint(x))
+			text = jsonString(fmt.Sprint(x))
 		}
-		lines = append(lines, a.Name+": "+text)
+		items = append(items, jsonString(a.Name)+":"+text)
 	}
-	return strings.Join(lines, "\n")
+	if len(items) == 0 {
+		return ""
+	}
+	return "{" + strings.Join(items, ",") + "}"
 }
 
-// BuildProfileLine returns the sdkconfig line that gives text to
-// CONFIG_WENDY_BUILD_PROFILE. Kconfig cannot store a newline, so each
-// newline becomes the 2 characters \n. Then the value is escaped as Kconfig
-// does: \ becomes \\, then " becomes \".
+// jsonString returns s as a JSON string. <, > and & stay as they are, as
+// with json.dumps.
+func jsonString(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s) // a string always encodes
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// BuildProfileLine returns the sdkconfig line that gives text, a build
+// profile on one line, to CONFIG_WENDY_BUILD_PROFILE. The value is escaped
+// as Kconfig does: \ becomes \\, then " becomes \".
 func BuildProfileLine(text string) string {
-	value := strings.ReplaceAll(text, "\n", `\n`)
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `"`, `\"`)
-	return BuildProfileOption + `="` + value + `"`
-}
-
-// The implicit resolvers of PyYAML (YAML 1.1): a plain string that matches
-// one of them is read back as another type, so safe_dump quotes it.
-var (
-	yamlResolvers = []*regexp.Regexp{
-		regexp.MustCompile(`^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$`),
-		regexp.MustCompile(`^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`),
-		regexp.MustCompile(`^(?:[-+]?0b[0-1_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)$`),
-		regexp.MustCompile(`^(?:~|null|Null|NULL|)$`),
-		regexp.MustCompile(`^[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?`),
-	}
-)
-
-// yamlString writes a string as yaml.safe_dump does in a block map: plain
-// when YAML reads it back as the same string, else in single quotes. It
-// follows the PyYAML rules for printable ASCII text; other text (newlines,
-// non-ASCII) is not in a configuration value.
-func yamlString(s string) string {
-	if yamlPlain(s) {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-func yamlPlain(s string) bool {
-	if s == "" || strings.TrimSpace(s) != s || strings.HasPrefix(s, "---") || strings.HasPrefix(s, "...") {
-		return false
-	}
-	for _, re := range yamlResolvers {
-		if re.MatchString(s) {
-			return false
-		}
-	}
-	if strings.ContainsAny(s[:1], "#,[]{}&*!|>'\"%@`") {
-		return false
-	}
-	if strings.ContainsAny(s[:1], "-?:") && (len(s) == 1 || s[1] == ' ') {
-		return false
-	}
-	if strings.Contains(s, ": ") || strings.Contains(s, " #") || strings.HasSuffix(s, ":") {
-		return false
-	}
-	for _, r := range s {
-		if r < 0x20 || r > 0x7e {
-			return false
-		}
-	}
-	return true
+	return BuildProfileOption + "=" + kconfigString(text)
 }
 
 // SdkconfigText returns the text of sdkconfig.wendy: the header comments,
