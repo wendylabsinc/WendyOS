@@ -3,6 +3,7 @@ package meshoperatorlink
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"sync"
@@ -34,7 +35,9 @@ func agentTLSState(raw net.Conn, server bool) (tls.ConnectionState, bool) {
 	if closed {
 		return tls.ConnectionState{}, false
 	}
-	return c.link.conn.ConnectionState(), true
+	state := c.link.conn.ConnectionState()
+	state.PeerCertificates = append([]*x509.Certificate(nil), c.link.peerCertificates...)
+	return state, true
 }
 func agentTLSInfo(state tls.ConnectionState) credentials.AuthInfo {
 	return credentials.TLSInfo{State: state, CommonAuthInfo: credentials.CommonAuthInfo{SecurityLevel: credentials.PrivacyAndIntegrity}}

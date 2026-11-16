@@ -474,6 +474,10 @@ func newAgentTLSConfig(
 			return inner(cs)
 		}
 	}
+	issuers, err := certs.ParseCertsFromPEM([]byte(certInfo.PemCertificateChain))
+	if err != nil {
+		return nil, err
+	}
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		GetClientCertificate: func(request *tls.CertificateRequestInfo) (*tls.Certificate, error) {
@@ -486,7 +490,8 @@ func newAgentTLSConfig(
 			if err := supported.SupportsCertificate(&cert); err != nil {
 				return nil, fmt.Errorf("device cannot use the operator certificate: %w", err)
 			}
-			return &cert, nil
+			stapled := certs.StapleClientCertificate(request.Context(), cert, issuers)
+			return &stapled, nil
 		},
 		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
 		MinVersion:         tls.VersionTLS12,

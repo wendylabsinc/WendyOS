@@ -92,7 +92,7 @@ func (p *PKI) Issue(t testing.TB, serial int64, principal string) Leaf {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	template := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), URIs: []*url.URL{u}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, CRLDistributionPoints: []string{Endpoint}}
+	template := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), URIs: []*url.URL{u}, DNSNames: []string{"localhost"}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, CRLDistributionPoints: []string{Endpoint}}
 	raw, err := x509.CreateCertificate(rand.Reader, template, p.CA, key.Public(), p.Key)
 	if err != nil {
 		t.Fatal(err)

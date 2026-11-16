@@ -989,8 +989,8 @@ func main() {
 
 	meshAgentListener := meshoperatorlink.NewAgentListener()
 	defer meshAgentListener.Close()
-	// Raw inner TLS from an already authenticated mesh app session is isolated
-	// from the legacy physical and primary-operator listener's clock policy.
+	// Raw inner TLS from an already authenticated mesh app session has its
+	// own listener, using the same local certificate clock as operator ingress.
 	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
 	defer meshNativeListener.Close()
 	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) error {
@@ -1060,7 +1060,17 @@ func main() {
 				zap.String("mode", effectiveMode.String()))
 		}
 
-		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedScope, effectiveMode,
+		// Use the same local boot-time floor as mesh ingress. Raw wall time can
+		// move backwards and must not make expired revocation evidence fresh.
+		policy := certs.CertificateTimePolicy{Floor: func() time.Time { return floor }}
+		if meshBootClock != nil {
+			if err := meshBootClock.AddProvisionedCertificate(certPEM); err != nil {
+				logger.Error("Failed to anchor operator certificate clock", zap.Error(err))
+				return
+			}
+			policy = meshBootClock.Policy()
+		}
+		srv, err := mtls.NewServerWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, effectiveMode,
 			// mTLS authentication and the exact-method device RPC allowlist are
 			// embedded inside mtls.NewServer before these error interceptors.
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),

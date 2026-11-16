@@ -2,6 +2,7 @@ package certs
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -58,6 +59,22 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 		pair.OCSPStaple = revocation.Default.Staple(append(append([]*x509.Certificate{parsed}, embedded...), chain...))
 	}
 	return pair, nil
+}
+
+// StapleClientCertificate selects current evidence at each handshake, including
+// reconnects on a retained TLS config. Issuers are local chain material, not
+// peer-supplied trust. The returned certificate owns its updated staple.
+func StapleClientCertificate(ctx context.Context, pair tls.Certificate, issuers []*x509.Certificate) tls.Certificate {
+	chain := make([]*x509.Certificate, 0, len(pair.Certificate)+len(issuers))
+	for _, der := range pair.Certificate {
+		certificate, err := x509.ParseCertificate(der)
+		if err != nil {
+			return pair
+		}
+		chain = append(chain, certificate)
+	}
+	pair.OCSPStaple = revocation.Default.StapleForHandshake(ctx, append(chain, issuers...))
+	return pair
 }
 
 // VerifyPeerCertificateChain verifies signatures through peer-supplied issuers

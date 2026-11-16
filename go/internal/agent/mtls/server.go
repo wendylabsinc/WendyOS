@@ -11,13 +11,11 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -49,15 +47,15 @@ func floorClock(notBeforeFloor time.Time) func(time.Time, time.Time) (time.Time,
 // NewTLSConfigWithTimePolicy selects an explicit local boot-clock policy.
 // It never uses an announcement timestamp to establish certificate trust.
 func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
-	cfg, _, err := newPolicyTLSConfig(certPEM, chainPEM, keyPEM, logger, policy)
+	cfg, _, err := newPolicyTLSConfig(certPEM, chainPEM, keyPEM, logger, policy, false)
 	return cfg, err
 }
 
-func newPolicyTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, peerCheck, error) {
+func newPolicyTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, logRemote bool) (*tls.Config, peerCheck, error) {
 	cfg, check, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(wall, nb time.Time) (time.Time, time.Time) {
 		base := policy.BaseTime(wall)
 		return base, policy.LeafTimeAtBase(base, nb)
-	}, policy.WallTime, true, false)
+	}, policy.WallTime, true, logRemote)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -96,9 +94,8 @@ type peerCheck func(raw [][]byte, level revocation.Level) error
 // The exported constructors leave it off. Their callers add checks by wrapping
 // VerifyPeerCertificate on the config they get back, and a handshake served
 // from the copy would skip that wrapper. NewServer turns it on: its callers
-// never hold the config, so none can wrap it. NewServerWithTimePolicy does
-// not, because it is served only on the in-process mesh pipe, whose
-// connections have no address.
+// never hold the config, so none can wrap it. NewServerWithTimePolicy also
+// enables it for physical listeners.
 func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly, logRemote bool) (*tls.Config, peerCheck, error) {
 	if chainPEM == "" {
 		return nil, nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
@@ -276,7 +273,7 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 }
 
 func NewServerWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
-	cfg, check, err := newPolicyTLSConfig(certPEM, chainPEM, keyPEM, logger, policy)
+	cfg, check, err := newPolicyTLSConfig(certPEM, chainPEM, keyPEM, logger, policy, true)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
@@ -290,10 +287,9 @@ func newServerWithTLSConfig(tlsConfig *tls.Config, check peerCheck, chainPEM str
 		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
 	}
 	tlsConfig.NextProtos = []string{"h2"}
-	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
 
-	checkLive := livePeerCheck(check)
-	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
+	checkLive := livePeerCheck(check, revocation.Fresh)
+	creds := meshoperatorlink.AgentTransportCredentials(newPeerCredentials(tlsConfig, known))
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
 		// mTLS interceptors are mandatory: they run before caller-provided chained interceptors
@@ -304,7 +300,7 @@ func newServerWithTLSConfig(tlsConfig *tls.Config, check peerCheck, chainPEM str
 			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.ChainStreamInterceptor(
 			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
-			liveStreamInterceptor(checkLive),
+			liveStreamInterceptor(checkLive, livePeerCheck(check, revocation.RevokedOnly)),
 			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),

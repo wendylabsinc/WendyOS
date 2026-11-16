@@ -39,8 +39,12 @@ type RouterLink struct {
 	lastReceivedRouting atomic.Bool
 }
 
-func (l *RouterLink) Peer() meshid.Device                  { return l.peer }
-func (l *RouterLink) ConnectionState() tls.ConnectionState { return l.conn.ConnectionState() }
+func (l *RouterLink) Peer() meshid.Device { return l.peer }
+func (l *RouterLink) ConnectionState() tls.ConnectionState {
+	state := l.conn.ConnectionState()
+	state.PeerCertificates = append([]*x509.Certificate(nil), l.peerCertificates...)
+	return state
+}
 
 func routerBegin(ctx context.Context, c *tls.Conn) (func(), error) {
 	if c == nil {
@@ -242,7 +246,7 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if policy != nil {
 		clock = func() time.Time { return policy.BaseTime(policy.WallTime()) }
 	}
-	l, err := routerReadyWithValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent, window)
+	l, err := routerReadyWithValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent, window, certificates...)
 	if err != nil {
 		return nil, err
 	}
@@ -265,8 +269,8 @@ func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.De
 	return routerReadyWithValidity(ctx, c, peer, self, server, expires, clock, nil, agent, agentWindow)
 }
 
-func routerReadyWithValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error, window uint32) (*RouterLink, error) {
-	base, err := readyWithAgentWindow(ctx, c, self.MeshAddress(), server, expires, clock, verifyExpiry, window)
+func routerReadyWithValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error, window uint32, certificates ...*x509.Certificate) (*RouterLink, error) {
+	base, err := readyWithAgentWindow(ctx, c, self.MeshAddress(), server, expires, clock, verifyExpiry, window, certificates...)
 	if err != nil {
 		return nil, err
 	}

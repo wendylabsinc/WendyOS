@@ -12,7 +12,7 @@ partition a site.
 | --- | --- | --- |
 | `RevokedOnly` | Established connections, mesh carriers, device and server certificates, the CLI verifying a device | Accepted |
 | `Session` | A new operator session on the agent's gRPC server, full or resumed | Accepted within the grace; refused beyond it or when there is no CRL at all |
-| `Fresh` | Destructive RPCs: unprovision, OS and agent update, volume removal | Refused |
+| `Fresh` | Every authenticated RPC admission, unary or streaming | Refused |
 
 `Session` and `Fresh` only refuse when the fleet configures a grace with
 `WENDY_CRL_GRACE` (a Go duration; `0` demands a current CRL). Without it, aged
@@ -20,14 +20,14 @@ or missing evidence is logged once an hour per issuer and accepted at every
 level. With it, evidence is in one of three states:
 
 - Fresh: full trust.
-- Stale within the grace: sessions are admitted and logged, destructive RPCs
+- Stale within the grace: sessions are admitted and logged, all new RPCs
   return `FailedPrecondition`.
 - Beyond the grace, or never seen: new operator sessions are refused.
-  Connections that already exist continue.
+  Established streams and mesh carriers continue unless positively revoked.
 
-Device certificates never fail for lack of evidence, whatever the grace:
-device revocation has its own authority channel through Cloud, and this check
-is defence in depth for the LAN path. A node does not judge its own identity.
+Device handshakes and mesh carriers never fail for lack of evidence. RPC
+admission requires current evidence for every caller when grace is configured,
+including device callers. There is no per-method freshness list. A node does not judge its own identity.
 Certificates without a distribution point keep their previous policy, but are
 still refused when a known CRL from their issuer lists them.
 
@@ -51,6 +51,10 @@ still refused when a known CRL from their issuer lists them.
   has no network. Stapled bytes are unverified until an authenticated path
   names their issuer and the issuer's signature checks, so a staple cannot
   vouch for its own chain, and an older staple never replaces newer evidence.
+  CLI agent connections and mesh/BLE client certificate selection read current
+  evidence at each handshake, including reconnects. Missing or stale evidence
+  gets a fetch attempt with one five-second total deadline; a cached fresh CRL
+  needs no network wait. Credential loading itself remains nonblocking.
   Staples are limited to 128 KiB by the TLS certificate message; larger CRLs
   are fetched only. Clients that cannot staple, such as the mobile apps, rely
   on the device's own evidence.
@@ -71,7 +75,9 @@ unsupported critical extensions are rejected.
 
 A CRL is adopted for its revocations whatever the local clock says. Freshness
 is measured against the caller's verification time, which on the agent includes
-its trusted-time floor. A CRL issued after a lagging local clock is fresh, and
+its trusted-time floor on physical and mesh ingress. An issuer's highest
+observed verification time is retained in memory so a wall-clock rollback cannot
+restore expired evidence. A CRL issued after a lagging local clock is fresh, and
 an expired CRL still refuses the serials it lists.
 
 Fetches from certificate URLs accept HTTP or HTTPS on ports 80/443, use
@@ -85,8 +91,10 @@ issuers, 4 MiB per response and 32 MiB of cached DER.
 
 - Agent TLS: handshakes refuse a listed certificate, take the stapled CRL, and
   apply `Session` to operators when a grace is set. The gRPC server rechecks
-  at unary/stream admission and stream message boundaries; those rechecks
-  refuse only a listed certificate, except destructive methods.
+  at every unary/stream admission using `Fresh`, with no method allowlist.
+  Stream message boundaries use `RevokedOnly`, so an outage cannot interrupt an
+  admitted stream. The connection retains the completed certificate chain used
+  by TLS, including issuers omitted by ALPN, independently of cache eviction.
 - Mesh: device and primary-operator carriers refuse a listed certificate. The
   node rechecks every carrier's original chain each second and removes a
   revoked carrier, its Babel link and forwarding interface. A newer certificate

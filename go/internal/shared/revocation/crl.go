@@ -57,7 +57,7 @@ const (
 	// Session admits new operator authority when evidence is fresh or stale by
 	// no more than the configured grace.
 	Session
-	// Fresh additionally refuses stale evidence. It gates destructive operations.
+	// Fresh additionally refuses stale evidence at every authenticated RPC admission.
 	Fresh
 )
 
@@ -90,7 +90,7 @@ func ConfigFromEnv(dir string) Config {
 }
 
 type entry struct {
-	fetchMu     sync.Mutex
+	fetching    chan struct{}
 	mu          sync.Mutex
 	issuer      *x509.Certificate
 	url         string
@@ -101,6 +101,7 @@ type snapshot struct {
 	crl     *x509.RevocationList
 	revoked map[string]bool
 	warned  time.Time
+	checked time.Time // Highest local verification time observed for this issuer.
 }
 
 // Manager holds a bounded cache of the newest verified CRL per issuer. Run
@@ -212,6 +213,14 @@ func (m *Manager) decide(child *x509.Certificate, key [sha256.Size]byte, now tim
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current := m.latest[key]
+	if current.checked.After(now) {
+		now = current.checked
+	} else {
+		current.checked = now
+		if _, exists := m.latest[key]; exists || len(m.latest) < maxEntries {
+			m.latest[key] = current
+		}
+	}
 	if current.revoked[child.SerialNumber.String()] {
 		return fmt.Errorf("%w: serial %s", ErrRevoked, child.SerialNumber)
 	}
@@ -231,7 +240,9 @@ func (m *Manager) decide(child *x509.Certificate, key [sha256.Size]byte, now tim
 	}
 	if m.cfg.Logf != nil && time.Since(current.warned) > time.Hour {
 		current.warned = time.Now()
-		m.latest[key] = current
+		if _, exists := m.latest[key]; exists || len(m.latest) < maxEntries {
+			m.latest[key] = current
+		}
 		m.cfg.Logf("revocation evidence for issuer %q is %s; accepting without a current CRL", child.Issuer.String(), state)
 	}
 	return nil
@@ -335,6 +346,22 @@ func (m *Manager) Offer(stapled []byte) {
 // certificates in TLS 1.3 without interpreting it; Wendy peers read it through
 // Offer. It also schedules refresh so an online machine keeps the staple fresh.
 func (m *Manager) Staple(chain []*x509.Certificate) []byte {
+	return m.staple(nil, chain)
+}
+
+// StapleForHandshake refreshes missing or stale evidence within one shared
+// five-second budget. It never mutates a tls.Certificate already in use.
+func (m *Manager) StapleForHandshake(ctx context.Context, chain []*x509.Certificate) []byte {
+	// Synthetic certificate requests may have no handshake context.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return m.staple(ctx, chain)
+}
+
+func (m *Manager) staple(ctx context.Context, chain []*x509.Certificate) []byte {
 	var out []byte
 	for i, child := range chain {
 		if len(child.CRLDistributionPoints) == 0 {
@@ -347,11 +374,20 @@ func (m *Manager) Staple(chain []*x509.Certificate) []byte {
 			key := issuerCacheKey(issuer)
 			m.restore(issuer, key)
 			entries := m.register(child, issuer, key)
-			go func() {
+			refresh := func(ctx context.Context) {
 				for _, e := range entries {
-					m.refresh(context.Background(), e, false)
+					m.refresh(ctx, e, false)
 				}
-			}()
+			}
+			m.mu.Lock()
+			crl := m.latest[key].crl
+			fresh := crl != nil && time.Now().Before(crl.NextUpdate)
+			m.mu.Unlock()
+			if ctx != nil && !fresh {
+				refresh(ctx)
+			} else {
+				go refresh(context.Background())
+			}
 			m.mu.Lock()
 			if crl := m.latest[key].crl; crl != nil && len(out)+len(crl.Raw) <= maxStapleBytes {
 				out = append(out, crl.Raw...)
@@ -409,17 +445,30 @@ func (m *Manager) refreshEntries(ctx context.Context, force bool) {
 // Keep the last authenticated CRL on every failure, including rollback, so an
 // outage cannot erase known revocations. Network I/O holds no shared lock.
 func (m *Manager) refresh(parent context.Context, e *entry, force bool) {
-	e.fetchMu.Lock()
-	defer e.fetchMu.Unlock()
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
 	e.mu.Lock()
+	if pending := e.fetching; pending != nil {
+		e.mu.Unlock()
+		select {
+		case <-pending:
+		case <-ctx.Done():
+		}
+		return
+	}
 	if !force && time.Now().Before(e.nextAttempt) {
 		e.mu.Unlock()
 		return
 	}
+	e.fetching = make(chan struct{})
 	e.nextAttempt = time.Now().Add(retryInterval)
 	e.mu.Unlock()
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-	defer cancel()
+	defer func() {
+		e.mu.Lock()
+		close(e.fetching)
+		e.fetching = nil
+		e.mu.Unlock()
+	}()
 	select {
 	case m.slots <- struct{}{}:
 	case <-ctx.Done():
@@ -489,7 +538,7 @@ func (m *Manager) adopt(issuer *x509.Certificate, raw []byte, fetched bool) erro
 	}
 	key := issuerCacheKey(issuer)
 	m.mu.Lock()
-	previous := m.latest[key]
+	previous, present := m.latest[key]
 	size := len(crl.Raw)
 	if previous.crl != nil {
 		older := crl.Number.Cmp(previous.crl.Number) < 0 || crl.ThisUpdate.Before(previous.crl.ThisUpdate)
@@ -505,7 +554,7 @@ func (m *Manager) adopt(issuer *x509.Certificate, raw []byte, fetched bool) erro
 			return err
 		}
 		size -= len(previous.crl.Raw)
-	} else if len(m.latest) >= maxEntries {
+	} else if !present && len(m.latest) >= maxEntries {
 		m.mu.Unlock()
 		return errors.New("CRL cache capacity reached")
 	}
@@ -518,7 +567,7 @@ func (m *Manager) adopt(issuer *x509.Certificate, raw []byte, fetched bool) erro
 	for _, r := range crl.RevokedCertificateEntries {
 		revoked[r.SerialNumber.String()] = true
 	}
-	m.latest[key] = snapshot{crl: crl, revoked: revoked}
+	m.latest[key] = snapshot{crl: crl, revoked: revoked, checked: previous.checked}
 	m.revision.Add(1)
 	file := m.path(key)
 	m.mu.Unlock()

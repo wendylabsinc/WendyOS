@@ -294,11 +294,11 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 		if !hasClientAuth {
 			return certs.CertificateWindow{}, fmt.Errorf("peer certificate requires explicit clientAuth usage")
 		}
-		// A device's revocation has its own authority channel; its certificate
-		// never fails for lack of a CRL. The role comes from the leaf that the
-		// path verification below still has to authenticate.
+		// Device handshakes and carriers keep their offline policy. RPC admission
+		// uses Fresh for every caller when a fleet grace is configured. The role
+		// below still has to be authenticated by path verification.
 		level := level
-		if id, found, idErr := certs.IdentityFromCert(leaf); idErr == nil && found && id.EntityType == certs.EntityAsset {
+		if id, found, idErr := certs.IdentityFromCert(leaf); level == revocation.Session && idErr == nil && found && id.EntityType == certs.EntityAsset {
 			level = revocation.RevokedOnly
 		}
 		baseNow, effectiveNow := clockTimes(realNow, leaf.NotBefore)

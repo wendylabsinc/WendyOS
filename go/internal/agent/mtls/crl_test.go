@@ -47,7 +47,7 @@ func TestCRLRevokesWarmPathResumedTLSAndExistingRPC(t *testing.T) {
 	if err := cfg.VerifyConnection(state); err != nil {
 		t.Fatal(err)
 	}
-	check := livePeerCheck(peerCheck)
+	check := livePeerCheck(peerCheck, revocation.Fresh)
 	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: state}})
 	if err := check(ctx, ""); err != nil {
 		t.Fatal(err)
@@ -69,8 +69,8 @@ func TestCRLRevokesWarmPathResumedTLSAndExistingRPC(t *testing.T) {
 }
 
 // An outage or an expired CRL is not a revocation. Existing connections keep
-// working, new operator sessions follow the fleet's grace, and only
-// destructive methods insist on current evidence.
+// working, new operator sessions follow the fleet's grace, and every new
+// operator RPC insists on current evidence.
 func TestAgedEvidenceGradesByDecision(t *testing.T) {
 	p := crltest.New(t, true)
 	own := p.Issue(t, 10, "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222")
@@ -100,10 +100,10 @@ func TestAgedEvidenceGradesByDecision(t *testing.T) {
 	if err := cfg.VerifyConnection(state(own.Cert)); err != nil {
 		t.Fatalf("node refused its own identity: %v", err)
 	}
-	check := livePeerCheck(peerCheck)
+	check := livePeerCheck(peerCheck, revocation.Fresh)
 	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: state(operator.Cert)}})
-	if err := check(ctx, "/wendy.agent.services.v2.WendyContainerService/ListContainers"); err != nil {
-		t.Fatalf("established connection refused for missing evidence: %v", err)
+	if err := check(ctx, "/wendy.agent.services.v2.WendyContainerService/ListContainers"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("read-only method ran without current evidence: %v", err)
 	}
 	if err := check(ctx, agentpbv2.WendyProvisioningService_Unprovision_FullMethodName); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("destructive method ran without current evidence: %v", err)

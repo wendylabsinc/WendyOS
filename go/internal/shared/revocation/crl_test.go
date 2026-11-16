@@ -475,3 +475,39 @@ func TestIssuerHistoryUsesSigningIdentity(t *testing.T) {
 		t.Fatal("different issuer keys share history")
 	}
 }
+
+func TestStapleWaitHonorsCancellation(t *testing.T) {
+	p := crltest.New(t, false)
+	leaf := p.Issue(t, 42, "spiffe://wendy.sh/tenant/t/operator/u")
+	chain := []*x509.Certificate{leaf.Cert, p.CA}
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	original := p.Client.Transport
+	p.Client.Transport = transportFunc(func(r *http.Request) (*http.Response, error) {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+			return original.RoundTrip(r)
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	})
+	m := New(p.Client)
+	m.Staple(chain)
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan []byte, 1)
+	go func() { done <- m.StapleForHandshake(ctx, chain) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("handshake waited for an unrelated fetch after cancellation")
+	}
+	close(release)
+	m.Refresh(context.Background())
+	if got := m.StapleForHandshake(context.Background(), chain); len(got) == 0 {
+		t.Fatal("completed background fetch was not used")
+	}
+}
