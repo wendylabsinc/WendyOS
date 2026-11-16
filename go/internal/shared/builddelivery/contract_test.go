@@ -28,19 +28,19 @@ type fixture struct {
 	builderChain   [][]byte
 	claims         Claims
 	op, key, chain string
-	mint           func(string) (string, string)
+	mint           func(string, time.Duration) (string, string)
 }
 
-func newFixture(t *testing.T) fixture {
+func newFixture(t testing.TB) fixture {
 	return newFixtureAt(t, time.Now().Truncate(time.Second))
 }
 
-func newFixtureAt(t *testing.T, now time.Time) fixture {
+func newFixtureAt(t testing.TB, now time.Time) fixture {
 	t.Helper()
 	return newFixtureWithParameters(t, now, mldsa.MLDSA65())
 }
 
-func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Parameters) fixture {
+func newFixtureWithParameters(t testing.TB, now time.Time, parameters mldsa.Parameters) fixture {
 	t.Helper()
 	rootKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
@@ -57,7 +57,7 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 	}
 	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
 	serial := int64(1)
-	mint := func(principal string) (string, string) {
+	mint := func(principal string, lifetime time.Duration) (string, string) {
 		t.Helper()
 		serial++
 		key, err := mldsa.GenerateKey(parameters)
@@ -68,7 +68,7 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 		if err != nil {
 			t.Fatal(err)
 		}
-		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "delivery test leaf"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(15 * time.Minute), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: []*url.URL{uri}}
+		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "delivery test leaf"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(lifetime), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: []*url.URL{uri}}
 		der, err := x509.CreateCertificate(rand.Reader, leaf, root, key.Public(), rootKey)
 		if err != nil {
 			t.Fatal(err)
@@ -82,18 +82,18 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 	const tenant = "11111111-1111-4111-8111-111111111111"
 	target, _ := meshid.DeviceFromPrincipal("spiffe://wendy.sh/tenant/" + tenant + "/device/22222222-2222-4222-8222-222222222222")
 	builderPrincipal := "spiffe://wendy.sh/tenant/" + tenant + "/device/33333333-3333-4333-8333-333333333333"
-	builderPEM, _ := mint(builderPrincipal)
+	builderPEM, _ := mint(builderPrincipal, 45*time.Minute)
 	block, _ := pem.Decode([]byte(builderPEM))
 	builder, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	operator := "spiffe://wendy.sh/tenant/" + tenant + "/operator/alice"
-	op, key := mint(operator)
+	op, key := mint(operator, 15*time.Minute)
 	claims := Claims{Version: Version, JobID: uuid.NewString(), Operator: operator, Target: target.Principal(), Builder: builderPrincipal, BuilderSPKI: Fingerprint(builder), Reference: "lab/app:latest", InputSHA256: encode(make([]byte, 32)), IssuedAt: now.Unix(), AdmitBefore: now.Add(time.Minute).Unix(), ValidUntil: now.Add(time.Hour).Unix(), Operations: []string{"stage", "publish"}, MaxBytes: 1 << 30}
 	return fixture{now: now, roots: []*x509.Certificate{root}, target: target, builder: builder, builderChain: [][]byte{builder.Raw, rootDER}, claims: claims, op: op, key: key, chain: chain, mint: mint}
 }
-func (f fixture) sign(t *testing.T, c Claims) string {
+func (f fixture) sign(t testing.TB, c Claims) string {
 	t.Helper()
 	j, err := Sign(c, f.op, f.chain, f.key)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestDeliveryRequiresOperatorCertificate(t *testing.T) {
 		{"another tenant", "spiffe://wendy.sh/tenant/44444444-4444-4444-8444-444444444444/operator/alice", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			certificate, privateKey := f.mint(tc.principal)
+			certificate, privateKey := f.mint(tc.principal, 15*time.Minute)
 			leafBlock, _ := pem.Decode([]byte(certificate))
 			keyBlock, _ := pem.Decode([]byte(privateKey))
 			key, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)

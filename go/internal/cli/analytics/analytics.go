@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +39,7 @@ type eventPayload struct {
 	DurationMS    int64     `json:"duration_ms,omitempty"`
 	Success       bool      `json:"success"`
 	ErrorClass    string    `json:"error_class,omitempty"`
+	ErrorDetail   string    `json:"error_detail,omitempty"`
 	CLIVersion    string    `json:"cli_version"`
 	OS            string    `json:"os"`
 	Arch          string    `json:"arch"`
@@ -161,6 +163,7 @@ func Track(event string, properties map[string]string) {
 // result, but callers such as one-time milestones can defer local acknowledgement
 // until the receiver has persisted the event.
 func track(event string, properties map[string]string, onDelivered func()) {
+	properties = nonFailureProperties(event, properties)
 	stateMu.Lock()
 	hook := trackHook
 	stateMu.Unlock()
@@ -190,8 +193,13 @@ func track(event string, properties map[string]string, onDelivered func()) {
 		CLIVersion:  version.Version,
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
-		IsDevBuild:  version.IsDev(version.Version),
-		Properties:  extraProperties(properties),
+		IsDevBuild:  version.IsDev(version.Version) || strings.HasPrefix(version.Version, "dev-"),
+		Properties:  outcomeProperties(event, properties),
+	}
+	// The legacy receiver stores only top-level fields. Supply the same canned
+	// diagnostic there until the v2 receiver can persist the full envelope.
+	if payload.Properties["outcome"] == "failed" {
+		payload.ErrorDetail = payload.Properties["error_detail"]
 	}
 
 	body, err := json.Marshal(payload)
@@ -215,6 +223,63 @@ func track(event string, properties map[string]string, onDelivered func()) {
 			onDelivered()
 		}
 	}()
+}
+
+func outcomeProperties(event string, properties map[string]string) map[string]string {
+	props := maps.Clone(properties)
+	if props == nil {
+		props = make(map[string]string)
+	}
+	if (event == "command_executed" || event == "deploy_completed") && props["outcome"] == "" {
+		props["outcome"] = "failed"
+		if parseBool(props["success"]) {
+			props["outcome"] = "completed"
+		}
+		if cancellationClass(props["error_class"]) && !parseBool(props["success"]) {
+			props["outcome"] = "cancelled"
+		}
+	}
+	if props["outcome"] == "failed" {
+		code, detail := Diagnostic(props["error_class"])
+		if !allowedProperty("error_code", props["error_code"]) {
+			props["error_code"] = code
+		}
+		if !allowedProperty("error_detail", props["error_detail"]) {
+			props["error_detail"] = detail
+		}
+	}
+	return extraProperties(props)
+}
+
+// nonFailureProperties keeps progress and cancellation out of legacy
+// success=false error queries. The outcome still distinguishes these events
+// from completed work; callers must not use success alone as a completion signal.
+// Clone only when changing fields, since callers can reuse their properties.
+func nonFailureProperties(event string, properties map[string]string) map[string]string {
+	outcome := properties["outcome"]
+	if outcome == "" && properties["success"] == "false" &&
+		(event == "command_executed" || event == "deploy_completed") {
+		if cancellationClass(properties["error_class"]) {
+			outcome = "cancelled"
+		}
+	}
+	switch outcome {
+	case "started", "cancelled":
+		properties = maps.Clone(properties)
+		properties["outcome"] = outcome
+		properties["success"] = "true"
+	}
+	return properties
+}
+
+// cancellationClass reports whether an error class records an explicit
+// cancellation rather than a failure.
+func cancellationClass(class string) bool {
+	switch class {
+	case "context_canceled", "user_cancelled", "cancelled":
+		return true
+	}
+	return false
 }
 
 func finishDelivery(done chan struct{}) {
