@@ -109,6 +109,33 @@ func TestPrepareWendyCoreVersion(t *testing.T) {
 	if setup, unchecked, err := PrepareWendyCoreVersion(dir, ""); setup != nil || unchecked != "" || err != nil {
 		t.Errorf("empty version: %v, %q, %v; want nothing", setup, unchecked, err)
 	}
+
+	// A release version X.Y.Z is pinned to its tag vX.Y.Z.
+	writeCoreFixture(t, dir, map[string]string{"main/idf_component.yml": head + dep + "    version: \"v0.9.3\"\n"})
+	if setup, _, err := PrepareWendyCoreVersion(dir, "0.9.3"); setup != nil || err != nil {
+		t.Errorf("pinned to v0.9.3, device 0.9.3: %v, %v; want nothing to change", setup, err)
+	}
+	writeCoreFixture(t, dir, map[string]string{"main/idf_component.yml": head + dep + "    version: \"0.9.3\"\n"})
+	setup, _, err := PrepareWendyCoreVersion(dir, "0.9.3")
+	if err != nil || setup == nil || setup.Current != "0.9.3" || setup.Version != "v0.9.3" {
+		t.Fatalf("pinned to 0.9.3, device 0.9.3: %+v, %v; want a change to v0.9.3", setup, err)
+	}
+}
+
+func TestWendyLiteGitRef(t *testing.T) {
+	for version, want := range map[string]string{
+		"0.9.3":         "v0.9.3",
+		"10.20.30":      "v10.20.30",
+		testLiteVersion: testLiteVersion,
+		"v0.9.3":        "v0.9.3",
+		"1.0.0-rc1":     "1.0.0-rc1",
+		"0.9":           "0.9",
+		"":              "",
+	} {
+		if got := WendyLiteGitRef(version); got != want {
+			t.Errorf("WendyLiteGitRef(%q) = %q, want %q", version, got, want)
+		}
+	}
 }
 
 func TestWendyCoreVersionApplyRefusesChangedManifest(t *testing.T) {

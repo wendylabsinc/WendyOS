@@ -157,7 +157,8 @@ func TestApplyWendyCoreUsesProjectToolchain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setup, err := PrepareWendyCore(dir, toolchain, "")
+	// A release version is pinned to its tag.
+	setup, err := PrepareWendyCore(dir, toolchain, "0.9.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestApplyWendyCoreUsesProjectToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{image, "idf.py", "add-dependency", "--component", "main", "--git", WendyLiteGitURL, "--git-path", "components/wendy_core", "wendy_core"},
+		{image, "idf.py", "add-dependency", "--component", "main", "--git", WendyLiteGitURL, "--git-path", "components/wendy_core", "--git-ref", "v0.9.3", "wendy_core"},
 		{image, "idf.py", "reconfigure"},
 	}
 	if len(*calls) != len(want) {

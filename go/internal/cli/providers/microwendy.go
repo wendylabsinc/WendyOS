@@ -626,13 +626,6 @@ func (*MissingWendyCoreError) Error() string {
 	return "this project does not include the wendy_core component; run 'wendy run' interactively to add it, or add it to main/idf_component.yml and call ESP_ERROR_CHECK(wendy_core_init()) first in app_main()"
 }
 
-// TEMPORARY: the device does not report its Wendy Lite version and build
-// profile yet. Until it does, GetDeviceInfo gives these values.
-const (
-	tempLiteVersion      = "d3a95ab94ba5be6efce82b1ef40d3dbda8e42750"
-	tempLiteBuildProfile = "board: esp32c61_devkit_c_1\ncloud_tunnel: true"
-)
-
 // LiteAppDefaultsError reports that the project's sdkconfig.defaults.wendy
 // (litebuild.AppDefaultsFile) is missing, or is for another Wendy Lite
 // version or build profile than the device. The CLI offers to write it.
@@ -709,6 +702,11 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 	if !di.NativeAppSupport {
 		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "native apps"}
 	}
+	// A native app is built for the Wendy Lite version and build profile of
+	// the device.
+	if di.LiteVersion == "" {
+		return nil, errors.New("the device does not report its Wendy Lite version, which a native app is built for: its Wendy Lite firmware is older than the get_build_info command, or was not configured with tools/configure.py; install a newer Wendy Lite build, for example with 'wendy os install'")
+	}
 
 	target := di.DeviceType
 	if strings.ContainsAny(target, " \t\r\n") {
@@ -729,21 +727,18 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 
 	// Set up the project for the Wendy Lite build of the device. Each
 	// check gives an error that the CLI offers to fix before it builds
-	// again. Without a device version there is nothing to check.
-	regenerate := false
-	if di.LiteVersion != "" {
-		if err := checkLiteProjectSetup(projectPath, di, target); err != nil {
+	// again.
+	if err := checkLiteProjectSetup(projectPath, di, target); err != nil {
+		return nil, err
+	}
+	// A defaults file only fills the options that sdkconfig does not have
+	// yet: sdkconfig is generated again when its defaults change.
+	regenerate := espidftoolchain.SdkconfigStale(projectPath, litebuild.AppDefaultsFile, "CMakeLists.txt")
+	// The ESP-IDF of the Wendy Lite build of the device. A container
+	// toolchain keeps the ESP-IDF of its image.
+	if eim {
+		if err := useLiteIDF(ctx, toolchain, di, target); err != nil {
 			return nil, err
-		}
-		// A defaults file only fills the options that sdkconfig does not
-		// have yet: sdkconfig is generated again when its defaults change.
-		regenerate = espidftoolchain.SdkconfigStale(projectPath, litebuild.AppDefaultsFile, "CMakeLists.txt")
-		// The ESP-IDF of the Wendy Lite build of the device. A container
-		// toolchain keeps the ESP-IDF of its image.
-		if eim {
-			if err := useLiteIDF(ctx, toolchain, di, target); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if err := toolchain.Ensure(ctx); err != nil {
@@ -850,7 +845,7 @@ func checkLiteProjectSetup(projectPath string, di *ProviderDeviceInfo, target st
 // configuration of the device version, fetched once per process.
 func useLiteIDF(ctx context.Context, toolchain *espidftoolchain.ProjectToolchain, di *ProviderDeviceInfo, target string) error {
 	logf := func(format string, args ...any) { fmt.Fprintln(os.Stderr, tui.Dim(fmt.Sprintf(format, args...))) }
-	model, err := litebuild.FetchMasterConf(ctx, espidftoolchain.WendyLiteGitURL, di.LiteVersion, logf)
+	model, err := litebuild.FetchMasterConf(ctx, espidftoolchain.WendyLiteGitURL, espidftoolchain.WendyLiteGitRef(di.LiteVersion), logf)
 	if err != nil {
 		return err
 	}
@@ -1041,7 +1036,7 @@ func (p *MicroWendyProvider) GetDeviceInfo(ctx context.Context, device models.Ex
 	if err != nil {
 		return nil, err
 	}
-	return &ProviderDeviceInfo{
+	info := &ProviderDeviceInfo{
 		// On wendy-lite, OS version and agent version are the same.
 		AgentVersion:     di.OSVersion,
 		OS:               di.OS,
@@ -1050,9 +1045,20 @@ func (p *MicroWendyProvider) GetDeviceInfo(ctx context.Context, device models.Ex
 		DeviceType:       di.Target,
 		WasmAppSupport:   di.WasmAppSupport,
 		NativeAppSupport: di.NativeAppSupport,
-		LiteVersion:      tempLiteVersion,
-		LiteBuildProfile: tempLiteBuildProfile,
-	}, nil
+	}
+	// A firmware older than get_build_info leaves the Wendy Lite build
+	// unknown; a native build then stops (buildEspIdf).
+	bi, err := client.GetBuildInfo(3 * time.Second)
+	switch {
+	case errors.Is(err, liteclient.ErrBuildInfoUnsupported):
+	case err != nil:
+		return nil, fmt.Errorf("getting build info: %w", err)
+	default:
+		// A build with uncommitted changes is configured as its commit.
+		info.LiteVersion = strings.TrimSuffix(bi.OSVersion, "-dirty")
+		info.LiteBuildProfile = bi.BuildProfile
+	}
+	return info, nil
 }
 
 func (p *MicroWendyProvider) WifiConnect(ctx context.Context, device models.ExternalDevice, ssid, password string) error {

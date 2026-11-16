@@ -23,18 +23,19 @@ type WendyCoreVersionSetup struct {
 	// Current is the version in the manifest, "" when it has none: the
 	// default branch of the repository.
 	Current string
-	// Version is the version that Apply writes.
+	// Version is the version that Apply writes: the git ref of the Wendy
+	// Lite version (WendyLiteGitRef).
 	Version           string
 	original, updated []byte
 }
 
 // PrepareWendyCoreVersion checks that the wendy_core dependency of
-// main/idf_component.yml has version, the Wendy Lite version of the device:
-// for a git dependency, the version is a git ref. It returns nil when there
-// is nothing to change: the manifest does not declare wendy_core, or the
-// dependency has the version (SameVersion). Otherwise it prepares the
-// change of that one line, without writing it, so that the comments and the
-// layout of the manifest stay.
+// main/idf_component.yml has version, the Wendy Lite version of the device.
+// For a git dependency, the version is a git ref: the WendyLiteGitRef of
+// version. It returns nil when there is nothing to change: the manifest does
+// not declare wendy_core, or the dependency has that ref (SameVersion).
+// Otherwise it prepares the change of that one line, without writing it, so
+// that the comments and the layout of the manifest stay.
 //
 // Only a git dependency on the wendy-lite repository is checked. Another
 // source (a local path, override_path, another repository, the registry)
@@ -44,6 +45,7 @@ func PrepareWendyCoreVersion(projectPath, version string) (setup *WendyCoreVersi
 	if version == "" {
 		return nil, "", nil
 	}
+	version = WendyLiteGitRef(version)
 	path := filepath.Join(projectPath, componentManifest)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
