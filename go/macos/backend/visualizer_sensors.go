@@ -34,6 +34,9 @@ const visualPointTotalLimit = 1_000_000
 
 // These files use the media budget, independent of camera/event metadata.
 func (v *VisualSnapshot) readSensors(ctx context.Context, client pb.DataServiceClient, episode string, manifest data.Manifest) {
+	v.readSensorsMode(ctx, client, episode, manifest, true)
+}
+func (v *VisualSnapshot) readSensorsMode(ctx context.Context, client pb.DataServiceClient, episode string, manifest data.Manifest, includeROS bool) {
 	budget := int64(visualVideoTotalLimit)
 	for _, f := range manifest.Files {
 		if ctx.Err() != nil {
@@ -48,6 +51,9 @@ func (v *VisualSnapshot) readSensors(ctx context.Context, client pb.DataServiceC
 				v.Warnings = append(v.Warnings, f.Path+": "+err.Error())
 			}
 		}
+	}
+	if !includeROS {
+		return
 	}
 	pointBudget := visualPointTotalLimit
 	for _, f := range manifest.Files {

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +33,12 @@ func TestActivationOperationRecordsCancellationAndFailedStep(t *testing.T) {
 				t.Fatalf("events %v", events)
 			}
 			last := props[2]
+			if props[0]["success"] != "true" || props[1]["success"] != "true" {
+				t.Fatalf("start/progress reported as errors: %v", props)
+			}
+			if last["success"] != strconv.FormatBool(tc.outcome != "failed") {
+				t.Fatalf("terminal failure flag disagrees with outcome: %v", last)
+			}
 			if strings.Contains(last["error_detail"], "private token") {
 				t.Fatal("arbitrary error text escaped")
 			}
