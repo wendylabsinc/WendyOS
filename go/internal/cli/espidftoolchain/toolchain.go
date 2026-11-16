@@ -17,7 +17,8 @@ import (
 	"strings"
 )
 
-// DefaultVersion is the ESP-IDF version used to build Wendy Lite native apps,
+// DefaultVersion is the ESP-IDF version used to build Wendy Lite native apps
+// when the device gives no Wendy Lite version (see ProjectToolchain.UseIDF),
 // named as eim (the ESP-IDF Installation Manager) names it.
 const DefaultVersion = "v6.0.3"
 
@@ -26,7 +27,7 @@ const DefaultVersion = "v6.0.3"
 // cannot stand in for it.
 const EIMFormula = "espressif/eim/eim"
 
-// ErrEIMNotInstalled reports that eim is not on PATH, so EnsureVersion cannot
+// ErrEIMNotInstalled reports that eim is not on PATH, so EnsureIDF cannot
 // check or install the toolchain. The CLI offers to install eim when it sees it.
 var ErrEIMNotInstalled = errors.New("eim (ESP-IDF Installation Manager) is not installed")
 
@@ -102,6 +103,31 @@ func ProjectTarget(dir string) string {
 		return ""
 	}
 	return config.IdfTarget
+}
+
+// BuildIDFVersion returns the ESP-IDF version that configured the build
+// folder of the project in dir: the git_revision of
+// build/project_description.json, such as "v6.0.3". It returns "" when the
+// project has not been configured.
+func BuildIDFVersion(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "build", "project_description.json"))
+	if err != nil {
+		return ""
+	}
+	var description struct {
+		GitRevision string `json:"git_revision"`
+	}
+	if json.Unmarshal(data, &description) != nil {
+		return ""
+	}
+	return description.GitRevision
+}
+
+// SameIDFVersion reports whether the ESP-IDF version that configured a
+// build folder (BuildIDFVersion) is want, an eim name such as "v6.1". A
+// development suffix ("v6.1-dirty") counts as the same version.
+func SameIDFVersion(configured, want string) bool {
+	return configured == want || strings.HasPrefix(configured, want+"-")
 }
 
 // ReadSdkconfig reads the sdkconfig of the ESP-IDF project in dir and returns
@@ -200,13 +226,6 @@ func parseSdkconfigValue(value string) any {
 		return int(n)
 	}
 	return value
-}
-
-// EnsureVersion verifies that eim is installed and that the DefaultVersion
-// ESP-IDF toolchain is available, installing the toolchain via eim when it
-// is missing. Without eim it returns an error wrapping ErrEIMNotInstalled.
-func EnsureVersion(ctx context.Context) error {
-	return EnsureIDF(ctx, DefaultVersion)
 }
 
 // CheckEIM verifies that eim is installed. Without eim it returns an error

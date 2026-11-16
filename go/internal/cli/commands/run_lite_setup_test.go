@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
+	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
@@ -242,6 +244,342 @@ func TestProviderBuildOffersEIMInstall(t *testing.T) {
 			}
 			if err == nil || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) || !strings.Contains(err.Error(), tc.wantMessage) {
 				t.Fatalf("providerBuild() = %v, want %v containing %q", err, tc.wantErr, tc.wantMessage)
+			}
+		})
+	}
+}
+
+// liteMasterConf is a small master configuration in the shape of the
+// wendy-lite one, for the sdkconfig.defaults.wendy repair.
+const liteMasterConf = `
+attributes:
+  board: {type: string, enum: [c61_board]}
+  chip: {type: string, enum: [esp32c61]}
+  idf_version: {type: string}
+  idf_preview: {type: boolean}
+  cloud_tunnel: {type: boolean}
+rules:
+  - if: board == "c61_board"
+    set: {chip: esp32c61, idf_version: "6.0.3", idf_preview: false}
+  - if: cloud_tunnel
+    sdkconfig: |
+      CONFIG_WENDY_CLOUD_TUNNEL=y
+      CONFIG_PARTITION_TABLE_CUSTOM=y
+  - else:
+    sdkconfig: |
+      CONFIG_WENDY_CLOUD_TUNNEL=n
+`
+
+const (
+	testLiteVersion = "6e2ae72d0b0433a2e65744b6f0821f09b4770541"
+	testLiteProfile = "board: c61_board\ncloud_tunnel: true"
+)
+
+// stubLiteRepairs makes the prompts answer accept and records them, makes
+// the terminal interactive or not, and replaces the wendy-lite fetch and
+// the git check. It returns the prompts.
+func stubLiteRepairs(t *testing.T, interactive bool, accept func(question string) bool, fetchErr error) *[]string {
+	t.Helper()
+	oldInteractive, oldConfirm, oldFetch := isInteractiveTerminalFn, confirmFn, fetchMasterConfFn
+	t.Cleanup(func() {
+		isInteractiveTerminalFn, confirmFn, fetchMasterConfFn = oldInteractive, oldConfirm, oldFetch
+	})
+	isInteractiveTerminalFn = func() bool { return interactive }
+	var prompts []string
+	confirmFn = func(question string) bool {
+		prompts = append(prompts, question)
+		return accept(question)
+	}
+	fetchMasterConfFn = func(_ context.Context, url, ref string, _ func(string, ...any)) (*litebuild.Model, error) {
+		if url != espidftoolchain.WendyLiteGitURL || ref != testLiteVersion {
+			t.Errorf("fetch %s %s, want the master configuration of %s", url, ref, testLiteVersion)
+		}
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		return litebuild.Load([]byte(liteMasterConf), "wendy-lite 6e2ae72:master_config.yaml")
+	}
+	return &prompts
+}
+
+func writeLiteProject(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestProviderBuildOffersLiteAppDefaults(t *testing.T) {
+	missing := &providers.LiteAppDefaultsError{
+		Status:  litebuild.AppDefaultsStatus{State: litebuild.AppDefaultsMissing},
+		Version: testLiteVersion, Profile: testLiteProfile, Target: "esp32c61",
+	}
+	outdated := &providers.LiteAppDefaultsError{
+		Status:  litebuild.AppDefaultsStatus{State: litebuild.AppDefaultsOutdated, Version: "1234567", Profile: "board: c61_board"},
+		Version: testLiteVersion, Profile: testLiteProfile, Target: "esp32c61",
+	}
+	otherChip := *missing
+	otherChip.Target = "esp32s3"
+	fetchFailed := errors.New("fetch failed")
+	for _, tc := range []struct {
+		name                string
+		interactive, accept bool
+		opts                runOptions
+		buildErr            error
+		fetchErr            error
+		wantPrompt          string
+		wantBuilds          int
+		wantFile            bool
+		wantErr             error
+		wantMessage         string
+	}{
+		{name: "create", interactive: true, accept: true, buildErr: missing, wantPrompt: "Create sdkconfig.defaults.wendy now?", wantBuilds: 2, wantFile: true},
+		{name: "update", interactive: true, accept: true, buildErr: outdated, wantPrompt: "Update sdkconfig.defaults.wendy now?", wantBuilds: 2, wantFile: true},
+		{name: "decline", interactive: true, buildErr: missing, wantPrompt: "Create sdkconfig.defaults.wendy now?", wantBuilds: 1, wantErr: ErrUserCancelled},
+		{name: "decline update", interactive: true, buildErr: outdated, wantPrompt: "Update sdkconfig.defaults.wendy now?", wantBuilds: 1, wantErr: ErrUserCancelled},
+		{name: "noninteractive", buildErr: missing, wantBuilds: 1, wantErr: missing},
+		{name: "yes", opts: runOptions{yes: true}, buildErr: missing, wantBuilds: 2, wantFile: true},
+		{name: "fetch failed", opts: runOptions{yes: true}, buildErr: missing, fetchErr: fetchFailed, wantBuilds: 1, wantErr: fetchFailed},
+		{name: "other chip", opts: runOptions{yes: true}, buildErr: &otherChip, wantBuilds: 1, wantMessage: "the build profile is for the esp32c61, but the device is a esp32s3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			prompts := stubLiteRepairs(t, tc.interactive, func(string) bool { return tc.accept }, tc.fetchErr)
+			p := &sequenceProvider{errs: []error{tc.buildErr}}
+			_, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", tc.opts)
+			if tc.wantErr == nil && tc.wantMessage == "" {
+				if err != nil {
+					t.Fatalf("providerBuild() = %v", err)
+				}
+			} else if err == nil || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("providerBuild() = %v, want %v containing %q", err, tc.wantErr, tc.wantMessage)
+			}
+			if p.builds != tc.wantBuilds {
+				t.Errorf("builds = %d, want %d", p.builds, tc.wantBuilds)
+			}
+			if tc.wantPrompt == "" && len(*prompts) != 0 || tc.wantPrompt != "" && (len(*prompts) != 1 || (*prompts)[0] != tc.wantPrompt) {
+				t.Errorf("prompts = %q, want %q", *prompts, tc.wantPrompt)
+			}
+			data, readErr := os.ReadFile(filepath.Join(dir, litebuild.AppDefaultsFile))
+			if !tc.wantFile {
+				if readErr == nil {
+					t.Fatalf("file written: %s", data)
+				}
+				return
+			}
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, want := range []string{
+				`CONFIG_WENDY_BUILD_PROFILE="board: c61_board\\ncloud_tunnel: true"` + "\n" + `CONFIG_WENDY_VERSION="` + testLiteVersion + `"`,
+				"CONFIG_WENDY_CLOUD_TUNNEL=y",
+				"from wendy-lite 6e2ae72:master_config.yaml",
+			} {
+				if !strings.Contains(string(data), want) {
+					t.Errorf("file lacks %q:\n%s", want, data)
+				}
+			}
+			if strings.Contains(string(data), "CONFIG_PARTITION_TABLE_CUSTOM=y") {
+				t.Errorf("file keeps the partition table line:\n%s", data)
+			}
+			status, err := litebuild.CheckAppDefaults(dir, testLiteVersion, testLiteProfile)
+			if err != nil || status.State != litebuild.AppDefaultsOK {
+				t.Errorf("written file does not check: %+v, %v", status, err)
+			}
+		})
+	}
+}
+
+func TestProviderBuildOffersSdkconfigDefaultsList(t *testing.T) {
+	const cmake = "cmake_minimum_required(VERSION 3.16)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(app)\n"
+	listErr := &providers.MissingSdkconfigDefaultsListError{}
+	for _, tc := range []struct {
+		name                string
+		interactive, accept bool
+		opts                runOptions
+		hasDefaults         bool
+		wantPrompt          string
+		wantBuilds          int
+		wantApplied         bool
+		wantErr             error
+	}{
+		{name: "accept", interactive: true, accept: true, hasDefaults: true, wantPrompt: "Add it to CMakeLists.txt now?", wantBuilds: 2, wantApplied: true},
+		{name: "accept without sdkconfig.defaults", interactive: true, accept: true, wantPrompt: "Add the line to CMakeLists.txt and create sdkconfig.defaults now?", wantBuilds: 2, wantApplied: true},
+		{name: "decline", interactive: true, hasDefaults: true, wantPrompt: "Add it to CMakeLists.txt now?", wantBuilds: 1, wantErr: ErrUserCancelled},
+		{name: "noninteractive", hasDefaults: true, wantBuilds: 1, wantErr: listErr},
+		{name: "yes", opts: runOptions{yes: true}, wantBuilds: 2, wantApplied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			files := map[string]string{"CMakeLists.txt": cmake}
+			if tc.hasDefaults {
+				files["sdkconfig.defaults"] = "CONFIG_MINE=y\n"
+			}
+			writeLiteProject(t, dir, files)
+			prompts := stubLiteRepairs(t, tc.interactive, func(string) bool { return tc.accept }, nil)
+			p := &sequenceProvider{errs: []error{listErr}}
+			_, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", tc.opts)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("providerBuild() = %v, want %v", err, tc.wantErr)
+			}
+			if p.builds != tc.wantBuilds {
+				t.Errorf("builds = %d, want %d", p.builds, tc.wantBuilds)
+			}
+			if tc.wantPrompt == "" && len(*prompts) != 0 || tc.wantPrompt != "" && (len(*prompts) != 1 || (*prompts)[0] != tc.wantPrompt) {
+				t.Errorf("prompts = %q, want %q", *prompts, tc.wantPrompt)
+			}
+			data, _ := os.ReadFile(filepath.Join(dir, "CMakeLists.txt"))
+			if applied := strings.Contains(string(data), espidftoolchain.SdkconfigDefaultsLine); applied != tc.wantApplied {
+				t.Errorf("CMakeLists.txt applied = %v, want %v:\n%s", applied, tc.wantApplied, data)
+			}
+			_, statErr := os.Stat(filepath.Join(dir, "sdkconfig.defaults"))
+			if (statErr == nil) != (tc.hasDefaults || tc.wantApplied) {
+				t.Errorf("sdkconfig.defaults exists = %v", statErr == nil)
+			}
+		})
+	}
+}
+
+func TestProviderBuildOffersWendyCoreVersion(t *testing.T) {
+	const manifest = "dependencies:\n  wendy_core:\n    git: \"https://github.com/wendylabsinc/wendy-lite.git\"\n    path: \"components/wendy_core\"\n"
+	versionErr := &providers.WendyCoreVersionError{Version: testLiteVersion}
+	for _, tc := range []struct {
+		name                string
+		interactive, accept bool
+		opts                runOptions
+		wantBuilds          int
+		wantPinned          bool
+		wantErr             error
+	}{
+		{name: "accept", interactive: true, accept: true, wantBuilds: 2, wantPinned: true},
+		{name: "decline", interactive: true, wantBuilds: 1, wantErr: ErrUserCancelled},
+		{name: "noninteractive", wantBuilds: 1, wantErr: versionErr},
+		{name: "yes", opts: runOptions{yes: true}, wantBuilds: 2, wantPinned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLiteProject(t, dir, map[string]string{"main/idf_component.yml": manifest})
+			prompts := stubLiteRepairs(t, tc.interactive, func(string) bool { return tc.accept }, nil)
+			p := &sequenceProvider{errs: []error{versionErr}}
+			_, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", tc.opts)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("providerBuild() = %v, want %v", err, tc.wantErr)
+			}
+			if p.builds != tc.wantBuilds {
+				t.Errorf("builds = %d, want %d", p.builds, tc.wantBuilds)
+			}
+			if tc.interactive && (len(*prompts) != 1 || (*prompts)[0] != "Change the wendy_core dependency to 6e2ae72 now?") {
+				t.Errorf("prompts = %q", *prompts)
+			}
+			data, _ := os.ReadFile(filepath.Join(dir, "main/idf_component.yml"))
+			if pinned := strings.Contains(string(data), `version: "`+testLiteVersion+`"`); pinned != tc.wantPinned {
+				t.Errorf("pinned = %v, want %v:\n%s", pinned, tc.wantPinned, data)
+			}
+		})
+	}
+}
+
+// A new project needs one repair per build, in the order of the checks.
+func TestProviderBuildRepairsInSequence(t *testing.T) {
+	dir := t.TempDir()
+	writeLiteProject(t, dir, map[string]string{
+		"CMakeLists.txt":         "include($ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(app)\n",
+		"main/idf_component.yml": "dependencies:\n  wendy_core:\n    git: https://github.com/wendylabsinc/wendy-lite.git\n",
+	})
+	prompts := stubLiteRepairs(t, true, func(string) bool { return true }, nil)
+	p := &sequenceProvider{errs: []error{
+		&providers.LiteAppDefaultsError{Status: litebuild.AppDefaultsStatus{State: litebuild.AppDefaultsMissing}, Version: testLiteVersion, Profile: testLiteProfile, Target: "esp32c61"},
+		&providers.MissingSdkconfigDefaultsListError{},
+		&providers.WendyCoreVersionError{Version: testLiteVersion},
+	}}
+	if _, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", runOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Create sdkconfig.defaults.wendy now?",
+		"Add the line to CMakeLists.txt and create sdkconfig.defaults now?",
+		"Change the wendy_core dependency to 6e2ae72 now?",
+	}
+	if p.builds != 4 || !reflect.DeepEqual(*prompts, want) {
+		t.Fatalf("builds = %d, prompts = %q; want 4, %q", p.builds, *prompts, want)
+	}
+	// The project now passes the three checks.
+	if status, err := litebuild.CheckAppDefaults(dir, testLiteVersion, testLiteProfile); err != nil || status.State != litebuild.AppDefaultsOK {
+		t.Errorf("sdkconfig.defaults.wendy: %+v, %v", status, err)
+	}
+	if setup, err := espidftoolchain.PrepareSdkconfigDefaultsList(dir); err != nil || setup != nil {
+		t.Errorf("CMakeLists.txt: %+v, %v", setup, err)
+	}
+	if setup, _, err := espidftoolchain.PrepareWendyCoreVersion(dir, testLiteVersion); err != nil || setup != nil {
+		t.Errorf("wendy_core version: %+v, %v", setup, err)
+	}
+}
+
+// A repair that does not take effect is not offered again.
+func TestProviderBuildRepairsOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeLiteProject(t, dir, map[string]string{"CMakeLists.txt": "include($ENV{IDF_PATH}/tools/cmake/project.cmake)\n", "sdkconfig.defaults": ""})
+	prompts := stubLiteRepairs(t, true, func(string) bool { return true }, nil)
+	listErr := &providers.MissingSdkconfigDefaultsListError{}
+	p := &sequenceProvider{errs: []error{listErr, listErr}}
+	_, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", runOptions{})
+	if !errors.Is(err, listErr) || p.builds != 2 || len(*prompts) != 1 {
+		t.Fatalf("err = %v, builds = %d, prompts = %q; want the error after 2 builds and 1 prompt", err, p.builds, *prompts)
+	}
+}
+
+func TestProviderBuildOffersFullclean(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake eim uses a shell script")
+	}
+	for _, tc := range []struct {
+		name                string
+		interactive, accept bool
+		opts                runOptions
+		wantBuilds          int
+		wantClean           bool
+		wantErr             bool
+		wantCancelled       bool
+	}{
+		{name: "accept", interactive: true, accept: true, wantBuilds: 2, wantClean: true},
+		{name: "decline", interactive: true, wantBuilds: 1, wantErr: true, wantCancelled: true},
+		{name: "noninteractive", wantBuilds: 1, wantErr: true},
+		{name: "yes", opts: runOptions{yes: true}, wantBuilds: 2, wantClean: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// Record the IDF commands.
+			script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> idf-commands\n"
+			writeLiteProject(t, dir, map[string]string{"eim": script})
+			if err := os.Chmod(filepath.Join(dir, "eim"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			prompts := stubLiteRepairs(t, tc.interactive, func(string) bool { return tc.accept }, nil)
+
+			toolchain := &espidftoolchain.ProjectToolchain{}
+			toolchain.UseIDF("v6.1", true)
+			changed := &providers.IDFVersionChangedError{Configured: "v6.0.3", Version: "v6.1", Toolchain: toolchain}
+			p := &sequenceProvider{errs: []error{changed}}
+			_, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", tc.opts)
+			if (err != nil) != tc.wantErr || (tc.wantCancelled && !errors.Is(err, ErrUserCancelled)) || (tc.wantErr && !tc.wantCancelled && !errors.Is(err, changed)) {
+				t.Fatalf("providerBuild() = %v", err)
+			}
+			if p.builds != tc.wantBuilds {
+				t.Errorf("builds = %d, want %d", p.builds, tc.wantBuilds)
+			}
+			if tc.interactive && (len(*prompts) != 1 || (*prompts)[0] != "Clean the build folder with idf.py fullclean now?") {
+				t.Errorf("prompts = %q", *prompts)
+			}
+			commands, _ := os.ReadFile(filepath.Join(dir, "idf-commands"))
+			if cleaned := strings.Contains(string(commands), "run idf.py --preview fullclean v6.1"); cleaned != tc.wantClean {
+				t.Errorf("fullclean ran = %v, want %v; commands: %s", cleaned, tc.wantClean, commands)
 			}
 		})
 	}

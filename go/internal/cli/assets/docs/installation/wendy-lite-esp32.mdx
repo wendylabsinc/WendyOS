@@ -130,9 +130,9 @@ Add a Wendy manifest using the `wendy-lite` device platform:
 }
 ```
 
-Your project also needs the **`wendy_core`** component. When it is missing, `wendy run` offers to add the dependency and initialize it in `app_main()`, then retries the build. This supports C and C++ projects with a single `app_main()` definition under `main/`. Use `wendy run --yes` to accept setup without a prompt.
+Your project also needs the **`wendy_core`** component, at the Wendy Lite version of the device, and a `sdkconfig.defaults.wendy` file that configures the app like the Wendy Lite build on the device. `wendy run` offers to set up each of them, then retries the build: it adds the `wendy_core` dependency and initializes it in `app_main()`, writes `sdkconfig.defaults.wendy`, and lists it in `SDKCONFIG_DEFAULTS` in `CMakeLists.txt`. The `wendy_core` setup supports C and C++ projects with a single `app_main()` definition under `main/`. Use `wendy run --yes` to accept setup without a prompt.
 
-To configure it manually, declare the dependency in `main/idf_component.yml`:
+To configure `wendy_core` manually, declare the dependency in `main/idf_component.yml`, with the Wendy Lite version of the device:
 
 ```yaml
 dependencies:
@@ -141,6 +141,7 @@ dependencies:
   wendy_core:
     git: "https://github.com/wendylabsinc/wendy-lite.git"
     path: "components/wendy_core"
+    version: "<Wendy Lite version of the device>"
 ```
 
 Then require it from your component in `main/CMakeLists.txt`:

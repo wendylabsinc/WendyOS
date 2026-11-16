@@ -32,7 +32,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
-	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
@@ -2031,32 +2030,32 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 		return tb.BuildWithType(ctx, device, projectPath, product, projectType, opts.debug)
 	}
 	app, err := p.Build(ctx, device, projectPath, projectType, product, opts.debug)
-	// Both repairs below need someone to accept them, and neither runs while
+	// The repairs need someone to accept them, and none runs while
 	// watching.
 	if opts.isWatch() || (!opts.yes && !isInteractiveTerminal()) {
 		return app, err
 	}
-	// The EIM check comes before the wendy_core one, so the retried build can
-	// still reach that offer.
-	if errors.Is(err, espidftoolchain.ErrEIMNotInstalled) {
-		installed, installErr := installMissingEIM(ctx, opts.yes)
-		if installErr != nil {
-			return nil, installErr
+	// A new project can need several repairs, one per build: see
+	// liteBuildRepair. Each runs at most once, so a repair that does not
+	// take effect cannot loop.
+	done := map[string]bool{}
+	for err != nil {
+		kind, repair := liteBuildRepair(err, projectPath, opts.yes)
+		if repair == nil || done[kind] {
+			return app, err
 		}
-		if !installed {
+		done[kind] = true
+		retry, repairErr := repair(ctx)
+		if repairErr != nil {
+			return nil, repairErr
+		}
+		if !retry {
 			return app, err
 		}
 		cliLogln("Retrying the build...")
 		app, err = p.Build(ctx, device, projectPath, projectType, product, opts.debug)
 	}
-	var missingCore *providers.MissingWendyCoreError
-	if !errors.As(err, &missingCore) {
-		return app, err
-	}
-	if err := setupLiteProject(ctx, projectPath, missingCore.Toolchain, opts.yes); err != nil {
-		return nil, err
-	}
-	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)
+	return app, err
 }
 
 // shouldOfferLiteReinstall reports whether a failed provider build should turn

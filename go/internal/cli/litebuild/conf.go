@@ -13,10 +13,14 @@ import (
 // TEMPORARY: the configurator is on this branch only.
 const DefaultRef = "gab/configurator"
 
+// MasterConfFile is the master configuration file, at the root of the
+// wendy-lite repository.
+const MasterConfFile = "master_config.yaml"
+
 // MasterConfPath returns the master configuration of the wendy-lite sources
 // in root.
 func MasterConfPath(root string) string {
-	return filepath.Join(root, "master_config.yaml")
+	return filepath.Join(root, MasterConfFile)
 }
 
 // Header returns the comment lines at the top of the sdkconfig text: the

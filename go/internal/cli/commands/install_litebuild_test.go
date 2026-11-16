@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -150,21 +149,6 @@ func TestLiteBuildRef(t *testing.T) {
 		if got := liteBuildRef(tc.nightly, tc.version); got != tc.want {
 			t.Errorf("liteBuildRef(%v, %q) = %q, want %q", tc.nightly, tc.version, got, tc.want)
 		}
-	}
-}
-
-func TestCheckGit(t *testing.T) {
-	orig := liteBuildLookPath
-	t.Cleanup(func() { liteBuildLookPath = orig })
-
-	liteBuildLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
-	err := checkGit()
-	if err == nil || !strings.Contains(err.Error(), "git is not installed") || !strings.Contains(err.Error(), gitInstallHint(runtime.GOOS)) {
-		t.Errorf("checkGit without git = %v, want the install hint", err)
-	}
-	liteBuildLookPath = func(string) (string, error) { return "/usr/bin/git", nil }
-	if err := checkGit(); err != nil {
-		t.Errorf("checkGit with git = %v", err)
 	}
 }
 

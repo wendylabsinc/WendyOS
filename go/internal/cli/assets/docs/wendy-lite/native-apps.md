@@ -7,7 +7,9 @@ device's connectivity and lets you write your own **native applications**,
 build them, and deploy them to it.
 
 Native apps are built with Espressif's tooling, in particular
-[ESP-IDF](https://docs.espressif.com/projects/esp-idf/), version **5.5**.
+[ESP-IDF](https://docs.espressif.com/projects/esp-idf/), in the version of the
+Wendy Lite build on your device (**6.0.3** for most boards, **6.1** for the
+ESP32-S31).
 ESP-IDF lets you write your application in C or C++. Because it is driven by
 CMake, you can also integrate other compiled languages, such as Rust or Swift.
 
@@ -37,9 +39,10 @@ Before you start, you need:
   and deploys your application.
 - **EIM**, the ESP-IDF Installation Manager — Espressif's tool for managing the
   ESP-IDF development environment (toolchains, Python environment, SDK
-  versions). Wendy Lite supports **ESP-IDF 6.0**; the Wendy CLI manages this
-  environment for you, so you never need to pin a version yourself. If EIM is
-  missing, `wendy run` offers to install it with Homebrew.
+  versions). The Wendy CLI manages this environment for you, so you never
+  need to pin a version yourself: `wendy run` installs the ESP-IDF version of
+  the Wendy Lite build on the device. If EIM is missing, `wendy run` offers to
+  install it with Homebrew.
 - a device already flashed with Wendy Lite.
 
 [Getting Started with Wendy Lite](./getting-started.md) walks through
@@ -54,7 +57,9 @@ version supports native apps, run `wendy device info` to check.
 A Wendy Lite native app is an ordinary ESP-IDF project with two additions:
 
 - a `wendy.json` manifest in the project root.
-- the **`wendy_core`** component.
+- the **`wendy_core`** component, at the Wendy Lite version of the device.
+- a `sdkconfig.defaults.wendy` file: the configuration of the Wendy Lite build
+  on the device.
 
 `wendy_core` is what makes your application a Wendy app rather than a bare
 ESP-IDF firmware. It runs your code inside the Wendy environment, so that the
@@ -76,6 +81,7 @@ component, a `sdkconfig.defaults` holding your build configuration, and a
 my-app/
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
+├── sdkconfig.defaults.wendy
 ├── wendy.json
 └── main/
     ├── CMakeLists.txt
@@ -101,9 +107,37 @@ my-app/
 > configuration in `sdkconfig.defaults` instead, or, if you really want to
 > rely on it, keep `sdkconfig` itself in your git repo.
 
+A native app is a full firmware image, so it must be configured like the
+Wendy Lite build on the device: flash size, WASM support, Wendy Cloud tunnel,
+board options. `sdkconfig.defaults.wendy` holds that configuration. `wendy run`
+generates it from the master configuration of the device's Wendy Lite version
+and the device's build profile, and offers to update it when the device runs
+another version or profile. Do not edit it, and commit it with your project.
+The partition table lines of the firmware are left out of it.
+
+The top-level `CMakeLists.txt` lists it in `SDKCONFIG_DEFAULTS`, before the
+include of `project.cmake`. Your own `sdkconfig.defaults` comes last, so its
+lines win:
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+
+set(SDKCONFIG_DEFAULTS "sdkconfig.defaults.wendy;sdkconfig.defaults")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(my-app)
+```
+
+`wendy run` offers to add this line, and to create an empty
+`sdkconfig.defaults` when there is none (ESP-IDF stops when a listed file is
+missing). When `sdkconfig.defaults.wendy` or `CMakeLists.txt` changes,
+`wendy run` generates `sdkconfig` again and keeps the previous one as
+`sdkconfig.old`.
+
 ### Step 2 — Declare the `wendy_core` dependency
 
-Add `wendy_core` to your component manifest, `main/idf_component.yml`:
+Add `wendy_core` to your component manifest, `main/idf_component.yml`. Its
+`version` is the Wendy Lite version of the device, a git tag or commit of
+wendy-lite:
 
 ```yaml
 dependencies:
@@ -112,7 +146,12 @@ dependencies:
   wendy_core:
     git: "https://github.com/wendylabsinc/wendy-lite.git"
     path: "components/wendy_core"
+    version: "<Wendy Lite version of the device>"
 ```
+
+`wendy run` offers to add the dependency when it is missing, and to change its
+`version` when the device runs another Wendy Lite version. A `wendy_core` from
+a local `path`, an `override_path` or another repository is not checked.
 
 Then require it from your component in `main/CMakeLists.txt`:
 
@@ -209,7 +248,8 @@ wendy run
 ```
 
 `wendy run` compiles the project, pushes the resulting application to the
-device, and starts it. It selects the right ESP-IDF toolchain version for you,
+device, and starts it. It selects the ESP-IDF version of the device's Wendy
+Lite build for you,
 so you do not have to pin one yourself. The application is pushed over USB, over
 the local network, or (soon) through the cloud.
 

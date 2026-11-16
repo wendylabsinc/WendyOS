@@ -330,7 +330,7 @@ func TestParseInstalledVersions(t *testing.T) {
 	}
 }
 
-func TestEnsureVersion_AlreadyInstalled(t *testing.T) {
+func TestEnsureIDFDefault_AlreadyInstalled(t *testing.T) {
 	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		if len(args) > 0 && args[0] == "list" {
 			return exec.CommandContext(ctx, "echo", "- "+DefaultVersion+" (selected) [/x]")
@@ -338,8 +338,8 @@ func TestEnsureVersion_AlreadyInstalled(t *testing.T) {
 		return exec.CommandContext(ctx, "true")
 	})
 
-	if err := EnsureVersion(context.Background()); err != nil {
-		t.Fatalf("EnsureVersion() unexpected error: %v", err)
+	if err := EnsureIDF(context.Background(), DefaultVersion); err != nil {
+		t.Fatalf("EnsureIDF() unexpected error: %v", err)
 	}
 
 	want := [][]string{{"eim", "--version"}, {"eim", "list"}}
@@ -348,7 +348,7 @@ func TestEnsureVersion_AlreadyInstalled(t *testing.T) {
 	}
 }
 
-func TestEnsureVersion_InstallsWhenMissing(t *testing.T) {
+func TestEnsureIDFDefault_InstallsWhenMissing(t *testing.T) {
 	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		if len(args) > 0 && args[0] == "list" {
 			return exec.CommandContext(ctx, "echo", "- v6.0.1 [/x]")
@@ -356,8 +356,8 @@ func TestEnsureVersion_InstallsWhenMissing(t *testing.T) {
 		return exec.CommandContext(ctx, "true")
 	})
 
-	if err := EnsureVersion(context.Background()); err != nil {
-		t.Fatalf("EnsureVersion() unexpected error: %v", err)
+	if err := EnsureIDF(context.Background(), DefaultVersion); err != nil {
+		t.Fatalf("EnsureIDF() unexpected error: %v", err)
 	}
 
 	if len(*calls) != 3 {
@@ -369,18 +369,18 @@ func TestEnsureVersion_InstallsWhenMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureVersion_EimNotFound(t *testing.T) {
+func TestEnsureIDFDefault_EimNotFound(t *testing.T) {
 	stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "nonexistent-binary-that-does-not-exist")
 	})
 
-	err := EnsureVersion(context.Background())
+	err := EnsureIDF(context.Background(), DefaultVersion)
 	if err == nil {
-		t.Fatal("EnsureVersion() expected error when eim is not installed, got nil")
+		t.Fatal("EnsureIDF() expected error when eim is not installed, got nil")
 	}
 	// The CLI recognizes this to offer the install.
 	if !errors.Is(err, ErrEIMNotInstalled) {
-		t.Errorf("EnsureVersion() = %v, want ErrEIMNotInstalled", err)
+		t.Errorf("EnsureIDF() = %v, want ErrEIMNotInstalled", err)
 	}
 	if !strings.Contains(err.Error(), "eim (ESP-IDF Installation Manager) is not installed") ||
 		!strings.Contains(err.Error(), eimInstallHint(runtime.GOOS)) {

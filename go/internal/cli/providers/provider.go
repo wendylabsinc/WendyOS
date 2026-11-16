@@ -61,6 +61,12 @@ type ProviderDeviceInfo struct {
 	DeviceType       string // e.g. the SoC/IDF target name for wendy-lite
 	WasmAppSupport   bool
 	NativeAppSupport bool
+	// LiteVersion and LiteBuildProfile describe the Wendy Lite build on a
+	// wendy-lite device: its version (a wendy-lite git ref) and its build
+	// profile (the configurator input values, as flat YAML). A native app
+	// is configured for them. "" when unknown.
+	LiteVersion      string
+	LiteBuildProfile string
 }
 
 // BuiltApp is the result of a successful Build. The opaque Context field

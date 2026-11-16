@@ -3,15 +3,12 @@
 package commands
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
@@ -49,7 +46,6 @@ var (
 		}
 		return filepath.Join(dir, "wendy-lite-build", "answers.json"), nil
 	}
-	liteBuildLookPath = exec.LookPath
 )
 
 // runLiteBuild builds Wendy Lite from source and flashes it:
@@ -74,7 +70,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 		return err
 	}
 
-	if err := checkGit(); err != nil {
+	if err := litebuild.CheckGit(); err != nil {
 		return err
 	}
 	ref := liteBuildRef(nightly, version)
@@ -228,25 +224,6 @@ func liteBuildRef(nightly bool, version string) string {
 	return litebuild.DefaultRef
 }
 
-// checkGit checks that git is installed and on PATH.
-func checkGit() error {
-	if _, err := liteBuildLookPath("git"); err != nil {
-		return fmt.Errorf("git is not installed or not on PATH; %s", gitInstallHint(runtime.GOOS))
-	}
-	return nil
-}
-
-// gitInstallHint names the command that installs git on goos.
-func gitInstallHint(goos string) string {
-	switch goos {
-	case "darwin":
-		return "install it via 'xcode-select --install' or 'brew install git'"
-	case "windows":
-		return "install it via 'winget install --id Git.Git -e --source winget'"
-	}
-	return "install the git package of your distribution (for example 'sudo apt install git')"
-}
-
 // cloneLiteSources clones the tag or branch ref of the wendy-lite repository
 // at url into a new temporary folder, without history. It returns the folder
 // and the short commit.
@@ -257,37 +234,16 @@ func cloneLiteSources(ctx context.Context, url, ref string) (dir, commit string,
 	}
 	fmt.Printf("Cloning wendy-lite %s from %s into %s...\n", ref, url, dir)
 	// --branch takes a tag or a branch.
-	if _, err := liteBuildGit(ctx, "", "clone", "--quiet", "--depth", "1", "--branch", ref, url, dir); err != nil {
+	if _, err := litebuild.Git(ctx, "", "clone", "--quiet", "--depth", "1", "--branch", ref, url, dir); err != nil {
 		os.RemoveAll(dir)
 		return "", "", fmt.Errorf("cloning wendy-lite %q (check the tag or branch name): %w", ref, err)
 	}
-	out, err := liteBuildGit(ctx, dir, "rev-parse", "--short", "HEAD")
+	out, err := litebuild.Git(ctx, dir, "rev-parse", "--short", "HEAD")
 	if err != nil {
 		os.RemoveAll(dir)
 		return "", "", err
 	}
 	return dir, strings.TrimSpace(out), nil
-}
-
-// liteBuildGit runs git, in dir when it is not empty, and returns its
-// output.
-func liteBuildGit(ctx context.Context, dir string, args ...string) (string, error) {
-	if dir != "" {
-		args = append([]string{"-C", dir}, args...)
-	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	// Fail instead of waiting for credentials: the repository is public.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		if details := strings.TrimSpace(stderr.String()); details != "" {
-			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, details)
-		}
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-	}
-	return string(out), nil
 }
 
 // runLiteBuildCommand runs name in dir, in the environment of the ESP-IDF
