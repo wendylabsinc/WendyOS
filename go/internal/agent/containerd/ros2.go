@@ -563,7 +563,7 @@ func (c *Client) sidecarHasROS2CLI(ctx context.Context, container containerd.Con
 	if err != nil {
 		return false, err
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = false
 	pspec.Args = ros2ShellArgs(distro,
 		fmt.Sprintf(". %s >/dev/null 2>&1; command -v ros2 >/dev/null 2>&1", ros2SetupScript(distro)),
@@ -1031,23 +1031,17 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 	if err != nil {
 		return -1, fmt.Errorf("reading ROS 2 sidecar spec: %w", err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	// The ROS environment lives in /opt/ros/<distro>/setup.sh; the "$@"
 	// indirection keeps user-supplied args out of shell interpretation
 	// (SOC2-CC6, ISO27001-A.8, NIST-SI-10). See ros2ShellArgs for why this is
 	// /bin/sh rather than /bin/bash.
 	pspec.Terminal = false
 	pspec.Args = args
-	// Copy pspec.Env before appending to avoid mutating the slice header returned
-	// by container.Spec (future callers might cache the spec or share the backing
-	// array across execs — defensive copy prevents env bleed-over, L5, WDY-1706).
-	//
 	// ROS_AUTOMATIC_DISCOVERY_RANGE accompanies ROS_LOCALHOST_ONLY for the same
 	// reason as in buildROS2Env: the latter has been deprecated since Iron, and the
 	// sidecar has to see the same graph as the app it is anchored to.
-	pspec.Env = append(append([]string(nil), pspec.Env...),
-		"ROS_DOMAIN_ID="+strconv.Itoa(opts.DomainID),
-	)
+	pspec.Env = append(pspec.Env, "ROS_DOMAIN_ID="+strconv.Itoa(opts.DomainID))
 	discoveryEnv, err := c.ros2SidecarDiscoveryEnv(nctx, labels, hostInspector || systemCLI)
 	if err != nil {
 		return -1, err

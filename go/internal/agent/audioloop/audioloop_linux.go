@@ -8,6 +8,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 )
 
 func defaultDeps() deps {
@@ -38,6 +40,7 @@ type aplayWriter struct {
 
 func newAplayWriter(ctx context.Context, hwID string, f PCMFormat) (AudioWriter, error) {
 	cmd := exec.CommandContext(ctx, "aplay", aplayArgs(hwID, f)...)
+	oomscore.ResetChild(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("aplay stdin pipe: %w", err)

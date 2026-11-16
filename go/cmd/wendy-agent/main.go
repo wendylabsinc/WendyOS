@@ -71,6 +71,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
@@ -128,6 +129,9 @@ func (a *containerMonitorAdapter) RestartStatuses() map[string]services.RestartS
 	return a.m.RestartStatuses()
 }
 
+// protectProcess is a var so tests can stub it.
+var protectProcess = oomscore.Protect
+
 func main() {
 	if handled, code := handleUtilityCommand(os.Args[1:]); handled {
 		os.Exit(code)
@@ -159,6 +163,10 @@ func main() {
 	// Logging the contract also keeps it in the binary, where the supervisor
 	// looks for it before it runs a new agent.
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version), zap.String("contract", supervisor.AgentContract))
+	// Workloads are reset to 0 at their spawn sites; helpers inherit this score.
+	if err := protectProcess(); err != nil {
+		logger.Warn("agent OOM protection unavailable", zap.Error(err))
+	}
 	if err := hoststats.EnableAgentNetworkAccounting(context.Background()); err != nil {
 		logger.Info("Agent network accounting unavailable", zap.Error(err))
 	}

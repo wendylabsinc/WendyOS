@@ -57,6 +57,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -3113,12 +3114,9 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("reading container spec for %q: %w", appName, err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = tty
 	pspec.Args = command
-	// Defensive copy of Env before use (mirrors the ROS 2 exec path) so we never
-	// mutate the slice backing the cached container spec.
-	pspec.Env = append([]string(nil), pspec.Env...)
 
 	var ioCreator cio.Creator
 	if tty {
@@ -3675,6 +3673,7 @@ var startPostStartHookCommand = func(argv []string) (func() error, error) {
 		return nil, errors.New("postStart hook argv is empty")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	oomscore.ResetChild(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
