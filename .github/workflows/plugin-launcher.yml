@@ -2,25 +2,7 @@ name: Plugin launcher
 
 on:
   workflow_call:
-  pull_request:
-    paths:
-      - 'plugins/wendy/scripts/**'
-      - 'scripts/pin-cli.sh'
-      - 'scripts/test/plugin-launcher/**'
-      - '.github/workflows/plugin-launcher.yml'
-      - '.github/actions/setup-macos-ci/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.gitattributes'
-  push:
-    branches: [main]
-    paths:
-      - 'plugins/wendy/scripts/**'
-      - 'scripts/pin-cli.sh'
-      - 'scripts/test/plugin-launcher/**'
-      - '.github/workflows/plugin-launcher.yml'
-      - '.github/actions/setup-macos-ci/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.gitattributes'
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -116,12 +116,12 @@ class ReleaseProvenanceWorkflowTests(unittest.TestCase):
 
     def test_required_ci_runs_both_fixture_suites_on_gate_and_workflow_changes(self):
         build_events = self.workflow.get('on', self.workflow.get(True))
-        self.assertIn('.github/scripts/verify-release.py', build_events['push']['paths'])
+        self.assertIn('.github/scripts/**', build_events['push']['paths'])
         ci = yaml.safe_load((ROOT / '.github/workflows/go-tests.yml').read_text())
         events = ci.get('on', ci.get(True))
-        for event in ['push', 'pull_request']:
-            self.assertIn('.github/scripts/**', events[event]['paths'])
-            self.assertIn('.github/workflows/**', events[event]['paths'])
+        self.assertIn('workflow_call', events)
+        self.assertNotIn('pull_request', events)
+        self.assertIn('.github/workflows/**', build_events['push']['paths'])
         job = ci['jobs']['automation-regressions']
         self.assertNotIn('if', job)
         self.assertTrue(any('run-automation-regressions.py' in s.get('run', '') for s in job['steps']))
