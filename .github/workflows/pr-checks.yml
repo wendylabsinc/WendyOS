@@ -46,3 +46,42 @@ jobs:
       - name: Check shared gRPC API contracts
         run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
 
+  go-tests:
+    name: Go unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Check whether Go tests apply
+        id: scope
+        shell: bash
+        run: |
+          git diff --name-only -z HEAD^1 HEAD > "$RUNNER_TEMP/pr-files"
+          python3 - <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import os
+          from pathlib import Path
+          paths = Path(os.environ['RUNNER_TEMP'], 'pr-files').read_bytes().split(b'\0')
+          prefixes = (b'go/', b'Proto/', b'.github/actions/setup-go-ci/')
+          files = (b'go.mod', b'go.sum', b'.github/workflows/pr-checks.yml')
+          relevant = any(path.startswith(prefixes) or path in files for path in paths)
+          print(f'go={str(relevant).lower()}')
+          PYTHON
+      - name: Set up Go
+        if: steps.scope.outputs.go == 'true'
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: pr-unit
+      - name: Install system dependencies
+        if: steps.scope.outputs.go == 'true'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+      - name: Run short Go unit tests
+        if: steps.scope.outputs.go == 'true'
+        working-directory: go
+        run: go test -short -vet=off -count=1 -timeout 300s ./...
+      - name: Run short Babel unit tests
+        if: steps.scope.outputs.go == 'true'
+        working-directory: go/babel
+        run: go test -short -vet=off -count=1 -timeout 300s ./...

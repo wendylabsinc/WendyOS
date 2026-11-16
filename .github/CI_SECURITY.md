@@ -68,7 +68,10 @@ repository secret's scope have not been certified by these workflow checks.
 ## When checks run
 
 PRs report the existing required `Shared gRPC API contracts` context on every
-change, so path filters cannot leave branch protection waiting forever. Swift
+change, so path filters cannot leave branch protection waiting forever. A single
+Linux Go job runs short unit tests for Go, Proto, module or test-setup changes,
+including the nested Babel module. Race tests and platform fixtures stay at
+pre-release. Swift
 lint, documentation previews, and the offline agent-evaluation harness retain
 their own relevant path filters. AI review triggers are unchanged.
 
