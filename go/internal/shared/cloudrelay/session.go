@@ -53,7 +53,6 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	if err != nil {
 		return nil, err
 	}
-	context.AfterFunc(s.stream.Context(), func() { _ = s.Close() })
 	if err = s.stream.Send(&pb.JoinSessionRequest{Message: &pb.JoinSessionRequest_Open{Open: &pb.JoinOpen{SessionGrantJws: artifact, Role: role}}}); err != nil {
 		return nil, err
 	}
@@ -61,6 +60,10 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	if err != nil {
 		return nil, fmt.Errorf("joining Cloud relay: %w", err)
 	}
+	// Context commits the attempt, which ends gRPC's transparent retry of a
+	// stream the broker never processed (a reused connection that is draining).
+	// Ask for it only once the broker has answered.
+	context.AfterFunc(s.stream.Context(), func() { _ = s.Close() })
 	label := "caller"
 	if role == pb.JoinRole_JOIN_ROLE_AGENT {
 		label = "agent"

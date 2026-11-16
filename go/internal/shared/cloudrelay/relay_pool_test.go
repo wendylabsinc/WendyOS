@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http/httptest"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -472,6 +474,89 @@ func TestRelayPoolMaxAgeDoesNotInterruptActiveSession(t *testing.T) {
 	poolEcho(t, fresh)
 	_ = old.Close()
 	waitPool(t, func() bool { return old.conn.GetState() == connectivity.Shutdown })
+}
+
+// drainingFront fronts a broker. Its first connection answers the first request
+// with GOAWAY(last-stream-id 0): the stream was not processed, as when a new
+// stream races a draining broker or load balancer. Later connections are
+// forwarded to the broker.
+func drainingFront(t *testing.T, broker string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for first := true; ; first = false {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if !first {
+				go func() {
+					defer conn.Close()
+					upstream, err := net.Dial("tcp", broker)
+					if err != nil {
+						return
+					}
+					defer upstream.Close()
+					go io.Copy(upstream, conn)
+					io.Copy(conn, upstream)
+				}()
+				continue
+			}
+			go func() {
+				defer conn.Close()
+				if _, err := io.ReadFull(conn, make([]byte, len(http2.ClientPreface))); err != nil {
+					return
+				}
+				framer := http2.NewFramer(conn, conn)
+				_ = framer.WriteSettings()
+				for {
+					frame, err := framer.ReadFrame()
+					if err != nil {
+						return
+					}
+					switch f := frame.(type) {
+					case *http2.SettingsFrame:
+						if !f.IsAck() {
+							_ = framer.WriteSettingsAck()
+						}
+					case *http2.PingFrame:
+						if !f.IsAck() {
+							_ = framer.WritePing(true, f.Data)
+						}
+					case *http2.HeadersFrame:
+						_ = framer.WriteGoAway(0, http2.ErrCodeNo, nil)
+					}
+				}
+			}()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+// gRPC moves a stream the server never processed to a fresh transport, unless
+// the attempt was already committed. Pooled connections meet a draining broker
+// far more often than one-shot dials did, so join must leave that retry intact.
+func TestRelayJoinRetriesStreamRefusedByDrainingConnection(t *testing.T) {
+	broker, endpoint, dial, dials := newPoolBroker(t)
+	fronted := &pb.BrokerInstance{Endpoint: drainingFront(t, endpoint.Endpoint), Audience: endpoint.Audience}
+	v := &Verifier{relayDial: dial}
+	t.Cleanup(func() { _ = v.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	artifact, grant := broker.grant(t, fronted)
+	s, err := join(ctx, fronted, artifact, grant.claims, grant.key, pb.JoinRole_JOIN_ROLE_CALLER, v, "wendy-agent")
+	if err != nil {
+		t.Fatalf("join over a draining connection: %v", err)
+	}
+	defer s.Close()
+	poolEcho(t, s)
+	if dials.Load() != 1 {
+		t.Fatalf("dials = %d, want the retry on the same pooled client", dials.Load())
+	}
 }
 
 func BenchmarkRelaySessionJoin(b *testing.B) {
