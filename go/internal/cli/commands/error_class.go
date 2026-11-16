@@ -61,6 +61,7 @@ func ErrorClass(err error) string {
 	var missing *errCloudDeviceNotFound
 	var orgMismatch orgMismatchDeviceError
 	var agentDown agentNotListeningError
+	var noLogin missingLoginError
 	var certErr cloudCertError
 	switch {
 	// A SIGTERM outranks whatever the interrupted operation reported: the run
@@ -85,6 +86,10 @@ func ErrorClass(err error) string {
 		return "device_auth_required"
 	case errors.Is(err, errDeviceNotResolved):
 		return "device_not_resolved"
+	// No stored login to try a saved device with. Nothing was dialled, so this
+	// is the missing login, not a device that failed to answer.
+	case errors.As(err, &noLogin):
+		return "auth_required"
 	case errors.Is(err, errNoAuthenticatedEndpoint), errors.Is(err, errDeviceUnreachable), errors.As(err, &agentDown):
 		return "device_unreachable"
 	case errors.Is(err, config.ErrNotLoggedIn):
@@ -107,12 +112,14 @@ func ErrorClass(err error) string {
 		return "registry_auth"
 	case isRegistryUnavailable(err):
 		return "registry_unavailable"
-	case errors.Is(err, errBuilderUnavailable):
-		return "builder_unavailable"
 	// Refused before a build for lack of space: the same class as the OS
-	// error the build would otherwise have ended with.
+	// error the build would otherwise have ended with. Ahead of
+	// builder_unavailable because a pre-build refusal can name both, and
+	// disk_full is how callers know nothing was deployed.
 	case errors.Is(err, errDiskSpaceLow):
 		return "disk_full"
+	case errors.Is(err, errBuilderUnavailable):
+		return "builder_unavailable"
 	// A missing executable during a build is a missing tool, not a failed
 	// compilation. exec.ErrNotFound survives the build failure wrapper.
 	case errors.Is(err, exec.ErrNotFound):

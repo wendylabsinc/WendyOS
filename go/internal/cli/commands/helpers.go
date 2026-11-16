@@ -1500,7 +1500,8 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 // addr for the ladder and its retries, "" when the USB-direct fallback
 // substituted a connection that never touched addr. pinKey is the key the
 // caller derived once for addr and judges the connection under: the ladder
-// and every retry dial under it too.
+// and every retry dial under it too, and a substituted connection is handed
+// back carrying it.
 func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr, pinKey string, isDefault bool) (_ *grpcclient.AgentConnection, dialled string, finished bool, _ error) {
 	startedAt := time.Now()
 	dialled = addr
@@ -1539,7 +1540,10 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
 			// The stored address is unreachable but the same device (verified
 			// by hostname) is on USB — use it directly. It is not the address
-			// that was asked for, so it is never treated as the typed one.
+			// that was asked for, so it is never treated as the typed one. It
+			// is still the device that was asked for, and the caller judges
+			// it under pinKey (see keepAsRequestedDevice).
+			keepAsRequestedDevice(usbConn, pinKey)
 			conn, dialled = usbConn, ""
 		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.
@@ -1573,6 +1577,35 @@ func markTypedVMConnection(conn *grpcclient.AgentConnection, pinKey, dialled str
 	}
 	if name, ok := strings.CutPrefix(pinKey, vmDeviceIDPrefix); ok && name != "" {
 		conn.SimulatorName = name
+	}
+}
+
+// keepAsRequestedDevice makes usbConn — a connection the USB-direct fallback
+// substituted for a named device's own address — the requested device's
+// connection, which is what the front door then judges it as. The fallback
+// dialled it under the USB address's own key, so it arrives carrying that key
+// and that key's answer to "is there a saved identity?" (normally none). Both
+// are about the wrong name, so before the pin check:
+//
+//   - DevicePinKey becomes pinKey. A reconnect after an agent or OS update is
+//     made under the key the connection carries; under the USB address's it
+//     would accept any enrolled board on the cable.
+//   - NoSavedIdentity is cleared when pinKey has a saved identity. The pin
+//     check compares the device with that identity, so this is not a first
+//     contact and must not be announced as one. "Saved" is the ladder's own
+//     reading (see dialTarget.pinned).
+//
+// The mark is only ever cleared, and never for a plaintext connection. Nothing
+// authenticated that peer, whatever is saved: a saved name refuses it (see
+// challengeUnprovisionedDevice), and for an unsaved one it must stay marked so
+// Wi-Fi credentials still need consent (see AgentConnection.UnverifiedPlaintext).
+func keepAsRequestedDevice(usbConn *grpcclient.AgentConnection, pinKey string) {
+	usbConn.DevicePinKey = pinKey
+	if !usbConn.NoSavedIdentity || !usbConn.IsMTLS {
+		return
+	}
+	if _, _, saved := governingPin(pinKey); saved {
+		usbConn.NoSavedIdentity = false
 	}
 }
 
@@ -2274,6 +2307,12 @@ func mdnsLocalHint(host string) string {
 // message: the CLI's rewrite of the gRPC error in the middle of the message
 // used to drop everything after it, and JSON mode lists steps separately.
 func defaultDeviceUnreachableError(hostname string, err error) error {
+	// A missing login is not a failure to reach the default: nothing was
+	// dialled, and its own message names the device and the sign-in step.
+	var noLogin missingLoginError
+	if errors.As(err, &noLogin) {
+		return err
+	}
 	steps := []string{"Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."}
 	if hint := strings.TrimPrefix(mdnsLocalHint(hostname), "\n  "); hint != "" {
 		steps = append(steps, hint)
@@ -2959,7 +2998,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// Nothing answered, so no certificate ever arrived and no identity was
 		// ever compared: this refusal is about reachability and says so, and it
 		// is deliberately NOT an errDeviceIdentityRefused (see
-		// errNoAuthenticatedEndpoint).
+		// errNoAuthenticatedEndpoint). With no stored certificate nothing was
+		// dialled at all, and pinnedRefusalError reports the missing login.
 		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
 		failure.pinKey = target.PinKey
 		tenant := ""
@@ -3851,6 +3891,9 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 			}
 		}
 		conn, brokerHit := (*grpcclient.AgentConnection)(nil), false
+		// dialled is the endpoint conn actually reached: addr, unless the
+		// USB-direct fallback substituted another connection ("" then).
+		dialled := addr
 		if !cfg.disableSessionBroker {
 			conn, brokerHit = connectPinnedSessionKeyed(ctx, addr, pinKey)
 		}
@@ -3890,6 +3933,16 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 				} else if ctx.Err() != nil || cfg.readOnlyMonitoring || stopConnectionRecovery(err) || errors.Is(err, errProvisionedAgentUnauthorized) ||
 					(cfg.enrollmentTrustRecovery && errors.Is(err, errNoAuthenticatedEndpoint)) {
 					return nil, err
+				} else if usbConn, ok := usbDirectFallback(ctx, pinKey); ok {
+					// The same fallback connectToAgentDirect makes, at the same
+					// point: addr is unreachable but the same device (verified by
+					// hostname) is on USB — use it directly. It is not the address
+					// that was asked for, so it is never treated as the typed one.
+					//
+					// It is still the device that was asked for, and the check
+					// below judges it under pinKey (see keepAsRequestedDevice).
+					keepAsRequestedDevice(usbConn, pinKey)
+					conn, dialled = usbConn, ""
 				} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 					// Default device is unreachable — offer interactive recovery.
 					recovered, recErr := handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll, cfg.sameTargetFallback)
@@ -3910,16 +3963,18 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// Judged under the key it was dialled with — unless a local VM started
 		// or stopped meanwhile, which refuses it with nothing recorded or
 		// marked. The typed address goes with it, for a running VM's bare-key
-		// record (see typedVMBarePinKey).
+		// record (see typedVMBarePinKey). A connection the USB fallback
+		// substituted is judged under the same key, the requested device's,
+		// and was never dialled at the typed address.
 		if keyErr := recheckDialPinKey(addr, pinKey); keyErr != nil {
 			conn.Close()
 			return nil, keyErr
 		}
-		if pinErr := enforceDevicePinAt(pinKey, addr, conn); pinErr != nil {
+		if pinErr := enforceDevicePinAt(pinKey, dialled, conn); pinErr != nil {
 			conn.Close()
 			return nil, pinErr
 		}
-		markTypedVMConnection(conn, pinKey, addr)
+		markTypedVMConnection(conn, pinKey, dialled)
 		if !cfg.suppressUpdateCheck {
 			var updateErr error
 			conn, updateErr = checkAndOfferUpdateFn(ctx, conn)
@@ -4167,6 +4222,11 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 			md.DisplayName = nd.DisplayName
 			existing.SortKey = deviceSortKey(existing.Name, existing.USB)
 		}
+	} else if nd.LAN != nil && lanRowAddressRank(incoming.Address) > lanRowAddressRank(existing.Address) {
+		// A later sighting changes the address the row shows only for a
+		// better-ranked one, so the result does not depend on which sighting
+		// arrived first. The row's device record, and so what is dialled, stays.
+		existing.Address = incoming.Address
 	}
 	if nd.LAN != nil && md.LAN != nil && nd.LAN.ID == md.LAN.ID {
 		// A later event from the same device carries its current cable record.
@@ -4535,11 +4595,13 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	// The engine handles offline detection and retry (see discovery.StreamLAN).
 	events := lanStreamFn(discoverCtx, cliLANStreamOptions(discoverCtx))
 	go func() {
-		// ev.Supersedes needs no handling here: picker rows dedup by hostname
-		// (deviceDedupKey/HostKey), so a superseded connect-minted row and the
-		// TXT-id row that replaces it are already the same row.
+		// Picker rows dedup by hostname (deviceDedupKey/HostKey), so a
+		// superseded connect-minted row and the TXT-id row that replaces it are
+		// already the same row. lanPickerRows takes back the row a device
+		// leaves behind when it comes back under another hostname.
+		rows := newLANPickerRows()
 		for ev := range events {
-			if msg := lanPickerEventMsg(ev); msg != nil {
+			for _, msg := range rows.eventMsgs(ev) {
 				p.Send(devicePickerLocalMsg{msg: msg})
 			}
 		}
@@ -4706,6 +4768,118 @@ func lanPickerEventMsg(ev discovery.LANEvent) tea.Msg {
 	}
 }
 
+// lanPickerRows turns the discovery stream's events into picker messages and
+// keeps one LAN row per device the stream reports.
+//
+// The stream identifies a device by its cache identity (the TXT device id);
+// the picker keys rows by hostname. A board that takes a new hostname, as one
+// does when it applies the name chosen at install, therefore arrives as the
+// same device under a new row key, and lanPickerEventMsg alone would add a
+// second row and leave the first. Here the row a device was last listed under
+// is remembered, and taken back when the stream reports that device under
+// another hostname or names it as replaced (LANEvent.Supersedes).
+//
+// Those two are the only grounds for removing a row: the stream saying this is
+// the same device. A name or an address alone is never one.
+type lanPickerRows struct {
+	listed map[string]models.LANDevice // cache identity -> device as last listed
+}
+
+func newLANPickerRows() *lanPickerRows {
+	return &lanPickerRows{listed: make(map[string]models.LANDevice)}
+}
+
+// eventMsgs returns the picker messages for one stream event, in the order
+// they must be delivered.
+func (r *lanPickerRows) eventMsgs(ev discovery.LANEvent) []tea.Msg {
+	msg := lanPickerEventMsg(ev)
+	if msg == nil {
+		return nil
+	}
+	identity := discoverycache.Key(ev.Device.ID, ev.Device.DisplayName)
+	add, listing := msg.(tui.PickerAddMsg)
+	if !listing {
+		delete(r.listed, identity) // retracted: lanPickerEventMsg drops its row
+		return []tea.Msg{msg}
+	}
+
+	rowKey := lanPickerRemoveMsg(ev.Device).Key
+	var msgs []tea.Msg
+	for _, earlier := range []string{identity, ev.Supersedes} {
+		previous, known := r.listed[earlier]
+		if !known {
+			continue
+		}
+		delete(r.listed, earlier)
+		staleKey := lanPickerRemoveMsg(previous).Key
+		if strings.EqualFold(staleKey, rowKey) || r.rowListed(staleKey) {
+			// Still this device's row, or one another device is listed under.
+			continue
+		}
+		switch {
+		case models.CanonicalDevicePrincipal(previous.PrincipalURI) != "":
+			// As for a retraction: take only the LAN path, so a mesh path
+			// merged into the row survives.
+			msgs = append(msgs, lanPickerEventMsg(discovery.LANEvent{Kind: discovery.LANRetracted, Device: previous}))
+		case add.Items[0].Supersedes == "":
+			// The picker swaps the rows in one step and keeps the highlight
+			// on the replacement.
+			add.Items[0].Supersedes = staleKey
+		default:
+			msgs = append(msgs, tui.PickerRemoveMsg{Key: staleKey})
+		}
+	}
+	r.listed[identity] = ev.Device
+	return append(msgs, add)
+}
+
+// rowListed reports whether any device is currently listed under rowKey.
+func (r *lanPickerRows) rowListed(rowKey string) bool {
+	for _, dev := range r.listed {
+		if strings.EqualFold(lanPickerRemoveMsg(dev).Key, rowKey) {
+			return true
+		}
+	}
+	return false
+}
+
+// lanRowAddressRank is the one rule for which address a LAN row shows. The
+// fixed USB address (discovery.WellKnownUSBAddr, which a WendyOS board adds to
+// its USB gadget interface next to that interface's own link-local address)
+// outranks every other address. Which of the two a lookup returns first is
+// arbitrary, so without a rank two USB boards could show one kind each. All
+// other addresses rank equal, so a row keeps the one it showed first.
+func lanRowAddressRank(address string) int {
+	if address == "" {
+		return 0
+	}
+	host := address
+	if h, _, err := net.SplitHostPort(address); err == nil {
+		host = h
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Zone() != "" && ip.WithZone("") == netip.MustParseAddr(discovery.WellKnownUSBAddr) {
+		return 2
+	}
+	return 1
+}
+
+// lanRowAddress is the address a LAN row shows for dev: the first address the
+// CLI dials, unless a better-ranked one (see lanRowAddressRank) is among those
+// the device was heard at. It is display only. What is dialled, and in which
+// order, still comes from lanAgentAddresses and lanDialCandidates.
+func lanRowAddress(dev models.LANDevice) string {
+	best := preferredLANAddress(dev)
+	if dev.Mesh {
+		return best
+	}
+	for _, heard := range dev.Addresses {
+		if candidate := hostPort(heard, lanAgentPort(dev)); lanRowAddressRank(candidate) > lanRowAddressRank(best) {
+			best = candidate
+		}
+	}
+	return best
+}
+
 // lanPickerItem is the run picker's row for a LAN device.
 func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tui.PickerItem {
 	devCopy := dev
@@ -4729,7 +4903,7 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 		Name:          dev.DisplayName,
 		Type:          kind,
 		USB:           dev.USB,
-		Address:       preferredLANAddress(dev),
+		Address:       lanRowAddress(dev),
 		AgentVersion:  dev.AgentVersion,
 		AgentOutdated: agentBehindCLI(version.Version, dev.AgentVersion),
 		OS:            os,

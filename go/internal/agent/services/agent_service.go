@@ -717,7 +717,7 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 	}
 	// committed is declared before the defer so the closure captures it.
 	// On success the lock is intentionally NOT released: the process exits
-	// within 500 ms and holding the lock prevents a concurrent update from
+	// soon after and holding the lock prevents a concurrent update from
 	// racing on the just-installed binary during that shutdown window.
 	committed := false
 	defer func() {
@@ -833,15 +833,6 @@ func finishCommittedUpdate(logger *zap.Logger, sendAck func() error, scheduleExi
 			zap.Error(err))
 	}
 	return nil
-}
-
-// scheduleAgentRestartExit exits the process after a short grace period so
-// systemd restarts the agent on the just-committed binary.
-func scheduleAgentRestartExit() {
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
 }
 
 func (s *AgentService) ListWiFiNetworks(ctx context.Context, _ *agentpb.ListWiFiNetworksRequest) (*agentpb.ListWiFiNetworksResponse, error) {

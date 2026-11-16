@@ -1,6 +1,7 @@
 name: Plugin launcher
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - 'plugins/wendy/scripts/**'
