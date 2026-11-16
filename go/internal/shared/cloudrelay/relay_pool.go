@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -98,6 +99,20 @@ func (p *relayPool) removeLocked(entry *relayTransport) {
 		_ = entry.conn.Close()
 	}
 	p.wakeLocked()
+}
+
+// retire stops assigning sessions to the current connections, for example once
+// the network path they were dialed over has changed. A session in progress
+// keeps its connection until it ends; idle connections close now.
+func (p *relayPool) retire() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, entry := range slices.Clone(p.entries) {
+		entry.retired = true
+		if entry.refs == 0 {
+			p.removeLocked(entry)
+		}
+	}
 }
 
 // errRelayPoolBusy marks a session that ran out of time while every connection

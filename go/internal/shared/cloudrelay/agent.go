@@ -581,6 +581,11 @@ func (a *Agent) runOnce(parent context.Context) error {
 			// new path. Re-presenting it saves an IssuePresenceLease round
 			// trip; if the broker does refuse it, that attempt drops it.
 			keepLease = true
+			// Pooled relay connections were dialed over the old path. A removed
+			// source leaves them dead until keepalive notices, and they still
+			// look ready; a moved path leaves them on the route presence is
+			// leaving. Later sessions dial again, as each one did before pooling.
+			a.Verifier.relays.retire()
 			return err
 		case <-renewal.C:
 			if workerDone != nil || renewing != nil {

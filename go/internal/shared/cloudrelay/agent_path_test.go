@@ -17,6 +17,7 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
 )
@@ -225,6 +226,14 @@ func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
 			if tc.refresh {
 				a.presenceMaxAge = 80 * time.Millisecond
 			}
+			// A session's relay connection, dialed over the path about to change.
+			defer v.Close()
+			poolKey := relayPoolKey{endpoint: r.endpoint}
+			pooled, releasePooled, err := v.relays.acquire(ctx, poolKey, dial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer releasePooled()
 			done := make(chan error, 1)
 			go func() { done <- a.runOnce(ctx) }()
 			select {
@@ -256,6 +265,20 @@ func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
 				}
 			case <-ctx.Done():
 				t.Fatal("removed source kept stale presence")
+			}
+			// Sessions opened after a path change dial again instead of joining a
+			// connection on the old path, which may be dead without knowing it.
+			// The active session keeps its connection; a refresh moves no path.
+			next, releaseNext, err := v.relays.acquire(ctx, poolKey, dial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			releaseNext()
+			if reused := next == pooled; reused != tc.refresh {
+				t.Fatalf("new session reused the earlier relay connection = %v, want %v", reused, tc.refresh)
+			}
+			if pooled.GetState() == connectivity.Shutdown {
+				t.Fatal("reconnect closed a relay connection that carries a session")
 			}
 			// The broker never refused the lease, so the reconnect presents
 			// it again instead of asking Cloud for a new one.

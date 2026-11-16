@@ -87,8 +87,9 @@ connections, closes unused connections after 30 seconds, and stops assigning new
 sessions to a connection after ten minutes. Active sessions finish normally when
 a connection ages out. If every slot is active, a new session joins the newest
 aged connection of its own class while that connection is healthy; otherwise it
-waits for a slot within its own deadline. Presence and reachability probes use
-independent connections.
+waits for a slot within its own deadline. When the Agent's network path
+changes, its later sessions open a new connection; sessions in progress keep
+theirs. Presence and reachability probes use independent connections.
 
 ## Reconnection and app uploads
 
