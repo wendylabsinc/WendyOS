@@ -66,9 +66,18 @@ persistent EFI settings, preserves valid retry counts, and verifies each write
 by reading the variable back. This preparation applies to both agent API versions.
 
 If firmware rejects a write, the agent stops before downloading or staging the
-OS update. It also refuses to change a disabled volatile setting: that change
-would be lost at reboot. Such devices need an A/B-enabled firmware configuration
-or image. Preparation does not repair an incompatible bootloader capsule.
+OS update. It also never changes a disabled volatile setting: that change would
+be lost at reboot. Instead it runs `wendyos-update check --json` and continues
+only when every check in that verdict passes, including `rootfs A/B redundancy`.
+Engines that switch slots with boot-chain A/B report that check as passing
+without the setting.
+
+Otherwise the agent refuses the update, and the error ends with the reason:
+the names of the failing checks, or that the engine returned no usable verdict
+(for example an older `wendyos-update` without `check`). A device whose engine
+does not pass the rootfs check needs an A/B-enabled firmware configuration or
+image. Any other failing check, such as a pending update, also stops the update
+at this point. Preparation does not repair an incompatible bootloader capsule.
 
 ## How the agent reboots
 

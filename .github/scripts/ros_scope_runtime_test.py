@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exercise the hosted wrapper's conservative cleanup on real private files."""
 import json
+import hashlib
+import sys
 import os
 from pathlib import Path
 import shutil
@@ -44,6 +46,47 @@ class ROSScopeCleanupTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('findmnt'), 'normal cleanup requires Linux findmnt')
     def test_reaped_namespace_removes_only_owned_work(self):
         self.exercise(interrupted=0, drained=1)
+
+
+class ROSScopePreparedSourceTests(unittest.TestCase):
+    def check(self, changed=None):
+        # Execute the exact wrapper admission, without starting a namespace,
+        # image, ROS process or privileged command.
+        code = SCRIPT.read_text().split("<<'VERIFY'\n", 1)[1].split("\nVERIFY", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepared, source = root/'prepared', root/'source'
+            (prepared/'context').mkdir(parents=True)
+            source.mkdir()
+            staged = prepared/'context'/'production-observe.py'
+            tracked = source/'observe.py'
+            archive = prepared/'ros-image.tar'
+            for path, data in [(staged, b'exact staged source'), (tracked, b'exact tracked source'),
+                               (archive, b'inert image identity test; not an OCI image')]:
+                path.write_bytes(data)
+            sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+            (prepared/'manifest.json').write_text(json.dumps({
+                'status': 'prepared', 'cleanup_errors': [],
+                'staged_sha256': {staged.name: sha(staged)},
+                'source_sha256': {tracked.name: sha(tracked)},
+                'archive_sha256': sha(archive)}))
+            if changed:
+                {'staged': staged, 'source': tracked, 'archive': archive}[changed].write_bytes(b'changed')
+            result = subprocess.run([sys.executable, '-', str(prepared), str(source)],
+                                    input=code, capture_output=True, text=True, timeout=5, cwd=root)
+            self.assertEqual(result.returncode == 0, changed is None, result.stderr)
+            if changed:
+                self.assertIn({'staged': 'staged runtime source changed',
+                               'source': 'prepared fixture differs from current source',
+                               'archive': 'ROS image archive changed'}[changed], result.stderr)
+
+    def test_admits_bound_inputs_from_an_unrelated_working_directory(self):
+        self.check()
+
+    def test_rejects_each_changed_runtime_input_before_namespace_start(self):
+        for changed in ('staged', 'source', 'archive'):
+            with self.subTest(changed=changed):
+                self.check(changed)
 
 
 if __name__ == '__main__':
