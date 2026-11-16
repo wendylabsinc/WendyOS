@@ -74,6 +74,21 @@ class EvidenceTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(compat.ReviewError):
                 self.validate(bad)
 
+    def test_aggregate_uses_actual_partial_batches_and_needs_no_dummy_source(self):
+        value=self.validate(response())
+        value.update(review_batches=1,compatibility_previous=[],
+            compatibility_coverage=[{'batch':1,'directions':value['compatibility_coverage']}])
+        compat.validate_aggregate(value,{}, {})
+        with self.assertRaises(compat.ReviewError):
+            compat.validate_aggregate(dict(value,compatibility_verdict='compatible_in_supplied_evidence'),{}, {})
+        value=self.validate(response(self.finding))
+        value.update(review_batches=2,compatibility_previous=[],compatibility_coverage=[
+            {'batch':1,'directions':value['compatibility_coverage']},
+            {'batch':2,'directions':response()['compatibility_coverage']}])
+        compat.validate_aggregate(value,self.changed,self.extra)
+        value['compatibility_coverage'][0]['directions']=response()['compatibility_coverage']
+        with self.assertRaises(compat.ReviewError):compat.validate_aggregate(value,self.changed,self.extra)
+
     def test_invalid_ids_types_and_missing_runtime_chain_fail(self):
         for key, value in (("changed", []), ("caller", [True]), ("receiver", ["src-invented"]),
                            ("caller", [{"evidence_id": "quoted source"}]), ("assessment", []), ("direction", [])):
@@ -178,6 +193,27 @@ class EvidenceTests(unittest.TestCase):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_config_counterpart_is_selected_without_scanning_lexical_neighbors(self):
+        with tempfile.TemporaryDirectory() as d:
+            def git(*args):return subprocess.check_output(['git','-C',d,*args],stderr=subprocess.DEVNULL).decode().strip()
+            git('init','-q');git('config','user.email','fixture@example.invalid');git('config','user.name','Fixture')
+            root=Path(d);config='go/internal/shared/config/config.go';writer='go/internal/agent/configpartition/apply.go'
+            neighbor='go/internal/shared/config/neighbor.go'
+            for path,text in ((config,'func Load() { decode(record) }\n'),(writer,'func Apply() { persist(record) }\n'),
+                              (neighbor,'func Unrelated() { decode(record); persist(record) }\n')):
+                target=root/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
+            git('add','.');git('commit','-qm','base');base=git('rev-parse','HEAD')
+            (root/config).write_text('func Load() { decodeNew(record) }\n')
+            git('add','.');git('commit','-qm','head');head=git('rev-parse','HEAD')
+            parsed=api.parse_diff(subprocess.check_output(['git','-C',d,'diff',base,head]).decode())
+            entries,limits=compat.collect_context(d,REPO,base,head,parsed)
+            self.assertTrue(any(e['path']==writer and 'persist(record)' in e['text'] and e['side']=='base' for e in entries))
+            self.assertFalse(any(e['path']==neighbor for e in entries))
+            with patch.object(compat,'MAX_CONTEXT_BYTES',30):
+                bounded,limits=compat.collect_context(d,REPO,base,head,parsed)
+            self.assertLessEqual(sum(len(e['text'].encode()) for e in bounded),30)
+            self.assertGreater(limits['omitted_candidates'],0)
+
     def test_real_git_root_deletion_neighbor_and_symlink(self):
         with tempfile.TemporaryDirectory() as d:
             def git(*args): return subprocess.check_output(['git','-C',d,*args],stderr=subprocess.DEVNULL).decode().strip()

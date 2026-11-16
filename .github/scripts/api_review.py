@@ -481,23 +481,18 @@ def preserve_findings(previous, repaired, changed, supplemental, previous_record
     for finding in previous["compatibility_findings"]:
         if not isinstance(finding, dict):
             continue
-        probe = {"compatibility_verdict": finding.get("assessment"), "compatibility_findings": [finding], "compatibility_updates": [],
-                 "compatibility_coverage": {d: {"status": "partial", "reason": "Validation probe", "evidence": [next(iter(changed))]} for d in compat.DIRECTIONS}}
         try:
-            valid = compat.validate(probe, changed, supplemental, previous=[r for r in previous_records or [] if r["id"] == finding.get("prior_id")] if "prior_id" in finding else None)["compatibility_findings"][0]
-        except (ReviewError, StopIteration):
+            valid = compat.resolve_finding(finding, changed, supplemental,
+                previous=(previous_records or []) if "prior_id" in finding else None)
+        except ReviewError:
             continue
         if valid not in repaired.get("compatibility_findings", []):
             raise ReviewError("API review repair changed or removed an already-valid compatibility finding")
     for update in previous.get("compatibility_updates", []):
         if not isinstance(update, dict):
             continue
-        probe_previous = [r for r in previous_records or [] if r["id"] == update.get("prior_id")]
-        probe = {"compatibility_verdict": "not_assessed", "compatibility_findings": [],
-                 "compatibility_updates": [update], "compatibility_coverage": {
-                     d: {"status": "not_assessed", "reason": "Independent validation", "evidence": []} for d in compat.DIRECTIONS}}
         try:
-            valid_update = compat.validate(probe, changed, supplemental, previous=probe_previous)["compatibility_updates"][0]
+            valid_update = compat.resolve_update(update, changed, supplemental, previous_records or [])
         except ReviewError:
             continue
         if valid_update not in repaired.get("compatibility_updates", []):

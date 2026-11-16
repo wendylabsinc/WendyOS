@@ -796,19 +796,10 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         assessment = {"revisions": {"repository": repo, "base": result["diff_base_sha"], "head": head_sha}, "visibility": "public"}
         changed = finding_catalog(evidence_catalog(parse_diff(source)), assessment)
         supplemental = result.get("evidence_catalog", {})
-        if (not isinstance(supplemental, dict) or any(ref.get("visibility") != "public" for ref in supplemental.values())
+        if (not isinstance(supplemental, dict) or any(not isinstance(ref, dict) or ref.get("visibility") != "public" for ref in supplemental.values())
                 or any(ref.get("repository") != repo or ref.get("revision") not in {head_sha, result["diff_base_sha"]} for ref in supplemental.values())):
             raise ValueError("Publication requires public same-repository immutable evidence")
-        coverage = result.get("compatibility_coverage")
-        if not isinstance(coverage, list) or len(coverage) != result.get("review_batches"):
-            raise ValueError("Compatibility assessment did not cover every batch")
-        for row in coverage:
-            # Validate each coverage record, then findings with their own direction.
-            compat.validate({"compatibility_verdict": "not_assessed", "compatibility_findings": [],
-                             "compatibility_coverage": row["directions"]}, changed, supplemental, resolved=True)
-        merged = {d: {"status": "partial", "reason": "Combined bounded batch evidence", "evidence": [next(iter(changed.values()))]} for d in compat.DIRECTIONS}
-        compat.validate({"compatibility_verdict": result["compatibility_verdict"], "compatibility_findings": result["compatibility_findings"],
-                         "compatibility_coverage": merged, "compatibility_updates": result.get("compatibility_updates", [])}, changed, supplemental, resolved=True, previous=result.get("compatibility_previous", []))
+        compat.validate_aggregate(result, changed, supplemental)
     root = f"/repos/{repo}"
     issue = f"{root}/issues/{pr_number}"
     pull_path = f"{root}/pulls/{pr_number}"

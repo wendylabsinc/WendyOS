@@ -12,15 +12,15 @@ import json
 import re
 import zlib
 
-from review_sources import ReviewError, valid_path, is_generated_path
-from compatibility_review import source_kind
+from review_sources import ReviewError
+import compatibility_review as compat
 
 MARKER = re.compile(r"<!-- compatibility-finding:v1:([A-Za-z0-9_-]+) -->")
 STATES = {"open", "not_assessed", "addressed", "cancelled"}
 MAX_RECORD_BYTES = 24_000
 MAX_STATE_BYTES = 96_000
 MAX_RECORDS = 100
-FINDING_FIELDS = {"assessment", "direction", "consumer", "action", "condition", "before", "after", "consider", "changed", "caller", "receiver"}
+FINDING_FIELDS = compat.FINDING_FIELDS
 
 
 def validate_records(records, *, public_only=True):
@@ -37,32 +37,8 @@ def validate_records(records, *, public_only=True):
                 or identifier in seen or not isinstance(status, str) or status not in STATES):
             raise ReviewError("Invalid prior compatibility identity/status")
         seen.add(identifier)
-        if not isinstance(finding, dict) or set(finding) != FINDING_FIELDS:
-            raise ReviewError("Invalid prior compatibility finding")
-        for field in ("consumer", "action", "condition", "before", "after", "consider"):
-            if not isinstance(finding[field], str) or not finding[field].strip() or len(finding[field]) > 1200:
-                raise ReviewError("Invalid prior compatibility text")
-        if (not isinstance(finding["assessment"], str) or finding["assessment"] not in {"breaking", "migration_needed"}
-                or not isinstance(finding["direction"], str) or finding["direction"] not in {"old_caller_new_peer", "new_caller_old_peer", "state_reader_writer"}):
-            raise ReviewError("Invalid prior compatibility classification")
-        if not isinstance(resolution, dict) or set(resolution) != {"reason", "evidence"} or not isinstance(resolution["reason"], str) or len(resolution["reason"]) > 1600:
-            raise ReviewError("Invalid prior compatibility resolution")
-        if any(not isinstance(finding[k], list) or not finding[k] for k in ("changed", "caller", "receiver")):
-            raise ReviewError("Prior compatibility finding is missing essential evidence")
-        for refs in [finding[k] for k in ("changed", "caller", "receiver")] + [resolution["evidence"]]:
-            if not isinstance(refs, list) or len(refs) > 8:
-                raise ReviewError("Invalid prior compatibility evidence")
-            for ref in refs:
-                if (not isinstance(ref, dict) or ref.get("visibility") not in ({"public"} if public_only else {"public", "private"})
-                        or not isinstance(ref.get("repository"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", ref["repository"])
-                        or not isinstance(ref.get("revision"), str) or not re.fullmatch(r"[a-f0-9]{40}", ref["revision"])
-                        or not valid_path(ref.get("path")) or is_generated_path(ref["path"])
-                        or type(ref.get("line")) is not int or type(ref.get("end_line")) is not int
-                        or not 0 <= ref["line"] <= ref["end_line"]):
-                    raise ReviewError("Invalid or private prior compatibility provenance")
-        for role in ("changed", "caller", "receiver"):
-            if not any(ref.get("kind") in {"source", "changed_source"} and source_kind(ref["path"]) == "source" for ref in finding[role]):
-                raise ReviewError("Prior compatibility concerns require runtime source evidence")
+        compat.validate_finding(finding, public_only=public_only)
+        compat.validate_resolution(resolution, status, public_only=public_only)
     return records
 
 

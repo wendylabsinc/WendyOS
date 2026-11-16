@@ -255,4 +255,32 @@ class StatefulTests(unittest.TestCase):
         payload=fixtures.response(dict(self.fixture.finding,prior_id='f'*64))
         with self.assertRaises(compat.ReviewError):self.resolved(payload,self.records)
 
+    def test_history_and_model_use_the_same_finding_text_rules(self):
+        for field,value in (('consider','Widen admission'),('after','Failed\x01message'),
+                            ('consumer','x'*(compat.MAX_FINDING_TEXT+1))):
+            bad=copy.deepcopy(self.records);bad[0]['finding'][field]=value
+            with self.subTest(field=field):
+                with self.assertRaises(compat.ReviewError):state.validate_records(bad)
+                with self.assertRaises(compat.ReviewError):state.parse([state.marker(bad[0])])
+                with self.assertRaises(compat.ReviewError):self.resolved(fixtures.response(dict(self.fixture.finding,**{field:value})))
+        self.assertEqual(state.parse([state.marker(self.records[0])]),self.records)
+
+    def test_publication_uses_real_batch_coverage_without_synthetic_partial_rows(self):
+        from api_review_comment_test import REVIEW_DIFF, HEAD, BASE
+        data=result();data.update(review_batches=1,input_visibility='public',evidence_catalog={},
+            compatibility_previous=[],compatibility_updates=[],compatibility_findings=[],
+            compatibility_verdict='not_assessed',
+            compatibility_coverage=[{'batch':1,'directions':fixtures.response()['compatibility_coverage']}])
+        self.assertTrue(comments.publish(data,REPO,1911,HEAD,BASE,REVIEW_DIFF,MultipartGitHub()))
+        invalid=[]
+        for number in (0,True):
+            bad=copy.deepcopy(data);bad['compatibility_coverage'][0]['batch']=number;invalid.append(bad)
+        bad=copy.deepcopy(data);bad['review_batches']=2;bad['compatibility_coverage']*=2;invalid.append(bad)
+        bad=copy.deepcopy(data);bad['compatibility_verdict']='compatible_in_supplied_evidence';invalid.append(bad)
+        for bad in invalid:
+            github=MultipartGitHub()
+            with self.subTest(bad=bad):
+                with self.assertRaises(compat.ReviewError):comments.publish(bad,REPO,1911,HEAD,BASE,REVIEW_DIFF,github)
+                self.assertFalse(github.mutations())
+
 if __name__=='__main__':unittest.main()
