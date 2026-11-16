@@ -5,7 +5,7 @@ import re
 from tool_trace import cli_path, command_words, parse_wendy_invocations
 
 OUTCOMES = ("right", "wrong", "missed", "asked", "went_around")
-EXPECT_KEYS = {"right", "wrong", "ask"}
+EXPECT_KEYS = {"right", "wrong", "ask", "ask_regex", "sequence", "require_result"}
 MATCHER_KEYS = {"tool", "cli", "shell", "args", "args_regex", "agents", "block"}
 KINDS = ("tool", "cli", "shell")
 HELP_FLAGS = frozenset({"--help", "-h"})
@@ -16,6 +16,25 @@ def validate_expect(expect):
         raise ValueError(f"expect keys must be within {sorted(EXPECT_KEYS)}")
     if not isinstance(expect.get("ask", False), bool):
         raise ValueError("expect.ask must be a boolean")
+    if not isinstance(expect.get("require_result", False), bool):
+        raise ValueError("expect.require_result must be a boolean")
+    patterns = expect.get("ask_regex", [])
+    if not isinstance(patterns, list) or any(not isinstance(p, str) or not p for p in patterns):
+        raise ValueError("expect.ask_regex must be a list of nonempty regular expressions")
+    if expect.get("ask") and not patterns:
+        raise ValueError("expect.ask requires scenario-specific ask_regex criteria")
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError(f"invalid ask_regex: {error}") from error
+    sequence = expect.get("sequence", [])
+    if not isinstance(sequence, list):
+        raise ValueError("expect.sequence must be a list of alternative-matcher lists")
+    for step in sequence:
+        if not isinstance(step, list) or not step:
+            raise ValueError("each sequence step needs at least one matcher")
+        validate_expect({"right": step})
     for side in ("right", "wrong"):
         matchers = expect.get(side, [])
         if not isinstance(matchers, list):
@@ -56,7 +75,11 @@ def is_help(argv):
 
 
 def _arg_ok(actual, want):
-    return want in actual if isinstance(actual, list) else actual == want
+    if isinstance(actual, list) and not isinstance(want, list):
+        return any(_arg_ok(item, want) for item in actual)
+    if isinstance(actual, bool) != isinstance(want, bool):
+        return False
+    return actual == want
 
 
 def matches(matcher, entry, adapter=None):
@@ -86,9 +109,20 @@ def matches(matcher, entry, adapter=None):
     return "args_regex" not in matcher or re.search(matcher["args_regex"], text) is not None
 
 
-def _first(matchers, trace, adapter):
-    for i, matcher in enumerate(matchers):
-        for j, entry in enumerate(trace):
+def _placeholder(entry):
+    """A proxy fallback reply: a canned MCP tool whose capture is missing. A CLI call the shim cans without
+    a capture is its designed silent success; commands whose output matters are listed in cli_canned, and
+    readiness requires those captures."""
+    return entry.get("channel") == "mcp" and entry.get("canned") and entry.get("captured") is False
+
+
+def _first(matchers, trace, adapter, require_result=False, right=False):
+    for j, entry in enumerate(trace):
+        for i, matcher in enumerate(matchers):
+            if right and (entry.get("is_error") is True or
+                          (require_result and _placeholder(entry)) or
+                          (require_result and entry.get("is_error") is not False)):
+                continue
             if matches(matcher, entry, adapter):
                 return i, j
     return None
@@ -117,12 +151,84 @@ def _wendy_work(entry):
     return False
 
 
-def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False):
+# On these commands --device is a Wendy Cloud device name, not a selector.
+CLOUD_NAME_COMMANDS = (["cloud", "ping"], ["cloud", "tunnel"], ["cloud", "run"])
+LOCAL_SELECTORS = frozenset({"local", "localhost", "127.0.0.1"})  # what the MCP server accepts on the device
+
+
+def explicit_target(entry):
+    """The device selector a call names, or None. Arguments that hold a Cloud device name (`device_name`,
+    --device on CLOUD_NAME_COMMANDS) are not selectors and cannot be compared with one."""
+    args = entry.get("arguments")
+    if entry.get("channel") == "mcp" and isinstance(args, dict):
+        # device_connect still accepts its legacy `address`.
+        return args.get("device") or (args.get("address") if entry.get("name") == "device_connect" else None)
+    if entry.get("channel") == "cli" and isinstance(args, list):
+        if cli_path([word for word in args if isinstance(word, str)])[:2] in CLOUD_NAME_COMMANDS:
+            return None
+        for i, value in enumerate(args):
+            if value == "--":
+                break
+            if value == "--device" and i + 1 < len(args):
+                return args[i + 1]
+            if isinstance(value, str) and value.startswith("--device="):
+                return value.split("=", 1)[1]
+    return None
+
+
+def same_target(selected, target):
+    """Whether two selectors name one device: the same text, two names for the local device, or one
+    host with the port left out on either side (--device takes a hostname, IP or host:port)."""
+    a, b = str(selected).strip().lower(), str(target).strip().lower()
+    if a == b or {a, b} <= LOCAL_SELECTORS:
+        return True
+    if any("://" in s or s.startswith("vm:") or s in LOCAL_SELECTORS for s in (a, b)):
+        return False
+    (host_a, port_a), (host_b, port_b) = (re.fullmatch(r"(.*?)(?::(\d+))?", s).groups() for s in (a, b))
+    return host_a == host_b and (port_a is None or port_b is None)
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])[\"'`*_)\]]*\s+|\n+")
+
+
+def _questions(text):
+    """(question, sentence before it) for each sentence that ends in a question mark. A sentence ends at
+    . ! or ? followed by whitespace, so the period in a version number, host name or file name does not
+    cut a question short."""
+    sentences = [sentence.strip() for sentence in _SENTENCE_END.split(text or "") if sentence.strip()]
+    return [(sentence, sentences[i - 1] if i else "") for i, sentence in enumerate(sentences)
+            if sentence.rstrip("\"'`*_)]").endswith("?")]
+
+
+def _asks(patterns, question, before):
+    """The question carries at least one required concept; the sentence before it may supply the rest,
+    as in "sensor-dashboard is running. Do you want me to stop it?"."""
+    def found(text):
+        return [re.search(pattern, text, re.I) is not None for pattern in patterns]
+    return any(found(question)) and all(found(before + " " + question))
+
+
+def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False, target=None):
     """Order: wrong, right, went around, asked, missed. `went_around` is set only where the model shares
     the device (the local target), so a laptop's grades don't change."""
     result = {"outcome": "missed", "rule": None, "entry": None, "hidden_group": False}
+    if target:
+        for i, entry in enumerate(trace):
+            selected = explicit_target(entry)
+            if selected is not None and not same_target(selected, target):
+                result.update(outcome="wrong", rule="target", entry=i)
+                return result
     for side in ("wrong", "right"):
-        hit = _first(expect.get(side, []), trace, adapter)
+        hit = _first(expect.get(side, []), trace, adapter, expect.get("require_result", False), right=side == "right")
+        if side == "right" and hit and expect.get("sequence"):
+            cursor = 0
+            for alternatives in expect["sequence"]:
+                step = _first(alternatives, trace[cursor:], adapter, expect.get("require_result", False), right=True)
+                if step is None or trace[cursor + step[1]].get("order_unknown"):
+                    hit = None
+                    result["rule"] = "incomplete_sequence"
+                    break
+                cursor += step[1] + 1
         if hit:
             result.update(outcome=side, rule=f"{side}[{hit[0]}]", entry=hit[1])
             return result
@@ -131,7 +237,9 @@ def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, 
         if plain and len(plain) >= sum(_wendy_work(e) for e in trace):
             result.update(outcome="went_around", entry=plain[0])
             return result
-    if expect.get("ask") and agent_completed and "?" in (final_text or ""):
+    # The required concepts must occur in a question and its lead-in, not in an unrelated success claim.
+    if (expect.get("ask") and agent_completed and expect.get("ask_regex") and
+            any(_asks(expect["ask_regex"], question, before) for question, before in _questions(final_text))):
         result["outcome"] = "asked"
         return result
     if adapter in ("claude", "codex") and group and group != "core":

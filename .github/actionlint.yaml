@@ -5,6 +5,7 @@ self-hosted-runner:
     - Linux
     - X64
     - macOS
+    - wendy-evals
     - wendy-macos-26
     - runs-on,runner=2cpu-linux-x64
 
