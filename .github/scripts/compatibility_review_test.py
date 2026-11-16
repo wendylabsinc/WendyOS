@@ -134,12 +134,14 @@ class EvidenceTests(unittest.TestCase):
         for path in ('go/internal/agent/oci/spec.go', 'go/internal/agent/containerd/device_spec.go', 'go/internal/cli/jobops/spec.go', 'go/internal/cli/vm/spec.go'):
             self.assertEqual(compat.source_kind(path), 'source')
 
-    def test_canned_eval_reply_and_documentation_cannot_prove_runtime_caller(self):
+    def test_evaluation_definitions_and_documentation_cannot_prove_runtime_caller(self):
         for path in ('evals/agent-experience/canned/set-default-device/cli/device-set-default.json',
+                     'evals/agent-experience/scenarios.json', 'evals/agent-experience/eval_wendy.py',
+                     'evals/agent-experience/canned.py',
                      'evals/agent-experience/canned-local/sample/cli/reply.json',
                      'evals/codec/canned/reply.json', 'EVALS/codec/CANNED/reply.json'):
             self.assertEqual(compat.source_kind(path),'test_definition')
-            # Reproduce the real caller pair, including its incorrect source label.
+            # Reproduce evaluation-plus-documentation callers, even with a stale source label.
             extras=compat.context_catalog([entry(path=path,kind='source'),
                 entry(path='Examples/mojo/README.md',kind='documentation')])[0]
             with self.subTest(path=path),self.assertRaisesRegex(compat.ReviewError,'Runtime findings'):
