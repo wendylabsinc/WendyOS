@@ -53,6 +53,7 @@ type mtlsDialer struct {
 	chainPEM string
 	keyPEM   string
 	want     certs.WendyIdentity
+	dial     func(context.Context, string, string) (net.Conn, error)
 }
 
 func (d mtlsDialer) Dial(ctx context.Context, addr string) (net.Conn, error) {
@@ -60,7 +61,11 @@ func (d mtlsDialer) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mcusource: client TLS config: %w", err)
 	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	dial := d.dial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("mcusource: dial %s: %w", addr, err)
 	}
@@ -76,7 +81,7 @@ func (d mtlsDialer) Dial(ctx context.Context, addr string) (net.Conn, error) {
 // agent's own credentials (read fresh per call), while the expected peer
 // identity comes from the pairing itself. Sensor pairing is same-tenant by
 // design.
-func NewMTLSDialer(logger *zap.Logger, identity Identity) func(SensorPairing) (Dialer, error) {
+func NewMTLSDialer(logger *zap.Logger, identity Identity, dialers ...func(context.Context, string, string) (net.Conn, error)) func(SensorPairing) (Dialer, error) {
 	return func(p SensorPairing) (Dialer, error) {
 		certPEM, chainPEM, keyPEM := identity()
 		if certPEM == "" || keyPEM == "" {
@@ -86,12 +91,17 @@ func NewMTLSDialer(logger *zap.Logger, identity Identity) func(SensorPairing) (D
 		if err != nil {
 			return nil, err
 		}
+		var dial func(context.Context, string, string) (net.Conn, error)
+		if len(dialers) > 0 {
+			dial = dialers[0]
+		}
 		return mtlsDialer{
 			logger:   logger,
 			certPEM:  certPEM,
 			chainPEM: chainPEM,
 			keyPEM:   keyPEM,
 			want:     want,
+			dial:     dial,
 		}, nil
 	}
 }

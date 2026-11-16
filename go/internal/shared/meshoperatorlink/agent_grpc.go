@@ -11,8 +11,8 @@ import (
 )
 
 // AgentTransportCredentials preserves the actual attachment's authenticated
-// TLS state for gRPC. Only this package's admitted management stream type can
-// use the handoff. Ordinary network connections use fallback's normal handshake;
+// TLS state for gRPC. Only this package's admitted operator or retained
+// management stream types can use the handoff. Ordinary network connections use fallback's normal handshake;
 // nil fallback refuses them. Neither source addresses nor RPC metadata are
 // identity inputs.
 func AgentTransportCredentials(fallback credentials.TransportCredentials) credentials.TransportCredentials {
@@ -40,6 +40,12 @@ func agentTLSInfo(state tls.ConnectionState) credentials.AuthInfo {
 	return credentials.TLSInfo{State: state, CommonAuthInfo: credentials.CommonAuthInfo{SecurityLevel: credentials.PrivacyAndIntegrity}}
 }
 func (c *agentCredentials) ClientHandshake(ctx context.Context, authority string, raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	if state, known, err := retainedAgentTLSState(raw, false); known {
+		if err != nil {
+			return nil, nil, err
+		}
+		return raw, agentTLSInfo(state), nil
+	}
 	if state, ok := agentTLSState(raw, false); ok {
 		return raw, agentTLSInfo(state), nil
 	}
@@ -49,6 +55,12 @@ func (c *agentCredentials) ClientHandshake(ctx context.Context, authority string
 	return nil, nil, errors.New("gRPC needs an admitted operator management stream")
 }
 func (c *agentCredentials) ServerHandshake(raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	if state, known, err := retainedAgentTLSState(raw, true); known {
+		if err != nil {
+			return nil, nil, err
+		}
+		return raw, agentTLSInfo(state), nil
+	}
 	if state, ok := agentTLSState(raw, true); ok {
 		return raw, agentTLSInfo(state), nil
 	}
@@ -170,7 +182,8 @@ func (p *meshTLSPipe) close() {
 
 type meshTLSConn struct {
 	net.Conn
-	pipe *meshTLSPipe
+	identity RetainedAgentIdentity
+	pipe     *meshTLSPipe
 }
 
 func (c *meshTLSConn) Close() error { c.pipe.close(); return nil }
@@ -187,6 +200,9 @@ func (c *meshTLSConn) Closed() <-chan struct{} { return c.pipe.done }
 // before handoff closes both ends; after handoff the ordinary connection and
 // listener lifecycle own the pipe, as with net.Dialer.DialContext.
 func (l *MeshTLSListener) DialContext(ctx context.Context) (net.Conn, error) {
+	return l.dialContext(ctx, nil)
+}
+func (l *MeshTLSListener) dialContext(ctx context.Context, identity RetainedAgentIdentity) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -202,10 +218,19 @@ func (l *MeshTLSListener) DialContext(ctx context.Context) (net.Conn, error) {
 	l.pipes[p] = struct{}{}
 	l.mu.Unlock()
 	select {
-	case l.connections <- &meshTLSConn{Conn: b, pipe: p}:
+	case l.connections <- &meshTLSConn{Conn: b, pipe: p, identity: identity}:
 		if err := ctx.Err(); err != nil {
 			p.close()
 			return nil, err
+		}
+		if identity != nil {
+			go func() {
+				select {
+				case <-identity.Done():
+					p.close()
+				case <-p.done:
+				}
+			}()
 		}
 		return &meshTLSConn{Conn: a, pipe: p}, nil
 	case <-ctx.Done():
