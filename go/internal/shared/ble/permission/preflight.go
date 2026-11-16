@@ -1,4 +1,4 @@
-//go:build !ios
+//go:build !ios && !android
 
 // Package permission checks whether this process has OS permission to use
 // Bluetooth Low Energy, before any scan or connection touches the platform's
