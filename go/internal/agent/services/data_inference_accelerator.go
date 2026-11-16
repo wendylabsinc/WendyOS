@@ -18,9 +18,10 @@ func InferenceHardware() inference.Hardware {
 	return inference.Hardware{GPUVendor: info.vendor, ComputeBackends: backends, CUDAVersion: info.cudaVersion, GPUArch: info.gpuArch}
 }
 
-// acceleratorState records the model process's report of what it runs on.
-// A fallback to the CPU on a device that could do better is logged once per
-// change, so it is never silent.
+// acceleratorState records the model process's report of what it runs on and
+// how fast. A fallback to the CPU on a device that could do better is logged
+// once per change, and so is a model that misses the campaign's rate, so
+// neither is ever silent.
 func (j *campaignInferenceJob) acceleratorState(accelerator *data.AcceleratorStatus, stats *data.InferenceStats) {
 	if accelerator == nil {
 		return
@@ -28,10 +29,15 @@ func (j *campaignInferenceJob) acceleratorState(accelerator *data.AcceleratorSta
 	j.mu.Lock()
 	previous := j.status.Accelerator
 	j.status.Accelerator = accelerator
+	rateChange := ""
 	if stats != nil {
 		j.status.Stats = stats
+		rateChange = j.throughputState(time.Now())
 	}
 	j.mu.Unlock()
+	if rateChange != "" {
+		j.owner.service.manager.Warnf("%s", rateChange)
+	}
 	if previous != nil && previous.Active == accelerator.Active && previous.Degraded == accelerator.Degraded && previous.Reason == accelerator.Reason {
 		return
 	}

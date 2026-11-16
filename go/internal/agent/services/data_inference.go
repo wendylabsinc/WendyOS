@@ -47,6 +47,9 @@ type campaignInferenceJob struct {
 	status         data.InferenceStatus
 	generations    map[string]uint64
 	nextGeneration atomic.Uint64
+	// pace outlives a worker, so a restarted one is not reported as too slow
+	// a second time.
+	pace inferencePace
 }
 
 // StartCampaignInference restores persisted inference plans and supervises their
@@ -189,6 +192,10 @@ func (m *campaignInferenceManager) snapshot(name, revision string) *data.Inferen
 		snapshot.Sources[source] = state
 	}
 	snapshot.Accelerator = acceleratorSnapshot(job.status.Accelerator, time.Now())
+	if job.status.Throughput != nil {
+		throughput := *job.status.Throughput
+		snapshot.Throughput = &throughput
+	}
 	return &snapshot
 }
 
@@ -226,7 +233,7 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 		j.setState("loading", nil)
 		// A new process reports its own accelerator; the last one's is stale.
 		j.mu.Lock()
-		j.status.Accelerator, j.status.Stats = nil, nil
+		j.status.Accelerator, j.status.Stats, j.status.Throughput = nil, nil, nil
 		j.mu.Unlock()
 		err := j.run(ctx)
 		if ctx.Err() != nil {
