@@ -88,7 +88,7 @@ def generate(inventory, output):
                           "image_digest": None, "start_utc": None, "end_utc": None, "reviewer": None})
     commands["board"] = {
         "info": [cli, "--json", "device", "info", "--device", selector],
-        "os-update": [cli, "--json", "device", "update", "--device", selector, "--binary", agent, "--artifact-url", url, "--yes"],
+        "os-update": [cli, "--json=false", "device", "update", "--device", selector, "--binary", agent, "--artifact-url", url, "--yes"],
     }
     for phase, driver in (("before", paths[0]), ("after", paths[1])):
         console = ["#!/bin/sh", "set -eu", "date -u", "cat /etc/os-release",

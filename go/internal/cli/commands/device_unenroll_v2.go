@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -160,6 +161,13 @@ func performV2Unenroll(ctx context.Context, j *v2UnenrollProgress, ops v2Unenrol
 	// refuses before deletion if its reset signer is unavailable; an authorized
 	// exact-asset retry reads the retained audit record instead of deleting again.
 	authorized, err := ops.authorize(ctx, j.AssetID)
+	var skew *unenrollproof.ClockSkewError
+	if errors.As(err, &skew) {
+		// Its signature verified, and Cloud signs only after deleting the asset
+		// and revoking its certificate: the Cloud side is done.
+		j.Deleted = true
+		return err
+	}
 	if err != nil {
 		return fmt.Errorf("Cloud unenrollment failed/uncertain; keys retained: %w", err)
 	}
@@ -215,10 +223,7 @@ func performV2Unenroll(ctx context.Context, j *v2UnenrollProgress, ops v2Unenrol
 // same direct link: --asset-id fetches a fresh signed authorization for the
 // deleted asset; --force is the operator's explicit local-only reset.
 func v2UnenrollResumeHint(device, assetID string) string {
-	target := ""
-	if device != "" {
-		target = " --device " + shellQuoteArg(device)
-	}
+	target := v2UnenrollTarget(device)
 	return fmt.Sprintf("the device did not confirm its reset and may still hold its enrollment keys; retry the authenticated reset with: wendy device unenroll%s --asset-id %s --yes; "+
 		"if that keeps failing, Cloud no longer lists this device and 'wendy device unenroll%s --force --yes' clears only its local enrollment",
 		target, shellQuoteArg(assetID), target)
@@ -246,6 +251,24 @@ func v2UnenrollFailureHint(err error, device, assetID string) string {
 	return fmt.Sprintf("the device erased its enrollment and Cloud no longer lists it, but it has not finished removing that enrollment's network setup, so it cannot be enrolled yet. "+
 		"It now answers only on its setup port, which this computer refuses while it still has the device's old identity saved: clear it with '%s', then enroll the device again with '%s' once the cleanup is done",
 		unpin, enroll)
+}
+
+func v2UnenrollTarget(device string) string {
+	if device == "" {
+		return ""
+	}
+	return " --device " + shellQuoteArg(device)
+}
+
+// v2UnenrollUnfinished is the outcome after Cloud deleted the asset but the
+// device was not reset: what is done, what is left, and the one next step.
+func v2UnenrollUnfinished(err error, device, assetID string) error {
+	var skew *unenrollproof.ClockSkewError
+	if errors.As(err, &skew) {
+		return fmt.Errorf("%w. Cloud has already removed this device and revoked its certificate; the device itself was not reset. Correct this computer's clock, then run: wendy device unenroll%s --asset-id %s --yes",
+			skew, v2UnenrollTarget(device), shellQuoteArg(assetID))
+	}
+	return fmt.Errorf("%w; %s", err, v2UnenrollResumeHint(device, assetID))
 }
 
 func directUnenrollPeerFingerprint(conn *grpcclient.AgentConnection, verifiedPeer *grpcpeer.Peer, principal certs.WendyIdentity) (string, error) {
@@ -459,7 +482,10 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		fmt.Println(string(out))
 	}
 	if err != nil && j.Deleted && !j.Reset {
-		return fmt.Errorf("%w; %s", err, v2UnenrollFailureHint(err, deviceFlag, j.AssetID))
+		if _, erased := resetcleanup.Cause(err); erased {
+			return fmt.Errorf("%w; %s", err, v2UnenrollFailureHint(err, deviceFlag, j.AssetID))
+		}
+		return v2UnenrollUnfinished(err, deviceFlag, j.AssetID)
 	}
 	if err != nil {
 		return err

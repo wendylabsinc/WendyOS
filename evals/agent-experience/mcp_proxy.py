@@ -189,10 +189,10 @@ class _Proxy:
         message = {"jsonrpc": "2.0", "id": request_id, key: value}
         self.to_client(json.dumps(message).encode() + b"\n")
 
-    def record(self, seq, tool, arguments, canned, captured, is_error, t, reply_text=None):
+    def record(self, seq, tool, arguments, canned, captured, is_error, t, reply_text=None, reply_bytes=None):
         line = json.dumps({"seq": seq, "tool": tool, "arguments": {} if arguments is None else arguments,
                            "canned": canned, "captured": captured, "is_error": is_error, "t": t,
-                           "reply_text": reply_text}) + "\n"
+                           "reply_text": reply_text, "reply_bytes": reply_bytes}) + "\n"
         with self._log_lock:
             if self.log.closed:
                 return
@@ -269,7 +269,8 @@ class _Proxy:
         except Exception as error:  # a broken capture must not surface as an error (D7)
             _warn(f"canned reply for {name!r} failed: {error!r}")
             result, captured = FALLBACK_RESULT, False
-        self.record(seq, name, arguments, True, captured, result.get("isError") is True, t)
+        self.record(seq, name, arguments, True, captured, result.get("isError") is True, t, reply_text({"result": result}),
+                    len(json.dumps(result, ensure_ascii=False).encode()))
         if has_id:
             with self._state:
                 self._canned_ids.add(_id_key(message["id"]))
@@ -308,7 +309,8 @@ class _Proxy:
         seq, name, arguments, t = call
         result = message.get("result")
         is_error = "error" in message or (isinstance(result, dict) and result.get("isError") is True)
-        self.record(seq, name, arguments, False, None, is_error, t, reply_text(message))
+        self.record(seq, name, arguments, False, None, is_error, t, reply_text(message),
+                    len(json.dumps(result if result is not None else message.get("error"), ensure_ascii=False).encode()))
 
     def finish(self):
         """Log forwarded calls the child never answered, then stop logging."""

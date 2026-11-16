@@ -38,6 +38,9 @@ func TestDockerPreflightStopsRunBeforeBuild(t *testing.T) {
 			for _, failure := range []string{"stopped", "hung"} {
 				t.Run(fmt.Sprintf("%s-%s-%s", export, chunking, failure), func(t *testing.T) {
 					stubDockerDaemonSeams(t, time.Second)
+					// Keep the independent Buildx check off the host Docker install.
+					// Daemon probes below use injected subprocesses.
+					t.Setenv("PATH", t.TempDir())
 					stubNonInteractive(t)
 					stubHumanPresent(t, false)
 					fakeAllBuildDisks(t, 40<<30)

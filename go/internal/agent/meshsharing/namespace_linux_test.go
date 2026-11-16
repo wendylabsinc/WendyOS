@@ -211,12 +211,16 @@ func TestSharingNamespaceBorrowerProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := policy.SetGateway(ctx, donor); err != nil {
-		t.Fatal(err)
+	if os.Getenv("WENDY_SHARING_SLOW_LEASE") == "1" {
+		namespaceSlowControllerLease(t, policy, donor)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := policy.SetGateway(ctx, donor); err != nil {
+			t.Fatal(err)
+		}
+		cancel() // reconciliation's context must not kill the established lease.
 	}
-	cancel() // reconciliation's context must not kill the established lease.
 	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	for _, upstream := range []string{"198.51.100.7", "2001:db8:feed::7"} {
 		response, err := client.Get("http://" + net.JoinHostPort(upstream, "18081"))
@@ -407,7 +411,11 @@ func TestSharingPolicyDualStackAcrossIPv6Namespaces(t *testing.T) {
 	}
 	start := func(ns, role, test string) child {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		budget := 45 * time.Second
+		if os.Getenv("WENDY_SHARING_SLOW_LEASE") == "1" {
+			budget = 70 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns, os.Args[0], "-test.run=^"+test+"$", "-test.v")
 		cmd.Env = append(os.Environ(), "WENDY_SHARING_ROLE="+role, "WENDY_SHARING_IDENTITY="+filepath.Join(dir, role+".json"), "WENDY_SHARING_SYNC="+dir, "WENDY_SHARING_DONOR="+donorCredentials.Device.Principal())
 		output, err := os.Create(filepath.Join(dir, role+".log"))
@@ -436,7 +444,11 @@ func TestSharingPolicyDualStackAcrossIPv6Namespaces(t *testing.T) {
 	}
 	await := func(name string, process child) {
 		t.Helper()
-		deadline := time.Now().Add(12 * time.Second)
+		budget := 12 * time.Second
+		if os.Getenv("WENDY_SHARING_SLOW_LEASE") == "1" {
+			budget = 40 * time.Second
+		}
+		deadline := time.Now().Add(budget)
 		for {
 			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 				return

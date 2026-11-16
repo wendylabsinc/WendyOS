@@ -441,7 +441,9 @@ func (s *Synchronizer) localDevicePrincipal(principal string) bool {
 
 // Receive returns replies plus independently verified changed records to relay.
 // Invalid signatures or lifetimes are fatal except for a bounded retry while
-// an exact advertised renewed chain is in flight. Unverified data grants no trust.
+// an exact advertised renewed chain is in flight, or a signature or issue-date
+// mismatch on a revision the origin has already replaced. Unverified data
+// grants no trust.
 func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (replies []ControlMessage, changed []SignedManifest, err error) {
 	s.Sweep(now)
 	switch m.Kind {
@@ -527,12 +529,15 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		if s.gossip != nil && (e == nil || errors.Is(e, ErrStaleManifest)) {
 			s.resolveManifest(*m.Manifest, now, e == nil)
 		}
-		if s.gossip != nil && errors.Is(e, ErrExpiredManifest) {
+		// A superseded envelope was never authenticated: release its claim
+		// like an expired one, without the receipt a verified stale body gets.
+		unverified := errors.Is(e, ErrExpiredManifest) || errors.Is(e, ErrSupersededManifest)
+		if s.gossip != nil && unverified {
 			s.discardManifest(*m.Manifest)
 		}
 		// Reordering across relays and leases expiring in transit are normal,
 		// not grounds to disconnect an authenticated neighbour.
-		if errors.Is(e, ErrStaleManifest) || errors.Is(e, ErrExpiredManifest) {
+		if errors.Is(e, ErrStaleManifest) || unverified {
 			return nil, nil, nil
 		}
 		signatureMismatch := errors.Is(e, ErrInvalidManifestSignature)

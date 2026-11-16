@@ -239,6 +239,10 @@ type cloudStartDropClient struct {
 	started    bool
 }
 
+func (c *cloudStartDropClient) ListContainers(context.Context, *agentpb.ListContainersRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+	return nil, c.cause
+}
+
 func (c *cloudStartDropClient) PrepareImage(context.Context, *agentpb.RunContainerLayersRequest, ...grpc.CallOption) (*agentpb.PrepareImageResponse, error) {
 	return &agentpb.PrepareImageResponse{}, nil
 }

@@ -319,6 +319,13 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			}
 		}
 
+		// Apply the same leaf usage policy on native and ML-DSA fallback paths.
+		// Newer Go versions can verify ML-DSA natively, so fallback-only
+		// checks would otherwise permit unknown EKUs depending on toolchain.
+		if !permitsUsage(leaf, x509.ExtKeyUsageServerAuth) {
+			return fmt.Errorf("device certificate has unsupported authentication usage")
+		}
+
 		// Step 1: ML-DSA-aware chain verification.
 		intermediates := x509.NewCertPool()
 		for _, cert := range cs.PeerCertificates[1:] {
