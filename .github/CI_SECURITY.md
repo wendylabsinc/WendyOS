@@ -73,7 +73,9 @@ Linux Go job runs short unit tests for Go, Proto, module or test-setup changes,
 including the nested Babel module. Race tests and platform fixtures stay at
 pre-release. Swift
 lint, documentation previews, and the offline agent-evaluation harness retain
-their own relevant path filters. AI review triggers are unchanged.
+their own relevant path filters. The AI security review runs when a PR carries
+the `review: security` label; Dependabot PRs still run the secretless dependency
+policy on every push. The other AI review triggers are unchanged.
 
 The full Go suite (including race tests, cross-platform regressions, plugin
 launchers, dependency scans and automation fixtures), Swift builds/tests, Swift
