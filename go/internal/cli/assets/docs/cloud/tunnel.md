@@ -85,8 +85,9 @@ The pool separates broker endpoints, broker incarnations, caller and agent roles
 and Agent management from application-port forwarding. It retains at most eight
 connections, closes unused connections after 30 seconds, and stops assigning new
 sessions to a connection after ten minutes. Active sessions finish normally when
-a connection ages out. If every slot is active, a new broker connection waits
-within the requesting session's deadline. Presence and reachability probes use
+a connection ages out. If every slot is active, a new session joins the newest
+aged connection of its own class while that connection is healthy; otherwise it
+waits for a slot within its own deadline. Presence and reachability probes use
 independent connections.
 
 ## Reconnection and app uploads

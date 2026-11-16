@@ -476,6 +476,72 @@ func TestRelayPoolMaxAgeDoesNotInterruptActiveSession(t *testing.T) {
 	waitPool(t, func() bool { return old.conn.GetState() == connectivity.Shutdown })
 }
 
+// agedPool fills every slot with a connection that is past max age and still
+// carries a session, as long-lived sessions opened ten minutes apart leave it.
+func agedPool(t *testing.T, v *Verifier, keys []relayPoolKey, dial func(string) (*grpc.ClientConn, error)) []*grpc.ClientConn {
+	t.Helper()
+	conns := make([]*grpc.ClientConn, relayPoolLimit)
+	for i := range relayPoolLimit {
+		conn, release, err := v.relays.acquire(t.Context(), keys[i%len(keys)], dial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(release)
+		conns[i] = conn
+		v.relays.mu.Lock()
+		for _, entry := range v.relays.entries {
+			entry.created = entry.created.Add(-relayPoolMaxAge)
+		}
+		v.relays.mu.Unlock()
+	}
+	return conns
+}
+
+// Aged connections keep their slots until their last session ends, up to an
+// hour later. Max age must not refuse a traffic class that still has a healthy
+// connection once those fill the pool.
+func TestRelayPoolFullOfAgedConnectionsStillServesTheirClasses(t *testing.T) {
+	_, endpoint, dial, dials := newPoolBroker(t)
+	v := &Verifier{relayDial: dial}
+	t.Cleanup(func() { _ = v.Close() })
+	keys := []relayPoolKey{
+		{endpoint: endpoint.Endpoint, audience: endpoint.Audience, management: true},
+		{endpoint: endpoint.Endpoint, audience: endpoint.Audience},
+	}
+	conns := agedPool(t, v, keys, dial)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	for class, key := range keys {
+		conn, release, err := v.relays.acquire(ctx, key, dial)
+		if err != nil {
+			t.Fatalf("class %d refused by a pool of aged connections: %v", class, err)
+		}
+		release()
+		if newest := conns[relayPoolLimit-len(keys)+class]; conn != newest {
+			t.Fatalf("class %d did not join its newest connection", class)
+		}
+	}
+	if dials.Load() != relayPoolLimit {
+		t.Fatal("pool exceeded connection bound")
+	}
+}
+
+// Age is a preference; a failed transport is never handed out again.
+func TestRelayPoolFullDoesNotReuseFailedAgedConnection(t *testing.T) {
+	_, endpoint, dial, _ := newPoolBroker(t)
+	v := &Verifier{relayDial: dial}
+	t.Cleanup(func() { _ = v.Close() })
+	key := relayPoolKey{endpoint: endpoint.Endpoint, audience: endpoint.Audience}
+	for _, conn := range agedPool(t, v, []relayPoolKey{key}, dial) {
+		_ = conn.Close()
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, _, err := v.relays.acquire(ctx, key, dial); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("full pool of failed connections: %v", err)
+	}
+}
+
 // drainingFront fronts a broker. Its first connection answers the first request
 // with GOAWAY(last-stream-id 0): the stream was not processed, as when a new
 // stream races a draining broker or load balancer. Later connections are

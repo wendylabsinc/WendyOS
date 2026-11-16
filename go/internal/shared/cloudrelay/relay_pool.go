@@ -98,12 +98,25 @@ func (p *relayPool) removeLocked(entry *relayTransport) {
 	p.wakeLocked()
 }
 
-func relayReusable(entry *relayTransport) bool {
-	if entry.retired || time.Since(entry.created) >= relayPoolMaxAge {
+func relayHealthy(entry *relayTransport) bool {
+	if entry.retired {
 		return false
 	}
 	state := entry.conn.GetState()
 	return state != connectivity.TransientFailure && state != connectivity.Shutdown
+}
+
+func relayAged(entry *relayTransport) bool {
+	return time.Since(entry.created) >= relayPoolMaxAge
+}
+
+func (p *relayPool) leaseLocked(entry *relayTransport) (*grpc.ClientConn, func()) {
+	entry.refs++
+	entry.idleGeneration++
+	if entry.timer != nil {
+		entry.timer.Stop()
+	}
+	return entry.conn, p.release(entry)
 }
 
 func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(string) (*grpc.ClientConn, error)) (*grpc.ClientConn, func(), error) {
@@ -120,7 +133,7 @@ func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(str
 			return nil, nil, context.Canceled
 		}
 		var pending <-chan struct{}
-		var idle *relayTransport
+		var idle, aged *relayTransport
 		for _, entry := range p.entries {
 			if entry.conn == nil {
 				if entry.key == key {
@@ -128,17 +141,18 @@ func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(str
 				}
 				continue
 			}
-			if !relayReusable(entry) {
+			if !relayHealthy(entry) {
 				entry.retired = true
 			}
 			if entry.key == key && !entry.retired {
-				entry.refs++
-				entry.idleGeneration++
-				if entry.timer != nil {
-					entry.timer.Stop()
+				if !relayAged(entry) {
+					conn, release := p.leaseLocked(entry)
+					p.mu.Unlock()
+					return conn, release, nil
 				}
-				p.mu.Unlock()
-				return entry.conn, p.release(entry), nil
+				if aged == nil || entry.created.After(aged.created) {
+					aged = entry
+				}
 			}
 			if entry.refs == 0 && (idle == nil || entry.idleAt.Before(idle.idleAt)) {
 				idle = entry
@@ -160,8 +174,15 @@ func (p *relayPool) acquire(ctx context.Context, key relayPoolKey, dial func(str
 			p.removeLocked(idle)
 		}
 		if len(p.entries) >= relayPoolLimit {
-			if p.changed == nil {
-				p.changed = make(chan struct{})
+			// Every slot carries a session, so no replacement can be dialed.
+			// An aged connection keeps its slot until its last session ends, up
+			// to an hour later; a few long-lived sessions would otherwise fill
+			// the pool and refuse their own traffic class. Max age spreads
+			// sessions over fresh connections; it is not a reason to refuse one.
+			if aged != nil {
+				conn, release := p.leaseLocked(aged)
+				p.mu.Unlock()
+				return conn, release, nil
 			}
 			changed := p.changed
 			p.mu.Unlock()
@@ -210,7 +231,7 @@ func (p *relayPool) release(entry *relayTransport) func() {
 			if entry.refs != 0 {
 				return
 			}
-			if p.closed || !relayReusable(entry) {
+			if p.closed || !relayHealthy(entry) || relayAged(entry) {
 				p.removeLocked(entry)
 				return
 			}
