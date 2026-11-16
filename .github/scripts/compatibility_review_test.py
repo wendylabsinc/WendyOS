@@ -134,6 +134,19 @@ class EvidenceTests(unittest.TestCase):
         for path in ('go/internal/agent/oci/spec.go', 'go/internal/agent/containerd/device_spec.go', 'go/internal/cli/jobops/spec.go', 'go/internal/cli/vm/spec.go'):
             self.assertEqual(compat.source_kind(path), 'source')
 
+    def test_canned_eval_reply_and_documentation_cannot_prove_runtime_caller(self):
+        for path in ('evals/agent-experience/canned/set-default-device/cli/device-set-default.json',
+                     'evals/agent-experience/canned-local/sample/cli/reply.json',
+                     'evals/codec/canned/reply.json', 'EVALS/codec/CANNED/reply.json'):
+            self.assertEqual(compat.source_kind(path),'test_definition')
+            # Reproduce the real caller pair, including its incorrect source label.
+            extras=compat.context_catalog([entry(path=path,kind='source'),
+                entry(path='Examples/mojo/README.md',kind='documentation')])[0]
+            with self.subTest(path=path),self.assertRaisesRegex(compat.ReviewError,'Runtime findings'):
+                compat.validate(response(dict(self.finding,caller=list(extras))),self.changed,extras,previous=[])
+        for path in ('go/internal/shared/config/config.json','runtime/canned.json','runtime/evaluation/settings.json'):
+            self.assertEqual(compat.source_kind(path),'source')
+
     def test_caps_fail_without_silent_truncation(self):
         with patch.object(compat, 'MAX_CONTEXT_BYTES', 4), self.assertRaisesRegex(compat.ReviewError, 'byte limit'):
             compat.context_catalog([entry()])

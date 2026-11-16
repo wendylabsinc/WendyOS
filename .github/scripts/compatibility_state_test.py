@@ -265,6 +265,19 @@ class StatefulTests(unittest.TestCase):
                 with self.assertRaises(compat.ReviewError):self.resolved(fixtures.response(dict(self.fixture.finding,**{field:value})))
         self.assertEqual(state.parse([state.marker(self.records[0])]),self.records)
 
+    def test_canned_eval_reply_cannot_address_or_cancel_a_concern(self):
+        extra=compat.context_catalog([fixtures.entry(
+            path='evals/agent-experience/canned/set-default-device/cli/device-set-default.json',kind='source')])[0]
+        key,ref=next(iter(extra.items()))
+        for status in ('addressed','cancelled'):
+            update={'prior_id':self.identifier,'status':status,'reason':'Only a captured reply','evidence':[key]}
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(compat.ReviewError,'Runtime findings'):
+                    compat.resolve_update(update,self.changed,extra,self.records)
+                with self.assertRaisesRegex(compat.ReviewError,'Runtime findings'):
+                    state.current(dict(self.report,compatibility_findings=[],compatibility_previous=self.records,
+                        compatibility_updates=[dict(update,evidence=[ref])]))
+
     def test_publication_uses_real_batch_coverage_without_synthetic_partial_rows(self):
         from api_review_comment_test import REVIEW_DIFF, HEAD, BASE
         data=result();data.update(review_batches=1,input_visibility='public',evidence_catalog={},

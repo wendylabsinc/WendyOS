@@ -62,8 +62,9 @@ MAPPED_FILE_BYTES = 14_000
 def source_kind(path):
     if PurePosixPath(path).suffix.lower() in {".md", ".rst", ".txt"} or "/docs/" in path:
         return "documentation"
-    if (any(part.lower() in {"test", "tests", "testdata", "fixtures", "fixture"}
-            for part in PurePosixPath(path).parts[:-1])
+    directories = {part.lower() for part in PurePosixPath(path).parts[:-1]}
+    if (directories.intersection({"test", "tests", "testdata", "fixtures", "fixture"})
+            or "evals" in directories and directories.intersection({"canned", "canned-local"})
             or path.endswith("_test.go")
             or (path.endswith(".swift") and re.search(r"(?:Test|Tests|Spec)\.swift$", path))
             or (path.endswith(".py") and (PurePosixPath(path).name.startswith("test_") or path.endswith("_test.py")))):
