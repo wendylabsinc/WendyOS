@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	quic "github.com/quic-go/quic-go"
@@ -217,6 +218,32 @@ type Server struct {
 	closed         bool
 	udpManager     *udpmessage.Manager
 	ownsUDPManager bool
+	routes         atomic.Pointer[func() localmesh.NodeSnapshot]
+}
+
+// SetRouteSnapshot lets an incoming session from a current direct LAN
+// neighbour use the faster QUIC startup that the dialing side uses. Without
+// it, or when the client's address has no installed direct-LAN route, sessions
+// keep conservative startup. The callback must return the current node
+// snapshot; nil removes it.
+func (s *Server) SetRouteSnapshot(snapshot func() localmesh.NodeSnapshot) {
+	if snapshot == nil {
+		s.routes.Store(nil)
+		return
+	}
+	s.routes.Store(&snapshot)
+}
+
+func (s *Server) listenConfig() *quic.Config {
+	config := quicConfig()
+	config.GetConfigForClient = func(info *quic.ClientInfo) (*quic.Config, error) {
+		var snapshot func() localmesh.NodeSnapshot
+		if routes := s.routes.Load(); routes != nil {
+			snapshot = *routes
+		}
+		return serverQUICConfig(snapshot, info.RemoteAddr), nil
+	}
+	return config
 }
 
 func NewServer(credentials *localmesh.Credentials, authorizer Authorizer, managers ...*udpmessage.Manager) (*Server, error) {
@@ -267,7 +294,7 @@ func (s *Server) Run(ctx context.Context, addr string, ready ...func()) error {
 		return err
 	}
 	defer packets.Close()
-	listener, err := quic.Listen(packets, s.TLSConfig(), quicConfig())
+	listener, err := quic.Listen(packets, s.TLSConfig(), s.listenConfig())
 	if err != nil {
 		cancel()
 		return err

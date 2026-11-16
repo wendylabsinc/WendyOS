@@ -57,6 +57,8 @@ const (
 	preEnrollSkip                        // --pre-enroll explicitly set to false
 )
 
+var errESP32DeviceType = errors.New("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
 	var force bool
@@ -113,6 +115,11 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			defer startInstallSession(cmd)()
+			// Alias and driver resolution can fetch manifests before runOSInstall.
+			// Refuse unsupported explicit targets before either path runs.
+			if isESP32Target(deviceType) {
+				return errESP32DeviceType
+			}
 			if len(drivers) > 0 {
 				if len(args) != 0 || deviceType == "" || deviceName == "" {
 					return usageErrorf("--driver requires --device-type and --device-name, and cannot be combined with positional image/drive arguments")
@@ -430,7 +437,7 @@ func pickWendyLiteBoard(target string, nightly bool) (string, error) {
 			continue
 		}
 		items = append(items, tui.PickerItem{
-			Name:    v.DisplayName,
+			Name:    v.DisplayName + liteCloudEnrollmentLabel(v.CloudEnrollment),
 			SortKey: strings.ToLower(v.DisplayName),
 			Value:   v.Board,
 		})
@@ -455,7 +462,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
 	// Rejected before any manifest fetch: the answer never depends on it.
 	if isESP32Target(flagDeviceType) {
-		return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+		return errESP32DeviceType
 	}
 	if storageOverride != "" && storageOverride != "nvme" && storageOverride != "sd" && storageOverride != "emmc" {
 		return fmt.Errorf("invalid --storage %q: must be \"nvme\", \"sd\", or \"emmc\" (jetson-agx-orin only)", storageOverride)
@@ -2278,6 +2285,19 @@ type wifiCLIOptions struct {
 	// RequireChoice makes an unanswered Wi-Fi question an error without a
 	// terminal; only callers with Wi-Fi flags to point at set it.
 	RequireChoice bool
+	// MaxNetworks is the most networks the board takes; 0 means no limit.
+	MaxNetworks int
+}
+
+// liteMaxWiFiNetworks is how many Wi-Fi networks a Wendy Lite board takes.
+const liteMaxWiFiNetworks = 1
+
+// tooManyWiFiNetworks is the error for a board that takes max networks.
+func tooManyWiFiNetworks(max int) error {
+	if max == 1 {
+		return usageErrorf("this board supports one Wi-Fi network: pass a single network")
+	}
+	return usageErrorf("this board supports at most %d Wi-Fi networks: pass no more than %d", max, max)
 }
 
 // chosen reports whether a flag settles first-boot Wi-Fi.
@@ -2393,6 +2413,9 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 		creds = append(creds, c)
 	}
 
+	if opts.MaxNetworks > 0 && len(creds) > opts.MaxNetworks {
+		return nil, tooManyWiFiNetworks(opts.MaxNetworks)
+	}
 	if len(creds) > 0 {
 		return creds, nil
 	}
@@ -2424,6 +2447,9 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 			break
 		}
 		creds = append(creds, c)
+		if opts.MaxNetworks > 0 && len(creds) >= opts.MaxNetworks {
+			break
+		}
 
 		more, err := tui.Confirm("Add another WiFi network?")
 		if err != nil {
@@ -2696,7 +2722,7 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 	if err != nil || plan == nil {
 		return nil, err
 	}
-	return mintProvisioningJSON(ctx, plan, *deviceName)
+	return mintProvisioningJSON(ctx, plan, deviceName)
 }
 
 // planProvisioning is the question half of resolveProvisioningJSON: it may
@@ -2716,8 +2742,9 @@ func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnr
 }
 
 // mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
-// plan, or a failure the person chose to continue past, bakes nothing.
-func mintProvisioningJSON(ctx context.Context, plan *acmePreEnrollPlan, deviceName string) ([]byte, error) {
+// plan, or a failure the person chose to continue past, bakes nothing. A name
+// changed because Cloud found it taken is written back to *deviceName.
+func mintProvisioningJSON(ctx context.Context, plan *acmePreEnrollPlan, deviceName *string) ([]byte, error) {
 	if plan == nil {
 		return nil, nil
 	}
@@ -2855,7 +2882,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 	}
 	// Reserving the name in Cloud waits for the erase confirm, so a declined
 	// install leaves nothing reserved and its retry can use the same name.
-	provisioningJSON, err := mintProvisioningJSON(ctx, plan, name)
+	provisioningJSON, err := mintProvisioningJSON(ctx, plan, &name)
 	if err != nil {
 		return diskInstallSettled{}, err
 	}
@@ -3154,6 +3181,9 @@ func flashRetryAction(flashErr error, interactive bool) (retry bool, fatal error
 	return true, nil
 }
 
+// resolveESP32InstallSerialPortsFn is the install-port scan; tests replace it.
+var resolveESP32InstallSerialPortsFn = discovery.ResolveESP32InstallSerialPorts
+
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
 // board is a Wendy Lite catalog board name, e.g. "esp32c6_generic_native". An empty
 // serialDevice means the device should be located by scanning install-capable
@@ -3168,6 +3198,51 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return err
 	}
 
+	// Find the board before asking for Wi-Fi, name or enrollment: a missing
+	// board must be reported before any question.
+	//
+	// An explicitly supplied device is used verbatim on every attempt. For
+	// discovered devices, preserve the selected port across retries and ask
+	// again if it disappears, since a different port may be another board.
+	autoDiscoverPort := serialDevice.Port == ""
+	interactive := !jsonOutput && isInteractiveTerminal()
+	if autoDiscoverPort {
+		fmt.Println("\nScanning for ESP32 devices...")
+
+		// A device that's rebooting on its own can drop off and reappear on
+		// the USB bus as it re-enumerates, so a single scan can miss it.
+		// Retry briefly rather than failing on the very first attempt.
+		deadline := time.Now().Add(1 * time.Second)
+		var devices []discovery.SerialPortInfo
+		for {
+			devices, err = resolveESP32InstallSerialPortsFn()
+			if err == nil && len(devices) == 0 {
+				err = fmt.Errorf("no ESP32 serial port found")
+			}
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			fmt.Println("\nNo ESP32 device detected.")
+			fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
+			fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
+			return fmt.Errorf("ESP32 not found: %w", err)
+		}
+		serialDevice, err = selectESP32InstallDevice(devices, discovery.SerialPortInfo{}, interactive, pickFromItems)
+		if err != nil {
+			return err
+		}
+	}
+
+	if preOpts.mode == preEnrollForced {
+		if err := checkLiteImageCanEnroll(board); err != nil {
+			return err
+		}
+	}
+
+	wifi.MaxNetworks = liteMaxWiFiNetworks
 	provCreds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
@@ -3192,6 +3267,11 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		if resolveErr != nil {
 			return resolveErr
 		}
+		if enrollmentAuth != nil {
+			if err := checkLiteImageCanEnroll(board); err != nil {
+				return err
+			}
+		}
 	}
 
 	wendyConf, err := buildWendyConf(provCreds, provDeviceName, nil)
@@ -3199,43 +3279,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return fmt.Errorf("building Wendy config: %w", err)
 	}
 
-	if wendyConf.Wifi != nil && len(wendyConf.Wifi.Networks) > 1 {
-		return fmt.Errorf("this device only supports one Wi-Fi network")
-	}
-
-	// An explicitly supplied device is used verbatim on every attempt. For
-	// discovered devices, preserve the selected port across retries and ask
-	// again if it disappears, since a different port may be another board.
-	autoDiscoverPort := serialDevice.Port == ""
-	interactive := !jsonOutput && isInteractiveTerminal()
-	if autoDiscoverPort {
-		fmt.Println("\nScanning for ESP32 devices...")
-
-		// A device that's rebooting on its own can drop off and reappear on
-		// the USB bus as it re-enumerates, so a single scan can miss it.
-		// Retry briefly rather than failing on the very first attempt.
-		deadline := time.Now().Add(1 * time.Second)
-		var devices []discovery.SerialPortInfo
-		for {
-			devices, err = discovery.ResolveESP32InstallSerialPorts()
-			if err == nil && len(devices) == 0 {
-				err = fmt.Errorf("no ESP32 serial port found")
-			}
-			if err == nil || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if err != nil {
-			fmt.Println("\nNo ESP32 device detected.")
-			fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
-			fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
-			return fmt.Errorf("ESP32 not found: %w", err)
-		}
-		serialDevice, err = selectESP32InstallDevice(devices, discovery.SerialPortInfo{}, interactive, pickFromItems)
-		if err != nil {
-			return err
-		}
+	if wendyConf.Wifi != nil && len(wendyConf.Wifi.Networks) > liteMaxWiFiNetworks {
+		return tooManyWiFiNetworks(liteMaxWiFiNetworks)
 	}
 
 	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
