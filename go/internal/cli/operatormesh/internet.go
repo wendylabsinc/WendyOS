@@ -59,7 +59,7 @@ func (s *Session) OpenInternet(setup context.Context, gateway meshid.Device) (ne
 		case <-timer.C:
 		}
 	}
-	raw, err := s.Endpoint.DialContext(setup, net.JoinHostPort(gateway.MeshAddress().String(), "18867"))
+	raw, err := s.DialContext(setup, "tcp", net.JoinHostPort(gateway.MeshAddress().String(), "18867"))
 	if err != nil {
 		return nil, err
 	}

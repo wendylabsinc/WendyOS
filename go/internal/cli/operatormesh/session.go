@@ -31,6 +31,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/central"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/directstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
@@ -41,9 +42,12 @@ import (
 const JoinSetupTimeout = 60 * time.Second
 
 type Options struct {
-	CarrierSources []carriers.Source
-	StateDirectory string
-	Certificate    config.CertificateInfo
+	// DisableDirectBLE opts out of negotiated direct BLE application streams.
+	// Peers without the capability continue to use their routed upper transport.
+	DisableDirectBLE bool
+	CarrierSources   []carriers.Source
+	StateDirectory   string
+	Certificate      config.CertificateInfo
 	// ReportCarrierFailure is an optional local diagnostics sink. It receives
 	// no certificate or request payload and must not change attachment policy.
 	ReportCarrierFailure func(transport string, err error)
@@ -54,9 +58,14 @@ type Info struct {
 	Revision uint64 `json:"revision" cbor:"R"`
 }
 type Session struct {
-	agentMu      sync.Mutex
-	agentClients map[meshid.Device]*grpcclient.AgentConnection
-	certificate  config.CertificateInfo
+	direct        *meshsession.DirectManager
+	upper         *meshsession.Client
+	agentMu       sync.Mutex
+	agentClients  map[meshid.Device]*grpcclient.AgentConnection
+	agentOwners   map[meshid.Device]*retainedAgentOwner
+	agentWorkers  sync.WaitGroup
+	agentStopping bool
+	certificate   config.CertificateInfo
 
 	runMu           sync.Mutex
 	started, closed bool
@@ -123,6 +132,7 @@ func (s *Session) Close() error {
 			_ = link.Close()
 		}
 		s.agentMu.Lock()
+		s.agentStopping = true
 		agents := make([]*grpcclient.AgentConnection, 0, len(s.agentClients))
 		for _, agent := range s.agentClients {
 			agents = append(agents, agent)
@@ -131,6 +141,13 @@ func (s *Session) Close() error {
 		for _, agent := range agents {
 			_ = agent.Close()
 		}
+		if s.direct != nil {
+			s.direct.Close()
+		}
+		if s.upper != nil {
+			s.upper.Close()
+		}
+		s.agentWorkers.Wait()
 		s.Endpoint.Close()
 		if done != nil {
 			<-done
@@ -197,7 +214,38 @@ func (s *Session) Run(ctx context.Context) error {
 }
 
 func (s *Session) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	return s.Endpoint.Dial(ctx, network, address)
+	dial := func(ctx context.Context) (net.Conn, error) { return s.Endpoint.Dial(ctx, network, address) }
+	if s.direct == nil {
+		return dial(ctx)
+	}
+	if endpoint, err := netip.ParseAddrPort(address); err == nil {
+		snapshot := s.Snapshot()
+		for _, manifest := range snapshot.Devices {
+			peer, err := manifest.Peer(snapshot.Self.Tenant())
+			if err == nil && peer.MeshAddress() == endpoint.Addr() {
+				return s.direct.DialUpper(ctx, peer, dial)
+			}
+		}
+	}
+	return s.direct.DialUnclassifiedUpper(ctx, dial)
+}
+
+// DialApp uses the retained direct epoch when available. A suspended admitted
+// stream must not silently create a second application connection on fallback.
+func (s *Session) DialApp(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
+	if s.direct == nil {
+		return s.DialAppTLS(ctx, peer, port)
+	}
+	// Hold admission from before epoch lookup through the returned stream's
+	// lifetime, including a fallback dial. A reuse proposal cannot race a new
+	// application open between selecting its epoch and allocating its flow.
+	return s.direct.DialUpper(ctx, peer, func(ctx context.Context) (net.Conn, error) {
+		conn, err := s.direct.Dial(ctx, peer, directstream.OpenRequest{Service: directstream.ServiceTCP, Port: port})
+		if !errors.Is(err, meshsession.ErrNoDirectSession) && !errors.Is(err, meshsession.ErrDirectUseUpper) {
+			return conn, err
+		}
+		return s.DialAppTLS(ctx, peer, port)
+	})
 }
 
 // DialAppTLS opens the ordinary end-to-end app TLS/WAS1 session using this
@@ -362,6 +410,32 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 		return nil, err
 	}
 	session := &Session{certificate: options.Certificate, revision: &revision, Endpoint: endpoint, Node: node, nodeCancel: nodeCancel, linkChanged: make(chan struct{}, 1), options: options, routerConfig: cfg, release: release, info: Info{Address: endpoint.Address().String(), Revision: state.Revision}}
+	if !options.DisableDirectBLE {
+		capability := uint32(directstream.CapabilityVersion | directstream.CapabilityTLS | directstream.CapabilityQUIC)
+		session.direct, err = meshsession.NewDirectManager(nodeCtx, meshsession.DirectManagerConfig{Credentials: credentials, PromotionSnapshot: session.Snapshot, PromotionDialContext: endpoint.Dial, Backend: func(context.Context, meshid.Device, directstream.OpenRequest) (net.Conn, error) {
+			return nil, meshsession.ErrDenied
+		}})
+		if err == nil {
+			err = node.SetDirectCarrierHandler(capability, session.direct.HandleCarrier, session.direct.AcceptsDirectCarrier)
+		}
+		if err == nil {
+			session.upper, err = meshsession.NewClientWithQUICDialer(credentials, endpoint.Dial)
+		}
+		if err == nil {
+			err = session.upper.SetAdmissionManager(session.direct)
+		}
+		if err != nil {
+			if session.upper != nil {
+				session.upper.Close()
+			}
+			if session.direct != nil {
+				session.direct.Close()
+			}
+			nodeCancel()
+			endpoint.Close()
+			return nil, err
+		}
+	}
 	session.links = make(map[*meshoperatorlink.RouterLink]managedCarrier)
 	session.agentClients = make(map[meshid.Device]*grpcclient.AgentConnection)
 	success = true
@@ -433,4 +507,13 @@ func (s *Session) AdjacentPeer() (meshid.Device, bool) {
 
 func (s *Session) HasRecentTransit(window time.Duration) bool {
 	return s != nil && s.Endpoint != nil && s.Endpoint.HasRecentTransit(window)
+}
+
+// DialNative implements liteclient.DirectNativeDialer. Disabled or absent direct
+// epochs return ErrNoDirectSession; callers must preserve all other errors.
+func (s *Session) DialNative(ctx context.Context, peer meshid.Device, service byte) (net.Conn, *x509.Certificate, error) {
+	if s.direct == nil {
+		return nil, nil, meshsession.ErrNoDirectSession
+	}
+	return s.direct.DialNative(ctx, peer, service)
 }

@@ -664,7 +664,7 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 		return current.session.Snapshot()
 	}
 	remotes.packetDial = attachment.DialContext
-	remotes.appDial = attachment.DialAppTLS
+	remotes.appDial = attachment.DialApp
 	remotes.internetOpen = attachment.OpenInternet
 	defer remotes.Close()
 	return serveResolvedLocal(owner, dir, spec, nil, idleTTL, func() bool {

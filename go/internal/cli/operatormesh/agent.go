@@ -10,6 +10,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // WaitForPeer waits for the local routing actor, rather than assuming that
@@ -93,19 +94,35 @@ func (s *Session) AgentConnectionForPeer(ctx context.Context, peer meshid.Device
 	// cannot be inserted just after its last carrier has retired.
 	s.linkMu.RLock()
 	defer s.linkMu.RUnlock()
-	if !s.hasDirectPeerLocked(peer) {
-		return nil, io.ErrClosedPipe
-	}
 	s.agentMu.Lock()
 	defer s.agentMu.Unlock()
 	if found := s.agentClients[peer]; found != nil {
-		return found, nil
+		if s.hasDirectPeerLocked(peer) || s.agentOwners[peer] != nil {
+			return found, nil
+		}
 	}
-	conn, err := grpc.NewClient("passthrough:///operator-agent", grpc.WithIdleTimeout(0), grpc.WithTransportCredentials(meshoperatorlink.AgentTransportCredentials(nil)), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return s.openAgentForPeer(ctx, peer) }))
+	if !s.hasDirectPeerLocked(peer) {
+		if s.upper == nil {
+			return nil, io.ErrClosedPipe
+		}
+		if _, _, err := s.agentUpperTarget(peer); err != nil {
+			return nil, err
+		}
+	}
+	var fallback credentials.TransportCredentials
+	if s.upper != nil {
+		config, err := s.Node.Credentials.PeerTLSWithTickets(peer, "h2", "native-grpc")
+		if err != nil {
+			return nil, err
+		}
+		fallback = credentials.NewTLS(config)
+	}
+	var result *grpcclient.AgentConnection
+	conn, err := grpc.NewClient("passthrough:///operator-agent", grpc.WithIdleTimeout(0), grpc.WithTransportCredentials(meshoperatorlink.AgentTransportCredentials(fallback)), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return s.openManagedAgent(ctx, peer, result) }))
 	if err != nil {
 		return nil, err
 	}
-	result := grpcclient.NewFromConn(conn)
+	result = grpcclient.NewFromConn(conn)
 	result.Host = peer.Principal()
 	result.IsMTLS = true
 	info := s.certificate
@@ -115,6 +132,7 @@ func (s *Session) AgentConnectionForPeer(ctx context.Context, peer meshid.Device
 		if s.agentClients[peer] == result {
 			delete(s.agentClients, peer)
 		}
+		s.clearAgentOwnerLocked(peer, result)
 		s.agentMu.Unlock()
 	}))
 	s.agentClients[peer] = result

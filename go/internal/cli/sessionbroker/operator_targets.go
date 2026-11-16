@@ -87,7 +87,7 @@ func newOperatorTargets(session *operatormesh.Session, adjacent *grpc.ClientConn
 	r.serviceTopology = r.topology
 	if session != nil && session.Node != nil {
 		r.internetOpen = session.OpenInternet
-		r.appDial = session.DialAppTLS
+		r.appDial = session.DialApp
 		r.localSnapshot = session.Snapshot
 		r.topology = func(context.Context) (*pb.LocalMeshTopology, error) {
 			snapshot := r.localSnapshot()
