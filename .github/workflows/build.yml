@@ -16,14 +16,25 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'swift/**'
-      - '.github/workflows/build.yml'
-      - '.github/scripts/verify-release.py'
-      - '.github/scripts/build-linux-release-cli.sh'
-      - '.github/scripts/build-linux-packages.sh'
-      - '.github/scripts/run-installed-linux-package-guests.py'
-      - '.github/scripts/test-installed-linux-packages.py'
-      - '.github/scripts/fixtures/package-upgrade-2352/**'
-      - 'packaging/linux/**'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/scripts/**'
+      - 'scripts/**'
+      - 'plugins/**'
+      - 'packaging/**'
+      - 'web-client/**'
+      - '.github/ci-tests/**'
+      - '.github/regression-coverage/**'
+      - '.github/dependabot.yml'
+      - '.gitattributes'
+      - 'Examples/G1CokeDemo/**'
+      - 'Examples/ThermalNotify/**'
+      - 'Examples/WendyDataModelApp/**'
+      - 'evals/**'
+      - 'Examples/SO101Reader/**'
+      - 'Examples/WendyNotify/**'
+      - 'README.md'
+      - 'Examples/NvidiaPAIR/README.md'
   workflow_dispatch:
     inputs:
       publish:
@@ -49,6 +60,56 @@ env:
   XCODE_VERSION: '26.5'
 
 jobs:
+  validate-go:
+    name: Go validation
+    uses: ./.github/workflows/go-tests.yml
+    permissions:
+      contents: read
+
+  validate-swift:
+    name: Swift validation
+    uses: ./.github/workflows/swift-tests.yml
+    permissions:
+      contents: read
+      actions: read
+
+  validate-e2e:
+    name: E2E validation
+    uses: ./.github/workflows/swift-e2e-tests.yml
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    secrets:
+      CI_SLACK_BOT_TOKEN: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  validate-sbom:
+    name: SBOM validation
+    uses: ./.github/workflows/sbom.yml
+    permissions:
+      contents: read
+
+  validate-simulator:
+    name: SO-101 simulator validation
+    uses: ./.github/workflows/so101-simulator.yml
+    permissions:
+      contents: read
+
+  pre-release-checks:
+    name: Pre-release checks
+    needs: [validate-go, validate-swift, validate-e2e, validate-sbom, validate-simulator, test-templates]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every validation suite to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+
   determine-version:
     permissions:
       contents: read
@@ -1012,9 +1073,10 @@ jobs:
     name: Publish to GCP Artifact Registry
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [determine-version, package-linux, test-templates, integration-tests]
+    needs: [determine-version, package-linux, test-templates, integration-tests, pre-release-checks]
     if: |
       always() &&
+      needs.pre-release-checks.result == 'success' &&
       needs.determine-version.outputs.is_release == 'true' &&
       needs.determine-version.outputs.is_prerelease == 'false' &&
       needs.package-linux.result == 'success' &&
@@ -1104,9 +1166,10 @@ jobs:
     # below (though still listed in needs, so its artifact is available to
     # download): a failed or skipped macOS build must not block Linux agent
     # publishing. The download step tolerates a missing macOS zip.
-    needs: [determine-version, build, build-agent-macos-app]
+    needs: [determine-version, build, build-agent-macos-app, pre-release-checks]
     if: |
       always() &&
+      needs.pre-release-checks.result == 'success' &&
       needs.determine-version.result == 'success' &&
       needs.build.result == 'success' &&
       (github.event_name == 'push' ||
@@ -1156,9 +1219,10 @@ jobs:
   publish-install-scripts:
     name: Publish install scripts to GCS
     runs-on: ubuntu-latest
-    needs: [determine-version, build]
+    needs: [determine-version, build, pre-release-checks]
     if: |
       always() &&
+      needs.pre-release-checks.result == 'success' &&
       needs.determine-version.result == 'success' &&
       needs.build.result == 'success' &&
       (github.event_name == 'push' ||
@@ -1215,9 +1279,10 @@ jobs:
     permissions:
       contents: write
       attestations: read
-    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests]
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests, pre-release-checks]
     if: |
       always() &&
+      needs.pre-release-checks.result == 'success' &&
       needs.determine-version.result == 'success' &&
       needs.build.result == 'success' &&
       needs.build-go-macos.result == 'success' &&
@@ -1231,11 +1296,21 @@ jobs:
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)) &&
       (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
     steps:
-      - name: Download artifact
+      # Validation artifacts and caches share this run; only download products.
+      - name: Download release products
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          # Build caches are internal and can be much larger than the release.
-          pattern: '!macos-release-build-*'
+          pattern: 'wendy-*'
+          merge-multiple: true
+      - name: Download Linux packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: 'linux-packages-*'
+          merge-multiple: true
+      - name: Download SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: 'sbom-*'
           merge-multiple: true
       - name: List files
         run: |

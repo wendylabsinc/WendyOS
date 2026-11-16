@@ -1,16 +1,12 @@
 name: SO-101 simulator
 on:
+  # PRs run this only for the runtime image and the desktop viewer. Go-only
+  # changes to the VM, MCP and command packages are covered by the PR Go unit
+  # tests, and the whole workflow runs before every pre-release.
   pull_request:
     paths:
       - 'go/simulator/so101/**'
       - 'go/simulator/go2/go2_sim/**'
-      - 'go/internal/shared/appconfig/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'go/internal/cli/vm/**'
-      - 'go/internal/agent/services/go2_feature*'
-      - 'go/internal/cli/commands/vm*'
-      - 'go/internal/cli/mcp/**'
       - 'web-client/desktop/**'
       - 'web-client/tsconfig.desktop.json'
       - 'web-client/tsconfig.json'
@@ -21,6 +17,7 @@ on:
       - 'web-client/electron/**'
       - '.github/workflows/so101-simulator.yml'
       - '.github/scripts/fixtures/so101-http-lifecycle.md'
+  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read

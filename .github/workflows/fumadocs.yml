@@ -19,6 +19,10 @@ on:
       - "docs/**"
       - "go/internal/cli/assets/docs/**"
       - "go/internal/cli/commands/**"
+      # Command tests cannot change the generated CLI reference. The one this job
+      # runs, through .github/scripts/test-readme-template.py, is included again.
+      - "!go/internal/cli/commands/**/*_test.go"
+      - "go/internal/cli/commands/docs_readme_init_runtime_test.go"
       - "go/cmd/api-surface-snapshot/**"
       - "go/internal/shared/appconfig/wendy.schema.json"
       # Dockerfile, patches, README and wendy.json read by scripts/test-pair-docs.py.
@@ -42,6 +46,8 @@ on:
       - "docs/**"
       - "go/internal/cli/assets/docs/**"
       - "go/internal/cli/commands/**"
+      - "!go/internal/cli/commands/**/*_test.go"
+      - "go/internal/cli/commands/docs_readme_init_runtime_test.go"
       - "go/cmd/api-surface-snapshot/**"
       - "go/internal/shared/appconfig/wendy.schema.json"
       # Dockerfile, patches, README and wendy.json read by scripts/test-pair-docs.py.

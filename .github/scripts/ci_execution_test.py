@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise workflow failure/concurrency behavior with local command fixtures."""
 
-import json
 import fnmatch
+import json
 import os
 from pathlib import Path
 import shlex
@@ -117,29 +117,31 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
         job = config["jobs"]["automation-regressions"]
         self.assertNotIn("if", job)
         self.assertFalse(any("if" in step for step in job["steps"]))
-        self.assertIn("pull_request", config["on"])
-        self.assertIn(".github/scripts/**", config["on"]["pull_request"]["paths"])
-        self.assertIn(".github/dependabot.yml", config["on"]["pull_request"]["paths"])
-        for event in ("push", "pull_request"):
-            for filename in ("README.md", "Examples/NvidiaPAIR/README.md",
-                             ".github/ci-tests/python-gpu/main.py", ".github/ci-tests/python-onnx-gpu/main.py",
-                             ".github/regression-coverage/manual/jetson-display-rehearsal.py",
-                             ".github/regression-coverage/manual/fixtures/jetson-display/main.c",
-                             "swift/Scripts/SetupSigningCI.sh", "swift/Scripts/Build.sh",
-                             "swift/WendyAgentMac/RuntimeGuest/Dockerfile",
-                             "swift/WendyAgentMac/RuntimeGuest/rootfs/init",
-                             "swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift",
-                             "swift/WendyAgentMac/Sources/AppDelegate.swift", "swift/Scripts/ValidateMacPermissions.sh",
-                             "swift/WendyAgentMac/LaunchAgents/agent.plist", "swift/Makefile",
-                             "Examples/SO101Reader/reader.py", "Examples/SO101Reader/test_reader.py",
-                             "web-client/tests/desktop-mesh.test.mjs", "web-client/tests/mesh-topology.test.mjs",
-                             "web-client/electron/service.mjs", "web-client/desktop/types.ts",
-                             "web-client/lib/mesh-topology.ts", "web-client/components/mesh-network.tsx",
-                             "go/internal/cli/browserauth/topology.go", "go/proto/gen/litepb/wendy_com_msg.pb.go",
-                             "Examples/WendyNotify/Sources/WendyNotify/Router.swift",
-                             "Examples/WendyNotify/Tests/WendyNotifyTests/RequestPathTests.swift"):
-                self.assertTrue(any(fnmatch.fnmatchcase(filename, pattern) for pattern in config["on"][event]["paths"]),
-                                f"{event} omits regression source {filename}")
+        self.assertIn("workflow_call", config["on"])
+        self.assertNotIn("pull_request", config["on"])
+        self.assertEqual(workflow("build.yml")["jobs"]["validate-go"]["uses"],
+                         "./.github/workflows/go-tests.yml")
+        for filename in ("README.md", "Examples/NvidiaPAIR/README.md",
+                         ".github/ci-tests/python-gpu/main.py", ".github/ci-tests/python-onnx-gpu/main.py",
+                         ".github/regression-coverage/manual/jetson-display-rehearsal.py",
+                         ".github/regression-coverage/manual/fixtures/jetson-display/main.c",
+                         "swift/Scripts/SetupSigningCI.sh", "swift/Scripts/Build.sh",
+                         "swift/WendyAgentMac/RuntimeGuest/Dockerfile",
+                         "swift/WendyAgentMac/RuntimeGuest/rootfs/init",
+                         "swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift",
+                         "swift/WendyAgentMac/Sources/AppDelegate.swift", "swift/Scripts/ValidateMacPermissions.sh",
+                         "swift/WendyAgentMac/LaunchAgents/agent.plist", "swift/Makefile",
+                         "Examples/SO101Reader/reader.py", "Examples/SO101Reader/test_reader.py",
+                         "Examples/G1CokeDemo/pyproject.toml", "Examples/ThermalNotify/Sources/ThermalNotify/App.swift",
+                         "Examples/WendyDataModelApp/app.py", "evals/agent-experience/test_quality.py",
+                         "web-client/tests/desktop-mesh.test.mjs", "web-client/tests/mesh-topology.test.mjs",
+                         "web-client/electron/service.mjs", "web-client/desktop/types.ts",
+                         "web-client/lib/mesh-topology.ts", "web-client/components/mesh-network.tsx",
+                         "go/internal/cli/browserauth/topology.go", "go/proto/gen/litepb/wendy_com_msg.pb.go",
+                         "Examples/WendyNotify/Sources/WendyNotify/Router.swift",
+                         "Examples/WendyNotify/Tests/WendyNotifyTests/RequestPathTests.swift"):
+            self.assertTrue(any(fnmatch.fnmatchcase(filename, pattern) for pattern in workflow("build.yml")["on"]["push"]["paths"]),
+                            f"build push omits regression source {filename}")
         self.assertTrue(any("api-snapshot-smoke.py" in s.get("run", "")
                             for s in config["jobs"]["vet"]["steps"]))
         self.assertIn("automation-regressions", config["jobs"]["test"]["needs"])

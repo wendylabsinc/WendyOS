@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Keep security scans tied to the release toolchain and resolved lockfiles."""
 
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,15 @@ from ci_execution_test import ROOT, load_yaml, workflow
 class DependencyGatesTests(unittest.TestCase):
     def test_scan_and_launcher_triggers_have_one_required_owner(self):
         parent = workflow("go-tests.yml")
+        release = workflow("build.yml")
+        self.assertIn("workflow_call", parent["on"])
+        self.assertNotIn("pull_request", parent["on"])
+        self.assertNotIn("push", parent["on"])
+        self.assertEqual(release["jobs"]["validate-go"]["uses"],
+                         "./.github/workflows/go-tests.yml")
+        self.assertNotIn("if", release["jobs"]["validate-go"])
+        self.assertNotIn("continue-on-error", release["jobs"]["validate-go"])
+        self.assertIn("validate-go", release["jobs"]["pre-release-checks"]["needs"])
         routes = {
             "dependency-security": ("security.yml", [
                 "go/**", "Proto/**", "go.mod", "go.sum",
@@ -41,13 +51,13 @@ class DependencyGatesTests(unittest.TestCase):
                 gate = parent["jobs"]["test"]["steps"][0]
                 self.assertEqual(gate["env"][result_name], "${{ needs." + job + ".result }}")
                 self.assertIn('test "$' + result_name + '" = success', gate["run"])
-                for event in ("pull_request", "push"):
-                    config = parent["on"][event]
-                    self.assertNotIn("paths-ignore", config)
-                    self.assertFalse(any(path.startswith("!") for path in config["paths"]))
-                    self.assertTrue(set(paths).issubset(config["paths"]))
-                self.assertNotIn("branches", parent["on"]["pull_request"])
-                self.assertIn("main", parent["on"]["push"]["branches"])
+                config = release["on"]["push"]
+                self.assertNotIn("paths-ignore", config)
+                self.assertFalse(any(path.startswith("!") for path in config["paths"]))
+                for path in paths:
+                    self.assertTrue(any(fnmatch.fnmatchcase(path, pattern)
+                                        for pattern in config["paths"]), path)
+                self.assertIn("main", config["branches"])
         security = workflow("security.yml")
         self.assertIn("schedule", security["on"])
         self.assertIn("workflow_dispatch", security["on"])

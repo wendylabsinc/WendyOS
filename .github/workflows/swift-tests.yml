@@ -18,40 +18,14 @@ name: Swift Tests
 # it into a staging directory. First-party code is always rebuilt.
 
 on:
-  pull_request:
-    paths:
-      - 'swift/**'
-      - 'go/internal/cli/assets/docs/development/debugging.md'
-      - '.github/scripts/check-swift-agent-docs.py'
-      - '.github/scripts/swift_agent_docs_test.py'
-      - 'Proto/**'
-      - '.github/workflows/**'
-      - '.github/scripts/restore-trusted-build-cache.sh'
-      - '.github/actions/setup-macos-ci/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.github/scripts/test-watch-session.sh'
-      - '.github/scripts/test-mac-agent-termination.py'
-      - '.github/scripts/test-mac-location-permission.py'
-      - '.github/scripts/fixtures/mac-agent-termination.swift'
-      - '.github/scripts/run-owned-media-test.py'
-      - 'go.mod'
-      - 'go.sum'
-      - 'go/cmd/wendy/**'
-      - 'go/internal/cli/commands/watch*'
-      - 'go/internal/cli/commands/run*'
-      - 'go/internal/cli/commands/native*'
-      - 'go/internal/cli/commands/filesync*'
-      - 'go/internal/cli/grpcclient/**'
-      - 'go/internal/shared/appconfig/**'
-      - 'go/internal/shared/config/**'
-      - 'go/internal/shared/env/**'
+  workflow_call:
   schedule:
     - cron: '37 3 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: swift-tests-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: swift-tests-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -338,121 +312,3 @@ jobs:
           set -euo pipefail
           plutil -lint "$APP_PATH/Contents/Library/LaunchAgents/sh.wendy.WendyAgentMac.plist"
           bash ./Scripts/TestLaunchAgentSupervision.sh
-
-  lint:
-    permissions:
-      actions: read
-      contents: read
-    name: Lint Swift Sources
-    # Lint reports to the pull request; scheduled cache runs have none.
-    if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    container: swift:6.2.3
-    outputs:
-      exit_code: ${{ steps.lint.outputs.exit_code }}
-      lint_output: ${{ steps.lint.outputs.lint_output }}
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Run Swift Lint
-        id: lint
-        working-directory: swift
-        shell: bash
-        run: |
-          set +e
-          set -o pipefail
-          bash ./Scripts/Lint.sh 2>&1 | tee lint_output.txt
-          status=${PIPESTATUS[0]}
-          # PR-controlled output cannot terminate the Actions output record.
-          delimiter="$(cat /proc/sys/kernel/random/uuid)"
-          limit=30000
-          size="$(wc -c < lint_output.txt)"
-          {
-            echo "lint_output<<$delimiter"
-            if (( size > limit )); then
-              # iconv -c drops a multibyte character cut at the limit.
-              head -c "$limit" lint_output.txt | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true
-              printf '\n[Truncated to %d of %d bytes. The Lint Swift Sources job log has the full output.]' "$limit" "$size"
-            else
-              cat lint_output.txt
-            fi
-            printf '\n%s\n' "$delimiter"
-            echo "exit_code=$status"
-          } >> "$GITHUB_OUTPUT"
-          exit 0
-
-      - name: Fail workflow on lint issues
-        if: steps.lint.outputs.exit_code != '0'
-        run: exit 1
-
-  lint-comment:
-    name: Report Swift lint
-    needs: lint
-    if: >-
-      ${{ always() && !cancelled() &&
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          needs.lint.outputs.exit_code != '' }}
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      # This job never checks out or executes PR code.
-      - name: Remove Previous Lint Comment
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-            });
-            const targetHeader = '## Swift Lint Failed';
-            for (const comment of comments) {
-              if (comment.user?.type === 'Bot' && comment.body?.includes(targetHeader)) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: comment.id,
-                });
-              }
-            }
-
-      - name: Comment on PR
-        if: needs.lint.outputs.exit_code != '0'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          LINT_OUTPUT: ${{ needs.lint.outputs.lint_output }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const lintOutput = process.env.LINT_OUTPUT?.trim();
-            const formattedOutput = lintOutput ? `\`\`\`\n${lintOutput}\n\`\`\`` : '_No linter output captured._';
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## Swift Lint Failed
-            
-            The Swift linter found issues with your code. Please run the following commands to fix them:
-            
-            \`\`\`
-            cd swift
-            make format
-            \`\`\`
-            
-            <details>
-            <summary>Lint issues</summary>
-            
-            ${formattedOutput}
-            
-            </details>
-            
-            Then commit and push the changes.`
-            });

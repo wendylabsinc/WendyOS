@@ -1,9 +1,10 @@
 name: Plugin launcher
 
 on:
-  # Go Tests covers these paths on PRs and main pushes and requires this result.
+  # Go validation calls this workflow before release and requires this result.
   # Keep one invocation of each Linux/macOS/Windows launcher check per source.
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
