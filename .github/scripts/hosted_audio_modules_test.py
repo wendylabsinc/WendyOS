@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline source/configuration checks. Never load or install kernel modules."""
+from contextlib import redirect_stdout
 import hashlib
 import importlib.util
 import io
@@ -65,7 +66,7 @@ class AudioModulesTests(unittest.TestCase):
             version = subprocess.CompletedProcess([], 0, stdout=AZURE["version"])
             for release, skipped in [("7.0.0-1018-azure", True), (AZURE_RELEASE, False)]:
                 env_file.write_text("")
-                with self.subTest(release=release), \
+                with self.subTest(release=release), redirect_stdout(io.StringIO()), \
                         patch.dict(os.environ, {"GITHUB_ENV": str(env_file)}), \
                         patch.object(modules, "host_guard"), \
                         patch.object(modules.platform, "release", return_value=release), \
@@ -80,6 +81,32 @@ class AudioModulesTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "reached"):
                             modules.main()
                     self.assertEqual(env_file.read_text(), "WENDY_HOSTED_AUDIO=unavailable\n" if skipped else "")
+
+    def test_download_outage_skips_audio_but_integrity_failure_stays_fatal(self):
+        for error in (subprocess.CalledProcessError(22, ["curl"]),
+                      subprocess.TimeoutExpired(["curl"], 180), ValueError("checksum mismatch")):
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as directory:
+                env_file = Path(directory) / "env"
+                env_file.touch()
+                with patch.dict(os.environ, {"GITHUB_ENV": str(env_file), "RUNNER_TEMP": directory}), \
+                        patch.object(modules, "host_guard"), \
+                        patch.object(modules.platform, "release", return_value=AZURE_RELEASE), \
+                        patch.object(modules.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)), \
+                        patch.object(modules, "run", return_value=subprocess.CompletedProcess([], 0, AZURE["version"])), \
+                        patch.object(modules, "validate_headers", return_value=AZURE), \
+                        patch.object(modules, "require_empty_stack"), \
+                        patch.object(modules.Path, "exists", return_value=False), \
+                        patch.object(modules, "download_archive", side_effect=error), \
+                        patch.object(modules, "extract_sound") as extract, redirect_stdout(io.StringIO()) as output:
+                    if isinstance(error, ValueError):
+                        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                            modules.main()
+                        self.assertEqual(env_file.read_text(), "")
+                    else:
+                        modules.main()
+                        self.assertEqual(env_file.read_text(), "WENDY_HOSTED_AUDIO=unavailable\n")
+                        self.assertIn("::warning", output.getvalue())
+                    extract.assert_not_called()
 
     def test_existing_or_loaded_sound_stack_is_never_shadowed(self):
         for loaded, installed in [(True, False), (False, True), (False, False)]:

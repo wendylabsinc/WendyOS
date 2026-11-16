@@ -111,7 +111,7 @@ def download_archive(output, name, expected, pin):
         try:
             run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
                  "--connect-timeout", "15", "--max-time", "180", "--output", str(destination), base + name])
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             destination.unlink(missing_ok=True)
             if index == len(bases) - 1:
                 raise
@@ -195,6 +195,12 @@ def validate_packaged_soundcore(release, version):
         raise ValueError("AWS soundcore is not owned by the exact matching Ubuntu module package")
 
 
+def skip_audio(reason):
+    with open(os.environ["GITHUB_ENV"], "a") as env:
+        env.write("WENDY_HOSTED_AUDIO=unavailable\n")
+    print(f"::warning title=Hosted audio gates skipped::{reason}")
+
+
 def main():
     host_guard()  # Before subprocesses, downloads, filesystem setup or sudo.
     if subprocess.run(["modinfo", "snd-aloop"], capture_output=True, timeout=10).returncode == 0:
@@ -207,10 +213,8 @@ def main():
     if PINS.get(release, {}).get("version") != version:
         # Hosted runners roll kernels. Without an audited source the audio gates
         # are skipped visibly; the other media gates in the job still run.
-        with open(os.environ["GITHUB_ENV"], "a") as env:
-            env.write("WENDY_HOSTED_AUDIO=unavailable\n")
-        print(f"::warning title=Hosted audio gates skipped::No audited ALSA module source for {release} "
-              f"({version}); add its exact-source pin to prepare-hosted-audio-modules.py")
+        skip_audio(f"No audited ALSA module source for {release} "
+                   f"({version}); add its exact-source pin to prepare-hosted-audio-modules.py")
         return
     pin = validate_headers(headers, release, platform.machine(), version)
     require_empty_stack(pin)
@@ -222,8 +226,14 @@ def main():
     output = Path(tempfile.mkdtemp(prefix="wendy-audio-modules-", dir=os.environ["RUNNER_TEMP"]))
     print(f"Exact-source ALSA build evidence: {output}", flush=True)
     source_archives = archives(pin)
-    for name, expected in source_archives.items():
-        download_archive(output, name, expected, pin)
+    try:
+        for name, expected in source_archives.items():
+            download_archive(output, name, expected, pin)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # Transport availability must not suppress the independent camera gates.
+        # Integrity/configuration/build failures still fail this job.
+        skip_audio(f"Audited ALSA source download unavailable for {release}; evidence: {output}")
+        return
     sound = extract_sound(output / next(iter(source_archives)), output)
     diff = gzip.decompress((output / (pin["source"] + "_" + pin["version"] + ".diff.gz")).read_bytes()).decode()
     run(["patch", "--batch", "--forward", "-p1", "-d", str(sound.parent)], input=sound_patch(diff, pin))

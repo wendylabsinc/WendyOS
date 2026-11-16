@@ -2998,7 +2998,7 @@
             ".github/scripts/test-stagefile-images.py",
             ".github/scripts/stagefile_images_test.py"
           ],
-          "result": "Packaged Dockerfile and direct LLB fixture builds inherited wheel layers, executes imports and environment/workdir assertions, changes source/environment/wheel inputs and rejects missing COPY, unknown stage and lost inheritance without replacing the last image. Five offline cases pass. Required native Make CLI and release CLI jobs are wired; hosted actual builds remain pending."
+          "result": "Packaged Dockerfile and direct LLB fixture builds inherited wheel layers, executes imports and environment/workdir assertions, changes source/environment/wheel inputs and rejects missing COPY, unknown stage and lost inheritance without replacing the last image. Five offline cases pass. The native Make CLI harness runs in Go Tests Linux install safety; the release CLI job runs only the offline smoke test. Hosted actual builds remain pending."
         },
         {
           "tests": [
