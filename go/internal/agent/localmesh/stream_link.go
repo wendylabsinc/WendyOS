@@ -15,12 +15,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/directstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 const (
 	streamControl byte = 1
 	streamPacket  byte = 2
+	streamDirect  byte = 6 // negotiated direct/1 records, also reserved in operator router mux
 	// A complete IP packet is queued internally, then split by the writer.
 	// It is never a wire frame kind.
 	streamWholeIP byte = 3
@@ -77,66 +79,82 @@ func OpenStreamHelloWithALPN(ctx context.Context, conn net.Conn, self, peer mesh
 }
 
 func openStreamHelloPeer(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string) (meshid.Device, error) {
+	bound, _, err := openStreamHelloNegotiated(ctx, conn, self, peer, alpn, 0)
+	return bound, err
+}
+
+// Only a session owner ready to handle attachment and promotion may supply a
+// nonzero capability. Callers must separately establish physical BLE eligibility.
+func openStreamHelloNegotiated(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string, localDirect uint32) (meshid.Device, uint32, error) {
+	bound, selected, _, err := openStreamHelloDeferred(ctx, conn, self, peer, alpn, localDirect, 0)
+	return bound, selected, err
+}
+
+func openStreamHelloDeferred(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string, localDirect, localDeferred uint32) (meshid.Device, uint32, bool, error) {
+	if !directstream.ValidCapability(localDirect) || !directstream.ValidCapability(localDeferred) {
+		return peer, 0, false, errors.New("invalid direct carrier capability")
+	}
 	if alpn != StreamALPN {
-		return peer, errors.New("unsupported net stream protocol")
+		return peer, 0, false, errors.New("unsupported net stream protocol")
 	}
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		return peer, errors.New("wendy net stream requires TLS")
+		return peer, 0, false, errors.New("wendy net stream requires TLS")
 	}
 	state := tlsConn.ConnectionState()
 	if !state.HandshakeComplete || state.Version != tls.VersionTLS13 || ApplicationProtocol(state.NegotiatedProtocol) != alpn || len(state.PeerCertificates) == 0 {
-		return peer, errors.New("wendy net stream TLS is not authenticated")
+		return peer, 0, false, errors.New("wendy net stream TLS is not authenticated")
 	}
 	if self == peer {
-		return peer, errors.New("self wendy net stream")
+		return peer, 0, false, errors.New("self wendy net stream")
 	}
 	if self.Tenant() != peer.Tenant() {
-		return peer, errors.New("wendy net peer is outside the tenant")
+		return peer, 0, false, errors.New("wendy net peer is outside the tenant")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
 	if err := conn.SetDeadline(deadline); err != nil {
-		return peer, err
+		return peer, 0, false, err
 	}
 	defer conn.SetDeadline(time.Time{})
 	version := StreamProtocolVersion
-	hello := &LinkHello{Version: version, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit}
+	hello := &LinkHello{Direct: localDirect, Deferred: localDeferred, Version: version, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit}
 	if self.IsOperator() {
 		hello.Owner = &OperatorOwner{Principal: self.Principal(), Instance: self.UUID()}
 	}
 	if err := WriteControl(conn, ControlMessage{Kind: "hello", Hello: hello}); err != nil {
-		return peer, err
+		return peer, 0, false, err
 	}
 	m, err := ReadControl(conn)
 	if err != nil {
-		return peer, err
+		return peer, 0, false, err
 	}
 	if m.Kind != "hello" || m.Hello == nil {
-		return peer, errors.New("missing wendy net stream hello")
+		return peer, 0, false, errors.New("missing wendy net stream hello")
 	}
 	h := m.Hello
 	if peer.IsOperator() {
 		if h.Owner == nil || h.Owner.Principal != peer.Principal() {
-			return peer, errors.New("operator hello owner mismatch")
+			return peer, 0, false, errors.New("operator hello owner mismatch")
 		}
 		bound, err := peer.WithInstance(h.Owner.Instance)
 		if err != nil {
-			return peer, err
+			return peer, 0, false, err
 		}
 		if peer.UUID() != ([16]byte{}) && peer != bound {
-			return peer, errors.New("operator hello instance mismatch")
+			return peer, 0, false, errors.New("operator hello instance mismatch")
 		}
 		peer = bound
 	} else if h.Owner != nil {
-		return peer, errors.New("device hello has operator owner")
+		return peer, 0, false, errors.New("device hello has operator owner")
 	}
 	if !validStreamHelloVersion(h, self, peer, version) {
-		return peer, errors.New("invalid wendy net stream hello")
+		return peer, 0, false, errors.New("invalid wendy net stream hello")
 	}
-	return peer, nil
+	selected, deferred := directstream.NegotiatedCarrier(localDirect, localDeferred, h.Direct, h.Deferred)
+	return peer, selected, deferred, nil
 }
 
 // streamNodeLink multiplexes directory control and Babel/IP packets on one
@@ -148,6 +166,8 @@ type streamNodeLink struct {
 	lastPriority bool // owned by the single writer: alternate priority with waiting IP
 	lastRouting  bool // at most one routing frame before another waiting class gets a turn
 
+	directEnabled       bool // immutable after construction, only after mutual negotiation
+	directRecords       chan []byte
 	conn                net.Conn
 	once                sync.Once
 	controls            chan ControlMessage
@@ -274,7 +294,17 @@ func newStreamNodeLink(conn net.Conn) *streamNodeLink {
 }
 
 func newBoundedStreamNodeLink(conn net.Conn, receiveCapacity int) *streamNodeLink {
+	return newNegotiatedStreamNodeLink(conn, receiveCapacity, false)
+}
+
+// direct is true only after both peers negotiated direct/1 and a session actor
+// is ready to consume the lane. Legacy callers never enable it implicitly.
+func newNegotiatedStreamNodeLink(conn net.Conn, receiveCapacity int, direct bool) *streamNodeLink {
 	l := &streamNodeLink{conn: conn, controls: make(chan ControlMessage, receiveCapacity), packets: make(chan []byte, receiveCapacity), routingPackets: make(chan []byte, streamRoutingQueue), routing: make(chan streamFrame, streamRoutingQueue), priority: make(chan streamFrame, streamPriorityQueue), fastIP: make(chan streamFrame, streamFastIPQueue), ip: make(chan streamFrame, streamIPQueue), ipPackets: newStreamIPSendQueue(), stop: make(chan struct{}), done: make(chan struct{}), diagIP: os.Getenv("WENDY_MESH_BLE_QUEUE_DIAG") == "1"}
+	l.directEnabled = direct
+	if direct {
+		l.directRecords = make(chan []byte, 4)
+	}
 	go l.readLoop()
 	go l.writeLoop()
 	if l.diagIP {
@@ -323,7 +353,7 @@ func (l *streamNodeLink) Close() error {
 }
 
 func (l *streamNodeLink) writeFrame(kind byte, data []byte) error {
-	if len(data) == 0 || len(data) > MaxControlMessage+4 || kind == streamPacket && len(data) > DatagramLimit {
+	if (kind != streamControl && kind != streamPacket) || len(data) == 0 || len(data) > MaxControlMessage+4 || kind == streamPacket && len(data) > DatagramLimit {
 		return errors.New("invalid wendy net stream frame size")
 	}
 	frame := streamFrame{kind: kind, data: append([]byte(nil), data...)}
@@ -577,6 +607,10 @@ func (l *streamNodeLink) readLoop() {
 			return
 		}
 		n := binary.BigEndian.Uint32(header[1:])
+		if l.directEnabled && header[0] == streamDirect && (n == 0 || n > directstream.MaxFlowFrame) {
+			l.recordTerminalError(errors.New("invalid direct record length"))
+			return
+		}
 		if n > MaxControlMessage+4 || n == 0 && (header[0] == streamControl || header[0] == streamPacket) || header[0] == streamPacket && n > DatagramLimit {
 			l.recordTerminalError(errors.New("invalid wendy net stream frame"))
 			return
@@ -589,6 +623,15 @@ func (l *streamNodeLink) readLoop() {
 		l.rxBytes.Add(int64(len(header) + len(buf)))
 		l.lastRxUnixNS.Store(time.Now().UnixNano())
 		switch header[0] {
+		case streamDirect:
+			if !l.directEnabled {
+				continue
+			}
+			select {
+			case l.directRecords <- buf:
+			case <-l.stop:
+				return
+			}
 		case streamControl:
 			m, err := ReadControl(bytes.NewReader(buf))
 			if err != nil {
@@ -708,4 +751,46 @@ func (l *streamNodeLink) terminalError() error {
 		return l.err
 	}
 	return net.ErrClosed
+}
+
+// TrySendDirectRecord transfers a private copy to the ordered writer without
+// waiting for transport I/O. false,nil means queue pressure: the actor must keep
+// processing ingress and retry later. Reliable records are never silently
+// dropped like IP datagrams. Carrier failure invalidates ambiguous submission.
+func (l *streamNodeLink) TrySendDirectRecord(data []byte) (bool, error) {
+	if !l.directEnabled || len(data) == 0 || len(data) > directstream.MaxFlowFrame {
+		return false, errors.New("direct lane unavailable or invalid record size")
+	}
+	select {
+	case <-l.stop:
+		return false, l.terminalError()
+	case <-l.done:
+		return false, l.terminalError()
+	default:
+	}
+	if len(l.priority) == cap(l.priority) {
+		return false, nil
+	}
+	frame := streamFrame{kind: streamDirect, data: append([]byte(nil), data...)}
+	select {
+	case l.priority <- frame:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+func (l *streamNodeLink) ReceiveDirectRecord(ctx context.Context) ([]byte, error) {
+	if !l.directEnabled {
+		return nil, errors.New("direct lane not negotiated")
+	}
+	select {
+	case data := <-l.directRecords:
+		return data, nil
+	case <-l.done:
+		return nil, l.terminalError()
+	case <-l.stop:
+		return nil, l.terminalError()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

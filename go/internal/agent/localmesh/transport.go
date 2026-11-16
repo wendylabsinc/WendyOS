@@ -14,6 +14,9 @@ import (
 // full principal, so the hello only has to prove the peer read the pinned
 // identity correctly - there is no numeric identity to announce.
 type LinkHello struct {
+	// Direct is optional direct/1 + promoted-transport capability. Zero preserves legacy framing.
+	Deferred uint32         `json:"directDeferred,omitempty" cbor:"directDeferred,omitempty"`
+	Direct   uint32         `json:"direct,omitempty" cbor:"direct,omitempty"`
 	Owner    *OperatorOwner `json:"owner,omitempty" cbor:"o,omitempty"`
 	Version  int            `json:"version" cbor:"v"`
 	Role     string         `json:"role,omitempty" cbor:"r,omitempty"`

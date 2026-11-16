@@ -8,6 +8,9 @@ import (
 	"net"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
+	"github.com/wendylabsinc/wendy/go/internal/shared/directstream"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 )
 
@@ -39,16 +42,51 @@ func (n *Node) AttachOperatorRouterLink(ctx context.Context, link *meshoperatorl
 	if err := n.verifyPeerCertificates(link.Peer(), link.ConnectionState().PeerCertificates); err != nil {
 		return err
 	}
+	selected := link.DirectCapability()
+	if selected != 0 {
+		n.gate.RLock()
+		capability, handler := n.directCapability, n.directHandler
+		n.gate.RUnlock()
+		physical := IsDirectBLECarrier(ctx)
+		if !physical || handler == nil || directstream.NegotiatedCapability(capability, selected) != selected {
+			return errors.New("operator direct lane has no eligible session owner")
+		}
+		state := link.ConnectionState()
+		digest, role, err := n.Credentials.directIdentities(link.Peer(), state)
+		if err != nil {
+			return err
+		}
+		admission := DirectCarrierAdmission{Deferred: link.DirectDeferred(), IdentityDigest: digest, Role: role, Self: n.Credentials.Device, Peer: link.Peer(), Selected: selected, TLS: state, Records: link}
+		return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), link.Peer(), cost, &operatorRouterNodeLink{link}, func(ctx context.Context, id babel.LinkID) error {
+			admission.Link = id
+			admission.Cost = cost
+			return serveDirectCarrier(ctx, admission, handler)
+		})
+	}
 	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), link.Peer(), cost, &operatorRouterNodeLink{link})
 }
 
 func (n *Node) AttachOperatorRouterStream(ctx context.Context, c *tls.Conn, cost uint16) error {
 	n.gate.RLock()
 	agent := n.operatorAgent
+	capability, handler, eligible := n.directCapability, n.directHandler, n.directEligible
 	n.gate.RUnlock()
+	physical := IsDirectBLECarrier(ctx)
+	if !physical || handler == nil {
+		capability = 0
+	}
 	var link *meshoperatorlink.RouterLink
 	var err error
-	if n.Credentials.HasCertificateTimePolicy() {
+	if capability != 0 {
+		credentials := n.Credentials
+		link, err = meshoperatorlink.AcceptRouterWithDirect(ctx, c, credentials.Device.Tenant(), credentials.primaryRoots, credentials.CertificateTimePolicy(), operatorOwnCredentialExpiry(credentials), meshoperatorlink.RouterDirectConfig{PhysicalBLE: physical, Capability: capability, Eligible: func(peer meshid.Device, state tls.ConnectionState) bool {
+			if eligible == nil {
+				return true
+			}
+			digest, _, err := credentials.directIdentities(peer, state)
+			return err == nil && eligible(peer, digest)
+		}}, agent, credentials.TLSIssuerCandidates)
+	} else if n.Credentials.HasCertificateTimePolicy() {
 		credentials := n.Credentials
 		own := operatorOwnCredentialExpiry(credentials)
 		link, err = meshoperatorlink.AcceptRouterWithTimePolicyAndOwn(ctx, c, credentials.Device.Tenant(), credentials.primaryRoots, credentials.CertificateTimePolicy(), own, agent, credentials.TLSIssuerCandidates)

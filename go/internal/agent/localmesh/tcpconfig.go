@@ -40,6 +40,9 @@ type TCPPeer struct {
 }
 
 type TCPIdentity struct {
+	// BindNode installs runtime session ownership before any carrier listener or
+	// provider can admit a peer. Cleanup runs after that node's carriers drain.
+	BindNode func(*Node) (func(), error) `json:"-" cbor:"-"`
 	// TimePolicy is runtime-only and applies solely to mesh carrier credentials.
 	TimePolicy              *certs.CertificateTimePolicy `json:"-" cbor:"-"`
 	Name                    string
