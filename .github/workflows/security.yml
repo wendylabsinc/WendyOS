@@ -1,25 +1,50 @@
 name: Security
 
 on:
+  workflow_call:
   pull_request:
     branches: [main]
-    # The docs site lives under go/internal/cli/assets/docs but is a Next.js app,
-    # not Go. Exclude it so docs-only PRs don't run the Go vuln/security scans.
+    # Prose-only docs edits do not need a scan; docs dependency edits do.
     paths:
       - 'go/**'
       - '!go/internal/cli/assets/docs/**'
       - 'Proto/**'
       - 'go.mod'
       - 'go.sum'
+      - 'web-client/package.json'
+      - 'web-client/package-lock.json'
+      - 'go/internal/cli/assets/docs/package.json'
+      - 'go/internal/cli/assets/docs/package-lock.json'
+      - '.github/workflows/security.yml'
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: security-${{ github.event.pull_request.number || github.ref }}
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  npm-audit:
+    name: npm audit (${{ matrix.directory }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [go/internal/cli/assets/docs, web-client]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+      - name: Audit the complete resolved dependency graph
+        working-directory: ${{ matrix.directory }}
+        run: npm audit --package-lock-only --audit-level=high
+
   govulncheck:
     name: govulncheck
     # Keep the security scan independent of self-hosted runner shutdowns.
