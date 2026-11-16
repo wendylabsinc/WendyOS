@@ -747,6 +747,38 @@ func TestSystemNotificationServiceValidation(t *testing.T) {
 	}
 }
 
+// A line break is the control character an app author is most likely to send
+// (a multi-line text box), so the refusal has to name it. "Printable" alone left
+// the WendyNotify example's users guessing what was wrong with their text.
+func TestSystemNotificationServiceTextRefusalNamesLineBreaks(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*systempb.SendRequest)
+		field  string
+	}{
+		{name: "line break in body", mutate: func(r *systempb.SendRequest) { r.Body = "first line\nsecond line" }, field: "body"},
+		{name: "carriage return in body", mutate: func(r *systempb.SendRequest) { r.Body = "first line\r\nsecond line" }, field: "body"},
+		{name: "tab in title", mutate: func(r *systempb.SendRequest) { r.Title = "Robot\tneeds help" }, field: "title"},
+		{name: "trailing line break in title", mutate: func(r *systempb.SendRequest) { r.Title = "Robot needs help\n" }, field: "title"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validSystemNotificationRequest()
+			test.mutate(request)
+			_, err := NewSystemNotificationService("com.example.app", &recordingNotificationSender{}).Send(context.Background(), request)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("Send() code = %v, want InvalidArgument (err=%v)", status.Code(err), err)
+			}
+			message := status.Convert(err).Message()
+			for _, want := range []string{test.field, "line breaks", "control characters", "leading or trailing whitespace"} {
+				if !strings.Contains(message, want) {
+					t.Errorf("Send() message = %q, want it to mention %q", message, want)
+				}
+			}
+		})
+	}
+}
+
 func TestSystemNotificationServiceBoundsRawAudienceSelectors(t *testing.T) {
 	request := validSystemNotificationRequest()
 	request.Audience = &systempb.NotificationAudience{

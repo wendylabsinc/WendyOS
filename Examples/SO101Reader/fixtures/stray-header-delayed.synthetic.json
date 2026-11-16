@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic",
+    "description": "Hand-constructed Feetech protocol-0 responses from protocol.py register definitions. These bytes were not captured from a motor, USB adapter or physical arm.",
+    "hardware_capture": null,
+    "scope": "PTY framing, resynchronization and bounded delayed-response handling; not USB-driver baud or physical acceptance"
+  },
+  "timeout_ms": 500,
+  "transactions": [
+    {
+      "name": "model response after one stray header byte",
+      "motor_id": 1,
+      "address": 3,
+      "count": 2,
+      "request_hex": "ffff0104020302f3",
+      "chunks": [
+        {"delay_ms": 0, "hex": "ff"},
+        {"delay_ms": 10, "hex": "ffff0104"},
+        {"delay_ms": 35, "hex": "000903ee"}
+      ],
+      "expected_payload_hex": "0903",
+      "expected_error_bits": 0
+    },
+    {
+      "name": "present state split across delayed fragments",
+      "motor_id": 1,
+      "address": 56,
+      "count": 8,
+      "request_hex": "ffff0104023808b8",
+      "chunks": [
+        {"delay_ms": 80, "hex": "ffff010a000580"},
+        {"delay_ms": 15, "hex": "00000000781ed9"}
+      ],
+      "expected_payload_hex": "058000000000781e",
+      "expected_error_bits": 0
+    }
+  ]
+}

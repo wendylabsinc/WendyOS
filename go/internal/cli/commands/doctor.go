@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -100,18 +99,7 @@ func newDoctorCmdWithDeps(deps doctorDeps) *cobra.Command {
 					return errors.New("could not write diagnostic report")
 				}
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "Wendy setup checks. Read-only; nothing is uploaded.")
-				for _, check := range out.Checks {
-					qualifier := "optional"
-					if check.Required {
-						qualifier = "required"
-					}
-					fmt.Fprintf(cmd.OutOrStdout(), "%s [%s, %s]: %s\n", check.ID, check.Status, qualifier, check.Message)
-					if check.Remediation != "" {
-						fmt.Fprintln(cmd.OutOrStdout(), "  "+check.Remediation)
-					}
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), "Use wendy doctor --report for the sanitized JSON report.")
+				renderDoctorReport(cmd.OutOrStdout(), out)
 			}
 			if !out.OK {
 				return errDoctorChecksFailed
