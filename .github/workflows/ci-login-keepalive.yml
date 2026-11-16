@@ -1,8 +1,8 @@
 name: CI login keepalive
 
-# Local candidate: the seven-day reminder is blocked on Auth exposing the
-# refresh family's authoritative absolute expiry through the CLI. Certificate
-# expiry (including certificate.expiringSoon) is not the sign-in deadline.
+# The seven-day reminder is intentionally stubbed until Auth and the CLI expose
+# authoritative refresh-family absolute expiry. Certificate expiry (including
+# certificate.expiringSoon) is not the sign-in deadline.
 on:
   schedule:
     - cron: '17 0 * * *'
@@ -31,6 +31,8 @@ jobs:
       # refresh output, which can contain token-endpoint error responses.
       # Prerequisite: the wendy context is the manual ci@wendy.sh production
       # OIDC login. Select it explicitly before refreshing the current context.
+      # The CLI has a legacy endpoint-substring fallback if that name is absent;
+      # this does not strictly verify the context name or CI principal.
       - name: Select the stored wendy CI context
         timeout-minutes: 1
         run: >-
@@ -46,6 +48,11 @@ jobs:
           'env CI=true WENDY_SECRET_STORE=file WENDY_NO_UPDATE_CHECK=1
           /Users/wendy/.github/actions-runner/_work/WendyOS/WendyOS/go/bin/wendy
           auth refresh-certs --json' </dev/null >/dev/null 2>&1
+
+      - name: 'STUB: seven-day sign-in reminder (not wired)'
+        if: ${{ false }}
+        # Intentionally inert; no deadline estimate or reminder is emitted.
+        run: ':'
 
       - name: Explain the failure without credential output
         if: ${{ failure() }}
@@ -69,7 +76,7 @@ jobs:
       CI_SLACK_CHANNEL: C0C7Z1SJXJ7
     steps:
       - name: 'Post the failure to #ci'
-        # Vendor release and tag SHA verified through GitHub on 2026-11-12.
+        # Vendor release and tag SHA verified through GitHub on 2026-11-13.
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
           method: chat.postMessage
