@@ -28,7 +28,7 @@ require (
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v29.9.1+incompatible
-	github.com/dustin/go-humanize v1.0.1
+	github.com/dustin/go-humanize v1.1.0
 	github.com/ebitengine/oto/v3 v3.5.1
 	github.com/ebitengine/purego v0.11.3
 	github.com/foxglove/mcap/go/mcap v1.7.4
