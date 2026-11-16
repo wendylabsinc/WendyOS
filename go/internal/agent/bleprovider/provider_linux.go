@@ -679,7 +679,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		measurement.log(r.cfg.Logger, "inbound-operator", meshid.Device{}, state, true)
 		defer secure.Close()
 		attached := time.Now()
-		err = r.cfg.Node.(operatorStreamNode).AttachOperatorStream(localmesh.WithCarrier(ctx, "ble"), secure, LinkCost)
+		err = r.cfg.Node.(operatorStreamNode).AttachOperatorStream(localmesh.WithDirectBLECarrier(ctx), secure, LinkCost)
 		r.cfg.Logger.Info("BLE operator attachment ended", zap.Duration("lifetime", time.Since(attached)), zap.Bool("cancelled", ctx.Err() != nil), zap.Error(err))
 		return
 	}
@@ -724,7 +724,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	r.requestAdvertisementRefresh()
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer, secure)
 	defer stopCheaperWatch()
-	if err = r.cfg.Node.AttachStream(localmesh.WithCarrier(ctx, "ble"), peer, secure, LinkCost); err != nil && ctx.Err() == nil {
+	if err = r.cfg.Node.AttachStream(localmesh.WithDirectBLECarrier(ctx), peer, secure, LinkCost); err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.Stringer("peer", peer.UUID()), zap.Error(err))
 	}
 }
@@ -1158,7 +1158,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	}
 	<-r.dialSlot
 	slotHeld = false
-	err = r.cfg.Node.AttachStream(localmesh.WithCarrier(ctx, "ble"), device, secure, LinkCost)
+	err = r.cfg.Node.AttachStream(localmesh.WithDirectBLECarrier(ctx), device, secure, LinkCost)
 	if err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.String("radio", peer.address), zap.Error(err))
 	}

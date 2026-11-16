@@ -61,10 +61,12 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
+	"github.com/wendylabsinc/wendy/go/internal/shared/directstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
@@ -555,16 +557,60 @@ func main() {
 	if err := sensorStore.Load(); err != nil {
 		logger.Warn("loading sensor pairing store failed", zap.Error(err))
 	}
+	var localMeshMu sync.RWMutex
+	var localMeshAppClient *meshsession.Client
+	dialSensorUpper := func(ctx context.Context, peer meshid.Device, network, address string) (net.Conn, error) {
+		localMeshMu.RLock()
+		owner := localMeshAppClient
+		localMeshMu.RUnlock()
+		dial := func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, network, address) }
+		if owner == nil {
+			return dial(ctx)
+		}
+		return owner.DialUpper(ctx, peer, dial)
+	}
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
 		if p.Transport == "wendycom" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
-			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+			return mcusource.NewWendyComTransportWithDirect(logger, certPEM, chainPEM, keyPEM, p, addr,
+				func(dialCtx context.Context, peer meshid.Device) (*liteclient.WendyLiteClient, bool, error) {
+					localMeshMu.RLock()
+					owner := localMeshAppClient
+					localMeshMu.RUnlock()
+					if owner == nil {
+						return nil, false, nil
+					}
+					client := liteclient.NewWendyLiteClient()
+					err := client.ConnectDirectContext(dialCtx, owner, peer, nil)
+					if err != nil {
+						client.Close()
+						if errors.Is(err, meshsession.ErrNoDirectSession) || errors.Is(err, meshsession.ErrDirectUseUpper) {
+							return nil, false, nil
+						}
+						return nil, true, err
+					}
+					return client, true, nil
+				}, dialSensorUpper)
+		}
+		// Legacy numeric LAN pairings have no mesh principal. Principal-based
+		// TCP and gRPC sources share the same setup/open lifetime gate as
+		// WendyCom, while retaining their normal TLS authentication.
+		sourceDial := func(ctx context.Context, network, address string) (net.Conn, error) {
+			if p.SourcePrincipalURI == "" {
+				return (&net.Dialer{}).DialContext(ctx, network, address)
+			}
+			peer, err := meshid.DeviceFromPrincipal(p.SourcePrincipalURI)
+			if err != nil {
+				// Generic PKI principals remain valid non-mesh sensor sources.
+				return (&net.Dialer{}).DialContext(ctx, network, address)
+			}
+			return dialSensorUpper(ctx, peer, network, address)
 		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
-			return mcusource.NewGRPCTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+			return mcusource.NewGRPCTransport(logger, certPEM, chainPEM, keyPEM, p, addr, sourceDial)
 		}
-		d, err := mcusource.NewMTLSDialer(logger, mcuIdentity)(p)
+		d, err := mcusource.NewMTLSDialer(logger, mcuIdentity, sourceDial)(p)
 		if err != nil {
 			return nil, err
 		}
@@ -804,7 +850,6 @@ func main() {
 	// true, BuildImage reports "no mesh dialer" rather than panicking.
 	var meshDialer *services.MeshDialer
 	var meshRoster *services.MeshRoster
-	var localMeshMu sync.RWMutex
 	var localMeshSnapshot func() localmesh.NodeSnapshot
 	// All listeners extract into the same per-app context directories. Share
 	// their locks so a local-socket build cannot race an mTLS build for the same
@@ -941,6 +986,8 @@ func main() {
 
 	meshAgentListener := meshoperatorlink.NewAgentListener()
 	defer meshAgentListener.Close()
+	meshRetainedAgentListener := meshoperatorlink.NewRetainedAgentListener()
+	defer meshRetainedAgentListener.Close()
 	// Raw inner TLS from an already authenticated mesh app session is isolated
 	// from the legacy physical and primary-operator listener's clock policy.
 	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
@@ -1047,6 +1094,13 @@ func main() {
 				logger.Error("authenticated mesh gRPC ingress stopped", zap.Error(err))
 			}
 		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Serve(meshRetainedAgentListener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				logger.Error("retained mesh gRPC ingress stopped", zap.Error(err))
+			}
+		}()
 
 		wg.Add(1)
 		go func() {
@@ -1088,7 +1142,6 @@ func main() {
 	agentRestart := newAgentRestart(logger, &localMeshLife)
 	agentSvc.SetRestartFunc(agentRestart.Schedule)
 	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
-	var localMeshAppClient *meshsession.Client
 	// currentAppRoutes reads the live node view at call time, never a view
 	// saved at dial start. It reports no routes once appClient's runtime has
 	// been replaced or stopped, so a late recheck fails closed.
@@ -1164,9 +1217,6 @@ func main() {
 				stopSessions()
 				return
 			}
-			localMeshMu.Lock()
-			localMeshAppClient = appClient
-			localMeshMu.Unlock()
 			launch(func() { <-meshCtx.Done(); _ = appClient.Close() })
 			launch(func() {
 				ticker := time.NewTicker(time.Second)
@@ -1196,6 +1246,59 @@ func main() {
 			// Sessions from a current direct LAN neighbour get the same startup
 			// profile the dialing side would choose.
 			sessionServer.SetRouteSnapshot(currentAppRoutes(appClient))
+			var bindDirectNode func(*localmesh.Node) (func(), error)
+			if meshDirectBLEEnabled() {
+				direct, directErr := meshsession.NewDirectManager(meshCtx, meshsession.DirectManagerConfig{
+					Credentials: credentials, Backend: sessionServer.DirectBackend, UDPManager: appUDPMessages,
+					NativeBackend: func(ctx context.Context, identity meshsession.DirectNativeIdentity, request directstream.OpenRequest) (net.Conn, error) {
+						if request.Service != directstream.ServiceGRPCAdmin {
+							return nil, meshsession.ErrDenied
+						}
+						// The same server enforces tenant, EKU and exact RPC role policy.
+						return meshRetainedAgentListener.Dial(ctx, identity)
+					},
+					// Separate from reliable replay slabs; each admitted UDP
+					// association reserves three negotiated-size buffers.
+					DatagramBytes: 256 * 1024, DatagramMaximum: meshsession.MaxUDPMessageSize,
+					PromotionSnapshot: func() localmesh.NodeSnapshot {
+						localMeshMu.RLock()
+						snapshot := localMeshSnapshot
+						localMeshMu.RUnlock()
+						if snapshot == nil {
+							return localmesh.NodeSnapshot{}
+						}
+						return snapshot()
+					},
+				})
+				if directErr == nil {
+					directErr = sessionServer.SetDirectManager(direct)
+				}
+				if directErr == nil {
+					directErr = appClient.SetDirectManager(direct)
+				}
+				if directErr != nil {
+					if direct != nil {
+						direct.Close()
+					}
+					logger.Error("wendy net direct session owner unavailable", zap.Error(directErr))
+					stopSessions()
+					return
+				}
+				bindDirectNode = func(node *localmesh.Node) (func(), error) {
+					handler, release, err := direct.CarrierGeneration()
+					if err != nil {
+						return nil, err
+					}
+					if err = node.SetDirectCarrierHandler(directstream.CapabilityVersion|directstream.CapabilityTLS|directstream.CapabilityQUIC, handler, direct.AcceptsDirectCarrier); err != nil {
+						release()
+						return nil, err
+					}
+					return release, nil
+				}
+			}
+			localMeshMu.Lock()
+			localMeshAppClient = appClient
+			localMeshMu.Unlock()
 			// Publish app capabilities only after both sockets have bound. A
 			// listener failure ends the carriers and their signed advertisement.
 			ready := make(chan struct{}, 2)
@@ -1226,7 +1329,7 @@ func main() {
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
-						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
+						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy, BindNode: bindDirectNode,
 						Agent:        services.MeshAgentMetadata(),
 						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
 						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
@@ -1282,7 +1385,9 @@ func main() {
 			if err != nil {
 				return nil, err
 			}
-			return (&net.Dialer{}).DialContext(dialCtx, "tcp6", address.String())
+			return appClient.DialUpper(dialCtx, peer, func(ctx context.Context) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp6", address.String())
+			})
 		}
 		address, err := meshsession.ResolveApp(view, peer)
 		if err != nil {
@@ -1297,14 +1402,17 @@ func main() {
 	meshDialer.SetLocalServiceDialer(func(dialCtx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
 		localMeshMu.RLock()
 		snapshot := localMeshSnapshot
+		appClient := localMeshAppClient
 		localMeshMu.RUnlock()
-		if snapshot == nil {
+		if snapshot == nil || appClient == nil {
 			return nil, meshsession.ErrNoRoute
 		}
 		if _, err := meshsession.Resolve(snapshot(), peer); err != nil {
 			return nil, err
 		}
-		return (&net.Dialer{}).DialContext(dialCtx, "tcp6", net.JoinHostPort(peer.MeshAddress().String(), strconv.Itoa(int(port))))
+		return appClient.DialUpper(dialCtx, peer, func(ctx context.Context) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp6", net.JoinHostPort(peer.MeshAddress().String(), strconv.Itoa(int(port))))
+		})
 	})
 	// VIP dialing is mesh-local only. Without a configured local mesh the
 	// app dialer fails closed with ErrNoRoute rather than falling back to
