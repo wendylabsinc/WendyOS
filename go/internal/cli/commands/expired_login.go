@@ -53,13 +53,21 @@ func expiredLoginFrom(err error) *expiredLogin {
 	return nil
 }
 
-// pinnedRefusalError returns failure, or the expired login that explains it.
+// pinnedRefusalError returns failure, or the missing or expired login that
+// explains it.
+//
+// With no stored certificate at all the ladder had nothing to dial with, so
+// the refusal is the missing login and not a statement about the device.
+//
 // A pinned device that rejected our certificate at some candidate address
 // ends in the pinned refusal, which says nothing about why. If every stored
 // login for the pinned tenant has expired, that is why: recovery must renew it
 // rather than treat the rejection as a clock error. The refusal stays in the
 // chain, so the Bluetooth fallback it blocks stays blocked.
 func pinnedRefusalError(failure *noAuthenticatedEndpointError, tenant string, credentials []config.CertificateInfo, now time.Time) error {
+	if len(credentials) == 0 {
+		return missingLoginError{refusal: failure}
+	}
 	if failure.certSeen && tenant != "" {
 		if login := expiredLoginForTenant(tenant, credentials, now); login != nil {
 			return tlsHandshakeRejectedError{cause: failure, expiredLogin: login}

@@ -225,11 +225,35 @@ func askUnreachable(device string, say func(string, ...any)) error {
 func (op *registryOp) sendDelete(ctx context.Context, appID string, rows []*cloudpb.PendingDeviceStatement, detach map[string]bool, started, interactive bool,
 	name func(*cloudpb.PendingDeviceStatement) string, say func(string, ...any),
 ) error {
-	for i := 0; ; {
-		end := min(i+deleteBatch, len(rows))
+	// One entry per (deployment, device) overall, and cloud takes one entry per
+	// device per call: a device in two deployments of the app gets its second
+	// entry in the next call.
+	seen := map[[2]string]bool{}
+	var queue []*cloudpb.PendingDeviceStatement
+	for _, r := range rows {
+		if k := [2]string{r.GetDeploymentId(), r.GetDevice()}; !seen[k] {
+			seen[k] = true
+			queue = append(queue, r)
+		}
+	}
+	var batch []*cloudpb.PendingDeviceStatement
+	for sent := false; ; {
+		if batch == nil {
+			inCall := map[string]bool{}
+			var next []*cloudpb.PendingDeviceStatement
+			for _, r := range queue {
+				if len(batch) < deleteBatch && !inCall[r.GetDevice()] {
+					inCall[r.GetDevice()] = true
+					batch = append(batch, r)
+				} else {
+					next = append(next, r)
+				}
+			}
+			queue = next
+		}
 		req := &cloudpb.DeleteAppRequest{Id: appID, OrganizationId: op.org}
 		valid := timestamppb.New(time.Now().Add(cloudrequest.MaxValidity)) // removals and detaches: the platform cap
-		for _, r := range rows[i:end] {
+		for _, r := range batch {
 			method := cloudpb.DeploymentService_UnassignDevice_FullMethodName
 			var stmt proto.Message = &cloudpb.UnassignDeviceRequest{OrganizationId: op.org, DeploymentId: r.GetDeploymentId(), Device: r.GetDevice(), Revision: maxRevision, ValidUntil: valid}
 			if detach[r.GetDevice()] {
@@ -251,15 +275,17 @@ func (op *registryOp) sendDelete(ctx context.Context, appID string, rows []*clou
 		switch {
 		case err == nil:
 			return nil
-		case st.Code() == codes.NotFound && (started || i > 0): // a call already completed it
+		case st.Code() == codes.NotFound && (started || sent): // a call already completed it
 			return nil
-		case st.Code() == codes.FailedPrecondition && strings.Contains(st.Message(), "still need") && end < len(rows):
-			i = end
+		case st.Code() == codes.FailedPrecondition && strings.Contains(st.Message(), "still need") && len(queue) > 0:
+			batch, sent = nil, true
 			continue
+		case st.Code() == codes.InvalidArgument && strings.Contains(st.Message(), "already has an entry in this call"):
+			return errors.New("cloud refused the delete: one call named a device twice. This is a wendy CLI bug: update the CLI, then run it again")
 		case strings.Contains(st.Message(), "can't reach this device"):
 			// The named device's row became detach-only since it was read:
 			// ask again, then resend the batch signed fresh.
-			for _, r := range rows[i:end] {
+			for _, r := range batch {
 				id := strings.TrimPrefix(r.GetDevice(), "spiffe://wendy.sh/tenant/"+op.org+"/device/")
 				if detach[r.GetDevice()] || !strings.Contains(st.Message(), id) {
 					continue

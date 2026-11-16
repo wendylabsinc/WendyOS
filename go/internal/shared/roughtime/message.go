@@ -38,6 +38,9 @@ const (
 // EncodeMessage encodes a map of tag→value pairs into the IETF Roughtime TLV format.
 // Tags are sorted in ascending order as required by the spec.
 func EncodeMessage(m map[uint32][]byte) []byte {
+	if len(m) == 0 {
+		return make([]byte, 4) // Zero tags still require the tag-count word.
+	}
 	type pair struct {
 		tag uint32
 		val []byte

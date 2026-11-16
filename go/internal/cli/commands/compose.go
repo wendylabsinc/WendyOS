@@ -1172,7 +1172,11 @@ func (w *serviceLogWriter) Flush() {
 // combined output. When a companion wendy.json exists in the
 // same directory it is merged to supply Wendy-specific config (entitlements,
 // isolation, frameworks) without modifying the compose file.
-func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, projectDir string, opts runOptions) error {
+func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, projectDir string, opts runOptions) (retErr error) {
+	// A Compose run never advances the activation step past "connect", so
+	// name the phase a failure belongs to here (see runPhaseFailure).
+	phase := "project setup"
+	defer func() { retErr = inRunPhase(phase, retErr) }()
 	cfg, composeFilename, err := parseComposeFile(projectDir)
 	if err != nil {
 		return err
@@ -1195,7 +1199,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 
 	versionResp, err := agentVersionForRun(ctx, conn)
 	if err != nil {
-		return fmt.Errorf("querying device version: %w", err)
+		return inRunPhase("device connection", fmt.Errorf("querying device version: %w", err))
 	}
 	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
@@ -1301,6 +1305,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	desiredHashes := map[string]string{}
 	candidates := map[string]watchServiceCandidate{}
 
+	phase = "build"
 	// Prepare each build before starting the parallel scheduler. In particular,
 	// compile Stagefiles to their generated Dockerfiles once, while errors can
 	// still be attributed directly to the declaring service.
@@ -1400,10 +1405,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if len(jobs) > 0 {
 		// Only a service left to build needs room here or on the device. Compose
 		// projects cannot use --build-host, so it is not offered.
-		if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, false)); err != nil {
-			return err
-		}
-		if err := checkDeviceDiskSpace(versionResp); err != nil {
+		if err := checkRunBuildPrerequisites(ctx, opts.builder, false, versionResp, defaultDoctorDeps()); err != nil {
 			return err
 		}
 		ctx = withDeviceStorage(ctx, versionResp)
@@ -1565,6 +1567,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		runCancel()
 	}()
 
+	phase = "deploy"
 	var runErr error
 	if opts.detach {
 		runErr = composeStartDetached(ctx, conn, ordered, svcCfgs, projectName)
@@ -1617,10 +1620,10 @@ func composeStartDetached(ctx context.Context, conn *grpcclient.AgentConnection,
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting service %s: %w", name, err)
+			return deviceRefusalOr(err, "starting service "+name)
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for service %s start: %w", name, err)
+			return deviceRefusalOr(err, "waiting for service "+name+" start")
 		}
 		cliLogln("Service %s started.", name)
 	}
@@ -1652,11 +1655,11 @@ func composeStartWatch(ctx context.Context, conn *grpcclient.AgentConnection, or
 				AppName: cfg.ContainerName(),
 			})
 			if err != nil {
-				errCh <- fmt.Errorf("starting service %s: %w", serviceName, err)
+				errCh <- deviceRefusalOr(err, "starting service "+serviceName)
 				return
 			}
 			if err := awaitStarted(stream); err != nil {
-				errCh <- fmt.Errorf("waiting for service %s start: %w", serviceName, err)
+				errCh <- deviceRefusalOr(err, "waiting for service "+serviceName+" start")
 				return
 			}
 			cancel()

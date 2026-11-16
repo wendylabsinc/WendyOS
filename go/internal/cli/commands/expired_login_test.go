@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 // The tenants of the 2026-10-28 mesh-1 report: the device's ("default"), the
@@ -105,7 +106,7 @@ func TestExpiredTenantLoginIsNotReportedAsAClockError(t *testing.T) {
 	if !errors.Is(err, errProvisionedAgentUnauthorized) || !errors.Is(err, errTLSHandshakeRejected) {
 		t.Fatalf("classification lost: %v", err)
 	}
-	if failure := classifyLANProbeFailure(err); failure.Code != "login_expired" || !strings.Contains(failure.Message, "expired at") {
+	if failure := classifyLANProbeFailure(models.LANDevice{}, err); failure.Code != "login_expired" || !strings.Contains(failure.Message, "expired at") {
 		t.Fatalf("discover row = %+v", failure)
 	}
 
@@ -355,6 +356,7 @@ func TestMCPWatchRetriesOnlyWhenNothingAnswered(t *testing.T) {
 		"i/o timeout":            {errors.New("dial tcp 192.168.1.20:50052: i/o timeout"), true},
 		"expired login":          {chooseRejectionErrorForScope(context.Background(), certs.Scope{TenantUUID: meshTenant}, storedCerts(cfg), bad), false},
 		"pinned, expired login":  {pinnedRefusalError(&noAuthenticatedEndpointError{msg: "pinned", certSeen: true}, meshTenant, storedCerts(cfg), time.Now()), false},
+		"pinned, no login":       {pinnedRefusalError(&noAuthenticatedEndpointError{msg: "pinned"}, meshTenant, nil, time.Now()), false},
 		"TLS rejection":          {newTLSHandshakeRejectedError(bad), false},
 		"identity refused":       {errDeviceIdentityRefused, false},
 		"not logged in":          {config.ErrNotLoggedIn, false},

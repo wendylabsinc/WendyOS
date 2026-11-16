@@ -22,12 +22,16 @@ actor AgentUpdateLock {
     }
 
     private let staleThreshold: Duration
+    private let now: @Sendable () -> ContinuousClock.Instant
     private var holder: Holder?
 
-    /// - Parameter staleThreshold: overridable so tests can exercise the steal
-    ///   without waiting half an hour.
-    init(staleThreshold: Duration = AgentUpdateLock.defaultStaleThreshold) {
+    /// Tests can advance a monotonic clock without depending on task scheduling.
+    init(
+        staleThreshold: Duration = AgentUpdateLock.defaultStaleThreshold,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
         self.staleThreshold = staleThreshold
+        self.now = now
     }
 
     /// Attempts to acquire the lock. Returns `false` while it is held by a
@@ -35,7 +39,7 @@ actor AgentUpdateLock {
     /// its way out; stealing there could double-install over the bundle just
     /// written) or one younger than `staleThreshold`.
     func tryAcquire() -> Bool {
-        let now = ContinuousClock.now
+        let now = self.now()
         if let holder = self.holder {
             guard !holder.isCommitted, now - holder.acquiredAt >= self.staleThreshold else {
                 return false

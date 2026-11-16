@@ -167,10 +167,10 @@ func validateNotificationSendRequest(request *systempb.SendRequest) (*cloudpb.No
 		return nil, "", status.Error(codes.InvalidArgument, "notification_id must be a UUID v4")
 	}
 	if !validNotificationText(request.GetTitle(), 120) {
-		return nil, "", status.Error(codes.InvalidArgument, "title must contain 1...120 printable UTF-8 bytes")
+		return nil, "", status.Error(codes.InvalidArgument, "title must contain 1...120 UTF-8 bytes"+notificationTextRule)
 	}
 	if !validNotificationText(request.GetBody(), 2000) {
-		return nil, "", status.Error(codes.InvalidArgument, "body must contain 1...2000 printable UTF-8 bytes")
+		return nil, "", status.Error(codes.InvalidArgument, "body must contain 1...2000 UTF-8 bytes"+notificationTextRule)
 	}
 	switch request.GetSeverity() {
 	case systempb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
@@ -312,6 +312,12 @@ func validNotificationIdentifier(value string, maximumBytes int) bool {
 	}
 	return true
 }
+
+// notificationTextRule spells out what validNotificationText refuses besides
+// length. Cloud's contract for title and body is "no surrounding whitespace or
+// control characters"; a line break is the control character app authors send
+// most, so the refusal names it instead of asking for "printable" text.
+const notificationTextRule = " on one line: no line breaks, tabs or other control characters, and no leading or trailing whitespace"
 
 func validNotificationText(value string, maximumBytes int) bool {
 	if value == "" || len(value) > maximumBytes || strings.TrimSpace(value) != value {
@@ -588,6 +594,14 @@ type CloudNotificationSender struct {
 	connection      *grpc.ClientConn
 }
 
+// cloudResponseError marks an error returned by the Cloud RPC itself. Cloud
+// controls its text, which can contain notification content or recipient
+// details. Errors the agent raises before the call stay unmarked.
+type cloudResponseError struct{ error }
+
+// GRPCStatus keeps status.Code and status.FromError returning Cloud's status.
+func (e cloudResponseError) GRPCStatus() *status.Status { return status.Convert(e.error) }
+
 func NewCloudNotificationSender(logger *zap.Logger, provisioningSvc *ProvisioningService) *CloudNotificationSender {
 	return &CloudNotificationSender{logger: logger, provisioningSvc: provisioningSvc}
 }
@@ -640,7 +654,7 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
 			zap.String("status_code", status.Code(err).String()))
-		return nil, err
+		return nil, cloudResponseError{err}
 	}
 	return response, nil
 }
@@ -684,7 +698,7 @@ func (s *CloudNotificationSender) createNotificationV2WithACME(
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
 			zap.String("status_code", status.Code(err).String()))
-		return nil, err
+		return nil, cloudResponseError{err}
 	}
 	return &cloudpb.CreateNotificationV2Response{NotificationId: response.GetNotificationId()}, nil
 }
