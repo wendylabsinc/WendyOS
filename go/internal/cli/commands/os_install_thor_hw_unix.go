@@ -54,7 +54,7 @@ func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevi
 		devs, err := scan()
 		switch {
 		case errors.Is(err, rcm.ErrUSBAccess) && len(devs) == 0:
-			fmt.Println("\n" + usbAccessHintBox())
+			fmt.Println("\n" + usbAccessDeniedLine("Jetson"))
 			if promptRescan("Press Enter to rescan, or 'q' to quit: ") {
 				return rcm.RecoveryDevice{}, fmt.Errorf("cannot open the Jetson's USB device: permission denied")
 			}

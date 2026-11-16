@@ -70,6 +70,19 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 	defer os.RemoveAll(handoffDir)
 
+	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmOrinReady(opts); err != nil {
+		return err
+	}
+	dev, err := pickOrinRecoveryDevice(opts)
+	if err != nil {
+		return err
+	}
+
 	creds, err := resolveWiFiCredentialsList(opts.WiFi)
 	if err != nil {
 		return err
@@ -78,22 +91,11 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
-		return err
-	}
 	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-
-	if err := confirmOrinReady(opts); err != nil {
-		return err
-	}
-	dev, err := pickOrinRecoveryDevice(opts)
-	if err != nil {
-		return err
-	}
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target:   dev.Describe(),
 		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},

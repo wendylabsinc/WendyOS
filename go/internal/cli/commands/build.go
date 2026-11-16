@@ -118,7 +118,7 @@ func newBuildCmd() *cobra.Command {
 			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
 			if cfgErr == nil {
 				if err := appCfg.Validate(); err != nil {
-					return fmt.Errorf("invalid wendy.json: %w", err)
+					return invalidAppConfigError(err)
 				}
 				if err := warnAppConfigFile(cfgPath); err != nil {
 					return fmt.Errorf("reading wendy.json warnings: %w", err)
@@ -132,6 +132,11 @@ func newBuildCmd() *cobra.Command {
 			// different architecture from the one the user expected.
 			if mustStopBuildAfterTargetError(targetErr) {
 				return targetErr
+			}
+			if cfgErr == nil {
+				if err := buildMCU(cmd.Context(), cwd, appCfg); err != nil {
+					return err
+				}
 			}
 
 			// If the target is an external provider device, use the provider build path.
