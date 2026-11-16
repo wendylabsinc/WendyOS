@@ -1221,7 +1221,7 @@ func connectAttempt(portPath string, mode *serial.Mode, transport discovery.Seri
 	if err != nil {
 		if isPermissionDenied(err) {
 			if group := serialPortGroup(portPath); group != "" {
-				return nil, fmt.Errorf("Permission denied to access USB device %s. To have access, you need to be part of the user group '%s'.", portPath, group)
+				return nil, portPermissionError(portPath, group, err)
 			}
 		}
 		if errors.Is(err, errPortBusy) {

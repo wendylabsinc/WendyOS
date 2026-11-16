@@ -52,8 +52,8 @@ forwarding paths.
 | Field | Type | Description |
 |---|---|---|
 | `audience` | `NotificationAudience` | Union of `user_ids` and `roles` for Cloud v2. |
-| `title` | `string` | Notification title. |
-| `body` | `string` | Notification body. |
+| `title` | `string` | Notification title: 1 to 120 UTF-8 bytes on one line, with no line breaks or other control characters and no leading or trailing whitespace. |
+| `body` | `string` | Notification body: 1 to 2,000 UTF-8 bytes on one line, with no line breaks or other control characters and no leading or trailing whitespace. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `deep_link` | `string` | Absolute `wendy://` URI. |
 | `notification_id` | `string` | Caller-chosen Notification resource UUID v4. Cloud returns canonical lowercase; any canonical reuse after creation returns `ALREADY_EXISTS`. |
@@ -156,8 +156,8 @@ the Wendy agent stamps `app_id` from trusted container state.
 |---|---|---|
 | `organization_id` | `optional int32` (v1), `optional string` (v2) | Required for user-authenticated callers; omitted by provisioned devices. |
 | `audience` | `NotificationAudience` | For Cloud v2, the union of `user_ids`, `team_ids`, `roles`, and `role_ids`; see the Cloud v2 audience below. |
-| `title` | `string` | Notification title. |
-| `body` | `string` | Notification body. |
+| `title` | `string` | Notification title: 1 to 120 UTF-8 bytes on one line, with no line breaks or other control characters and no leading or trailing whitespace. |
+| `body` | `string` | Notification body: 1 to 2,000 UTF-8 bytes on one line, with no line breaks or other control characters and no leading or trailing whitespace. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `deep_link` | `string` | Absolute `wendy://` URI. |
 | `notification_id` | `string` | Caller-chosen Notification resource UUID v4; Cloud stores and returns canonical lowercase form and rejects every canonical reuse with `ALREADY_EXISTS`. |

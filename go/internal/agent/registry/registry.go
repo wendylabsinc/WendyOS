@@ -31,6 +31,9 @@ import (
 	"github.com/google/uuid"
 	digest "github.com/opencontainers/go-digest"
 	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 )
 
 // Server is the embedded OCI registry HTTP server.
@@ -67,7 +70,19 @@ func imagePrefixFor(listenAddr string) (string, error) {
 	return net.JoinHostPort(host, port) + "/", nil
 }
 
-func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config) (*Server, error) {
+func LocalImagePrefix(listenAddr string) (string, error) { return imagePrefixFor(listenAddr) }
+
+type authorizationOptions struct {
+	source delivery.Source
+	mode   interceptor.OrgMode
+}
+type Option func(*authorizationOptions)
+
+func WithDeliveryAuthorization(source delivery.Source, mode interceptor.OrgMode) Option {
+	return func(o *authorizationOptions) { o.source = source; o.mode = mode }
+}
+
+func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config, options ...Option) (*Server, error) {
 	client, err := containerd.New(containerdAddr, containerd.WithDefaultNamespace("default"))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to containerd for registry: %w", err)
@@ -86,17 +101,29 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		manifestSizeLimit:   4 * 1024 * 1024, // 4 MiB
 	}
 
+	config := authorizationOptions{}
+	for _, option := range options {
+		option(&config)
+	}
+	reg.deliverySource = config.source
 	var backend ociregistry.Interface = safeDeleteRegistry{
 		Interface: reg,
 	}
 
+	if config.source != nil {
+		backend = newAuthorizedRegistry(backend)
+	}
 	ociHandler := newOCIHandler(backend)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", readyzHandler(client, logger))
 	mux.Handle("/", ociHandler)
 
-	handler := loggingMiddleware(logger)(securityHeadersMiddleware(mux))
+	var handler http.Handler = mux
+	if config.source != nil {
+		handler = authorizationMiddleware(config.source, config.mode)(handler)
+	}
+	handler = loggingMiddleware(logger)(securityHeadersMiddleware(handler))
 
 	tcpLis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -234,6 +261,7 @@ func readyzHandler(client *containerd.Client, logger *zap.Logger) http.HandlerFu
 // ---------------------------------------------------------------------------
 
 type containerdRegistry struct {
+	deliverySource delivery.Source
 	*ociregistry.Funcs
 	client *containerd.Client
 
@@ -818,22 +846,29 @@ func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag s
 			Name:   r.imageName(repo, tag),
 			Target: desc,
 		}
-		// Use a fresh context so the image service update is independent of the
-		// HTTP request lifecycle and the content-write lease. WithDefaultNamespace
-		// on the client injects the required namespace into every outgoing gRPC
-		// call, so no explicit namespace is needed here.
-		imgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, err := is.Update(imgCtx, img, "target")
-		if err != nil {
-			if !errdefs.IsNotFound(err) {
-				return desc, err
+		err := delivery.Commit(ctx, r.deliverySource, img.Name, desc.Digest.String(), func() (string, error) {
+			current, err := is.Get(ctx, img.Name)
+			if errdefs.IsNotFound(err) {
+				return "", nil
 			}
-			_, err = is.Create(imgCtx, img)
 			if err != nil {
-				return desc, err
+				return "", err
 			}
+			return current.Target.Digest.String(), nil
+		}, func() error {
+			_, err := is.Update(ctx, img, "target")
+			if err != nil {
+				if !errdefs.IsNotFound(err) {
+					return err
+				}
+				_, err = is.Create(ctx, img)
+			}
+			return err
+		})
+		if err != nil {
+			return desc, err
 		}
+
 	}
 
 	return desc, nil
