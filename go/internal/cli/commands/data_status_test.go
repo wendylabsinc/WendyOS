@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // statusDataClient serves Episodes and Status from fixed responses and counts
@@ -132,6 +133,61 @@ func TestEpisodesWithNothingInProgressKeepsFourColumns(t *testing.T) {
 	}
 }
 
+// TestEpisodesWithNoEpisodesSaysSo: a device with nothing recorded printed only
+// the header row, which reads like a listing that failed.
+func TestEpisodesWithNoEpisodesSaysSo(t *testing.T) {
+	const sentence = "No episodes on this device yet. Record one with 'wendy data record'.\n"
+	for name, test := range map[string]struct {
+		client *statusDataClient
+		want   string
+	}{
+		"current agent": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}},
+			want:   sentence,
+		},
+		"older agent with nothing recording": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{}, status: &agentpbv2.DataStatusResponse{}},
+			want:   sentence,
+		},
+		"agent without Status keeps its note": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{}, statusErr: status.Error(codes.Unimplemented, "unknown method Status")},
+			want:   sentence + "\n" + noInProgressReportNote + "\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if err := runDataEpisodes(context.Background(), test.client, &out, &errOut, false, statusTestNow); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != test.want {
+				t.Fatalf("got %q, want %q", out.String(), test.want)
+			}
+			if errOut.Len() != 0 {
+				t.Fatalf("unexpected stderr: %s", errOut.String())
+			}
+		})
+	}
+}
+
+// A recording in progress is an episode, so it is listed in the table even
+// when nothing has been finalized yet.
+func TestEpisodesWithOnlyARecordingInProgressKeepsTheTable(t *testing.T) {
+	client := &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{
+		InProgress: []*agentpbv2.DataEpisode{recordingEpisode()}, ReportsInProgress: true,
+	}}
+	var out bytes.Buffer
+	if err := runDataEpisodes(context.Background(), client, &out, &out, false, statusTestNow); err != nil {
+		t.Fatal(err)
+	}
+	rows := tableRows(t, out.String())
+	if len(rows) != 2 || strings.Join(rows[0], " ") != "EPISODE STATE SIZE NAME DURATION TRIGGER" || rows[1][1] != "recording" {
+		t.Fatalf("unexpected table:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "No episodes") {
+		t.Fatalf("a device that is recording was reported as having no episodes:\n%s", out.String())
+	}
+}
+
 // TestEpisodesFromAnOlderAgent covers an agent that predates in_progress, such
 // as 2026.10.27-091653: its Episodes response has no in_progress, and its
 // Status response carries the one open episode in active with nothing else.
@@ -193,10 +249,75 @@ func TestEpisodesFallbackSkipsAnEpisodeAlreadyFinalized(t *testing.T) {
 	}
 }
 
+// TestEpisodesJSONWritesEmptyListsAsArrays: protobuf JSON leaves an empty list
+// out, so a device with no episodes printed only {"reports_in_progress":true}
+// and a script had to test for the key before iterating it. episodes is always
+// an array. in_progress is one whenever the agent says what is in progress, and
+// stays out for an older agent, where its absence means "not reported".
+func TestEpisodesJSONWritesEmptyListsAsArrays(t *testing.T) {
+	line := func(message proto.Message) string {
+		t.Helper()
+		var encoded bytes.Buffer
+		if err := encodeProtoJSON(&encoded, message); err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSuffix(encoded.String(), "\n")
+	}
+	finalized, recording := line(finalizedEpisode()), line(recordingEpisode())
+	for name, test := range map[string]struct {
+		client *statusDataClient
+		want   string
+	}{
+		"current agent, no episodes": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}},
+			want:   `{"episodes":[],"in_progress":[],"reports_in_progress":true}`,
+		},
+		"current agent, finalized only": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{Episodes: []*agentpbv2.DataEpisode{finalizedEpisode()}, ReportsInProgress: true}},
+			want:   `{"episodes":[` + finalized + `],"in_progress":[],"reports_in_progress":true}`,
+		},
+		"current agent, in progress only": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{InProgress: []*agentpbv2.DataEpisode{recordingEpisode()}, ReportsInProgress: true}},
+			want:   `{"episodes":[],"in_progress":[` + recording + `],"reports_in_progress":true}`,
+		},
+		"older agent, no episodes": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{}, status: &agentpbv2.DataStatusResponse{}},
+			want:   `{"episodes":[]}`,
+		},
+		"older agent, finalized only": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{Episodes: []*agentpbv2.DataEpisode{finalizedEpisode()}}, status: &agentpbv2.DataStatusResponse{}},
+			want:   `{"episodes":[` + finalized + `]}`,
+		},
+		// With both lists filled there is nothing to add: the output is the
+		// response in the shared dialect, byte for byte.
+		"both lists filled": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{
+				Episodes: []*agentpbv2.DataEpisode{finalizedEpisode()}, InProgress: []*agentpbv2.DataEpisode{recordingEpisode()}, ReportsInProgress: true,
+			}},
+			want: line(&agentpbv2.DataEpisodesResponse{
+				Episodes: []*agentpbv2.DataEpisode{finalizedEpisode()}, InProgress: []*agentpbv2.DataEpisode{recordingEpisode()}, ReportsInProgress: true,
+			}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if err := runDataEpisodes(context.Background(), test.client, &out, &errOut, true, statusTestNow); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != test.want+"\n" {
+				t.Fatalf("got  %swant %s", out.String(), test.want)
+			}
+			if errOut.Len() != 0 {
+				t.Fatalf("unexpected note: %s", errOut.String())
+			}
+		})
+	}
+}
+
 // TestEpisodesJSONOnlyAddsAField pins --json compatibility: with nothing in
 // progress, episodes encodes exactly as before beside the reports_in_progress
-// flag, and in-progress episodes go in a new in_progress array, never into
-// episodes, which scripts download.
+// flag and an empty in_progress array, and in-progress episodes go in that
+// array, never into episodes, which scripts download.
 func TestEpisodesJSONOnlyAddsAField(t *testing.T) {
 	before := &agentpbv2.DataEpisodesResponse{Episodes: []*agentpbv2.DataEpisode{finalizedEpisode()}}
 	var legacy bytes.Buffer
@@ -216,8 +337,8 @@ func TestEpisodesJSONOnlyAddsAField(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &idleFields); err != nil {
 		t.Fatalf("--json is not one JSON document: %v\n%s", err, out.String())
 	}
-	if len(idleFields) != 2 || string(idleFields["episodes"]) != string(legacyFields["episodes"]) || string(idleFields["reports_in_progress"]) != "true" {
-		t.Fatalf("--json with nothing in progress changed beyond the flag:\n got %s\nwant %s plus reports_in_progress", out.String(), legacy.String())
+	if len(idleFields) != 3 || string(idleFields["episodes"]) != string(legacyFields["episodes"]) || string(idleFields["in_progress"]) != "[]" || string(idleFields["reports_in_progress"]) != "true" {
+		t.Fatalf("--json with nothing in progress changed beyond the flag and the empty list:\n got %s\nwant %s plus in_progress and reports_in_progress", out.String(), legacy.String())
 	}
 
 	busy := &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{

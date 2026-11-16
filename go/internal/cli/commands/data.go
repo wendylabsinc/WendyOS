@@ -43,6 +43,10 @@ import (
 // because re-encoding them would lose the byte fidelity that makes them
 // checkable against the device.
 //
+// Two commands add members to a message's line and change nothing the dialect
+// wrote: "episodes" writes its empty lists as [] (encodeEpisodesJSON), and
+// "delete" leads each line with "deleted":true (encodeDeletedJSON).
+//
 // protojson varies its whitespace deliberately between runs, so the result is
 // compacted before it is written; without that no two invocations of the same
 // command agree byte for byte.

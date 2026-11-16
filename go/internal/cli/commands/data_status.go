@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,9 +72,51 @@ func runDataEpisodes(ctx context.Context, client agentpbv2.DataServiceClient, ou
 		if note != "" {
 			fmt.Fprintln(errOut, note)
 		}
-		return encodeProtoJSON(out, response)
+		return encodeEpisodesJSON(out, response)
 	}
 	return writeDataEpisodes(out, response, now, note)
+}
+
+// encodeEpisodesJSON writes the Episodes response in the --json dialect, with
+// its empty lists written as [] where protobuf JSON leaves them out, so a
+// script can iterate them without first testing for the key. episodes is
+// always an array. in_progress is one whenever the agent reports what is in
+// progress; from an older agent an empty in_progress stays out, because there
+// it means "not reported" and not "none".
+//
+// Only the missing keys are added. Every value the dialect wrote keeps its
+// bytes, in the order the .proto declares the fields, and a response with
+// nothing to add is written by encodeProtoJSON unchanged.
+func encodeEpisodesJSON(out io.Writer, response *agentpbv2.DataEpisodesResponse) error {
+	emptyLists := map[string]bool{
+		"episodes":    len(response.GetEpisodes()) == 0,
+		"in_progress": len(response.GetInProgress()) == 0 && response.GetReportsInProgress(),
+	}
+	if !emptyLists["episodes"] && !emptyLists["in_progress"] {
+		return encodeProtoJSON(out, response)
+	}
+	var line bytes.Buffer
+	if err := encodeProtoJSON(&line, response); err != nil {
+		return err
+	}
+	var written map[string]json.RawMessage
+	if err := json.Unmarshal(line.Bytes(), &written); err != nil {
+		return err
+	}
+	var members []string
+	fields := response.ProtoReflect().Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		name := fields.Get(i).TextName()
+		value, ok := written[name]
+		if !ok && emptyLists[name] {
+			value, ok = json.RawMessage("[]"), true
+		}
+		if ok {
+			members = append(members, fmt.Sprintf("%q:%s", name, value))
+		}
+	}
+	_, err := fmt.Fprintf(out, "{%s}\n", strings.Join(members, ","))
+	return err
 }
 
 // inProgressFromStatus returns the episodes a Status response reports as in
@@ -166,9 +210,19 @@ func inProgressTrigger(episode *agentpbv2.DataEpisode) string {
 
 // writeDataEpisodes renders the episodes table. Episodes in progress come first
 // and add DURATION and TRIGGER columns, which only they fill; with none in
-// progress the table has its original four columns.
+// progress the table has its original four columns. With no episode of either
+// kind it prints a sentence, because a header with no rows under it reads like
+// a listing that failed.
 func writeDataEpisodes(out io.Writer, response *agentpbv2.DataEpisodesResponse, now time.Time, note string) error {
 	open := response.GetInProgress()
+	if len(open) == 0 && len(response.GetEpisodes()) == 0 {
+		message := "No episodes on this device yet. Record one with 'wendy data record'."
+		if note != "" {
+			message += "\n\n" + note
+		}
+		_, err := fmt.Fprintln(out, message)
+		return err
+	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	header := "EPISODE\tSTATE\tSIZE\tNAME"
 	if len(open) > 0 {
