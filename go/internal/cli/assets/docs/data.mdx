@@ -215,7 +215,9 @@ and downloads the pinned model. This needs network access and storage outside
 the episode quota. Check `inference_status` in `campaign inspect` to verify
 the runtime and each camera. The rate is an upper bound: a model too slow for
 it scores as fast as it can, and `inference_status.throughput` there shows the
-rate it achieves.
+rate it achieves. The agent publishes the same figures as OpenTelemetry
+metrics named `inference.*`, such as `inference.rate.achieved`; the inference
+reference lists them.
 
 `notify.on: event` can deliver a named event immediately; `notify.on: detection`
 requires inference. Delivery can use a configured webhook or Wendy Cloud.

@@ -7,6 +7,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 )
 
 // InferenceHardware is the accelerator evidence campaign inference chooses an
@@ -21,7 +22,8 @@ func InferenceHardware() inference.Hardware {
 // acceleratorState records the model process's report of what it runs on and
 // how fast. A fallback to the CPU on a device that could do better is logged
 // once per change, and so is a model that misses the campaign's rate, so
-// neither is ever silent.
+// neither is ever silent. A report of how fast is also published as metrics,
+// built from the status it has just set.
 func (j *campaignInferenceJob) acceleratorState(accelerator *data.AcceleratorStatus, stats *data.InferenceStats) {
 	if accelerator == nil {
 		return
@@ -30,13 +32,19 @@ func (j *campaignInferenceJob) acceleratorState(accelerator *data.AcceleratorSta
 	previous := j.status.Accelerator
 	j.status.Accelerator = accelerator
 	rateChange := ""
+	var metrics *colmetricspb.ExportMetricsServiceRequest
 	if stats != nil {
 		j.status.Stats = stats
-		rateChange = j.throughputState(time.Now())
+		now := time.Now()
+		rateChange = j.throughputState(now)
+		metrics = j.throughputMetrics(now)
 	}
 	j.mu.Unlock()
 	if rateChange != "" {
 		j.owner.service.manager.Warnf("%s", rateChange)
+	}
+	if metrics != nil {
+		j.owner.service.telemetry.PublishMetrics(metrics)
 	}
 	if previous != nil && previous.Active == accelerator.Active && previous.Degraded == accelerator.Degraded && previous.Reason == accelerator.Reason {
 		return

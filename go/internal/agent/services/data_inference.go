@@ -50,6 +50,9 @@ type campaignInferenceJob struct {
 	// pace outlives a worker, so a restarted one is not reported as too slow
 	// a second time.
 	pace inferencePace
+	// scoringSince is when the running model process started, which is where
+	// its count of scored frames begins.
+	scoringSince time.Time
 }
 
 // StartCampaignInference restores persisted inference plans and supervises their
@@ -285,6 +288,9 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 	if err != nil {
 		return inferenceStartError{err}
 	}
+	j.mu.Lock()
+	j.scoringSince = time.Now()
+	j.mu.Unlock()
 	sources := map[string]inferenceSource{}
 	defer func() {
 		cancel()

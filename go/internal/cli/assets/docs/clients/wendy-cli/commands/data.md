@@ -539,6 +539,28 @@ gone, and the agent logs that too. Cameras that deliver fewer frames than the
 rate are not reported as a slow model, and neither is the CPU while a TensorRT
 engine is on its way.
 
+Each report from the model process, about every 10 seconds, is also published
+as OpenTelemetry metrics of the agent (`service.name` `wendy-agent`, scope
+`wendy.data.inference`):
+
+| Metric | Type | Value |
+|---|---|---|
+| `inference.rate.requested` | gauge, `{frame}/s` | `throughput.requested_fps` |
+| `inference.rate.achieved` | gauge, `{frame}/s` | `stats.fps` |
+| `inference.model.too_slow` | gauge, `0` or `1` | `throughput.model_too_slow` |
+| `inference.frame.duration_ms` | gauge, `ms` | `stats.infer_ms_p50` and `stats.infer_ms_p95`, told apart by `inference.quantile` (`p50`, `p95`) |
+| `inference.frames.scored` | cumulative sum, `{frame}` | `stats.frames_scored`; it starts again when the model process restarts |
+
+Every point carries `inference.campaign` and `inference.model`, and the gauges
+`inference.engine` (`cpu` or `tensorrt`). The requested rate and
+`inference.model.too_slow` are published only while the status has a
+`throughput`, and nothing more is published once a campaign's inference has
+stopped, though a metrics stream opened later still begins with the last
+values the agent published. Read them with the `telemetry_metrics` MCP tool
+(`metric_name_prefix: inference.`), or with
+`wendy device telemetry-stream --metrics`, which prints one JSON line per
+metric: for a metric with several points, such as the frame duration, its last.
+
 Each scored frame produces a `prediction` record, which an Episode that
 records applications keeps in its `events.jsonl`. A frame that raises the
 inference event also writes an `event` record with the same attributes, which
