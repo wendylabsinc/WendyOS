@@ -321,6 +321,46 @@ func chooseRejectionErrorForScope(ctx context.Context, device certs.Scope, allCe
 	return rejection
 }
 
+// firstContactRefusal reports an enrolled device that refused this CLI's
+// certificate when no saved identity was involved. Only the device's own
+// answer (a TLS alert or an Unauthenticated status) is reworded; an expired
+// login, a cross-org device, or a failure of the CLI's own checks keeps its
+// specific message. errors.Is still sees the underlying rejection.
+func firstContactRefusal(name string, rejection error, attempts []mtlsAttemptError) error {
+	var plain tlsHandshakeRejectedError
+	if !errors.As(rejection, &plain) || expiredLoginFrom(rejection) != nil || isCertRefreshableError(rejection) {
+		return rejection
+	}
+	for _, attempt := range attempts {
+		if strings.Contains(attempt.err.Error(), "remote error: tls:") || status.Code(attempt.err) == codes.Unauthenticated {
+			return deviceRefusedUserError{name: name, cause: rejection}
+		}
+	}
+	return rejection
+}
+
+// deviceRefusedUserError is an enrolled device saying no to this user.
+type deviceRefusedUserError struct {
+	name  string
+	cause error
+}
+
+const deviceRefusedUserStep = "Sign in with an account that has access to this device ('wendy auth login'), then retry."
+
+func (e deviceRefusedUserError) Error() string {
+	name := e.name
+	if name == "" {
+		name = "The device"
+	} else {
+		name = fmt.Sprintf("Device %q", name)
+	}
+	return name + " is enrolled and refused your sign-in certificate.\n  " + deviceRefusedUserStep
+}
+
+func (e deviceRefusedUserError) NextSteps() []string { return []string{deviceRefusedUserStep} }
+
+func (e deviceRefusedUserError) Unwrap() error { return e.cause }
+
 type provisionedAgentUnauthorizedError struct {
 	cause error
 }
@@ -1279,6 +1319,16 @@ func connectResolvedAgentKeyed(ctx context.Context, hostname, addr, pinKey strin
 // an interactive device picker is presented (unless running in --json mode).
 func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.AgentConnection, error) {
 	conn, err := connectToAgentInner(ctx, opts...)
+	// A changed identity the user accepts is saved, then connected to again;
+	// a second change (its certificate key) may follow the first.
+	for range 2 {
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
+		if !retry {
+			err = confirmErr
+			break
+		}
+		conn, err = connectToAgentInner(ctx, opts...)
+	}
 	if err != nil {
 		if cloudConn, cloudErr, attempted := connectUnresolvedCloudName(ctx, deviceFlag, err, opts...); attempted {
 			conn, err = cloudConn, cloudErr
@@ -1450,7 +1500,8 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 // addr for the ladder and its retries, "" when the USB-direct fallback
 // substituted a connection that never touched addr. pinKey is the key the
 // caller derived once for addr and judges the connection under: the ladder
-// and every retry dial under it too.
+// and every retry dial under it too, and a substituted connection is handed
+// back carrying it.
 func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr, pinKey string, isDefault bool) (_ *grpcclient.AgentConnection, dialled string, finished bool, _ error) {
 	startedAt := time.Now()
 	dialled = addr
@@ -1489,7 +1540,10 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
 			// The stored address is unreachable but the same device (verified
 			// by hostname) is on USB — use it directly. It is not the address
-			// that was asked for, so it is never treated as the typed one.
+			// that was asked for, so it is never treated as the typed one. It
+			// is still the device that was asked for, and the caller judges
+			// it under pinKey (see keepAsRequestedDevice).
+			keepAsRequestedDevice(usbConn, pinKey)
 			conn, dialled = usbConn, ""
 		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.
@@ -1523,6 +1577,35 @@ func markTypedVMConnection(conn *grpcclient.AgentConnection, pinKey, dialled str
 	}
 	if name, ok := strings.CutPrefix(pinKey, vmDeviceIDPrefix); ok && name != "" {
 		conn.SimulatorName = name
+	}
+}
+
+// keepAsRequestedDevice makes usbConn — a connection the USB-direct fallback
+// substituted for a named device's own address — the requested device's
+// connection, which is what the front door then judges it as. The fallback
+// dialled it under the USB address's own key, so it arrives carrying that key
+// and that key's answer to "is there a saved identity?" (normally none). Both
+// are about the wrong name, so before the pin check:
+//
+//   - DevicePinKey becomes pinKey. A reconnect after an agent or OS update is
+//     made under the key the connection carries; under the USB address's it
+//     would accept any enrolled board on the cable.
+//   - NoSavedIdentity is cleared when pinKey has a saved identity. The pin
+//     check compares the device with that identity, so this is not a first
+//     contact and must not be announced as one. "Saved" is the ladder's own
+//     reading (see dialTarget.pinned).
+//
+// The mark is only ever cleared, and never for a plaintext connection. Nothing
+// authenticated that peer, whatever is saved: a saved name refuses it (see
+// challengeUnprovisionedDevice), and for an unsaved one it must stay marked so
+// Wi-Fi credentials still need consent (see AgentConnection.UnverifiedPlaintext).
+func keepAsRequestedDevice(usbConn *grpcclient.AgentConnection, pinKey string) {
+	usbConn.DevicePinKey = pinKey
+	if !usbConn.NoSavedIdentity || !usbConn.IsMTLS {
+		return
+	}
+	if _, _, saved := governingPin(pinKey); saved {
+		usbConn.NoSavedIdentity = false
 	}
 }
 
@@ -2224,6 +2307,12 @@ func mdnsLocalHint(host string) string {
 // message: the CLI's rewrite of the gRPC error in the middle of the message
 // used to drop everything after it, and JSON mode lists steps separately.
 func defaultDeviceUnreachableError(hostname string, err error) error {
+	// A missing login is not a failure to reach the default: nothing was
+	// dialled, and its own message names the device and the sign-in step.
+	var noLogin missingLoginError
+	if errors.As(err, &noLogin) {
+		return err
+	}
 	steps := []string{"Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."}
 	if hint := strings.TrimPrefix(mdnsLocalHint(hostname), "\n  "); hint != "" {
 		steps = append(steps, hint)
@@ -2685,7 +2774,16 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				return nil, err
 			}
 			i := w.probeOrder[pos]
-			conn, tlsErr := grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
+			var conn *grpcclient.AgentConnection
+			var tlsErr error
+			if w.target.Expected == nil && !w.target.pinned() {
+				// No saved identity: the device's certificate is verified
+				// against the trust roots only, and the device decides
+				// whether it accepts ours.
+				conn, tlsErr = grpcclient.ConnectWithTLSFirstContact(ctx, mtlsAddr, &w.allCerts[i], w.pins)
+			} else {
+				conn, tlsErr = grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
+			}
 			if tlsErr != nil {
 				if errors.Is(tlsErr, certs.ErrExpectedDeviceIdentity) {
 					return nil, tlsErr
@@ -2814,9 +2912,10 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 // authenticate the requested device. A host with any pin is never offered the
 // plaintext rung.
 func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
-	if len(allCerts) > 0 && target.Expected == nil {
-		// A local configuration failure must never turn into a plaintext
-		// attempt or a different carrier's trust-on-first-use connection.
+	if len(allCerts) > 0 && target.Expected == nil && target.pinned() {
+		// A saved binding too old to name a device (organization only) must
+		// never turn into a plaintext attempt or a first-contact connection.
+		// A device with no saved binding at all is dialled below.
 		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
 	}
 	candidates := target.dialCandidates()
@@ -2878,7 +2977,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 				// tenant it belongs to.
 				device.TenantUUID = target.Expected.TenantUUID
 			}
-			return nil, cause, chooseRejectionErrorForScope(ctx, device, allCerts, cause)
+			rejection := chooseRejectionErrorForScope(ctx, device, allCerts, cause)
+			if !target.pinned() && target.Expected == nil {
+				rejection = firstContactRefusal(target.PinKey, rejection, walk.attempts)
+			}
+			return nil, cause, rejection
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2895,7 +2998,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// Nothing answered, so no certificate ever arrived and no identity was
 		// ever compared: this refusal is about reachability and says so, and it
 		// is deliberately NOT an errDeviceIdentityRefused (see
-		// errNoAuthenticatedEndpoint).
+		// errNoAuthenticatedEndpoint). With no stored certificate nothing was
+		// dialled at all, and pinnedRefusalError reports the missing login.
 		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
 		failure.pinKey = target.PinKey
 		tenant := ""
@@ -2911,8 +3015,31 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	// actually worked. The authenticated walk above is where reachability gets
 	// established; cacheFastPathReachable is what proves a plaintext one.
 	conn, err := plaintextConnectFn(ctx, target.Addr)
-	return conn, walk.lastMTLSErr, err
+	if err != nil || len(allCerts) == 0 {
+		return conn, walk.lastMTLSErr, err
+	}
+	// Signed in, no saved binding, and no TLS endpoint accepted us: use the
+	// plaintext setup port only when the device says it is not enrolled. An
+	// enrolled agent never serves it.
+	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
+	state, err := deviceProvisioning(probeCtx, conn)
+	cancel()
+	if err != nil {
+		conn.Close()
+		return nil, walk.lastMTLSErr, err
+	}
+	if state.GetNotProvisioned() == nil {
+		conn.Close()
+		return nil, walk.lastMTLSErr, errEnrolledWithoutTLS
+	}
+	conn.NoSavedIdentity = true
+	return conn, walk.lastMTLSErr, nil
 }
+
+// errEnrolledWithoutTLS is a device that answered on the unencrypted setup port
+// but does not report itself unenrolled. A real enrolled agent serves only
+// TLS, so nothing is sent to it.
+var errEnrolledWithoutTLS = errors.New("the device answered without TLS but does not report itself as unenrolled, so the CLI will not use that connection. Check that the device name or address is correct, then retry")
 
 // dialAgentLadder is dialAgentLadderWithCerts with the CLI's stored certs
 // in config order — the shape every non-fast-path caller wants.
@@ -3376,13 +3503,12 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 	if device == nil {
 		return nil, certs.ErrExpectedDeviceIdentity
 	}
-	// The advertised name selects an existing local binding only. It cannot
-	// supply or create an identity: spoofing it still requires that binding's
-	// certificate and private key, and unknown names are rejected.
+	// The advertised name selects an existing local binding only; it cannot
+	// supply an identity. With no binding this is a first contact, checked as
+	// the LAN dial checks one: the chain, a device identity, the legacy org,
+	// any saved key, and the sign-in's tenant. The device decides whether it
+	// accepts this user.
 	expected := expectedIdentityFor(device.HostKey())
-	if expected == nil {
-		return nil, fmt.Errorf("cannot authenticate Bluetooth device %q: %w; refresh its trusted Cloud inventory with 'wendy cloud discover' or use a saved binding from verified enrollment", device.DisplayName, certs.ErrExpectedDeviceIdentity)
-	}
 	keyPEM, err := cert.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
@@ -3391,10 +3517,25 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 		ChainPEM:         cert.PemCertificateChain,
 		ExpectedOrgID:    int32(cert.OrganizationID),
 		ExpectedIdentity: expected,
+		FirstContact:     expected == nil,
 		PinStore:         pins,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building BLE TLS config: %w", err)
+	}
+	if tenant := cert.TenantUUID(); expected == nil && tenant != "" {
+		// The LAN front doors refuse a device from another tenant after
+		// connecting (observeDeviceIdentity); Bluetooth has no such step.
+		verify := tlsCfg.VerifyConnection
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if err := verify(cs); err != nil {
+				return err
+			}
+			if id, ok, err := certs.IdentityFromCert(cs.PeerCertificates[0]); err != nil || !ok || id.TenantUUID != tenant {
+				return fmt.Errorf("Bluetooth device %q does not belong to your sign-in's tenant", device.DisplayName)
+			}
+			return nil
+		}
 	}
 	return tlsCfg, nil
 }
@@ -3418,6 +3559,7 @@ func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
 
 	client, err := attemptBLEConnect(device, cert, pins)
 	if err == nil {
+		noteBLEFirstContact(device)
 		return client, nil
 	}
 
@@ -3435,7 +3577,19 @@ func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
 	if alt == nil {
 		return nil, fmt.Errorf("device belongs to org %s; authenticate for that org with 'wendy auth login'", orgLabel("", mismatch.Got))
 	}
-	return attemptBLEConnect(device, *alt, pins)
+	client, err = attemptBLEConnect(device, *alt, pins)
+	if err == nil {
+		noteBLEFirstContact(device)
+	}
+	return client, err
+}
+
+// noteBLEFirstContact prints the first-contact notice for a Bluetooth device
+// with no saved identity.
+func noteBLEFirstContact(device *models.BluetoothDevice) {
+	if expectedIdentityFor(device.HostKey()) == nil {
+		noteNoSavedIdentityName(device.DisplayName, true)
+	}
 }
 
 // resolveOption configures resolveTarget behaviour.
@@ -3580,6 +3734,14 @@ func ExcludeProviders(keys ...string) resolveOption {
 // device, so the clock fix applies to info, run, deploy, ros2 bag, etc.
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 	sel, err := resolveTargetInner(ctx, opts...)
+	for range 2 {
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
+		if !retry {
+			err = confirmErr
+			break
+		}
+		sel, err = resolveTargetInner(ctx, opts...)
+	}
 	if err != nil {
 		device := resolveOptionsDevice(opts)
 		if device == "" {
@@ -3729,6 +3891,9 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 			}
 		}
 		conn, brokerHit := (*grpcclient.AgentConnection)(nil), false
+		// dialled is the endpoint conn actually reached: addr, unless the
+		// USB-direct fallback substituted another connection ("" then).
+		dialled := addr
 		if !cfg.disableSessionBroker {
 			conn, brokerHit = connectPinnedSessionKeyed(ctx, addr, pinKey)
 		}
@@ -3768,6 +3933,16 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 				} else if ctx.Err() != nil || cfg.readOnlyMonitoring || stopConnectionRecovery(err) || errors.Is(err, errProvisionedAgentUnauthorized) ||
 					(cfg.enrollmentTrustRecovery && errors.Is(err, errNoAuthenticatedEndpoint)) {
 					return nil, err
+				} else if usbConn, ok := usbDirectFallback(ctx, pinKey); ok {
+					// The same fallback connectToAgentDirect makes, at the same
+					// point: addr is unreachable but the same device (verified by
+					// hostname) is on USB — use it directly. It is not the address
+					// that was asked for, so it is never treated as the typed one.
+					//
+					// It is still the device that was asked for, and the check
+					// below judges it under pinKey (see keepAsRequestedDevice).
+					keepAsRequestedDevice(usbConn, pinKey)
+					conn, dialled = usbConn, ""
 				} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 					// Default device is unreachable — offer interactive recovery.
 					recovered, recErr := handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll, cfg.sameTargetFallback)
@@ -3788,16 +3963,18 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// Judged under the key it was dialled with — unless a local VM started
 		// or stopped meanwhile, which refuses it with nothing recorded or
 		// marked. The typed address goes with it, for a running VM's bare-key
-		// record (see typedVMBarePinKey).
+		// record (see typedVMBarePinKey). A connection the USB fallback
+		// substituted is judged under the same key, the requested device's,
+		// and was never dialled at the typed address.
 		if keyErr := recheckDialPinKey(addr, pinKey); keyErr != nil {
 			conn.Close()
 			return nil, keyErr
 		}
-		if pinErr := enforceDevicePinAt(pinKey, addr, conn); pinErr != nil {
+		if pinErr := enforceDevicePinAt(pinKey, dialled, conn); pinErr != nil {
 			conn.Close()
 			return nil, pinErr
 		}
-		markTypedVMConnection(conn, pinKey, addr)
+		markTypedVMConnection(conn, pinKey, dialled)
 		if !cfg.suppressUpdateCheck {
 			var updateErr error
 			conn, updateErr = checkAndOfferUpdateFn(ctx, conn)

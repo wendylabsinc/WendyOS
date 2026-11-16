@@ -129,7 +129,7 @@ export function JetsonBuyersTable() {
           </td>
         </tr>
         <tr>
-          <td>NVMe SSD to USB-C Adapter</td>
+          <td>NVMe SSD to USB-C Adapter (adapter install)</td>
           <td>
             <a
               href="https://www.amazon.com/s?k=nvme+ssd+to+usb+c+adapter"
@@ -160,6 +160,45 @@ export function JetsonBuyersTable() {
           <td>
             <a
               href="https://www.sparkfun.com/search/results?term=nvme+usb+adapter"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Buy
+            </a>
+          </td>
+        </tr>
+        <tr>
+          <td>Female-to-female jumper wires (USB install)</td>
+          <td>
+            <a
+              href="https://www.amazon.com/s?k=female+to+female+jumper+wires"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Buy
+            </a>
+          </td>
+          <td>
+            <a
+              href="https://www.seeedstudio.com/catalogsearch/result/?q=jumper+wire+female"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Buy
+            </a>
+          </td>
+          <td>
+            <a
+              href="https://www.alibaba.com/trade/search?SearchText=female+to+female+jumper+wire"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Buy
+            </a>
+          </td>
+          <td>
+            <a
+              href="https://www.sparkfun.com/search/results?term=jumper+wires+female"
               target="_blank"
               rel="noopener noreferrer"
             >

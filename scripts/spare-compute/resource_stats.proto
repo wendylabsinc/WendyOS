@@ -1,0 +1,44 @@
+syntax = "proto3";
+package wendy.agent.services.v1;
+// Wire-compatible projection of WendyContainerService.GetResourceStats.
+message GetResourceStatsRequest { string gpu_admission_app_id = 1; }
+message ResourceContainerStats {
+  string app_name = 1;
+  uint64 cpu_usage_nanos = 2;
+  int64 memory_bytes = 3;
+}
+message GpuStats {
+  uint32 index = 1;
+  string name = 2;
+  double util_percent = 3;
+  int64 mem_used_bytes = 4;
+  int64 mem_total_bytes = 5;
+}
+message HostStats {
+  uint64 cpu_total_jiffies = 1;
+  uint64 cpu_idle_jiffies = 2;
+  uint32 cpu_count = 3;
+  int64 mem_total_bytes = 4;
+  int64 mem_available_bytes = 5;
+  repeated GpuStats gpus = 6;
+  GpuAdmissionStats gpu_admission = 10;
+}
+message GetResourceStatsResponse {
+  HostStats host = 1;
+  repeated ResourceContainerStats containers = 2;
+}
+
+message GpuAdmissionStats {
+  bool valid = 1;
+  string unavailable_reason = 2;
+  repeated GpuAdmissionDevice devices = 3;
+}
+message GpuAdmissionDevice {
+  uint32 index = 1;
+  string uuid = 2;
+  bool foreign_process = 3;
+  bool supported = 4;
+  bool unified_memory = 5;
+  optional double utilization_percent = 6;
+  optional uint64 memory_free_bytes = 7;
+}

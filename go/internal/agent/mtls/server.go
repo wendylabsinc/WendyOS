@@ -30,9 +30,15 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
-	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(now, nb time.Time) (time.Time, time.Time) {
+	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, floorClock(notBeforeFloor), time.Now, false, false)
+}
+
+// floorClock is NewTLSConfig's clock policy: the device clock, with a leaf's
+// NotBefore check allowed to lean on notBeforeFloor.
+func floorClock(notBeforeFloor time.Time) func(time.Time, time.Time) (time.Time, time.Time) {
+	return func(now, nb time.Time) (time.Time, time.Time) {
 		return now, effectiveVerificationTime(now, notBeforeFloor, nb)
-	}, time.Now, false)
+	}
 }
 
 // NewTLSConfigWithTimePolicy selects an explicit local boot-clock policy.
@@ -41,7 +47,7 @@ func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Lo
 	cfg, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(wall, nb time.Time) (time.Time, time.Time) {
 		base := policy.BaseTime(wall)
 		return base, policy.LeafTimeAtBase(base, nb)
-	}, policy.WallTime, true)
+	}, policy.WallTime, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +70,23 @@ func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Lo
 	return cfg, nil
 }
 
-func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly bool) (*tls.Config, error) {
+// newTLSConfig builds the config behind every constructor in this file.
+//
+// logRemote makes the log line for a rejected client certificate name the
+// address that presented it. crypto/tls gives VerifyPeerCertificate no
+// connection, so each handshake is then served from its own copy of the
+// config, made once the ClientHello has revealed the connection, whose
+// verifier knows that address. The copy shares everything else with the
+// config: its ticket hooks still seal and open tickets with the config's own
+// keys, so a ticket issued on one connection resumes on the next.
+//
+// The exported constructors leave it off. Their callers add checks by wrapping
+// VerifyPeerCertificate on the config they get back, and a handshake served
+// from the copy would skip that wrapper. NewServer turns it on: its callers
+// never hold the config, so none can wrap it. NewServerWithTimePolicy does
+// not, because it is served only on the in-process mesh pipe, whose
+// connections have no address.
+func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly, logRemote bool) (*tls.Config, error) {
 	if chainPEM == "" {
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
@@ -114,7 +136,24 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 		MinVersion: tls.VersionTLS12,
 	}
 	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, nil, leafOnly)
-	cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error { _, err := verify(raw, now()); return err }
+	verifyFrom := func(remote string) func([][]byte, [][]*x509.Certificate) error {
+		return func(raw [][]byte, _ [][]*x509.Certificate) error { _, err := verify(raw, now(), remote); return err }
+	}
+	cfg.VerifyPeerCertificate = verifyFrom("")
+	if logRemote && logger != nil {
+		cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			remote := handshakeRemote(hello)
+			if remote == "" {
+				return nil, nil // nothing to add; crypto/tls serves from cfg itself
+			}
+			// Copied per handshake rather than once, so the copy carries
+			// whatever was set on cfg after this function returned.
+			perConn := cfg.Clone()
+			perConn.GetConfigForClient = nil
+			perConn.VerifyPeerCertificate = verifyFrom(remote)
+			return perConn, nil
+		}
+	}
 	cfg.Time = func() time.Time { base, _ := clockTimes(now(), time.Time{}); return base }
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
@@ -152,18 +191,33 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 	return cfg, nil
 }
 
+// handshakeRemote returns the address the handshake's client connected from,
+// or "" when there is no connection to ask (QUIC handshakes have none).
+func handshakeRemote(hello *tls.ClientHelloInfo) string {
+	if hello.Conn == nil {
+		return ""
+	}
+	addr := hello.Conn.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
+
 // NewServer creates a gRPC server with mTLS credentials.
 // The mTLS interceptors are always applied — they cannot be omitted via extraOpts.
 // This ensures no handler can accidentally receive an unauthenticated call regardless
 // of how the caller configures the server. Device callers are restricted to the
 // exact RPC allowlist; unknown roles are refused. Callers may append further
 // chained interceptors via extraOpts; those run after authentication and authorization.
-// logger may be nil; when provided, rejected client certificates are logged at WARN level.
+// logger may be nil; when provided, rejected client certificates are logged at WARN level
+// together with the address that presented them.
 // notBeforeFloor is forwarded to NewTLSConfig; see its documentation for details.
 // expected and orgMode are forwarded to the mandatory mTLS interceptors, which
 // enforce tenant-equality between the connecting client cert and this device.
 func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
-	tlsConfig, err := NewTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor)
+	// NewTLSConfig's config, with logRemote on.
+	tlsConfig, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, floorClock(notBeforeFloor), time.Now, false, true)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}

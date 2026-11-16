@@ -175,6 +175,13 @@ The rollback regression uses fixed pre-operator main commit
 restart and unenrolled reset cleanup, then verifies that WN5 can clean the
 remaining policy.
 
+The required **Mesh operator policy and rollback** CI job builds that revision
+and `ceef5cfa15f6739b04559a365a617e1dd287ae47`, main immediately before WN5,
+without changing either checkout. It runs both rollback versions through
+`.github/scripts/test-operator-policy.sh` in separate mount, network and PID
+namespaces on a disposable Linux VM. The job also requires operator policy
+migration/withdrawal and DNS cleanup to pass, and rejects skipped cases.
+
 These tests qualify kernel-state cleanup only. Full mesh-service rollback to a
 pre-operator agent remains unqualified; read the
 [version compatibility limits](../../cli/assets/docs/development/local-mesh-radio.md#version-compatibility)

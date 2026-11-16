@@ -3511,7 +3511,7 @@ func (p *registryProxy) Port() int {
 	return p.listener.Addr().(*net.TCPAddr).Port
 }
 
-// Close stops the proxy and waits for the serve loop to exit.
+// Close stops the proxy and waits for its listener and active relays to exit.
 func (p *registryProxy) Close() {
 	p.cancel()
 	p.listener.Close()
@@ -3534,17 +3534,27 @@ func (p *registryProxy) LastDialError() error {
 
 func (p *registryProxy) serve(ctx context.Context) {
 	defer close(p.done)
+	var relays sync.WaitGroup
+	defer relays.Wait()
 	for {
 		conn, err := p.listener.Accept()
 		if err != nil {
 			return
 		}
-		go p.forward(ctx, conn)
+		relays.Add(1)
+		go func() {
+			defer relays.Done()
+			p.forward(ctx, conn)
+		}()
 	}
 }
 
 func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
 	defer client.Close()
+	// Cancellation must interrupt established transfers as well as dialing:
+	// closing the listening socket alone leaves both io.Copy calls running.
+	stopClient := context.AfterFunc(ctx, func() { client.Close() })
+	defer stopClient()
 
 	// Test-only fault injection: with probability WENDY_REGISTRY_CHAOS, drop the
 	// connection before forwarding to simulate the device-registry tunnel
@@ -3564,10 +3574,15 @@ func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
 	// healthy push as "registry unavailable".
 	p.recordDialErr(nil)
 	defer remote.Close()
+	stopRemote := context.AfterFunc(ctx, func() { remote.Close() })
+	defer stopRemote()
 
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(remote, client); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(client, remote); done <- struct{}{} }()
+	<-done
+	client.Close()
+	remote.Close()
 	<-done
 }
 
