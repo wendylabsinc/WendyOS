@@ -144,7 +144,8 @@ struct `'wendy project optimize'` {
 
     /// Preservation checks detect newly created hidden files, changed bytes,
     /// changed permissions and retargeted symlinks. A deliberately altered finding
-    /// also differs from the expected report. These controls exercise the same
+    /// also differs from the expected report. Null, missing and scalar values
+    /// cannot replace available fix objects. These controls exercise the same
     /// observations used above without changing the CLI implementation.
     @Test
     func `rejects unwanted writes and altered findings in its observations`() async throws {
@@ -177,6 +178,26 @@ struct `'wendy project optimize'` {
                 try await OptimizeFixture.report(cli, altered).findings
                     != OptimizeFixture.initialFindings
             )
+            var object = try FirstAppFixture.object(result.stdout)
+            let original = try #require(object["findings"] as? [[String: Any]])
+            try #require(original.count == OptimizeFixture.initialFindings.count)
+            let replacements: [Any?] = [nil, NSNull(), "not a fix", 0, false]
+            for (index, expected) in OptimizeFixture.initialFindings.enumerated()
+            where expected.fixable {
+                try #require(original[index]["fix"] is [String: Any])
+                for replacement in replacements {
+                    var findings = original
+                    findings[index]["fix"] = replacement
+                    object["findings"] = findings
+                    let altered = String(
+                        decoding: try JSONSerialization.data(withJSONObject: object),
+                        as: UTF8.self
+                    )
+                    let report = try await OptimizeFixture.report(cli, altered)
+                    #expect(report.findings != OptimizeFixture.initialFindings)
+                    #expect(!report.findings[index].fixable)
+                }
+            }
             #expect(try await FirstAppFixture.snapshot(cli) == before)
         }
     }
@@ -425,7 +446,7 @@ private enum OptimizeFixture {
                 title: try #require(f["title"] as? String),
                 file: relative,
                 line: location?["line"] as? Int,
-                fixable: f["fix"] != nil
+                fixable: (f["fix"] as? [String: Any]) != nil
             )
         }
         return Report(targets: targets, findings: findings)
