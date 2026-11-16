@@ -71,27 +71,6 @@ until it passes. Check Companion's v2 support for the features
 your operators use, including cameras, app controls, logs, and notifications.
 App Store availability alone does not establish v1/v2 feature parity.
 
-## Agent updates end v1 Cloud access
-
-A device enrolled with Cloud v1 is reachable through Wendy Cloud only while it
-runs a Wendy Agent older than `2026.10.22-080351`. Agents from that release on
-connect to Wendy Cloud only for a device enrolled with Cloud v2. Installing one
-on a v1 device takes it off Wendy Cloud until it is enrolled again, and
-enrollment needs a direct connection to the device (local network or USB). A
-device you can reach only through Wendy Cloud would be out of reach.
-
-The CLI warns before it does this. `wendy device update`,
-`wendy cloud device update`, `wendy os update` and `wendy device push-agent`
-explain the consequence and ask, defaulting to No. Without a terminal they stop
-before uploading anything, unless you pass `--allow-cloud-v1-disconnect`. The
-update offer shown when a command connects, and the `u` key in `wendy discover`
-and `wendy cloud discover`, leave such a device alone. The native Mac agent is
-not affected. See
-[`wendy device update`](/docs/advanced/clients/wendy-cli/commands/device/update#devices-enrolled-with-cloud-v1).
-
-Keep v1 devices on their current agent until you are ready to move them, and
-update only when you can reach the device directly.
-
 ## Validate a spare device
 
 1. Sign into v2 with an owner or admin account and enroll a spare device using
@@ -114,21 +93,6 @@ handled for your deployment; this guide does not provide an automatic transfer.
 
 Use the [device unenrollment guide](/docs/device/unenrollment) for your device's
 identity and installed versions, then enroll it in the intended v2 organization.
-From a direct connection to the device, in this order:
-
-```sh
-wendy device update --device <device-address>
-wendy device unenroll --device <device-address>
-wendy cloud login
-wendy device enroll --device <device-address>
-```
-
-The update asks you to confirm that the device leaves Wendy Cloud; from then
-until enrollment finishes it is reachable only directly. `wendy device unenroll`
-uses your legacy session, so restore it with `wendy cloud login --legacy` first
-if it has expired. When `wendy device enroll` offers several sessions, choose
-the v2 organization.
-
 Unenrollment changes credentials and can remove remote access. Flashing is not
 a substitute for revoking the previous Cloud identity.
 
@@ -143,7 +107,6 @@ does not restore a device's old enrollment.
 | Symptom | What to check |
 | --- | --- |
 | The fleet is empty after sign-in | Check the active context, organization, and `discover --all`. V1 devices do not appear automatically in v2. |
-| A v1 device went offline in Cloud after an agent update | Wendy Agent `2026.10.22-080351` and newer connect only v2 devices. Connect to the device directly and enroll it again, as in [Move an existing device](#move-an-existing-device). |
 | A numeric device ID no longer resolves | Select the v2 device by its name or UUID from discovery. |
 | The service catalog has no entry for a port | The Cloud service, CLI, or Agent predates arbitrary v2 ports. Older v2 versions forward only TCP ports 22 and 50052. |
 | UDP forwarding is refused | Older v2 versions do not forward UDP. Update the Cloud service, CLI, and Agent, or use a legacy session. |

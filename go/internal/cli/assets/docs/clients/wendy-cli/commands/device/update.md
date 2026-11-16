@@ -6,49 +6,6 @@ On the auto-download path, if the device already runs the resolved release versi
 
 GitHub release lookups use the `GITHUB_TOKEN` environment variable for authentication when it is present, and fall back to unauthenticated requests otherwise.
 
-## Devices enrolled with Cloud v1
-
-A device enrolled with Cloud v1 (the older Wendy Cloud) stays reachable through Wendy Cloud only while it runs an agent older than `2026.10.22-080351`. Agents from that release on connect to Wendy Cloud only for a device enrolled with Cloud v2. Updating the agent on a Cloud v1 device therefore takes it off Wendy Cloud until it is enrolled again, and enrolling needs a direct connection to the device (local network or USB). `wendy cloud device update` performs the update over the very connection that stops working.
-
-Before uploading an agent to such a device, the command says so and asks, defaulting to No:
-
-```
-⚠ This update will disconnect thor from Wendy Cloud.
-
-  It is enrolled with the older Wendy Cloud (Cloud v1). The agent it runs now
-  (2026.09.28-101500) keeps it connected. The agent being installed
-  (2026.11.13-000000) connects to Wendy Cloud only after the device has been
-  enrolled again. Until then you can reach thor only directly, over the local
-  network or USB.
-
-  To put it back on Wendy Cloud, connect to it directly (local network or USB;
-  this cannot be done through Wendy Cloud) and enroll it again:
-
-    wendy device unenroll --device <device-address>
-    wendy cloud login
-    wendy device enroll --device <device-address>
-
-  'wendy device unenroll' uses your Cloud v1 sign-in; restore an expired one
-  with 'wendy cloud login --legacy'.
-  Moving a device to Cloud v2: https://docs.wendy.dev/latest/cloud-migration
-
-Update the agent anyway?   Yes  [No]  (y/n)
-```
-
-Through Wendy Cloud, the warning adds that the current connection is the one that stops working, so the command cannot confirm the update afterwards.
-
-Without a terminal, including `--json` and the MCP `device_update_agent` tool, nothing is asked. The command exits non-zero before it uploads anything and names the flag that agrees to the disconnect:
-
-```sh
-wendy device update --device <device> --allow-cloud-v1-disconnect
-```
-
-`--yes` does not agree to it; that flag only answers the OS update prompt. Declining at the prompt changes nothing on the device and exits 0.
-
-The question is not asked when there is nothing to lose or the answer cannot be known: the device is not enrolled, is enrolled with Cloud v2, already runs an agent from `2026.10.22-080351` or later, is a Mac (the native Mac agent keeps its Cloud v1 connection), or does not answer the enrollment query. A local `dev` agent on the device counts as current, except when the command reaches the device through Wendy Cloud, which shows it still has that connection; a branch build (`<date>-dev`) is judged by its date. A `--binary` upload has no version and counts as a current build.
-
-The same check guards the agent step of [`wendy os update`](../os/update.md) and [`wendy device push-agent`](./push-agent.md), both of which accept `--allow-cloud-v1-disconnect`. Two places that cannot ask leave the device alone and point here instead: the "Agent is behind the CLI" offer shown when a command connects, and the `u` key in `wendy discover` and `wendy cloud discover`. See [Moving to Cloud v2](/docs/cloud-migration) for the move itself.
-
 ## Verification
 
 A successful reconnect only proves the device is reachable — a silent no-op, a rollback, or an arch-mismatched binary that never starts would answer just as well. So after **every** agent upload, confirmed or not, `wendy device update` queries the restarted agent and checks what the device actually runs before reporting success.
