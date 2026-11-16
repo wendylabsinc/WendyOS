@@ -67,13 +67,13 @@ func classifyLANCarrier(name, sysfs string, ethernet, wifi bool, isManaged func(
 	base := filepath.Join(sysfs, name)
 	if _, err := os.Stat(filepath.Join(base, "wireless")); err == nil {
 		if wifi && isManaged(name) {
-			return WiFiLinkCost, "infrastructure-wifi", true
+			return WiFiLinkCost, CarrierInfrastructureWiFi, true
 		}
 		return 0, "", false
 	}
 	if _, err := os.Stat(filepath.Join(base, "phy80211")); err == nil {
 		if wifi && isManaged(name) {
-			return WiFiLinkCost, "infrastructure-wifi", true
+			return WiFiLinkCost, CarrierInfrastructureWiFi, true
 		}
 		return 0, "", false
 	}
@@ -89,7 +89,7 @@ func classifyLANCarrier(name, sysfs string, ethernet, wifi bool, isManaged func(
 	if _, err := os.Stat(filepath.Join(base, "device")); err != nil {
 		return 0, "", false
 	}
-	return EthernetLinkCost, "ethernet", true
+	return EthernetLinkCost, CarrierEthernet, true
 }
 
 func managedWiFi(name string) bool {
