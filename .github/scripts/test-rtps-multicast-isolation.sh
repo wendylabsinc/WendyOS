@@ -15,11 +15,14 @@ if [[ ${1:-} == --namespace ]]; then
     "$(realpath "$0")" --inside "$(realpath "$2")"
 fi
 if [[ ${1:-} == --inside ]]; then
-  [[ $EUID == 0 && $# == 2 ]] || exit 2
+  [[ $# == 2 ]] || exit 2
   for kind in mnt net pid; do
     variable="WENDY_RTPS_PARENT_$kind"
-    [[ -n ${!variable:-} && $(readlink "/proc/self/ns/$kind") != "${!variable}" ]] || exit 2
+    [[ -n ${!variable:-} && $(readlink "/proc/self/ns/$kind") != "${!variable}" ]] || {
+      echo "RTPS fixture requires a distinct $kind namespace." >&2; exit 2;
+    }
   done
+  [[ $EUID == 0 ]] || exit 2
   mount --make-rprivate /
   mount -t tmpfs tmpfs /run
   ip link set lo up multicast on

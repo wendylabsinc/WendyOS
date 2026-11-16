@@ -273,14 +273,15 @@ elif name == "timeout": sys.exit(subprocess.call(args[2:]))
         with tempfile.TemporaryDirectory() as tmp:
             runner = VM.Runner(Path(tmp), Path(tmp), "a" * 32)
             runner.deadline = time.monotonic() + 1
-            # The real command exits immediately. The guardian's mandatory group
-            # drain also consumes the shared budget and cannot reset it.
+            # A real command receives the remaining shared budget. Expire that
+            # budget explicitly; an empty process group now drains immediately.
             with mock.patch.object(VM.GUARDIAN, "run", wraps=VM.GUARDIAN.run) as run:
                 code = runner.command([sys.executable, "-c", "print('owned command completed')"], timeout=120)
                 self.assertEqual(code, 0)
                 self.assertGreater(run.call_args.args[1], 0)
                 self.assertLessEqual(run.call_args.args[1], 1)
             self.assertIn("owned command completed", (Path(tmp) / "command-01.log").read_text())
+            runner.deadline = time.monotonic() - 1
             with mock.patch.object(VM.GUARDIAN, "run") as run:
                 with self.assertRaisesRegex(ValueError, "shared wall deadline"):
                     runner.command([sys.executable, "-c", "raise SystemExit(0)"])

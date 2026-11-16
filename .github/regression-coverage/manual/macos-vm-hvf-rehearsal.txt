@@ -34,7 +34,7 @@ Source does not infer physical ownership from a model string.
 
 3. Require12GiB free in /tmp and an uninterrupted35-minute reserved window.
    Inspect the exact published guest pin in test-windows-vm-boot.py (vm-arm64
-   0.20.2, size582023203, SHA256f9f3e3ac18936230d1f72a38a097ba3bae5f7e37ccaba663b20dbfcc53849ea3).
+   0.21.0, size 605715600, SHA256 f4237e58fbded13f661d9c053680ef3622fc0525a7f9fb76df13bb9354e3d762).
    The wrapper validates bytes before boot. The guest is an actual released
    WendyOS image; only the nonce HTTP test app is locally built. No credential
    or host directory is shared into the guest. Run:

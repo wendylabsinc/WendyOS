@@ -103,7 +103,7 @@ def generate(inventory,output):
     prefix=["env","WENDY_CONFIG_DIR="+str(config),"WENDY_SECRET_STORE=file","WENDY_ANALYTICS=false","WENDY_NO_UPDATE_CHECK=1",records["cli_binary"]["path"]]
     selection=["--device-type",board["device"],"--version",version]
     target=["--device",board["management_address"]]
-    commands={"plan":[*prefix,"install","plan",*selection],"install":[*prefix,"install",*selection,"--binary",records["agent_binary"]["path"],"--device-name",board["device_name"],"--pre-enroll=false","--wifi","ssid="+wifi["ssid"]+",security=open"],
+    commands={"install":[*prefix,"install",*selection,"--binary",records["agent_binary"]["path"],"--device-name",board["device_name"],"--pre-enroll=false","--wifi","ssid="+wifi["ssid"]+",security=open"],
               "verify":[*prefix,"install","verify","--address",board["management_address"],"--expected-device-type",board["device"],"--expected-os-version",version,"--timeout","30s"],"info":[*prefix,"--json","device","info",*target],"wifi_status":[*prefix,"--json","device","wifi","status",*target]}
     (out/"commands.json").write_text(json.dumps(commands,indent=2)+"\n")
     observer=Path(__file__).with_name("dragonwing-reset-marker.py")

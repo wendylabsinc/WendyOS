@@ -29,13 +29,21 @@ def main():
     mutation.write_text(text.replace(boundary, 'if false {'))
     overlay = output / 'overlay.json'
     overlay.write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
+    unknown_boundary = 'if len(cert.UnknownExtKeyUsage) != 0 {'
+    if text.count(unknown_boundary) != 1:
+        raise RuntimeError('unknown EKU policy boundary changed')
+    unknown_mutation = output / 'unchecked-eku.go'
+    unknown_mutation.write_text(text.replace(unknown_boundary, 'if false {'))
+    unknown_overlay = output / 'eku-overlay.json'
+    unknown_overlay.write_text(json.dumps({'Replace': {str(source): str(unknown_mutation)}}))
     results = {}
-    for mode in ('normal', 'unchecked-issuer'):
+    for mode in ('normal', 'unchecked-issuer', 'unchecked-eku'):
         command = ['go', 'test', '-race', '-v', '-count=1', '-timeout=30s']
         selection = '^TestDirectMLDSAPolicyOverTLS$'
         if mode != 'normal':
-            command += ['-overlay', str(overlay)]
-            selection += '/(client|server)/issuer-critical$'
+            command += ['-overlay', str(overlay if mode == 'unchecked-issuer' else unknown_overlay)]
+            policy = 'issuer-critical' if mode == 'unchecked-issuer' else 'leaf-unknown-eku'
+            selection += '/(client|server)/' + policy + '$'
         command += ['./go/internal/agent/mtls', '-run', selection]
         with (output / (mode + '.log')).open('w') as log:
             status = OWNER.run(command, 180, cwd=ROOT, env=dict(os.environ), stdout=log)
@@ -47,12 +55,12 @@ def main():
             if status or log.count('--- PASS: TestDirectMLDSAPolicyOverTLS/') != 8 or log.count('MLDSA_POLICY_REJECTED ') != 6:
                 raise RuntimeError('full TLS policy matrix incomplete')
         elif status != 1 or log.count('MLDSA_TRANSPORT_POLICY malformed chain admitted: client=<nil> server=<nil> delivered=1 policy=<nil>') != 2 or any(
-            '--- FAIL: TestDirectMLDSAPolicyOverTLS/' + peer + '/issuer-critical ' not in log
+            '--- FAIL: TestDirectMLDSAPolicyOverTLS/' + peer + '/' + policy + ' ' not in log
             for peer in ('client', 'server')
         ):
-            raise RuntimeError('permissive issuer control did not fail both transport directions')
+            raise RuntimeError(mode + ' control did not fail both transport directions')
         results[mode] = {'exit_code': status, 'expected': True}
-    sources = [source, ROOT / 'go/internal/agent/mtls/server.go',
+    sources = [source, ROOT / 'go/internal/shared/certs/mldsa.go', ROOT / 'go/internal/agent/mtls/server.go',
                ROOT / 'go/internal/agent/mtls/peer_chain_test.go',
                ROOT / 'go/internal/agent/mtls/peer_chain_transport_test.go']
     (output / 'evidence.json').write_text(json.dumps({

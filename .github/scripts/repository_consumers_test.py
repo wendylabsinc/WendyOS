@@ -2,6 +2,9 @@
 """Offline admission/ownership checks, not external repository acceptance."""
 import importlib.util
 import json
+import os
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 import subprocess
 import tempfile
@@ -28,6 +31,40 @@ def packages():
 
 
 class RepositoryAdmission(unittest.TestCase):
+    def test_upload_commands_execute_before_any_consumer_dependency(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for fmt in ('deb', 'rpm'):
+                    (root / fmt).mkdir()
+                    for index in range(4):
+                        (root / fmt / f'candidate{index}.{fmt}').write_bytes(b'candidate bytes')
+                cli = root / 'gcloud'
+                cli.write_text('#!' + sys.executable + '\n'
+                    'import os,sys\n'
+                    'from pathlib import Path\n'
+                    'a=sys.argv[1:]\n'
+                    'assert a[:4] in (["artifacts","apt","upload","wendy-apt"],["artifacts","yum","upload","wendy-yum"]),a\n'
+                    'assert "--location=us-central1" in a and "--project=fixture-project" in a and "--quiet" in a\n'
+                    'source=Path(next(x.split("=",1)[1] for x in a if x.startswith("--source=")))\n'
+                    'assert source.read_bytes()==b"candidate bytes"\n'
+                    'sys.exit(17 if os.environ["FIXTURE_UPLOAD_FAIL"]=="1" else 0)\n')
+                cli.chmod(0o755)
+                args = SimpleNamespace(project='fixture-project', packages=root,
+                                       evidence=root / 'evidence', receipts=root / 'receipts.json')
+                with patch.object(HOST, 'hosted_guard'), \
+                        patch.object(HOST.subprocess, 'check_output', return_value='a' * 40), \
+                        patch.dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                                   GITHUB_SHA='a' * 40, FIXTURE_UPLOAD_FAIL='1' if fail else '0'):
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, 'rejected or interrupted'):
+                            HOST.upload(args)
+                    else:
+                        HOST.upload(args)
+                receipts = json.loads(args.receipts.read_text())
+                self.assertEqual(len(receipts), 1 if fail else 8)
+                self.assertEqual({r['exit_code'] for r in receipts}, {17 if fail else 0})
+
     def test_native_inventory_requires_all_pairs_and_exact_release_version(self):
         values = packages(); HOST.validate_packages(values, '1.2.3')
         for bad in (values[:-1], values[:-1] + [values[0]],

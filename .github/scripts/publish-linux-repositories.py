@@ -113,14 +113,14 @@ def validate_wif(path):
     return data
 
 
-def hosted_guard():
+def hosted_guard(*, consumer=True):
     require(sys.platform == 'linux' and platform.machine() == 'x86_64', 'requires native hosted Linux amd64')
     require(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted',
             'refusing publication outside the authorized hosted release job')
     require(os.environ.get('GITHUB_EVENT_NAME') in ('push', 'workflow_dispatch') and
             os.environ.get('WENDY_STABLE_RELEASE') == 'true', 'requires existing stable-release publication gate')
     require(re.fullmatch(r'[0-9a-f]{40}', os.environ.get('GITHUB_SHA', '')), 'missing immutable source revision')
-    for tool in ('docker', 'gcloud', 'git'):
+    for tool in (('docker', 'git') if consumer else ('gcloud', 'git')):
         require(shutil.which(tool), 'missing release tool ' + tool)
 
 
@@ -135,6 +135,42 @@ def drain_container(name, owner, env):
     listing = subprocess.run(['docker', 'ps', '--all', '--quiet', '--no-trunc', '--filter', 'id=' + container],
                              env=env, capture_output=True, text=True, timeout=15)
     require(listing.returncode == 0 and not listing.stdout.strip(), 'owned container remains')
+
+
+
+def upload(args):
+    """Publish before Docker pulls or consumer dependencies can fail."""
+    hosted_guard(consumer=False)
+    require(re.fullmatch(r'[a-z][a-z0-9-]{4,61}[a-z0-9]', args.project), 'invalid project ID')
+    source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=HERE, text=True, timeout=10).strip()
+    require(source == os.environ['GITHUB_SHA'], 'checked-out source differs from published release')
+    packages_dir = args.packages.resolve(strict=True)
+    files = []
+    for fmt in ('deb', 'rpm'):
+        candidates = sorted((packages_dir / fmt).glob('*.' + fmt))
+        require(len(candidates) == 4, 'require four packages per format before publication')
+        for path in candidates:
+            require(path.is_file() and not path.is_symlink() and 0 < path.stat().st_size < 1024 ** 3,
+                    'invalid candidate package')
+            files.append((fmt, path, sha(path)))
+    output = args.evidence.resolve()
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    require(not args.receipts.exists(), 'refusing to overwrite upload receipts')
+    receipts = []
+    for fmt, path, checksum in files:
+        require(sha(path) == checksum, 'candidate changed before upload')
+        repository = 'apt' if fmt == 'deb' else 'yum'
+        command = ['gcloud', 'artifacts', repository, 'upload', 'wendy-' + repository,
+                   '--location=us-central1', '--project=' + args.project, '--source=' + str(path), '--quiet']
+        log = output / ('upload-' + path.name + '.log')
+        with log.open('x') as stream:
+            code = OWNED.run(command, 180, stdout=stream)
+        receipts.append(dict(format=fmt, filename=path.name, sha256=checksum, exit_code=code,
+                             log_sha256=sha(log), repository='wendy-' + repository))
+        args.receipts.write_text(json.dumps(receipts, indent=2) + '\n')
+        require(code == 0, 'Artifact Registry rejected or interrupted candidate upload')
+        require(sha(path) == checksum, 'candidate changed during upload')
+    print('RELEASE_REPOSITORY_UPLOADS_VERIFIED')
 
 
 def run(args):
@@ -207,24 +243,9 @@ def run(args):
                     source=source, packages=packages)
         (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
         report['plan_sha256'] = sha(output / 'plan.json')
-        for p in packages:
-            path = packages_dir / p['format'] / p['filename']
-            require(path.is_file() and not path.is_symlink() and sha(path) == p['sha256'], 'candidate changed before upload')
-            fmt = 'apt' if p['format'] == 'deb' else 'yum'
-            command = ['gcloud', 'artifacts', fmt, 'upload', 'wendy-' + fmt, '--location=us-central1',
-                       '--project=' + args.project, '--source=' + str(path), '--quiet']
-            log = output / ('upload-' + p['filename'] + '.log')
-            with log.open('w') as stream:
-                remaining = min(180, deadline - time.monotonic())
-                require(remaining > 0, 'release validation exceeded its 35-minute deadline')
-                code = OWNED.run(command, remaining, env=env, stdout=stream)
-            receipt = dict(format=p['format'], filename=p['filename'], sha256=p['sha256'],
-                           exit_code=code, log_sha256=sha(log), repository='wendy-' + fmt)
-            report['uploads'].append(receipt)
-            (output / 'upload-receipts.json').write_text(json.dumps(report['uploads'], indent=2) + '\n')
-            require(code == 0 and not interrupted, 'Artifact Registry rejected or interrupted candidate upload')
-            require(sha(path) == p['sha256'], 'candidate changed during upload')
+        report['uploads'] = json.loads(args.receipts.read_text())
         validate_uploads(packages, report['uploads'])
+        (output / 'upload-receipts.json').write_text(json.dumps(report['uploads'], indent=2) + '\n')
         # All dependency installation has finished. Only now expose the existing
         # action's WIF credential; it never enters container layers or evidence.
         copied = work / 'credential/wif.json'
@@ -273,8 +294,11 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--phase', choices=('upload', 'consume'), required=True)
+    parser.add_argument('--receipts', type=Path, required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--packages', type=Path, required=True)
     parser.add_argument('--evidence', type=Path, required=True)
-    run(parser.parse_args())
+    args = parser.parse_args()
+    (upload if args.phase == "upload" else run)(args)

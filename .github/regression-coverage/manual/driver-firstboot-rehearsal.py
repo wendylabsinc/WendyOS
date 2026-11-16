@@ -127,7 +127,7 @@ def generate(inventory, output):
     (out/"cli-config").mkdir(mode=0o700)
     prefix = cli_prefix(out, cli)
     selection = ["--device-type",board["device"],"--storage",board["storage"],"--version",version]
-    install = [*prefix,"install",*selection,"--device-name",board["device_name"],"--binary",records["agent_binary"]["path"],"--pre-enroll=false","--no-wifi"]
+    install = [*prefix,"install","--rootfs-only=false",*selection,"--device-name",board["device_name"],"--binary",records["agent_binary"]["path"],"--pre-enroll=false","--no-wifi"]
     commands = {"plan":[*prefix,"install","plan",*selection,"--carrier","developer-kit"], "install_with_driver":install+["--driver","wendyos-hello"], "fresh_registry_baseline":install}
     (out/"commands.json").write_text(json.dumps(commands,indent=2)+"\n")
     guide = Path(__file__).with_suffix(".txt").read_text()

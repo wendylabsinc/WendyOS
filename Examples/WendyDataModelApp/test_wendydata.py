@@ -216,6 +216,9 @@ class _FakeNode:
             self.ready -= 1
         return item
 
+    def read_ready(self):
+        return self.read()
+
     def readable(self):
         return self.ready > 0
 

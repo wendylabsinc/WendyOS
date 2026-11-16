@@ -71,4 +71,4 @@ done
 ctr --address "$work/containerd.sock" version
 # PID1 exit kills the private daemon, runc shims and every remaining ROS task.
 # The parent requires a waited namespace exit before deleting backing files.
-exec "$binary" -test.run '^TestFoxgloveGeneratedAppDeploysAndCarriesROS$' -test.count=1 -test.v -test.timeout=0
+exec "$binary" -test.run '^TestFoxglove(GeneratedAppDeploysAndCarriesROS|RuntimeMessageAdmission)$' -test.count=1 -test.v -test.timeout=0

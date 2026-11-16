@@ -68,6 +68,7 @@ class DragonwingResetTests(unittest.TestCase):
                     self.assertEqual(record["sha256"],sha(Path(record["path"]).read_bytes()))
                 self.assertEqual({source["sha256"] for source in evidence["builder_sources"]},{sha(SOURCE)})
                 commands=json.loads((root/"out/commands.json").read_text());install=commands["install"]
+                self.assertNotIn("plan",commands)
                 self.assertIn("--pre-enroll=false",install)
                 self.assertEqual(install[install.index("--device-type")+1],device)
                 self.assertEqual(install[install.index("--binary")+1],str(Path(data["agent_binary"]).resolve()))

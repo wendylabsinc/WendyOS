@@ -68,9 +68,11 @@ Target, provenance and authorization
      python3 dragonwing-reset-rehearsal.py inventory.json NEW_PRIVATE_OUTPUT
    Compare the generated inventory/source/artifact hashes before every physical
    phase. The host commands use a new private cli-config directory and file secret
-   store; retain those prefixes. Run the plan command and compare the exact board,
-   immutable version, qcomflash URL and full digest. The actual install resolves
-   the catalog again: any changed artifact/catalog requires a new reviewed plan.
+   store; retain those prefixes. Compare the generated evidence with the reviewed
+   release manifest: exact board, immutable version, qcomflash URL and full digest.
+   The CLI's install plan command does not support Dragonwing. The interactive
+   install resolves the catalog again; compare its displayed selection with that
+   evidence before consenting. Any changed artifact/catalog requires a new review.
    Pin the candidate CLI and Linux arm64 Agent bytes/source commits. The install
    passes --binary and --pre-enroll=false; it must not fetch a replacement Agent.
    No --force, --storage, --drive, --rootfs-only, --no-bmap or

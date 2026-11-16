@@ -179,6 +179,8 @@ def validate_identity(record,info,port,nonce):
 def validate_restart(state,identity,disk,first_state,first_identity,first_disk):
     if not state.get('startedAt') or state['startedAt']==first_state.get('startedAt'):
         raise ValueError('restart reused the previous VM run record')
+    if identity['version']!=first_identity['version']:
+        raise ValueError('same-disk restart changed the pinned guest Agent version')
     if identity['hostname']!=first_identity['hostname'] or disk!=first_disk:
         raise ValueError('same-disk restart changed hostname or owned disk identity')
     if identity['bootId']==first_identity['bootId']:
@@ -268,6 +270,11 @@ def execute(output):
         owner.run('build-lookup',[go,'build','-o',str(lookup),'./go/internal/testfixture/windowsqemulookup'],120,build_env)
         identity_probe=output/'vm-identity.exe'
         owner.run('build-identity',[go,'build','-o',str(identity_probe),'./go/internal/testfixture/windowsvmidentity'],120,build_env)
+        freeze=output/'vm-freeze.exe'
+        owner.run('test-freeze',[go,'test','./go/internal/testfixture/windowsvmfreeze'],120,build_env)
+        owner.run('build-freeze',[go,'build','-o',str(freeze),'./go/internal/testfixture/windowsvmfreeze'],120,build_env)
+        evidence['freeze_sha256']=digest(freeze)
+        evidence['freeze_source_sha256']=digest(ROOT/'go/internal/testfixture/windowsvmfreeze/main.go')
         evidence['identity_probe_sha256']=digest(identity_probe)
         evidence['identity_probe_source_sha256']=digest(ROOT/'go/internal/testfixture/windowsvmidentity/main.go')
         evidence['lookup_sha256']=digest(lookup)
@@ -283,6 +290,7 @@ def execute(output):
         port=free_port_span()
         evidence.update(name=name,port=port)
         owner.run('create',[cli,'vm','create',name,'--image',output/'guest.wic.zst','--disk','16'],300,env)
+        evidence['guest_updater_mask']=json.loads(owner.run('freeze-guest',[freeze,env['WENDY_CONFIG_DIR'],name],30,env))
         # Run the unchanged production lookup in the same owned process chain
         # and environment. A preflight failure is not the historical launch bug.
         owner.run('qemu-lookup',[lookup,qemu],20,env)
@@ -318,6 +326,9 @@ def execute(output):
                         info=json.loads((output/(label+'.log')).read_text());validate_guest(info);break
                     time.sleep(1)
                 if info is None:raise RuntimeError('guest agent did not become ready within10minutes: '+phase)
+                console=(output/(phase+'-console.log')).read_text(errors='replace')
+                if not any('Kernel command line:' in line and 'systemd.mask=wendyos-agent-updater.service' in line for line in console.splitlines()):
+                    raise RuntimeError('guest did not boot with the updater masked: '+phase)
                 vm_dir=Path(env['WENDY_CONFIG_DIR'])/'vms'/name
                 state=json.loads((vm_dir/'state.json').read_text())
                 metadata=json.loads((vm_dir/'meta.json').read_text())
