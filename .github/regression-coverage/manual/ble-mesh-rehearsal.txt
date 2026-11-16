@@ -1,0 +1,177 @@
+Reserved native BLE/mesh acceptance — trial @TRIAL@
+
+Generation performs no device operation. Every case starts not_run. This extends
+1903's identity, host-permission and reserved peripheral procedures; that GATT
+procedure does not establish L2CAP, mesh TLS, gateway leases, profiles or power.
+Use the exact generated commands, candidate hashes and identity records. Save
+stdout, stderr, exit status and monotonic start/end time separately in fresh
+private files. A CLI success or a visible neighbour is not packet proof.
+
+1. Qualify the topology before changing anything.
+   Use only the reserved Mac/account/profile and three named devices in inventory.
+   Compare native Mac serial/OS/account/controller/permission records, CLI hash,
+   Linux serial/device UUID/tenant/OS/kernel/Agent executable hash, USB/controller
+   address/firmware and native C5 PSRAM board/firmware hash with the signed-off
+   inventory. Match direct wired/USB management selectors independently using
+   console identity; never infer a physical device from a reused IP or hci index.
+   Record `btmgmt --index N info` and `btmon` startup adapter information on the
+   selected Linux console, plus `uname -a`, `/etc/os-release`, and `ip -j addr`.
+   No SSH, remote shell, pairing reset, bond deletion, driver reload or reflash is
+   part of these commands. Bring any missing observation through the reserved
+   serial/local console, or retain its case pending.
+
+   Borrower A: original Realtek USB 13d3:3549 class, with exact firmware/feature and
+   prior observed 0x0c LE Connection Update refusal captured in the qualification
+   record. Donor B: independent lab uplink, qualified coded PHY; Lite C: qualified
+   native operator-router C5 PSRAM, matching coded PHY support. Mac M has no other
+   enabled Wendy router/profile in this account. All live links, power settings
+   and affected controllers must be owner-reserved: power applies device-wide.
+   Require all three saved participation states disabled and normal/default radio
+   settings before starting. Compare every saved carrier/roam/share flag with the
+   baseline record; generator includes exact restore commands for those flags.
+   Keep independent management while disabling mesh Ethernet/Wi-Fi. The borrower
+   management subnet must have no independent Internet route. Only B has the
+   owner-controlled upstream route to the exact HTTPS body challenge. Record
+   route tables, interface names/MACs, DNS and physical cable/attenuator positions.
+
+   Copy the pinned traffic CA to the exact borrower-console path recorded in the
+   plan and verify its SHA256 before curl. Do not use curl -k. The traffic URL,
+   expected body hash and upstream server request log are independently owned.
+   Prepare owner-operated recovery for all changed settings and any C5 profile
+   restart before the first change. Do not perform this on a working shared mesh.
+
+2. 2527 — a real rejected controller request keeps its ACL and CoC.
+   Turn Lite C off for this case; enable the generated BLE-only A/B configurations.
+   Start the bounded 180-second btmon captures on A and B before admitting links.
+   Compare live handle, role, peer address, adapter identity and LE feature pages
+   with the qualification record. Require an actual LE Connection Update command
+   on A and its Command Status 0x0c (Command Disallowed), not merely an Agent log.
+   On that SAME ACL/CoC, require subsequent TLS handshake/authenticated mesh link,
+   matching endpoint principals, and three fresh management RPCs to A through B separated by
+   10 seconds. Use direct `*-topology` and the exact discovered `*-mesh-info`
+   commands from M after its operator-connect. The qualified layout must give M
+   only B as an entry router and A's selected next hop must be B; a direct M→A
+   connection cannot satisfy A↔B traffic. Capture route/link IDs and byte
+   counters before/after. Verify no replacement ACL/CoC or hidden LAN/Wi-Fi path
+   explains the success; correlate btmon and Agent journal timestamps/handles.
+   Stop after 120 seconds. If firmware accepts the request, never emits it, or
+   reconnects to a new ACL before success, this refusal case is inconclusive.
+   Unknown HCI results/timeouts must not be relabelled a successful refusal.
+   The automated eight-outcome fixture covers software decisions; it cannot
+   create a controller-specific physical result.
+
+3. 2524 — a slow physical BLE gateway lease completes across controller steps.
+   Use the qualified owner-operated attenuator/shielded layout in the slow-link
+   record, including model, manual setting, peer placement and prior latency
+   capture; no invented rig API or unqualified interference injection is allowed.
+   A remains BLE-only with roam enabled, B shares its independent upstream; C is
+   off. Start captures and fresh journals before A joins. On the borrower console
+   record `ss -tnp`, `ip -j route`, `ip -6 -j route` and current DNS before/after.
+   Require one actual TCP connection to B's mesh ULA port 18867, with TLS handshake
+   bytes progressing for more than 15 seconds and less than 60 seconds. Correlate
+   the same four-tuple/ACL, successive offline/negotiating controller observations,
+   and absence of a borrowed default/resolver before its lease is granted. Then
+   require roaming, an installed Internet tunnel/default and actual exact HTTPS
+   body bytes through B, plus the upstream server's request nonce/time. Resolve
+   the challenge hostname through the donor and retain the DNS response. Repeat
+   the challenge after at least 35 seconds to span real heartbeat exchanges.
+   Withdraw B's sharing using its generated donor-no-sharing command; require A removes the borrowed default/tunnel and the
+   challenge fails. Restore B's generated BLE-only configuration, requalify the
+   slow interval, and require a fresh successful lease and body challenge.
+   A transfer shorter than 15s, a new connection every step, a direct uplink, or
+   status without real HTTPS/DNS data does not pass this case. If the qualified
+   rig cannot produce the required interval, retain physical acceptance pending.
+
+4. 2576 — native carrier selection and listener ownership.
+   Restore the unattenuated layout. Connect A/B on their isolated owner-reserved
+   Ethernet segment, then execute both generated lan-and-ble commands while BLE
+   traffic is active. Observe actual overlapping inbound/outbound native TLS
+   attempts at both peers, their principals, listener address/port, selected
+   connection cost, and application/RPC outcomes. Require one selected forwarding
+   path and bounded standby/losing-stream retirement without retiring the live
+   peer. Do not require all backups to close: current compatible peers can retain
+   a slower backup. Send 20 fresh exact management requests over 60 seconds while
+   physically removing only the reserved Ethernet link, then restoring it.
+   Require recovery over BLE and return to the faster path, with no duplicate
+   application delivery, connection-slot leak or listener loss. Record whether an
+   application stream was interrupted; ordinary recovery is not an uninterrupted
+   stream guarantee. Verify the listener's live owner PID/executable and socket
+   before/after each change. Then disable A participation, require all its owned
+   mesh listener/attachment lifetimes stop, and re-enable A to obtain fresh TLS
+   traffic. Never kill an arbitrary listener or bind a competing host port.
+   Repeat the handover with B and actual native Lite C, not just two Linux
+   nodes. Use the already configured owner-reserved AP in native_ap_record
+   (exact BSSID, band/channel and isolated Ethernet segment reaching B). Do not
+   modify saved Wi-Fi credentials. Enable C BLE-only, then lite-wifi-and-ble;
+   require native C5 TCP/TLS and BLE attachments with B and actual crossed
+   attempts in B's journal plus C's pinned-firmware serial trace. Query C through
+   its mesh selector, turn only C's mesh Wi-Fi carrier off with lite-wifi-off,
+   require fresh RPCs over BLE, then re-enable Wi-Fi and require recovery to the
+   faster carrier. On B require the same live listener owner and no leaked
+   connection slots. C has firmware tasks/connection handles, not Linux PIDs:
+   use its actual serial/topology observations. Missing native firmware telemetry
+   leaves the corresponding ownership assertion pending; Linux-only traffic
+   cannot close native Lite acceptance. Keep C USB management throughout.
+   Exact listener bind-failure/cancellation and selection controls are software
+   fixtures; physical crossed attempts must actually be observed for this case.
+
+5. 2669 — native Mac discovery, selected organization and broker restart.
+   Use the reserved Mac's real CoreBluetooth permission, not a mocked scan. With
+   B/C in the qualified native topology and no direct Mac LAN mesh route, run
+   operator-connect, bounded operator-discovery, operator-topology, and a fresh
+   mesh-info for each expected reachable endpoint. Require actual BLE carrier
+   admission, matching selected tenant/operator principal and verified destination
+   identity. Retain public issuer fingerprints; never copy private keys/tokens.
+   Do not manually nominate a router or restore an obsolete saved-router recipe.
+   Run operator-disconnect. Confirm old broker PID/birth exits and topology shows
+   disconnected; passive discovery must not silently rejoin. Run connect again
+   and require a new broker PID/birth, same saved operator identity, native
+   discovery and fresh RPC success. Independently compare the reserved profile's
+   selected organization; a working stale cached issuer from another organization
+   must not substitute for that selection. Software issuer controls cover the
+   adversarial mismatch; hardware output alone cannot assert all negative trust
+   cases. Repeat once with only C5 PSRAM as entry router. C6 is not an entry router.
+
+6. 2603 — profile/tuning serialization and truthful power evidence.
+   Turn A off. Keep B/C independent wired/USB management and matched coded-PHY
+   qualification. Record normal/default status, controller feature support and
+   all owned ACL handles. On C select coded-s2, allowing its declared restart;
+   on B run donor-coded-s2 while C is reconnecting. Repeat at most 10 times with
+   normal↔coded-s2 and normal↔coded-s8; use both peers' generated mode commands.
+   Preserve start/completion times and raw btmon. At least one observation MUST
+   show a new link's tuning overlapping B's profile-change interval; runs with
+   only sequential idle updates cannot establish race acceptance. Require the
+   completed saved policy and actual PHY readback agree for each surviving
+   handle, no stale coded tuning after completed normal mode, and fresh exact
+   mesh RPC traffic after each transition. Unsupported/refused/unknown readbacks
+   must remain truthful; requested S2/S8 coding is not proof of observed coding.
+   The controlled-response unit tests establish the precise admission-lock order;
+   this physical scenario establishes actual BlueZ/controller behavior only for
+   its observed overlapping trace and exact firmware.
+   Apply the explicitly approved numeric donor power command once. Compare
+   requested settings, HCI/MGMT completion and actual supported per-handle power
+   readbacks. A kernel/controller refusal is a supported refusal outcome, not
+   proof of physical transmit power. Do not choose maximum implicitly. Restore
+   default power and normal mode on B/C, including any required C5 restart, and
+   require fresh exact RPC traffic and default/unknown status as appropriate.
+
+7. Original-failure sensitivity and restoration.
+   Software controls are concrete: 2527 removes only rejection fallback; 2524
+   withdraws the live pending lease; 2603 existing controlled-IO barriers restore
+   the stale-policy/admission ordering; 2576/2669 existing transport and issuer
+   controls retain their own exact assertions. Do not substitute their success
+   for hardware execution. A historical full binary may have incompatible mesh
+   protocols or persistence. Run a historical physical control only with an
+   independently reviewed isolated build/overlay, unchanged trust/protocol and
+   an owner-qualified recovery procedure. Without those prerequisites, record
+   physical fail-before sensitivity pending rather than install a guessed build.
+   Before any timeout, lost management or unsafe RF/power observation, stop the
+   trial and use independent management to restore. Disconnect only the reserved
+   Mac profile; on A/B/C run off, normal, power-default, then restore-net. Compare
+   all saved settings and participation with the recorded baseline, confirm
+   leases/tunnels/default routes and owned captures ended, and verify direct
+   management still works. Retain saved identities/bonds/certificates and logs;
+   do not delete profile directories, re-enroll or clean unrelated resources.
+   Mark a case passed only with its exact provenance, stimulus, runtime evidence
+   and completed restoration. Every missing/unobservable condition remains
+   not_run or inconclusive, never an inferred pass.

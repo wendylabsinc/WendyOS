@@ -1,6 +1,8 @@
 name: Security
 
 on:
+  # Go Tests calls this for every affected PR and gates its Test result on it.
+  # A second pull_request trigger repeats all three scans for the same source.
   workflow_call:
   schedule:
     - cron: '0 6 * * *'
