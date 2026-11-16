@@ -119,6 +119,10 @@ func TestCloudDefaultResolvesExactCloudOrgAndAsset(t *testing.T) {
 		}
 		return []*cloudpb.Asset{{Id: 99, Name: "42"}, {Id: 42, Name: "renamed"}}, nil
 	}
+	// A missing asset is looked up again among every enrolled device.
+	oldAll := fetchDefaultCloudAllAssetsFn
+	t.Cleanup(func() { fetchDefaultCloudAllAssetsFn = oldAll })
+	fetchDefaultCloudAllAssetsFn = fetchDefaultCloudAssetsFn
 	connectDefaultCloudAssetFn = func(_ context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, _ string) (*grpcclient.AgentConnection, error) {
 		if asset.Id != 42 || cloudAuthOrgID(auth) != 7 {
 			t.Fatal("connected to wrong asset or organization")
@@ -292,8 +296,9 @@ func TestCloudV2DefaultPreservesTenantAndAssetAcrossRename(t *testing.T) {
 	}
 	oldFetch, oldConnect := fetchDefaultCloudAssetsV2Fn, connectDefaultCloudAssetV2Fn
 	t.Cleanup(func() { fetchDefaultCloudAssetsV2Fn, connectDefaultCloudAssetV2Fn = oldFetch, oldConnect })
+	explainingMiss := false
 	fetchDefaultCloudAssetsV2Fn = func(_ context.Context, selected *config.AuthConfig, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
-		if selected.CloudGRPC != auth.CloudGRPC || selected.Certificates[0].TenantUUID() != tenant || !onlineOnly {
+		if selected.CloudGRPC != auth.CloudGRPC || selected.Certificates[0].TenantUUID() != tenant || (!onlineOnly && !explainingMiss) {
 			t.Fatal("default resolved the wrong cloud or tenant")
 		}
 		return []*cloudpbv2.Asset{{Id: "a20403ae-9251-4937-aa9b-bb1d773df071", Name: "original"}, {Id: assetID, Name: "renamed"}}, nil
@@ -309,6 +314,8 @@ func TestCloudV2DefaultPreservesTenantAndAssetAcrossRename(t *testing.T) {
 		t.Fatalf("connect default: %v, %v", selected, err)
 	}
 	selector.AssetUUID = "ede01a43-7ef8-49d9-bfaf-88192b5124af"
+	// A missing asset is looked up again among every enrolled device.
+	explainingMiss = true
 	if _, err := connectCloudDeviceSelector(context.Background(), selector); err == nil {
 		t.Fatal("missing asset selected another device")
 	}
