@@ -546,12 +546,23 @@ func TestH264RandomAccessOffsetCases(t *testing.T) {
 
 // nativeTestCapture stands in for one native V4L2 H.264 capture feeding hub:
 // the emit callback streamV4L2Native gives the capture loop, delivering through
-// produce the way runProducer wires it. Each call is one dequeued buffer; whole
-// is false for one the maxFrameBytes cap cut short.
+// produce the way runProducer wires it.
 func nativeTestCapture(svc *VideoService, hub *deviceHub) func(buffer []byte, whole bool) bool {
-	emit := svc.nativeH264Emit("/dev/video0", func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
+	return testCaptureLoop(svc.nativeH264Emit("/dev/video0", hubBroadcast(hub)))
+}
+
+// hubBroadcast is the callback runProducer gives a capture: it wraps a payload
+// in a frame and hands it to the hub.
+func hubBroadcast(hub *deviceHub) func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
+	return func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
 		return hub.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned})
-	})
+	}
+}
+
+// testCaptureLoop stands in for the V4L2 dequeue loop. Each call is one
+// dequeued buffer, stamped with the driver's frame counter and handed to emit;
+// whole is false for a buffer the maxFrameBytes cap cut short.
+func testCaptureLoop(emit func([]byte, frameTimestamp) bool) func(buffer []byte, whole bool) bool {
 	var sequence uint32
 	return func(buffer []byte, whole bool) bool {
 		stamp := realtimeFrameTimestamp(time.Now())

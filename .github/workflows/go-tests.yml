@@ -845,6 +845,8 @@ jobs:
 
       - name: Decode H264 without a producer parser and require regression controls
         run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Decode native H264 for a late viewer and recording and require regression controls
+        run: bash .github/scripts/test-native-h264-parameter-sets.sh
       - name: Require camera pairing before ONVIF and RTSP connections
         run: bash .github/scripts/test-camera-pairing-admission.sh
       - name: Preserve 16-bit thermal samples through the real raw tap
