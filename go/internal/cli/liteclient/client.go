@@ -1229,7 +1229,7 @@ func (c *WendyLiteClient) connectTLSContext(ctx context.Context, address string,
 }
 
 func (c *WendyLiteClient) connectTLSWithDialerContext(ctx context.Context, address string, cfg *tls.Config, dial func(context.Context, string, string) (net.Conn, error)) error {
-	conn, err := dialAuthenticatedTLSWithDialer(ctx, address, cfg, 15*time.Second, 60*time.Second, dial)
+	conn, err := dialAuthenticatedTLSWithDialer(ctx, address, cfg, sourceTCPDialBudget(dial != nil), sensorSourceTLSSetupTimeout, dial)
 	if err != nil {
 		return fmt.Errorf("connect (mTLS): %w", err)
 	}
@@ -1276,6 +1276,17 @@ func dialAuthenticatedTLSWithDialer(ctx context.Context, address string, cfg *tl
 }
 
 const sensorSourceTCPDialTimeout = 15 * time.Second
+const meshSourceTCPDialTimeout = 45 * time.Second
+
+// A forward mesh route may precede its return route. Keep the TCP attempt
+// alive for later SYN retransmissions; the caller deadline still wins.
+func sourceTCPDialBudget(routed bool) time.Duration {
+	if routed {
+		return meshSourceTCPDialTimeout
+	}
+	return sensorSourceTCPDialTimeout
+}
+
 const sensorSourceTLSSetupTimeout = 60 * time.Second
 
 // SensorSourceSetupTimeout bounds a native source connection's TCP dial and

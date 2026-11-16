@@ -434,3 +434,34 @@ func TestOperatorAdjacentLiteUsesSignedNativeEndpoint(t *testing.T) {
 		t.Fatalf("adjacent native target bypassed signed routing: %v", err)
 	}
 }
+
+// A healthy mesh TCP setup can take more than the ordinary LAN dial budget.
+func TestOperatorLiteSlowMeshTCPSetup(t *testing.T) {
+	r, cc, _, _ := liteManagementFixture(t)
+	_, _, target := remoteTopologyFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	r.packetDial = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(16 * time.Second):
+		}
+		client, server := net.Pipe()
+		go func() { defer server.Close(); _, _ = io.Copy(server, server) }()
+		return client, nil
+	}
+	conn, err := openOperatorLite(ctx, cc, MeshSelector(target), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err = conn.Write([]byte("ready")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 5)
+	if _, err = io.ReadFull(conn, got); err != nil || string(got) != "ready" {
+		t.Fatal(string(got), err)
+	}
+}

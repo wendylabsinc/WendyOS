@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
@@ -335,5 +336,79 @@ func assertConnectedSensorSurvivesSetupCancellation(t *testing.T, conn net.Conn,
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Ping did not finish after setup cancellation")
+	}
+}
+
+// Normal return-route convergence can place the successful SYN after the old
+// 15-second deadline. Keep the original connection attempt alive, while still
+// allowing a caller with a shorter budget to cancel it.
+func TestRoutedPKISetupAllowsLateTCPDial(t *testing.T) {
+	for _, budget := range []time.Duration{3 * time.Second, 30 * time.Second} {
+		t.Run(budget.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const tenant = "11111111-1111-4111-8111-111111111111"
+				root, rootKey := issueRelayCertificate(t, 1, "root", "", true, nil, nil)
+				operator, operatorKey := issueRelayCertificate(t, 2, "operator", "spiffe://wendy.sh/tenant/"+tenant+"/operator/22222222-2222-4222-8222-222222222222", false, root, rootKey)
+				device, deviceKey := issueRelayCertificate(t, 3, "device", "spiffe://wendy.sh/tenant/"+tenant+"/device/"+liteTestDevice, false, root, rootKey)
+				pair := tls.Certificate{Certificate: [][]byte{operator.Raw}, PrivateKey: operatorKey}
+				chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+				ctx, cancel := context.WithTimeout(context.Background(), budget)
+				defer cancel()
+				completed := make(chan error, 1)
+				release := make(chan struct{})
+				defer close(release)
+				attempts := 0
+				dial := func(dialCtx context.Context, _, _ string) (net.Conn, error) {
+					attempts++
+					select {
+					case <-time.After(16 * time.Second):
+					case <-dialCtx.Done():
+						return nil, dialCtx.Err()
+					}
+					client, raw := net.Pipe()
+					go func() {
+						defer raw.Close()
+						pool := x509.NewCertPool()
+						pool.AddCert(root)
+						server := tls.Server(raw, &tls.Config{MinVersion: tls.VersionTLS13, SessionTicketsDisabled: true,
+							Certificates: []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: deviceKey}},
+							ClientAuth:   tls.RequireAndVerifyClientCert, ClientCAs: pool})
+						if err := server.HandshakeContext(ctx); err != nil {
+							completed <- err
+							return
+						}
+						link := newDirectLink(server)
+						request, err := link.recv(time.Second)
+						if err == nil {
+							err = link.send(request)
+						}
+						completed <- err
+						<-release
+					}()
+					return client, nil
+				}
+				client := NewWendyLiteClient()
+				start := time.Now()
+				err := client.ConnectWithPKIDialerContext(ctx, "mesh", pair, chain, liteTestDevice, nil, nil, dial)
+				if attempts != 1 {
+					t.Fatalf("dial attempts=%d", attempts)
+				}
+				if budget < 16*time.Second {
+					if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != budget {
+						t.Fatalf("caller cancellation: elapsed=%s error=%v", time.Since(start), err)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := <-completed; err != nil {
+						t.Fatal(err)
+					}
+				}
+				// Close the one established client explicitly; no redial occurs.
+				cancel()
+				client.Close()
+			})
+		})
 	}
 }
