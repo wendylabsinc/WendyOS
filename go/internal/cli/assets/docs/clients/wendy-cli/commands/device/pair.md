@@ -35,6 +35,13 @@ Saved sources are found again if their address changes, and remain available to
 forget while offline. If an older agent falls back to discovery on the CLI's
 network, the list says so; update that agent to scan from the device instead.
 
+Apps on the Wendy device receive a paired source's cameras (MJPEG or H.264) and
+microphones (16-bit PCM). Other channels, such as temperature or motion sensors
+and video or audio in other codecs, are not delivered to apps yet. A source
+offering only those never reports `connected`. The agent logs the channels it
+leaves out, once per source until they change; read them with
+`wendy device logs --service wendy-agent`.
+
 `--name` gives the pairing a friendly name; `--sensors` limits it to selected
 sensor names. Either flag opens the SensorLink tab, unless `--sensorlink` names
 a source to pair (see below). Use `--list` to print saved SensorLink pairings.

@@ -44,6 +44,8 @@ type Supervisor struct {
 	statusMu  sync.Mutex
 	connected map[string]bool
 
+	undelivered undeliveredNotices
+
 	nodeIDsMu sync.Mutex
 	nodeIDs   map[string]uint32 // "pairing key:channelID" -> MCU-band node id
 }
@@ -139,6 +141,7 @@ func (s *Supervisor) releaseSource(sourceAssetID int32) {
 }
 
 func (s *Supervisor) releasePairing(p SensorPairing) {
+	s.undelivered.forget(p.Key())
 	if s.audioLoop != nil {
 		if p.SourcePrincipalURI == "" {
 			s.audioLoop.ReleaseSource(p.SourceAssetID)
@@ -292,6 +295,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		sort.Slice(cams, func(i, j int) bool { return cams[i].ChannelId < cams[j].ChannelId })
 		sort.Slice(mics, func(i, j int) bool { return mics[i].ChannelId < mics[j].ChannelId })
 	}
+	s.reportUndelivered(p, manifest, cams, mics)
 	if len(cams) == 0 && len(mics) == 0 {
 		return false, nil // nothing to mount; caller backs off and retries
 	}
