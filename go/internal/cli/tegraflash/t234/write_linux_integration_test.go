@@ -19,7 +19,7 @@ func TestRawWriterExclusiveMountedPartition(t *testing.T) {
 	if os.Getenv("WENDY_TEST_LOOP_DEVICES") != "1" || os.Geteuid() != 0 {
 		t.Skip("requires root and WENDY_TEST_LOOP_DEVICES=1")
 	}
-	for _, tool := range []string{"losetup", "mkfs.ext4", "mount", "umount"} {
+	for _, tool := range []string{"losetup", "mkfs.ext4", "mount", "umount", "udevadm"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +62,9 @@ func TestRawWriterExclusiveMountedPartition(t *testing.T) {
 		}
 	})
 	partition := loop + "p1"
+	run("udevadm", "settle", "--timeout=10")
 	run("mkfs.ext4", "-q", "-F", partition)
+	run("udevadm", "settle", "--timeout=10")
 	target := filepath.Join(dir, "mounted")
 	if err := os.Mkdir(target, 0700); err != nil {
 		t.Fatal(err)
@@ -130,15 +132,24 @@ func TestRawWriterExclusiveMountedPartition(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dev.Close()
-	out, err := exec.Command("mount", "--", partition, target).CombinedOutput()
+	// Check the kernel's reason directly. A missing partition node or another
+	// mount-helper error must not masquerade as successful exclusive access.
+	err = syscall.Mount(partition, target, "ext4", 0, "")
 	if err == nil {
 		mounted = true
 		t.Fatal("partition mounted during exclusive raw-device access")
 	}
-	t.Logf("mount refused while exclusively held: %s", strings.TrimSpace(string(out)))
+	if !errors.Is(err, syscall.EBUSY) {
+		t.Fatalf("exclusive mount refused for the wrong reason: %v", err)
+	}
+	t.Logf("mount refused while exclusively held: %v", err)
 	if err := dev.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Closing a writable block descriptor triggers udev's partition-table
+	// reprobe. Wait for its remove/add events before requiring a successful
+	// remount; the partition can briefly disappear even though no bytes changed.
+	run("udevadm", "settle", "--timeout=10")
 	run("mount", "--", partition, target)
 	mounted = true
 	if err := unmountUMSDisk(UMSDisk{DevPath: loop}); err != nil {

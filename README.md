@@ -7,10 +7,14 @@
 
 # Wendy
 
-Build, deploy, and debug apps on robots, Raspberry Pis, Jetsons, and Linux devices.
-Bring your Dockerfile or Compose project. Start with hardware or a simulator.
+Build, deploy, and debug robot apps with your coding agent.
+Start with a simulated robot on your laptop, then deploy to NVIDIA Jetson,
+Raspberry Pi, or an existing Linux device. Bring your Dockerfile or Compose project.
 
-[Get started](https://docs.wendy.dev/latest/getting-started/app/) · [Watch the demo](https://wendy.dev/videos/wendy-g1-warehouse-turbopuffer-2026-09-29.mp4) · [Examples](Examples) · [Discord](https://discord.gg/wendylabsinc)
+Use Claude Code, Codex, or another MCP client to deploy changes, inspect logs,
+and debug your app. Local development needs no cloud account.
+
+[Program your first robot](https://docs.wendy.dev/latest/getting-started/robot/) · [Deploy your first app](https://docs.wendy.dev/latest/getting-started/app/) · [Watch the demo](https://wendy.dev/videos/wendy-g1-warehouse-turbopuffer-2026-09-29.mp4) · [Examples](Examples) · [Discord](https://discord.gg/wendylabsinc)
 
 ## Install
 
@@ -33,19 +37,7 @@ WSL2 with the Wendy CLI and Docker with Buildx installed inside WSL2.
 
 [Other installation methods and updates](INSTALL.md)
 
-## Choose a starting point
-
-### Use your own device
-
-```sh
-wendy tour --hardware
-```
-
-The tour guides you through device setup. Start with a Raspberry Pi, NVIDIA
-Jetson, or an existing Linux computer or robot.
-[Find the setup guide for your hardware](https://docs.wendy.dev/latest/installation/).
-
-### Try a simulated robot
+## Program your first robot on your laptop
 
 ```sh
 wendy tour --simulator
@@ -55,11 +47,39 @@ The tour creates a simulated Unitree Go2, opens its 3D viewer, and runs a short
 walking demo. No physical robot or cloud account is needed. The installer may
 start the tour automatically.
 
+Then choose **Build a robot app**, followed by **Waypoint patrol**. Edit the
+Python route and deploy it to the simulator. Choose **Start route** to watch the
+robot follow your changes. Follow [Program a simulated robot](https://docs.wendy.dev/latest/getting-started/robot/)
+for the full walkthrough.
+
 You need macOS or Linux, Docker with Buildx, and QEMU. Allow 4 GiB of memory for
 the VM and several minutes for the first download and build. Apple Silicon is
-the fastest path; x86 Linux uses ARM64 emulation.
+the fastest path. x86 Linux uses ARM64 emulation.
 See [simulator setup](https://docs.wendy.dev/latest/installation/wendyos-virtual-machine/)
 for prerequisites. When finished, use the `wendy vm stop` command printed by the tour.
+
+## Build with a coding agent
+
+Once your simulator or device is set up, connect your coding agent to Wendy's
+MCP server:
+
+```sh
+wendy mcp setup
+```
+
+Your agent can deploy app changes and inspect the device and its logs.
+Follow the [coding-agent setup guide](https://docs.wendy.dev/latest/guides/llm-integration/)
+for supported tools. For ChatGPT, see the [ChatGPT guide](https://docs.wendy.dev/latest/guides/chatgpt/).
+
+## Use your own device
+
+```sh
+wendy tour --hardware
+```
+
+The tour guides you through device setup. Start with a Raspberry Pi, NVIDIA
+Jetson, or an existing Linux computer or robot.
+[Find the setup guide for your hardware](https://docs.wendy.dev/latest/installation/).
 
 ## Build and deploy an app
 
@@ -77,9 +97,12 @@ Select your device. Open the address Wendy prints and check for
 Follow the [full walkthrough](https://docs.wendy.dev/latest/getting-started/app/)
 for watch mode, local-only Linux targets, and stopping the app when finished.
 
+If Wendy helped you build something, [star the repo](https://github.com/wendylabsinc/WendyOS)
+to help other developers find it.
+
 ## Why Wendy?
 
-The CLI runs on your computer; Wendy Agent runs on your device,
+The CLI runs on your computer. Wendy Agent runs on your device,
 manages your apps, and returns logs. Install the Agent on an existing Linux system,
 or use WendyOS with the Agent included.
 
@@ -89,19 +112,6 @@ or use WendyOS with the Agent included.
 
 Local development needs no cloud account. [Wendy Cloud](https://cloud.wendy.dev)
 adds remote access and fleet management. [Compare deployment options](https://docs.wendy.dev/latest/concepts/why-wendy/).
-
-## Build with a coding agent
-
-After your first successful run, you can let a coding agent deploy changes and
-inspect the device through Wendy's MCP server:
-
-```sh
-wendy mcp setup
-```
-
-Follow the [coding-agent setup guide](https://docs.wendy.dev/latest/guides/llm-integration/)
-for supported tools. For ChatGPT, see the [ChatGPT guide](https://docs.wendy.dev/latest/guides/chatgpt/).
-
 
 ## Keep building
 
