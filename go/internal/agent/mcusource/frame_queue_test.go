@@ -7,51 +7,137 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestCameraFrameQueuePreservesFIFOAndIndependentLatestSlots(t *testing.T) {
-	q := newCameraFrameQueue([]uint32{1, 2})
-	// A saturated audio/H.264 FIFO must not prevent either camera from
-	// retaining its latest frame or let camera churn evict FIFO frames.
-	for seq := range uint32(sensorFIFOFrames) {
-		if q.offer(&sensorlink.SensorFrame{ChannelID: 3 + seq%2, Seq: seq}) {
-			t.Fatal("early FIFO drop")
-		}
-	}
-	for seq := range uint32(100) {
-		for _, ch := range []uint32{1, 2} {
-			if dropped := q.offer(&sensorlink.SensorFrame{ChannelID: ch, Seq: seq}); dropped != (seq > 0) {
-				t.Fatalf("channel %d seq %d: dropped=%v", ch, seq, dropped)
+func TestCameraFrameQueueKeepsFIFOAndNewestCameraFramesWhileStalled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := newCameraFrameQueue([]uint32{1, 2})
+		// A saturated audio/H.264 FIFO must not prevent either camera from
+		// retaining its newest frame or let camera churn evict FIFO frames.
+		for seq := range uint32(sensorFIFOFrames) {
+			if q.offer(&sensorlink.SensorFrame{ChannelID: 3 + seq%2, Seq: seq}) != 0 {
+				t.Fatal("early FIFO drop")
 			}
 		}
-	}
-	if !q.offer(&sensorlink.SensorFrame{ChannelID: 3, Seq: 100}) {
-		t.Fatal("full FIFO accepted another frame")
-	}
-	if len(q.pending) != sensorFIFOFrames+2 {
-		t.Fatalf("unbounded pending frames: %d", len(q.pending))
-	}
-	q.finish()
-	for seq := range uint32(sensorFIFOFrames) {
-		f, ok := q.next(context.Background())
-		if !ok || f.ChannelID != 3+seq%2 || f.Seq != seq {
-			t.Fatalf("FIFO reordered: %+v, open=%v", f, ok)
+		// Nothing consumes during 3.3 seconds of 30 fps video.
+		for seq := range uint32(100) {
+			for _, ch := range []uint32{1, 2} {
+				want := 1
+				if seq == 0 {
+					want = 0
+				}
+				if discarded := q.offer(&sensorlink.SensorFrame{ChannelID: ch, Seq: seq}); discarded != want {
+					t.Fatalf("channel %d seq %d: discarded %d frames, want %d", ch, seq, discarded, want)
+				}
+			}
+			time.Sleep(33 * time.Millisecond)
+		}
+		if q.offer(&sensorlink.SensorFrame{ChannelID: 3, Seq: 100}) != 1 {
+			t.Fatal("full FIFO accepted another frame")
+		}
+		q.finish()
+		for seq := range uint32(sensorFIFOFrames) {
+			f, ok := q.next(context.Background())
+			if !ok || f.ChannelID != 3+seq%2 || f.Seq != seq {
+				t.Fatalf("FIFO reordered: %+v, open=%v", f, ok)
+			}
+		}
+		for _, ch := range []uint32{1, 2} {
+			f, ok := q.next(context.Background())
+			if !ok || f.ChannelID != ch || f.Seq != 99 {
+				t.Fatalf("camera did not resume at its newest frame: %+v, open=%v", f, ok)
+			}
+		}
+		if _, ok := q.next(context.Background()); ok {
+			t.Fatal("closed queue did not drain")
+		}
+	})
+}
+
+func TestCameraFrameQueueDeliversFramesThatArriveTogether(t *testing.T) {
+	q := newCameraFrameQueue([]uint32{1})
+	// A network stall releases several frames at once. The consumer is not
+	// behind; it has simply not run yet.
+	for seq := range uint32(5) {
+		if discarded := q.offer(&sensorlink.SensorFrame{ChannelID: 1, Seq: seq}); discarded != 0 {
+			t.Fatalf("seq %d: discarded %d frames that arrived together", seq, discarded)
 		}
 	}
-	for _, ch := range []uint32{1, 2} {
+	q.finish()
+	for seq := range uint32(5) {
 		f, ok := q.next(context.Background())
-		if !ok || f.ChannelID != ch || f.Seq != 99 {
-			t.Fatalf("camera slot: %+v, open=%v", f, ok)
+		if !ok || f.Seq != seq {
+			t.Fatalf("got %+v, open=%v, want seq %d", f, ok, seq)
 		}
 	}
 	if _, ok := q.next(context.Background()); ok {
 		t.Fatal("closed queue did not drain")
 	}
+}
+
+func TestCameraFrameQueueBoundsFramesThatArriveTogether(t *testing.T) {
+	q := newCameraFrameQueue([]uint32{1})
+	var discarded int
+	for seq := range uint32(cameraRunFrames + 2) {
+		discarded += q.offer(&sensorlink.SensorFrame{ChannelID: 1, Seq: seq})
+	}
+	if discarded != 2 {
+		t.Fatalf("discarded %d frames, want the 2 oldest", discarded)
+	}
+	q.finish()
+	for seq := uint32(2); seq < cameraRunFrames+2; seq++ {
+		f, ok := q.next(context.Background())
+		if !ok || f.Seq != seq {
+			t.Fatalf("got %+v, open=%v, want seq %d", f, ok, seq)
+		}
+	}
+	if _, ok := q.next(context.Background()); ok {
+		t.Fatal("closed queue did not drain")
+	}
+}
+
+func TestCameraFrameQueueSlowConsumerSharesTurnsOnNewestFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const interval = 33 * time.Millisecond
+		const frames = 90
+		q := newCameraFrameQueue([]uint32{1, 2})
+		start := time.Now()
+		go func() {
+			for seq := range uint32(frames) {
+				for _, ch := range []uint32{1, 2} {
+					q.offer(&sensorlink.SensorFrame{ChannelID: ch, Seq: seq})
+				}
+				time.Sleep(interval)
+			}
+			q.finish()
+		}()
+		// Offset the consumer so it never runs at the instant a frame arrives.
+		time.Sleep(500 * time.Microsecond)
+		delivered := map[uint32]int{}
+		for {
+			f, ok := q.next(context.Background())
+			if !ok {
+				break
+			}
+			newest := min(uint32(time.Since(start)/interval), frames-1)
+			if f.Seq != newest {
+				t.Fatalf("camera %d delivered seq %d when seq %d had arrived", f.ChannelID, f.Seq, newest)
+			}
+			delivered[f.ChannelID]++
+			time.Sleep(40 * time.Millisecond) // slower than either camera
+		}
+		// Discarding a stale frame must not cost a camera its turn.
+		if difference := delivered[1] - delivered[2]; delivered[1] < 30 || difference < -1 || difference > 1 {
+			t.Fatalf("cameras did not share the consumer: %v", delivered)
+		}
+	})
 }
 
 func TestCameraFrameQueueConcurrentDelivery(t *testing.T) {
@@ -148,7 +234,9 @@ func TestLiveTransportRetainsNewestCompleteCameraFrame(t *testing.T) {
 				send(wholeFrame(1, 0))
 				send(wholeFrame(2, 0))
 				send(wholeFrame(3, 0))
+				// Nothing consumes during 3.3 seconds of 30 fps video.
 				for seq := uint32(1); seq < 100; seq++ {
+					time.Sleep(33 * time.Millisecond)
 					send(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: seq, Payload: []byte("first")})
 					send(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: seq, ChunkSeq: 1, Flags: sensorlink.FlagLastChunk, Payload: []byte("last")})
 				}
@@ -168,6 +256,46 @@ func TestLiveTransportRetainsNewestCompleteCameraFrame(t *testing.T) {
 				disconnected()
 				if _, ok := next(); ok {
 					t.Fatal("disconnected stream stayed open")
+				}
+			})
+		})
+	}
+}
+
+func TestLiveTransportReportsOnlyReplacedCameraFramesAsDrops(t *testing.T) {
+	for _, transport := range []string{"wendycom", "grpc"} {
+		t.Run(transport, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				core, logs := observer.New(zap.WarnLevel)
+				var tr SensorTransport
+				var send func(*sensorlinkpb.SensorData)
+				if transport == "wendycom" {
+					client := newFakeWendycomClient()
+					tr, _ = newTestWendycomTransport(zap.New(core), client)
+					send = client.send
+				} else {
+					client := &backpressureSensorClient{frames: make(chan *sensorlinkpb.SensorData)}
+					tr = &grpcTransport{logger: zap.New(core), client: client}
+					send = func(d *sensorlinkpb.SensorData) { client.frames <- d }
+				}
+				next, closeStream, err := streamLiveFrames(context.Background(), tr, []uint32{1}, []uint32{1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeStream()
+				// Frames that arrive together wait for the consumer.
+				for seq := range uint32(3) {
+					send(wholeFrame(1, seq))
+				}
+				synctest.Wait()
+				assertDropLogs(t, logs, nil)
+				// The consumer is still away when the next frame arrives.
+				time.Sleep(33 * time.Millisecond)
+				send(wholeFrame(1, 3))
+				synctest.Wait()
+				assertDropLogs(t, logs, [][2]uint64{{3, 3}})
+				if f, ok := next(); !ok || f.Seq != 3 {
+					t.Fatalf("got %+v, open=%v, want the newest frame", f, ok)
 				}
 			})
 		})

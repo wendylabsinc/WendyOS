@@ -114,10 +114,9 @@ func (t *grpcTransport) streamFrames(ctx context.Context, channels []uint32, fra
 			if f == nil {
 				continue
 			}
-			if frames.offer(f) {
-				dropped++
-				droppedTotal++
-			}
+			discarded := uint64(frames.offer(f))
+			dropped += discarded
+			droppedTotal += discarded
 			// Warn immediately on the first drop, then aggregate at most
 			// once per interval. Successful receives also flush pending
 			// counts after recovery; an idle stream flushes on exit.

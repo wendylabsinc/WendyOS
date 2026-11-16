@@ -316,10 +316,9 @@ func (s *wendycomStream) deliver(d *sensorlinkpb.SensorData) {
 	if f == nil {
 		return
 	}
-	if s.frames.offer(f) {
-		s.dropped++
-		s.droppedTotal++
-	}
+	discarded := uint64(s.frames.offer(f))
+	s.dropped += discarded
+	s.droppedTotal += discarded
 	// Warn immediately on the first drop, then aggregate at most once per
 	// interval, as grpcTransport does.
 	if s.dropped > 0 && (s.lastDropLog.IsZero() || time.Since(s.lastDropLog) >= grpcDropLogInterval) {
