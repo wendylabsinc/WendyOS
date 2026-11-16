@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!*.py
+!config.json
+!resource_stats.proto
+!model/
+!model/lease_runner.py

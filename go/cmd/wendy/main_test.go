@@ -542,6 +542,15 @@ func TestFormatError_CloudUnavailablePreservesDetails(t *testing.T) {
 	}
 }
 
+func TestFormatError_PreservesRemoteBuildUpgradeHint(t *testing.T) {
+	const message = "missing operator build delivery authorization. Update the wendy CLI and retry"
+	err := fmt.Errorf("build on spark-office failed or did not complete: %w", status.Error(codes.PermissionDenied, message))
+	want := "build on spark-office failed or did not complete: " + message
+	if got := formatError(err).Error(); got != want {
+		t.Fatalf("formatted error = %q, want %q", got, want)
+	}
+}
+
 func TestFormatError_UnimplementedPreservesContextualDescription(t *testing.T) {
 	err := fmt.Errorf("listing audio devices: %w", status.Error(codes.Unimplemented, "Audio device management is currently not supported by Wendy Agent for Mac."))
 

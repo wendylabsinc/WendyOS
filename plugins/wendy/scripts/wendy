@@ -191,7 +191,11 @@ lock_is_stale() {
 
 acquire_lock() {
   waited=0
-  until mkdir "$lock_dir" 2>/dev/null; do
+  # Some uutils mkdir releases report success after a concurrent EEXIST
+  # (uutils/coreutils#13970). Claim the PID file with the shell's exclusive
+  # create as well, so that false success cannot admit a second installer.
+  until mkdir "$lock_dir" 2>/dev/null &&
+    (set -C; echo "$$" >"$lock_dir/pid") 2>/dev/null; do
     if lock_is_stale; then
       rm -rf "$lock_dir"
       continue
@@ -201,7 +205,6 @@ acquire_lock() {
       fail "another Wendy CLI install has held $lock_dir for 10 minutes" "if no install is running, delete $lock_dir and restart the Wendy MCP server"
     sleep 1
   done
-  echo "$$" >"$lock_dir/pid"
 }
 
 # prune_versions keeps CLI_VERSION and the newest other version (what a
