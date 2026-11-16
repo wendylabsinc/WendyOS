@@ -11,10 +11,10 @@ trap 'rm -rf "$scratch"' EXIT
 trap 'echo "error: contracts setup or runner failed; repair from the repository root: bash scripts/contracts.sh generate" >&2' ERR
 
 # TEMPORARY: service-protos #198 (https://github.com/wendylabsinc/service-protos/pull/198)
-# must land; switch this integration ref to master before merging this consumer.
-readonly CONTRACTS_RUNNER_REF='9573d35feb67f2f6a47c7ecc514624971abace32'
+# must land; switch this integration ref to main before merging this consumer.
+readonly CONTRACTS_RUNNER_REF='35c8a2f4f1cfe01804043d66cd15545f6fc19a7d'
 # Keep runner acquisition independent of the schema pin. The runner still fetches
-# authoritative checker policy and the complete source catalogue from master.
+# authoritative checker policy and the complete source catalogue from main.
 # Preserve scoped Git authentication; clear only caller-repository redirection.
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_SHALLOW_FILE GIT_REPLACE_REF_BASE GIT_GRAFT_FILE
