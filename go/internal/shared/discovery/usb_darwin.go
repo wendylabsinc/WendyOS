@@ -12,9 +12,37 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
-// system_profiler SPUSBDataType -json output structure.
+// system_profiler -json output for the two USB reports. macOS 26 dropped
+// SPUSBDataType for SPUSBHostDataType, which names its keys differently.
 type spUSBData struct {
-	SPUSBDataType []spUSBBus `json:"SPUSBDataType"`
+	SPUSBHostDataType []spUSBHostItem `json:"SPUSBHostDataType"`
+	SPUSBDataType     []spUSBBus      `json:"SPUSBDataType"`
+}
+
+// spUSBHostItem is a bus, hub or device in the SPUSBHostDataType report.
+type spUSBHostItem struct {
+	Name      string          `json:"_name"`
+	VendorID  string          `json:"USBDeviceKeyVendorID"`
+	ProductID string          `json:"USBDeviceKeyProductID"`
+	SerialNum string          `json:"USBDeviceKeySerialNumber"`
+	LinkSpeed string          `json:"USBDeviceKeyLinkSpeed"` // e.g. "5 Gb/s"
+	Items     []spUSBHostItem `json:"_items"`                // devices on a bus or hub
+}
+
+// item converts h and everything below it to the older report's shape, which
+// collectUSBDevices reads. The newer report carries no power figures.
+func (h spUSBHostItem) item() spUSBItem {
+	item := spUSBItem{
+		Name:      h.Name,
+		VendorID:  h.VendorID,
+		ProductID: h.ProductID,
+		SerialNum: h.SerialNum,
+		Speed:     h.LinkSpeed,
+	}
+	for _, child := range h.Items {
+		item.Items = append(item.Items, child.item())
+	}
+	return item
 }
 
 type spUSBBus struct {
@@ -35,23 +63,72 @@ type spUSBItem struct {
 }
 
 // discoverUSB uses system_profiler to find USB-connected Wendy devices on macOS.
+// It asks for both USB reports in one call: system_profiler answers a report
+// it does not have with an empty list, so each macOS release fills in its own.
 func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
-	cmd := exec.CommandContext(ctx, "system_profiler", "SPUSBDataType", "-json")
-	out, err := cmd.Output()
+	out, err := exec.CommandContext(ctx, "system_profiler", "SPUSBHostDataType", "SPUSBDataType", "-json").Output()
+	if err != nil {
+		// In case an older release refuses a report name it does not know.
+		out, err = exec.CommandContext(ctx, "system_profiler", "SPUSBDataType", "-json").Output()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("running system_profiler: %w", err)
 	}
+	devices, err := parseSystemProfilerUSB(out)
+	if err != nil || len(devices) == 0 {
+		return devices, err
+	}
+	if ports, err := darwinHardwarePorts(ctx); err == nil {
+		setUSBNetworkInterfaces(devices, ports)
+	}
+	return devices, nil
+}
 
+// parseSystemProfilerUSB returns the Wendy devices in system_profiler's JSON
+// USB report. The older report is read only when the newer one lists none, so
+// a release that answers both never lists a board twice.
+func parseSystemProfilerUSB(out []byte) ([]models.USBDevice, error) {
 	var data spUSBData
 	if err := json.Unmarshal(out, &data); err != nil {
 		return nil, fmt.Errorf("parsing system_profiler output: %w", err)
 	}
 
 	var devices []models.USBDevice
+	for _, entry := range data.SPUSBHostDataType {
+		// Top-level entries are buses; collectUSBDevices walks down from them.
+		collectUSBDevices([]spUSBItem{entry.item()}, &devices)
+	}
+	if len(devices) > 0 {
+		return devices, nil
+	}
 	for _, bus := range data.SPUSBDataType {
 		collectUSBDevices(bus.Items, &devices)
 	}
 	return devices, nil
+}
+
+// setUSBNetworkInterfaces records the network interface each device's USB
+// network link appears as. macOS names that hardware port after the USB
+// product string, so a name held by exactly one device and one port joins
+// them. A name that several devices or ports share proves nothing and is left
+// unset.
+func setUSBNetworkInterfaces(devices []models.USBDevice, ports []darwinHardwarePort) {
+	devicesNamed := make(map[string]int, len(devices))
+	for i := range devices {
+		devicesNamed[devices[i].Name]++
+	}
+	portsNamed := make(map[string]int, len(ports))
+	interfaceNamed := make(map[string]string, len(ports))
+	for _, port := range ports {
+		portsNamed[port.displayName]++
+		interfaceNamed[port.displayName] = port.bsdName
+	}
+	for i := range devices {
+		name := devices[i].Name
+		if devicesNamed[name] == 1 && portsNamed[name] == 1 {
+			devices[i].NetworkInterface = interfaceNamed[name]
+		}
+	}
 }
 
 // collectUSBDevices recursively walks the USB tree (hubs contain child items)

@@ -41,6 +41,10 @@ type ContainerService struct {
 	containerd      ContainerdClient
 	logManager      *ContainerLogManager
 	monitor         ContainerMonitorRegistrar
+	// sketches drops the microcontroller sketch of an app deployed again without one.
+	sketches interface {
+		ForgetApp(ctx context.Context, appID string)
+	}
 
 	// imageVerifier checks the container image signature (see RunContainer)
 	// before the image is assembled or the container created. This verifies
@@ -206,8 +210,9 @@ func (s *ContainerService) CreateContainer(ctx context.Context, req *agentpb.Cre
 	}
 
 	if err := s.containerd.CreateContainer(ctx, req, appCfg); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create container: %v", err)
+		return nil, refusalOrInternal(err, "failed to create container")
 	}
+	s.forgetDroppedSketch(ctx, appCfg)
 
 	s.logger.Info("Container created",
 		zap.String("app_name", req.GetAppName()),
@@ -283,8 +288,9 @@ func (s *ContainerService) CreateContainerWithProgress(req *agentpb.CreateContai
 	}
 
 	if err := s.containerd.CreateContainerWithProgress(stream.Context(), req, appCfg, onProgress); err != nil {
-		return status.Errorf(codes.Internal, "failed to create container: %v", err)
+		return refusalOrInternal(err, "failed to create container")
 	}
+	s.forgetDroppedSketch(stream.Context(), appCfg)
 
 	// Send completed response.
 	return stream.Send(&agentpb.CreateContainerProgressResponse{
@@ -586,8 +592,9 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 	}
 
 	if err := s.containerd.CreateContainer(ctx, createReq, appCfg); err != nil {
-		return status.Errorf(codes.Internal, "failed to create container: %v", err)
+		return refusalOrInternal(err, "failed to create container")
 	}
+	s.forgetDroppedSketch(ctx, appCfg)
 	createDur = time.Since(phaseStart)
 
 	s.logger.Info("RunContainer phase timings",
@@ -638,7 +645,7 @@ func (s *ContainerService) startGroup(
 	for _, id := range containerIDs {
 		outputCh, startErr := s.containerd.StartContainer(startCtx, id, "", restartPolicy)
 		if startErr != nil {
-			return status.Errorf(codes.Internal, "failed to start service %q: %v", id, startErr)
+			return refusalOrInternal(startErr, fmt.Sprintf("failed to start service %q", id))
 		}
 		// Drain the output channel in the background so the containerd goroutine
 		// does not block. The container runs independently after this.
@@ -845,7 +852,7 @@ func (s *ContainerService) streamContainerOutput(
 	startCtx := context.WithoutCancel(ctx)
 	outputCh, err := s.containerd.StartContainer(startCtx, appName, postStartAgentCommand, restartPolicy)
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+		return refusalOrInternal(err, "failed to start container")
 	}
 
 	// Attach the task-lifetime drainer before any early return below can
@@ -949,7 +956,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 	outputCh, err := s.containerd.StartContainerWithStdin(startCtx, appName, stdinR, postStartAgentCommand, nil)
 	if err != nil {
 		stdinR.Close()
-		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+		return refusalOrInternal(err, "failed to start container")
 	}
 
 	// Attach the task-lifetime drainer before any early return below can
@@ -1439,7 +1446,7 @@ func (s *ContainerService) ListContainerStats(ctx context.Context, _ *agentpb.Li
 // transport (the device's trusted control channel); there is no per-RPC
 // authorization layer, so the read-only host topology this returns is no more
 // exposed than the existing container-stats RPCs. The call is logged for audit.
-func (s *ContainerService) GetResourceStats(ctx context.Context, _ *agentpb.GetResourceStatsRequest) (*agentpb.GetResourceStatsResponse, error) {
+func (s *ContainerService) GetResourceStats(ctx context.Context, req *agentpb.GetResourceStatsRequest) (*agentpb.GetResourceStatsResponse, error) {
 	s.logger.Info("GetResourceStats")
 	containers, err := s.containerd.GetResourceStats(ctx)
 	if err != nil {
@@ -1455,6 +1462,12 @@ func (s *ContainerService) GetResourceStats(ctx context.Context, _ *agentpb.GetR
 	if mem, memErr := hoststats.ReadMemory(); memErr == nil {
 		host.MemTotalBytes = mem.TotalBytes
 		host.MemAvailableBytes = mem.AvailableBytes
+	}
+	if appID := req.GetGpuAdmissionAppId(); appID != "" {
+		if err := appconfig.ValidateAppID(appID); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid admission app ID")
+		}
+		host.GpuAdmission = s.gpuAdmission(ctx, appID)
 	}
 	host.Gpus = gpuStatsToProto(hoststats.SampleGPU(ctx))
 	host.ThermalZones = thermalZonesToProto(hoststats.ResolveThermal())
@@ -1729,4 +1742,30 @@ func parseAppConfig(data []byte) (*appconfig.AppConfig, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+// refusalOrInternal keeps a refusal the user can act on (a port held by
+// another app) as it is; anything else is an internal failure.
+func refusalOrInternal(err error, what string) error {
+	if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition {
+		return err
+	}
+	return status.Errorf(codes.Internal, "%s: %v", what, err)
+}
+
+// SetSketchOwner wires the microcontroller's sketch owner in.
+func (s *ContainerService) SetSketchOwner(sketches interface {
+	ForgetApp(ctx context.Context, appID string)
+}) {
+	s.sketches = sketches
+}
+
+// forgetDroppedSketch removes the sketch of an app that was
+// just deployed without "mcu": it has none any more. Before the app starts,
+// or the start is refused over a sketch the app no longer has.
+func (s *ContainerService) forgetDroppedSketch(ctx context.Context, appCfg *appconfig.AppConfig) {
+	if s.sketches == nil || appCfg == nil || appCfg.MCU != nil || appCfg.AppID == "" {
+		return
+	}
+	s.sketches.ForgetApp(context.WithoutCancel(ctx), appCfg.AppID)
 }

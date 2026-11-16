@@ -11,11 +11,21 @@ import Logging
 struct ProvisioningStore {
     let configPath: URL
     private let keychainStore: KeychainStore
+    private let observeWrite: (@Sendable (URL, WriteBoundary) -> Void)?
     private let logger = Logger(label: "sh.wendy.agent.provisioning.store")
 
-    init(configPath: URL, keychainStore: KeychainStore = KeychainStore()) {
+    enum WriteBoundary: String, Sendable {
+        case before, after
+    }
+
+    init(
+        configPath: URL,
+        keychainStore: KeychainStore = KeychainStore(),
+        observeWrite: (@Sendable (URL, WriteBoundary) -> Void)? = nil
+    ) {
         self.configPath = configPath
         self.keychainStore = keychainStore
+        self.observeWrite = observeWrite
     }
 
     /// How the device's private key is stored: in the Secure Enclave (no key
@@ -217,6 +227,9 @@ struct ProvisioningStore {
 
     private func writeFile(_ url: URL, data: Data, permissions: Int) throws {
         if self.fileMatches(url, data: data, permissions: permissions) { return }
+        // Subprocess regressions can terminate at a real write boundary.
+        // Production stores leave this observer unset.
+        self.observeWrite?(url, .before)
         let directory = url.deletingLastPathComponent()
         let tmpURL = directory.appendingPathComponent(
             ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
@@ -277,6 +290,7 @@ struct ProvisioningStore {
             guard closed == 0 else {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
+            self.observeWrite?(url, .after)
         } catch {
             try? FileManager.default.removeItem(at: tmpURL)
             throw error

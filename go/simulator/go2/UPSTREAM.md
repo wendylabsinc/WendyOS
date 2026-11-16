@@ -184,7 +184,15 @@ samples**: the SDK expects trailing `PathPoint[10] path_point` absent from ROS.
 `tools/prepare_unitree.py` verifies all 37 pinned ROS input files before copying
 them to `ros_ws/generated_unitree/`. This separate, authored compatibility overlay
 appends `PathPoint[10] path_point` to `SportModeState.msg` and changes Response's
-binary sequence to `uint8[]`. Every other input byte is preserved. The generated
+binary sequence to `uint8[]`. It also applies the ARM64 ROS Humble library-lookup
+workaround from [Unitree ROS 2 PR #9](https://github.com/unitreerobotics/unitree_ros2/pull/9)
+to `unitree_api/CMakeLists.txt` and `unitree_go/CMakeLists.txt`. Before loading
+ament dependencies, these packages explicitly locate
+`builtin_interfaces__rosidl_generator_c` in `/opt/ros/$ROS_DISTRO/lib`, bypassing
+CMake's default and root-path searches. This avoids a missing-library error when
+building ARM64 images under emulation on x86 hosts; see also the originating
+[RTAB-Map issue #1288](https://github.com/introlab/rtabmap_ros/issues/1288).
+Every other input byte is preserved. The generated
 `wendy-compatibility.json` records both source commits and every output hash.
 `--check` verifies the inputs and exact derived output offline. The fetcher's
 independent `--check` continues to validate the original sources and archives.

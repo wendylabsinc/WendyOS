@@ -242,3 +242,20 @@ only expose path, model and capacity, so check those carefully before authorizin
 `os_install_verify` can also check first boot independently, including enrollment.
 Boot verification does not verify application behavior. An empty discovery scan
 does not establish a network failure.
+
+## Error recovery
+
+Error results retain the `[CODE] message` text and add `error_code`, `message`,
+`retryable`, and `next_steps` in structured content. gRPC deadlines map to
+`TIMEOUT`, and cancellation maps to `CANCELLED`.
+
+Only failed read-only log, metric, and trace requests recommend automatic
+retries for temporary unavailability or timeouts. Those responses include
+`retry_after_ms: 1000` and `max_retries: 2`. These are instructions for the caller;
+the MCP server does not repeat the request itself. Keep the same selected
+device when retrying. Partial stream data can be incomplete.
+
+Generic errors have `retryable: false`. Before repeating a deployment, start,
+stop, or other mutation after a lost response, inspect its current state.
+Authentication and identity failures require corrective action and never
+recommend an automatic retry.
