@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
     paths:
+      - "README.md"
+      - "DEVELOPMENT.md"
+      - ".github/scripts/check-built-doc-capabilities.py"
+      - ".github/scripts/built_doc_capabilities_test.py"
+      - ".github/scripts/fixtures/docs-capabilities/**"
+      - ".github/scripts/test-readme-template.py"
+      - ".github/scripts/fixtures/readme-template/**"
+      - "go/internal/agent/network/documented_backend_unix_test.go"
+      - ".github/scripts/test-readme-install.py"
+      - ".github/scripts/readme_install_test.py"
+      - ".github/scripts/run-owned-media-test.py"
       - "docs"
       - "docs/**"
       - "go/internal/cli/assets/docs/**"
@@ -16,6 +27,17 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "README.md"
+      - "DEVELOPMENT.md"
+      - ".github/scripts/check-built-doc-capabilities.py"
+      - ".github/scripts/built_doc_capabilities_test.py"
+      - ".github/scripts/fixtures/docs-capabilities/**"
+      - ".github/scripts/test-readme-template.py"
+      - ".github/scripts/fixtures/readme-template/**"
+      - "go/internal/agent/network/documented_backend_unix_test.go"
+      - ".github/scripts/test-readme-install.py"
+      - ".github/scripts/readme_install_test.py"
+      - ".github/scripts/run-owned-media-test.py"
       - "docs"
       - "docs/**"
       - "go/internal/cli/assets/docs/**"
@@ -82,6 +104,51 @@ jobs:
 
       - name: Install CLI reference build dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev pkg-config
+
+      - name: Execute README installation with this revision's CLI
+        working-directory: .
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          fixture="$(mktemp -d "$RUNNER_TEMP/docs-installer-cli.XXXXXX")"
+          trap 'rm -rf "$fixture"' EXIT
+          python3 .github/scripts/readme_install_test.py
+          python3 .github/scripts/run-owned-media-test.py --timeout 360 -- \
+            go build -o "$fixture/wendy" ./go/cmd/wendy
+          python3 .github/scripts/test-readme-install.py --cli "$fixture/wendy" \
+            --evidence "$RUNNER_TEMP/docs-readme-install-evidence"
+
+      - name: Preserve documentation installer evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-readme-install-execution
+          path: ${{ runner.temp }}/docs-readme-install-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify the documented Go Agent backend selection
+        working-directory: .
+        timeout-minutes: 3
+        run: go test -race ./go/internal/agent/network -run '^TestDocumentedGoAgentIgnoresLegacyNetworkBackend$' -count=1 -timeout=60s -v
+
+      - name: Bind OS documentation to published rootfs configuration
+        working-directory: .
+        timeout-minutes: 4
+        run: |
+          python3 .github/scripts/built_doc_capabilities_test.py
+          python3 .github/scripts/run-owned-media-test.py --timeout 210 -- \
+            python3 .github/scripts/check-built-doc-capabilities.py \
+              --output "$RUNNER_TEMP/docs-built-capabilities.json"
+
+      - name: Preserve built documentation capability evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-built-capabilities
+          path: ${{ runner.temp }}/docs-built-capabilities.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Install dependencies
         run: npm ci
@@ -267,6 +334,11 @@ jobs:
           timeout 120 git -C "$fixtures/native" fetch -q --depth=1 \
             https://github.com/wendylabsinc/wendy-lite-native-apps.git \
             73271d49c1c6872ca46e63a36e94012c6fd68f2f
+          # Reuse this exact pinned checkout and the existing Go/Node build job.
+          # The generated app runs locally; this does not claim device deployment.
+          python3 ../../../../../.github/scripts/test-readme-template.py \
+            --templates "$fixtures/templates" \
+            --evidence "$RUNNER_TEMP/docs-readme-template-evidence"
           examples_checked=0
           preview_checked=0
 
@@ -324,7 +396,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: docs-regression-evidence
-          path: ${{ runner.temp }}/docs-*-crawl.json
+          path: |
+            ${{ runner.temp }}/docs-*-crawl.json
+            ${{ runner.temp }}/docs-readme-template-evidence
           if-no-files-found: ignore
           retention-days: 7
 
