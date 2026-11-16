@@ -7,8 +7,10 @@ output=$(realpath "$1")
 export WENDY_E2E_PUBLICATION_LOSS=1
 package=./go/internal/agent/localmesh
 regression=TestPublicationLossDiamondRecoversWithCurrentLeaf
-go test -race "$package" -run "^${regression}$" -count=1 -v -timeout=120s > "$output/normal.log" 2>&1
+status=0
+go test -race "$package" -run "^${regression}$" -count=1 -v -timeout=120s > "$output/normal.log" 2>&1 || status=$?
 cat "$output/normal.log"
+if [[ "$status" != 0 ]]; then exit "$status"; fi
 grep -q "^--- PASS: $regression " "$output/normal.log"
 grep -q 'production idle timeout recovered exact current-leaf publication and live TCP:' "$output/normal.log"
 if grep -q -- '--- SKIP:' "$output/normal.log"; then exit 1; fi
