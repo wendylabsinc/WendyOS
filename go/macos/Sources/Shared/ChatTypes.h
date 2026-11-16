@@ -13,4 +13,6 @@ WDChatResult *WDPollChat(uint64_t session, uint64_t turn);
 void WDChatFree(WDChatResult *value);
 WDStatus *WDStopChat(uint64_t session, uint64_t turn);
 WDStatus *WDResolveChatApproval(uint64_t session, uint64_t turn, uint64_t approval, int32_t allow);
+WDChatModelsResult *WDHostedChatModels(char *provider, char *key);
+WDStatus *WDStartHostedChat(uint64_t session, uint64_t turn, char *provider, char *model, char *key, WDChatMessage *messages, size_t count);
 #endif

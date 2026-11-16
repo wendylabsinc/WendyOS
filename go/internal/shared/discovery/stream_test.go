@@ -1274,6 +1274,22 @@ func TestCollectLANReportsBackendErrors(t *testing.T) {
 	}
 }
 
+func TestCollectLANReportsPolicyDenialAfterPromptWithoutRetry(t *testing.T) {
+	shrinkDuration(t, &backendListenedAfter, time.Millisecond)
+	var calls atomic.Int32
+	useStreamSeams(t, func(context.Context, string, func(MDNSService)) error {
+		calls.Add(1)
+		time.Sleep(10 * time.Millisecond)
+		return ErrLocalNetworkDenied
+	}, nil)
+	var denied atomic.Bool
+	opts := StreamOptions{OnBackendError: func(err error) { denied.Store(errors.Is(err, ErrLocalNetworkDenied)) }}
+	rows, err := CollectLAN(context.Background(), opts, 100*time.Millisecond)
+	if err != nil || len(rows) != 0 || !denied.Load() || calls.Load() != 1 {
+		t.Fatalf("rows=%v err=%v denied=%v attempts=%d", rows, err, denied.Load(), calls.Load())
+	}
+}
+
 // An mDNSResponder restart makes one browse attempt fail and the retry
 // recovers. That scan did listen, so it must not be reported as failed.
 func TestCollectLANDoesNotReportARecoveredBackend(t *testing.T) {

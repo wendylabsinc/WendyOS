@@ -309,7 +309,7 @@ struct ActivityView: View {
                 if let snapshot, !snapshot.diskError.isEmpty { Text("Storage is unavailable.").font(.caption).foregroundStyle(.secondary) }
             }
             Section("Apps") {
-                if let error = model.appsError { FailureNote(message: error) }
+                if let error = model.appsErrorFailure { FailureNote(message: error) }
                 HiddenAppsFilter(model: model)
                 ForEach(model.visibleApps) { app in
                     NavigationLink {

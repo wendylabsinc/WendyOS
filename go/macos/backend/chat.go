@@ -218,6 +218,16 @@ func discoverDeviceChatModels(ctx context.Context, preferred uint32, installed [
 }
 
 func (b *Backend) StartChat(session, turn uint64, port uint32, model string, messages []chat.Message) error {
+	return b.startChat(session, turn, port, model, messages, "", "")
+}
+
+// StartHostedChat shares the exact selected-device tools and approval lifecycle
+// with local inference; only the model transport changes.
+func (b *Backend) StartHostedChat(session, turn uint64, provider, model, key string, messages []chat.Message) error {
+	return b.startChat(session, turn, 0, model, messages, provider, key)
+}
+
+func (b *Backend) startChat(session, turn uint64, port uint32, model string, messages []chat.Message, hosted, key string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if session == 0 || turn == 0 {
@@ -243,12 +253,20 @@ func (b *Backend) StartChat(session, turn uint64, port uint32, model string, mes
 	if size > 1<<20 {
 		return errors.New("this conversation is too large; start a new chat")
 	}
-	transport, err := deviceChatTransport(conn, port)
-	if err != nil {
-		return err
+	var provider chat.Provider
+	closeTransport := func() {}
+	if hosted != "" {
+		provider, err = chat.HostedProvider(hosted, model, key)
+	} else {
+		var transport *chatTransport
+		transport, err = deviceChatTransport(conn, port)
+		if err == nil {
+			provider, err = chat.DeviceProvider(model, transport)
+			closeTransport = transport.CloseIdleConnections
+		}
 	}
-	provider, err := chat.DeviceProvider(model, transport)
 	if err != nil {
+		closeTransport()
 		return err
 	}
 	if b.chatTurn != nil {
@@ -275,7 +293,7 @@ func (b *Backend) StartChat(session, turn uint64, port uint32, model string, mes
 	b.chatTurn = state
 	go func() {
 		defer cancel()
-		defer transport.CloseIdleConnections()
+		defer closeTransport()
 		executor, err := environment.get(ctx)
 		if err != nil {
 			state.mu.Lock()
