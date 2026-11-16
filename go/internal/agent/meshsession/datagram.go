@@ -67,6 +67,7 @@ func validateUDPAck(b []byte) error {
 
 // DatagramFlow exposes complete messages. Transport frames remain unreliable.
 type DatagramFlow struct {
+	direct      *directDatagramApp
 	conn        *quic.Conn
 	endpoint    *udpmessage.Endpoint
 	ownsManager bool
@@ -176,18 +177,27 @@ func quicUDPAdmission(conn *quic.Conn) func([]byte) error {
 	}
 }
 func (f *DatagramFlow) Send(payload []byte) error {
+	if f != nil && f.direct != nil {
+		return f.direct.Send(payload)
+	}
 	if f == nil || f.endpoint == nil {
 		return net.ErrClosed
 	}
 	return f.endpoint.Send(payload)
 }
 func (f *DatagramFlow) Done() <-chan struct{} {
+	if f.direct != nil {
+		return f.direct.done
+	}
 	if f.shared != nil {
 		return f.shared.done
 	}
 	return f.conn.Context().Done()
 }
 func (f *DatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error) {
+	if f != nil && f.direct != nil {
+		return f.direct.Receive(ctx)
+	}
 	if f == nil || f.conn == nil {
 		return nil, net.ErrClosed
 	}
@@ -213,6 +223,9 @@ func (f *DatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error)
 	}
 }
 func (f *DatagramFlow) Close() error {
+	if f != nil && f.direct != nil {
+		return f.direct.Close()
+	}
 	if f != nil && f.shared != nil {
 		f.shared.close()
 		return nil

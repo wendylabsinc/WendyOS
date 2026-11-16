@@ -49,6 +49,8 @@ func (r appRetirement) close(reason string) {
 // shutdown.
 type Client struct {
 	credentials    *localmesh.Credentials
+	direct         *DirectManager
+	admission      *DirectManager
 	udpManager     *udpmessage.Manager
 	ownsUDPManager bool
 	mu             sync.Mutex
@@ -61,7 +63,8 @@ type Client struct {
 	done           chan struct{}
 	closeDone      chan struct{}
 	dial           func(context.Context, netip.AddrPort, *tls.Config, *quic.Config) (*quic.Conn, error)
-	portACKLimit   time.Duration // test override; zero uses pooledPortACKLimit
+	socketWorkers  sync.WaitGroup // joined after owned connections and pending dials close
+	portACKLimit   time.Duration  // test override; zero uses pooledPortACKLimit
 }
 
 type pooledSession struct {
@@ -82,6 +85,20 @@ type pooledSession struct {
 }
 
 func NewClient(credentials *localmesh.Credentials, managers ...*udpmessage.Manager) (*Client, error) {
+	return newClient(credentials, nil, managers...)
+}
+
+// NewClientWithQUICDialer uses connected UDP sockets from a userspace mesh
+// router. The pool retains peer authentication, session reuse and recovery;
+// Close also joins the transport/socket cleanup workers.
+func NewClientWithQUICDialer(credentials *localmesh.Credentials, dial func(context.Context, string, string) (net.Conn, error)) (*Client, error) {
+	if dial == nil {
+		return nil, errors.New("missing routed QUIC dialer")
+	}
+	return newClient(credentials, dial)
+}
+
+func newClient(credentials *localmesh.Credentials, dial func(context.Context, string, string) (net.Conn, error), managers ...*udpmessage.Manager) (*Client, error) {
 	if credentials == nil {
 		return nil, errors.New("missing wendy net app credentials")
 	}
@@ -89,6 +106,29 @@ func NewClient(credentials *localmesh.Credentials, managers ...*udpmessage.Manag
 		dial: func(ctx context.Context, endpoint netip.AddrPort, tlsConfig *tls.Config, config *quic.Config) (*quic.Conn, error) {
 			return dialAppQUIC(ctx, credentials, endpoint, tlsConfig, config)
 		}}
+	if dial != nil {
+		c.dial = func(ctx context.Context, endpoint netip.AddrPort, tlsConfig *tls.Config, config *quic.Config) (*quic.Conn, error) {
+			conn, cleanup, err := dialConnectedQUIC(ctx, dial, endpoint, tlsConfig, config)
+			if err != nil {
+				return nil, err
+			}
+			c.mu.Lock()
+			if c.closed {
+				c.mu.Unlock()
+				conn.CloseWithError(0, "app client stopped")
+				cleanup()
+				return nil, net.ErrClosed
+			}
+			c.socketWorkers.Add(1)
+			c.mu.Unlock()
+			go func() {
+				defer c.socketWorkers.Done()
+				<-conn.Context().Done()
+				cleanup()
+			}()
+			return conn, nil
+		}
+	}
 	c.udpManager = udpmessage.NewManager()
 	c.ownsUDPManager = true
 	if len(managers) > 0 && managers[0] != nil {
@@ -143,6 +183,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.closed = true
+	direct := c.direct
 	close(c.stop)
 	for pending := range c.tlsDials {
 		pending.retired = true
@@ -172,6 +213,9 @@ func (c *Client) Close() error {
 		tlsApps = append(tlsApps, conn)
 	}
 	c.mu.Unlock()
+	if direct != nil {
+		direct.Close()
+	}
 	for _, conn := range tlsApps {
 		_ = conn.Close()
 	}
@@ -184,6 +228,7 @@ func (c *Client) Close() error {
 		<-barrier
 	}
 	<-c.done
+	c.socketWorkers.Wait()
 	if c.ownsUDPManager {
 		c.udpManager.Close()
 	}
@@ -199,6 +244,7 @@ func (c *Client) Invalidate(peer meshid.Device) {
 	}
 	c.mu.Lock()
 	conns := c.invalidateLocked(peer)
+	direct := c.direct
 	var tlsApps []*tlsAppConn
 	for conn := range c.tlsApps {
 		if conn.peer == peer {
@@ -206,6 +252,9 @@ func (c *Client) Invalidate(peer meshid.Device) {
 		}
 	}
 	c.mu.Unlock()
+	if direct != nil {
+		direct.Invalidate(peer)
+	}
 	for _, conn := range tlsApps {
 		_ = conn.Close()
 	}
@@ -214,7 +263,8 @@ func (c *Client) Invalidate(peer meshid.Device) {
 	}
 }
 
-// WithdrawRoute cancels UDP flows and pending handshakes, but retains a live
+// WithdrawRoute cancels ordinary UDP flows and pending handshakes, but retains
+// direct associations under their epoch lifetime and a live
 // authenticated QUIC session so existing TCP streams can survive reconvergence.
 // Every new dial still requires a fresh caller-side signed-route check. The
 // routed packet layer does not forward during the outage; credential lifetime
@@ -224,7 +274,7 @@ func (c *Client) WithdrawRoute(peer meshid.Device) {
 		return
 	}
 	c.mu.Lock()
-	conns := c.retirePeerLocked(peer, true)
+	conns := c.retirePeerLocked(peer, true, true)
 	c.mu.Unlock()
 	for _, conn := range conns {
 		conn.close("wendy net app route withdrawn")
@@ -252,6 +302,10 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 		peers[peer] = entry.address
 	}
 	for entry := range c.udpSessions {
+		if entry.direct {
+			// The retained epoch owns outage and credential lifetime.
+			continue
+		}
 		endpoint, err := ResolveApp(snapshot, entry.peer)
 		transport := localmesh.AppQUIC
 		if entry.tls {
@@ -270,11 +324,11 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	for peer, address := range peers {
 		endpoint, err := ResolveApp(snapshot, peer)
 		if !quicProofCurrent(snapshot, peer, address) {
-			stale = append(stale, c.invalidateLocked(peer)...)
+			stale = append(stale, c.retirePeerLocked(peer, false, true)...)
 		} else if err != nil || endpoint.Transport != localmesh.AppQUIC {
-			stale = append(stale, c.retirePeerLocked(peer, true)...)
+			stale = append(stale, c.retirePeerLocked(peer, true, true)...)
 		} else if endpoint.Address != address {
-			stale = append(stale, c.invalidateLocked(peer)...)
+			stale = append(stale, c.retirePeerLocked(peer, false, true)...)
 		}
 	}
 	c.mu.Unlock()
@@ -335,10 +389,10 @@ func (c *Client) retireEntryLocked(entry *pooledSession) []appRetirement {
 }
 
 func (c *Client) invalidateLocked(peer meshid.Device) []appRetirement {
-	return c.retirePeerLocked(peer, false)
+	return c.retirePeerLocked(peer, false, false)
 }
 
-func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []appRetirement {
+func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP, preserveDirect bool) []appRetirement {
 	for pending := range c.tlsDials {
 		if pending.peer == peer {
 			pending.retired = true
@@ -355,7 +409,7 @@ func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []
 		}
 	}
 	for entry := range c.udpSessions {
-		if entry.peer != peer {
+		if entry.peer != peer || preserveDirect && entry.direct {
 			continue
 		}
 		entry.retired = true
@@ -402,8 +456,17 @@ func (c *Client) DialWithRouteSnapshot(ctx context.Context, peer meshid.Device, 
 }
 
 func (c *Client) dialWithConfig(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, retryCheck func() error, config func() (*quic.Config, error)) (net.Conn, error) {
+	return c.DialUpper(ctx, peer, func(ctx context.Context) (net.Conn, error) {
+		return c.dialWithConfigOwned(ctx, peer, address, port, retryCheck, config)
+	})
+}
+
+func (c *Client) dialWithConfigOwned(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, retryCheck func() error, config func() (*quic.Config, error)) (net.Conn, error) {
 	if c == nil || port == 0 || !address.IsValid() || address.Port() == 0 {
 		return nil, errors.New("invalid pooled wendy net app dial")
+	}
+	if conn, owned, err := c.dialDirect(ctx, peer, port); owned {
+		return conn, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		entry, reused, err := c.acquireWithConfig(ctx, peer, address, config)

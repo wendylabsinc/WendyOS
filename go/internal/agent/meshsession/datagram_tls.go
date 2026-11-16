@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
@@ -20,6 +21,7 @@ import (
 // ends. A two-byte length preserves empty messages and message boundaries.
 // Setup negotiates the smaller complete-message capacity of the two peers.
 type TLSDatagramFlow struct {
+	direct      *directDatagramApp
 	conn        *tlsAppConn
 	endpoint    *udpmessage.Endpoint
 	maximum     uint16
@@ -28,10 +30,7 @@ type TLSDatagramFlow struct {
 	failed      <-chan struct{}
 	cleanup     sync.Once
 	ownsManager bool
-	header      [2]byte
-	headerUsed  int
-	payload     []byte
-	payloadUsed int
+	reader      tlsDatagramReader
 }
 
 func writeTLSUDPFrame(conn net.Conn, mu *sync.Mutex, payload []byte, maximum uint16) error {
@@ -43,20 +42,8 @@ func writeTLSUDPFrame(conn net.Conn, mu *sync.Mutex, payload []byte, maximum uin
 	if err := conn.SetWriteDeadline(time.Now().Add(udpIdleTimeout)); err != nil {
 		return err
 	}
-	var header [2]byte
-	binary.BigEndian.PutUint16(header[:], uint16(len(payload)))
-	for _, part := range [][]byte{header[:], payload} {
-		for len(part) != 0 {
-			n, err := conn.Write(part)
-			if err != nil || n <= 0 {
-				// A partial frame cannot be retried on a different flow.
-				if err != nil {
-					return err
-				}
-				return io.ErrShortWrite
-			}
-			part = part[n:]
-		}
+	if err := writeTLSDatagramFrame(conn, payload); err != nil {
+		return err
 	}
 	return conn.SetWriteDeadline(time.Time{})
 }
@@ -67,6 +54,11 @@ func DialUDPTLS(ctx context.Context, credentials *localmesh.Credentials, peer me
 	if err != nil {
 		return nil, err
 	}
+	return newTLSDatagramFlow(conn, peer, maximum, options...)
+}
+
+func newTLSDatagramFlow(conn *tlsAppConn, peer meshid.Device, maximum uint16, options ...UDPOptions) (*TLSDatagramFlow, error) {
+	var err error
 	opts := udpOptions(options)
 	manager, endpoint := opts.Manager, opts.Endpoint
 	if endpoint != nil {
@@ -138,6 +130,13 @@ func DialUDPTLS(ctx context.Context, credentials *localmesh.Credentials, peer me
 // with QUIC's bounded transport queue, ownership is checked when bytes enter
 // this queue; endpoint retirement closes the connection and drops queued data.
 func attachTLSUDPTransport(conn net.Conn, endpoint *udpmessage.Endpoint, maximum uint16) (<-chan struct{}, error) {
+	var writeMu sync.Mutex
+	return attachQueuedUDPTransport(endpoint, func(b []byte) error { return writeTLSUDPFrame(conn, &writeMu, b, maximum) })
+}
+
+// One bounded whole-message queue shared by TLS and retained direct UDP.
+// The callback runs outside the source guard and must unblock on transport close.
+func attachQueuedUDPTransport(endpoint *udpmessage.Endpoint, write func([]byte) error) (<-chan struct{}, error) {
 	failed := make(chan struct{})
 	pending := make(chan []byte, 1)
 	err := endpoint.SetTransport(MaxUDPTransportChunk, true, func(b []byte) error {
@@ -161,7 +160,6 @@ func attachTLSUDPTransport(conn net.Conn, endpoint *udpmessage.Endpoint, maximum
 		return nil, err
 	}
 	go func() {
-		var writeMu sync.Mutex
 		for {
 			select {
 			case <-endpoint.Done():
@@ -172,7 +170,7 @@ func attachTLSUDPTransport(conn net.Conn, endpoint *udpmessage.Endpoint, maximum
 					return
 				default:
 				}
-				if err := writeTLSUDPFrame(conn, &writeMu, b, maximum); err != nil {
+				if err := write(b); err != nil {
 					close(failed)
 					return
 				}
@@ -184,8 +182,16 @@ func attachTLSUDPTransport(conn net.Conn, endpoint *udpmessage.Endpoint, maximum
 
 func (f *TLSDatagramFlow) Maximum() int          { return int(f.maximum) }
 func (f *TLSDatagramFlow) Done() <-chan struct{} { return f.done }
-func (f *TLSDatagramFlow) Close() error          { return f.conn.Close() }
+func (f *TLSDatagramFlow) Close() error {
+	if f.direct != nil {
+		return f.direct.Close()
+	}
+	return f.conn.Close()
+}
 func (f *TLSDatagramFlow) Send(b []byte) error {
+	if f.direct != nil {
+		return f.direct.Send(b)
+	}
 	if len(b) > int(f.maximum) {
 		return udpmessage.ErrCapacity
 	}
@@ -193,6 +199,9 @@ func (f *TLSDatagramFlow) Send(b []byte) error {
 }
 
 func (f *TLSDatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error) {
+	if f.direct != nil {
+		return f.direct.Receive(ctx)
+	}
 	if err := f.readMu.lock(ctx, f.done); err != nil {
 		return nil, localUDPError(err)
 	}
@@ -211,44 +220,22 @@ func (f *TLSDatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, err
 		if err := f.conn.SetReadDeadline(deadline); err != nil {
 			return nil, err
 		}
-		if f.headerUsed != len(f.header) {
-			n, err := f.conn.Read(f.header[f.headerUsed:])
-			f.headerUsed += n
-			if err != nil {
-				if e, ok := err.(net.Error); ok && e.Timeout() {
-					continue
-				}
-				f.Close()
-				return nil, err
-			}
-			if f.headerUsed != len(f.header) {
+		payload, complete, err := f.reader.read(f.conn, int(f.maximum))
+		if err != nil {
+			if e, ok := err.(net.Error); ok && e.Timeout() {
 				continue
 			}
-		}
-		if f.payload == nil {
-			size := int(binary.BigEndian.Uint16(f.header[:]))
-			if size > int(f.maximum) {
-				f.Close()
+			f.Close()
+			if errors.Is(err, syscall.EMSGSIZE) {
 				return nil, ErrUDPUnsupported
 			}
-			f.payload = make([]byte, size)
+			return nil, err
 		}
-		if f.payloadUsed != len(f.payload) {
-			n, err := f.conn.Read(f.payload[f.payloadUsed:])
-			f.payloadUsed += n
-			if err != nil {
-				if e, ok := err.(net.Error); ok && e.Timeout() {
-					continue
-				}
-				f.Close()
-				return nil, err
-			}
-			if f.payloadUsed != len(f.payload) {
-				continue
-			}
+		if !complete {
+			continue
 		}
-		message, err := f.endpoint.RetainReceived(f.payload)
-		f.payload, f.payloadUsed, f.headerUsed = nil, 0, 0
+		message, err := f.endpoint.RetainReceived(payload)
+		f.reader.payload = nil
 		if errors.Is(err, udpmessage.ErrCapacity) {
 			continue
 		}
@@ -261,6 +248,16 @@ func (c *Client) DialUDPTLS(ctx context.Context, peer meshid.Device, address net
 	if c == nil {
 		return nil, net.ErrClosed
 	}
+	release, err := c.acquireApplication(ctx, peer)
+	if err != nil {
+		return nil, err
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			release()
+		}
+	}()
 	if peer == c.credentials.Device {
 		return nil, ErrNoRoute
 	}
@@ -272,6 +269,7 @@ func (c *Client) DialUDPTLS(ctx context.Context, peer meshid.Device, address net
 		c.mu.Unlock()
 		return nil, net.ErrClosed
 	}
+	entry.direct = c.direct != nil && c.direct.cfg.DatagramBytes != 0
 	c.udpSessions[entry] = struct{}{}
 	c.mu.Unlock()
 	opts := udpOptions(options)
@@ -282,7 +280,15 @@ func (c *Client) DialUDPTLS(ctx context.Context, peer meshid.Device, address net
 			opts.Manager = c.udpManager
 		}
 	}
-	flow, err := DialUDPTLS(setup, c.credentials, peer, address, port, opts)
+	direct, handled, err := c.dialDirectDatagram(setup, entry, peer, port, opts)
+	var flow *TLSDatagramFlow
+	if handled {
+		if err == nil {
+			flow = &TLSDatagramFlow{direct: direct, maximum: uint16(direct.maximum), done: direct.done}
+		}
+	} else {
+		flow, err = DialUDPTLS(setup, c.credentials, peer, address, port, opts)
+	}
 	c.mu.Lock()
 	valid := err == nil && !c.closed && !entry.retired
 	if valid {
@@ -300,7 +306,8 @@ func (c *Client) DialUDPTLS(ctx context.Context, peer meshid.Device, address net
 		}
 		return nil, net.ErrClosed
 	}
-	go func() { <-flow.Done(); c.mu.Lock(); delete(c.udpSessions, entry); c.mu.Unlock() }()
+	transferred = true
+	go func() { defer release(); <-flow.Done(); c.mu.Lock(); delete(c.udpSessions, entry); c.mu.Unlock() }()
 	return flow, nil
 }
 
