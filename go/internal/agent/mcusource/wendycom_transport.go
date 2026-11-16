@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 )
@@ -50,6 +52,7 @@ type wendycomTransport struct {
 	connect            func(context.Context) (wendycomClient, error)
 	sourceAssetID      int32 // the asset the board's certificate must name
 	sourcePrincipalURI string
+	routedSetup        bool
 
 	mu     sync.Mutex
 	client wendycomClient // nil until the first successful connect
@@ -70,6 +73,19 @@ type wendycomTransport struct {
 // certificate does not name p.SourceAssetID, as mtlsDialer does for the other
 // transports.
 func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
+	return NewWendyComTransportWithDirect(logger, certPEM, chainPEM, keyPEM, p, addr, nil)
+}
+
+// WendyComDirectConnector tries the current authenticated retained epoch. owned
+// is false only when no epoch accepts new native flows. Errors on an owned epoch
+// must not fall back to another connection, which could duplicate a service OPEN.
+// The returned client must retain the exact epoch's verified peer certificate.
+type WendyComDirectConnector func(context.Context, meshid.Device) (client *liteclient.WendyLiteClient, owned bool, err error)
+
+// NewWendyComTransportWithDirect uses a retained stream for principal-based
+// pairings when available, retaining the ordinary TLS path for other cases.
+// The connector is resolved on each connection attempt, not at construction.
+func NewWendyComTransportWithDirect(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string, direct WendyComDirectConnector, upperDialers ...func(context.Context, meshid.Device, string, string) (net.Conn, error)) (SensorTransport, error) {
 	if p.SourcePrincipalURI != "" {
 		if err := p.Validate(); err != nil {
 			return nil, err
@@ -81,18 +97,48 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 	if chainPEM == "" {
 		return nil, errors.New("mcusource: agent has no CA chain to verify a Wendy Lite board against")
 	}
+	// Generic PKI names remain valid SensorLink sources even when they cannot
+	// be addressed by Wendy Net's UUID-only retained session registry.
+	directPeer, _ := meshid.DeviceFromPrincipal(p.SourcePrincipalURI)
+	routedSetup := directPeer.IsValid() && len(upperDialers) > 0 && upperDialers[0] != nil
 	return &wendycomTransport{
 		logger:             logger.With(zap.Int32("source", p.SourceAssetID), zap.String("addr", addr)),
 		sourceAssetID:      p.SourceAssetID,
 		sourcePrincipalURI: p.SourcePrincipalURI,
+		routedSetup:        routedSetup,
 		connect: func(ctx context.Context) (wendycomClient, error) {
+			if direct != nil && directPeer.IsValid() {
+				client, owned, err := direct(ctx, directPeer)
+				if err != nil {
+					if client != nil {
+						client.Close()
+					}
+					return nil, err
+				}
+				if owned {
+					if client == nil {
+						return nil, errors.New("mcusource: direct connector returned no client")
+					}
+					return client, nil
+				}
+				if client != nil {
+					client.Close()
+					return nil, errors.New("mcusource: unowned direct client")
+				}
+			}
 			cert, err := certs.TLSKeyPair(certPEM, chainPEM, keyPEM)
 			if err != nil {
 				return nil, fmt.Errorf("mcusource: wendycom client certificate: %w", err)
 			}
 			if p.SourcePrincipalURI != "" {
 				c := liteclient.NewWendyLiteClient()
-				if err := c.ConnectSensorSource(ctx, addr, cert, chainPEM, p.SourcePrincipalURI); err != nil {
+				var dial func(context.Context, string, string) (net.Conn, error)
+				if routedSetup {
+					dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+						return upperDialers[0](ctx, directPeer, network, address)
+					}
+				}
+				if err := c.ConnectSensorSourceWithDialer(ctx, addr, cert, chainPEM, p.SourcePrincipalURI, dial); err != nil {
 					return nil, err
 				}
 				return c, nil
@@ -177,6 +223,9 @@ func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, erro
 	budget := wendycomConnectTimeout
 	if t.sourcePrincipalURI != "" {
 		budget = liteclient.SensorSourceSetupTimeout
+		if t.routedSetup {
+			budget = liteclient.SensorSourceRoutedSetupTimeout
+		}
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()

@@ -1229,22 +1229,26 @@ func (c *WendyLiteClient) connectTLSContext(ctx context.Context, address string,
 }
 
 func (c *WendyLiteClient) connectTLSWithDialerContext(ctx context.Context, address string, cfg *tls.Config, dial func(context.Context, string, string) (net.Conn, error)) error {
-	conn, err := dialAuthenticatedTLSWithDialer(ctx, address, cfg, 15*time.Second, 60*time.Second, dial)
+	conn, err := dialAuthenticatedTLSWithDialer(ctx, address, cfg, sourceTCPDialBudget(dial != nil), sensorSourceTLSSetupTimeout, dial)
 	if err != nil {
 		return fmt.Errorf("connect (mTLS): %w", err)
 	}
+	return c.connectAuthenticatedStreamContext(ctx, conn, conn.ConnectionState().PeerCertificates[0])
+}
+
+// The caller has authenticated this stream and retains authority for its entire
+// lifetime. This helper only establishes WendyCom; it does not authenticate raw
+// sockets or grant any peer role.
+func (c *WendyLiteClient) connectAuthenticatedStreamContext(ctx context.Context, conn net.Conn, leaf *x509.Certificate) error {
 	stopCancel := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stopCancel()
 	c.link = newDirectLink(conn)
-	// TLS1.3 clients can finish before the server has received and verified
-	// their certificate flight. Across BLE that work can outlast a local
-	// protocol RTT; keep caller cancellation and a finite radio budget.
 	if err := c.handshakeWithin(60 * time.Second); err != nil {
 		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
-	c.peerCert = conn.ConnectionState().PeerCertificates[0]
+	c.peerCert = leaf
 	c.startReadLoop()
 	return nil
 }
@@ -1263,26 +1267,42 @@ func dialAuthenticatedTLSWithDialer(ctx context.Context, address string, cfg *tl
 	raw, err := dial(setup, "tcp", address)
 	cancelDial()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("TCP setup: %w", err)
 	}
 	secure := tls.Client(raw, cfg)
 	handshake, cancel := context.WithTimeout(ctx, tlsBudget)
 	defer cancel()
 	if err := secure.HandshakeContext(handshake); err != nil {
 		_ = raw.Close()
-		return nil, err
+		return nil, fmt.Errorf("TLS handshake: %w", err)
 	}
 	return secure, nil
 }
 
 const sensorSourceTCPDialTimeout = 15 * time.Second
+const meshSourceTCPDialTimeout = 45 * time.Second
 const sensorSourceTLSSetupTimeout = 60 * time.Second
 
-// SensorSourceSetupTimeout bounds a native source connection's TCP dial and
-// authenticated TLS/WendyCom setup. C6 certificate flights on a routed BLE
-// endpoint take about 29–33 seconds; established SensorLink I/O has its own
-// shorter request deadlines.
+// A newly installed forward mesh route can precede the peer's return route.
+// Allow TCP's later SYN retransmissions to complete after that convergence;
+// the old 15s limit raced a successful 15s retransmission on BLE. Ordinary
+// LAN dials keep their shorter ceiling. The caller's context always wins.
+func sourceTCPDialBudget(routed bool) time.Duration {
+	if routed {
+		return meshSourceTCPDialTimeout
+	}
+	return sensorSourceTCPDialTimeout
+}
+
+// SensorSourceSetupTimeout bounds native source setup with the ordinary TCP
+// dialer. Routed dialers use SensorSourceRoutedSetupTimeout. Both keep a
+// separate certificate/WendyCom flight budget and shorter established request
+// deadlines.
 const SensorSourceSetupTimeout = sensorSourceTCPDialTimeout + sensorSourceTLSSetupTimeout
+
+// SensorSourceRoutedSetupTimeout also allows mesh return-route convergence
+// during TCP setup. It does not extend established sensor request deadlines.
+const SensorSourceRoutedSetupTimeout = meshSourceTCPDialTimeout + sensorSourceTLSSetupTimeout
 
 // ConnectSensorSource authenticates a pinned SensorLink source using this
 // consumer's device identity. The source limits device callers to SensorLink.
@@ -1290,7 +1310,14 @@ func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address strin
 	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
 }
 
-func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, tcpBudget, tlsBudget time.Duration) error {
+// ConnectSensorSourceWithDialer keeps normal source authentication while the
+// caller owns routed admission and lifetime. A non-nil dialer gets the mesh
+// TCP setup ceiling; TLS and established request budgets remain unchanged.
+func (c *WendyLiteClient) ConnectSensorSourceWithDialer(ctx context.Context, address string, cert tls.Certificate, chain, principal string, dial func(context.Context, string, string) (net.Conn, error)) error {
+	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, sourceTCPDialBudget(dial != nil), sensorSourceTLSSetupTimeout, dial)
+}
+
+func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, tcpBudget, tlsBudget time.Duration, dialers ...func(context.Context, string, string) (net.Conn, error)) error {
 	if len(cert.Certificate) == 0 {
 		return fmt.Errorf("missing consumer certificate")
 	}
@@ -1319,7 +1346,11 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 	}
 	meshalpn.NewCertificates(cert, known).ConfigureClient(cfg, meshalpn.WendyCom)
 	dialCtx, cancelDial := context.WithTimeout(ctx, tcpBudget)
-	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", address)
+	dial := (&net.Dialer{}).DialContext
+	if len(dialers) > 0 && dialers[0] != nil {
+		dial = dialers[0]
+	}
+	raw, err := dial(dialCtx, "tcp", address)
 	cancelDial()
 	if err != nil {
 		return fmt.Errorf("connect SensorLink (mTLS): %w", err)

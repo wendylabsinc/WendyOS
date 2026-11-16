@@ -32,7 +32,7 @@ type grpcTransport struct {
 
 // NewGRPCTransport dials the source's mTLS agent endpoint, pinning its
 // identity (paired principal, or legacy asset id in own tenant).
-func NewGRPCTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
+func NewGRPCTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string, dialers ...func(context.Context, string, string) (net.Conn, error)) (SensorTransport, error) {
 	want, err := wantPeerIdentity(p, certPEM)
 	if err != nil {
 		return nil, err
@@ -41,8 +41,12 @@ func NewGRPCTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p Se
 	if err != nil {
 		return nil, fmt.Errorf("mcusource: grpc tls: %w", err)
 	}
+	rawDial := (&net.Dialer{}).DialContext
+	if len(dialers) > 0 && dialers[0] != nil {
+		rawDial = dialers[0]
+	}
 	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		return rawDial(ctx, "tcp", addr)
 	}
 	cc, err := grpc.NewClient("passthrough:///sensor-source",
 		grpc.WithContextDialer(dialer),
