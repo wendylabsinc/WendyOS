@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
 	"github.com/wendylabsinc/wendy/go/internal/agent/bluetooth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
@@ -280,6 +281,12 @@ func main() {
 		// can resolve peer-device names for containers on the mesh network mode.
 		meshDNS = mesh.NewDNSServer(logger, "127.0.0.53:53")
 		ctrdClient.SetMeshDNS(meshDNS)
+
+		if runtime.GOOS == "linux" {
+			ctrdClient.SetAppMemoryBudget(func() appcgroup.Status { return appcgroup.Ensure(configPath) })
+			// Logging the state now keeps the first app start quiet.
+			ctrdClient.EnsureAppMemoryBudget()
+		}
 	}
 
 	// Ensure the host-side WENDY-MESH iptables chain exists so the wendy-mesh

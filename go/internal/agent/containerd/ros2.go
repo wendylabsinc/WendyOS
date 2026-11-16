@@ -438,6 +438,7 @@ func (c *Client) ensureOneROS2Sidecar(ctx context.Context, anchor *services.ROS2
 		spec.Mounts = append(spec.Mounts, localoci.SharedSHMMount(sidecarSHM))
 	}
 
+	placeROS2Helper(spec, name, c.ros2HelperUnified())
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return services.ROS2Sidecar{}, fmt.Errorf("marshaling sidecar OCI spec: %w", err)
