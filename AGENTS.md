@@ -28,7 +28,8 @@ applicable sections below, in this order. The header:
 
 The issue line is present only when an issue exists (use **Advances** for a
 partial delivery, **Related** for context). The "In plain terms" paragraph is
-always present. Then the sections, in this order. Keep each section concise and describe only what changed. Omit
+always present. Examples: [#2834](https://github.com/wendylabsinc/WendyOS/pull/2834),
+[#2958](https://github.com/wendylabsinc/WendyOS/pull/2958). Then the sections, in this order. Keep each section concise and describe only what changed. Omit
 sections that do not apply instead of writing `None` or describing unchanged
 behavior. Always include the Risk section. Do not add a summary, test plan,
 checklist, or other sections. These limits apply to the PR description, not to
