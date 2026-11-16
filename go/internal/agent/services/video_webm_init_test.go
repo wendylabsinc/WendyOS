@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -314,5 +315,173 @@ func TestH264LateViewerReceivesFramesUnchanged(t *testing.T) {
 				t.Fatalf("%s viewer frame %d: %x, want %x", name, i, got[i], want[i])
 			}
 		}
+	}
+}
+
+// webmTestBoundaries lists every offset where the stream stands between two
+// elements a demuxer reads whole. It is deliberately not the walker under
+// test: only Segment and Cluster are stepped into, so a BlockGroup is one
+// element here, as it is to matroskademux.
+func webmTestBoundaries(t *testing.T, stream []byte) map[int]bool {
+	t.Helper()
+	boundaries := make(map[int]bool)
+	for i := 0; i < len(stream); {
+		id, n, _, ok := webmVint(stream[i:], true)
+		if !ok {
+			t.Fatalf("no element identifier at %d", i)
+		}
+		size, m, _, ok := webmVint(stream[i+n:], false)
+		if !ok {
+			t.Fatalf("no element size at %d", i+n)
+		}
+		i += n + m
+		if id != webmIDSegment && id != webmIDCluster {
+			i += int(size)
+		}
+		boundaries[i] = true
+	}
+	return boundaries
+}
+
+func TestWebMJoinsReportWholeElementsAcrossReadBoundaries(t *testing.T) {
+	stream, _, clusters := webmTestStream()
+	boundaries := webmTestBoundaries(t, stream)
+	// The test stream must put the walker to the question: the walker steps
+	// between a BlockGroup's children, and a demuxer cannot be left there.
+	duration := bytes.Index(stream[clusters[2].start:], []byte{0x9b, 0x81, 33})
+	if duration < 0 || boundaries[clusters[2].start+duration] {
+		t.Fatal("the test stream has no BlockGroup with a Block followed by a BlockDuration")
+	}
+	for size := 1; size <= len(stream); size++ {
+		var webmInit webmInitialization
+		var joins webmJoins
+		for off := 0; off < len(stream); off += size {
+			read := stream[off:min(off+size, len(stream))]
+			joins.feed(read, webmInit.feed(read))
+			want := len(read)
+			for want > 0 && !boundaries[off+want] {
+				want--
+			}
+			if joins.whole != want {
+				t.Fatalf("read size %d, read at %d: %d leading bytes reported whole, want %d", size, off, joins.whole, want)
+			}
+		}
+	}
+}
+
+// pumpVP8 runs the view RPC's send loop over the frames one viewer was given
+// and returns the messages it sent.
+func pumpVP8(t *testing.T, frames []*videoFrame) [][]byte {
+	t.Helper()
+	h, cancel := newTestHub(t)
+	defer cancel()
+	id, _, err := h.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan *videoFrame, len(frames))
+	for _, frame := range frames {
+		ch <- frame
+	}
+	return pumpClosed(h, id, ch)
+}
+
+// A viewer is only ever sent whole WebM elements, whatever the pipe reads cut
+// the stream into. An element left unfinished at the end of a message is what
+// makes a later loss fatal: the demuxer takes whatever comes next as the rest
+// of it.
+func TestVP8ViewerIsSentWholeElements(t *testing.T) {
+	stream, _, _ := webmTestStream()
+	pristine := append([]byte(nil), stream...)
+	boundaries := webmTestBoundaries(t, stream)
+	for size := 1; size <= len(stream); size++ {
+		sent := pumpVP8(t, vp8TestFrames(t, stream, size))
+		end := 0
+		for k, message := range sent {
+			if len(message) == 0 {
+				t.Fatalf("read size %d: message %d is empty", size, k)
+			}
+			if end += len(message); !boundaries[end] {
+				t.Fatalf("read size %d: message %d ends at %d, inside an element", size, k, end)
+			}
+		}
+		if got := bytes.Join(sent, nil); !bytes.Equal(got, stream) {
+			t.Fatalf("read size %d: viewer's stream changed:\n got %x\nwant %x", size, got, stream)
+		}
+	}
+	if !bytes.Equal(stream, pristine) {
+		t.Fatal("the send loop wrote into the shared frame payloads")
+	}
+}
+
+// When the hub drops reads for a slow viewer, the viewer's stream must stay
+// one WebM stream: it ends on the last whole element before the loss and
+// resumes at the next Cluster that opens on a key frame. The initialization is
+// sent again only to a viewer that had not been sent all of it.
+func TestVP8ViewerResumesAtAKeyFrameClusterAfterLosingReads(t *testing.T) {
+	stream, init, clusters := webmTestStream()
+	boundaries := webmTestBoundaries(t, stream)
+	for size := 1; size <= len(stream); size++ {
+		frames := vp8TestFrames(t, stream, size)
+		for hole := 1; hole < len(frames); hole++ {
+			for _, width := range []int{1, 3} {
+				if hole+width > len(frames) {
+					continue
+				}
+				whole := hole * size
+				for whole > 0 && !boundaries[whole] {
+					whole--
+				}
+				want := append([]byte(nil), stream[:whole]...)
+				if resumed := lateWebMViewer(stream, init, clusters, (hole+width)*size); resumed != nil {
+					if frames[hole-1].decoderInit != nil {
+						resumed = resumed[len(init):]
+					}
+					want = append(want, resumed...)
+				}
+				kept := append(append([]*videoFrame(nil), frames[:hole]...), frames[hole+width:]...)
+				if got := bytes.Join(pumpVP8(t, kept), nil); !bytes.Equal(got, want) {
+					t.Fatalf("read size %d, reads %d+%d lost:\n got %x\nwant %x", size, hole, width, got, want)
+				}
+			}
+		}
+	}
+}
+
+// The loss is the hub's own: a viewer whose queue is full has reads dropped,
+// and the reads it is given afterwards show the gap.
+func TestVP8ViewerRecoversFromReadsTheHubDropped(t *testing.T) {
+	stream, _, clusters := webmTestStream()
+	const size = 7
+	h, cancel := newTestHub(t)
+	defer cancel()
+	h.sampleSeq = new(atomic.Uint64)
+	id, ch, err := h.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The viewer stalls inside the first Cluster's delta frame: its queue fills
+	// with the next reads and the hub drops the rest of that frame's.
+	stall := clusters[0].tag/size + 1
+	var kept []*videoFrame
+	for k, off := 0, 0; off < len(stream); k, off = k+1, off+size {
+		h.produce(&videoFrame{codec: agentpb.VideoCodec_VIDEO_CODEC_VP8, data: stream[off:min(off+size, len(stream))]})
+		if k >= stall && off+size <= clusters[1].start {
+			continue
+		}
+		for len(ch) > 0 {
+			kept = append(kept, <-ch)
+		}
+	}
+	dropped := h.drops(id)
+	if dropped == 0 {
+		t.Fatal("the hub dropped nothing; the test proves nothing")
+	}
+	whole := (stall + cap(ch)) * size
+	for boundaries := webmTestBoundaries(t, stream); !boundaries[whole]; whole-- {
+	}
+	want := append(append([]byte(nil), stream[:whole]...), stream[clusters[2].start:]...)
+	if got := bytes.Join(pumpVP8(t, kept), nil); !bytes.Equal(got, want) {
+		t.Fatalf("after the hub dropped %d reads:\n got %x\nwant %x", dropped, got, want)
 	}
 }
