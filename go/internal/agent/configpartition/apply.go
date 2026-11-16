@@ -253,6 +253,12 @@ func stageSeedForSupervisor(logger *zap.Logger, cfgDir, inbox, configPath string
 		logger.Info("Keeping the config partition agent binary until first-boot enrollment is done")
 		return false
 	}
+	if _, err := os.Stat(filepath.Join(cfgDir, "wendy.conf")); err == nil {
+		// Wi-Fi added during the seed's trial is not in its snapshot, so
+		// rejecting the seed would delete it.
+		logger.Info("Keeping the config partition agent binary until wendy.conf is applied")
+		return false
+	}
 	if err := validateELF(src); err != nil {
 		logger.Error("Config partition binary failed ELF validation, removing", zap.String("path", src), zap.Error(err))
 		os.Remove(src)    //nolint:errcheck

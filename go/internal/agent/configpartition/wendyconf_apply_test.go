@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -419,4 +420,36 @@ func TestApplyWendyConfDropsWhenAttemptCannotBeCounted(t *testing.T) {
 	applyWendyConf(zap.NewNop(), cfgDir, filepath.Join(configPath, "sub"))
 
 	assertGone(t, confPath, confPath+".new")
+}
+
+// A Wi-Fi network NetworkManager could not take yet is applied by a later start;
+// the seed waits for it, or its trial snapshot would miss the network.
+func TestSeedWaitsForWiFiThatNetworkManagerCouldNotTakeYet(t *testing.T) {
+	notRunning := nmNotRunning(t)
+	nmUp := false
+	stubApply(t, &fakeApply{addErr: func(string, int) error {
+		if nmUp {
+			return nil
+		}
+		return notRunning
+	}})
+	cfgDir, confPath := writeConf(t, "[wifi]\nssid = Home\npassword = home-pass\n")
+	data, _ := os.ReadFile(makeELF(t, 2, elfMachineByArch[runtime.GOARCH]))
+	seed := filepath.Join(cfgDir, agentBinaryName)
+	os.WriteFile(seed, data, 0o644)
+	configPath, inbox := t.TempDir(), t.TempDir()
+
+	applyWendyConf(zap.NewNop(), cfgDir, configPath)
+	if _, err := os.Stat(confPath); err != nil {
+		t.Fatal("NetworkManager was down, so wendy.conf must be kept")
+	}
+	if stageSeedForSupervisor(zap.NewNop(), cfgDir, inbox, configPath) {
+		t.Fatal("the seed must wait while its Wi-Fi is not in NetworkManager")
+	}
+
+	nmUp = true
+	applyWendyConf(zap.NewNop(), cfgDir, configPath)
+	if !stageSeedForSupervisor(zap.NewNop(), cfgDir, inbox, configPath) {
+		t.Fatal("with the Wi-Fi applied, the seed must go ahead")
+	}
 }

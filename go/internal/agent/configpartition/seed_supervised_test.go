@@ -89,6 +89,22 @@ func TestStageSeedWaitsForFirstBootEnrollment(t *testing.T) {
 	}
 }
 
+func TestStageSeedWaitsUntilWendyConfIsApplied(t *testing.T) {
+	cfgDir, inbox, src := seedFixture(t)
+	conf := filepath.Join(cfgDir, "wendy.conf")
+	os.WriteFile(conf, []byte("[wifi]\nssid = Home\n"), 0o600)
+	if stageSeedForSupervisor(zap.NewNop(), cfgDir, inbox, t.TempDir()) {
+		t.Fatal("a seed staged before its Wi-Fi reaches NetworkManager would delete it on a rejection")
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Fatal("the seed must be kept for a later start")
+	}
+	os.Remove(conf)
+	if !stageSeedForSupervisor(zap.NewNop(), cfgDir, inbox, t.TempDir()) {
+		t.Fatal("once wendy.conf is applied the seed must go ahead")
+	}
+}
+
 func seedFixture(t *testing.T) (cfgDir, inbox, src string) {
 	t.Helper()
 	cfgDir, inbox = t.TempDir(), t.TempDir()
