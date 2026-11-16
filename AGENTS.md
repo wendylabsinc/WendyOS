@@ -16,8 +16,19 @@ asset to satisfy the PR demonstration requirement.
 
 ## Pull request descriptions
 
-Every PR created from now on must use only the applicable sections below, in
-this order. Keep each section concise and describe only what changed. Omit
+Every PR description starts with a short header for people, then uses only the
+applicable sections below, in this order. The header:
+
+```markdown
+- **Closes:** [WDY-1234 Problem title](https://linear.app/wendylabsinc/issue/WDY-1234/problem-title)
+
+> **In plain terms:** One short paragraph on what this PR changes for the people
+> using it, and why. Do not repeat the linked issue.
+```
+
+The issue line is present only when an issue exists (use **Advances** for a
+partial delivery, **Related** for context). The "In plain terms" paragraph is
+always present. Then the sections, in this order. Keep each section concise and describe only what changed. Omit
 sections that do not apply instead of writing `None` or describing unchanged
 behavior. Always include the Risk section. Do not add a summary, test plan,
 checklist, or other sections. These limits apply to the PR description, not to
