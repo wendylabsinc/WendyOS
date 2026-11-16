@@ -32,7 +32,15 @@ func (f fakeApps) DeleteApp(_ context.Context, in *cloudpb.SignedRequest) (*clou
 	for _, r := range f.pending[req.GetId()] {
 		kind[r.GetDevice()] = r.GetKind()
 	}
-	covered := map[string]bool{}
+	covered := map[[2]string]bool{} // (deployment, device)
+	inCall := map[string]bool{}
+	once := func(device string) error {
+		if inCall[device] {
+			return status.Error(codes.InvalidArgument, "This device already has an entry in this call. Send one per device.")
+		}
+		inCall[device] = true
+		return nil
+	}
 	for i, e := range req.GetDeviceRemovals() {
 		var u cloudpb.UnassignDeviceRequest
 		if err := f.accept(cloudpb.DeploymentService_UnassignDevice_FullMethodName, e, &u); err != nil {
@@ -44,20 +52,26 @@ func (f fakeApps) DeleteApp(_ context.Context, in *cloudpb.SignedRequest) (*clou
 		if kind[u.GetDevice()] == cloudpb.PendingDeviceStatement_KIND_DETACH {
 			return nil, status.Errorf(codes.PermissionDenied, "Removal %d (device %s) was refused: You can't reach this device. Ask someone who can to remove it, or detach it (the app keeps running there)", i, u.GetDevice())
 		}
+		if err := once(u.GetDevice()); err != nil {
+			return nil, err
+		}
 		f.removed = append(f.removed, &u)
-		covered[u.GetDevice()] = true
+		covered[[2]string{u.GetDeploymentId(), u.GetDevice()}] = true
 	}
 	for _, e := range req.GetDeviceDetachments() {
 		var d cloudpb.DetachDeviceRequest
 		if err := f.accept(cloudpb.DeploymentService_DetachDevice_FullMethodName, e, &d); err != nil {
 			return nil, err
 		}
+		if err := once(d.GetDevice()); err != nil {
+			return nil, err
+		}
 		f.detached = append(f.detached, &d)
-		covered[d.GetDevice()] = true
+		covered[[2]string{d.GetDeploymentId(), d.GetDevice()}] = true
 	}
 	var left []*cloudpb.PendingDeviceStatement
 	for _, r := range f.pending[req.GetId()] {
-		if !covered[r.GetDevice()] {
+		if !covered[[2]string{r.GetDeploymentId(), r.GetDevice()}] {
 			left = append(left, r)
 		}
 	}
@@ -179,6 +193,28 @@ func TestAppDeleteSendsBatchesOf200(t *testing.T) {
 	}
 	if fmt.Sprint(sizes) != "[200 200 50]" || len(fake.apps) != 0 {
 		t.Fatalf("batches %v", sizes)
+	}
+}
+
+// A device in two deployments of the app gets one removal per deployment,
+// one per call (cloud refuses a device twice in a call); a pair the list
+// repeats is sent once.
+func TestAppDeleteDeviceInTwoDeploymentsOnePerCall(t *testing.T) {
+	second := row(kindUnassign, vectorDevice, "packer-01")
+	second.DeploymentId = uuid.NewString()
+	op, fake, depID := deleteFixture(t, row(kindUnassign, vectorDevice, "packer-01"), row(kindUnassign, vectorDevice, "packer-01"), second)
+	if err := runAppDelete(context.Background(), op, exampleApp, nil, true, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var sizes, deps []string
+	for _, c := range fake.signed(cloudpb.AppService_DeleteApp_FullMethodName) {
+		sizes = append(sizes, fmt.Sprint(len(c.payload.(*cloudpb.DeleteAppRequest).GetDeviceRemovals())))
+	}
+	for _, u := range fake.removed {
+		deps = append(deps, u.GetDeploymentId())
+	}
+	if fmt.Sprint(sizes) != "[1 1]" || fmt.Sprint(deps) != fmt.Sprint([]string{depID, second.DeploymentId}) || len(fake.apps) != 0 {
+		t.Fatalf("removals per call %v, deployments %v, apps %v", sizes, deps, fake.apps)
 	}
 }
 

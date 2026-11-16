@@ -19,12 +19,25 @@ from fetch_unitree import check_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PREFIX = "ros_ws/src/unitree/"
+# Match the ARM64 lookup workaround in unitreerobotics/unitree_ros2#9.
+# ROS Humble's default lookup can miss this installed library under emulation.
+ROS_LIBRARY_LOOKUP = b'''if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  find_library(builtin_interfaces__rosidl_generator_c_LIB
+    NAMES builtin_interfaces__rosidl_generator_c
+    PATHS "/opt/ros/$ENV{ROS_DISTRO}/lib"
+    NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+endif()
+
+'''
+CMAKE_DEPENDENCIES = b"find_package(ament_cmake REQUIRED)"
 PATCHES = {
     "unitree_go/msg/SportModeState.msg": (
         b"float32[12] foot_speed_body\n",
         b"float32[12] foot_speed_body\n# Wendy SDK compatibility: trajectory feedback is unsupported; all points are zero.\nPathPoint[10] path_point\n",
     ),
     "unitree_api/msg/Response.msg": (b"int8[] binary", b"uint8[] binary"),
+    "unitree_api/CMakeLists.txt": (CMAKE_DEPENDENCIES, ROS_LIBRARY_LOOKUP + CMAKE_DEPENDENCIES),
+    "unitree_go/CMakeLists.txt": (CMAKE_DEPENDENCIES, ROS_LIBRARY_LOOKUP + CMAKE_DEPENDENCIES),
 }
 
 

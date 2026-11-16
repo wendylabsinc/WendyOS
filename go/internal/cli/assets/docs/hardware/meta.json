@@ -1,12 +1,13 @@
 {
   "title": "Hardware access",
-  "description": "Grant apps access to cameras, microphones, speakers, Bluetooth, and GPUs",
+  "description": "Grant apps access to cameras, microphones, speakers, Bluetooth, GPUs, and NPUs",
   "pages": [
     "index",
     "camera",
     "microphone",
     "speakers",
     "bluetooth",
-    "gpu"
+    "gpu",
+    "npu"
   ]
 }

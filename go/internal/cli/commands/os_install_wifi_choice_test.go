@@ -3,12 +3,14 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 )
 
 // stubWifiChoice fakes the keychain and the Wi-Fi prompts of
@@ -274,5 +276,63 @@ func TestInstallAsksWiFi(t *testing.T) {
 		if got := installAsksWiFi(deviceType); got != want {
 			t.Errorf("installAsksWiFi(%q) = %v; want %v", deviceType, got, want)
 		}
+	}
+}
+
+// Wendy Lite looks for the board before asking anything: with no board
+// attached, the run reports that instead of reaching the Wi-Fi settings,
+// which a malformed entry would otherwise fail first.
+func TestInstallESP32FirmwareScansForBoardBeforeQuestions(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	orig := resolveESP32InstallSerialPortsFn
+	t.Cleanup(func() { resolveESP32InstallSerialPortsFn = orig })
+	resolveESP32InstallSerialPortsFn = func() ([]discovery.SerialPortInfo, error) { return nil, nil }
+	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native", discovery.SerialPortInfo{},
+		wifiCLIOptions{Entries: []string{"not-key-value"}}, "", preEnrollOptions{mode: preEnrollSkip})
+	if err == nil || !strings.Contains(err.Error(), "ESP32 not found") {
+		t.Fatalf("no board: %v; want ESP32 not found before any Wi-Fi question", err)
+	}
+}
+
+// A board that takes one network never offers to add another.
+func TestWiFiPromptWithMaximumOneDoesNotOfferAnother(t *testing.T) {
+	stubWifiChoice(t, true, "")
+	stubWifiPrompts(t)
+	confirmWifiSetup = func() (bool, error) { return true, nil }
+	selectWifiNetworkFromScan = func() (wifiScanSelection, error) {
+		return wifiScanSelection{ScanErr: errNoWifiAdapter}, nil
+	}
+	confirmManualWifiEntry = func() (bool, error) { return true, nil }
+	confirmKeychainLookup = func(string) (bool, error) { return false, nil }
+	promptWifiSSID = func() (string, error) { return "homenet", nil }
+	promptWifiPassword = func(string) (string, error) { return "hunter2", nil }
+	// An "Add another" question would reach tui.Confirm, which cannot run here.
+	creds, err := resolveWiFiCredentialsList(wifiCLIOptions{MaxNetworks: 1})
+	if err != nil || len(creds) != 1 {
+		t.Fatalf("got %v, %v; want one network and no further question", creds, err)
+	}
+}
+
+// Too many networks on the flags stop the Lite install before the name question.
+func TestInstallESP32FirmwareRefusesTooManyNetworksBeforeTheNameQuestion(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native",
+		discovery.SerialPortInfo{Port: "/dev/ttyACM0"},
+		wifiCLIOptions{Entries: []string{"ssid=A,password=pw1", "ssid=B,password=pw2"}}, "", preEnrollOptions{mode: preEnrollSkip})
+	if err == nil || !strings.Contains(err.Error(), "supports one Wi-Fi network") || !IsUsageError(err) {
+		t.Fatalf("two networks: %v; want the one-network usage error", err)
+	}
+}
+
+// --pre-enroll with an image that has no cloud enrollment stops before any
+// question or flashing, and names the image to choose instead.
+func TestInstallESP32FirmwareRefusesPreEnrollForImageWithoutCloudEnrollment(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	err := installESP32Firmware(context.Background(), false, "esp32c6_net",
+		discovery.SerialPortInfo{Port: "/dev/ttyACM0"},
+		wifiCLIOptions{Entries: []string{"not-key-value"}}, "", preEnrollOptions{mode: preEnrollForced})
+	if err == nil || !strings.Contains(err.Error(), "does not include Wendy Cloud enrollment") ||
+		!strings.Contains(err.Error(), "Nothing was flashed") || !strings.Contains(err.Error(), wendyLiteCloudImage) {
+		t.Fatalf("got %v; want the no-cloud-enrollment stop naming %q", err, wendyLiteCloudImage)
 	}
 }

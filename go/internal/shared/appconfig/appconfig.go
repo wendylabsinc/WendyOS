@@ -87,6 +87,9 @@ const (
 	// declares the app's primary HTTP port so clients (wendy run, remote
 	// management apps) can discover and open it. See entitlements.md.
 	EntitlementHTTP = "http"
+	// EntitlementArduinoBridge reaches the microcontroller's sketch through
+	// Arduino's router: the agent mounts its socket directory and sets APP_SOCKET.
+	EntitlementArduinoBridge = "arduino-bridge"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
@@ -114,6 +117,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementAdmin,
 	EntitlementBuild,
 	EntitlementHTTP,
+	EntitlementArduinoBridge,
 }
 
 // FrameworkROS2 is the "ros2" key under wendy.json's "frameworks" object.
@@ -154,6 +158,7 @@ var allowedKeys = map[string][]string{
 	EntitlementAdmin:         {"type"},
 	EntitlementBuild:         {"type"},
 	EntitlementHTTP:          {"type", "port"},
+	EntitlementArduinoBridge: {"type"},
 }
 
 // Platform constants identify the target hardware family.
@@ -445,6 +450,8 @@ type AppConfig struct {
 	// the default shown and may be empty; an empty value is never required by
 	// itself. Clients check it; the device does nothing with it.
 	RequiredEnv []string `json:"requiredEnv,omitempty"`
+	// MCU is the Arduino sketch flashed to the board's microcontroller.
+	MCU *MCUConfig `json:"mcu,omitempty"`
 }
 
 // ContainerName returns the container identifier for this app config.
@@ -715,6 +722,7 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
+		case EntitlementArduinoBridge:
 		case EntitlementMCP:
 			if e.Port < 1 || e.Port > 65535 {
 				return fmt.Errorf("%s[%d]: mcp port must be between 1 and 65535, got %d", prefix, i, e.Port)
@@ -904,6 +912,10 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if err := validateEntitlements(c.Entitlements, "entitlement"); err != nil {
+		return err
+	}
+
+	if err := validateMCU(c.MCU); err != nil {
 		return err
 	}
 
@@ -1325,6 +1337,10 @@ func ValidateJSON(data []byte) []string {
 	warnings = append(warnings, validateHooksJSON(raw["hooks"], "hooks")...)
 	warnings = append(warnings, validateReadinessJSON(raw["readiness"], "readiness")...)
 	warnings = append(warnings, validateFrameworksJSON(raw["frameworks"], "frameworks")...)
+	var mcuRaw map[string]json.RawMessage
+	if json.Unmarshal(raw["mcu"], &mcuRaw) == nil {
+		warnings = append(warnings, unknownKeyWarnings(mcuRaw, "mcu", jsonFieldNames(reflect.TypeOf(MCUConfig{})))...)
+	}
 
 	// Validate service-level entitlements, frameworks, and hooks when a
 	// services map is present. Unmarshal into map[string]json.RawMessage first
