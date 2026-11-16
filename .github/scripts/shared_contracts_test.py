@@ -69,7 +69,7 @@ class SharedContractsTests(unittest.TestCase):
         git.write_text('''#!/bin/bash
 if [[ "$*" == init* ]]; then exit 0; fi
 [[ "$*" == *"https://github.com/wendylabsinc/service-protos.git"* ]] || exit 99
-[[ "$*" == *"35c8a2f4f1cfe01804043d66cd15545f6fc19a7d"* ]] || exit 98
+[[ "$*" == *"4cc0943e76be14d92f5f1a4a5fe5678cc77bb96e"* ]] || exit 98
 echo 'injected HTTPS acquisition failure' >&2
 exit 23
 ''')

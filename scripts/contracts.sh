@@ -12,7 +12,7 @@ trap 'echo "error: contracts setup or runner failed; repair from the repository 
 
 # TEMPORARY: service-protos #198 (https://github.com/wendylabsinc/service-protos/pull/198)
 # must land; switch this integration ref to main before merging this consumer.
-readonly CONTRACTS_RUNNER_REF='35c8a2f4f1cfe01804043d66cd15545f6fc19a7d'
+readonly CONTRACTS_RUNNER_REF='4cc0943e76be14d92f5f1a4a5fe5678cc77bb96e'
 # Keep runner acquisition independent of the schema pin. The runner still fetches
 # authoritative checker policy and the complete source catalogue from main.
 # Preserve scoped Git authentication; clear only caller-repository redirection.
