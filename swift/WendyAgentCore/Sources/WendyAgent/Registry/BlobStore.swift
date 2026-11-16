@@ -2,8 +2,8 @@ import Crypto
 import Foundation
 
 /// On-disk content store shared by the registry and the WriteLayer RPC.
-/// Blobs live at `<root>/blobs/sha256/<hex>`; manifests at
-/// `<root>/manifests/<repo>/<reference>`.
+/// Blobs live at `<root>/blobs/sha256/<hex>`. Repository and tag filenames
+/// hash their exact spelling, with immutable digests under `@digests`.
 struct BlobStore: Sendable {
     let root: URL
 
@@ -99,28 +99,98 @@ struct BlobStore: Sendable {
             return nil
         }
         let url = manifestPath(repository: repository, reference: reference)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        return legacyManifestURL(repository: repository, reference: reference)
+    }
+
+    private func legacyManifestURL(repository: String, reference: String) -> URL? {
+        let manifests = root.appendingPathComponent("manifests")
+        // Look up the stored spelling before opening a legacy path. A direct
+        // lookup on a case-insensitive volume can resolve a different OCI name.
+        guard let directory = Self.exactEntry(repository, in: manifests) else { return nil }
+        if Self.isValidSHA256Digest(reference) {
+            let hex = String(reference.dropFirst("sha256:".count))
+            let byDigest = directory.appendingPathComponent("@digests").appendingPathComponent(hex)
+            if FileManager.default.fileExists(atPath: byDigest.path) { return byDigest }
+            guard
+                let legacy = Self.exactEntry(
+                    reference.replacingOccurrences(of: ":", with: "_"),
+                    in: directory
+                )
+            else { return nil }
+            guard let data = try? Data(contentsOf: legacy), data.count <= 4 * 1024 * 1024,
+                Self.contentDigest(data) == reference
+            else { return nil }
+            return legacy
+        }
+        return Self.exactEntry(reference, in: directory)
+    }
+
+    private static func exactEntry(_ name: String, in directory: URL) -> URL? {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path),
+            entries.contains(name)
+        else { return nil }
+        return directory.appendingPathComponent(name)
+    }
+
+    static func contentDigest(_ data: Data) -> String {
+        "sha256:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func manifestDigest(repository: String, reference: String) throws -> String? {
+        guard let url = manifestURL(repository: repository, reference: reference) else {
+            return nil
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 4 * 1024 * 1024 else {
+            throw BlobError.badDigest("oversized saved manifest")
+        }
+        return Self.contentDigest(data)
     }
 
     func writeManifest(_ data: Data, repository: String, reference: String) throws {
-        // Callers (the manifest PUT handler) must validate `repository` and
-        // `reference` with `isValidRepository`/`isValidReference` before
-        // calling this — this method trusts its inputs to build a path.
+        guard Self.isValidRepository(repository), Self.isValidReference(reference),
+            data.count <= 4 * 1024 * 1024
+        else { throw BlobError.badDigest("invalid manifest reference or size") }
         let url = manifestPath(repository: repository, reference: reference)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try data.write(to: url, options: .atomic)
-        // Also index by content digest so pulls by digest resolve.
-        let hex = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let byDigest = manifestPath(repository: repository, reference: "sha256:\(hex)")
-        try? data.write(to: byDigest, options: .atomic)
+        let digest = Self.contentDigest(data)
+        if Self.isValidSHA256Digest(reference), reference != digest {
+            throw BlobError.digestMismatch(expected: reference, actual: digest)
+        }
+        let byDigest = manifestPath(repository: repository, reference: digest)
+        for directory in [url.deletingLastPathComponent(), byDigest.deletingLastPathComponent()] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        let repositoryDirectory = manifestDirectory(repository: repository)
+        try ProvisioningStore.synchronizeDirectory(repositoryDirectory)
+        try ProvisioningStore.synchronizeDirectory(repositoryDirectory.deletingLastPathComponent())
+        try ProvisioningStore.synchronizeDirectory(root)
+        // Persist digest-addressed content before changing the tag.
+        try ProvisioningStore.writeDurableFile(byDigest, data: data, permissions: 0o600)
+        if url != byDigest {
+            try ProvisioningStore.writeDurableFile(url, data: data, permissions: 0o600)
+        }
     }
 
     private func manifestPath(repository: String, reference: String) -> URL {
-        root.appendingPathComponent("manifests")
-            .appendingPathComponent(repository)
-            .appendingPathComponent(reference.replacingOccurrences(of: ":", with: "_"))
+        let directory = manifestDirectory(repository: repository)
+        if Self.isValidSHA256Digest(reference) {
+            return directory.appendingPathComponent("@digests").appendingPathComponent(
+                String(reference.dropFirst("sha256:".count))
+            )
+        }
+        return directory.appendingPathComponent(Self.nameKey(reference))
+    }
+
+    private func manifestDirectory(repository: String) -> URL {
+        root.appendingPathComponent("manifests").appendingPathComponent(Self.nameKey(repository))
+    }
+
+    private static func nameKey(_ name: String) -> String {
+        // '@' keeps new keys disjoint from all legacy names.
+        "@" + contentDigest(Data(name.utf8)).dropFirst("sha256:".count)
     }
 }

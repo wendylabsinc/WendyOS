@@ -1579,19 +1579,8 @@ func newDeviceLogsCmd() *cobra.Command {
 			if tail > 0 {
 				req.LastN = &tail
 			}
-			// Cancelled when RunE returns so a --no-follow exit also stops the
-			// background receive (see consumeLogStream).
-			streamCtx, cancelStream := context.WithCancel(ctx)
-			defer cancelStream()
-			stream, err := conn.TelemetryService.StreamLogs(streamCtx, req)
-			if err != nil {
-				if errors.Is(ctx.Err(), context.Canceled) {
-					return nil
-				}
-				return fmt.Errorf("starting log stream: %w", err)
-			}
 
-			// Tell the user the stream is live and that waiting is expected.
+			// Tell the user which logs are requested and that waiting is expected.
 			// Without this the command appears to hang after connecting, with
 			// no way to tell streaming from a stuck command (see issue #1169).
 			// Printed to stderr (via cliLogln) so it never mixes into piped or
@@ -1605,20 +1594,22 @@ func newDeviceLogsCmd() *cobra.Command {
 					target = serviceName
 				}
 				if noFollow && tail > 0 {
-					cliLogln("Showing up to %d recent log batches from %s.", tail, target)
+					cliLogln("Requesting up to %d recent log batches from %s.", tail, target)
 				} else if noFollow {
-					cliLogln("Showing recent logs from %s.", target)
+					cliLogln("Requesting recent logs from %s.", target)
 				} else if tail > 0 {
-					cliLogln("Streaming logs from %s — replaying up to %d recent, then live. Press Ctrl-C to stop.", target, tail)
+					cliLogln("Opening logs from %s: up to %d recent batches, then live. Press Ctrl-C to stop.", target, tail)
 				} else {
-					cliLogln("Streaming logs from %s. Waiting for new logs — press Ctrl-C to stop.", target)
+					cliLogln("Opening logs from %s. Waiting for new logs; press Ctrl-C to stop.", target)
 				}
 			}
 
 			liveSeparatorPrinted := tail == 0 || noFollow
 			seenHistory := false
 
-			res, err := consumeLogStream(streamCtx, stream, !noFollow, func(resp *agentpb.StreamLogsResponse) {
+			res, err := consumeLogStreamWithRetry(ctx, func(streamCtx context.Context) (logStreamReceiver, error) {
+				return conn.TelemetryService.StreamLogs(streamCtx, req)
+			}, !noFollow, func(resp *agentpb.StreamLogsResponse) {
 				logs := resp.GetLogs()
 				if logs == nil {
 					return
@@ -1649,7 +1640,7 @@ func newDeviceLogsCmd() *cobra.Command {
 						}
 					}
 				}
-			})
+			}, func(message string) { cliLogln("%s", message) }, []time.Duration{time.Second, 2 * time.Second})
 			if err != nil {
 				return err
 			}

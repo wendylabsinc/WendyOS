@@ -312,11 +312,11 @@ func requestMuxUDP(ctx context.Context, conn *quic.Conn, port uint16) (*quic.Str
 	return stream, maximum, nil
 }
 
-func (c *Client) dialMultiplexedUDP(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, opts UDPOptions) (*DatagramFlow, error) {
+func (c *Client) dialMultiplexedUDP(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, opts UDPOptions, config func() (*quic.Config, error)) (*DatagramFlow, error) {
 	if port == 0 || !address.IsValid() || address.Port() == 0 {
 		return nil, errors.New("invalid multiplexed UDP dial")
 	}
-	entry, reused, err := c.acquire(ctx, peer, address)
+	entry, reused, err := c.acquireWithConfig(ctx, peer, address, config)
 	if err != nil {
 		return nil, err
 	}
