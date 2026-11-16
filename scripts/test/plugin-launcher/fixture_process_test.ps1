@@ -61,6 +61,26 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
 server.serve_forever()
 '@ 'readiness nonce mismatch' 3000
+# A wrong-identity response is terminal, even if a subsequent request would
+# return the expected nonce. This also prevents retries from masking the cause.
+Invoke-FixtureSupervisorCheck 'wrong identity cannot recover on a later response' @'
+import http.server, pathlib, sys
+class Handler(http.server.BaseHTTPRequestHandler):
+    attempts = 0
+    def do_GET(self):
+        Handler.attempts += 1
+        nonce = self.path.rsplit('/', 1)[-1][len('ready-'):-len('.txt')]
+        body = b'x' * 32 if Handler.attempts == 1 else nonce.encode('ascii')
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args): pass
+server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
+server.serve_forever()
+'@ 'readiness nonce mismatch' 3000
+
 Invoke-FixtureSupervisorCheck 'stalled HTTP body remains bounded' @'
 import http.server, pathlib, sys, time
 class Handler(http.server.BaseHTTPRequestHandler):
