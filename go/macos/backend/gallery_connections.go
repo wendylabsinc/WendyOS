@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"google.golang.org/grpc/connectivity"
 )
 
 const galleryIdleTimeout = 30 * time.Second
@@ -61,6 +62,13 @@ func (b *Backend) galleryAcquireWith(ctx context.Context, selector string, dial 
 				case <-ready:
 					continue
 				}
+			}
+			if e.conn.Conn != nil && e.conn.Conn.GetState() == connectivity.Shutdown {
+				// A relay can close its gRPC connection independently of the
+				// idle timer. Never hand that terminal connection to a new read.
+				b.galleryRemoveLocked(selector, e)
+				p.mu.Unlock()
+				continue
 			}
 			if e.timer != nil {
 				e.timer.Stop()

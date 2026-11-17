@@ -115,6 +115,19 @@ type RecordingLibrary struct {
 }
 
 func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (result RecordingLibrary, err error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err = b.recordingLibraryAttempt(id, selector, secure)
+		// An agent restart can leave an idle Cloud relay in the pool. The
+		// attempt releases that broken transport before we dial again. Retry
+		// only this idempotent read, and never authentication or cancellation.
+		if status.Code(err) != codes.Unavailable {
+			break
+		}
+	}
+	return result, err
+}
+
+func (b *Backend) recordingLibraryAttempt(id uint64, selector string, secure bool) (result RecordingLibrary, err error) {
 	ctx, conn, done, err := b.recordingConnection(id, selector, secure, time.Minute)
 	if err != nil {
 		return RecordingLibrary{}, err

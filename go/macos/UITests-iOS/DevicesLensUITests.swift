@@ -856,6 +856,14 @@ final class DevicesLensUITests: XCTestCase {
         let episode = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "data.episode.")).firstMatch
         let libraryReady = episode.waitForExistence(timeout: 60)
         capture("Live Gallery loading outcome")
+        if !libraryReady {
+            let details = app.buttons["Technical details"].firstMatch
+            if details.exists {
+                details.tap()
+                print("DEVICE_QA gallery failure details: " + app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
+                capture("Live Gallery failure details")
+            }
+        }
         XCTAssertTrue(libraryReady, "No recording library loaded: " + app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
         print("DEVICE_QA recording library: \(Date().timeIntervalSince(start)) s")
         capture("Live episode picker")

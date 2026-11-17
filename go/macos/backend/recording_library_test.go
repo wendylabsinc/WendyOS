@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func (f *recordingLibraryAgent) Inspect(_ context.Context, req *pb.DataInspectRe
 	body, err := json.Marshal(m)
 	return &pb.DataInspectResponse{ManifestJson: body}, err
 }
-func isolatedRecordingAgent(t *testing.T, f *recordingLibraryAgent) {
+func isolatedRecordingAgent(t *testing.T, f pb.DataServiceServer) {
 	t.Helper()
 	// Unix socket paths must fit sockaddr_un even when the OS temp path is long.
 	dir, err := os.MkdirTemp("/tmp", "wc-")
@@ -375,5 +376,84 @@ func TestRecordingTransportFailureAllowsFreshConnection(t *testing.T) {
 	defer release(nil)
 	if first == second {
 		t.Fatal("retry reused a failed relay")
+	}
+}
+
+func TestRecordingLibraryRecoversClosedPooledConnection(t *testing.T) {
+	isolatedRecordingAgent(t, &recordingLibraryAgent{})
+	b := New()
+	b.recordings.setActive(true)
+	defer b.galleryReset(true)
+	id := b.BeginRecordingRead()
+	defer b.EndRecordingRead(id)
+	_, stale, release, err := b.recordingConnection(id, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(nil)
+	// Model the pooled transport that survives navigation while the agent
+	// or its relay disappears. The first RPC must fail on this connection.
+	stale.Close()
+	library, err := b.RecordingLibrary(id, "fixture", false)
+	if err != nil || len(library.Episodes) != 2 {
+		t.Fatalf("library did not recover: rows=%d error=%v", len(library.Episodes), err)
+	}
+	_, fresh, release, err := b.recordingConnection(id, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release(nil)
+	if fresh == stale {
+		t.Fatal("read reused closed transport")
+	}
+}
+
+type failingRecordingIndexAgent struct {
+	recordingLibraryAgent
+	code              codes.Code
+	calls             atomic.Int32
+	recoverAfterFirst bool
+}
+
+func (f *failingRecordingIndexAgent) Episodes(ctx context.Context, req *pb.DataEpisodesRequest) (*pb.DataEpisodesResponse, error) {
+	if f.calls.Add(1) > 1 && f.recoverAfterFirst {
+		return f.recordingLibraryAgent.Episodes(ctx, req)
+	}
+	return nil, status.Error(f.code, "fixture failure")
+}
+
+func TestRecordingLibraryRetriesUnavailableRead(t *testing.T) {
+	agent := &failingRecordingIndexAgent{code: codes.Unavailable, recoverAfterFirst: true}
+	isolatedRecordingAgent(t, agent)
+	b := New()
+	b.recordings.setActive(true)
+	defer b.galleryReset(true)
+	id := b.BeginRecordingRead()
+	defer b.EndRecordingRead(id)
+	library, err := b.RecordingLibrary(id, "fixture", false)
+	if err != nil || len(library.Episodes) != 2 || agent.calls.Load() != 2 {
+		t.Fatalf("rows=%d calls=%d error=%v", len(library.Episodes), agent.calls.Load(), err)
+	}
+}
+
+func TestRecordingLibraryRetryIsBoundedAndOnlyForUnavailable(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unavailable, codes.PermissionDenied, codes.Unauthenticated, codes.Canceled, codes.Internal} {
+		t.Run(code.String(), func(t *testing.T) {
+			agent := &failingRecordingIndexAgent{code: code}
+			isolatedRecordingAgent(t, agent)
+			b := New()
+			b.recordings.setActive(true)
+			defer b.galleryReset(true)
+			id := b.BeginRecordingRead()
+			defer b.EndRecordingRead(id)
+			_, err := b.RecordingLibrary(id, "fixture", false)
+			want := int32(1)
+			if code == codes.Unavailable {
+				want = 2
+			}
+			if status.Code(err) != code || agent.calls.Load() != want {
+				t.Fatalf("code=%v calls=%d; want %v, %d", status.Code(err), agent.calls.Load(), code, want)
+			}
+		})
 	}
 }
