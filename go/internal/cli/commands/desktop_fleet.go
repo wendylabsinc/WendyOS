@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 type DesktopFleetDevice struct {
@@ -24,12 +26,12 @@ func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFlee
 	if err != nil {
 		return DesktopFleet{}, err
 	}
-	assets, err := fetchCloudAssetsV2(ctx, auth, false)
+	assets, online, presenceErr, err := fetchFleetAssets(ctx, func(ctx context.Context, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
+		return fetchCloudAssetsV2(ctx, auth, onlineOnly)
+	})
 	if err != nil {
 		return DesktopFleet{}, err
 	}
-	// Query broker presence, never infer online status from a stale timestamp.
-	online, presenceErr := fetchCloudAssetsV2(ctx, auth, true)
 	present := make(map[string]bool, len(online))
 	for _, a := range online {
 		present[a.GetId()] = true
@@ -51,4 +53,30 @@ func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFlee
 		out.Devices = append(out.Devices, item)
 	}
 	return out, nil
+}
+
+// Fetch independent inventory and broker presence concurrently. Inventory errors
+// fail the refresh; presence errors still allow the inventory to be displayed.
+func fetchFleetAssets(ctx context.Context, fetch func(context.Context, bool) ([]*cloudpbv2.Asset, error)) (assets, online []*cloudpbv2.Asset, presenceErr, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		assets []*cloudpbv2.Asset
+		err    error
+	}
+	presence := make(chan result, 1)
+	go func() {
+		items, e := fetch(ctx, true)
+		presence <- result{items, e}
+	}()
+	assets, err = fetch(ctx, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	select {
+	case r := <-presence:
+		return assets, r.assets, r.err, nil
+	case <-ctx.Done():
+		return assets, nil, ctx.Err(), nil
+	}
 }
