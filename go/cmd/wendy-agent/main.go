@@ -70,6 +70,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -162,6 +163,17 @@ func main() {
 	configPath := "/etc/wendy-agent"
 	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
 		configPath = envPath
+	}
+	// Before any credential is loaded or verified: persisted CRLs and their
+	// number floor must survive a restart, and an offline boot starts from them.
+	crlConfig := revocation.ConfigFromEnv(filepath.Join(configPath, "crl"))
+	crlConfig.Logf = logger.Sugar().Warnf
+	if err := revocation.Default.Configure(crlConfig); err != nil {
+		logger.Warn("Certificate revocation lists will not persist across restarts", zap.Error(err))
+		crlConfig.Dir = ""
+		if err := revocation.Default.Configure(crlConfig); err != nil {
+			logger.Fatal("Invalid certificate revocation configuration", zap.Error(err))
+		}
 	}
 	accessPolicy, err := networkaccess.Load(configPath)
 	if err != nil {
@@ -474,6 +486,7 @@ func main() {
 	// Optional startup work can block after resource-owning workers begin.
 	// Handle termination now so those workers can drain during startup too.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	go revocation.Default.Run(ctx)
 	cleanupResetOwnedState := func(resetCtx context.Context) error {
 		return errors.Join(deliveryManager.Reset(), cleanupResetMesh(resetCtx))
 	}

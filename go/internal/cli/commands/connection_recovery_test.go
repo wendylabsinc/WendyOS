@@ -46,7 +46,7 @@ func TestConnectionClockRecoveryOutcomes(t *testing.T) {
 	}{
 		{"send fails", broadcastFailure, nil, 1, 0, "Could not broadcast a signed time proof"},
 		// Every retry is preceded by a send, and the outcome names the next step.
-		{"still rejected", nil, original, 3, 3, "still rejected the connection after the time proof was sent 3 times, so its clock is probably still wrong.\n  Next: connect the device to the internet"},
+		{"still rejected", nil, original, 3, 3, "still rejected the connection after the time proof was sent 3 times. Check its credentials and certificate revocation evidence as well as its clock.\n  Next: connect the device to the internet"},
 		{"retry reveals changed identity", nil, refusal, 1, 1, "Connection retry failed after broadcasting the time proof."},
 		{"connected", nil, nil, 1, 1, "Connected after broadcasting"},
 	} {
@@ -458,7 +458,7 @@ func TestClockRecoveryNamesASavedProofAndItsRemedy(t *testing.T) {
 	for _, want := range []string{
 		"proof saved 3h0m0s ago",
 		// A failed resend is not counted as sent.
-		"sent 2 times,",
+		"sent 2 times. Check its credentials and certificate revocation evidence",
 		"Next: connect this computer to the internet so it can fetch a fresh time proof, then retry.",
 	} {
 		if !strings.Contains(stderr, want) {

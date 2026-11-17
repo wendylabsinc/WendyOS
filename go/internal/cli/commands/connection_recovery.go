@@ -70,7 +70,7 @@ func tlsRecoveryMessage(err error) string {
 	if login := expiredLoginFrom(err); login != nil {
 		return login.message() + "\n  " + login.loginStep
 	}
-	message := "TLS authentication failed. A wrong device clock or incompatible credentials may be responsible."
+	message := "TLS authentication failed. The device may have a wrong clock, incompatible credentials, or missing certificate revocation evidence."
 	if reason := certificateRefreshReason(err); reason != "" {
 		message = "TLS authentication failed. " + reason
 	}
@@ -88,6 +88,7 @@ func tlsRecoveryNextSteps(err error) []string {
 	}
 	return []string{
 		"If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.",
+		"If WENDY_CRL_GRACE is configured on the device, bring the device online to refresh its certificate revocation evidence, or retry with a current CLI over a full TLS handshake.",
 		"For connection details rerun with WENDY_TLS_DEBUG=1.",
 	}
 }
@@ -287,7 +288,7 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 		return nil, cause
 	}
 	clockSkewSyncAttempted = true
-	fmt.Fprintln(os.Stderr, "Possible device clock error. Attempting to broadcast a signed time proof on the LAN...")
+	fmt.Fprintln(os.Stderr, "The TLS rejection does not identify its cause. Checking whether a signed LAN time proof resolves a device clock error...")
 	syncCtx, cancel := context.WithTimeout(ctx, clockSkewSyncTimeout)
 	syncErr := broadcastTimeFn(syncCtx)
 	cancel()
@@ -341,6 +342,6 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 	if sent == 1 {
 		times = "once"
 	}
-	fmt.Fprintf(os.Stderr, "The device still rejected the connection after the time proof was sent %s, so its clock is probably still wrong.\n  Next: %s\n", times, next)
+	fmt.Fprintf(os.Stderr, "The device still rejected the connection after the time proof was sent %s. Check its credentials and certificate revocation evidence as well as its clock.\n  Next: %s\n", times, next)
 	return nil, cause
 }

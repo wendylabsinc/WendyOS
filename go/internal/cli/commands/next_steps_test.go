@@ -69,11 +69,12 @@ func TestErrorsWithAdviceExposeTheirSteps(t *testing.T) {
 	tlsErr := newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))
 	if got, want := NextSteps(fmt.Errorf("connecting: %w", tlsErr)), []string{
 		"If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.",
+		"If WENDY_CRL_GRACE is configured on the device, bring the device online to refresh its certificate revocation evidence, or retry with a current CLI over a full TLS handshake.",
 		"For connection details rerun with WENDY_TLS_DEBUG=1.",
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("TLS rejection steps = %q, want %q", got, want)
 	}
-	if tlsErr.Error() != "TLS authentication failed. A wrong device clock or incompatible credentials may be responsible.\n  If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.\n  For connection details rerun with WENDY_TLS_DEBUG=1." {
+	if tlsErr.Error() != "TLS authentication failed. The device may have a wrong clock, incompatible credentials, or missing certificate revocation evidence.\n  If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.\n  If WENDY_CRL_GRACE is configured on the device, bring the device online to refresh its certificate revocation evidence, or retry with a current CLI over a full TLS handshake.\n  For connection details rerun with WENDY_TLS_DEBUG=1." {
 		t.Errorf("TLS rejection text changed: %q", tlsErr.Error())
 	}
 
@@ -92,7 +93,7 @@ func TestErrorsWithAdviceExposeTheirSteps(t *testing.T) {
 		{
 			name: "peer claims expiry",
 			err:  newProvisionedAgentUnauthorizedError(errors.New("tls: expired certificate")),
-			want: []string{"If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.", "For connection details rerun with WENDY_TLS_DEBUG=1."},
+			want: []string{"If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.", "If WENDY_CRL_GRACE is configured on the device, bring the device online to refresh its certificate revocation evidence, or retry with a current CLI over a full TLS handshake.", "For connection details rerun with WENDY_TLS_DEBUG=1."},
 		},
 		{
 			name: "client authentication capability missing",

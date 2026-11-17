@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
@@ -165,7 +166,16 @@ func DialCloud(endpoint, certPEM, chainPEM string, keyPEM []byte) (*grpc.ClientC
 	// Standard validation handles public CAs; custom verification supports the
 	// ML-DSA issuing hierarchy on Cloud's dedicated devices listener.
 	config.InsecureSkipVerify = true // verification is performed below, including hostname
-	config.VerifyConnection = func(cs tls.ConnectionState) error {
+	config.VerifyConnection = cloudServerVerifier(host, roots, trust)
+	return newCloudClient(t, credentials.NewTLS(config), true)
+}
+
+func cloudServerVerifier(host string, roots *x509.CertPool, trust []*x509.Certificate) func(tls.ConnectionState) error {
+	privateRoots := x509.NewCertPool()
+	for _, ca := range trust {
+		privateRoots.AddCert(ca)
+	}
+	return func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return fmt.Errorf("Cloud presented no certificate")
 		}
@@ -178,11 +188,15 @@ func DialCloud(endpoint, certPEM, chainPEM string, keyPEM []byte) (*grpc.ClientC
 			intermediates.AddCert(c)
 		}
 		if _, e := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); e == nil {
+			// Public Web PKI can use scoped CRLs that our full-CRL manager
+			// does not support. Only enroll paths rooted in Wendy trust.
+			if privatePaths, err := leaf.Verify(x509.VerifyOptions{Roots: privateRoots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err == nil {
+				return revocation.Default.CheckPaths(privatePaths, time.Now(), revocation.RevokedOnly)
+			}
 			return nil
 		}
-		return certs.VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], trust, x509.ExtKeyUsageServerAuth, time.Now(), time.Now())
+		return certs.VerifyLivePeerCertificateChain(leaf, cs.PeerCertificates[1:], trust, x509.ExtKeyUsageServerAuth, time.Now(), time.Now())
 	}
-	return newCloudClient(t, credentials.NewTLS(config), true)
 }
 
 // DialBroker deliberately has no client certificate or identity metadata.
