@@ -417,14 +417,14 @@ def compatibility_finding_lines(record):
 
 def compatibility_lines(result, *, include_findings=True, include_coverage=True):
     if "compatibility_findings" not in result:
-        return ["Compatibility findings: not assessed by this legacy result.", ""]
+        return ["## Compatibility review", "", "Compatibility was not assessed by this legacy result.", ""]
     records = compatibility_state.current(result)
     active = [r for r in records if r["status"] in {"open", "not_assessed"}]
-    lines = ["## Compatibility", ""]
+    lines = ["## Compatibility review", "", "Advisory findings do not approve a cutover or replace compatibility tests.", ""]
     if active:
         lines += [f"{len(active)} advisory concern(s). Apply, adapt or dismiss the suggestions as appropriate.", ""]
     else:
-        lines += ["No open compatibility concerns in the supplied evidence. This is not a guarantee for untested versions or missing counterparts.", ""]
+        lines += ["No open compatibility concerns in the supplied evidence.", ""]
     if include_findings:
         for record in active:
             lines += compatibility_finding_lines(record)
@@ -450,23 +450,33 @@ def compatibility_lines(result, *, include_findings=True, include_coverage=True)
         lines += ["", f"Supplemental source: {limits.get('bytes', limits.get('source_bytes', 0)):,} bytes; {limits.get('entries', 0)} ranges. "
                   f"{limits.get('omitted_candidates', 0)} candidates omitted by bounded selection.", ""]
         lines += ["- " + inline(reason) for reason in limits.get("limitations", [])]
-    lines += ["", "Source revisions and pins are not installed versions. Test definitions do not establish execution or mixed-version coverage.", "",
+    lines += ["", "This is not a guarantee for untested versions or missing counterparts. Source revisions and pins are not installed versions. Test definitions do not establish execution or mixed-version coverage.", "",
               inline(result.get("model_call_policy", "One evidence call; execution details are recorded in the local receipt.")), "",
               "</details>", ""]
     return lines
 
 
-def review_intro(result: dict, repo: str, *, include_findings=True, include_coverage=True) -> list[str]:
+def review_intro(result: dict, repo: str) -> list[str]:
     head = result["head_sha"]
-    coverage = result.get("source_coverage", {})
-    files = coverage.get("source_files", result["changed_files"])
-    return ["# AI Compatibility Review", "", "> [!NOTE]",
-            "> Advisory review from Claude. Findings do not approve a cutover or replace compatibility tests.", "",
-            f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
-            f"**Recommended risk:** {'medium' if result['risk'] == 'mid' else result['risk']}. The author owns the risk label.", "",
-            f"Input coverage: {files}/{result['changed_files']} source files across {result.get('review_batches', 1)} complete diff batch(es); no diff truncation. "
-            f"{len(coverage.get('excluded_generated_files', []))} generated files excluded (not AI-reviewed). Supplemental context is bounded.", "",
-            *compatibility_lines(result, include_findings=include_findings, include_coverage=include_coverage)]
+    return [
+        "# API decisions", "",
+        f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
+        + (f"Input coverage: {result['source_coverage']['source_files']}/{result['changed_files']} source files, "
+         f"{result['source_coverage']['source_bytes']:,}/{result['diff_bytes']:,} diff bytes reviewed; "
+         f"{len(result['source_coverage']['excluded_generated_files'])} generated files excluded (not AI-reviewed); "
+         if "source_coverage" in result else
+         f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes ")
+        + f"across {result.get('review_batches', 1)} complete batch(es); no truncation.",
+        "",
+        *(["Generated protocol output was excluded. External pins and source references remain in scope; upstream source bodies are not fetched by this review. Exclusions and generation checks do not establish API or behavior coverage.", ""]
+          if result.get("source_coverage", {}).get("excluded_generated_files") else []),
+        ("Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
+         + "these checkboxes do not block merging automatically."),
+        "",
+        f"**Recommended risk:** {'medium' if result['risk'] == 'mid' else result['risk']}. "
+        "The author owns the risk label. Compatibility impact is listed separately for each decision.",
+        "",
+    ]
 
 
 def markdown_fence(text: str) -> str:
@@ -526,20 +536,19 @@ def withdrawn_lines(withdrawn: list[dict]) -> list[str]:
 def render_comment(result: dict, repo: str, previous: list[dict] | None = None, diff: str = "") -> str:
     current, withdrawn = reconcile_records(result, previous or [])
     lines = review_intro(result, repo)
-    lines += ["<details>", f"<summary>API decisions ({len(result['decisions'])}) — human acceptance</summary>", "",
-              "Check a box to accept a pending or changed decision. Materially unchanged decisions retain their acceptance.", ""]
     if not result["decisions"]:
         lines += ["No durable API decisions changed. Comments, formatting, and documentation wording alone do not require acceptance.", ""]
     for category, title in CATEGORIES.items():
         decisions = [item for item in result["decisions"] if item["category"] == category]
-        if not decisions:
-            continue
         lines += [f"## {title}", ""]
+        if not decisions:
+            lines += ["No API decisions changed.", ""]
+            continue
         records = [record for record in current if record["decision"]["category"] == category]
         for record in sorted(records, key=lambda item: (item["decision"]["title"], item["id"])):
             lines += decision_lines(record, result, repo, diff)
     lines += withdrawn_lines(withdrawn)
-    lines += ["</details>", ""]
+    lines += compatibility_lines(result)
     lines += [revision_marker(result), COMMENT_MARKER, ""]
     body = "\n".join(lines)
     if len(body.encode()) > MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES:
@@ -569,9 +578,10 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
 
     def render(lines: list[str], index: int, total: int) -> str:
         return "\n".join([
-            f"# AI Compatibility Review — part {index} of {total}", "",
+            f"# API decisions — checklist part {index} of {total}", "",
             f"Reviewed revision `{result['head_sha']}`. "
-            "The primary review links every published part. API checkboxes record human acceptance.", "",
+            "The primary API review comment records whether every checklist part was published successfully.",
+            "Check a box to accept a pending or changed decision.", "",
             *lines, revision_marker(result),
             f"<!-- ai-api-review:part={index}/{total} -->", COMMENT_MARKER, "",
         ])
@@ -579,16 +589,6 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
     pages: list[list[str]] = []
     page_lines: list[str] = []
     current_category = None
-    for block in [*(compatibility_finding_lines(record) for record in compat_records), *coverage_blocks]:
-        candidate = page_lines + block
-        if len(render(candidate, maximum_parts, maximum_parts).encode()) > limit:
-            if page_lines:
-                pages.append(page_lines)
-            page_lines = block
-            if len(render(page_lines, maximum_parts, maximum_parts).encode()) > limit:
-                raise ValueError("A compatibility/coverage block exceeds the comment limit; prior review preserved")
-        else:
-            page_lines = candidate
     for category, title in CATEGORIES.items():
         records = sorted((item for item in current_records if item["decision"]["category"] == category),
                          key=lambda item: (item["decision"]["title"], item["id"]))
@@ -621,6 +621,21 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
         else:
             history.append(record)
     page_lines += withdrawn_lines(history)
+    # Compatibility follows the complete API checklist and its history.
+    heading = ["## Compatibility review", ""]
+    for block in [*(compatibility_finding_lines(record) for record in compat_records),
+                  *(["<details>", "<summary>Coverage and limitations</summary>", "", *block, "</details>", ""]
+                    for block in coverage_blocks)]:
+        candidate = page_lines + heading + block
+        if len(render(candidate, maximum_parts, maximum_parts).encode()) > limit:
+            if page_lines:
+                pages.append(page_lines)
+            page_lines = ["## Compatibility review", "", *block]
+            if len(render(page_lines, maximum_parts, maximum_parts).encode()) > limit:
+                raise ValueError("A compatibility/coverage block exceeds the comment limit; prior review preserved")
+        else:
+            page_lines = candidate
+        heading = []
     if page_lines:
         pages.append(page_lines)
     if not pages:
@@ -629,11 +644,12 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
 
 
 def render_primary(result: dict, repo: str, pr_number: int, comment_ids: list[int]) -> str:
-    lines = review_intro(result, repo, include_findings=False, include_coverage=False) + [
-        f"**Complete review:** {len(result['decisions'])} API decisions across {len(comment_ids)} comments.", "",
-        *[f"- [Review part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
+    lines = review_intro(result, repo) + [
+        f"**Complete checklist:** {len(result['decisions'])} decisions across {len(comment_ids)} comments.", "",
+        *[f"- [Checklist part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
           for index, identifier in enumerate(comment_ids, start=1)],
-        "", revision_marker(result),
+        "", *compatibility_lines(result, include_findings=False, include_coverage=False),
+        revision_marker(result),
         f"<!-- ai-api-review:part=0/{len(comment_ids)} -->", COMMENT_MARKER, "",
     ]
     body = "\n".join(lines)
@@ -654,6 +670,7 @@ def render_incomplete(result: dict, repo: str, previous: str = "") -> str:
         "> [!WARNING]",
         f"> API review is incomplete for [{head[:12]}](https://github.com/{repo}/commit/{head}): {inline(result['error'][:400])}",
         "> Any checklist below belongs to the previous successful review. Prior decisions, acceptance, and risk labels are preserved; no clean result was recorded.",
+        "> Compatibility review is also incomplete; any compatibility section belongs to the previous successful review.",
         WARNING_END,
     ])
     lines = previous.splitlines()

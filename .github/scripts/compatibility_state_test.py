@@ -104,6 +104,33 @@ class StatefulTests(unittest.TestCase):
         self.assertEqual(before,after)
         self.assertEqual(set(self.records[0]),{'id','status','finding','resolution'})
 
+    def test_compatibility_follows_visible_api_acceptance_and_withdrawn_history(self):
+        old = comments.render_comment(result(), REPO).replace('- [ ] Accept', '- [x] Accept')
+        data = copy.deepcopy(self.report)
+        data['decisions'] = result()['decisions']
+        body = comments.render_comment(data, REPO, old)
+        api_body, compatibility = body.split('## Compatibility review\n', 1)
+        self.assertIn('- [x] Accepted', api_body)
+        self.assertNotIn('<details>', api_body)
+        self.assertLess(compatibility.index('#### ⚠️ Concern — Open:'), compatibility.index('<details>'))
+        self.assertIn(self.records[0]['finding']['consider'], compatibility)
+        self.assertEqual(comments.parse_comment_state([old]), comments.parse_comment_state([body]))
+        data['decisions'] = []
+        withdrawn = comments.render_comment(data, REPO, old)
+        self.assertLess(withdrawn.index('<summary>Withdrawn decisions'), withdrawn.index('## Compatibility review'))
+        self.assertEqual(state.parse([withdrawn]), self.records)
+
+    def test_no_findings_keeps_limits_expandable_below_api_review(self):
+        data = self.report_result(self.resolved(fixtures.response()))
+        data['context_limits'] = {'limitations': ['Feature support/retirement guidance was not supplied.']}
+        body = comments.render_comment(data, REPO)
+        api_body, compatibility = body.split('## Compatibility review\n', 1)
+        self.assertNotIn('retirement guidance', api_body)
+        self.assertIn('No open compatibility concerns in the supplied evidence.\n\n<details>', compatibility)
+        self.assertIn('<summary>Coverage and limitations</summary>', compatibility)
+        self.assertGreater(compatibility.index('retirement guidance'), compatibility.index('<details>'))
+        self.assertEqual(body.count('<details>'), body.count('</details>'))
+
     def test_prior_state_digest_covers_findings_without_exposing_acceptance(self):
         decisions=comments.parse_comment_state([comments.render_comment(result(),REPO)])
         old=comments.model_prior_state(decisions)
@@ -132,6 +159,28 @@ class StatefulTests(unittest.TestCase):
         self.assertGreater(len(parts),1)
         self.assertEqual(state.parse(parts),self.records)
         self.assertEqual(sum(part.count('compatibility-finding:v1:') for part in parts),1)
+        bodies = '\n'.join(parts)
+        self.assertLess(bodies.rindex('- [ ] Accept'), bodies.index('## Compatibility review'))
+        self.assertLess(bodies.index('#### ⚠️ Concern — Open:'), bodies.index('<details>'))
+        for part in parts:
+            self.assertTrue(part.startswith('# API decisions — checklist part'))
+            self.assertEqual(part.count('<details>'), part.count('</details>'))
+        primary = comments.render_primary(data, REPO, 1911, list(range(100, 100 + len(parts))))
+        self.assertLess(primary.index('**Complete checklist:**'), primary.index('## Compatibility review'))
+        self.assertLess(primary.rindex('[Checklist part'), primary.index('## Compatibility review'))
+
+    def test_incomplete_review_preserves_both_prior_sections_and_acceptance(self):
+        data = dict(self.report, decisions=result()['decisions'])
+        previous = comments.render_comment(data, REPO).replace('- [ ] Accept', '- [x] Accept')
+        failed = dict(self.report, status='incomplete', error='Provider result was rejected')
+        body = comments.render_incomplete(failed, REPO, previous)
+        self.assertIn('Compatibility review is also incomplete', body)
+        self.assertLess(body.index('- [x] Accept'), body.index('## Compatibility review'))
+        self.assertEqual(state.parse([body]), self.records)
+        self.assertEqual(comments.parse_comment_state([body]), comments.parse_comment_state([previous]))
+        repeated = comments.render_incomplete(failed, REPO, body)
+        self.assertEqual(repeated.count(comments.WARNING_START), 1)
+        self.assertEqual(repeated.count('## Compatibility review'), 1)
 
     def test_citation_bound_is_communicated_and_never_silently_truncated(self):
         request=json.loads(api.user_prompt(self.fixture.meta,diff().decode(),REPO))
@@ -165,6 +214,9 @@ class StatefulTests(unittest.TestCase):
         for reason in reasons:self.assertIn(comments.inline(reason),'\n'.join(parts))
         self.assertEqual(state.parse(parts),self.records)
         self.assertNotIn(reasons[0],primary)
+        for part in parts:
+            self.assertIn('## Compatibility review', part)
+            self.assertEqual(part.count('<details>'), part.count('</details>'))
 
     def test_private_local_history_is_reusable_and_taints_the_successor(self):
         private=copy.deepcopy(self.records)
