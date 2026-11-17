@@ -1707,7 +1707,8 @@ func main() {
 			// Once, after this attempt: hand the held /config seed over now.
 			if pending && configpartition.SeedWaiting(configPath) {
 				logger.Info("Restarting to hand the config partition agent to the supervisor")
-				os.Exit(0)
+				// Stops Wendy Net first, as every agent restart does.
+				agentRestart.Schedule()
 			}
 		} else if os.IsNotExist(err) {
 			provisioningSvc.ApplyEnrollmentFile(ctx)
