@@ -12,6 +12,7 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/shared/timefmt"
 	"go.uber.org/zap"
 )
@@ -33,10 +34,8 @@ const maxCertLifetime = certs.MaxPeerCertificateLifetime
 // future (e.g. years ahead) cannot be accepted by a device with a stuck clock.
 const maxClockSkewTolerance = certs.MaxCertificateClockSkew
 
-// checkRevocation enforces that leaf was issued with a validity window short
-// enough that a compromised credential expires within maxCertLifetime even
-// without an explicit CRL/OCSP revocation check.
-func checkRevocation(leaf *x509.Certificate) error {
+// checkCertificateLifetime enforces the independent certificate lifetime ceiling.
+func checkCertificateLifetime(leaf *x509.Certificate) error {
 	lifetime := leaf.NotAfter.Sub(leaf.NotBefore)
 	if lifetime > maxCertLifetime {
 		return fmt.Errorf("certificate lifetime %v exceeds maximum %v; reissue with a shorter validity window", lifetime, maxCertLifetime)
@@ -172,7 +171,7 @@ func effectiveVerificationTime(realNow, notBeforeFloor, certNotBefore time.Time)
 // so that certs issued at provisioning time are still accepted. Pass a zero
 // time.Time to disable the floor.
 func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time) func([][]byte, [][]*x509.Certificate) error {
-	verify := buildPeerCertificateVerifier(caPool, caCerts, logger, notBeforeFloor)
+	verify := buildPeerCertificateVerifierWithCache(caPool, caCerts, logger, notBeforeFloor, newPeerPathCache())
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		_, err := verify(rawCerts, time.Now())
 		return err
@@ -183,8 +182,9 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 // the expiry of the path that actually verified. Unlike the general mTLS
 // loopback policy, the local leaf is not an independent trust anchor. Peer leaves
 // must be non-CA certificates with explicit clientAuth usage. The leaf profile,
-// current time and checkRevocation's validity-window policy are checked on every
-// call; this verifier does not query a Cloud revocation service. A bounded,
+// current time and checkCertificateLifetime's validity-window policy are checked on every
+// call; CRL updates invalidate cached paths, and a listed certificate is
+// refused. Missing or expired CRL evidence never fails this verifier. A bounded,
 // short-lived cache reuses only signature/path verification for exact chains.
 // New roots or policy require a new verifier and therefore a fresh cache.
 func NewPeerCertificateVerifier(chainPEM string, logger *zap.Logger, notBeforeFloor time.Time) (func([][]byte, time.Time) (time.Time, error), error) {
@@ -241,7 +241,7 @@ func buildPeerCertificateVerifier(caPool *x509.CertPool, caCerts []*x509.Certifi
 }
 
 func buildPeerCertificateVerifierWithCache(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, floor time.Time, cache *peerPathCache) func([][]byte, time.Time) (time.Time, error) {
-	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, func(now, nb time.Time) (time.Time, time.Time) { return now, effectiveVerificationTime(now, floor, nb) }, cache, false)
+	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, func(now, nb time.Time) (time.Time, time.Time) { return now, effectiveVerificationTime(now, floor, nb) }, cache, false, revocation.RevokedOnly)
 	return func(raw [][]byte, now time.Time) (time.Time, error) {
 		window, err := verify(raw, now, "")
 		return window.NotAfter, err
@@ -258,7 +258,7 @@ func NewPeerCertificateWindowVerifierWithPolicy(chainPEM string, logger *zap.Log
 	verify := buildPeerCertificateWindowVerifier(pool, roots, logger, func(wall, nb time.Time) (time.Time, time.Time) {
 		base := policy.BaseTime(wall)
 		return base, policy.LeafTimeAtBase(base, nb)
-	}, newPeerPathCache(), true)
+	}, newPeerPathCache(), true, revocation.RevokedOnly)
 	return func(raw [][]byte, now time.Time) (certs.CertificateWindow, error) { return verify(raw, now, "") }, nil
 }
 
@@ -266,7 +266,7 @@ func NewPeerCertificateWindowVerifierWithPolicy(chainPEM string, logger *zap.Log
 // certificate check in this package. Its last argument is the address of the
 // connection that presented the chain and is used only in the rejection log;
 // callers that verify a chain outside a handshake pass "".
-func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), cache *peerPathCache, leafOnly bool) func([][]byte, time.Time, string) (certs.CertificateWindow, error) {
+func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), cache *peerPathCache, leafOnly bool, level revocation.Level) func([][]byte, time.Time, string) (certs.CertificateWindow, error) {
 	return func(rawCerts [][]byte, realNow time.Time, remote string) (certs.CertificateWindow, error) {
 		if cache != nil {
 			cache.observe()
@@ -294,6 +294,13 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 		if !hasClientAuth {
 			return certs.CertificateWindow{}, fmt.Errorf("peer certificate requires explicit clientAuth usage")
 		}
+		// Device handshakes and carriers keep their offline policy. RPC admission
+		// uses Fresh for every caller when a fleet grace is configured. The role
+		// below still has to be authenticated by path verification.
+		level := level
+		if id, found, idErr := certs.IdentityFromCert(leaf); level == revocation.Session && idErr == nil && found && id.EntityType == certs.EntityAsset {
+			level = revocation.RevokedOnly
+		}
 		baseNow, effectiveNow := clockTimes(realNow, leaf.NotBefore)
 		// These checks also run when the cryptographic path is reused. A clock
 		// floor may accommodate NotBefore, but must never mask real expiry.
@@ -307,13 +314,13 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 			logCertRejection(logger, leaf, err, realNow, effectiveNow, remote)
 			return certs.CertificateWindow{}, err
 		}
-		if err := checkRevocation(leaf); err != nil {
+		if err := checkCertificateLifetime(leaf); err != nil {
 			logCertRejection(logger, leaf, err, realNow, effectiveNow, remote)
 			return certs.CertificateWindow{}, err
 		}
 		var window certs.CertificateWindow
 		if cache == nil {
-			window, err = verifyPeerCertificateWindow(leaf, rawCerts, caPool, caCerts, baseNow, effectiveNow, leafOnly)
+			window, err = verifyPeerCertificateWindow(leaf, rawCerts, caPool, caCerts, baseNow, effectiveNow, leafOnly, level)
 		} else {
 			window, err = cache.verifyWindow(rawCerts, baseNow, effectiveNow, func(chain [][]byte, _ time.Time) (certs.CertificateWindow, error) {
 				// The cache owns these exact bytes before verification starts.
@@ -321,7 +328,7 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 				if err != nil {
 					return certs.CertificateWindow{}, err
 				}
-				return verifyPeerCertificateWindow(parsed, chain, caPool, caCerts, baseNow, effectiveNow, leafOnly)
+				return verifyPeerCertificateWindow(parsed, chain, caPool, caCerts, baseNow, effectiveNow, leafOnly, level)
 			})
 		}
 		if err != nil {
@@ -336,13 +343,13 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 }
 
 func verifyPeerCertificatePath(leaf *x509.Certificate, raw [][]byte, pool *x509.CertPool, roots []*x509.Certificate, wall, effective time.Time) (time.Time, error) {
-	window, err := verifyPeerCertificateWindow(leaf, raw, pool, roots, wall, effective, false)
+	window, err := verifyPeerCertificateWindow(leaf, raw, pool, roots, wall, effective, false, revocation.RevokedOnly)
 	return window.NotAfter, err
 }
 
 // verifyPeerCertificateWindow verifies immutable chain constraints and signatures.
 // The caller applies current leaf validity and revocation policy separately.
-func verifyPeerCertificateWindow(leaf *x509.Certificate, rawCerts [][]byte, caPool *x509.CertPool, caCerts []*x509.Certificate, realNow, effectiveNow time.Time, leafOnly bool) (certs.CertificateWindow, error) {
+func verifyPeerCertificateWindow(leaf *x509.Certificate, rawCerts [][]byte, caPool *x509.CertPool, caCerts []*x509.Certificate, realNow, effectiveNow time.Time, leafOnly bool, level revocation.Level) (certs.CertificateWindow, error) {
 	// Build an intermediates pool from the rest of the chain presented by the client.
 	intermediates := x509.NewCertPool()
 	var peerCAs []*x509.Certificate
@@ -392,7 +399,7 @@ func verifyPeerCertificateWindow(leaf *x509.Certificate, rawCerts [][]byte, caPo
 			return certs.CertificateWindow{}, stdErr
 		}
 		var mldsaErr error
-		window, mldsaErr = certs.VerifyPeerCertificateChainWindow(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
+		window, mldsaErr = certs.VerifyLivePeerCertificateChainWindow(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow, level)
 		if mldsaErr != nil {
 			return certs.CertificateWindow{}, mldsaErr
 		}
@@ -413,6 +420,11 @@ func verifyPeerCertificateWindow(leaf *x509.Certificate, rawCerts [][]byte, caPo
 		}
 		if window.NotAfter.IsZero() {
 			return certs.CertificateWindow{}, fmt.Errorf("no certificate issuer path valid at verification time")
+		}
+		// A leaf trusted directly as its own anchor has no issuer to consult:
+		// a node never refuses its own identity.
+		if err := revocation.Default.CheckPaths(paths, realNow, level); err != nil {
+			return certs.CertificateWindow{}, err
 		}
 	}
 	return window, nil

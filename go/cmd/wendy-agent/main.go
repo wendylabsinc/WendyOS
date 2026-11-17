@@ -70,6 +70,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -162,6 +163,17 @@ func main() {
 	configPath := "/etc/wendy-agent"
 	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
 		configPath = envPath
+	}
+	// Before any credential is loaded or verified: persisted CRLs and their
+	// number floor must survive a restart, and an offline boot starts from them.
+	crlConfig := revocation.ConfigFromEnv(filepath.Join(configPath, "crl"))
+	crlConfig.Logf = logger.Sugar().Warnf
+	if err := revocation.Default.Configure(crlConfig); err != nil {
+		logger.Warn("Certificate revocation lists will not persist across restarts", zap.Error(err))
+		crlConfig.Dir = ""
+		if err := revocation.Default.Configure(crlConfig); err != nil {
+			logger.Fatal("Invalid certificate revocation configuration", zap.Error(err))
+		}
 	}
 	accessPolicy, err := networkaccess.Load(configPath)
 	if err != nil {
@@ -474,6 +486,7 @@ func main() {
 	// Optional startup work can block after resource-owning workers begin.
 	// Handle termination now so those workers can drain during startup too.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	go revocation.Default.Run(ctx)
 	cleanupResetOwnedState := func(resetCtx context.Context) error {
 		return errors.Join(deliveryManager.Reset(), cleanupResetMesh(resetCtx))
 	}
@@ -977,8 +990,8 @@ func main() {
 
 	meshAgentListener := meshoperatorlink.NewAgentListener()
 	defer meshAgentListener.Close()
-	// Raw inner TLS from an already authenticated mesh app session is isolated
-	// from the legacy physical and primary-operator listener's clock policy.
+	// Raw inner TLS from an already authenticated mesh app session has its
+	// own listener, using the same local certificate clock as operator ingress.
 	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
 	defer meshNativeListener.Close()
 	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) error {
@@ -1048,7 +1061,17 @@ func main() {
 				zap.String("mode", effectiveMode.String()))
 		}
 
-		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedScope, effectiveMode,
+		// Use the same local boot-time floor as mesh ingress. Raw wall time can
+		// move backwards and must not make expired revocation evidence fresh.
+		policy := certs.CertificateTimePolicy{Floor: func() time.Time { return floor }}
+		if meshBootClock != nil {
+			if err := meshBootClock.AddProvisionedCertificate(certPEM); err != nil {
+				logger.Error("Failed to anchor operator certificate clock", zap.Error(err))
+				return
+			}
+			policy = meshBootClock.Policy()
+		}
+		srv, err := mtls.NewServerWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, effectiveMode,
 			// mTLS authentication and the exact-method device RPC allowlist are
 			// embedded inside mtls.NewServer before these error interceptors.
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),

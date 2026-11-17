@@ -21,18 +21,20 @@ import (
 	quic "github.com/quic-go/quic-go"
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 type nodePeer struct {
-	reconcileNeeded bool // Actor-owned: retry a change after bounded queue pressure.
-	babelConfirmed  bool // Actor-owned: this incarnation once had two-way Babel liveness.
-	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
-	retire          chan struct{}
-	retireOnce      sync.Once
-	capacityRetire  atomic.Bool      // Local cause survives asynchronous owned cleanup.
-	capacityLease   *ConnectionLease // Immutable: signal-only publication to the owning provider.
-	closeDiagnostic sync.Once
-	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
+	authenticatedChain [][]byte
+	reconcileNeeded    bool // Actor-owned: retry a change after bounded queue pressure.
+	babelConfirmed     bool // Actor-owned: this incarnation once had two-way Babel liveness.
+	babelRetiring      bool // Actor-owned: expiry already signalled the existing lifetime owner.
+	retire             chan struct{}
+	retireOnce         sync.Once
+	capacityRetire     atomic.Bool      // Local cause survives asynchronous owned cleanup.
+	capacityLease      *ConnectionLease // Immutable: signal-only publication to the owning provider.
+	closeDiagnostic    sync.Once
+	ingress            *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
 	assembler      IPAssembler
 	id             babel.LinkID
@@ -394,6 +396,9 @@ func (n *Node) Run() error {
 				return err
 			}
 		case <-maintenance.C:
+			if err := n.revalidatePeerCertificates(time.Now()); err != nil {
+				return err
+			}
 			n.sweepAnnouncements(time.Now())
 			n.gate.Lock()
 			err := n.kernel.ReconcileBase()
@@ -909,7 +914,7 @@ func (n *Node) AttachWithCost(ctx context.Context, peer meshid.Device, conn *qui
 	if err != nil {
 		return err
 	}
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "quic")), peer, cost, &quicNodeLink{conn: conn, stream: stream, sendIP: &carrierIPSender{sender: conn, negotiated: maxIP}, receiveIP: WholeIPDatagramLimit})
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "quic")), peer, cost, &quicNodeLink{conn: conn, stream: stream, sendIP: &carrierIPSender{sender: conn, negotiated: maxIP}, receiveIP: WholeIPDatagramLimit}, conn.ConnectionState().TLS.PeerCertificates...)
 }
 
 // AttachStream admits a mutually authenticated TLS 1.3 byte stream. The
@@ -928,7 +933,7 @@ func (n *Node) AttachStream(ctx context.Context, peer meshid.Device, conn net.Co
 		return err
 	}
 	peer = boundPeer
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn))
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn), tlsConn.ConnectionState().PeerCertificates...)
 }
 
 func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certificate) error {
@@ -993,7 +998,7 @@ func (p *nodePeer) wakeControl() {
 	}
 }
 
-func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink) error {
+func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink, certificates ...*x509.Certificate) error {
 	defer link.Close()
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
@@ -1003,6 +1008,13 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {
 		return nil
 	}
+	if len(certificates) > 16 {
+		return errors.New("oversized authenticated carrier chain")
+	}
+	for _, certificate := range certificates {
+		p.authenticatedChain = append(p.authenticatedChain, append([]byte(nil), certificate.Raw...))
+	}
+
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
 		if errors.Is(err, ErrCarrierCapacityRetry) {
 			markConnectionRetry(ctx)
@@ -1252,6 +1264,29 @@ func (n *Node) Send(d babel.Datagram) error {
 		_ = p.link.Close()
 		// A failed carrier must withdraw its link, not stop the shared node.
 		return nil
+	}
+	return nil
+}
+
+// Recheck the actual carrier certificate, not a newer leaf for the same
+// principal learned through gossip. Only positive revocation evidence closes
+// an established carrier: an expired or unreachable CRL must not take a site's
+// mesh down, and the node never judges its own identity here. Closing and
+// removing the link withdraws routes and tears down its forwarding interface
+// through the normal owner.
+func (n *Node) revalidatePeerCertificates(now time.Time) error {
+	for id, p := range n.peers {
+		if len(p.authenticatedChain) == 0 {
+			continue
+		}
+		_, err := n.Credentials.VerifyTLS(p.authenticatedChain, now)
+		if !errors.Is(err, revocation.ErrRevoked) {
+			continue
+		}
+		n.closePeer(p, "certificate-revoked", err)
+		if err := n.handle(nodeEvent{id: id, remove: true}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

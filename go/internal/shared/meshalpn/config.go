@@ -5,6 +5,8 @@ import (
 	"crypto/x509"
 	"strings"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 // ClientProtocols offers root-first fingerprints and cached CA availability.
@@ -147,6 +149,7 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 		for _, hash := range acknowledged {
 			known[hash] = true
 		}
+		certificate = certs.StapleClientCertificate(request.Context(), certificate, c.own)
 		return omitKnownCertificates(certificate, known), nil
 	}
 }

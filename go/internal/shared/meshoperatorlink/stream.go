@@ -91,22 +91,23 @@ type Link struct {
 	agentHandler func(context.Context, net.Conn) error
 	agentContext context.Context
 
-	workers      sync.WaitGroup
-	outControl   chan control
-	expiryMu     sync.Mutex
-	expires      time.Time
-	certNow      func() time.Time
-	maxExpiry    time.Time // Earliest observed monotonic bound; never extended.
-	verifyExpiry func() (time.Time, error)
-	invalid      error
-	closed       bool
-	conn         *tls.Conn
-	address      netip.Addr
-	server       bool
-	once         sync.Once
-	done         chan struct{}
-	stop         func() bool
-	timer        *time.Timer
+	workers          sync.WaitGroup
+	outControl       chan control
+	expiryMu         sync.Mutex
+	expires          time.Time
+	certNow          func() time.Time
+	maxExpiry        time.Time // Earliest observed monotonic bound; never extended.
+	verifyExpiry     func() (time.Time, error)
+	invalid          error
+	closed           bool
+	conn             *tls.Conn
+	peerCertificates []*x509.Certificate // Immutable completed presentation.
+	address          netip.Addr
+	server           bool
+	once             sync.Once
+	done             chan struct{}
+	stop             func() bool
+	timer            *time.Timer
 }
 
 func (l *Link) Address() netip.Addr   { return l.address }
@@ -146,12 +147,15 @@ func readyWithValidity(ctx context.Context, c *tls.Conn, address netip.Addr, ser
 	return readyWithAgentWindow(ctx, c, address, server, expires, certNow, verifyExpiry, agentWindow)
 }
 
-func readyWithAgentWindow(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time, verifyExpiry func() (time.Time, error), window uint32) (*Link, error) {
+func readyWithAgentWindow(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time, verifyExpiry func() (time.Time, error), window uint32, certificates ...*x509.Certificate) (*Link, error) {
 	if window < agentWindow || window > agentTCPWindow {
 		return nil, errors.New("invalid operator agent window")
 	}
 	started := time.Now()
-	l := &Link{agentWindow: window, conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, verifyExpiry: verifyExpiry, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	if len(certificates) == 0 {
+		certificates = c.ConnectionState().PeerCertificates
+	}
+	l := &Link{peerCertificates: append([]*x509.Certificate(nil), certificates...), agentWindow: window, conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, verifyExpiry: verifyExpiry, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	if certNow != nil {
 		remaining := expires.Sub(certNow())
 		if remaining <= 0 {
@@ -193,7 +197,7 @@ func verifyRouterState(state tls.ConnectionState, cfg ClientConfig, now time.Tim
 	if peer != cfg.Router {
 		return time.Time{}, errors.New("operator attachment router identity differs from target")
 	}
-	return certs.VerifyPeerCertificateChainExpiry(chain[0], chain[1:], cfg.Roots, x509.ExtKeyUsageServerAuth, now, now)
+	return certs.VerifyLivePeerCertificateChainExpiry(chain[0], chain[1:], cfg.Roots, x509.ExtKeyUsageServerAuth, now, now)
 }
 
 // ClientTLSConfig replaces hostname verification with the exact authenticated
