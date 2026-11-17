@@ -4,20 +4,23 @@ struct FleetDevice: Identifiable {
     let id, name, selector, siteID, site, hardware, address: String
     let online: Bool
     let lastSeen: Date?
+    var lite = false
     var siteKey: String { siteID.isEmpty ? site : siteID }
-    var device: Device { Device(id: selector, name: name, selector: selector, transport: .cloud, address: address) }
+    var device: Device { Device(id: selector, name: name, selector: selector, transport: .cloud, address: address, lite: lite) }
 }
 struct FleetSnapshot { let devices: [FleetDevice]; let presenceError: String }
 extension GoClient {
+    private static let fleetRequests = DispatchQueue(label: "dev.wendy.desktop.fleet", qos: .userInitiated)
+
     func fleet(account: String, org: String) async throws -> FleetSnapshot {
-        try await perform {
+        try await BlockingWork.run(on: Self.fleetRequests) {
             let strings = CStringStorage(); defer { withExtendedLifetime(strings) {} }
             guard let p = WDFleet(strings.add(account), strings.add(org)) else { throw WendyError(message: "Missing fleet result.") }
             defer { WDFleetFree(p) }; try Self.check(p.pointee.status)
             let devices: [FleetDevice] = UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map { d in
                 FleetDevice(id: Self.string(d.id), name: Self.string(d.name), selector: Self.string(d.selector), siteID: Self.string(d.site_id), site: Self.string(d.site),
                             hardware: Self.string(d.hardware), address: Self.string(d.address), online: d.online != 0,
-                            lastSeen: d.last_seen > 0 ? Date(timeIntervalSince1970: Double(d.last_seen)) : nil)
+                            lastSeen: d.last_seen > 0 ? Date(timeIntervalSince1970: Double(d.last_seen)) : nil, lite: d.lite != 0)
             }
             return FleetSnapshot(devices: devices, presenceError: Self.string(p.pointee.presence_error))
         }

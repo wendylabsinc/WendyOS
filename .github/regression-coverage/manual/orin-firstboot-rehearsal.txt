@@ -1,0 +1,199 @@
+Physical Orin first boot, audits 49fa7f963 and 2805
+
+This is a supplement to the existing full Orin seed host-writer rehearsal and
+orin-wpa3-rehearsal.py. Reuse their release verification, exact radio/AP identity
+and recovery records. The host-writer test does not boot hardware. The WPA3
+procedure starts with an operational board. This supplement observes the missing
+transition from a newly written image to persistent name, Wi-Fi and enrollment.
+All cases start not_run. Generation performs only local file reads and hashing.
+
+Prepare one exact reserved target
+
+1. Reserve board serial @SERIAL@ with its named owner. This plan covers a genuine
+   NVIDIA developer kit and its selected NVMe/eMMC storage, not a custom carrier.
+   Record module/carrier model and revisions, module serial, recovery ECID, USB
+   physical path, storage model/serial/capacity, Wi-Fi chipset/firmware/driver,
+   station MAC and power arrangement. Keep serial console and independent direct
+   Ethernet/USB management. The management link must have NO Internet forwarding,
+   bridging, DNS proxy or connection sharing for the delayed-network case. The
+   tested radio must be the only egress path. Record routes and both host/board
+   link configuration to prove that condition. Do not change a shared router.
+
+2. Use the public release descriptor and locally verified full archive from the
+   existing Orin seed procedure, or acquire the exact board/storage release from
+   the official device manifest. Record its immutable URL, version, size and SHA.
+   The generator verifies those local bytes. It does not install that local archive
+   by fiat: run the generated plan and require its artifact_url, artifact_sha256,
+   device_type, storage and version to match the descriptor. A generation query in
+   the descriptor is acceptable only if the URL without that query and the full
+   digest match. Reject a moving latest alias or mismatched release. Keep plan JSON,
+   signed/published producer provenance, full CLI SHA/revision and Agent SHA/revision.
+   Verify source revisions include the relevant changes. Do not infer code from a
+   version string. Record the image's boot scripts and Agent selection separately.
+
+3. Review recovery_record with the owner before any flash. Include actual recovery
+   button/cable/power sequence for this board, previous image/storage backup and
+   restore plan, independent console access, AP rollback, and Cloud test-device
+   cleanup owner. No device is erased by generating a plan. At each physical write,
+   present the newly observed exact target fingerprint and erase scope and obtain
+   that owner's authorization. Old authorization for another device or an earlier
+   fingerprint is insufficient. Do not pass --force or bypass internal disk checks.
+   Use the CLI's returned physical instructions and elevation flow. Never guess a
+   /dev path. Flash failure remains a failure; do not turn it into a blind retry.
+
+4. Use a dedicated lab SSID @SSID@, predeclared BSSID and isolated credentials.
+   Record AP model/firmware/security/channel, DHCP lease and association logging,
+   station MAC policy, and the owner-approved method to delay only this SSID.
+   Reserve the unique device name @NAME@ in the intended lab tenant before the
+   enrollment case. Verify the exact logged-in Cloud host/tenant/account; do not
+   reuse an unrelated enrolled device identity. Public protocol observations and
+   sensitive credentials have separate evidence storage. Do not publish passphrases,
+   EABs, account/device private keys or raw provisioning/config files. No terminal
+   transcript should record password entry.
+
+Case A: jobs CLI seed applied by the first real boot (49fa7f963)
+
+5. In a private local terminal run start-seeded-job.py. It prompts for the lab
+   password and calls the exact generated jobs start prefix with --wifi. The
+   password is not saved in this plan or shell history. The current CLI accepts
+   --wifi as an argument, so it is transiently visible in that local child process's
+   argv. Use only reserved credentials on a trusted operator host. The helper
+   refuses nonterminal input and exits after 60 seconds; it only plans a job.
+   Record the returned job ID, device_name, Wi-Fi SSID, open_wifi and target plan.
+   Require open_wifi to be empty and the intended name/SSID to be present. Save
+   only redacted job JSON. The private input belongs to that exact job, is kept
+   at most 24 hours and is single-attempt material. Do not read it into a shared log.
+
+6. Follow that job's physical instructions and run, with the observed values:
+     "$CLI" install jobs status --job-id "$JOB_ID"
+     "$CLI" install jobs resume --job-id "$JOB_ID"
+   The second command probes; inspect the returned target fingerprint, ECID/path,
+   storage and erase scope against step1. Only after exact-target erase approval:
+     "$CLI" install jobs resume --job-id "$JOB_ID" --target-id "$FINGERPRINT" --confirm-erase
+   Record each state and full sanitized worker log through write completion.
+   The jobs path does not support --binary or pre-enrollment. Record the actual
+   downloaded arm64 Agent artifact selected by the worker and compare its SHA to
+   the inventory. A changed release selection makes binary provenance incomplete;
+   do not silently credit this run to the requested revision. Never add unsupported
+   flags or replace the installed Agent after boot to make this first-boot test pass.
+   Name/Wi-Fi injection, config release and write completion must all succeed.
+   Retain a private hash of the exact job provisioning input and the worker's seed
+   preparation evidence. If direct seed readback is available before boot through
+   the returned recovery workflow, retain its private hash and redacted [device]/
+   [wifi] values; do not mount a live target behind the installer's back. No secret
+   readback is required to be uploaded. The real boot observations below are mandatory.
+
+7. Start timestamped serial capture before the first power-on/recovery release.
+   With the dedicated AP available, allow at most @SECONDS@ seconds for this first
+   boot. Match physical serial/storage/boot ID to the fresh write. From the console
+   record uname, /etc/os-release, the actual Agent unit/ExecStart/MainPID, and SHA256
+   of /proc/PID/exe. Compare it with the recorded downloaded Agent and source pin.
+   A config-seeded Agent may restart itself once; record both boot-time processes
+   and the final durable executable, not just the image's initial Agent version.
+   Require the journal to show name and Wi-Fi application from config, with no
+   retained invalid/unreadable seed or profile registration failure. Successful
+   profile registration alone is insufficient: require actual AP association.
+
+8. Read the live profile UUID from nmcli's connection/device status, then run
+   sh board-snapshot.sh "$OBSERVED_PROFILE_UUID" from the physical console,
+   saving stdout/stderr and exit
+   status on the operator host. Require /etc/wendyos/device-name == @NAME@,
+   /etc/hostname and running hostname == wendyos-@NAME@. Record the selected live
+   NetworkManager profile UUID, autoconnect, interface, SSID and nonsecret security
+   fields, plus its persistent keyfile existence/permissions. Do not use nmcli
+   --show-secrets. Require AP-confirmed BSSID/station, the expected DHCP address,
+   live iw association and five gateway replies bound to the Wi-Fi interface.
+   Ethernet cannot satisfy the bound ping. Preserve config consumption status;
+   if wendy.conf remains, privately identify its remaining section and failure.
+   A partly retained seed is not a complete first-boot application pass.
+
+9. From the management host run discover and verify at the actual observed direct
+   address. If DHCP changed the planned address, first corroborate serial console,
+   station MAC and physical board identity, then use that explicit address. Require
+   actual expected OS/type and name/mDNS advertisement, and save the returned public
+   key. Run jobs resume with --address and --expected-public-key for this same job.
+   Record reachable/verified and the job's terminal state. Jobs do not pre-enroll:
+   require an honestly unenrolled state rather than claiming Cloud success here.
+   With owner approval perform one normal reboot, without reflashing or reapplying
+   the seed. Within @SECONDS@ seconds repeat steps7–9 with a new boot ID. Require
+   the same name, persisted Wi-Fi UUID, Agent hash, identity and actual association.
+
+Case B: configure Wi-Fi while fresh pre-enrollment is waiting (2805)
+
+10. This is a separate fresh-install case, with a second exact-target authorization.
+    A previously enrolled board cannot establish the bug. Preserve CaseA evidence,
+    restore only through the reserved recovery method, and run the generated
+    pre_enroll_fresh_install in a real terminal. It pins --binary, sets --no-wifi
+    and reserves the intended Cloud enrollment. Confirm the returned tenant/device
+    identity and staged credential provenance privately. Do not print the credential.
+    Keep the lab SSID disabled and wired management without Internet. Stop if this
+    installer/image does not stage /config/acme-enrollment.json or if a legacy
+    handoff also exists. Do not manually fabricate an EAB or delete an attempt marker.
+
+11. Observe the first boot from serial. Within @SECONDS@ seconds require the exact
+    pinned Agent to be running and setup RPCs reachable through the direct link.
+    Record the actual WENDY_CONFIG_PATH from the unit if overridden; the snapshot
+    defaults to /etc/wendy-agent and must use that observed path otherwise.
+    Capture the journal's 'Waiting for network connectivity before first-boot
+    enrollment' and at least one actual failed public-directory probe. Confirm the
+    configured public directory is unreachable over every board egress route.
+    Clock/TLS/invalid-directory errors must be classified honestly, not called Wi-Fi
+    failure. Require acme-enrollment.json retained, no acme-first-boot-attempt.json,
+    no newly issued identity and no automatic credential redemption. Record file
+    existence/permissions only, never contents. Observe for 30 seconds after the
+    failed probe. RPC status must remain responsive and report unenrolled.
+
+12. Enable only the reserved SSID, timestamp the AP event and run wifi_setup from
+    the direct operator endpoint. This case deliberately opts into the documented
+    unverified Wi-Fi setup exception for this physically identified unenrolled
+    board. Decline host-keychain lookup and type the lab password at the hidden
+    terminal prompt. Do not reuse this exception for an enrolled or identity-bound
+    device. Do not start a separate enrollment command or restart the Agent to
+    assist recovery. Bound the Wi-Fi command to 90 seconds of observation; if it
+    stalls interrupt once, retain logs and inspect the same board before recovery.
+    Require the intended SSID/BSSID, actual NetworkManager activation, AP station
+    event and interface-bound connectivity, as in step8. The unchanged Agent process
+    must move from waiting to issuance after connectivity becomes available.
+
+13. Within 180 seconds of Wi-Fi becoming usable, require the journal's directory
+    reachable/first-boot completed events, exactly one issuance attempt, durable
+    marker/state, and removal of the consumed handoff. Verify expected tenant/device
+    principal using local persisted public identity plus install verify with
+    --require-enrollment. Record fresh Cloud presence for that exact identity as a
+    separate check; reservation alone is not connection evidence. Compare with the
+    tenant's issuance/audit record to establish one credential redemption. If that
+    record is unavailable, leave the exact issuance-count assertion pending.
+    The verify public key before and after enrollment need not be identical: direct
+    ACME generates its enrolled key. Record the transition and pin the authenticated
+    post-enrollment key for subsequent checks. Do not treat a planned key change as
+    an unrelated device, or accept an unexplained principal change.
+
+14. Reboot the same board normally once, with Wi-Fi available and no reinstall or
+    enrollment RPC. Within @SECONDS@ seconds require the same enrolled principal,
+    post-enrollment public key, Agent hash, persistent hostname/profile and a fresh
+    AP association. Require no second account/order issuance and no renewed staged
+    credential. A failed/uncertain issuance preserves its marker and needs explicit
+    coordinated recovery; never delete the marker to manufacture automatic retry.
+    Keep the portable real-ACME fixture evidence separate from this physical result.
+
+Evidence, limits and recovery
+
+15. Preserve each attempt in a fresh private directory: exact source/binary/archive
+    hashes, immutable descriptor/plan, target fingerprint and authorization record,
+    redacted seed/job records, serial and Agent/NM journals with boot IDs/UTC,
+    before/after profile UUID and name, AP/DHCP records, interface-bound packets,
+    verification JSON, issuance audit and cleanup result. Export only the measured
+    journal interval for the observed service. Record first failure, every timeout
+    and any manual action; neither later success nor synthetic state overwrites it.
+    An independent reviewer must tie all observations to the same physical target.
+    Missing first-boot capture, unverified binary, alternative Internet route or
+    unavailable identity evidence leaves the relevant case incomplete.
+
+16. Restore only this reserved board/AP/test Cloud registration using the reviewed
+    recovery record. Do not wipe other profiles, tenant devices, host CLI state or
+    shared caches. Remove private input/evidence credentials under owner policy only
+    after recovery is confirmed; keep sanitized hashes and outcome. This procedure
+    covers the executed developer-kit/storage path only. A media-only install,
+    another carrier/storage/radio, and WPA3-specific driver acceptance require their
+    own actual run. Use orin-wpa3-rehearsal.py for the full SAE/PMF and mixed-network
+    cases instead of claiming them from this first-boot association.

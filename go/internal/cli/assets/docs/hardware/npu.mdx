@@ -1,0 +1,178 @@
+---
+title: NPU access
+description: Run on-device inference on the Hexagon NPU of a Qualcomm Dragonwing board
+---
+
+The `npu` entitlement gives an app the Hexagon NPU on a Qualcomm Dragonwing
+IQ-8275 (IQ8) or IQ-9075 (IQ9). Apps reach the NPU through the Qualcomm AI
+Runtime (QAIRT): QNN runs models compiled for the NPU, and Genie runs language
+and vision models on top of it.
+
+Like other hardware, the NPU stays hidden from an app until the app declares the
+entitlement. On a board without an NPU the entitlement does nothing, so an app
+that also runs on other boards can keep it.
+
+If your board is not set up yet, start with
+[Qualcomm Dragonwing IQ8 and IQ9](/docs/installation/wendyos-qualcomm-dragonwing).
+
+## Check the board
+
+```bash
+wendy device info
+```
+
+A Dragonwing running WendyOS reports `NPU: qualcomm (qnn)`. The Adreno GPU on
+the same board is a separate device, covered by the [`gpu` entitlement](/docs/hardware/gpu).
+
+## Add the entitlement
+
+From your project directory:
+
+```bash
+wendy project entitlements add npu
+```
+
+This adds the entitlement to `wendy.json`:
+
+```json
+{
+  "appId": "com.example.npu",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": [
+    { "type": "npu" }
+  ]
+}
+```
+
+## What WendyOS provides
+
+The entitlement supplies only what is tied to the board and its firmware, which
+an app cannot download. Your image brings the rest of the runtime from
+Qualcomm's public QAIRT SDK, so you choose and pin its version.
+
+| WendyOS provides | Your image bundles |
+| --- | --- |
+| The FastRPC device nodes and `/dev/dma_heap/system` | The QNN and Genie libraries (`libQnn*`, `libQairt*`, `libGenie*`) |
+| The FastRPC transport library in `/opt/wendyos/npu/lib`, at the front of `LD_LIBRARY_PATH` | The HTP stub and skel for the board's DSP |
+| The board's DSP shells, Hexagon C++ runtime and `/usr/share/qcom/conf.d` files | Tools such as `genie-t2t-run`, `genie-app` or `qnn-platform-validator` |
+| The `FASTRPC_PROCESS_ATTRS` and `MACHINE_NAME` environment variables | Your models |
+
+Don't bundle your own copies of what WendyOS provides. The board's versions take
+precedence.
+
+The stub and skel must match the board's DSP. Bundle both pairs and the same
+image runs on either board.
+
+| Board | DSP | Stub | Skel |
+| --- | --- | --- | --- |
+| IQ-9075 (IQ9) | Hexagon V73 | `libQnnHtpV73Stub.so` | `libQnnHtpV73Skel.so` |
+| IQ-8275 (IQ8) | Hexagon V75 | `libQnnHtpV75Stub.so` | `libQnnHtpV75Skel.so` |
+
+## Build the image
+
+Use Debian trixie or newer as the base image. The FastRPC transport needs glibc
+2.38 (Debian bookworm has 2.36) and the `libyaml-0-2` and `libbsd0` packages.
+
+This Dockerfile is a starting point. It downloads QAIRT 2.47 on your computer,
+keeps only the files an NPU app needs, and by default checks that the app can
+reach the NPU. Replace the `CMD` with your own app.
+
+```dockerfile title="Dockerfile"
+# Download the public SDK on the build machine and keep only what the app runs.
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS qairt
+ARG QAIRT_VERSION=2.47.0.260601
+ARG QAIRT_SHA256=d3497e110eae82c35a9152a93c0a18bbede402aaf9faa7a97c8079eb0f522b01
+ARG QAIRT_URL=https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/${QAIRT_VERSION}/v${QAIRT_VERSION}.zip
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates unzip \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fL --retry 3 -o /tmp/qairt.zip "$QAIRT_URL" \
+    && echo "${QAIRT_SHA256}  /tmp/qairt.zip" | sha256sum -c - \
+    && unzip -q /tmp/qairt.zip -d /tmp/sdk \
+    && rm /tmp/qairt.zip
+
+# Stubs and skels for both boards: V73 for the IQ9, V75 for the IQ8.
+RUN set -eu; \
+    sdk="$(echo /tmp/sdk/qairt/*)"; \
+    lib="$sdk/lib/aarch64-oe-linux-gcc11.2"; bin="$sdk/bin/aarch64-oe-linux-gcc11.2"; \
+    mkdir -p /out/lib /out/bin /out/skel; \
+    for f in libGenie libQnnHtp libQnnHtpV73Stub libQnnHtpV75Stub libQnnHtpPrepare \
+             libQnnSystem libQairtHtpBackendExtensions libQnnHtpNetRunExtensions \
+             libPlatformValidatorShared; do \
+      cp -L "$lib/$f.so" /out/lib/; \
+    done; \
+    for b in genie-t2t-run qnn-platform-validator; do cp -L "$bin/$b" /out/bin/; done; \
+    cp -L "$sdk/lib/hexagon-v73/unsigned/libQnnHtpV73Skel.so" /out/skel/; \
+    cp -L "$sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so" /out/skel/
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates libatomic1 libgomp1 libstdc++6 libyaml-0-2 libbsd0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Outside /usr/lib, so the transport WendyOS puts first in LD_LIBRARY_PATH wins.
+COPY --from=qairt /out/lib/ /opt/app/qairt/lib/
+COPY --from=qairt /out/bin/ /opt/app/qairt/bin/
+ENV LD_LIBRARY_PATH=/opt/app/qairt/lib
+ENV PATH=/opt/app/qairt/bin:$PATH
+
+# The DSP loads skels from ADSP_LIBRARY_PATH.
+COPY --from=qairt /out/skel/ /app/skel/
+ENV ADSP_LIBRARY_PATH=/app/skel
+
+CMD ["qnn-platform-validator", "--backend", "dsp", "--coreVersion", "--targetPath", "/tmp/pv"]
+```
+
+Then deploy it:
+
+```bash
+wendy run
+```
+
+The first build downloads the 2.3 GB SDK, so it takes a few minutes. Later
+builds reuse the cached layer.
+
+## Store models on a volume
+
+Models are often several gigabytes. Download them on first start into a
+[`persist` volume](/docs/reference/app-configuration#persist) so they survive redeploys:
+
+```json
+{
+  "entitlements": [
+    { "type": "npu" },
+    { "type": "persist", "name": "models", "path": "/data" }
+  ]
+}
+```
+
+Keep the skels in the image, as in the Dockerfile above. Volumes are mounted
+`noexec`, so the DSP cannot load a skel from one.
+
+## Stop cleanly
+
+Killing a process while it has a model loaded on the NPU can leave the DSP stuck
+until the board restarts. So WendyOS never force-kills an app that has the `npu`
+entitlement. When you stop or redeploy the app, WendyOS sends it `SIGTERM` and
+waits up to 30 seconds for it to exit. If the app is still running after that,
+the stop or redeploy fails and the app keeps running.
+
+Handle `SIGTERM` in your app: stop accepting requests, release the model, and
+exit.
+
+## Troubleshooting
+
+- **`Failed to create device: 14001`**: the image is missing the stub or skel
+  for the board's DSP. Check both against the table above.
+- **The transport library fails to load**: the base image is older than Debian
+  trixie, or `libyaml-0-2` or `libbsd0` is missing.
+- **A large Genie model fails to load**: set `"use-mmap": true` in
+  `genie_config.json`. Without it, Genie allocates one shared-weights buffer
+  bigger than the DSP session can map.
+- **Every run fails after one failure**: a failed run can leave the DSP stuck.
+  Restart the board. To avoid it, send work to the NPU from one process, one
+  request at a time.
+
+For every option the entitlement sets, see the [`npu` entry in the
+`wendy.json` reference](/docs/reference/app-configuration#npu).

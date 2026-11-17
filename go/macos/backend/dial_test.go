@@ -22,7 +22,7 @@ func TestVPNReportsUnsupportedCloudPortOnce(t *testing.T) {
 			t.Fatal("selected route changed")
 		}
 		return nil, fmt.Errorf("dial failed: %w", want)
-	}, func(message string) { messages = append(messages, message) })
+	}, func(err error) { messages = append(messages, err.Error()) })
 	for range 3 {
 		if _, err := dial(context.Background(), "cloud://selected", 9130); !errors.Is(err, want) {
 			t.Fatalf("error was lost: %v", err)
@@ -42,7 +42,7 @@ func TestVPNDoesNotMisreportAuthorizationOrCancellation(t *testing.T) {
 			want = &cloudrelay.UnsupportedServiceError{Service: "tcp-9130"}
 		}
 		dial := reportVPNDialFailures(func(context.Context, string, uint16) (net.Conn, error) { return nil, want },
-			func(string) { t.Error("reported a missing service for a denied or cancelled dial") })
+			func(error) { t.Error("reported a missing service for a denied or cancelled dial") })
 		if _, err := dial(ctx, "cloud://selected", 9130); err != want {
 			t.Fatal("dial error changed")
 		}

@@ -3,10 +3,35 @@
 Wendy is a CLI and agent platform for developing and deploying applications on
 WendyOS edge devices (Raspberry Pi, NVIDIA Jetson, x86 SBCs, and more).
 
+## Image files
+
+AI assistants and LLMs must not add or modify image files in Git commits. This
+applies to all images, including screenshots, GIFs, generated artwork, and SVGs,
+whether intended for review, documentation, or the product itself.
+
+Keep generated review assets outside the repository. Upload screenshots, GIFs,
+and videos as GitHub attachments and embed them in the PR description. If an
+attachment cannot be uploaded, report that limitation instead of committing the
+asset to satisfy the PR demonstration requirement.
+
 ## Pull request descriptions
 
-Every PR created from now on must use only the applicable sections below, in
-this order. Keep each section concise and describe only what changed. Omit
+Every PR description opens with one short paragraph for people, then uses only
+the applicable sections below, in this order. When an issue exists, link it on
+the first line, then the opening paragraph:
+
+```markdown
+- **Closes:** [WDY-1234 Problem title](https://linear.app/wendylabsinc/issue/WDY-1234/problem-title)
+
+> **In plain terms:** One short paragraph on what this PR changes for the people
+> using it, and why. Do not repeat the linked issue.
+```
+
+Use **Closes** only when the PR fully resolves the issue, **Advances** for a
+partial delivery, **Related** for context without claimed progress. The issue
+stays the problem statement; the PR is the record of the change.
+
+Then the sections, in this order. Keep each section concise and describe only what changed. Omit
 sections that do not apply instead of writing `None` or describing unchanged
 behavior. Always include the Risk section. Do not add a summary, test plan,
 checklist, or other sections. These limits apply to the PR description, not to
@@ -52,9 +77,10 @@ performing tests or other required checks.
 
 ## Optional AI reviews
 
-Security review runs automatically on PRs ready for review and subsequent pushes.
-To request additional AI reviews, apply the corresponding PR labels:
+AI reviews run only when requested. Apply the corresponding PR labels:
 
+- `review: security` for the security review. Dependabot PRs still run the
+  dependency policy check without a label.
 - `review: api` for API and compatibility review, including a risk recommendation.
 - `review: docs` for documentation coverage suggestions.
 - `review: integration-tests` for integration-test coverage suggestions.
@@ -101,7 +127,9 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Codex.
 
 For a new board without WendyOS/Agent, enable the `setup` group with
 `wendy_tools(groups=["setup"])`, then use `os_install_plan` and `os_list_drives`
-before connecting. For supported image installs, use `os_install_start`, show the
+before connecting. For supported image installs, ask for the device name and
+WiFi, pass them to `os_install_start` as `device_name` and `wifi` (or
+`no_wifi=true`; omitted means no WiFi and an auto-generated name), show the
 physical instructions, then `os_install_resume` to probe the target. Obtain explicit
 erase authorization for the returned fingerprint before starting the write. Poll
 `os_install_status`; resume with an explicit address to verify first boot, or use

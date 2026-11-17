@@ -55,6 +55,115 @@ type VisualVideo struct {
 	Times []int64
 }
 
+// VisualEpisodesAt reads a device's episode index without replacing the active
+// camera/playback session. The connection is reused by subsequent Gallery reads.
+func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
+	// Large device-local indexes can take longer than connection setup. Keep
+	// galleryAcquire's bounded dial budget while allowing the index to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	conn, release, err := b.galleryAcquire(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { release(err) }()
+
+	result, err := recordingEpisodeIndex(ctx, conn.DataService)
+	if err != nil {
+		return nil, err
+	}
+	return result.GetEpisodes(), nil
+}
+
+// VisualPreviewAt retrieves only the first playable video, without changing the
+// active session. Clients extract and cache a small poster frame locally.
+type VisualPreview struct {
+	Path           string
+	MaximumCelsius *float64
+	Duration       float64
+	Reason         string
+}
+
+func (b *Backend) VisualPreviewAt(selector, episode string) (VisualPreview, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	conn, release, err := b.galleryAcquire(ctx, selector)
+	if err != nil {
+		return VisualPreview{}, err
+	}
+	defer func() { release(err) }()
+
+	preview, err := readVisualPreview(ctx, conn.DataService, episode)
+	return preview, err
+}
+
+func readVisualPreview(ctx context.Context, client pb.DataServiceClient, episode string) (VisualPreview, error) {
+	result, err := client.Inspect(ctx, &pb.DataInspectRequest{Episode: episode})
+	if err != nil {
+		return VisualPreview{}, err
+	}
+	if len(result.GetManifestJson()) > visualFileLimit {
+		return VisualPreview{}, errors.New("episode manifest exceeds the viewer limit")
+	}
+	var manifest data.Manifest
+	if err := json.Unmarshal(result.GetManifestJson(), &manifest); err != nil {
+		return VisualPreview{}, err
+	}
+	if manifest.ID != episode {
+		return VisualPreview{}, errors.New("the Agent returned a different episode")
+	}
+	start, end := manifest.StartedEpisodeNS, manifest.StoppedEpisodeNS
+	for _, source := range manifest.Sources {
+		if source.Count > 0 {
+			start = min(start, source.ActualOffset)
+		}
+	}
+	if manifest.CaptureStoppedEpisodeNS != 0 {
+		end = manifest.CaptureStoppedEpisodeNS
+	}
+	preview := VisualPreview{Reason: manifest.Trigger.Reason, Duration: (float64(end) - float64(start)) / 1e9}
+	for _, file := range manifest.Files {
+		if file.Path == "events.jsonl" && file.Size <= 2<<20 {
+			payload, err := visualDownload(ctx, client, episode, file)
+			if err == nil {
+				preview.MaximumCelsius = recordedThermalMaximum(payload)
+			}
+		}
+	}
+	for _, file := range manifest.Files {
+		if file.Role == data.FileRoleDerived && path.Base(file.Path) == "playable.mp4" && strings.HasPrefix(file.Path, "cameras/") && file.Size > 0 && file.Size <= 64<<20 {
+			preview.Path, err = visualDownloadVideo(ctx, client, episode, file)
+			return preview, err
+		}
+	}
+	return preview, nil
+}
+
+func recordedThermalMaximum(payload []byte) *float64 {
+	var maximum *float64
+	scan := bufio.NewScanner(bytes.NewReader(payload))
+	scan.Buffer(make([]byte, 4096), 2<<20)
+	for scan.Scan() {
+		var event struct {
+			Attributes struct {
+				Maximum *float64 `json:"max_celsius"`
+			} `json:"attributes"`
+		}
+		if json.Unmarshal(scan.Bytes(), &event) != nil || event.Attributes.Maximum == nil {
+			continue
+		}
+		value := *event.Attributes.Maximum
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < -273.15 {
+			continue
+		}
+		if maximum == nil || value > *maximum {
+			copy := value
+			maximum = &copy
+		}
+	}
+	return maximum
+}
+
 func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	ctx, done := b.begin()
 	defer done()
@@ -65,7 +174,7 @@ func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{})
+	r, err := recordingEpisodeIndex(ctx, conn.DataService)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +205,42 @@ func (b *Backend) VisualEpisode(session uint64, episode string) (*VisualSnapshot
 	return readVisualEpisode(ctx, client, episode)
 }
 
+// VisualEpisodeAt uses the same Gallery connection as indexes and previews.
+func (b *Backend) VisualEpisodeAt(selector, episode string) (*VisualSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn, release, err := b.galleryAcquire(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := readVisualEpisode(ctx, conn.DataService, episode)
+	release(err)
+	return snapshot, err
+}
+
+// VisualGalleryDataAt separates quick measurements from audio; ROS bags stay in the full viewer.
+func (b *Backend) VisualGalleryDataAt(selector, episode string, summary bool) (*VisualSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	conn, release, err := b.galleryAcquire(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	mode := 2
+	if summary {
+		mode = 1
+	}
+	snapshot, err := readVisualEpisodeMode(ctx, conn.DataService, episode, mode)
+	release(err)
+	return snapshot, err
+}
+
 func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode string) (*VisualSnapshot, error) {
+	return readVisualEpisodeMode(ctx, client, episode, 0)
+}
+
+// mode 0 is full replay, 1 is telemetry only, 2 adds audio without ROS bags.
+func readVisualEpisodeMode(ctx context.Context, client pb.DataServiceClient, episode string, mode int) (*VisualSnapshot, error) {
 	r, err := client.Inspect(ctx, &pb.DataInspectRequest{Episode: episode})
 	if err != nil {
 		return nil, err
@@ -148,6 +292,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 	budget := int64(visualTotalLimit)
 	indexes := map[string][]byte{}
 	for _, file := range manifest.Files {
+		if mode != 0 && file.Path != "telemetry.jsonl" {
+			continue
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -182,6 +329,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 	}
 	videoBudget := int64(visualVideoTotalLimit)
 	for _, file := range manifest.Files {
+		if mode != 0 {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -214,7 +364,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 		}
 		out.Videos = append(out.Videos, VisualVideo{Track: track, Path: movie, Times: times})
 	}
-	out.readSensors(ctx, client, episode, manifest)
+	if mode != 1 {
+		out.readSensorsMode(ctx, client, episode, manifest, mode == 0)
+	}
 	if len(out.Samples) >= visualSampleLimit {
 		out.Warnings = append(out.Warnings, "The viewer sample limit was reached. Export the full episode to retain all recorded samples.")
 	}

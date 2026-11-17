@@ -32,6 +32,12 @@ func deviceRPCAllowed(method string) bool {
 		agentpb.WendyContainerService_WriteChunks_FullMethodName,
 		agentpb.WendyContainerService_PrepareImage_FullMethodName:
 		return true
+	// Public device identity material and admission of an operator-signed grant;
+	// the admission handler also binds the caller to its operator or builder key.
+	case agentpbv2.WendyBuildDeliveryService_GetDeliveryCapabilities_FullMethodName,
+		agentpbv2.WendyBuildDeliveryService_AdmitDelivery_FullMethodName,
+		agentpbv2.WendyBuildDeliveryService_GetDeliveryStatus_FullMethodName:
+		return true
 	// Legacy peer agents carry application TCP streams through MeshDial.
 	// Its handler independently restricts the tenant and running-app ingress.
 	case agentpbv2.WendyMeshService_MeshDial_FullMethodName:
@@ -64,6 +70,33 @@ func CheckRPCIdentity(ctx context.Context, method string, expected certs.Scope, 
 		return status.Error(codes.Unauthenticated, "verified mTLS caller identity required")
 	}
 	leaf := tlsInfo.State.PeerCertificates[0]
+	return checkRPCLeaf(leaf, method, expected, mode)
+}
+
+// CheckOperatorCertificate admits an already chain-verified management leaf.
+// It shares the operator and legacy-user policy of management RPCs, without
+// granting any of the device-only RPC exceptions to another transport.
+func CheckOperatorCertificate(leaf *x509.Certificate, expected certs.Scope, mode OrgMode) error {
+	if leaf == nil {
+		return rpcauth.Denied("operator certificate required")
+	}
+	identity, found, err := certs.IdentityFromCert(leaf)
+	if err != nil || (found && identity.EntityType != certs.EntityUser) {
+		return rpcauth.Denied("management requires operator credentials")
+	}
+	if found {
+		if !expected.Known() || !identity.Scope().Matches(expected) {
+			return rpcauth.Denied("operator certificate must match the device tenant")
+		}
+		return nil
+	}
+	if mode == OrgModeGrace && legacyRPCUser(leaf) {
+		return nil
+	}
+	return rpcauth.Denied("management requires a recognized operator certificate")
+}
+
+func checkRPCLeaf(leaf *x509.Certificate, method string, expected certs.Scope, mode OrgMode) error {
 	identity, found, err := certs.IdentityFromCert(leaf)
 	if err != nil {
 		return rpcauth.Denied("client certificate has no recognized RPC caller identity")

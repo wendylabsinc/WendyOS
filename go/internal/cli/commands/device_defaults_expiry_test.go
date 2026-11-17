@@ -25,6 +25,7 @@ func TestCloudSelectorCertificateExpiresDuringRenewal(t *testing.T) {
 		{name: "service account", issuer: "https://auth.example", serviceAccount: "robot"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			resetAutomaticCertReissue(t)
 			now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 			expiry := now.Add(time.Second)
 			auth := config.AuthConfig{

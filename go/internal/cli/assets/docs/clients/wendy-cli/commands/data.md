@@ -514,7 +514,7 @@ disabled.
 | `revision` | yes | Lowercase, 40-character Hugging Face commit SHA. Branch names are rejected. |
 | `labels` | yes | 1–32 unique, nonempty model labels, each at most 128 bytes. |
 | `threshold` | yes | Detection confidence in `(0, 1]`. |
-| `rate` | yes | Frames per second per camera in `(0, 30]`. |
+| `rate` | yes | Frames per second per camera in `(0, 30]`. An upper bound: a model slower than this scores as fast as it can; see `inference_status.throughput` below. |
 | `event` | yes | Event emitted on detection; 1–128 letters, numbers, `.`, `-`, or `_`. |
 | `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
 | `cooldown` | yes | Minimum interval between detection events; positive duration, at most 24h. |
@@ -526,6 +526,41 @@ Inference requires a camera source and a trigger matching its event in
 `inference_status`, including runtime state, per-camera state and notification
 errors. Temporary camera loss retains presence/cooldown state so reconnecting
 does not produce a duplicate detection.
+
+`rate` is the most the model scores, not a promise: one model scores the
+campaign's cameras in turn, and a model that needs longer for a frame than the
+rate allows scores as fast as it can. `inference_status.throughput` compares
+the two, for either backend: `requested_fps` (the rate, for every camera being
+scored), `achieved_fps`, and a `summary` such as
+`model scores 0.11 frames/s of the 1 requested (about 9.1 s per frame on cpu)`.
+Once the model has missed the rate for 30 seconds, `model_too_slow` is `true`
+and the agent logs a warning. Once it has kept up for 30 seconds the flag is
+gone, and the agent logs that too. Cameras that deliver fewer frames than the
+rate are not reported as a slow model, and neither is the CPU while a TensorRT
+engine is on its way.
+
+Each report from the model process is also published as OpenTelemetry metrics
+of the agent (`service.name` `wendy-agent`, scope `wendy.data.inference`). Reports
+are sent between frames, at most one every 10 seconds, so a slow model reports
+less often.
+
+| Metric | Type | Value |
+|---|---|---|
+| `inference.rate.requested` | gauge, `{frame}/s` | `throughput.requested_fps` |
+| `inference.rate.achieved` | gauge, `{frame}/s` | `stats.fps` |
+| `inference.model.too_slow` | gauge, `0` or `1` | `throughput.model_too_slow` |
+| `inference.frame.duration_ms` | gauge, `ms` | `stats.infer_ms_p50` and `stats.infer_ms_p95`, told apart by `inference.quantile` (`p50`, `p95`) |
+| `inference.frames.scored` | cumulative sum, `{frame}` | `stats.frames_scored`; it starts again when the model process restarts |
+
+Every point carries `inference.campaign` and `inference.model`, and the gauges
+`inference.engine` (`cpu` or `tensorrt`). The requested rate and
+`inference.model.too_slow` are published only while the status has a
+`throughput`, and nothing more is published once a campaign's inference has
+stopped, though a metrics stream opened later still begins with the last
+values the agent published. Read them with the `telemetry_metrics` MCP tool
+(`metric_name_prefix: inference.`), or with
+`wendy device telemetry-stream --metrics`, which prints one JSON line per
+metric: for a metric with several points, such as the frame duration, its last.
 
 Each scored frame produces a `prediction` record, which an Episode that
 records applications keeps in its `events.jsonl`. A frame that raises the
@@ -618,11 +653,11 @@ with `waiting_since` and `build_by`, `queued`, `building` with `started_at`,
 `verifying`, `ready` or `failed` with an `error`) and any `warnings` TensorRT
 printed while loading it. A build or a wait also reports `elapsed_seconds`,
 and a build that stopped waiting for idle CPUs reports `low_priority: true`.
-`inference_status.stats` reports `fps`, inference latency (`infer_ms_p50`,
-`infer_ms_p95`) and `frames_scored`, the frames the model process has scored
-since it started. Each `prediction` record carries `accelerator`, `precision`,
-`infer_ms` and `model_sha256`, because FP16 TensorRT scores differ slightly
-from FP32 CPU scores.
+`inference_status.stats` reports, for either backend, `fps`, inference latency
+(`infer_ms_p50`, `infer_ms_p95`) and `frames_scored`, the frames the model
+process has scored since it started. Each `prediction` record carries
+`accelerator`, `precision`, `infer_ms` and `model_sha256`, because FP16
+TensorRT scores differ slightly from FP32 CPU scores.
 
 The agent keeps what TensorRT needs in its inference directory: `accel/` holds
 the bindings, `engines/` the built engines (about 9 MB each for `yolo11n`),

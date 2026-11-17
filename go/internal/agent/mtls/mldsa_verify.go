@@ -243,7 +243,7 @@ func buildPeerCertificateVerifier(caPool *x509.CertPool, caCerts []*x509.Certifi
 func buildPeerCertificateVerifierWithCache(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, floor time.Time, cache *peerPathCache) func([][]byte, time.Time) (time.Time, error) {
 	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, func(now, nb time.Time) (time.Time, time.Time) { return now, effectiveVerificationTime(now, floor, nb) }, cache, false, revocation.RevokedOnly)
 	return func(raw [][]byte, now time.Time) (time.Time, error) {
-		window, err := verify(raw, now)
+		window, err := verify(raw, now, "")
 		return window.NotAfter, err
 	}
 }
@@ -255,14 +255,19 @@ func NewPeerCertificateWindowVerifierWithPolicy(chainPEM string, logger *zap.Log
 	if err != nil {
 		return nil, err
 	}
-	return buildPeerCertificateWindowVerifier(pool, roots, logger, func(wall, nb time.Time) (time.Time, time.Time) {
+	verify := buildPeerCertificateWindowVerifier(pool, roots, logger, func(wall, nb time.Time) (time.Time, time.Time) {
 		base := policy.BaseTime(wall)
 		return base, policy.LeafTimeAtBase(base, nb)
-	}, newPeerPathCache(), true, revocation.RevokedOnly), nil
+	}, newPeerPathCache(), true, revocation.RevokedOnly)
+	return func(raw [][]byte, now time.Time) (certs.CertificateWindow, error) { return verify(raw, now, "") }, nil
 }
 
-func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), cache *peerPathCache, leafOnly bool, level revocation.Level) func([][]byte, time.Time) (certs.CertificateWindow, error) {
-	return func(rawCerts [][]byte, realNow time.Time) (certs.CertificateWindow, error) {
+// buildPeerCertificateWindowVerifier returns the verifier behind every peer
+// certificate check in this package. Its last argument is the address of the
+// connection that presented the chain and is used only in the rejection log;
+// callers that verify a chain outside a handshake pass "".
+func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), cache *peerPathCache, leafOnly bool, level revocation.Level) func([][]byte, time.Time, string) (certs.CertificateWindow, error) {
+	return func(rawCerts [][]byte, realNow time.Time, remote string) (certs.CertificateWindow, error) {
 		if cache != nil {
 			cache.observe()
 		}
@@ -301,16 +306,16 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 		// floor may accommodate NotBefore, but must never mask real expiry.
 		if baseNow.After(leaf.NotAfter) {
 			expiredErr := fmt.Errorf("certificate expired (notAfter=%v)", leaf.NotAfter)
-			logCertRejection(logger, leaf, expiredErr, realNow, realNow)
+			logCertRejection(logger, leaf, expiredErr, realNow, realNow, remote)
 			return certs.CertificateWindow{}, expiredErr
 		}
 		if effectiveNow.Before(leaf.NotBefore) {
 			err := fmt.Errorf("certificate not valid before %v", leaf.NotBefore)
-			logCertRejection(logger, leaf, err, realNow, effectiveNow)
+			logCertRejection(logger, leaf, err, realNow, effectiveNow, remote)
 			return certs.CertificateWindow{}, err
 		}
 		if err := checkCertificateLifetime(leaf); err != nil {
-			logCertRejection(logger, leaf, err, realNow, effectiveNow)
+			logCertRejection(logger, leaf, err, realNow, effectiveNow, remote)
 			return certs.CertificateWindow{}, err
 		}
 		var window certs.CertificateWindow
@@ -327,7 +332,7 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 			})
 		}
 		if err != nil {
-			logCertRejection(logger, leaf, err, realNow, effectiveNow)
+			logCertRejection(logger, leaf, err, realNow, effectiveNow, remote)
 			return certs.CertificateWindow{}, err
 		}
 		if leafOnly && !window.Valid() {
@@ -428,8 +433,11 @@ func verifyPeerCertificateWindow(leaf *x509.Certificate, rawCerts [][]byte, caPo
 // logCertRejection logs a WARN when a client cert is rejected, with a clock
 // skew hint when the error indicates the cert is not yet valid. realNow is the
 // device clock; effectiveNow is the floored clock verification actually used, and
-// the two differ by however far the floor carried the device.
-func logCertRejection(logger *zap.Logger, leaf *x509.Certificate, err error, realNow, effectiveNow time.Time) {
+// the two differ by however far the floor carried the device. remote is the
+// address the certificate arrived from, so the line says which machine holds
+// it; when the chain was not verified on a connection it is "" and the field
+// is left out.
+func logCertRejection(logger *zap.Logger, leaf *x509.Certificate, err error, realNow, effectiveNow time.Time, remote string) {
 	if logger == nil {
 		return
 	}
@@ -439,6 +447,11 @@ func logCertRejection(logger *zap.Logger, leaf *x509.Certificate, err error, rea
 		zap.Time("notAfter", leaf.NotAfter),
 		zap.Time("clock", realNow),
 		zap.Error(err),
+	}
+	if remote != "" {
+		// The interceptor's RPC-level rejections use the same key, so one
+		// search for an address finds both.
+		fields = append(fields, zap.String("remote", remote))
 	}
 	msg := "mTLS client certificate rejected"
 	// Only hint at clock skew when the verification clock is behind the cert's

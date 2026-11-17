@@ -51,7 +51,7 @@ func liveCheckFixture(t testing.TB, pq bool) (*crltest.PKI, func(context.Context
 	pool.AddCert(p.CA)
 	// The previous production constructor supplied no path cache.
 	uncached := buildPeerCertificateWindowVerifier(pool, []*x509.Certificate{p.CA}, nil, func(now, nb time.Time) (time.Time, time.Time) { return now, now }, nil, false, revocation.RevokedOnly)
-	baseline := livePeerCheck(func(raw [][]byte, level revocation.Level) error { _, err := uncached(raw, time.Now()); return err })
+	baseline := livePeerCheck(func(raw [][]byte, level revocation.Level) error { _, err := uncached(raw, time.Now(), ""); return err })
 	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{remote.Cert}}}})
 	return p, livePeerCheck(check), baseline, ctx
 }
@@ -130,7 +130,7 @@ func TestTLSFreshnessNotReusedFromWarmRevocationProof(t *testing.T) {
 	}
 	now := time.Now().Truncate(time.Second)
 	p.Respond(p.Sign(t, &x509.RevocationList{Number: big.NewInt(1), ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(10 * time.Second)}), 200)
-	_, check, err := newTLSConfig(own.PEM, p.PEM, own.KeyPEM, nil, func(now, nb time.Time) (time.Time, time.Time) { return now, now }, func() time.Time { return now }, false)
+	_, check, err := newTLSConfig(own.PEM, p.PEM, own.KeyPEM, nil, func(now, nb time.Time) (time.Time, time.Time) { return now, now }, func() time.Time { return now }, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

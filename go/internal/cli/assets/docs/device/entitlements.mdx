@@ -5,7 +5,7 @@ description: Configure hardware access and permissions for your WendyOS applicat
 
 ## Understanding Entitlements
 
-Entitlements are permissions that grant your application access to hardware resources and system capabilities on your WendyOS device. By default, applications run in isolated containers with minimal privileges. Entitlements allow you to selectively enable access to features like networking, GPU, video capture, audio, and Bluetooth.
+Entitlements are permissions that grant your application access to hardware resources and system capabilities on your WendyOS device. By default, applications run in isolated containers with minimal privileges. Entitlements allow you to selectively enable access to features like networking, GPU, NPU, video capture, audio, and Bluetooth.
 
 <Callout type="info">
   Entitlements apply to WendyOS container targets (`linux`/`wendyos`) and `wendy-lite`. Native macOS (`darwin`) apps run non-containerized and do not use the WendyOS entitlement system.
@@ -138,6 +138,23 @@ When enabled, this entitlement:
 <Callout type="info">
   **Hardware-specific behavior**: What the `gpu` entitlement exposes depends on the device — NVIDIA GPU access on Jetson, and VideoCore board telemetry on Raspberry Pi. See [GPU access](/docs/hardware/gpu#raspberry-pi-board-telemetry) for the details.
 </Callout>
+
+### NPU Entitlement
+
+The NPU entitlement gives your application the Hexagon NPU on Qualcomm Dragonwing boards, for on-device inference with QNN or Genie.
+
+```json
+{
+  "type": "npu"
+}
+```
+
+When enabled, this entitlement:
+- Grants the FastRPC device nodes and `/dev/dma_heap/system`
+- Injects the board's FastRPC transport library and DSP files
+- Sets `FASTRPC_PROCESS_ATTRS` and `MACHINE_NAME`
+
+Your image bundles the rest of the Qualcomm AI Runtime. See [NPU access](/docs/hardware/npu) for an example Dockerfile.
 
 ### Display Entitlement
 
@@ -304,6 +321,19 @@ replugging a device; a running task is not remounted in place.
   intended device connected if physical-device identity matters.
 </Callout>
 
+### Arduino UNO Q microcontroller (`arduino-bridge`) Entitlement
+
+The UNO Q's STM32 runs an Arduino sketch next to WendyOS. Name the sketch folder with [`mcu`](/docs/apps/wendy.json#mcu), and `wendy run` compiles it and flashes it before the container deploy. `arduino-bridge` lets the app talk to the sketch through Arduino's router, the same Bridge that Arduino App Lab uses. Modulino modules sit on the microcontroller's Qwiic bus, so Linux reaches them only this way.
+
+```json
+{
+    "mcu": { "sketch": "sketch" },
+    "entitlements": [{ "type": "arduino-bridge" }]
+}
+```
+
+The container gets the host directory `/run/arduino-router`, the `arduino-router` group, and `APP_SOCKET=unix:///run/arduino-router/router.sock` (unless the app's `env` sets it). Arduino's Python package `arduino-router-bridge` reads `APP_SOCKET`.
+
 ### Persist Entitlement
 
 The persist entitlement creates a persistent storage volume that survives container restarts. Data written to the mounted path is stored on the host device and persists across application updates and reboots.
@@ -412,6 +442,8 @@ An app with `admin` can start, stop, and delete apps and read all device data lo
 <Callout type="warning">
   **Security**: `admin` is a privileged, deliberate grant equivalent to local device control. Grant it only to fully-trusted first-party apps (e.g. the WendyOS shell). Requires an agent build that serves the local socket.
 </Callout>
+
+An app that only needs the agent's version or the device's name does not need `admin`: every app can read them from the `WENDY_AGENT_VERSION` and `WENDY_DEVICE_NAME` [environment variables](/docs/advanced/cloud/telemetry#environment-variables-injected-into-app-containers).
 
 ## Common Configurations
 

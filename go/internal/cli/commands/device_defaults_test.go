@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,6 +119,10 @@ func TestCloudDefaultResolvesExactCloudOrgAndAsset(t *testing.T) {
 		}
 		return []*cloudpb.Asset{{Id: 99, Name: "42"}, {Id: 42, Name: "renamed"}}, nil
 	}
+	// A missing asset is looked up again among every enrolled device.
+	oldAll := fetchDefaultCloudAllAssetsFn
+	t.Cleanup(func() { fetchDefaultCloudAllAssetsFn = oldAll })
+	fetchDefaultCloudAllAssetsFn = fetchDefaultCloudAssetsFn
 	connectDefaultCloudAssetFn = func(_ context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, _ string) (*grpcclient.AgentConnection, error) {
 		if asset.Id != 42 || cloudAuthOrgID(auth) != 7 {
 			t.Fatal("connected to wrong asset or organization")
@@ -291,8 +296,9 @@ func TestCloudV2DefaultPreservesTenantAndAssetAcrossRename(t *testing.T) {
 	}
 	oldFetch, oldConnect := fetchDefaultCloudAssetsV2Fn, connectDefaultCloudAssetV2Fn
 	t.Cleanup(func() { fetchDefaultCloudAssetsV2Fn, connectDefaultCloudAssetV2Fn = oldFetch, oldConnect })
+	explainingMiss := false
 	fetchDefaultCloudAssetsV2Fn = func(_ context.Context, selected *config.AuthConfig, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
-		if selected.CloudGRPC != auth.CloudGRPC || selected.Certificates[0].TenantUUID() != tenant || !onlineOnly {
+		if selected.CloudGRPC != auth.CloudGRPC || selected.Certificates[0].TenantUUID() != tenant || (!onlineOnly && !explainingMiss) {
 			t.Fatal("default resolved the wrong cloud or tenant")
 		}
 		return []*cloudpbv2.Asset{{Id: "a20403ae-9251-4937-aa9b-bb1d773df071", Name: "original"}, {Id: assetID, Name: "renamed"}}, nil
@@ -308,6 +314,8 @@ func TestCloudV2DefaultPreservesTenantAndAssetAcrossRename(t *testing.T) {
 		t.Fatalf("connect default: %v, %v", selected, err)
 	}
 	selector.AssetUUID = "ede01a43-7ef8-49d9-bfaf-88192b5124af"
+	// A missing asset is looked up again among every enrolled device.
+	explainingMiss = true
 	if _, err := connectCloudDeviceSelector(context.Background(), selector); err == nil {
 		t.Fatal("missing asset selected another device")
 	}
@@ -377,12 +385,14 @@ func TestCloudSelectorRefreshesExpiredOAuthCertificate(t *testing.T) {
 	refused := errors.New("identity issuance refused")
 	for _, refreshErr := range []error{nil, refused} {
 		t.Run(fmt.Sprint(refreshErr), func(t *testing.T) {
-			auth := config.AuthConfig{CloudGRPC: "cloud.example:443", OAuthIssuer: "https://auth.example", RefreshToken: "original", Certificates: []config.CertificateInfo{{
+			resetAutomaticCertReissue(t)
+			auth := config.AuthConfig{Name: "current", CloudGRPC: "cloud.example:443", OAuthIssuer: "https://auth.example", RefreshToken: "original", Certificates: []config.CertificateInfo{{
 				PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test", PemCertificate: "expired",
 			}}}
 			other := auth
+			other.Name = "other"
 			other.Certificates = []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/ed6e09f3-d287-450b-a053-e4554f3c70ed/operator/test", PemCertificate: "other"}}
-			setTempConfig(t, &config.Config{Auth: []config.AuthConfig{other, auth}})
+			setTempConfig(t, &config.Config{CurrentContext: "current", Auth: []config.AuthConfig{other, auth}})
 			oldExpiry, oldRefresh := leafNotAfterFn, refreshDefaultCloudCertificateFn
 			oldFetch, oldConnect := fetchDefaultCloudAssetsV2Fn, connectDefaultCloudAssetV2Fn
 			t.Cleanup(func() {
@@ -437,6 +447,7 @@ func TestCloudSelectorKeepsValidCertificateWhenRenewalRefused(t *testing.T) {
 		{reason: "renewal budget exhausted", needsFreshCert: true},
 	} {
 		t.Run(refusal.reason, func(t *testing.T) {
+			resetAutomaticCertReissue(t)
 			auth := pickerAuth(7)
 			auth.OAuthIssuer = "https://auth.example"
 			auth.Certificates[0].PemCertificate = "still-valid"
@@ -454,9 +465,10 @@ func TestCloudSelectorKeepsValidCertificateWhenRenewalRefused(t *testing.T) {
 			renewViaPKICore = func(context.Context, string, *config.AuthConfig) (string, string, string, error) {
 				return "", "", "", refusal
 			}
+			refreshes := 0
 			refreshDefaultCloudCertificateFn = func(context.Context, *config.AuthConfig) error {
-				t.Fatal("reissued a certificate that remains valid")
-				return nil
+				refreshes++
+				return errors.New("identity issuance refused")
 			}
 			fetchDefaultCloudAssetsFn = func(context.Context, *config.AuthConfig) ([]*cloudpb.Asset, error) {
 				return []*cloudpb.Asset{{Id: 42}}, nil
@@ -469,13 +481,17 @@ func TestCloudSelectorKeepsValidCertificateWhenRenewalRefused(t *testing.T) {
 				}
 				return &grpcclient.AgentConnection{}, nil
 			}
-			warning := captureStderr(t, func() {
+			var notices bytes.Buffer
+			oldNotice := noticeOut
+			noticeOut = &notices
+			t.Cleanup(func() { noticeOut = oldNotice })
+			_ = captureStderr(t, func() {
 				if _, err := connectCloudDeviceSelector(context.Background(), cloudDeviceSelector{Endpoint: auth.CloudGRPC, OrgID: 7, AssetID: 42}); err != nil {
 					t.Fatal(err)
 				}
 			})
-			if !connected || !strings.Contains(strings.ToLower(warning), refusal.reason) {
-				t.Fatalf("renewal refusal did not warn and continue: connected=%v, warning=%q", connected, warning)
+			if !connected || refreshes != 1 || !strings.Contains(notices.String(), "identity issuance refused") {
+				t.Fatalf("failed re-issue did not warn and retain valid custody: connected=%v, refreshes=%d, warning=%q", connected, refreshes, notices.String())
 			}
 		})
 	}

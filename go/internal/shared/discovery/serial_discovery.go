@@ -26,6 +26,11 @@ type SerialDevice struct {
 	// incompatible) Wendy Lite firmware installed. ID/Name/DisplayName are
 	// empty in that case.
 	Responsive bool
+	// Busy is true when Port could not even be opened because another process
+	// holds it, so nothing is known about the board behind it — neither its
+	// identity nor whether it runs Wendy Lite. Never set together with
+	// Responsive.
+	Busy bool
 }
 
 // resolvePortsFn resolves the VID/PID-matching ESP32 serial ports. Indirected
@@ -152,10 +157,10 @@ type SerialDiscovery struct {
 	nextID         ListenerID
 	// contended tracks ESP32 ports whose most recent open attempt failed
 	// because something else currently holds them (see ContendedPorts).
-	// Kept separate from devices: a contended port must never appear there
-	// (that would risk mislabeling a fine, working board as unflashed), but
-	// still needs to be distinguishable from "no board connected" for
-	// DiscoverDevices to explain a truly empty result (WDY-2319).
+	// Kept separate from devices: a port already listed there keeps its entry
+	// when it turns contended (a failed open must not relabel a known board),
+	// and DiscoverDevices needs to explain a result with no usable board
+	// (WDY-2319). A contended port with no entry yet is listed as Busy.
 	contended map[string]bool
 	// watchdogStrikes counts consecutive probeWithWatchdog timeouts per port;
 	// wedgedUntil (set once strikes reach maxWatchdogStrikes) is when the port
@@ -360,13 +365,18 @@ func (d *SerialDiscovery) StartScan(repeatInterval time.Duration) {
 							// dangling fd inherited by a subprocess, etc.).
 							// Leave any existing entry untouched rather than
 							// mislabel a contended-but-fine device as unflashed;
-							// the next cycle retries once it frees up. Recorded
-							// separately via contended so a caller seeing zero
-							// devices can still tell a board is present but
-							// inaccessible right now (WDY-2319).
+							// the next cycle retries once it frees up. A port
+							// with no entry is listed as Busy: the board is
+							// plugged in, and dropping it reads as "not
+							// connected" whenever any other device is found.
 							d.mu.Lock()
 							d.contended[port] = true
+							changed := !d.hasDeviceLocked(port) &&
+								d.upsertDeviceLocked(SerialDevice{Port: port, Busy: true})
 							d.mu.Unlock()
+							if changed {
+								d.notify()
+							}
 							return
 						}
 
@@ -519,6 +529,17 @@ func (d *SerialDiscovery) snapshotLocked() []SerialDevice {
 	snap := make([]SerialDevice, len(d.devices))
 	copy(snap, d.devices)
 	return snap
+}
+
+// hasDeviceLocked reports whether port already has an entry. Must be called
+// with mu held.
+func (d *SerialDiscovery) hasDeviceLocked(port string) bool {
+	for _, existing := range d.devices {
+		if existing.Port == port {
+			return true
+		}
+	}
+	return false
 }
 
 // upsertDeviceLocked replaces the entry for dev.Port with dev (appending if

@@ -1,0 +1,195 @@
+2770 physical TOPDON 96x96 thermometry acceptance
+
+This is an executable human procedure for a reserved Linux board. Generation
+does not contact a board. No existing committed thermal frame is claimed to be
+a physical recording. Every case starts not_run. An offline replay can prove
+decoder behavior for supplied bytes; physical provenance and reference accuracy
+still require a human review. Never commit raw camera files, images or videos.
+
+Target and measurement contract
+
+Use the source-supported USB device 2bdf:0102, bcdDevice 0409. Pin its serial,
+physical USB port, stable camera ID, board serial, OS/kernel and installed Agent
+binary hash. Save the original lsusb -v and udevadm output, not just a label
+typed into JSON. The usb_descriptor inventory file is a transcription with
+idVendor/idProduct/bcdDevice/serial/port fields; retain its original console
+output beside it. If the USB device has no serial descriptor, record the literal
+not-reported in both inventory and transcription; retain a photographed bench
+asset label and the fixed USB port as the physical-unit identity. Never invent
+a USB serial. If firmware cannot be read independently, state that only
+the USB-reported revision is known. Do not invent a firmware version.
+
+The camera list must declare topdon-tc001-hik-v1, capture_width 96 and
+capture_height 200. The raw message has YUYV layout, 192 bytes per line and
+38400 bytes per frame. Only rows 0..95 are the 96x96 sensor plane. Row 97 holds
+the geometry header; rows 100..195 are the preview; row 196 holds the summary.
+The summary temperature code is not a raw sensor pixel. Applying code/64-50 to
+the sensor plane is wrong. Calibration is not established by the camera name,
+an encoded preview, a synthetic fixture or matching two copies of the decoder.
+
+Before capture, document an independent temperature reference. Use an in-date
+calibrated blackbody target or an appropriate calibrated contact probe with a
+stable high-emissivity target whose surface temperature is independently known.
+Record instrument serial, calibration certificate/hash, emissivity, distance,
+focus, ambient/reflected temperature, equilibration time and combined uncertainty.
+Predeclare the acceptance tolerance and safe cool/warm target temperatures.
+An uncalibrated thermometer, human skin temperature estimate or the TOPDON's own
+display is not an independent reference. If no suitable reference is available,
+capture may still document protocol/geometry but Celsius accuracy remains pending.
+Choose a threshold between the safe cool and warm references. Do not heat to the
+default 80C just to test an alert. Put the selected finite threshold in inventory.
+
+Prepare without device operations
+
+1. Generate the plan from captured inventory/provenance files:
+     python3 .github/regression-coverage/manual/topdon-physical-rehearsal.py INVENTORY_JSON NEW_DIRECTORY
+   Its schema is in the generator docstring. The generated app is an exact copy
+   of ThermalNotify source with a unique app ID, admin entitlement only and
+   monitor-only environment. No Cloud notifications are sent or requested.
+   Generation does not build or deploy the app. Keep the original example intact.
+
+2. From the pinned repository checkout, build the bounded capture helper:
+     @BUILD@
+   Save source SHA, Go version, command output and sha256sum of the result. The
+   helper only calls ListVideoDevices and StreamVideo on an explicitly supplied
+   local admin Unix socket. It never opens video nodes or changes capture size.
+   Copy it and the plan to a fresh private directory on the reserved board using
+   the bench's authorized transport. Recheck its hash on the board. Do not change
+   admin-socket permissions to make the test work. Use the already authorized
+   bench account; absence of local access is a prerequisite, not a reason to
+   substitute a fake server or contact Cloud.
+
+3. Verify the installed Agent executable through /proc/<actual-main-pid>/exe,
+   its hash, service start time and boot ID. Save the exact camera list command
+   below, lsusb -v -d 2bdf:0102 and:
+     udevadm info --query=all --name="$OBSERVED_CAMERA_NODE"
+     v4l2-ctl --device="$OBSERVED_CAMERA_NODE" --all --list-formats-ext
+   Match camera stable ID to this node and serial/port. Save clock synchronization
+   state, UTC time and reference-instrument time offset. The replay checks Agent
+   frame UTC against capture-helper receipt UTC; it never rewrites old timestamps
+   to now. Close only bench-owned viewers before starting so the default physical
+   96x200 mode is selected. A 256x392 or picture-only stream cannot cover 2770.
+
+Collect the real reusable frame sequence
+
+4. Observe the actual local Agent admin socket from its service/runtime state.
+   The current host default is /var/lib/wendy/agent-control/agent.sock, and an
+   admin-entitled app receives /run/wendy/agent/agent.sock. Select the real socket,
+   not a guessed network endpoint. On the board, in the private directory:
+     @CAPTURE@ --socket "$OBSERVED_AGENT_SOCKET" --output "$NEW_RECORDING_DIRECTORY"
+   This is an explicit hardware operation. It stops at 60 seconds or 1600 frames,
+   whichever happens first, and cancellation closes its own RPC. It writes only
+   a NEW output directory, at most about 83 MB. Start it only when ready to follow
+   the physical sequence. The capture's status 'captured' only means transport
+   collection completed; physical_acceptance still requires review.
+
+5. During that minute, issue a fresh written run nonce and record a UTC timeline.
+   First show the stable cool target. Move the independently measured warmer
+   target through left, center and right parts of the 96x96 field, with a cool
+   background and no hotter object elsewhere. Hold each position long enough to
+   see several distinct summary updates. Then remove it, wait for the cool
+   reading, and introduce it again. Log reference temperatures and target pixel
+   regions independently of the decoded coordinates. Save the target arrangement
+   and instrument display as external review assets, with acquisition times.
+   Do not use a rendered palette as the temperature reference. Changing raw sensor
+   values alone does not prove that the summary changed or its location is valid.
+
+6. Retain camera.json, manifest.json and every frame-*.json without editing them.
+   Each frame file contains the full Agent protobuf JSON, including original raw
+   bytes in base64, thermal-plane description and timestamp. Manifest entries
+   contain receipt timestamps, file hashes and raw-payload hashes. Copy the whole
+   directory to the workstation and verify hashes before and after transfer.
+   A missing/truncated sequence, changed layout, early camera error or no fresh
+   summary must remain incomplete. Keep the initial cached summary too; do not
+   discard it to make freshness tests pass.
+
+Independent byte and reference inspection
+
+7. For at least three post-startup changed summaries at distinct target positions,
+   inspect the original bytes without calling Wendy's decoder. This command
+   reads a captured frame JSON and prints unsigned little-endian metadata words:
+     python3 inspect-frame.py "$FRAME_JSON"
+   Header words 0/1 must be ccdd/aabb; 32-bit little-endian dimensions at header
+   offsets 8 and 12 must both be 96. Summary words 0/1 must be ffff/eeee. Word 2
+   is maximum code and word 5 minimum code; both must be between 1 and 65534 with
+   maximum >= minimum. Words 3/4 and 6/7 are normalized coordinates in 0..1000.
+   Independently transcribe max Celsius = word2 / 64 - 50 and compare to the
+   simultaneous external reference within the PREDECLARED uncertainty. Convert
+   max coordinates by floor((normalized * 95 + 500)/1000); compare to the target
+   region recorded before looking at decoded coordinates. Save the arithmetic,
+   raw words, instrument observations and chosen frame indices.
+
+8. Copy reference.template.json to the recording directory as reference.json.
+   Fill observer, independent instrument serial and the calibration-record hash.
+   Add at least three samples using this schema, with actual observed values:
+     {"frame": INDEX, "expected_max_celsius": MANUAL_METADATA_RESULT,
+      "reference_celsius": INDEPENDENT_INSTRUMENT_READING,
+      "tolerance_celsius": PREDECLARED_UNCERTAINTY,
+      "x_min": LEFT, "x_max": RIGHT, "y_min": TOP, "y_max": BOTTOM}
+   The regions are inclusive sensor coordinates 0..95, not 96x200 capture rows.
+   Never fill an expected value from ThermalNotify's output merely to pass replay.
+   Preserve the immutable capture separately from this reviewed annotation file.
+
+Replay with the actual ThermalNotify implementation
+
+9. On a macOS 15+ workstation with the package's Swift toolchain, use a private
+   checkout of the exact candidate. Copy RecordedTopdonTests.swift
+   into its Examples/ThermalNotify/Tests/ThermalNotifyTests directory. It is a
+   test template outside the normal package, so no physical file is required by
+   ordinary CI. Set TOPDON_RECORDING to the absolute reviewed recording path:
+     TOPDON_RECORDING="$RECORDING" swift test --package-path "$PRIVATE_CHECKOUT/Examples/ThermalNotify" --filter recordedTopdonReplay
+   Save full compiler/test output, Package.resolved and source SHA. Do not copy
+   recordings into the repository. The test verifies file/raw hashes, original
+   timestamps, real decoder geometry/Celsius, external reference/regions, startup
+   suppression and at least one changed fresh summary. It runs actual AlertState
+   at the measured threshold and one metadata count below it: equal does not
+   trigger, above triggers once, sustained heat does not retrigger, cool rearms.
+
+   The stale timestamp, frozen summary with advancing receipt/video time, corrupt
+   header/trailer and truncated-payload cases are explicitly DERIVED controls.
+   They never overwrite a recorded frame. These controls establish software
+   rejection using real captured bytes; they do not claim the camera itself was
+   made to freeze or emit corrupt metadata. Save a failing historical control
+   by running the same test in another private checkout with only ThermalReading's
+   96x200 layout acceptance removed. Require failure at the supported-layout
+   assertion, then rerun the unmodified candidate. A compiler error is not proof.
+
+Observe the physical source through the running monitor
+
+10. From @OUTPUT@/app, run the generated bounded attached command below. The app
+    ID is @APP_ID@. Its build can be prepared first with the same CLI's `build`
+    command and explicit device selector. Do not change the example's live app.
+    The command is bounded to 300 seconds including startup; if building consumes
+    the interval, this is an incomplete run. Attached cancellation requests only
+    this owned app to stop. Confirm actual container state and logs separately.
+    Require startup logs naming the exact stable ID, configured threshold and
+    'Monitor-only mode: no Cloud notifications will be sent.'
+
+11. Repeat the safe cool/warm/cool/warm physical target sequence and independent
+    reference log. Require startup waiting until the HIK summary changes, a valid
+    Celsius log with camera-reported provenance, one 'MONITOR ONLY' event above
+    the chosen threshold, no duplicate during sustained warmth, and a second
+    event only after a valid cool measurement rearms it. Allow the global 10-second
+    send spacing. Do not infer absence from a short log tail; retain the entire
+    attached run and UTC sequence. No Cloud delivery or notification acceptance
+    is part of this procedure. A reference tolerance spanning the threshold is
+    inconclusive; use safe setpoints clearly on either side.
+
+Cleanup and fixture custody
+
+12. Let the bounded helper and attached CLI finish. Use the exact generated apps
+    command to verify the unique app is stopped. If necessary run stop_owned_app
+    for that exact app ID and verify again; do not stop an existing ThermalNotify
+    deployment. Verify helper RPC/camera capture children are gone and the camera
+    can be reopened normally. Restore only bench-owned device order/settings from
+    the recovery record. Preserve uncertain cleanup evidence for the bench owner.
+
+13. Preserve an access-controlled archive of the ORIGINAL recording plus hashes,
+    source/binary pins, USB/kernel/firmware provenance, instrument calibration,
+    nonce/timeline, reviewed reference.json, replay normal/control logs and live
+    monitor logs. Save the archive URL and SHA256 in the audit evidence. A later
+    approved fixture may store raw bytes outside Git and fetch by pinned hash;
+    do not commit frames or images to satisfy reuse. An independent reviewer must
+    accept provenance, uncertainty, geometry, freshness, threshold and cleanup
+    separately. Missing hardware or reference evidence stays pending. Never turn
+    a synthetic local validation run into a physical acceptance result.

@@ -959,6 +959,15 @@ func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) e
 	if err != nil {
 		return enrollmentWifiError(err)
 	}
+	if selected, _ := ctx.Value(wifiCredentialTargetKey{}).(*SelectedDevice); selected != nil && password != "" {
+		if err := confirmUnverifiedWiFiCredentials(selected); errors.Is(err, errUnverifiedWiFiDeclined) {
+			// Declining Wi-Fi is not declining enrollment, as above.
+			fmt.Println("WiFi credentials were not sent.")
+			return nil
+		} else if err != nil {
+			return enrollmentWifiError(err)
+		}
+	}
 
 	fmt.Printf("Connecting to %s...\n", ssid)
 	wifiResp, err := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{
@@ -1140,14 +1149,18 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Renew while the certificate is still valid. This shared picker has no
-	// caller context; renewal applies its own request timeout. Enrollment uses
-	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	// Keep pre-expiry renewal first; OIDC operators can then re-issue through
+	// their current sign-in session. This picker has no caller context, so
+	// both network paths impose their own timeout.
 	var before string
 	if len(auth.Certificates) > 0 {
 		before = auth.Certificates[0].PemCertificate
 	}
-	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+	if auth.OAuthIssuer != "" && auth.ServiceAccount == "" {
+		if err := prepareDefaultCloudCertificate(context.Background(), auth); err != nil {
+			return nil, err
+		}
+	} else if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
 		reportStaleCertificate(rerr)
 	}
 	// A renewal is a certificate refresh: retry an unbound registry key, as
@@ -1566,19 +1579,8 @@ func newDeviceLogsCmd() *cobra.Command {
 			if tail > 0 {
 				req.LastN = &tail
 			}
-			// Cancelled when RunE returns so a --no-follow exit also stops the
-			// background receive (see consumeLogStream).
-			streamCtx, cancelStream := context.WithCancel(ctx)
-			defer cancelStream()
-			stream, err := conn.TelemetryService.StreamLogs(streamCtx, req)
-			if err != nil {
-				if errors.Is(ctx.Err(), context.Canceled) {
-					return nil
-				}
-				return fmt.Errorf("starting log stream: %w", err)
-			}
 
-			// Tell the user the stream is live and that waiting is expected.
+			// Tell the user which logs are requested and that waiting is expected.
 			// Without this the command appears to hang after connecting, with
 			// no way to tell streaming from a stuck command (see issue #1169).
 			// Printed to stderr (via cliLogln) so it never mixes into piped or
@@ -1592,20 +1594,22 @@ func newDeviceLogsCmd() *cobra.Command {
 					target = serviceName
 				}
 				if noFollow && tail > 0 {
-					cliLogln("Showing up to %d recent log batches from %s.", tail, target)
+					cliLogln("Requesting up to %d recent log batches from %s.", tail, target)
 				} else if noFollow {
-					cliLogln("Showing recent logs from %s.", target)
+					cliLogln("Requesting recent logs from %s.", target)
 				} else if tail > 0 {
-					cliLogln("Streaming logs from %s — replaying up to %d recent, then live. Press Ctrl-C to stop.", target, tail)
+					cliLogln("Opening logs from %s: up to %d recent batches, then live. Press Ctrl-C to stop.", target, tail)
 				} else {
-					cliLogln("Streaming logs from %s. Waiting for new logs — press Ctrl-C to stop.", target)
+					cliLogln("Opening logs from %s. Waiting for new logs; press Ctrl-C to stop.", target)
 				}
 			}
 
 			liveSeparatorPrinted := tail == 0 || noFollow
 			seenHistory := false
 
-			res, err := consumeLogStream(streamCtx, stream, !noFollow, func(resp *agentpb.StreamLogsResponse) {
+			res, err := consumeLogStreamWithRetry(ctx, func(streamCtx context.Context) (logStreamReceiver, error) {
+				return conn.TelemetryService.StreamLogs(streamCtx, req)
+			}, !noFollow, func(resp *agentpb.StreamLogsResponse) {
 				logs := resp.GetLogs()
 				if logs == nil {
 					return
@@ -1636,7 +1640,7 @@ func newDeviceLogsCmd() *cobra.Command {
 						}
 					}
 				}
-			})
+			}, func(message string) { cliLogln("%s", message) }, []time.Duration{time.Second, 2 * time.Second})
 			if err != nil {
 				return err
 			}
@@ -3167,7 +3171,7 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 			p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 		}()
 
-		finalModel, runErr := p.Run()
+		finalModel, runErr := tui.RunProgram(p)
 		if runErr != nil {
 			return fmt.Errorf("TUI error: %w", runErr)
 		}
