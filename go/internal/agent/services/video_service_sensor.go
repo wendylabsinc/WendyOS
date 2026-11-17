@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/codes"
@@ -32,15 +33,15 @@ func canonicalCameraSourceID(src videoSource, devID uint32) string {
 // resolveSensorSource resolves a sensor source identifier to its camera,
 // refusing any spelling that is not the canonical identifier for that camera.
 func (s *VideoService) resolveSensorSource(sourceID string) (videoSource, error) {
-	devID, ok := cameraDeviceID(sourceID)
-	if !ok {
-		return videoSource{}, status.Errorf(codes.NotFound, "source %q is not a camera", sourceID)
+	devID, resolveErr := s.dataCameraDeviceID(sourceID)
+	if resolveErr != nil {
+		return videoSource{}, resolveErr
 	}
 	src, err := s.resolveSource(devID)
 	if err != nil {
 		return videoSource{}, err
 	}
-	if canonical := canonicalCameraSourceID(src, devID); canonical != sourceID {
+	if canonical := canonicalCameraSourceID(src, devID); !strings.HasPrefix(sourceID, "sensorlink:") && canonical != sourceID {
 		return videoSource{}, status.Errorf(codes.NotFound,
 			"source %q is not a camera identifier; this camera is %q", sourceID, canonical)
 	}
@@ -72,7 +73,10 @@ func (s *VideoService) SubscribeSensor(ctx context.Context, sourceID string) (se
 	if err != nil {
 		return nil, err
 	}
-	devID, _ := cameraDeviceID(sourceID)
+	devID, err := s.dataCameraDeviceID(sourceID)
+	if err != nil {
+		return nil, err
+	}
 	if src.kind == sourceIP {
 		if err := s.preflightIPCamera(src.camera); err != nil {
 			return nil, err
@@ -82,11 +86,11 @@ func (s *VideoService) SubscribeSensor(ctx context.Context, sourceID string) (se
 	// running stream away from a viewer or from episode capture. An empty
 	// request also matches the parameters episode capture uses by default, so
 	// the common case joins one hub rather than creating a second.
-	hub, subID, frames, err := s.joinHub(ctx, src.key, &agentpb.StreamVideoRequest{DeviceId: devID})
+	hub, subID, frames, err := s.joinDataCamera(ctx, sourceID, src.key, devID)
 	if err != nil {
 		return nil, err
 	}
-	return &cameraSensorSubscription{video: s, key: src.key, devID: devID, hub: hub, subID: subID, frames: frames}, nil
+	return &cameraSensorSubscription{video: s, sourceID: sourceID, key: src.key, devID: devID, hub: hub, subID: subID, frames: frames}, nil
 }
 
 // cameraSensorSubscription adapts one hub subscription to the sensor contract.
@@ -96,12 +100,13 @@ type cameraSensorSubscription struct {
 	// restarts the producer at the campaign's parameters this subscriber
 	// simply rejoins and gets what the producer now provides. video is nil in
 	// unit tests that drive a bare hub; those never see a restarted hub.
-	video  *VideoService
-	key    string
-	devID  uint32
-	hub    *deviceHub
-	subID  int
-	frames chan *videoFrame
+	sourceID string
+	video    *VideoService
+	key      string
+	devID    uint32
+	hub      *deviceHub
+	subID    int
+	frames   chan *videoFrame
 	// pending accumulates losses no delivered sample has reported yet: the
 	// hub's per-frame drop counts as each frame is taken off the channel, plus
 	// frames the random-access gate skipped. It is handed to the next sample
@@ -178,7 +183,7 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 func (c *cameraSensorSubscription) reattach(ctx context.Context) error {
 	c.pending += c.hub.unreportedDrops(c.subID)
 	c.hub.unsubscribe(c.subID)
-	hub, subID, frames, err := c.video.joinHub(ctx, c.key, &agentpb.StreamVideoRequest{DeviceId: c.devID})
+	hub, subID, frames, err := c.video.joinDataCamera(ctx, c.sourceID, c.key, c.devID)
 	if err != nil {
 		return err
 	}

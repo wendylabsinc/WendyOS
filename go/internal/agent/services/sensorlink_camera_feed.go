@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -134,10 +135,10 @@ func (f *SensorFrameFeed) publish(path string, frame ros2camera.Frame) {
 // than from their nodes. Call once at startup, before serving.
 func (s *VideoService) SetSensorFrameFeed(feed *SensorFrameFeed) { s.sensorFrames = feed }
 
-// SetSensorCameraIdentities is wired before serving. The callback returns a
-// fresh snapshot, so a stale camera number never becomes a persisted identity.
-func (s *VideoService) SetSensorCameraIdentities(read func() map[uint32]string) {
-	s.sensorCameraIdentities = read
+// SetSensorCameras is wired before serving. Names and stable identities must
+// come from the same current ownership snapshot, never from retained node labels.
+func (s *VideoService) SetSensorCameras(read func() map[uint32]mcusource.Camera) {
+	s.sensorCameras = read
 }
 
 // isSensorLinkCameraPath reports whether path is a node in the MCU band, where

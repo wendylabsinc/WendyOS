@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
-	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // preRollCameraLimitBytes bounds one armed camera ring's retained encoded
@@ -372,7 +371,7 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 
 func (a *armedCameraSource) reattach(ctx context.Context) error {
 	carried := a.carriedDrops + a.hub.unsubscribe(a.subID)
-	hub, subID, frames, err := a.video.joinHub(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID})
+	hub, subID, frames, err := a.video.joinDataCamera(ctx, a.source.ID, a.key, a.devID)
 	if err != nil {
 		// The count still belongs to this armed source even when the rejoin
 		// failed: activate reports it whether or not a live tail follows.
@@ -426,7 +425,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	// retained ring still opens the episode, but the live tail needs a fresh
 	// subscription rather than the dead channel.
 	if !a.alive || a.hub == nil {
-		hub, subID, frames, joinErr := a.video.joinHub(context.Background(), a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID})
+		hub, subID, frames, joinErr := a.video.joinDataCamera(context.Background(), a.source.ID, a.key, a.devID)
 		if joinErr != nil {
 			if len(preRoll) == 0 {
 				return nil, false, errors.Join(joinErr, index.Close(), mappings.Close())
@@ -445,7 +444,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	captureCtx, cancel := context.WithCancel(context.Background())
 	devID := a.devID
 	rejoin := func(ctx context.Context) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHub(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: devID})
+		return a.video.joinDataCamera(ctx, a.source.ID, a.key, devID)
 	}
 	// Everything the hub dropped for this subscription up to now happened
 	// during the ARMED period. The capture subtracts it from its own total and
