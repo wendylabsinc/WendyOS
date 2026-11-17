@@ -53,6 +53,7 @@ func (c *WendyLiteClient) ConnectViaBLEContext(ctx context.Context, address stri
 	// Certificate flights have the same finite radio budget as a mesh TCP
 	// endpoint; GAP/GATT/L2CAP setup retain their shorter independent limits.
 	_ = stream.SetDeadline(time.Now().Add(60 * time.Second))
+	tlsCfg = bleTLSConfig(tlsCfg)
 	tlsConn := tls.Client(stream, tlsCfg)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		stream.Close() //nolint:errcheck,gosec -- teardown on an already-failed path
@@ -70,6 +71,18 @@ func (c *WendyLiteClient) ConnectViaBLEContext(ctx context.Context, address stri
 	}
 	c.startReadLoop()
 	return nil
+}
+
+// Lite disables X25519MLKEM768. Avoid sending its unused 1 KiB+ key share
+// over the slow BLE link. Prefer X25519 as the mesh BLE carrier does, while
+// retaining classical fallback groups for older firmware.
+// Preserve an explicit caller policy and never mutate a shared TLS config.
+func bleTLSConfig(cfg *tls.Config) *tls.Config {
+	cloned := cfg.Clone()
+	if len(cloned.CurvePreferences) == 0 {
+		cloned.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384, tls.CurveP521}
+	}
+	return cloned
 }
 
 // The native BLE API has bounded blocking calls but no context support. Keep
