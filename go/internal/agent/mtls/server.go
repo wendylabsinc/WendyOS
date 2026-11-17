@@ -133,7 +133,13 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 	}
 	var verifiers [revocation.Fresh + 1]func([][]byte, time.Time) (certs.CertificateWindow, error)
 	for level := range verifiers {
-		verifiers[level] = buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, nil, leafOnly, revocation.Level(level))
+		// Freshness can change without a CRL revision. Cache only the
+		// revoked-only proof; Session and Fresh must reevaluate age each time.
+		var cache *peerPathCache
+		if revocation.Level(level) == revocation.RevokedOnly {
+			cache = newPeerPathCache()
+		}
+		verifiers[level] = buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, cache, leafOnly, revocation.Level(level))
 	}
 	check := func(raw [][]byte, level revocation.Level) error { _, err := verifiers[level](raw, now()); return err }
 	// Established connections and rechecks fail only on positive revocation.
@@ -232,10 +238,11 @@ func newServerWithTLSConfig(tlsConfig *tls.Config, check peerCheck, chainPEM str
 		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
 	}
 	tlsConfig.NextProtos = []string{"h2"}
-	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
+	material := meshalpn.NewCertificates(tlsConfig.Certificates[0], known)
+	material.ConfigureServer(tlsConfig)
 
 	checkLive := livePeerCheck(check)
-	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
+	creds := meshoperatorlink.AgentTransportCredentials(&liveCredentials{TransportCredentials: credentials.NewTLS(tlsConfig), material: material})
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
 		// mTLS interceptors are mandatory: they run before caller-provided chained interceptors

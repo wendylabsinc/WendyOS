@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -26,11 +27,12 @@ import (
 )
 
 const (
-	RefreshInterval = 5 * time.Minute
-	retryInterval   = 30 * time.Second
-	maxCRLBytes     = 4 << 20
-	maxEntries      = 128
-	maxCacheBytes   = 32 << 20
+	RefreshInterval  = 5 * time.Minute
+	retryInterval    = 30 * time.Second
+	maxRetryInterval = time.Hour
+	maxCRLBytes      = 4 << 20
+	maxEntries       = 128
+	maxCacheBytes    = 32 << 20
 	// A stapled CRL travels in the TLS Certificate message, which Go caps at
 	// 256 KiB together with the chain. Larger lists are fetched, not stapled.
 	// ponytail: roughly 3000 revoked serials per issuer; a delta or OCSP-style
@@ -95,6 +97,8 @@ type entry struct {
 	issuer      *x509.Certificate
 	url         string
 	nextAttempt time.Time
+	failures    uint
+	warned      time.Time
 }
 
 type snapshot struct {
@@ -159,8 +163,8 @@ func (m *Manager) Enforcing() bool {
 	return m.cfg.Grace >= 0
 }
 
-// Revision changes whenever accepted CRL contents change. Cryptographic path
-// caches must include this revision.
+// Revision changes when CRLs change or new stapled evidence needs verification.
+// Cryptographic path caches must include this revision.
 func (m *Manager) Revision() uint64 { return m.revision.Load() }
 
 // CheckPath checks every certificate except the locally trusted anchor.
@@ -271,9 +275,9 @@ func (m *Manager) register(child, issuer *x509.Certificate, key [sha256.Size]byt
 func refreshAfter(crl *x509.RevocationList, now time.Time) time.Duration {
 	half := crl.NextUpdate.Sub(now) / 2
 	if half <= 0 {
-		return retryInterval
+		return RefreshInterval
 	}
-	return min(RefreshInterval, max(time.Second, half))
+	return min(RefreshInterval, max(retryInterval, half))
 }
 
 // restore adopts evidence this process has not verified yet: the persisted
@@ -325,7 +329,20 @@ func (m *Manager) Offer(stapled []byte) {
 		if len(m.pending) >= maxPending {
 			clear(m.pending)
 		}
-		m.pending[sha256.Sum256(crl.RawIssuer)] = raw.FullBytes
+		known := false
+		for _, current := range m.latest {
+			if current.crl != nil && bytes.Equal(current.crl.Raw, raw.FullBytes) {
+				known = true
+				break
+			}
+		}
+		name := sha256.Sum256(crl.RawIssuer)
+		if !known && !bytes.Equal(m.pending[name], raw.FullBytes) {
+			m.pending[name] = raw.FullBytes
+			// Warm path caches must revisit offered evidence to authenticate
+			// it. An offer itself still never establishes trust.
+			m.revision.Add(1)
+		}
 		m.mu.Unlock()
 	}
 }
@@ -427,10 +444,29 @@ func (m *Manager) refresh(parent context.Context, e *entry, force bool) {
 	}
 	defer func() { <-m.slots }()
 	crl, err := m.fetch(ctx, e)
+	e.mu.Lock()
+	now := time.Now()
 	if err == nil {
-		e.mu.Lock()
-		e.nextAttempt = time.Now().Add(refreshAfter(crl, time.Now()))
+		e.failures = 0
+		e.nextAttempt = now.Add(refreshAfter(crl, now))
 		e.mu.Unlock()
+		return
+	}
+	// Back off all failures, including invalid signed content. A rejected
+	// multi-megabyte CRL must not become a permanent 30-second download loop.
+	e.failures = min(e.failures+1, 8)
+	delay := min(retryInterval<<(e.failures-1), maxRetryInterval)
+	e.nextAttempt = now.Add(delay)
+	warn := e.warned.IsZero() || now.Sub(e.warned) >= time.Hour
+	if warn {
+		e.warned = now
+	}
+	e.mu.Unlock()
+	m.mu.Lock()
+	logf := m.cfg.Logf
+	m.mu.Unlock()
+	if warn && logf != nil {
+		logf("CRL refresh failed for %s: %v; retrying in %s", e.url, err, delay)
 	}
 }
 
@@ -480,6 +516,16 @@ func (m *Manager) fetch(ctx context.Context, e *entry) (*x509.RevocationList, er
 // is newer than what is known. Only a fetched CRL older than the known one is
 // an error; stapled and persisted copies are routinely older and are ignored.
 func (m *Manager) adopt(issuer *x509.Certificate, raw []byte, fetched bool) error {
+	if len(raw) > maxCRLBytes {
+		return errors.New("oversized CRL")
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("-----BEGIN")) {
+		block, rest := pem.Decode(raw)
+		if block == nil || block.Type != "X509 CRL" || len(bytes.TrimSpace(rest)) != 0 {
+			return errors.New("invalid PEM CRL")
+		}
+		raw = block.Bytes
+	}
 	crl, err := x509.ParseRevocationList(raw)
 	if err != nil {
 		return err
@@ -493,7 +539,10 @@ func (m *Manager) adopt(issuer *x509.Certificate, raw []byte, fetched bool) erro
 	size := len(crl.Raw)
 	if previous.crl != nil {
 		older := crl.Number.Cmp(previous.crl.Number) < 0 || crl.ThisUpdate.Before(previous.crl.ThisUpdate)
-		same := crl.Number.Cmp(previous.crl.Number) == 0
+		// Some deployed issuers reuse the number when reissuing. Require
+		// a strictly later signed issue time in that case. Equal-time
+		// conflicts and either kind of rollback remain rejected.
+		same := crl.Number.Cmp(previous.crl.Number) == 0 && crl.ThisUpdate.Equal(previous.crl.ThisUpdate)
 		switch {
 		case older && fetched:
 			err = errors.New("CRL rollback")
@@ -521,7 +570,7 @@ func (m *Manager) adopt(issuer *x509.Certificate, raw []byte, fetched bool) erro
 	m.latest[key] = snapshot{crl: crl, revoked: revoked}
 	m.revision.Add(1)
 	file := m.path(key)
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 	if file != "" {
 		// Best effort: evidence in memory still applies when the disk is full.
 		tmp := file + ".tmp"

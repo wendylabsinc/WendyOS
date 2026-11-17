@@ -35,7 +35,10 @@ still refused when a known CRL from their issuer lists them.
 
 - Fetch. The first check of an issuer registers the certificate's distribution
   URLs. A process worker refreshes them every five minutes, or halfway to
-  `NextUpdate` when sooner, and retries failures after 30 seconds. A check
+  `NextUpdate` when sooner, and retries failures with exponential backoff from 30 seconds to one hour.
+  Failed fetches and rejected CRLs are logged at most once an hour per URL.
+  Public Web PKI chains on the Cloud endpoint use standard TLS verification
+  without registering their distribution URLs with this full-CRL manager. A check
   never waits on the network unless it would otherwise refuse for lack of
   evidence; then it makes one bounded attempt.
 - Disk. The newest verified CRL per issuer is written under `crl/` in the
@@ -53,18 +56,24 @@ still refused when a known CRL from their issuer lists them.
   vouch for its own chain, and an older staple never replaces newer evidence.
   Staples are limited to 128 KiB by the TLS certificate message; larger CRLs
   are fetched only. Clients that cannot staple, such as the mobile apps, rely
-  on the device's own evidence.
+  on the device's own evidence. Staples travel only on full TLS handshakes.
+  Resumed sessions send no certificate message and cannot deliver a new CRL.
+  The CLI persists TLS sessions across invocations, so reconnecting alone does
+  not guarantee delivery. An offline device needs a full handshake to receive
+  new evidence from an online operator.
 - Mirror. `WENDY_CRL_MIRROR` replaces the scheme and host of certificate URLs
   and keeps their path, for self-hosted, proxied and NAT64 sites. A mirror is
   local configuration, so the public-address restriction does not apply to it.
 
 ## Validation
 
-CRLs must have the correct issuer, a valid signature and a CRL number. Native
+Fetched CRLs may be DER or a single PEM `X509 CRL` block. CRLs must have the correct issuer, a valid signature and a CRL number. Native
 Go verification supports ML-DSA and classical issuers. Older CA certificates
 without SKI use the same RFC 5280 key identifier derivation as PKI. A fetched
 CRL with a lower number or older issue time than the known one is rejected, as
-is conflicting content at the same number. This history is shared by all URLs
+is conflicting content with both the same number and issue time. Issuers
+that reuse a CRL number may advance evidence with a strictly later signed
+`ThisUpdate`; the number must never decrease. This history is shared by all URLs
 and CA certificate wrappers with the same issuer subject and public key, and it
 persists. Delta CRLs, scoped/indirect CRLs, remove-from-CRL entries and
 unsupported critical extensions are rejected.
@@ -95,7 +104,21 @@ issuers, 4 MiB per response and 32 MiB of cached DER.
 - CLI, Cloud relay and Lite relay: refuse a listed certificate on classical and
   ML-DSA chains alike. Historical receipts and signatures keep their
   time-specific verification.
-- Accepted CRL changes invalidate the agent's cryptographic path cache.
+- Accepted CRL changes and newly offered staples invalidate the agent's
+  cryptographic path cache. Only revocation-only checks reuse paths; session
+  and destructive-operation freshness is evaluated on every admission.
+- The gRPC transport retains issuer candidates for each connection so live
+  checks can verify chains shortened by issuer hints, including resumed TLS.
+
+## Diagnosing a refusal
+
+TLS alerts do not carry the server's verification error text. A CLI receiving
+`bad certificate` cannot distinguish a clock problem from a missing CRL or
+incompatible credentials. Its recovery message lists these possibilities;
+check the agent log for the issuer and the CRL fetch or validation failure.
+With `WENDY_CRL_GRACE=0`, a device with no evidence refuses an operator that
+cannot staple. Bring the device online, or supply a fresh staple on a full
+TLS handshake. Destructive RPCs report missing evidence as `FailedPrecondition`.
 
 ## Limits
 

@@ -34,7 +34,7 @@ func classifyLANProbeFailure(err error) *models.ProbeFailure {
 	case errors.As(err, &org):
 		return probeFailure("device_org_mismatch", "The device's certificate belongs to an organization for which this CLI has no credentials.", "Run 'wendy auth login' with an account that can access that organization.")
 	case probeErrorMatches(err, isExplicitTLSRejection):
-		return probeFailure("tls_rejected", "TLS authentication failed. A wrong device clock or incompatible credentials may be responsible.", "If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.")
+		return probeFailure("tls_rejected", "TLS authentication failed. The device may have a wrong clock, incompatible credentials, or missing certificate revocation evidence.", "If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.")
 	case errors.As(err, &notListening), probeErrorMatches(err, isConnectionRefusedError):
 		return probeFailure("connection_refused", "Agent unavailable (connection refused). The advertised service may be stopped or restarting.", "Retry shortly. If it persists, check the device's agent and enrollment state.")
 	case errors.Is(err, context.DeadlineExceeded), status.Code(err) == codes.DeadlineExceeded, probeErrorMatches(err, isReachabilityTimeoutError):

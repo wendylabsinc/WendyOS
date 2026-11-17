@@ -94,9 +94,8 @@ func (s *liveServerStream) SendMsg(m any) error {
 	return s.ServerStream.SendMsg(m)
 }
 func (s *liveServerStream) RecvMsg(m any) error {
-	if err := s.check(s.Context()); err != nil {
-		return err
-	}
+	// Check after a potentially blocking receive, before the handler can use
+	// the message. Admission already checked before the first receive.
 	if err := s.ServerStream.RecvMsg(m); err != nil {
 		return err
 	}
