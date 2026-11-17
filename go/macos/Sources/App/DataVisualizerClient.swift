@@ -5,6 +5,11 @@ struct DataVisualEpisode: Identifiable, Equatable {
     let id, name, state: String
     let started: Date
     let bytes: Int64
+    var contentTypes: [String]? = nil
+    static func contentTypes(_ row: WDVisualEpisode) -> [String]? {
+        guard let json = row.content_types_json else { return nil }
+        return try? JSONDecoder().decode([String].self, from: Data(String(cString: json).utf8))
+    }
     var title: String { name.isEmpty ? id : name }
 }
 struct CampaignClip: Identifiable {
