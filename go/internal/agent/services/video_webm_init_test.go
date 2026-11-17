@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -484,4 +485,61 @@ func TestVP8ViewerRecoversFromReadsTheHubDropped(t *testing.T) {
 	if got := bytes.Join(pumpVP8(t, kept), nil); !bytes.Equal(got, want) {
 		t.Fatalf("after the hub dropped %d reads:\n got %x\nwant %x", dropped, got, want)
 	}
+}
+
+// Large elements still arrive in small pipe reads. A viewer must either send
+// the entire element or discard it and rejoin, including when a read is lost
+// after the buffer has filled. The payload need not be decodable for this
+// byte-boundary check; the integration test also exercises a real demuxer.
+func TestVP8ViewerDiscardsOversizedElementsAndRecovers(t *testing.T) {
+	for _, payloadSize := range []int{512 << 10, 2 << 20} {
+		for _, readSize := range []int{4096, 64 << 10, 256 << 10} {
+			for _, loss := range []bool{false, true} {
+				t.Run(fmt.Sprintf("payload=%d/read=%d/loss=%v", payloadSize, readSize, loss), func(t *testing.T) {
+					original, _, clusters := webmTestStream()
+					// Extend the first unknown-size Cluster with a large delta block.
+					// The following Cluster opens on a delta frame and must be skipped.
+					insert := clusters[1].start
+					block := webmLargeTestElement(0xa3, payloadSize)
+					copy(block[5:], []byte{0x81, 0, 0, 0, 1})
+					stream := append(append(append([]byte(nil), original[:insert]...), block...), original[insert:]...)
+					pristine := append([]byte(nil), stream...)
+					frames := vp8TestFrames(t, stream, readSize)
+					if loss {
+						// For the oversized case, lose a read after the old fallback
+						// would already have sent an unfinished element.
+						hole := (insert+payloadSize/2)/readSize + 2
+						if (hole+1)*readSize >= insert+len(block) {
+							hole = (insert + payloadSize/2) / readSize
+						}
+						frames = append(append([]*videoFrame(nil), frames[:hole]...), frames[hole+1:]...)
+					}
+					var viewer webmViewer
+					for _, frame := range frames {
+						viewer.next(frame)
+						if len(viewer.held) > maxWebMInitialization {
+							t.Fatalf("viewer retained %d unfinished bytes", len(viewer.held))
+						}
+					}
+					want := stream
+					if loss || payloadSize > maxWebMInitialization {
+						want = append(append([]byte(nil), original[:insert]...), original[clusters[2].start:]...)
+					}
+					if got := bytes.Join(pumpVP8(t, frames), nil); !bytes.Equal(got, want) {
+						t.Fatalf("viewer did not preserve whole elements and resume at the next key frame: got %d bytes, want %d", len(got), len(want))
+					}
+					if !bytes.Equal(stream, pristine) {
+						t.Fatal("viewer modified shared payloads")
+					}
+				})
+			}
+		}
+	}
+}
+
+// Use a four-byte size so fixtures can cross the viewer's buffering limit.
+func webmLargeTestElement(id byte, size int) []byte {
+	element := make([]byte, 5+size)
+	copy(element, []byte{id, 0x10 | byte(size>>24), byte(size >> 16), byte(size >> 8), byte(size)})
+	return element
 }

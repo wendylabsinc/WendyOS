@@ -124,4 +124,37 @@ func TestGStreamerVP8DecodesAcrossLostReadsForViewersAndEpisodes(t *testing.T) {
 		t.Fatalf("segments decode to %d pictures of the %d recorded stretch", recorded, pictures*2/3)
 	}
 	t.Logf("capture that joined a third of the way in and lost reads wrote %d segments decoding to %d pictures", len(names), recorded)
+
+	// Insert a legal, oversized Void between two Clusters. A decoder ignores
+	// it, so all pictures must survive both discarding it at the buffer limit
+	// and losing a read after that limit. The latter used to leave matroskademux
+	// inside an unfinished element, swallowing the following key-frame Cluster.
+	insert := -1
+	for _, frame := range frames[1:] {
+		if p := frame.webmJoin; p != nil {
+			insert = int(frame.sampleID-1)*4096 + p.offset - p.carry
+			break
+		}
+	}
+	if insert <= 0 {
+		t.Fatal("stream has no later key-frame Cluster for the oversized-element regression")
+	}
+	large := webmLargeTestElement(0xec, 2<<20)
+	withLarge := append(append(append([]byte(nil), stream[:insert]...), large...), stream[insert:]...)
+	for _, loss := range []bool{false, true} {
+		t.Run(fmt.Sprintf("oversized-element/loss=%v", loss), func(t *testing.T) {
+			largeFrames := vp8TestFrames(t, withLarge, 4096)
+			if loss {
+				hole := (insert+maxWebMInitialization)/4096 + 2
+				largeFrames = append(append([]*videoFrame(nil), largeFrames[:hole]...), largeFrames[hole+1:]...)
+			}
+			viewer := bytes.Join(pumpVP8(t, largeFrames), nil)
+			if got, err := decode(viewer, "fdsrc", "fd=0"); err != nil || got != pictures {
+				t.Fatalf("viewer decoded %d of %d pictures after an oversized element: %v", got, pictures, err)
+			}
+			if !bytes.Equal(viewer, stream) {
+				t.Fatalf("discarding the oversized Void changed the video stream: got %d bytes, want %d", len(viewer), len(stream))
+			}
+		})
+	}
 }

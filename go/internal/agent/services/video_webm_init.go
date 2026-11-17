@@ -142,6 +142,8 @@ func (p *webmJoinPoint) join(data []byte) []byte {
 // supported"), whatever is sent next. With nothing unfinished outstanding, a
 // loss costs the held bytes and the wait for the next join point, where the
 // viewer resumes with that Cluster alone: it is sent the initialization once.
+// An unfinished element exceeding the buffer limit is discarded the same way
+// as a lost read. Sending part of it would make the next loss unrecoverable.
 type webmViewer struct {
 	last    uint64 // sample identity of the previous frame
 	joined  bool   // false until a join point, and again after a loss
@@ -179,7 +181,8 @@ func (v *webmViewer) next(frame *videoFrame) []byte {
 		return out
 	}
 	if whole <= 0 {
-		whole = len(data) // too large to hold: sent as it comes, as before
+		v.joined, v.held = false, nil
+		return out
 	}
 	if len(out)+len(v.held) > 0 {
 		out = append(append(out, v.held...), data[:whole]...)
