@@ -26,8 +26,11 @@ const AgentSocket = "/var/lib/wendy/agent-control/agent.sock"
 
 // socketVersion asks the agent on its local socket which binary it runs.
 func socketVersion(ctx context.Context, sock string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
 	conn, err := grpc.NewClient("unix://"+sock, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return "", err

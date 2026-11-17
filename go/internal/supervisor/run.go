@@ -461,6 +461,9 @@ func (s *Supervisor) runChild(ctx context.Context, d Decision, t *Trial) runResu
 			// is spared until its OS gate opens the socket.
 			if err == nil {
 				misses, answered = 0, true
+			} else if s.updating(pid) {
+				// An install can starve the socket; stopping it would break the update.
+				misses = 0
 			} else if !errors.Is(err, ErrNoLiveness) && (answered || s.forceImage == "") && !s.imageRestartsSpent(d) {
 				misses++
 				s.deps.Log.Warn("agent did not answer", zap.Int("misses", misses), zap.Error(err))

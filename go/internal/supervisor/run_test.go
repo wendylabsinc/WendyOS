@@ -322,6 +322,23 @@ func TestAfterRunForgivesEarlierFailuresAfterALongHealthyRun(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotRestartAnAgentThatMissesPingsWhileItAppliesAnUpdate(t *testing.T) {
+	h := newHarness(t)
+	var applying atomic.Bool
+	applying.Store(true)
+	h.sup.deps.Updating = func(int) bool { return applying.Load() }
+	h.start()
+	h.eventually("the image agent runs", func() bool { s := h.status(); return s.Role == RoleImage && s.PID > 0 })
+	pid := h.status().PID
+	h.alive.Store(errors.New("deadline exceeded"))
+	time.Sleep(500 * time.Millisecond)
+	if got := h.status().PID; got != pid {
+		t.Fatalf("an agent applying an update must not be restarted for missed pings: pid %d -> %d", pid, got)
+	}
+	applying.Store(false)
+	h.eventually("it is restarted once the update is over", func() bool { p := h.status().PID; return p > 0 && p != pid })
+}
+
 func TestRunRejectsATrialThatKeepsCrashing(t *testing.T) {
 	h := newHarness(t)
 	// A crashing agent never passes the real probe; a long deadline leaves the
