@@ -263,27 +263,11 @@ Here `web` inherits the full app-level limits (`1Gi`, `pids: 512`). `worker` use
 
 #### Host memory protection
 
-On every cgroup v2 device, all apps run under one cgroup, `/wendy-apps`. When the kernel has a memory controller, the host keeps a reserve for the agent and system services, and the apps share the rest of the RAM as one hard limit. Devices on cgroup v1 keep their old placement and have no shared budget.
+On cgroup v2 devices with a memory controller and at least about 512 MiB of RAM, apps share a hard memory limit. Wendy reserves 768 MiB plus 3% of RAM for the host, capped at half the total RAM. Apps and ROS 2 helpers share the rest. Set `resources.memory` to limit an individual container.
 
-The host keeps 768 MiB plus 3% of the RAM (at most half the RAM), and apps share the rest. That is about 1 GiB on an 8 GB board and 4.4 GiB on a 128 GB board.
+To change the reserve, write a size such as `768Mi` to `/etc/wendy-agent/host-memory-reserve`, or `off` to disable it. Invalid values fall back to the default. Changes apply at the next app start or agent restart. Increasing the reserve can kill running app processes if their memory use exceeds the new limit.
 
-- The budget is a hard limit (`memory.max`) only. There is no soft limit, and app swap is unchanged.
-- A `resources.memory` limit still caps its own container, inside the shared budget.
-- To change the reserve on one device, write a size such as `768Mi` to `/etc/wendy-agent/host-memory-reserve`, or `off` to remove the budget. The agent applies it at the next app start or agent restart. An invalid value is logged, and the default is used.
-- Devices without a memory controller (some older Raspberry Pi images), or with less than about 512 MiB of RAM, run apps without the shared limit. The agent logs one warning at startup.
-- GPU memory counts toward the budget on Jetson Orin. On Jetson Thor, memory the GPU driver allocates for an app is not counted, so leave room for it.
-- When the shared limit is reached, the kernel stops the largest process under `/wendy-apps`. That is not necessarily the one that is leaking. Give a leaky app its own `resources.memory` limit to contain it.
-- A larger reserve (a smaller app budget) takes effect at the next app start or agent restart. It can stop running apps that use more than the new limit.
-- The ROS 2 helper containers the agent starts for the ROS 2 tools also count toward the limit.
-- The agent and its supervisor run with OOM score `-999`, so the kernel OOM killer picks them last. Apps and the workloads the agent starts (inference, media, device shell) run at `0`.
-- After an agent update, restart running apps to move them under `/wendy-apps`. Until then, the agent logs a warning for each one. Stopped apps move at their next start.
-
-To check a device:
-
-```sh
-cat /proc/<pid>/cgroup                    # expect 0::/wendy-apps/…
-cat /sys/fs/cgroup/wendy-apps/memory.max
-```
+Restart existing apps after an agent update to apply the shared limit. When apps reach it, the kernel may kill a process in any app. GPU memory counts toward the limit on Jetson Orin, but not on Thor.
 
 ### `env`
 
