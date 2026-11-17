@@ -267,6 +267,7 @@ func renderError(err error) string {
 	}
 	message := formatError(err).Error()
 	_, steps := sessionbroker.OperatorRecovery(err)
+	steps = append(steps, commands.ResetCleanupRecovery(err)...)
 	for _, step := range steps {
 		if !strings.Contains(message, step) {
 			message += "\n  " + step

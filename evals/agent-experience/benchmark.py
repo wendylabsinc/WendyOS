@@ -24,6 +24,8 @@ import urllib.request
 import uuid
 
 from retry_guard import RetryGuard
+from token_diagnostics import diagnostics, tool_payloads, render as render_diagnostics, inference_summary
+from statistics_quality import wilson
 from grading import OUTCOMES, grade
 from mcp_client import StdioMCP
 from tool_trace import build_trace, read_jsonl
@@ -53,6 +55,13 @@ def prompt_variables(variables, target):
     return variables
 
 
+def graded_target(item, device):
+    """The selector an attempt's calls must name, when the task or scenario prompt names a device.
+    The live run and --rescore both use this."""
+    prompt = item.get("prompt") or ""
+    return device if device and ("{device}" in prompt or "{vm_name}" in prompt) else None
+
+
 def expand(value, variables):
     if isinstance(value, str):
         for name, replacement in variables.items():
@@ -68,7 +77,7 @@ def expand(value, variables):
 def run_process(argv, cwd, prefix, timeout, env=None, state_guard=None, progress_guard=None):
     """Keep raw logs, bound wall time, and stop the process group on exit."""
     start = time.monotonic()
-    result = {"argv": argv, "exit_code": None, "timed_out": False, "interrupted": False,
+    result = {"started_at": time.time(), "argv": argv, "exit_code": None, "timed_out": False, "interrupted": False,
               "timeout_seconds": timeout}
     process = None
     with prefix.with_suffix(".stdout").open("wb") as out, prefix.with_suffix(".stderr").open("wb") as err:
@@ -119,6 +128,7 @@ def run_process(argv, cwd, prefix, timeout, env=None, state_guard=None, progress
                 except ProcessLookupError:
                     pass
                 process.wait()
+    result["finished_at"] = time.time()
     result["seconds"] = round(time.monotonic() - start, 3)
     return result
 
@@ -216,11 +226,12 @@ def metrics(adapter, events):
             raise ValueError(f"unknown adapter: {adapter}")
     known = [u for u in usage if u is not None]
     tokens = {key: sum(u[key] for u in known) for key in TOKEN_FIELDS} if known else None
-    return {"tokens": tokens, "usage_complete": bool(usage) and complete and ended and len(known) == len(usage),
+    trace = build_trace(adapter, events)
+    return {"token_diagnostics": diagnostics(adapter, events, trace, normalize_usage), "tokens": tokens, "usage_complete": bool(usage) and complete and ended and len(known) == len(usage),
             "tool_calls": len(tools), "permission_denials": len(denied) if adapter != "codex" else None,
             "reported_cost_usd": reported_cost, "reported_cost_kind": "client_estimate" if reported_cost is not None else None,
             "models_observed": sorted(models), "agent_completed": ended, "agent_errors": errors,
-            "final_text": "\n".join(text), "mcp_servers_observed": servers if adapter == "claude" else [], "tool_trace": build_trace(adapter, events)}
+            "final_text": "\n".join(text), "mcp_servers_observed": servers if adapter == "claude" else [], "tool_trace": trace}
 
 
 def estimate_cost(metric, prices):
@@ -259,7 +270,7 @@ def summary(rows):
         output.append({"agent": agent, "target": target, "task": task, "kind": kind,
                        "attempts": len(eligible), "unscored": len(trials) - len(eligible),
                        "setup_errors": sum(r["status"] == "setup_error" for r in trials),
-                       "successes": len(passed), "unassisted_success_rate": len(passed) / len(eligible) if eligible else None,
+                       "successes": len(passed), "success_interval_95": wilson(len(passed), len(eligible)), "unassisted_success_rate": len(passed) / len(eligible) if eligible else None,
                        "median_success_seconds": statistics.median(times) if times else None,
                        "p90_success_seconds": times[math.ceil(.9 * len(times)) - 1] if times else None,
                        "mean_tokens_per_attempt": statistics.mean(token_values) if all_usage else None,
@@ -283,6 +294,10 @@ def choice_cell(choice):
 def report(rows, output):
     data = summary(rows)
     dump(output / "summary.json", data)
+    dump(output / "inference-summary.json", inference_summary(rows))
+    dump(output / "token-diagnostics.json", [{"id": r.get("id"), "agent": r["agent"], "task": r["task"],
+         **r.get("metrics", {}).get("token_diagnostics", {})} for r in rows])
+    (output / "token-diagnostics.md").write_text(render_diagnostics(rows))
     lines = ["| Agent | Target | Task | Unassisted passes | Median seconds | Tokens / attempt | Tokens / success incl. failures | Estimated $ / success | Tool choice R/W/M/A/WA |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     def fmt(value):
@@ -317,6 +332,7 @@ def rescore(results_dir, tasks, scenarios):
                  for k, f in (("proxy_records", "proxy"), ("cli_records", "cli"))}
         live = metrics(adapter, events)
         row["metrics"]["tool_trace"] = trace = build_trace(adapter, events, **extra)
+        row["metrics"]["token_diagnostics"] = diagnostics(adapter, events, trace, normalize_usage)
         scenario = row.get("kind") == "scenario"
         if scenario:
             mcp_routing(live, extra["proxy_records"])
@@ -325,7 +341,8 @@ def rescore(results_dir, tasks, scenarios):
         item = expects[scenario].get(row.get("task"), {})
         row["tool_choice"] = (grade(trace, item["expect"], live["final_text"], live["agent_completed"],
                                     group=row.get("group") if scenario else None, adapter=adapter,
-                                    went_around=sc.is_local(row.get("target_config") or {}))
+                                    went_around=sc.is_local(row.get("target_config") or {}),
+                                    target=graded_target(item, row.get("device_selector")))
                               if item.get("expect") else None)
         agent = row.get("stages", {}).get("agent")
         # A setup_error attempt never reached a verdict (it may have aborted after the agent ran), and an
@@ -357,9 +374,10 @@ def tree_sha256(path):
 
 
 def harness_sha256(here=HERE):
-    """One hash over what scenario agents run against: every *.py here, cli_safe.json and the canned/ tree."""
+    """Hash runner code, suite/model definitions, CLI policy and both capture trees."""
     here = Path(here)
-    files = list(here.glob("*.py")) + [here / "cli_safe.json"] + list((here / "canned").rglob("*"))
+    files = (list(here.glob("*.py")) + [here / name for name in ("cli_safe.json", "suites.json", "models.json")]
+             + list((here / "canned").rglob("*")) + list((here / "canned-local").rglob("*")))
     digest = hashlib.sha256()
     for file in sorted((f for f in files if f.is_file()), key=lambda f: f.relative_to(here).as_posix()):
         digest.update(file.relative_to(here).as_posix().encode() + b"\0" + file.read_bytes() + b"\0")
@@ -764,6 +782,11 @@ def agent_metrics(adapter, stdout, result, prices):
                                  and not result.get("host_state_changed") and not result.get("no_progress")
                                  and invalid == 0)
     metric["estimated_cost_usd"] = estimate_cost(metric, prices)
+    request_log = os.environ.get("WENDY_EVAL_MODEL_REQUESTS")
+    if request_log and Path(request_log).is_file():
+        metric["inference_requests"] = [r for r in read_jsonl(Path(request_log))
+                                       if result.get("started_at", float("inf")) <= r.get("started_at", 0)
+                                       <= result.get("finished_at", 0)]
     return metric, events
 
 
@@ -859,6 +882,7 @@ def rebuild_trace(metric, adapter, events, proxy_log, cli_log):
     proxy_records = read_jsonl(proxy_log)
     mcp_routing(metric, proxy_records)
     metric["tool_trace"] = build_trace(adapter, events, proxy_records=proxy_records, cli_records=read_jsonl(cli_log))
+    metric.setdefault("token_diagnostics", {})["tools"] = tool_payloads(metric["tool_trace"])
     return metric["tool_trace"]
 
 
@@ -977,7 +1001,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                 row["task_seconds"] = result["seconds"]
                 row["tool_choice"] = (grade(row["metrics"]["tool_trace"], task["expect"], row["metrics"]["final_text"],
                                             row["metrics"]["agent_completed"], adapter=agent["adapter"],
-                                            went_around=local)
+                                            went_around=local, target=graded_target(task, variables["device"]))
                                       if task.get("expect") else None)
                 row["status"] = mcp_status(agent["adapter"], row["metrics"]) or attempt_status(result)
                 infra = infra_status(events, config) if disposable(config) else None
@@ -1139,41 +1163,42 @@ def main(argv=None):
             parser.error("--calibrate checks end-to-end fixtures and can't run scenarios")
         scenarios = load_scenarios()
     agents = args.agent or list(config["agents"])
+    # Without --target, scenarios run on simulators and the --device board; end-to-end tasks run on every
+    # configured target, also when scenarios are selected in the same run. The board is for scenarios only.
     if args.target:
-        targets = args.target
-    elif args.scenario:
-        targets = [name for name, t in config["targets"].items() if t.get("kind") == "simulator"]
-        targets += ["board"] if args.device else []
+        task_targets = scenario_targets = args.target
     else:
-        targets = list(config["targets"])
+        scenario_targets = [name for name, t in config["targets"].items() if t.get("kind") == "simulator"]
+        scenario_targets += ["board"] if args.device else []
+        task_targets = [name for name in config["targets"] if not (args.device and name == "board")]
     selected_tasks = args.task or ([] if args.scenario else [t["id"] for t in tasks])
     scenario_ids = [s["id"] for s in scenarios]
     selected_scenarios = scenario_ids if "all" in (args.scenario or []) else args.scenario or []
-    for selected, available in ((agents, config["agents"]), (targets, config["targets"]),
+    for selected, available in ((agents, config["agents"]), (task_targets + scenario_targets, config["targets"]),
                                 (selected_tasks, [t["id"] for t in tasks]), (selected_scenarios, scenario_ids)):
         if any(name not in available for name in selected):
             parser.error("unknown selection: " + str(selected))
     if args.calibrate:
-        return calibrate(config, [t for t in tasks if t["id"] in selected_tasks], targets, args)
+        return calibrate(config, [t for t in tasks if t["id"] in selected_tasks], task_targets, args)
     # Validate guard settings before creating workspaces or copying credentials.
     RetryGuard(args.output / "validation-only", config.get("syntax_error_limit", 3))
 
     def plan_all():
         try:
-            covered = sc.scenario_coverage(scenarios, config["targets"], selected_scenarios, targets, sc.CANNED,
+            covered = sc.scenario_coverage(scenarios, config["targets"], selected_scenarios, scenario_targets, sc.CANNED,
                                            lambda: sc.robot_prerequisites(config))
         except ValueError as error:  # a capture that would fail mid-attempt
             parser.error(str(error))
-        coverage = plan_coverage(tasks, config["targets"], selected_tasks, targets) + covered
+        coverage = plan_coverage(tasks, config["targets"], selected_tasks, task_targets) + covered
         ready = {(c["task"], c["target"]) for c in covered if c["status"] == "ready"}
         plan = [("task", agent, target, task_for_target(task, config["targets"][target])[0])
                 for _ in range(args.repetitions) for task in tasks
-                if task["id"] in selected_tasks for target in targets
+                if task["id"] in selected_tasks for target in task_targets
                 if config["targets"][target]["kind"] in task["environments"]
                 if task_for_target(task, config["targets"][target])[1] is None for agent in agents]
         plan += [("scenario", agent, target, scenario)
                  for _ in range(args.repetitions) for scenario in scenarios
-                 if scenario["id"] in selected_scenarios for target in targets
+                 if scenario["id"] in selected_scenarios for target in scenario_targets
                  if (scenario["id"], target) in ready for agent in agents]
         random.Random(args.seed).shuffle(plan)
         if disposable(config):
@@ -1197,7 +1222,7 @@ def main(argv=None):
                      "would be scored as the model's failure")
     # A board's capabilities (null, as for --device) are read only under --execute; until then its
     # hardware scenarios wait.
-    detect = [name for name in targets if config["targets"][name]["kind"] in ("physical", "cloud", "local")
+    detect = [name for name in scenario_targets if config["targets"][name]["kind"] in ("physical", "cloud", "local")
               and "capabilities" in config["targets"][name] and config["targets"][name]["capabilities"] is None
               and any(config["targets"][name]["kind"] in s["environments"]
                       for s in scenarios if s["id"] in selected_scenarios)]

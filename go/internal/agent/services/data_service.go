@@ -93,6 +93,9 @@ type DataService struct {
 	// Start RPC, which carry no campaign to declare one. Campaign episodes take
 	// their own value from the plan.
 	adHocDrain time.Duration
+	// telemetry receives campaign inference metrics. It is set once, before
+	// StartCampaignInference; without it nothing is published.
+	telemetry TelemetryPublisher
 }
 
 type dataCaptureAdapter interface {
@@ -156,6 +159,13 @@ func (s *DataService) SetVideoService(video *VideoService) {
 // fragment sealing.
 func (s *DataService) SetAudioService(audioSvc *AudioService) {
 	s.addAdapter(newAudioDataAdapter(audioSvc))
+}
+
+// SetTelemetryPublisher publishes what each campaign's model achieves against
+// its rate as OpenTelemetry metrics (inferenceMetrics). Call it before
+// StartCampaignInference.
+func (s *DataService) SetTelemetryPublisher(publisher TelemetryPublisher) {
+	s.telemetry = publisher
 }
 
 // SetROS2Service enables one managed rosbag2 recorder per live RMW graph.

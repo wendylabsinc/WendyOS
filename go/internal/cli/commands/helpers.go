@@ -36,6 +36,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -2764,6 +2765,9 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 	// Try the given port first (covers explicit tunnel ports that already point
 	// at the mTLS port), then fall back to port+1 (the normal case where
 	// discovery returns the plaintext port and mTLS is port+1).
+	// A target that requires mTLS keeps both rungs: a probe can mark a row as
+	// mTLS while it still carries the plaintext port from an advertisement that
+	// lags the agent's enrollment. Only the plaintext rung is withheld from it.
 	mtlsAddrs := []string{cand, hostPort(host, port+1)}
 	for addrIdx, mtlsAddr := range mtlsAddrs {
 		if err := ctx.Err(); err != nil {
@@ -3008,6 +3012,9 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		}
 		return nil, walk.lastMTLSErr, pinnedRefusalError(failure, tenant, allCerts, time.Now())
 	}
+	if target.RequiresMTLS {
+		return nil, walk.lastMTLSErr, provisionedAgentConnectError(walk.lastMTLSErr)
+	}
 	// The plaintext rung stays on the primary address rather than walking the
 	// candidates. grpc.NewClient is lazy, so a plaintext "success" against a dead
 	// address is indistinguishable from one against a live address until the
@@ -3024,6 +3031,16 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
 	state, err := deviceProvisioning(probeCtx, conn)
 	cancel()
+	if _, cleaningUp := resetcleanup.Cause(err); cleaningUp {
+		// The device was reset and cannot finish removing what its previous
+		// enrollment left on the host. It is unenrolled, so the setup port is
+		// all it serves, and it withholds its enrollment state until the
+		// cleanup succeeds. Refusing it here would leave no way to read its
+		// logs, update its agent or reboot it, which is how it recovers. The
+		// trust is the same as for NotProvisioned: the device's own word.
+		conn.NoSavedIdentity = true
+		return conn, walk.lastMTLSErr, nil
+	}
 	if err != nil {
 		conn.Close()
 		return nil, walk.lastMTLSErr, err
@@ -4396,7 +4413,9 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 			}},
 		}
 		if port := dev.ConnectionInfo["serialPort"]; port != "" {
-			if dev.ConnectionInfo["needsInstall"] == "true" {
+			// A busy port has no identity either; key it the same way so the
+			// row is replaced once the board can be opened and identifies itself.
+			if dev.ConnectionInfo["needsInstall"] == "true" || dev.ConnectionInfo["busy"] == "true" {
 				item.DedupKey = unflashedLiteDedupKey(port)
 				// The branch sets no SortKey, so ordering falls back to the
 				// dedup key; pin it to the name to keep the row's position.

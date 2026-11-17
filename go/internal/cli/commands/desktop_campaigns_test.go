@@ -2,9 +2,11 @@ package commands
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
 func TestDesktopCampaignHumanPlan(t *testing.T) {
@@ -26,6 +28,33 @@ func TestDesktopCampaignHumanPlan(t *testing.T) {
 		t.Fatal("default clips should stay local with bounded pre/post capture")
 	}
 }
+
+// A model too slow for the campaign's rate showed "Detection: running" and
+// nothing else.
+func TestDesktopCampaignWarnsWhenTheModelMissesItsRate(t *testing.T) {
+	const summary = "model scores 0.11 frames/s of the 1 requested (about 9.1 s per frame on cpu)"
+	plan := func(tooSlow string) *pb.DataCampaign {
+		return &pb.DataCampaign{Name: "people-all-cameras", State: "armed", Warnings: []string{"deploy warning"},
+			PlanJson: []byte(`{"name": "people-all-cameras", "inference_status": {"state": "running",
+				"throughput": {"requested_fps": 1, "achieved_fps": 0.11, ` + tooSlow + `"summary": "` + summary + `"}}}`)}
+	}
+	slow := desktopCampaign(plan(`"model_too_slow": true, `))
+	if want := []string{"deploy warning", "Detection misses its rate: " + summary}; !slices.Equal(slow.Warnings, want) {
+		t.Fatalf("warnings %q, want %q", slow.Warnings, want)
+	}
+	if slow.InferenceState != "running" || slow.Problem != "" {
+		t.Fatalf("a slow model is not a failure: %+v", slow)
+	}
+	// A model that keeps up, or an agent that reports no throughput, adds nothing.
+	if keeps := desktopCampaign(plan("")); !slices.Equal(keeps.Warnings, []string{"deploy warning"}) {
+		t.Fatalf("warnings %q", keeps.Warnings)
+	}
+	older := desktopCampaign(&pb.DataCampaign{PlanJson: []byte(`{"inference_status": {"state": "running"}}`)})
+	if len(older.Warnings) != 0 || older.InferenceState != "running" {
+		t.Fatalf("older agent: %+v", older)
+	}
+}
+
 func TestDesktopCampaignLiteralSourceAndAppEvent(t *testing.T) {
 	camera := "sensorlink:camera-1:camera\nnotify: injected"
 	raw, err := DesktopCampaignYAML(DesktopCampaignInput{Name: "door", Camera: camera, Event: "door_opened", After: 5})

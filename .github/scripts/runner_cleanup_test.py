@@ -86,11 +86,11 @@ print('fixture 999999999 1 '+os.environ['FIXTURE_FREE_KIB']+' 1% /fixture')
         self.assertEqual(self.removed(), sorted(self.builders[:4]))
 
     def test_disk_action_changes_select_required_regressions(self):
-        workflow = yaml.safe_load((ROOT/'.github/workflows/go-tests.yml').read_text())
+        workflow = yaml.safe_load((ROOT/'.github/workflows/build.yml').read_text())
         events = workflow.get('on',workflow.get(True))
-        for event in ['push','pull_request']:
-            self.assertIn('.github/actions/check-runner-disk/**',events[event]['paths'])
-            self.assertIn('.github/scripts/**',events[event]['paths'])
+        self.assertIn('.github/actions/**',events['push']['paths'])
+        self.assertIn('.github/scripts/**',events['push']['paths'])
+        self.assertEqual(workflow['jobs']['validate-go']['uses'], './.github/workflows/go-tests.yml')
 
     def test_disk_threshold_and_invalid_readings_stop_work_without_deleting_anything(self):
         action = yaml.safe_load((ROOT/'.github/actions/check-runner-disk/action.yml').read_text())

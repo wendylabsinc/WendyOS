@@ -456,6 +456,7 @@ func main() {
 		envBytes(logger, "WENDY_DATA_RESERVE_BYTES", agentdata.DefaultReserveBytes, 0),
 	)
 	dataSvc := services.NewDataService(dataManager)
+	dataSvc.SetTelemetryPublisher(telemetryBuf)
 	dataSvc.SetAudioService(audioSvc)
 	// ROS 2 inspection requires the containerd-backed sidecar runtime; the
 	// service is only registered when containerd connected (WDY-1332).

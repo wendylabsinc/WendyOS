@@ -24,7 +24,7 @@ Linux release container is pinned by digest. Dependabot does not update
 were resolved through their upstream repositories; this change does not upgrade
 action major versions.
 
-The required `Local: Ubuntu 24` check audits all workflows and composite actions
+The pre-release `Local: Ubuntu 24` check audits all workflows and composite actions
 with zizmor 1.32.0, blocking high-severity, high-confidence findings. It runs the
 E2E suite even when the audit fails, then fails the job. The Go test aggregate
 also fails when this audit fails or is skipped. Both gates run
@@ -64,3 +64,33 @@ this because a contributor can propose changes to those conditions.
 Organization runner-group policy and audit-log access were unavailable to the
 CLI token during this review. Cloud IAM, runner host isolation, and every
 repository secret's scope have not been certified by these workflow checks.
+
+## When checks run
+
+PRs report the existing required `Shared gRPC API contracts` context on every
+change, so path filters cannot leave branch protection waiting forever. A single
+Linux Go job runs short unit tests for Go, Proto, module or test-setup changes,
+including the nested Babel module. Race tests and platform fixtures stay at
+pre-release. Swift
+lint, documentation previews, and the offline agent-evaluation harness retain
+their own relevant path filters. The AI security review runs when a PR carries
+the `review: security` label; Dependabot PRs still run the secretless dependency
+policy on every push. The other AI review triggers are unchanged.
+
+The full Go suite (including race tests, cross-platform regressions, plugin
+launchers, dependency scans and automation fixtures), Swift builds/tests, Swift
+E2E, SBOM tests and the SO-101 simulator suite run through `build.yml` before
+publishing. PRs run the simulator suite only when the runtime image or the
+desktop viewer changes. The `Pre-release
+checks` job requires every suite and the template tests to succeed. A failed,
+cancelled or skipped suite blocks GitHub releases, agent uploads, installer
+uploads and Linux repository publication. This applies to both pre-releases on
+main and manually published stable releases. The stable release's separate
+hardware-integration gate and its explicit override remain in place.
+
+Each suite can still be dispatched manually. To run the complete build and
+validation without publishing, dispatch **Build products and release** with
+`publish: false`. Daily dependency scans and Swift cache refreshes remain
+scheduled. Nested Go, Swift, security and SBOM suites use per-run concurrency
+groups so a manual check or scheduled refresh cannot cancel release validation;
+the parent build controls cancellation of superseded main builds.
