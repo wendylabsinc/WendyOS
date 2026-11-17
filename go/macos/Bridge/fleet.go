@@ -5,7 +5,7 @@ package main
 */
 import "C"
 import (
-	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"unsafe"
 )
 
@@ -13,7 +13,7 @@ import (
 func WDFleet(account, org *C.char) *C.WDFleetResult {
 	ctx, cancel := cloudContext()
 	defer cancel()
-	r, err := commands.DesktopFleetOverview(ctx, C.GoString(account), C.GoString(org))
+	r, err := backend.FleetOverview(ctx, C.GoString(account), C.GoString(org))
 	p := alloc[C.WDFleetResult](1)
 	p.status = status(err)
 	p.presence_error = C.CString(r.PresenceError)
