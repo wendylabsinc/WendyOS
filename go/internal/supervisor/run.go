@@ -469,7 +469,7 @@ func (s *Supervisor) runChild(ctx context.Context, d Decision, t *Trial) runResu
 						s.imageRestarts++
 					}
 					s.stop(cmd, exited)
-					return runResult{exit: Exit{Stopped: true}, livenessDead: true}
+					return runResult{exit: Exit{Stopped: true, Ran: s.deps.Uptime() - s.agentStarted}, livenessDead: true}
 				}
 			}
 		}
@@ -585,6 +585,10 @@ func (s *Supervisor) afterRun(d Decision, res runResult) {
 		}
 	case res.startErr != nil, res.livenessDead, res.silentExit, CountsAsFailure(res.exit):
 		s.deps.Log.Warn("agent failed", zap.String("version", d.Version), zap.Error(res.startErr), zap.Int("code", res.exit.Code))
+		if res.exit.Ran >= LongRun {
+			// Rare stalls over a long uptime must not add up to the budget.
+			st.ClearFailures(d.SHA256)
+		}
 		st.RecordFailure(d.SHA256, s.deps.BootID())
 		s.save(st)
 	}

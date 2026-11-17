@@ -302,6 +302,26 @@ func TestRunRemembersTheCloudAcrossASupervisorRestart(t *testing.T) {
 	}
 }
 
+func TestAfterRunForgivesEarlierFailuresAfterALongHealthyRun(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	s := &Supervisor{cfg: Config{Store: store}, deps: Deps{BootID: func() string { return "boot-1" }, Log: zap.NewNop()}}
+	st := State{Approved: &Agent{SHA256: "a", Version: "2026.11.02-101010"}, Failures: []Failure{{SHA256: "a", BootID: "boot-1", Count: 4}}}
+	if err := SaveState(store.StatePath(), st); err != nil {
+		t.Fatal(err)
+	}
+	d := Decision{Role: RoleApproved, SHA256: "a"}
+	s.afterRun(d, runResult{exit: Exit{Stopped: true, Ran: LongRun}, livenessDead: true})
+	got, _ := LoadState(store.StatePath())
+	if len(got.Failures) != 1 || got.Failures[0].Count != 1 {
+		t.Fatalf("a restart after a long healthy run starts the count over, got %+v", got.Failures)
+	}
+	s.afterRun(d, runResult{exit: Exit{Stopped: true, Ran: time.Minute}, livenessDead: true})
+	got, _ = LoadState(store.StatePath())
+	if got.Failures[0].Count != 2 {
+		t.Fatalf("a restart after a short run still counts, got %+v", got.Failures)
+	}
+}
+
 func TestRunRejectsATrialThatKeepsCrashing(t *testing.T) {
 	h := newHarness(t)
 	// A crashing agent never passes the real probe; a long deadline leaves the
