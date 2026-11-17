@@ -977,7 +977,7 @@ jobs:
           cache-dependency-path: go.sum
       - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
-          xcode-version: '26.5'
+          xcode-version: '27.1'
       - name: Install native build dependencies
         run: brew install xcodegen pkg-config libusb cmake ninja
       - name: Build and test native app
