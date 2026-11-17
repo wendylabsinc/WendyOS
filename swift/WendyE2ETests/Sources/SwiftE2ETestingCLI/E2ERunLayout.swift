@@ -32,6 +32,24 @@ func e2eAttemptExitStatus(at attemptURL: URL) -> Int? {
     return object["exitStatus"] as? Int
 }
 
+func e2eAttemptGoCoverageTotal(at attemptURL: URL) -> String {
+    guard let coverage = e2eAttemptJSON(at: attemptURL)?["coverage"] as? [String: Any] else {
+        return "Not collected"
+    }
+    switch coverage["status"] as? String {
+    case "no-data":
+        return "No data"
+    case "collected":
+        guard let summary = coverage["summary"] as? [String: Any],
+            let percent = summary["percent"] as? Double,
+            percent.isFinite, (0...100).contains(percent)
+        else { return "Incomplete" }
+        return String(format: "%.3f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
+    default:
+        return "Incomplete"
+    }
+}
+
 func e2eAttemptXUnitURL(at attemptURL: URL) -> URL? {
     let normalizedURL = attemptURL.appendingPathComponent("test-results.xml")
     if FileManager.default.fileExists(atPath: normalizedURL.path) {

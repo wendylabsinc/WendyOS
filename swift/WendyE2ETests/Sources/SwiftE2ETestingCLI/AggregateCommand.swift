@@ -114,7 +114,9 @@ struct AggregateCommand: ParsableCommand {
                 at: destinationURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try copyItem(at: testDirectory, to: destinationURL)
+            // HTML/AI inputs need recordings and metadata, not a second copy of
+            // native Go evidence or reproducible full-source profiles.
+            try copyDirectory(at: testDirectory, to: destinationURL, excluding: ["coverage"])
             try copyTestMetadataIfPresent(
                 from: testDirectory,
                 to: destinationURL.deletingLastPathComponent().deletingLastPathComponent(),
@@ -368,11 +370,42 @@ private func copyAttemptLevelArtifacts(from attemptURL: URL, to destinationURL: 
         includingPropertiesForKeys: nil,
         options: [.skipsHiddenFiles]
     )
-    for sourceURL in entries where sourceURL.lastPathComponent != e2eObservationsDirectoryName {
+    for sourceURL in entries
+    where ![e2eObservationsDirectoryName, "report"].contains(sourceURL.lastPathComponent) {
+        if sourceURL.lastPathComponent == "coverage" {
+            try copyDirectory(
+                at: sourceURL,
+                to: destinationURL.appendingPathComponent("coverage"),
+                excluding: [
+                    "bin", "bootstrap", "go-native.tar.gz", "native.sha256", "coverage.out",
+                    "index.html",
+                ]
+            )
+            continue
+        }
         try copyItem(
             at: sourceURL,
             to: destinationURL.appendingPathComponent(sourceURL.lastPathComponent)
         )
+    }
+}
+
+private func copyDirectory(
+    at sourceURL: URL,
+    to destinationURL: URL,
+    excluding names: Set<String>
+) throws {
+    try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+    for entry in try FileManager.default.contentsOfDirectory(
+        at: sourceURL,
+        includingPropertiesForKeys: nil
+    ) {
+        if !names.contains(entry.lastPathComponent) {
+            try copyItem(
+                at: entry,
+                to: destinationURL.appendingPathComponent(entry.lastPathComponent)
+            )
+        }
     }
 }
 
