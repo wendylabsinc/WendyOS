@@ -1,6 +1,7 @@
 """Compare a candidate benchmark run against a baseline run.
 
-Flags follow fixed rules so a quiet report can be trusted: tool choice (every candidate attempt is
+Verified success uses a Wilson-based difference interval with a minimum sample count.
+Missing evidence exits 3. Diagnostic flags use fixed rules: tool choice (every candidate attempt is
 not good where every baseline attempt was), tokens and time (candidate median beyond the baseline
 maximum plus a margin, with at least two known values per side). Unknown usage is counted, never
 treated as zero. Python standard library only.
@@ -8,6 +9,7 @@ treated as zero. Python standard library only.
 import argparse
 import collections
 import json
+import math
 from pathlib import Path
 import statistics
 import subprocess
@@ -15,7 +17,8 @@ import sys
 import time
 import uuid
 
-from benchmark import SCENARIO_NOT_SUCCESS
+from benchmark import SCENARIO_NOT_SUCCESS, scored
+from statistics_quality import attempts_to_pass, wilson, success_comparison
 
 OUTCOMES = ("right", "wrong", "missed", "asked")
 TRACKED = ("runner_sha256", "harness_sha256", "task_sha256", "scenarios_sha256")
@@ -51,8 +54,17 @@ def load_run(directory):
     tools = _read_json(directory / "tools.json", [])
     if isinstance(tools, dict):
         tools = tools.get("tools", [])
-    return {"dir": directory, "rows": _read_rows(source), "manifest": _read_json(directory / "manifest.json", {}),
-            "tools": tools}
+    errors = []
+    try:
+        for line in source.read_text().splitlines():
+            if not isinstance(json.loads(line), dict):
+                errors.append("non-object result")
+    except (OSError, ValueError):
+        errors.append("missing or malformed results")
+    if not _read_json(directory / "manifest.json"):
+        errors.append("missing or malformed manifest")
+    return {"evidence_errors": errors, "dir": directory, "rows": _read_rows(source), "manifest": _read_json(directory / "manifest.json", {}),
+            "tools": tools, "coverage": _read_json(directory / "coverage.json", None)}
 
 
 def _key(row):
@@ -65,14 +77,17 @@ def _tokens(row):
     if not metrics.get("usage_complete") or not isinstance(tokens, dict):
         return None
     try:
-        return tokens["input_tokens"] + tokens["output_tokens"]
+        values = [tokens["input_tokens"], tokens["output_tokens"]]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0 for v in values):
+            return None
+        return sum(values)
     except (KeyError, TypeError):
         return None
 
 
 def _seconds(row):
     value = ((row.get("stages") or {}).get("agent") or {}).get("seconds")
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
 
 
 def _median(values):
@@ -81,7 +96,8 @@ def _median(values):
 
 def side_stats(rows):
     setup_errors = sum(r.get("status") == "setup_error" for r in rows)
-    rows = [r for r in rows if r.get("status") != "setup_error"]
+    unscored = sum(not scored(r) for r in rows)
+    rows = [r for r in rows if scored(r)]
     outcomes = {k: 0 for k in OUTCOMES}
     outcomes["ungraded"] = 0
     for r in rows:
@@ -99,7 +115,13 @@ def side_stats(rows):
         for e in ((r.get("metrics") or {}).get("tool_trace") or []):
             if isinstance(e, dict) and e.get("channel") in ("mcp", "cli") and e.get("name"):
                 used.add(e["name"])
-    return {"attempts": len(rows), "setup_errors": setup_errors, "outcomes": outcomes, "good": good,
+    success_rows = [r for r in rows if isinstance(r.get("success"), bool)]
+    successes = sum(r["success"] for r in success_rows)
+    return {"successes": successes, "success_attempts": len(success_rows),
+            "success_unknown": len(rows) - len(success_rows), "unscored": unscored,
+            "success_rate": successes / len(success_rows) if success_rows else None,
+            "success_interval": wilson(successes, len(success_rows)),
+            "attempts": len(rows), "setup_errors": setup_errors, "outcomes": outcomes, "good": good,
             "median_tokens": _median(tokens), "max_tokens": max(tokens, default=None),
             "known_usage": len(tokens), "unknown_usage": len(rows) - len(tokens),
             "median_seconds": _median(seconds), "max_seconds": max(seconds, default=None),
@@ -123,6 +145,11 @@ def _version_text(run, agent):
 def _mismatches(baseline, candidate, rows):
     found = []
     bm, cm = baseline["manifest"], candidate["manifest"]
+    bi, ci = _get(bm, ("config", "inference_identity")), _get(cm, ("config", "inference_identity"))
+    if bi != ci:
+        found.append("config.inference_identity")
+    elif bi and bi.get("missing"):
+        found.append("config.inference_identity.incomplete")
     for name in TRACKED:
         if bm.get(name) != cm.get(name):
             found.append(name)
@@ -131,8 +158,20 @@ def _mismatches(baseline, candidate, rows):
     for agent in agents:
         if _version_text(baseline, agent) != _version_text(candidate, agent):
             found.append(f"{agent}_version.stdout")
+        for field in ("command", "reasoning_effort", "temperature", "max_tokens"):
+            def setting(manifest):
+                value = _get(manifest, ("config", "agents", agent, field))
+                if field == "command" and isinstance(value, list) and _get(manifest, ("config", "inference_identity")):
+                    value = list(value)
+                    if "--base-url" in value and value.index("--base-url") + 1 < len(value):
+                        value[value.index("--base-url") + 1] = "<observed-local-model>"
+                return value
+            if setting(bm) != setting(cm):
+                found.append(f"config.agents.{agent}.{field}")
         if _get(bm, ("config", "agents", agent, "model")) != _get(cm, ("config", "agents", agent, "model")):
             found.append(f"config.agents.{agent}.model")
+    if _get(bm, ("config", "context_policy")) != _get(cm, ("config", "context_policy")):
+        found.append("config.context_policy")
     for target in targets:
         for field in ("kind", "device"):
             if _get(bm, ("config", "targets", target, field)) != _get(cm, ("config", "targets", target, field)):
@@ -169,7 +208,7 @@ def _rollup(items):
     return dict(sorted(totals.items()))
 
 
-def compare(baseline, candidate, scenarios, margin=.25):
+def compare(baseline, candidate, scenarios, margin=.25, min_attempts=10, success_tolerance=.1):
     groups_by_row = collections.defaultdict(lambda: {"baseline": [], "candidate": []})
     for side, run in (("baseline", baseline), ("candidate", candidate)):
         for r in run["rows"]:
@@ -196,6 +235,17 @@ def compare(baseline, candidate, scenarios, margin=.25):
                     flags.append(name)
                 elif verdict == "insufficient":
                     insufficient.append(name)
+        success = success_comparison(b, n, min_attempts, success_tolerance)
+        if success["verdict"] == "regression":
+            flags.append("success_rate")
+        if success["verdict"] == "insufficient_evidence":
+            insufficient.append("success_rate")
+        for name, present in (("coverage", one_sided or b["unscored"] or n["unscored"]),
+                              ("success", b["success_unknown"] or n["success_unknown"]),
+                              ("tokens", b["unknown_usage"] or n["unknown_usage"]),
+                              ("time", b["known_seconds"] < b["attempts"] or n["known_seconds"] < n["attempts"])):
+            if present and name not in insufficient:
+                insufficient.append(name)
         scenario = known.get(task) if kind == "scenario" else None
         group = (scenario or {}).get("group") or next((r.get("group") for r in sides["baseline"] + sides["candidate"] if r.get("group")), None)
         result_rows.append({
@@ -204,11 +254,34 @@ def compare(baseline, candidate, scenarios, margin=.25):
             "tools_added": sorted(set(n["tools"]) - set(b["tools"])),
             "tools_removed": sorted(set(b["tools"]) - set(n["tools"])),
             "canned_tools_changed": _changed_tools(scenario, baseline, candidate) if scenario else [],
-            "one_sided": one_sided})
+            "one_sided": one_sided, "success_comparison": success,
+            "verdict": "regression" if flags else "insufficient_evidence" if insufficient else "pass"})
         for side, stats in (("baseline", b), ("candidate", n)):
             group_items.append((group or "end-to-end", side, stats))
             agent_items.append((agent, side, stats))
-    return {"margin": margin, "mismatches": _mismatches(baseline, candidate, groups_by_row),
+    coverage_gaps = []
+    for name, run in (("baseline", baseline), ("candidate", candidate)):
+        coverage_gaps += [f"{name}: {error}" for error in run.get("evidence_errors", [])]
+        coverage = run.get("coverage")
+        if not coverage:
+            coverage_gaps.append(f"{name}: missing coverage evidence")
+        else:
+            for item in coverage:
+                if item.get("status") != "ready" or not item.get("agents") or any(
+                    a.get("not_run", 0) or a.get("setup_errors", 0) or a.get("unscored", 0)
+                    for a in item.get("agents", {}).values()):
+                    coverage_gaps.append(f"{name}: {item.get('task')} / {item.get('target')} incomplete")
+                for agent in item.get("agents", {}):
+                    key = (item.get("kind", "task"), item.get("task"), item.get("target"), agent)
+                    if not groups_by_row.get(key, {}).get(name):
+                        coverage_gaps.append(f"{name}: {item.get('task')} / {agent} has no results")
+    mismatches = _mismatches(baseline, candidate, groups_by_row)
+    verdict = ("regression" if any(r["flags"] for r in result_rows) else
+               "insufficient_evidence" if not result_rows or coverage_gaps or mismatches or
+               any(r["verdict"] != "pass" for r in result_rows) else "pass")
+    return {"margin": margin, "min_attempts": min_attempts, "success_tolerance": success_tolerance,
+            "verdict": verdict, "coverage_gaps": coverage_gaps,
+            "mismatches": mismatches,
             "rows": result_rows, "groups": _rollup(group_items), "agents": _rollup(agent_items)}
 
 
@@ -234,21 +307,32 @@ def _pair(b, c, unknown_b, unknown_c):
 
 
 def render_markdown(result):
-    lines = ["# Tool-choice comparison", ""]
+    needed = attempts_to_pass(result["success_tolerance"])
+    lines = ["# Agent evaluation comparison", "", f"Verdict: {result['verdict']}", "",
+             "Success intervals are 95% per comparison. A pass excludes a success-rate loss larger than "
+             f"{result['success_tolerance']:.0%}, with at least {result['min_attempts']} attempts per side."
+             + (f" Two sides with the same success rate need at least {needed} attempts each to pass."
+                if needed else ""), ""]
     if result["mismatches"]:
         lines += ["**Runs differ in fields that should match:** " + ", ".join(f"`{m}`" for m in result["mismatches"]), ""]
-    lines += ["| Task | Agent | Target | Baseline R/W/M/A | Candidate R/W/M/A | Tokens (b → c) | Seconds (b → c) | Flags |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    lines += ["| Task | Agent | Target | Baseline R/W/M/A | Candidate R/W/M/A | Tokens (b → c) | Seconds (b → c) | Successes (b / c) | Success loss, 95% interval | Verdict / flags |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for r in result["rows"]:
         b, n = r["baseline"], r["candidate"]
         flags = [f + (" (confirmed)" if f in r.get("confirmed", []) else
                       f" (unconfirmed: {r['unconfirmed'][f]})" if f in r.get("unconfirmed", {}) else "")
                  for f in r["flags"]]
+        flags += ["insufficient: " + x for x in r["insufficient"]]
         if r["one_sided"]:
             flags.append("one side only")
+        interval = r["success_comparison"]["interval"]
+        ci = "unknown" if interval is None else f"[{interval[0]:.1%}, {interval[1]:.1%}]"
         lines.append(f"| {_cell(r['task'])} | {_cell(r['agent'])} | {_cell(r['target'])} | {_rwma(b)} | {_rwma(n)} | "
                      f"{_pair(b['median_tokens'], n['median_tokens'], b['unknown_usage'], n['unknown_usage'])} | "
-                     f"{_pair(b['median_seconds'], n['median_seconds'], 0, 0)} | {_cell(', '.join(flags))} |")
+                     f"{_pair(b['median_seconds'], n['median_seconds'], 0, 0)} | "
+                     f"{b['successes']}/{b['success_attempts']} / {n['successes']}/{n['success_attempts']} | {ci} | "
+                     f"{r['verdict']}: {_cell(', '.join(flags))} |")
+    lines += ["", *[f"- {gap}" for gap in result["coverage_gaps"]]]
     notes = [f"- {r['task']}: reply text of {', '.join(r['canned_tools_changed'])} is shared between runs; "
              "recapture against the candidate to measure it"
              for r in result["rows"] if r["canned_tools_changed"]]
@@ -312,7 +396,14 @@ def main(argv=None):
     parser.add_argument("--margin", type=float, default=.25)
     parser.add_argument("--allow-mismatch", action="store_true")
     parser.add_argument("--confirm", type=int, metavar="N")
+    parser.add_argument("--min-attempts", type=int, default=10)
+    parser.add_argument("--success-tolerance", type=float, default=.1,
+                        help="Maximum acceptable absolute success-rate loss (default 0.1)")
     args = parser.parse_args(argv)
+    if args.min_attempts < 2 or not math.isfinite(args.success_tolerance) or not 0 <= args.success_tolerance < 1:
+        parser.error("min-attempts must be >= 2 and success-tolerance must be in [0, 1)")
+    if not math.isfinite(args.margin) or args.margin < 0 or (args.confirm is not None and args.confirm < 1):
+        parser.error("margin must be finite and nonnegative; confirm must be positive")
     baseline, candidate = load_run(args.baseline), load_run(args.candidate)
     scenarios = []
     if not (baseline["manifest"].get("scenarios") or candidate["manifest"].get("scenarios")):
@@ -321,13 +412,13 @@ def main(argv=None):
             scenarios = sc.load_scenarios(Path(__file__).resolve().parent / "scenarios.json")
         except (ImportError, OSError, ValueError):
             scenarios = []
-    result = compare(baseline, candidate, scenarios, args.margin)
+    result = compare(baseline, candidate, scenarios, args.margin, args.min_attempts, args.success_tolerance)
     if result["mismatches"] and not args.allow_mismatch:
         print("The runs differ in: " + ", ".join(result["mismatches"]) + " (pass --allow-mismatch to compare anyway)")
     elif args.confirm and any(r["flags"] for r in result["rows"]):
         first = {_key_of(r): list(r["flags"]) for r in result["rows"] if r["flags"]}
         reruns = _confirm(candidate, {k[:2] + k[3:] for k in first}, args.confirm)
-        result = compare(baseline, candidate, scenarios, args.margin)
+        result = compare(baseline, candidate, scenarios, args.margin, args.min_attempts, args.success_tolerance)
         for r in result["rows"]:
             key = _key_of(r)
             r["confirmed"], r["unconfirmed"] = [], {}
@@ -351,7 +442,7 @@ def main(argv=None):
     print(render_markdown(result))
     if result["mismatches"] and not args.allow_mismatch:
         return 2
-    return 1 if any(r["flags"] for r in result["rows"]) else 0
+    return 1 if result["verdict"] == "regression" else 3 if result["verdict"] == "insufficient_evidence" or result["mismatches"] else 0
 
 
 if __name__ == "__main__":

@@ -1,8 +1,16 @@
 import SwiftUI
 import UIKit
 
+enum MobileAppearance: String, CaseIterable {
+    case system = "System", light = "Light", dark = "Dark"
+    var colorScheme: ColorScheme? {
+        switch self { case .system: nil; case .light: .light; case .dark: .dark }
+    }
+}
+
 @main
 struct WendyMobileApp: App {
+    @AppStorage("wendy.appearance") private var appearance = MobileAppearance.system.rawValue
     @UIApplicationDelegateAdaptor(MobileAppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     var body: some Scene {
@@ -13,6 +21,7 @@ struct WendyMobileApp: App {
                 Color.clear
             } else {
                 MobileRootView().environmentObject(model)
+                    .preferredColorScheme((MobileAppearance(rawValue: appearance) ?? .system).colorScheme)
                     .task { await model.cleanup.run() }
                     .task { await model.vpn.observeStatus() }
                     .task(id: model.initialized) { await model.observeEvents() }

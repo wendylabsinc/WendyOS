@@ -27,7 +27,7 @@ class GuardianReportTests(unittest.TestCase):
                 # child has exited zero and its result has been reported.
                 leaf = (
                     "import signal,time; from pathlib import Path; "
-                    "signal.signal(signal.SIGTERM, lambda s,f: (Path(" + repr(str(draining)) + ").write_text('term'), exit(0))); "
+                    "signal.signal(signal.SIGTERM, lambda s,f: (Path(" + repr(str(draining)) + ").write_text('term'), time.sleep(.2), exit(0))); "
                     "Path(" + repr(str(ready)) + ").write_text('ready'); "
                     "time.sleep(30)"
                 )
@@ -70,6 +70,11 @@ class GuardianReportTests(unittest.TestCase):
                 self.assertTrue(sent.is_set(), "real owned descendant never reached final TERM drain")
                 self.assertEqual(outside, [], "signal arrived outside the owned cleanup window")
                 self.assertEqual(result, 128 + signum, "DRAIN_SIGNAL_MUST_NOT_REPORT_SUCCESS")
+
+    def test_completed_command_does_not_wait_full_grace(self):
+        started = time.monotonic()
+        self.assertEqual(MEDIA.run([sys.executable, "-c", "pass"], 5), 0)
+        self.assertLess(time.monotonic() - started, 2.5)
 
     def test_closed_report_reader_does_not_release_group_leader(self):
         directory=tempfile.TemporaryDirectory()

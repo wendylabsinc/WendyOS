@@ -17,7 +17,8 @@ struct MobileVPNView: View {
                     if model.vpnUpdating || vpn.changing { ProgressView() }
                 }
                 if let issue = vpn.setupIssue { Text(issue) }
-                if let error = model.vpnError ?? vpn.connectionError { FailureNote(message: error) }
+                if let error = model.vpnErrorFailure { FailureNote(message: error) }
+                else if let error = vpn.connectionError { FailureNote(message: error) }
             }
             Section("Automatic internet backup") {
                 Text("If your normal internet goes down, Wendy uses an available mesh uplink and switches back when it recovers.")

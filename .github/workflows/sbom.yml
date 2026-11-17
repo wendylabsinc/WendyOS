@@ -1,25 +1,12 @@
 name: SBOM tests
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'scripts/generate-sbom.sh'
-      - 'scripts/test/**'
-      - '.github/workflows/build.yml'
-      - '.github/workflows/sbom.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'scripts/generate-sbom.sh'
-      - 'scripts/test/**'
-      - '.github/workflows/build.yml'
-      - '.github/workflows/sbom.yml'
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
-  group: sbom-tests-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: sbom-tests-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   sbom-tests:

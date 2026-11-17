@@ -769,7 +769,10 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 // should stop). Late-joining subscribers receive whatever frame the producer
 // sends next; for H.264 they will not see an IDR/keyframe until the next one
 // arrives naturally (at most one GOP interval away for GStreamer pipelines with
-// key-int-max set). VP8 is one WebM container rather than a run of frames, so
+// key-int-max set). The producers repeat SPS and PPS ahead of each IDR so that
+// it is one a late joiner can start on: h264parse config-interval=-1 in the
+// GStreamer and IP camera pipelines, h264ParameterSets on the native V4L2
+// path. VP8 is one WebM container rather than a run of frames, so
 // each VP8 frame also carries the stream's initialization and, where a Cluster
 // opening on a key frame was found, a join point for late viewers.
 //
@@ -2807,9 +2810,7 @@ func (s *VideoService) setV4L2FrameInterval(fd int, path string, fps uint32) {
 }
 
 func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
-	return s.captureV4L2Native(ctx, func(data []byte, stamp frameTimestamp) bool {
-		return broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264)
-	}, path, v4l2CaptureConfig{
+	return s.captureV4L2Native(ctx, s.nativeH264Emit(path, broadcast), path, v4l2CaptureConfig{
 		pixelFormat:   v4l2PixFmtH264,
 		width:         req.GetWidth(),
 		height:        req.GetHeight(),

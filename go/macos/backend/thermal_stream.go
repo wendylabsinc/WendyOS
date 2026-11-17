@@ -32,7 +32,7 @@ func (b *Backend) runThermalCamera(ctx context.Context, client thermalVideoClien
 		}
 		failures++
 		if !retryThermalStream(err) || failures > 3 {
-			b.emitText(ctx, EventCameraError, session, streamID, err.Error())
+			b.emitError(ctx, EventCameraError, session, streamID, err)
 			return
 		}
 		timer := time.NewTimer(time.Second * time.Duration(1<<(failures-1)))

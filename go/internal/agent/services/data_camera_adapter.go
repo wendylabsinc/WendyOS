@@ -1139,9 +1139,10 @@ func (c *cameraCapture) writeEncodedFrame(frame *videoFrame, canonical, uncertai
 // per buffer — byte-chunked transports degrade to continuous recording), and
 // frameRandomAccess then verifies the unit carries its own SPS/PPS/IDR trio.
 // Together they guarantee a written still is a complete, self-contained
-// access unit; a keyframe whose parameter sets the camera firmware did not
-// inline is skipped and its interval is reported as missed rather than filled
-// with an undecodable file.
+// access unit; a keyframe that still lacks parameter sets (the camera did not
+// inline them and the producer had none to add, see h264ParameterSets) is
+// skipped and its interval is reported as missed rather than filled with an
+// undecodable file.
 //
 // Between intervals the capture stays subscribed and discards frames instead
 // of unsubscribing: receiving and dropping a shared frame pointer is a channel
@@ -1293,44 +1294,55 @@ func (c *cameraCapture) ensureSegment(codec agentpb.VideoCodec, canonical int64,
 
 // h264RandomAccessOffset reports an Annex-B payload position where SPS, PPS,
 // and IDR NALs appear in order. The GStreamer pipelines emit this trio at
-// every keyframe (h264parse config-interval=-1) and UVC H.264 firmware
-// commonly inlines it too, so starting segments only here makes each file
-// begin independently decodable. Note this inspects only the bytes it is
-// given: on a byte-chunked transport a reported unit may still be truncated
-// at the payload's end, which is why snapshot stills additionally require an
-// access-unit-aligned frame (see handleFrame).
+// every keyframe (h264parse config-interval=-1) and the native V4L2 path
+// completes it for a camera that does not (h264ParameterSets), so starting
+// segments only here makes each file begin independently decodable. Note this
+// inspects only the bytes it is given: on a byte-chunked transport a reported
+// unit may still be truncated at the payload's end, which is why snapshot
+// stills additionally require an access-unit-aligned frame (see handleFrame).
 func h264RandomAccessOffset(payload []byte) (offset int, found bool) {
 	spsOffset, ppsOffset := -1, -1
-	for i := 0; i+3 < len(payload); {
-		start, prefix := -1, 0
-		for ; i+3 < len(payload); i++ {
-			if payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 1 {
-				start, prefix = i, 3
-				break
-			}
-			if i+4 < len(payload) && payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 0 && payload[i+3] == 1 {
-				start, prefix = i, 4
-				break
-			}
-		}
-		if start < 0 || start+prefix >= len(payload) {
-			break
-		}
-		switch payload[start+prefix] & 0x1f {
-		case 5:
+	for start, header, ok := h264NextNAL(payload, 0); ok; start, header, ok = h264NextNAL(payload, header+1) {
+		switch payload[header] & 0x1f {
+		case h264NALIDR:
 			if spsOffset >= 0 && ppsOffset >= spsOffset {
 				offset, found = spsOffset, true
 			}
-		case 7:
+		case h264NALSPS:
 			spsOffset, ppsOffset = start, -1
-		case 8:
+		case h264NALPPS:
 			if spsOffset >= 0 {
 				ppsOffset = start
 			}
 		}
-		i = start + prefix + 1
 	}
 	return offset, found
+}
+
+// The H.264 NAL unit types (nal_unit_type, the low five bits of the header
+// byte) that the agent tells apart.
+const (
+	h264NALIDR = 5 // coded slice of an IDR picture
+	h264NALSPS = 7 // sequence parameter set
+	h264NALPPS = 8 // picture parameter set
+	h264NALAUD = 9 // access unit delimiter
+)
+
+// h264NextNAL finds the next NAL unit of an Annex-B payload at or after from.
+// start is the offset of its start code, three bytes or four, and header that
+// of the NAL header byte behind it; a start code with nothing after it is not
+// a unit. The unit runs to the start of the following one, or to the end of
+// the payload.
+func h264NextNAL(payload []byte, from int) (start, header int, ok bool) {
+	for i := from; i+3 < len(payload); i++ {
+		if payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 1 {
+			return i, i + 3, true
+		}
+		if i+4 < len(payload) && payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 0 && payload[i+3] == 1 {
+			return i, i + 4, true
+		}
+	}
+	return 0, 0, false
 }
 
 func (c *cameraCapture) sampleMapping(receipt int64) error {

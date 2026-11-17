@@ -27,6 +27,7 @@ struct ChatDeviceCardView: View {
     let card: ChatDeviceCard
     let session: UInt64
     let deviceName: String
+    @State private var showingRecording = false
     @State private var resources: ResourceSnapshot?
     @State private var info: DeviceInfoSnapshot?
     @State private var error: String?
@@ -39,6 +40,11 @@ struct ChatDeviceCardView: View {
                     Label(card.title, systemImage: "video.slash")
                     Text(error ?? "Camera is no longer available.").font(.caption).foregroundStyle(.secondary)
                 }
+            } else if card.kind == "recording" {
+                Label(card.title, systemImage: "play.rectangle").font(.headline)
+                Text(card.episode).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Button("Open recording") { showingRecording = true }
+                    .disabled(model.deviceSession != session)
             } else if card.kind == "notifications" {
                 Label(card.title, systemImage: "bell.badge").font(.headline)
                 NotificationReceivingView()
@@ -64,6 +70,16 @@ struct ChatDeviceCardView: View {
         }.padding(card.kind == "camera" ? 0 : 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 14))
+            .sheet(isPresented: $showingRecording) {
+                NavigationStack {
+                    DataVisualizerView(session: session, deviceName: deviceName, initialEpisode: card.episode)
+                        .navigationTitle(card.title)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingRecording = false } } }
+                }
+            }
+            .onChange(of: model.deviceSession) { _, current in
+                if current != session { showingRecording = false }
+            }
             .task(id: card.id) {
                 guard model.deviceSession == session else { return }
                 if card.kind == "camera" {

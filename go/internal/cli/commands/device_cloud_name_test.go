@@ -285,12 +285,20 @@ func TestNamedCloudDeviceResolvesThroughBothAgentEntryPoints(t *testing.T) {
 			deviceFlag = "ci-mesh-2"
 			oldLookup, oldBrowse, oldDiscover := osLookupHostFn, lanBrowseFn, discoverLANDevices
 			oldUSB, oldFind := usbDirectCandidatesFn, findDeviceByIDFn
-			oldCloud := connectCloudLookupFn
+			oldCloud, oldResolver := connectCloudLookupFn, net.DefaultResolver
 			t.Cleanup(func() {
 				osLookupHostFn, lanBrowseFn, discoverLANDevices = oldLookup, oldBrowse, oldDiscover
 				usbDirectCandidatesFn, findDeviceByIDFn = oldUSB, oldFind
-				connectCloudLookupFn = oldCloud
+				connectCloudLookupFn, net.DefaultResolver = oldCloud, oldResolver
 			})
+			// gRPC retries DNS itself after the CLI's resolver misses. Keep that
+			// lookup offline too; CI resolvers may return SERVFAIL for bare names.
+			net.DefaultResolver = &net.Resolver{
+				PreferGo: true,
+				Dial: func(context.Context, string, string) (net.Conn, error) {
+					return nil, unresolvedCloudNameError()
+				},
+			}
 			osLookupHostFn = func(context.Context, string) ([]string, error) { return nil, unresolvedCloudNameError() }
 			lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
 			discoverLANDevices = lanBrowseFn

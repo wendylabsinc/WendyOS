@@ -177,7 +177,7 @@ func TestAgentRPCsAndStreamCancellation(t *testing.T) {
 	if len(cameras) != 1 || cameras[0].Id != 0 {
 		t.Fatal("missing camera zero")
 	}
-	if err = b.StartLogs("test-app", 16); err != nil {
+	if err = b.StartLogs("test-app", 16, 3); err != nil {
 		t.Fatal(err)
 	}
 	select {
