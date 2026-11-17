@@ -32,6 +32,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -3450,6 +3451,13 @@ func agentUpdateTerminalError(recvErr error) error {
 			return fmt.Errorf("%s — another OS or agent update may still be running; wait for it to finish, then retry. "+
 				"If this repeats with nothing running, reboot the device, then retry", s.Message())
 		}
+		switch reason, cause := agentRefusal(s); reason {
+		case supervisor.RefusalCheckFailed:
+			return &agentCheckRefusedError{reason: cause}
+		case supervisor.RefusalUpdatesPaused:
+			return &agentUpdatesPausedError{reason: s.Message()}
+		}
+		// A status that lost its detail on the way still reads as before.
 		if reason, ok := strings.CutPrefix(s.Message(), checkRefusalPrefix); ok {
 			return &agentCheckRefusedError{reason: reason}
 		}

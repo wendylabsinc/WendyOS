@@ -77,3 +77,13 @@ func ReadStatus(path string) (Status, error) {
 	err = json.Unmarshal(data, &st)
 	return st, err
 }
+
+// Refusal reasons ride on the gRPC status of an upload the agent turns down
+// (an ErrorInfo detail), so a client on another release need not parse the
+// message. RefusalMetaReason carries the bare cause of a failed check.
+const (
+	RefusalDomain        = "agent-supervisor.wendy.sh"
+	RefusalCheckFailed   = "AGENT_CHECK_FAILED"
+	RefusalUpdatesPaused = "AGENT_UPDATES_PAUSED"
+	RefusalMetaReason    = "reason"
+)

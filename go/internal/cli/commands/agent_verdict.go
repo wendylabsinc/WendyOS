@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/status"
 )
 
 // agentVerdict is the agent supervisor's word on one uploaded agent.
@@ -194,4 +197,19 @@ func keptAcrossOSUpdate(resp *agentpb.GetAgentVersionResponse, sha string) (mess
 		return "", false
 	}
 	return fmt.Sprintf("Your --binary agent (version %s) was kept across the OS update.", resp.GetVersion()), true
+}
+
+// agentRefusal reads why the device turned an upload down from the status
+// detail, which does not change when either side rewords its message.
+func agentRefusal(s *status.Status) (reason, cause string) {
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == supervisor.RefusalDomain {
+			cause = info.GetMetadata()[supervisor.RefusalMetaReason]
+			if cause == "" {
+				cause = s.Message()
+			}
+			return info.GetReason(), cause
+		}
+	}
+	return "", ""
 }

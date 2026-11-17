@@ -12,8 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -113,10 +115,10 @@ func refuseUpdates() error {
 		return nil
 	}
 	if reason := supervisor.PausedReason(supervisorStatusPath); reason != "" {
-		return status.Error(codes.FailedPrecondition, reason)
+		return refusal(supervisor.RefusalUpdatesPaused, reason, "")
 	}
 	if trialInProgress() {
-		return status.Error(codes.FailedPrecondition, "an agent update is being verified; retry in a few minutes")
+		return refusal(supervisor.RefusalUpdatesPaused, "an agent update is being verified; retry in a few minutes", "")
 	}
 	return nil
 }
@@ -157,7 +159,7 @@ func stageForSupervisor(ctx context.Context, tmpFile *os.File, tmpPath, inbox, s
 	}
 	if err := runSupervisorCheck(ctx, staged, sha); err != nil {
 		os.Remove(staged)
-		return status.Errorf(codes.FailedPrecondition, "new agent failed its checks: %v", err)
+		return refusal(supervisor.RefusalCheckFailed, fmt.Sprintf("new agent failed its checks: %v", err), err.Error())
 	}
 	if err := supervisor.WriteIncoming(inbox, supervisor.Incoming{SHA256: sha, RemoteVia: via, Explicit: true}); err != nil {
 		os.Remove(staged)
@@ -246,4 +248,18 @@ func supervisionUpdate(u supervisor.UpdateState) agentpb.AgentUpdateState {
 		return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_REJECTED
 	}
 	return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_UNSPECIFIED
+}
+
+// refusal names why an upload was turned down in a form a client can match;
+// the message stays for people and for clients that predate the detail.
+func refusal(reason, message, cause string) error {
+	st := status.New(codes.FailedPrecondition, message)
+	info := &errdetails.ErrorInfo{Reason: reason, Domain: supervisor.RefusalDomain}
+	if cause != "" {
+		info.Metadata = map[string]string{supervisor.RefusalMetaReason: cause}
+	}
+	if detailed, err := st.WithDetails(info); err == nil {
+		st = detailed
+	}
+	return st.Err()
 }

@@ -9,7 +9,9 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -352,5 +354,35 @@ func TestConfirmAgentAfterRestartOutlastsAFailedFirstReconnect(t *testing.T) {
 	dials = 0
 	if _, err := confirmAgentAfterRestart(context.Background(), false, reconnect, "new", &out); err == nil {
 		t.Fatal("a device without the supervisor has no deadline to wait for: the failed reconnect is final")
+	}
+}
+
+// The CLI and the device are often on different releases: the reason detail,
+// not the wording, says what the device did.
+func TestAgentUpdateTerminalErrorReadsTheReasonNotTheWording(t *testing.T) {
+	refusal := func(reason, message, cause string) error {
+		info := &errdetails.ErrorInfo{Reason: reason, Domain: supervisor.RefusalDomain}
+		if cause != "" {
+			info.Metadata = map[string]string{supervisor.RefusalMetaReason: cause}
+		}
+		st, err := status.New(codes.FailedPrecondition, message).WithDetails(info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Err()
+	}
+	var refused *agentCheckRefusedError
+	err := agentUpdateTerminalError(refusal(supervisor.RefusalCheckFailed, "reworded: the upload did not pass", "not an ELF binary"))
+	if !errors.As(err, &refused) || refused.reason != "not an ELF binary" {
+		t.Fatalf("a reworded check refusal must still be one, got %v", err)
+	}
+	var paused *agentUpdatesPausedError
+	err = agentUpdateTerminalError(refusal(supervisor.RefusalUpdatesPaused, "reworded: updates wait for the OS check", ""))
+	if !errors.As(err, &paused) {
+		t.Fatalf("a reworded pause must still be one, got %v", err)
+	}
+	err = agentUpdateTerminalError(status.Error(codes.FailedPrecondition, "something else went wrong"))
+	if errors.As(err, &refused) || errors.As(err, &paused) {
+		t.Fatalf("a status without the detail or the known wording is a plain failure, got %v", err)
 	}
 }

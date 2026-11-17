@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -418,5 +419,17 @@ func TestSupervisionMapsEveryStatusWord(t *testing.T) {
 		if got := supervisionUpdate(in); got != want {
 			t.Errorf("update state %q: want %v, got %v", in, want, got)
 		}
+	}
+}
+
+func TestRefusalCarriesAReasonAClientCanMatch(t *testing.T) {
+	st, _ := status.FromError(refusal(supervisor.RefusalCheckFailed, "new agent failed its checks: not an ELF binary", "not an ELF binary"))
+	if st.Code() != codes.FailedPrecondition || len(st.Details()) != 1 {
+		t.Fatalf("status = %v with %d details", st.Code(), len(st.Details()))
+	}
+	info, ok := st.Details()[0].(*errdetails.ErrorInfo)
+	if !ok || info.GetReason() != supervisor.RefusalCheckFailed || info.GetDomain() != supervisor.RefusalDomain ||
+		info.GetMetadata()[supervisor.RefusalMetaReason] != "not an ELF binary" {
+		t.Fatalf("detail = %+v", st.Details()[0])
 	}
 }
