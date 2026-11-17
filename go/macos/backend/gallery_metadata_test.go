@@ -1,7 +1,9 @@
 package backend
 
 import (
+	"context"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"slices"
 	"testing"
 )
@@ -57,5 +59,25 @@ func TestGalleryContentBadgesUsePayloads(t *testing.T) {
 	}
 	if got := galleryContentKinds(data.Manifest{Files: []data.File{{Path: "cameras/c/index.jsonl"}}}); len(got) != 0 {
 		t.Fatalf("invented content: %v", got)
+	}
+}
+
+func TestGalleryMediaReadsManifestWithoutDownloadingEvents(t *testing.T) {
+	b := New()
+	defer b.galleryReset(true)
+	// This client supports Inspect only: any attempt to download events fails the test.
+	client := &campaignClipClient{manifests: map[string]data.Manifest{
+		"episode": {ID: "episode", Files: []data.File{{Path: "events.jsonl", Size: 100}, {Path: "camera/part.mp4"}}},
+		"wrong":   {ID: "different"},
+	}}
+	b.connectTarget = func(context.Context, string) (*grpcclient.AgentConnection, liteConnection, error) {
+		return &grpcclient.AgentConnection{DataService: client}, nil, nil
+	}
+	result, err := b.GalleryMediaAt("device", "episode")
+	if err != nil || !result.Complete || !slices.Contains(result.ContentKinds, "Video") || len(result.Types) != 0 || len(result.Labels) != 0 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if _, err := b.GalleryMediaAt("device", "wrong"); err == nil {
+		t.Fatal("accepted mismatched manifest")
 	}
 }
