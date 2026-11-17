@@ -2,12 +2,36 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import SafariServices
+#if targetEnvironment(simulator) && DEBUG
+import UniformTypeIdentifiers
+#endif
 
 struct BrowserSheet: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
     func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
+
+#if targetEnvironment(simulator) && DEBUG
+struct SimulatorSignInLink: View {
+    let url: URL
+    @State private var copied = false
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Button(copied ? "Copy sign-in link again" : "Copy sign-in link for Mac") {
+                UIPasteboard.general.setItems([[UTType.url.identifier: url, UTType.utf8PlainText.identifier: url.absoluteString]],
+                                              options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(300)])
+                copied = true
+            }
+            Text(copied ? "Paste in Safari on your Mac. Keep Wendy open." : "Use your Mac or iPhone passkey in Safari on your Mac.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity).padding(10).background(.bar)
+    }
+}
+#endif
+
 private final class VideoHostView: UIView {
     let displayLayer = AVSampleBufferDisplayLayer()
     override init(frame: CGRect) {

@@ -1,0 +1,93 @@
+name: PR checks
+
+# Always report the existing required context, including for docs-only PRs.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  shared-grpc-api-contracts:
+    name: Shared gRPC API contracts
+    # The unified check regenerates both Go and Swift with the existing tools.
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-macos-ci
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: '26.3'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+          pr_comment: false
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: '34.0'
+          repo-token: ${{ github.token }}
+      - name: Install pinned Go generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+      - name: Check shared gRPC API contracts
+        run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
+
+  go-tests:
+    name: Go unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Check whether Go tests apply
+        id: scope
+        shell: bash
+        run: |
+          git diff --name-only -z HEAD^1 HEAD > "$RUNNER_TEMP/pr-files"
+          python3 - <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import os
+          from pathlib import Path
+          paths = Path(os.environ['RUNNER_TEMP'], 'pr-files').read_bytes().split(b'\0')
+          prefixes = (b'go/', b'Proto/', b'.github/actions/setup-go-ci/')
+          files = (b'go.mod', b'go.sum', b'.github/workflows/pr-checks.yml')
+          relevant = any(path.startswith(prefixes) or path in files for path in paths)
+          print(f'go={str(relevant).lower()}')
+          PYTHON
+      - name: Set up Go
+        if: steps.scope.outputs.go == 'true'
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: pr-unit
+      - name: Install system dependencies
+        if: steps.scope.outputs.go == 'true'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+      - name: Run short Go unit tests
+        if: steps.scope.outputs.go == 'true'
+        working-directory: go
+        run: go test -short -vet=off -count=1 -timeout 300s ./...
+      - name: Run short Babel unit tests
+        if: steps.scope.outputs.go == 'true'
+        working-directory: go/babel
+        run: go test -short -vet=off -count=1 -timeout 300s ./...

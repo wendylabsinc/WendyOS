@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -94,7 +95,7 @@ func DesktopEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 	auth, ok := cfg.ContextByName(account)
 	if !ok || len(auth.Certificates) == 0 || auth.OrganizationKey() != organization {
-		return nil, errors.New("this organization account is no longer available; sign in and choose it again")
+		return nil, failure.Wrap(errors.New("this organization account is no longer available; sign in and choose it again"), failure.AuthenticationRequired, failure.SignIn)
 	}
 	if err := ensureFreshCertificateFn(ctx, auth); err != nil {
 		return nil, fmt.Errorf("sign in to this organization again: %w", err)

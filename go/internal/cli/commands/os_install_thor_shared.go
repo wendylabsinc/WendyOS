@@ -471,14 +471,14 @@ func printThorBadStateHint(w io.Writer) {
 		"Plug the Thor into a monitor and power-cycle it.",
 		"If the screen shows " + thorHintEmph.Render("UEFI") + ", the Thor is in a bad state.",
 		"",
-		"Attach a USB keyboard and type these two commands exactly:",
-		"",
-		thorHintCmd.Render("  " + cmdA),
-		thorHintCmd.Render("  " + cmdB),
+		"Attach a USB keyboard and type the two commands below exactly.",
 		"",
 		"Then power-cycle again, re-enter recovery mode, and re-run the flash.",
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
+	fmt.Fprintln(w, "\nIn the UEFI shell:")
+	fmt.Fprintln(w, cmdA)
+	fmt.Fprintln(w, cmdB)
 }
 
 // printThorGadgetUnreachableHint is a calm note for a flash that never wrote data.
@@ -503,41 +503,47 @@ func wendyPackagedRule(name string) bool {
 	return false
 }
 
-// linuxUSBAccessStep is the one sentence a Linux user sees when the OS refuses
-// wendy the board over USB. With the package, the rules already cover the user
-// at this computer's desktop, so what is left is plugdev for other logins
-// (SSH, headless). Without it there are no rules, and the package is the fix.
-func linuxUSBAccessStep(device string, packaged bool) string {
+// linuxUSBAccessHint keeps the remedy's command separate from the boxed prose.
+func linuxUSBAccessHint(device string, packaged bool) (string, string) {
 	if packaged {
-		return "Your user can't open the " + device + " over USB from this login; run " +
-			"sudo usermod -aG plugdev $USER and log in again, or run the same command with sudo."
+		return "Your user can't open the " + device + " over USB from this login.\nAdd your user to plugdev with the command below and log in again.\nOr run the same command with sudo.",
+			"Add your user to plugdev:\nsudo usermod -aG plugdev $USER"
 	}
-	return "This wendy was installed without its package, so it can't open the " + device +
-		" over USB; install the package with " + cliupdate.InstallCommand("linux") +
-		", or run the same command with sudo."
+	return "This wendy was installed without its package.\nIt can't open the " + device + " over USB from this login.\nInstall the package with the command below.\nOr run the same command with sudo.",
+		"Install the Wendy CLI package:\n" + cliupdate.InstallCommand("linux")
 }
 
 // usbAccessHintBox explains how to regain USB access to the Jetson when the OS
 // refuses to open it: on Linux, the packaged rules or plugdev; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it).
 func usbAccessHintBox() string {
-	return thorHintBorder.Render(strings.Join(usbAccessHintLines(runtime.GOOS), "\n"))
+	return renderUSBAccessHint(runtime.GOOS, wendyPackagedRule("70-wendy-jetson.rules"))
+}
+
+func renderUSBAccessHint(goos string, packaged bool) string {
+	hint := thorHintBorder.Render(strings.Join(usbAccessHintLines(goos, packaged), "\n"))
+	if goos == "linux" {
+		_, commands := linuxUSBAccessHint("Jetson", packaged)
+		hint += "\n\n" + commands
+	}
+	return hint
 }
 
 // usbAccessHintLines builds the body of the USB-access-denied hint for the given
 // GOOS. Split out from usbAccessHintBox so both OS branches are testable without
 // depending on the runner's platform.
-func usbAccessHintLines(goos string) []string {
+func usbAccessHintLines(goos string, packaged bool) []string {
 	lines := []string{
 		thorHintTitle.Render("⚠  USB access denied"),
 		"",
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
 	if goos == "linux" {
+		step, _ := linuxUSBAccessHint("Jetson", packaged)
 		return []string{
 			thorHintTitle.Render("⚠  USB access denied"),
 			"",
-			linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")),
+			step,
 		}
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own

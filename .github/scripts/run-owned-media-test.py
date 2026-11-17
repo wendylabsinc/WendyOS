@@ -39,7 +39,25 @@ while True:
 '''
 
 
-def run(command, timeout, *, cwd=None, env=None, stdout=None):
+def group_has_live_children(group):
+    """Keep the grace period only while non-zombie descendants remain.
+
+    The unreaped guardian still pins the group while ps runs and until the final
+    kill. An unavailable process inventory conservatively keeps the full grace.
+    """
+    try:
+        listing = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="],
+                                 check=True, capture_output=True, text=True, timeout=.5)
+        for line in listing.stdout.splitlines():
+            pid, pgid, state = line.split()
+            if int(pgid) == group and int(pid) != group and not state.startswith("Z"):
+                return True
+        return False
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return True
+
+
+def run(command, timeout, *, cwd=None, env=None, stdout=None, stderr=None):
     stopped = 0
 
     def stop(signum, frame):
@@ -57,7 +75,7 @@ def run(command, timeout, *, cwd=None, env=None, stdout=None):
         guardian = subprocess.Popen([sys.executable, "-c", GUARDIAN, str(write_fd), *command],
                                     start_new_session=True, pass_fds=(write_fd,),
                                     cwd=cwd, env=env, stdout=stdout,
-                                    stderr=subprocess.STDOUT if stdout is not None else None)
+                                    stderr=stderr if stderr is not None else (subprocess.STDOUT if stdout is not None else None))
         os.close(write_fd)
         write_fd = None
         os.set_blocking(read_fd, False)
@@ -102,7 +120,7 @@ def run(command, timeout, *, cwd=None, env=None, stdout=None):
             # The leader is deliberately not reaped, even if TERM killed it.
             # Give children a bounded grace period before the final group signal.
             deadline = time.monotonic() + 3
-            while time.monotonic() < deadline:
+            while time.monotonic() < deadline and group_has_live_children(guardian.pid):
                 time.sleep(min(0.05, max(0, deadline - time.monotonic())))
             try:
                 os.killpg(guardian.pid, signal.SIGKILL)
