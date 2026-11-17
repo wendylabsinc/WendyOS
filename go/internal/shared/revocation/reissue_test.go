@@ -149,3 +149,24 @@ func TestPEMCRLValidation(t *testing.T) {
 		t.Fatal("PEM bypassed signature verification")
 	}
 }
+
+// A valid but nearly expired or already expired response must not turn the
+// successful-refresh path into a rapid download loop either.
+func TestRefreshCadenceBounds(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name            string
+		remaining, want time.Duration
+	}{
+		{"long lived", 4 * time.Hour, 5 * time.Minute},
+		{"near expiry", 10 * time.Second, 30 * time.Second},
+		{"expired", -time.Hour, 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			crl := &x509.RevocationList{NextUpdate: now.Add(tc.remaining)}
+			if got := refreshAfter(crl, now); got != tc.want {
+				t.Fatalf("refresh in %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

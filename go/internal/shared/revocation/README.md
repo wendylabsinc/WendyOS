@@ -35,7 +35,9 @@ still refused when a known CRL from their issuer lists them.
 
 - Fetch. The first check of an issuer registers the certificate's distribution
   URLs. A process worker refreshes them every five minutes, or halfway to
-  `NextUpdate` when sooner, and retries failures with exponential backoff from 30 seconds to one hour.
+  `NextUpdate` when sooner, with a 30-second minimum. Already expired CRLs
+  use the five-minute interval. Failures use exponential backoff from
+  30 seconds to one hour.
   Failed fetches and rejected CRLs are logged at most once an hour per URL.
   Public Web PKI chains on the Cloud endpoint use standard TLS verification
   without registering their distribution URLs with this full-CRL manager. A check
