@@ -467,10 +467,11 @@ type StartOptions struct {
 }
 
 type EpisodeInfo struct {
-	ID               string `json:"id"`
-	Name             string `json:"name,omitempty"`
-	State            string `json:"state"`
-	StartedUnixNanos int64  `json:"started_unix_nanos"`
-	SizeBytes        int64  `json:"size_bytes"`
-	BootID           string `json:"boot_id"`
+	ContentTypes     []string `json:"content_types"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name,omitempty"`
+	State            string   `json:"state"`
+	StartedUnixNanos int64    `json:"started_unix_nanos"`
+	SizeBytes        int64    `json:"size_bytes"`
+	BootID           string   `json:"boot_id"`
 }

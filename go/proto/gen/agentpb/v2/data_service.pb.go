@@ -738,8 +738,13 @@ type DataEpisode struct {
 	// How long it has captured, measured on the device's CLOCK_BOOTTIME so a
 	// wrong wall clock cannot distort it. It stops growing when capture stops.
 	DurationNanos int64 `protobuf:"varint,10,opt,name=duration_nanos,json=durationNanos,proto3" json:"duration_nanos,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Finalized payload categories derived from manifest files, not requested sources.
+	// Stable values: video, image, audio, device_stats, events, robot_data.
+	ContentTypes []string `protobuf:"bytes,11,rep,name=content_types,json=contentTypes,proto3" json:"content_types,omitempty"`
+	// Distinguishes an empty summary from an older agent or an unfinished episode.
+	ContentTypesKnown bool `protobuf:"varint,12,opt,name=content_types_known,json=contentTypesKnown,proto3" json:"content_types_known,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DataEpisode) Reset() {
@@ -840,6 +845,20 @@ func (x *DataEpisode) GetDurationNanos() int64 {
 		return x.DurationNanos
 	}
 	return 0
+}
+
+func (x *DataEpisode) GetContentTypes() []string {
+	if x != nil {
+		return x.ContentTypes
+	}
+	return nil
+}
+
+func (x *DataEpisode) GetContentTypesKnown() bool {
+	if x != nil {
+		return x.ContentTypesKnown
+	}
+	return false
 }
 
 type DataStatusResponse struct {
@@ -2124,7 +2143,7 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x13DataDownloadRequest\x12\x18\n" +
 	"\aepisode\x18\x01 \x01(\tR\aepisode\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\xba\x02\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\x8f\x03\n" +
 	"\vDataEpisode\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -2137,7 +2156,9 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\rcampaign_name\x18\b \x01(\tR\fcampaignName\x12\x18\n" +
 	"\asources\x18\t \x03(\tR\asources\x12%\n" +
 	"\x0eduration_nanos\x18\n" +
-	" \x01(\x03R\rdurationNanos\"\xc9\x01\n" +
+	" \x01(\x03R\rdurationNanos\x12#\n" +
+	"\rcontent_types\x18\v \x03(\tR\fcontentTypes\x12.\n" +
+	"\x13content_types_known\x18\f \x01(\bR\x11contentTypesKnown\"\xc9\x01\n" +
 	"\x12DataStatusResponse\x12<\n" +
 	"\x06active\x18\x01 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06active\x12E\n" +
 	"\vin_progress\x18\x02 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\n" +

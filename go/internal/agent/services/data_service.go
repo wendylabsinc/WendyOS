@@ -797,7 +797,7 @@ func manifestEpisode(m data.Manifest) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: m.ID, Name: m.Name, State: m.State, StartedUnixNanos: m.StartedUnixNanos, BootId: m.BootID}
 }
 func infoEpisode(e data.EpisodeInfo) *agentpbv2.DataEpisode {
-	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID}
+	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID, ContentTypes: e.ContentTypes, ContentTypesKnown: true}
 }
 func inProgressEpisode(e data.InProgressEpisode) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID,
