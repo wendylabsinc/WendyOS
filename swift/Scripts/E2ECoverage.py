@@ -83,8 +83,16 @@ def agent_control(path, operation, directory=""):
 
 def profile(native_dirs, destination, source):
     for native in native_dirs:
-        if not list(native.glob("covmeta.*")) or not list(native.glob("covcounters.*")):
+        metadata = {path.name.removeprefix("covmeta.") for path in native.glob("covmeta.*")}
+        counters = {path.name.split(".")[1] for path in native.glob("covcounters.*")}
+        if not metadata or not counters:
             raise RuntimeError("Missing native Go metadata/counters: " + str(native))
+        # covdata can silently ignore counters whose binary's metadata is gone,
+        # shrinking a mixed CLI/Agent denominator. Require every binary's pair.
+        if counters - metadata:
+            raise RuntimeError("Missing native Go metadata for counters: " + str(native))
+        if metadata - counters:
+            raise RuntimeError("Missing native Go counters for metadata: " + str(native))
     destination.mkdir(parents=True, exist_ok=True)
     # Temporary derived data avoids overwriting native files, even on reruns.
     with tempfile.TemporaryDirectory(prefix="merge-", dir=destination) as merged:
@@ -127,6 +135,7 @@ def check_cli_counters(native):
 
 
 def run_tests(run, filters, control):
+    run = run.resolve()
     source = json.loads((run / "coverage/source.json").read_text())
     source["binaries"] = {}
     for role in source["packages"]:
@@ -163,7 +172,7 @@ def run_tests(run, filters, control):
             # Export before parsing results, including nonzero/crashed test
             # processes. The Agent is still alive and test-owned cleanup ended.
             if receipt.exists():
-                test_dir = Path(receipt.read_text())
+                test_dir = Path(receipt.read_text()).resolve()
                 native = test_dir / "coverage/go"
                 record["directory"] = str(test_dir.relative_to(run))
                 if control:
@@ -199,6 +208,7 @@ def run_tests(run, filters, control):
 
 
 def report(repo, run, html=False, control=None):
+    run = run.resolve()
     source = json.loads((run / "coverage/source.json").read_text())
     records = json.loads((run / "coverage/tests.json").read_text())
     errors, natives = [], []
@@ -213,14 +223,14 @@ def report(repo, run, html=False, control=None):
     if records and records[-1]["status"] == "incomplete":
         receipt = run / "coverage/current-test.txt"
         if receipt.exists():
-            test_dir = Path(receipt.read_text())
-            records[-1]["directory"] = str(test_dir.relative_to(run))
-            if control and not records[-1].get("agentExported"):
-                try:
+            try:
+                test_dir = Path(receipt.read_text()).resolve()
+                records[-1]["directory"] = str(test_dir.relative_to(run))
+                if control and not records[-1].get("agentExported"):
                     agent_control(control, "export", test_dir / "coverage/go")
                     records[-1]["agentExported"] = True
-                except Exception as error:
-                    errors.append(str(error))
+            except Exception as error:
+                errors.append(str(error))
     for record in records:
         if record["sourceID"] != source["sourceID"]:
             errors.append("Incompatible source identity: " + record["test"])

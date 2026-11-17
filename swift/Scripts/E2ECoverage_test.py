@@ -222,6 +222,70 @@ func main() {
         self.assertEqual(coverage.report(self.repo, run), 1)
         self.assertEqual(json.loads((run / "attempt.json").read_text())["exitStatus"], 1)
 
+    def test_receipt_alias_collects_and_finalizes_real_native_evidence(self):
+        run = self.attempt_for_test()
+        alias = self.repo / "receipt-alias"
+        alias.symlink_to(run, target_is_directory=True)
+        native = run / "observations/suite/test/coverage/go"
+        native.mkdir(parents=True)
+        def swift_test(args, env):
+            Path(env["WENDY_E2E_COVERAGE_RECEIPT"]).write_text(str(alias / "observations/suite/test"))
+            self.assertEqual(self.invoke(native, "left"), 0)
+            Path(args[-1]).write_text('<testsuite><testcase name="fixture"/></testsuite>')
+            return 0
+        with self.listed_tests("fixture/test()"), mock.patch.object(coverage.subprocess, "call", side_effect=swift_test):
+            self.assertEqual(coverage.run_tests(run, ["fixture"], None), 0)
+        self.assertEqual(coverage.report(self.repo, run), 0)
+        records = json.loads((run / "coverage/tests.json").read_text())
+        self.assertEqual(records[0]["directory"], "observations/suite/test")
+        # Simulate interruption before the runner saved the receipt's directory.
+        records[0]["status"] = "incomplete"
+        del records[0]["directory"]
+        coverage.write_json(run / "coverage/tests.json", records)
+        self.assertEqual(coverage.report(self.repo, run), 1)
+        summary = json.loads((run / "coverage/summary.json").read_text())
+        self.assertEqual(summary["status"], "incomplete")
+        self.assertGreater(summary["summary"]["statements"], 0)
+        # A bad receipt must still produce the incomplete summary, not abort it.
+        (run / "coverage/current-test.txt").write_text(str(self.repo / "outside-attempt"))
+        self.assertEqual(coverage.report(self.repo, run), 1)
+        self.assertTrue(json.loads((run / "coverage/summary.json").read_text())["errors"])
+
+    def test_missing_one_binary_metadata_cannot_shrink_a_mixed_profile(self):
+        run = self.attempt_for_test()
+        native = run / "observations/suite/test/coverage/go"
+        native.mkdir(parents=True)
+        # Both executables really run and write into one native test directory.
+        self.assertEqual(self.invoke(native, "left"), 0)
+        cli_metadata = set(native.glob("covmeta.*"))
+        result = subprocess.run([str(self.repo / "wendy-agent")], input="right\n", text=True,
+                                env=dict(os.environ, GOCOVERDIR=str(native)), capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        agent_metadata, = set(native.glob("covmeta.*")) - cli_metadata
+        record = {"test": "fixture/test()", "sourceID": self.source["sourceID"],
+                  "status": "collected", "directory": "observations/suite/test"}
+        coverage.write_json(run / "coverage/tests.json", [record])
+        self.assertEqual(coverage.report(self.repo, run), 0)
+        complete = json.loads((run / "coverage/summary.json").read_text())
+        self.assertIn("example.test/coverage/go/cmd/wendy-agent", complete["summary"]["packages"])
+        content = agent_metadata.read_bytes()
+        agent_metadata.unlink()
+        self.assertTrue(cli_metadata <= set(native.glob("covmeta.*")))
+        with self.assertRaisesRegex(RuntimeError, "Missing native Go metadata for counters"):
+            coverage.profile([native], run / "derived", self.source)
+        self.assertEqual(coverage.report(self.repo, run), 1)
+        incomplete = json.loads((run / "coverage/summary.json").read_text())
+        self.assertEqual(incomplete["status"], "incomplete")
+        self.assertNotIn("summary", incomplete)
+        self.assertFalse((run / "coverage/coverage.out").exists())
+        self.assertEqual(json.loads((run / "attempt.json").read_text())["exitStatus"], 1)
+        # Also reject the inverse: metadata with all its counters missing.
+        agent_metadata.write_bytes(content)
+        for path in native.glob("covcounters." + agent_metadata.name.removeprefix("covmeta.") + ".*"):
+            path.unlink()
+        with self.assertRaisesRegex(RuntimeError, "Missing native Go counters for metadata"):
+            coverage.profile([native], run / "derived", self.source)
+
     def test_incompatible_source_and_timeout_are_incomplete(self):
         run = self.attempt_for_test()
         coverage.write_json(run / "coverage/tests.json", [])
