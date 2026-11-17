@@ -27,15 +27,15 @@ def job_condition(text, job):
     return " ".join(match[1].split()).removeprefix("${{").removesuffix("}}").strip()
 
 
-def evaluate(condition, results, attempt, event, run_cancelled=False, coverage=False):
+def evaluate(condition, results, attempt, event, run_cancelled=False, quiet=False):
     """Translate the small expression subset these gates use into Python."""
     python = re.sub(r"contains\(needs\.\*\.result, ('\w+')\)", r"(\1 in results)", condition)
     python = python.replace("always()", "True").replace("cancelled()", "run_cancelled")
     python = python.replace("github.run_attempt", "attempt").replace("github.event_name", "event")
-    python = python.replace("inputs.coverage", "coverage")
+    python = python.replace("inputs.quiet", "quiet")
     python = python.replace("&&", " and ").replace("||", " or ")
     python = re.sub(r"!(?!=)", " not ", python)
-    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled, "coverage": coverage}
+    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled, "quiet": quiet}
     return bool(eval(python, {"__builtins__": {}}, names))
 
 
@@ -64,6 +64,8 @@ class GateTests(unittest.TestCase):
             ("green second attempt on main", ("skipped", "success"), "2", "push", (True, False)),
             ("green dispatch", ("skipped", "success"), "1", "workflow_dispatch", (True, False)),
             ("failed dispatch", ("skipped", "failure"), "1", "workflow_dispatch", (True, False)),
+            ("green reusable caller", ("skipped", "success"), "1", "workflow_call", (False, True)),
+            ("failed reusable caller", ("skipped", "failure"), "1", "workflow_call", (True, False)),
             ("all skipped on a PR", ("skipped", "skipped"), "1", "pull_request", (False, False)),
             ("all skipped on main", ("skipped", "skipped"), "1", "push", (False, False)),
             ("all skipped dispatch", ("skipped", "skipped"), "1", "workflow_dispatch", (True, False)),
@@ -78,13 +80,35 @@ class GateTests(unittest.TestCase):
             with self.subTest(results):
                 self.assertEqual(self.started(results, run_cancelled=True), (False, False))
 
-    def test_coverage_never_runs_analysis_or_notifications(self):
+    def test_quiet_diagnostics_never_run_analysis_or_notifications(self):
         for results, attempt, event in itertools.product(
             itertools.product(("success", "failure", "cancelled", "skipped"), repeat=2),
             ("1", "2"), ("workflow_dispatch", "workflow_call", "push")
         ):
             for condition in (self.analyze, self.passed):
-                self.assertFalse(evaluate(condition, results, attempt, event, coverage=True))
+                self.assertFalse(evaluate(condition, results, attempt, event, quiet=True))
+
+    def test_coverage_is_unconditional_for_the_only_active_ci_route(self):
+        ubuntu = self.text.split("  swift-e2e-local-ubuntu:\n", 1)[1].split("\n  # Physical/future route ledger.", 1)[0]
+        self.assertIn("coverage: 'true'", ubuntu)
+        self.assertNotIn("inputs.coverage", self.text)
+        self.assertNotRegex(self.text, r"(?m)^      coverage:")
+        self.assertEqual(len(re.findall(r"(?m)^      quiet:\n(?:        .*\n)*?        default: false$", self.text)), 2)
+        self.assertIn("    if: false", self.text.split("  swift-e2e-local-ubuntu:", 1)[0])
+        build = WORKFLOW.with_name("build.yml").read_text()
+        self.assertIn("uses: ./.github/workflows/swift-e2e-tests.yml", build)
+        self.assertNotIn("quiet:", build)
+
+    def test_html_overview_is_rendered_before_raw_artifact_upload(self):
+        action = (WORKFLOW.parents[1] / "actions/swift-e2e-run/action.yml").read_text()
+        render = action.index("    - name: Render Swift E2E overview (Unix)")
+        upload = action.index("    - name: Upload Swift E2E run (Unix)")
+        self.assertLess(render, upload)
+        script = action[render:upload]
+        self.assertIn("!cancelled()", script)
+        self.assertIn("E2EAggregate.sh", script)
+        self.assertIn("E2EReport.sh", script)
+        self.assertNotIn("E2EReview", script)
 
     def test_every_run_starts_at_most_one_and_never_loses_a_finished_job(self):
         outcomes = ("success", "failure", "cancelled", "skipped")

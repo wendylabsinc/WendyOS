@@ -61,7 +61,9 @@ Repeat `--filter` to pass multiple test filters.
 
 ### Collect Go source coverage
 
-Coverage is opt-in. For example, collect two local CLI tests:
+Local coverage is opt-in. Every active Swift E2E CI run collects Go coverage,
+including manual dispatch and the reusable release/build caller. For example,
+collect two local CLI tests:
 
 ```bash
 bash Scripts/E2ETest.sh --coverage --no-managed-agent \
@@ -109,16 +111,28 @@ No data has no percentage. Collection errors fail the attempt while preserving
 the original test result. Timeouts and missing counters remain incomplete.
 Existing attempt IDs cannot be reused in coverage mode.
 
-HTML is generated only when requested, using the same source checkout:
+The existing E2E report overview displays the run's total Go statement coverage
+from `attempt.json`. Incomplete, no-data and uncollected results are labeled
+explicitly. Reports containing several attempts show “Multiple attempts” instead
+of averaging percentages. Existing per-test and command timings remain visible
+in both normal and coverage runs.
+
+A detailed Go source HTML view is generated only when requested, using the same
+source checkout:
 
 ```bash
 python3 Scripts/E2ECoverage.py report --run-dir /path/to/attempt --html
 ```
 
-The existing **Swift E2E Tests** workflow accepts `coverage: true` for a test-only
-Ubuntu run with its usual raw artifact upload. Coverage runs skip AI analysis,
-GitHub review comments and Slack notifications. Use selective `tests` filters for
-validation; the full suite includes operations unsuitable for shared machines.
+The **Swift E2E Tests** workflow always enables coverage on its active Ubuntu
+route. It renders the existing E2E HTML overview at `report/index.html` inside the
+raw run artifact, independently of AI analysis, including failed test runs.
+The `quiet` input defaults to false, preserving normal CI analysis and reporting;
+set `quiet: true` for diagnostic validation without AI, GitHub comments or Slack
+notifications. Omit `tests` to run all product specs on the isolated Ubuntu runner.
+Use selective `tests` filters on shared machines; the full suite includes
+operations unsuitable for them. Paused macOS, remote and Windows routes stay
+paused.
 
 Framework verification (real instrumented fixture binaries using the Agent hook,
 separate from product E2E assertions): `python3 Scripts/E2ECoverage_test.py -v`.

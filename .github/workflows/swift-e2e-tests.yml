@@ -3,8 +3,8 @@ name: Swift E2E Tests
 on:
   workflow_dispatch:
     inputs:
-      coverage:
-        description: 'Collect sequential Go source coverage (Ubuntu, no AI review or notifications)'
+      quiet:
+        description: 'Diagnostic run: skip AI review, GitHub comments and Slack notifications'
         type: boolean
         required: false
         default: false
@@ -26,7 +26,7 @@ on:
         default: ''
   workflow_call:
     inputs:
-      coverage:
+      quiet:
         type: boolean
         required: false
         default: false
@@ -170,7 +170,8 @@ jobs:
         with:
           tests: ${{ inputs.tests || '' }}
           target_id: local-ubuntu-24
-          coverage: ${{ inputs.coverage && 'true' || 'false' }}
+          # Every active CI execution measures Go source, including reusable callers.
+          coverage: 'true'
           runner_id: ubuntu-24-04
           cli_os: linux
           device_address: 127.0.0.1:50051
@@ -505,7 +506,7 @@ jobs:
     # green first attempt goes to swift-e2e-passed instead. .github/scripts/
     # swift_e2e_gate_test.py evaluates both conditions.
     if: >-
-      ${{ always() && !cancelled() && !inputs.coverage &&
+      ${{ always() && !cancelled() && !inputs.quiet &&
           (contains(needs.*.result, 'failure') ||
            contains(needs.*.result, 'cancelled') ||
            github.run_attempt != '1' ||
@@ -1202,7 +1203,7 @@ jobs:
     # it, a fixed failure's review comment and main's last Failed post would
     # outlive the failure.
     if: >-
-      ${{ always() && !cancelled() && !inputs.coverage &&
+      ${{ always() && !cancelled() && !inputs.quiet &&
           contains(needs.*.result, 'success') &&
           !contains(needs.*.result, 'failure') &&
           !contains(needs.*.result, 'cancelled') &&

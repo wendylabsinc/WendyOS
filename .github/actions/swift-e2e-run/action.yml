@@ -464,6 +464,21 @@ runs:
         & ./Scripts/E2ETest.ps1 @e2eArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    - name: Render Swift E2E overview (Unix)
+      if: ${{ !cancelled() && runner.os != 'Windows' && steps.swift-toolchain-unix.outcome == 'success' }}
+      shell: bash
+      env:
+        RUN_ID: ${{ steps.e2e-run-unix.outputs.run_id }}
+      run: |
+        set -euo pipefail
+        attempt_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
+        report_staging="${RUNNER_TEMP}/wendy-report/${RUN_ID}"
+        bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" "$attempt_dir"
+        reports=("$report_staging"/*)
+        [[ ${#reports[@]} -eq 1 && -d "${reports[0]}" ]]
+        bash swift/Scripts/E2EReport.sh --run-dir "${reports[0]}"
+        mv "${reports[0]}" "$attempt_dir/report"
+
     - name: Upload Swift E2E run (Unix)
       if: always() && runner.os != 'Windows'
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5

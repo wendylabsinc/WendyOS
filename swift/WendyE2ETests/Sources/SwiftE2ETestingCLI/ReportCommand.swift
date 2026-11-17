@@ -1174,6 +1174,13 @@ private func renderReport(
 
     let reviewHTML = renderRunAIReview(aiReviews.root)
     let targetOverview = try renderTargetOverview(buildTargetOverview(runURL: runURL, files: files))
+    let coverageAttempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
+    // Each attempt owns its source union. Several attempts require a native
+    // source merge; percentages must never be averaged into a run total.
+    let goCoverageTotal =
+        coverageAttempts.count > 1
+        ? "Multiple attempts"
+        : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
     let testCards = renderCards(files: files)
 
     template.replaceSubrange(
@@ -1189,6 +1196,7 @@ private func renderReport(
         "{{RUN_ID}}": runID(outputURL: outputURL),
         "{{REVIEW_AGGREGATE_LINK}}": renderReviewAggregateLink(runURL: runURL),
         "{{TARGET_OVERVIEW}}": targetOverview,
+        "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
         "{{TESTS_PASSED_COUNT}}": String(passed),
         "{{TESTS_FLAKED_COUNT}}": String(flaked),
         "{{TESTS_SKIPPED_COUNT}}": String(skipped),
