@@ -27,6 +27,12 @@ func newRebooter(logger *zap.Logger) rebooter {
 	}
 }
 
+// newArgumentRebooter is newRebooter: there is no argument to pass to a
+// restart that cannot happen.
+func newArgumentRebooter(logger *zap.Logger, _ string) rebooter {
+	return newRebooter(logger)
+}
+
 func rebootSystem() error {
 	return newRebooter(nil).reboot()
 }
