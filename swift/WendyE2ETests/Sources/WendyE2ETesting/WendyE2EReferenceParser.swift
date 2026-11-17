@@ -9,7 +9,7 @@ struct ReferenceSourceParser {
     }
 
     private let lines: [String]
-    private let lexicon: ReferenceSwiftLexicon
+    private let lexer: WendyE2EReferenceLexer
     private let path: String
 
     private var index: Int = 0
@@ -28,14 +28,14 @@ struct ReferenceSourceParser {
             separatedBy: .newlines
         )
         self.path = path
-        self.lexicon = ReferenceSwiftLexicon(source)
+        self.lexer = WendyE2EReferenceLexer(source)
     }
 
     mutating func parse() -> [WendyE2EReference.Document] {
         while index < lines.count {
             let line = lines[index]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let code = lexicon.codeLines[index].trimmingCharacters(in: .whitespaces)
+            let code = lexer.codeLines[index].trimmingCharacters(in: .whitespaces)
 
             if let documentation = parseDocumentationComment() {
                 pendingDocumentation = documentation
@@ -175,7 +175,7 @@ struct ReferenceSourceParser {
     private mutating func skipFunctionBody(startingAt functionLine: Int) {
         var depth = 0
         var foundBody = false
-        for token in lexicon.tokens where token.line >= functionLine {
+        for token in lexer.tokens where token.line >= functionLine {
             if token.text == "{" {
                 foundBody = true
                 depth += 1
@@ -192,7 +192,7 @@ struct ReferenceSourceParser {
     }
 
     private mutating func parseAttributeAvailability() -> StaticAvailability {
-        let tokens = lexicon.tokens
+        let tokens = lexer.tokens
         guard let start = tokens.firstIndex(where: { $0.line == index && $0.text == "@" }) else {
             index += 1
             return StaticAvailability()
@@ -216,7 +216,7 @@ struct ReferenceSourceParser {
             return StaticAvailability()
         }
         index = tokens[cursor].line + 1
-        return StaticAvailability(traits: Array(tokens[(opening + 1)..<cursor]), lexicon: lexicon)
+        return StaticAvailability(traits: Array(tokens[(opening + 1)..<cursor]), lexer: lexer)
     }
 
     private func parseSuiteTitle(from line: String) -> String? {
@@ -274,7 +274,7 @@ private struct StaticAvailability {
         self.reason = reason
     }
 
-    init(traits: [ReferenceSwiftLexicon.Token], lexicon: ReferenceSwiftLexicon) {
+    init(traits: [WendyE2EReferenceLexer.Token], lexer: WendyE2EReferenceLexer) {
         self.init()
         var depth = 0
         var start = 0
@@ -286,7 +286,7 @@ private struct StaticAvailability {
                     self = merging(
                         StaticAvailability(
                             state: conditional ? .conditional : .disabled,
-                            reason: lexicon.spelling(of: Array(traits[start..<cursor]))
+                            reason: lexer.spelling(of: Array(traits[start..<cursor]))
                         )
                     )
                 }

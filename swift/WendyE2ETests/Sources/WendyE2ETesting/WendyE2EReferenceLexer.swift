@@ -3,7 +3,8 @@ import Foundation
 /// A bounded lexical scan for the reference extractor, not a Swift syntax parser.
 /// Strings (including interpolation), quoted identifiers and comments are atomic:
 /// their punctuation must never participate in declaration/body balancing.
-struct ReferenceSwiftLexicon {
+// REFACTOR: Replace this custom Swift lexer with an established parser such as SwiftSyntax.
+struct WendyE2EReferenceLexer {
     struct Token {
         var text: String
         var line: Int
