@@ -339,6 +339,32 @@ func TestRunDoesNotRestartAnAgentThatMissesPingsWhileItAppliesAnUpdate(t *testin
 	h.eventually("it is restarted once the update is over", func() bool { p := h.status().PID; return p > 0 && p != pid })
 }
 
+func TestRunKeepsSettingsAddedAfterTheApprovalWhenTheGraceFails(t *testing.T) {
+	h := newHarness(t)
+	h.sup.cfg.TrialDeadline = 8 * time.Second
+	cfgDir := h.sup.cfg.SnapshotDirs[0].Path
+	os.MkdirAll(cfgDir, 0o700)
+	os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte("before"), 0o600)
+	h.sup.deps.Probe = func(context.Context, int, string) error {
+		os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte("trial wrote this"), 0o600)
+		return nil
+	}
+	sum := dropInInbox(t, h.store, "late", Incoming{Explicit: true, RemoteVia: "lan"})
+	t.Setenv(childBehaviorEnv(sum), "late-crash")
+	h.start()
+	h.eventually("it is approved early", func() bool { return h.status().UpdateState == UpdateApproved })
+	added := filepath.Join(cfgDir, "added-after-approval")
+	os.WriteFile(added, []byte("the user's new network"), 0o600)
+	h.eventually("its crashes reject it", func() bool { return h.state().IsRejected(sum, "build-1") })
+	h.eventually("the image agent runs again", func() bool { return h.status().Role == RoleImage })
+	if _, err := os.Stat(added); err != nil {
+		t.Fatalf("what was added after the reported approval must survive the rejection: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(cfgDir, "provisioning.json")); string(got) != "before" {
+		t.Fatalf("what the trial changed must still be restored, got %q", got)
+	}
+}
+
 func TestRunRejectsATrialThatKeepsCrashing(t *testing.T) {
 	h := newHarness(t)
 	// A crashing agent never passes the real probe; a long deadline leaves the

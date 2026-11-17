@@ -72,7 +72,13 @@ func snapshotDir(root string, dir SnapshotDir) error {
 
 // restore puts the snapshot back in place. Files are replaced one by one and
 // extras removed last, because the dirs are bind-mounted and can't be swapped.
+// confirmedMark in a snapshot says its trial was reported approved; what
+// appeared after that may be the user's, so a restore keeps it.
+const confirmedMark = ".confirmed"
+
 func restore(src string, dirs []SnapshotDir) error {
+	_, err := os.Stat(filepath.Join(src, confirmedMark))
+	keepAdded := err == nil
 	for _, dir := range dirs {
 		if len(dir.Only) == 0 {
 			from := filepath.Join(src, snapshotKey(dir.Path))
@@ -81,6 +87,9 @@ func restore(src string, dirs []SnapshotDir) error {
 			}
 			if err := copyTree(from, dir.Path); err != nil {
 				return err
+			}
+			if keepAdded {
+				continue
 			}
 			if err := removeExtras(dir.Path, from); err != nil {
 				return err
@@ -105,10 +114,12 @@ func restore(src string, dirs []SnapshotDir) error {
 			fi, err := os.Lstat(saved)
 			switch {
 			case errors.Is(err, os.ErrNotExist):
-				err = os.RemoveAll(live)
+				if err = nil; !keepAdded {
+					err = os.RemoveAll(live)
+				}
 			case err != nil:
 			default:
-				if err = copyTree(saved, live); err == nil && fi.IsDir() {
+				if err = copyTree(saved, live); err == nil && fi.IsDir() && !keepAdded {
 					err = removeExtras(live, saved)
 				}
 			}

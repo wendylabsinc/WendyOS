@@ -519,6 +519,12 @@ func (s *Supervisor) confirm(t *Trial) error {
 		return err
 	}
 	t.Confirmed, t.Build = true, st.Trial.Build
+	if !t.Revalidation {
+		mark := filepath.Join(s.cfg.Store.SnapshotDir(), t.SHA256, confirmedMark)
+		if err := os.WriteFile(mark, nil, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.deps.Log.Warn("cannot mark the config snapshot as confirmed", zap.Error(err))
+		}
+	}
 	s.deps.Log.Info("new agent passed its checks", zap.String("version", t.Version), zap.Bool("revalidation", t.Revalidation))
 	if !t.Revalidation {
 		s.setUpdate(UpdateApproved, t.SHA256, "")
