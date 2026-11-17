@@ -2,8 +2,13 @@
 """Evaluate the committed Swift E2E job conditions across real run shapes."""
 
 import itertools
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "swift-e2e-tests.yml"
@@ -104,6 +109,31 @@ class GateTests(unittest.TestCase):
 
     def test_report_command_reads_the_variable_the_workflow_sets(self):
         self.assertIn('environment["WENDY_E2E_REVIEW_OUTCOME"]', REPORT_COMMAND.read_text(encoding="utf-8"))
+
+    def test_host_setup_leaves_successful_attempt_creation_to_the_runner(self):
+        self.run_host_setup(0)
+
+    def test_host_setup_failure_preserves_its_artifact(self):
+        self.run_host_setup(23)
+
+    def run_host_setup(self, exit_status):
+        action = WORKFLOW.parents[1] / "actions/swift-e2e-run/action.yml"
+        block = action.read_text().split("    - name: Set up Swift E2E host (Unix)\n", 1)[1].split("\n    - name:", 1)[0]
+        script = textwrap.dedent(block.split("      run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory(prefix="swift-e2e-host-setup-") as directory:
+            root = Path(directory)
+            setup = root / "swift/Scripts/E2ESetup.sh"
+            setup.parent.mkdir(parents=True)
+            setup.write_text(f"echo real-setup-shell-receipt\nexit {exit_status}\n")
+            result = subprocess.run(["bash", "-c", script], cwd=root, capture_output=True, text=True,
+                                    env=dict(os.environ, RUNNER_TEMP=str(root / "runner-temp"), RUN_ID="test-attempt"))
+            self.assertEqual(result.returncode, exit_status, result.stderr)
+            run = root / "runner-temp/wendy/test-attempt"
+            if exit_status:
+                self.assertIn("real-setup-shell-receipt", (run / "attempt.log").read_text())
+                self.assertEqual(json.loads((run / "attempt.json").read_text())["exitStatus"], exit_status)
+            else:
+                self.assertFalse(run.exists(), "Successful setup must not precreate a coverage attempt")
 
 
 if __name__ == "__main__":

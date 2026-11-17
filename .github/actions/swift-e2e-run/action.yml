@@ -294,8 +294,10 @@ runs:
       run: |
         set -euo pipefail
         run_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
-        log_path="${run_dir}/attempt.log"
-        mkdir -p "$run_dir"
+        # Successful setup must leave the attempt directory for the runner to
+        # create; coverage refuses to overwrite an existing attempt's evidence.
+        log_path="${RUNNER_TEMP}/wendy-setup/${RUN_ID}.log"
+        mkdir -p "${log_path%/*}"
 
         set +e
         {
@@ -306,6 +308,8 @@ runs:
         set -e
 
         if [[ "$setup_status" -ne 0 ]]; then
+          mkdir -p "$run_dir"
+          cp "$log_path" "$run_dir/attempt.log"
           RUN_DIR="$run_dir" EXIT_STATUS="$setup_status" python3 - <<'PY'
         import json, os, time
         run_dir = os.environ["RUN_DIR"]
