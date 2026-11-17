@@ -91,13 +91,14 @@ def inline(workflow, index):
 
 
 class PolicyTests(unittest.TestCase):
-    def test_actual_generator_outputs_only(self):
-        for path in (GENERATED, SWIFT, 'go/proto/gen/agentpb/v2/service_grpc.pb.go',
+    def test_audited_generator_and_vendor_outputs_only(self):
+        for path in (GENERATED, SWIFT, 'vendor/important.go', 'go/proto/gen/agentpb/v2/service_grpc.pb.go',
                      'swift/WendyAgentCore/Sources/OpenTelemetryGRPC/Proto/logs.pb.swift',
                      'Examples/WendyNotify/Sources/WendyNotify/Generated/wendy_system_v1_notifications.pb.swift'):
             self.assertTrue(source.is_generated_path(path), path)
         for path in ('go/proto/gen/README.md', 'go/proto/gen/new.proto', 'go/proto/gen/go.sum',
-                     'go/proto/gen/generate.sh', 'go/go.sum', 'vendor/important.go',
+                     'go/proto/gen/generate.sh', 'go/go.sum', 'vendor/go.mod', 'vendor/modules.txt',
+                     'vendor/schema.proto', 'vendor/generate.go',
                      'untrusted/example.pb.go', 'swift/Sources/Untrusted/Proto/foo.pb.swift',
                      'Proto/cloud/tunnel.proto', 'go/scripts/generate-proto.sh',
                      'swift/Scripts/GenerateProto.sh', 'go/proto/service-protos.version',

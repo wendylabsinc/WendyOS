@@ -65,7 +65,7 @@ def unfenced_lines(body):
         yield index, line
 
 
-def parse(bodies):
+def parse(bodies, *, public_only=True):
     records = []
     for body in bodies:
         for _, line in unfenced_lines(body):
@@ -83,7 +83,7 @@ def parse(bodies):
                 records.append(json.loads(data))
             except (ValueError, TypeError, zlib.error) as error:
                 raise ReviewError("Invalid compatibility history marker") from error
-    return validate_records(records)
+    return validate_records(records, public_only=public_only)
 
 
 def current(result):
