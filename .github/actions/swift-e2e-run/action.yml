@@ -473,6 +473,7 @@ runs:
         set -euo pipefail
         attempt_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
         report_staging="${RUNNER_TEMP}/wendy-report/${RUN_ID}"
+        python3 swift/Scripts/E2ECoverage.py pack --run-dir "$attempt_dir"
         bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" "$attempt_dir"
         reports=("$report_staging"/*)
         [[ ${#reports[@]} -eq 1 && -d "${reports[0]}" ]]

@@ -12,8 +12,10 @@ import os
 from pathlib import Path
 import re
 import socket
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -81,7 +83,7 @@ def agent_control(path, operation, directory=""):
         return result["pid"]
 
 
-def profile(native_dirs, destination, source):
+def profile(native_dirs, destination, source, write_profile=True):
     for native in native_dirs:
         metadata = {path.name.removeprefix("covmeta.") for path in native.glob("covmeta.*")}
         counters = {path.name.split(".")[1] for path in native.glob("covcounters.*")}
@@ -115,7 +117,8 @@ def profile(native_dirs, destination, source):
         summary = totals.setdefault(package, {"statements": 0, "covered": 0})
         summary["statements"] += int(statements)
         summary["covered"] += int(statements) if int(count) > 0 else 0
-    (destination / "coverage.out").write_text("\n".join(lines) + "\n")
+    if write_profile:
+        (destination / "coverage.out").write_text("\n".join(lines) + "\n")
     statements = sum(p["statements"] for p in totals.values())
     covered = sum(p["covered"] for p in totals.values())
     return {"statements": statements, "covered": covered,
@@ -207,8 +210,13 @@ def run_tests(run, filters, control):
     return status
 
 
-def report(repo, run, html=False, control=None):
+def report(repo, run, html=False, control=None, per_test=False):
     run = run.resolve()
+    archive_path = run / "coverage/go-native.tar.gz"
+    if archive_path.exists():
+        with tarfile.open(archive_path, "r:gz") as archive:
+            if any(not (run / name).is_file() for name in archive.getnames()):
+                raise RuntimeError("Native evidence is archived. Unpack in the attempt directory: tar -xzf coverage/go-native.tar.gz")
     source = json.loads((run / "coverage/source.json").read_text())
     records = json.loads((run / "coverage/tests.json").read_text())
     errors, natives = [], []
@@ -256,7 +264,7 @@ def report(repo, run, html=False, control=None):
             check_cli_counters(native)
             if "agentPID" in record and not list(native.glob(f"covcounters.*.{record['agentPID']}.*")):
                 raise RuntimeError("Missing managed Agent counters: " + record["test"])
-            summary = profile([native], test_dir / "coverage", source)
+            summary = profile([native], test_dir / "coverage", source, write_profile=per_test)
             natives.append(native)
         except Exception as error:
             errors.append(str(error))
@@ -290,14 +298,76 @@ def report(repo, run, html=False, control=None):
     return 1 if errors else 0
 
 
+def pack(run):
+    """Prepare CI evidence using ordinary tar/gzip, retaining every native path."""
+    run = run.resolve()
+    if not run.is_dir():
+        raise RuntimeError("Attempt directory does not exist: " + str(run))
+    paths = sorted(p for p in run.glob("observations/*/*/coverage/go/*") if p.is_file())
+    paths += sorted(p for p in (run / "coverage/bootstrap").glob("*") if p.is_file())
+    archive_path = run / "coverage/go-native.tar.gz"
+    if paths:
+        if archive_path.exists():
+            raise RuntimeError("Native archive already exists; refusing to overwrite it")
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = archive_path.with_suffix(".partial")
+        hashes, metadata = {}, {}
+        with tarfile.open(temporary, "w:gz") as archive:
+            for path in paths:
+                name = str(path.relative_to(run))
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                hashes[name] = digest
+                info = archive.gettarinfo(str(path), arcname=name)
+                # Go repeats the same metadata for every test. Standard tar hard
+                # links preserve all paths while storing identical payloads once.
+                if path.name.startswith("covmeta.") and digest in metadata:
+                    info.type, info.linkname, info.size = tarfile.LNKTYPE, metadata[digest], 0
+                    archive.addfile(info)
+                else:
+                    with path.open("rb") as data:
+                        archive.addfile(info, data)
+                    if path.name.startswith("covmeta."):
+                        metadata[digest] = name
+        # Verify the recoverable bytes before removing any original native file.
+        with tarfile.open(temporary, "r:gz") as archive:
+            for name, digest in hashes.items():
+                if hashlib.sha256(archive.extractfile(name).read()).hexdigest() != digest:
+                    raise RuntimeError("Native archive verification failed: " + name)
+        temporary.rename(archive_path)
+        (run / "coverage/native.sha256").write_text("".join(f"{digest}  {name}\n" for name, digest in hashes.items()))
+        for path in paths:
+            path.unlink()
+        print(f"Packed {len(paths)} native files into {archive_path.stat().st_size} bytes: {archive_path}")
+    # Build hashes/settings are already captured in source.json. Executables and
+    # reproducible per-test full-source profiles are not upload evidence.
+    if (run / "coverage/bin").exists():
+        # A failed build can stop before run_tests records its binary identity.
+        source_path = run / "coverage/source.json"
+        source = json.loads(source_path.read_text()) if source_path.exists() else {}
+        binaries = source.setdefault("binaries", {})
+        changed = False
+        for binary in (run / "coverage/bin").iterdir():
+            if binary.is_file() and binary.name not in binaries:
+                info = subprocess.run(["go", "version", "-m", str(binary)], text=True, capture_output=True)
+                binaries[binary.name] = {"sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                                         "buildInfo": info.stdout, "buildInfoError": info.stderr}
+                changed = True
+        if changed:
+            write_json(source_path, source)
+        shutil.rmtree(run / "coverage/bin")
+    for path in run.glob("observations/*/*/coverage/coverage.out"):
+        path.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["prepare", "run", "report"])
+    parser.add_argument("operation", choices=["prepare", "run", "report", "pack"])
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--managed-agent", action="store_true")
     parser.add_argument("--control")
     parser.add_argument("--html", action="store_true")
+    parser.add_argument("--per-test", action="store_true", help="Also write reproducible per-test coverage.out profiles")
     parser.add_argument("--filter", action="append", default=[])
     args = parser.parse_args()
     args.repo = args.repo.resolve()
@@ -308,7 +378,10 @@ def main():
             return 0
         if args.operation == "run":
             return run_tests(args.run_dir, args.filter, args.control)
-        return report(args.repo, args.run_dir, args.html, args.control)
+        if args.operation == "pack":
+            pack(args.run_dir)
+            return 0
+        return report(args.repo, args.run_dir, args.html, args.control, args.per_test)
     except Exception as error:
         print("ERROR: E2E coverage:", error, file=sys.stderr)
         return 1

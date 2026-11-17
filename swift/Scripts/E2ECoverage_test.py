@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
 from unittest import mock
 
@@ -298,6 +299,81 @@ func main() {
         coverage.write_json(run / "coverage/source.json", self.source)
         (run / "timeout.json").write_text("{}")
         self.assertEqual(coverage.report(self.repo, run), 1)
+
+    def test_pack_preserves_native_paths_bytes_totals_and_on_demand_profiles(self):
+        run = self.attempt_for_test()
+        records, original = [], {}
+        for index, argument in enumerate(("left", "right")):
+            native = run / f"observations/suite/test-{index}/coverage/go"
+            native.mkdir(parents=True)
+            self.assertEqual(self.invoke(native, argument), 0)
+            original.update({str(path.relative_to(run)): path.read_bytes() for path in native.iterdir()})
+            records.append({"test": str(index), "sourceID": self.source["sourceID"],
+                            "status": "collected", "directory": str(native.parents[1].relative_to(run))})
+        coverage.write_json(run / "coverage/tests.json", records)
+        self.assertEqual(coverage.report(self.repo, run), 0)
+        self.assertFalse(list(run.glob("observations/*/*/coverage/coverage.out")))
+        self.assertEqual(coverage.report(self.repo, run, per_test=True), 0)
+        profiles = {str(path.relative_to(run)): path.read_bytes() for path in run.glob("observations/*/*/coverage/coverage.out")}
+        self.assertEqual(len(profiles), 2)
+        total = (run / "coverage/coverage.out").read_bytes()
+        attempt = (run / "attempt.json").read_bytes()
+        coverage.pack(run)
+        archive = run / "coverage/go-native.tar.gz"
+        with tarfile.open(archive) as packed:
+            self.assertTrue(any(member.islnk() for member in packed))
+            self.assertEqual({name: packed.extractfile(name).read() for name in original}, original)
+        self.assertFalse((run / "coverage/bin").exists())
+        self.assertFalse(list(run.glob("observations/*/*/coverage/coverage.out")))
+        self.assertEqual((run / "coverage/coverage.out").read_bytes(), total)
+        self.assertEqual((run / "attempt.json").read_bytes(), attempt)
+        with self.assertRaisesRegex(RuntimeError, "Unpack"):
+            coverage.report(self.repo, run)
+        subprocess.run(["tar", "-xzf", str(archive), "-C", str(run)], check=True)
+        for name, contents in original.items():
+            self.assertEqual((run / name).read_bytes(), contents)
+        self.assertEqual(coverage.report(self.repo, run, per_test=True), 0)
+        self.assertEqual((run / "coverage/coverage.out").read_bytes(), total)
+        self.assertEqual({name: (run / name).read_bytes() for name in profiles}, profiles)
+        self.assertIn("wendy", json.loads((run / "coverage/source.json").read_text())["binaries"])
+
+    def test_pack_retains_partial_failure_evidence(self):
+        run = self.attempt_for_test()
+        coverage.write_json(run / "coverage/tests.json", [{"test": "partial", "status": "incomplete",
+                            "directory": "observations/suite/partial", "sourceID": self.source["sourceID"]}])
+        coverage.write_json(run / "attempt.json", {"exitStatus": 9, "coverage": {"status": "incomplete"}})
+        (run / "timeout.json").write_text('{"message":"retained failure"}')
+        native = run / "observations/suite/partial/coverage/go"
+        native.mkdir(parents=True)
+        (native / "covcounters.missing.1.0").write_bytes(b"partial native evidence")
+        coverage.pack(run)
+        self.assertEqual(json.loads((run / "attempt.json").read_text())["exitStatus"], 9)
+        self.assertIn("retained failure", (run / "timeout.json").read_text())
+        with tarfile.open(run / "coverage/go-native.tar.gz") as archive:
+            self.assertEqual(archive.extractfile("observations/suite/partial/coverage/go/covcounters.missing.1.0").read(), b"partial native evidence")
+        coverage.pack(run)  # Already packed, no native data removed twice.
+        with self.assertRaisesRegex(RuntimeError, "Unpack"):
+            coverage.report(self.repo, run)
+        subprocess.run(["tar", "-xzf", str(run / "coverage/go-native.tar.gz"), "-C", str(run)], check=True)
+        self.assertEqual(coverage.report(self.repo, run), 1)
+        summary = json.loads((run / "coverage/summary.json").read_text())
+        self.assertEqual(summary["status"], "incomplete")
+        self.assertTrue(any("Missing native Go metadata/counters" in error for error in summary["errors"]))
+        self.assertEqual(json.loads((run / "attempt.json").read_text())["exitStatus"], 9)
+
+    def test_bootstrap_only_all_skipped_archive_can_be_reported_after_unpack(self):
+        run = self.attempt_for_test()
+        coverage.write_json(run / "coverage/tests.json", [{"test": "skipped", "status": "skipped", "sourceID": self.source["sourceID"]}])
+        bootstrap = run / "coverage/bootstrap"
+        bootstrap.mkdir()
+        self.assertEqual(self.invoke(bootstrap, "left"), 0)
+        self.assertEqual(coverage.report(self.repo, run), 0)
+        coverage.pack(run)
+        with self.assertRaisesRegex(RuntimeError, "Unpack"):
+            coverage.report(self.repo, run)
+        subprocess.run(["tar", "-xzf", str(run / "coverage/go-native.tar.gz"), "-C", str(run)], check=True)
+        self.assertEqual(coverage.report(self.repo, run), 0)
+        self.assertEqual(json.loads((run / "coverage/summary.json").read_text())["status"], "no-data")
 
 
 if __name__ == "__main__":

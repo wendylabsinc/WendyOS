@@ -91,8 +91,17 @@ while the Agent is alive. Background Agent activity during that interval is
 included. Initialization before the interval is excluded. Its private Unix socket
 control and CLI invocation receipts exist only in `e2e_coverage` builds.
 
-Native files remain under `observations/<suite>/<test>/coverage/go/`.
-`coverage/coverage.out` beside them is the derived per-test profile. The attempt's
+Native files use `observations/<suite>/<test>/coverage/go/`. CI packages these
+paths, plus startup native evidence, losslessly in `coverage/go-native.tar.gz`.
+Ordinary tar hard links store byte-identical metadata once while restoring every
+test's original paths. From the downloaded attempt directory:
+
+```bash
+tar -xzf coverage/go-native.tar.gz
+sha256sum -c coverage/native.sha256
+```
+
+Standard Go coverage tools work on the unpacked directories. The attempt's
 `coverage/coverage.out` combines test evidence by source with Go's
 `covdata merge -pcombine`, so shared CLI/Agent packages have one denominator.
 Percentages use covered statements divided by statements, including zero-hit
@@ -110,6 +119,20 @@ lists skipped tests, tests without Go observations and incomplete intervals.
 No data has no percentage. Collection errors fail the attempt while preserving
 the original test result. Timeouts and missing counters remain incomplete.
 Existing attempt IDs cannot be reused in coverage mode.
+
+Full-source per-test `coverage.out` files are reproducible and are not retained
+by default. After unpacking native evidence, generate them on demand with the
+matching source checkout:
+
+```bash
+python3 Scripts/E2ECoverage.py report --run-dir /path/to/attempt --per-test
+```
+
+CI removes instrumented executables after recording their hashes and Go build
+settings in `coverage/source.json`. The embedded report and downstream AI inputs
+retain command logs, recordings, test results, coverage totals and provenance;
+they omit duplicate native archives, profiles and binaries. The original native
+archive and overall source profile remain in the raw attempt artifact.
 
 The existing E2E report overview displays the run's total Go statement coverage
 from `attempt.json`. Incomplete, no-data and uncollected results are labeled
