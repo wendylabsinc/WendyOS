@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -18,20 +19,42 @@ type DesktopFleet struct {
 	PresenceError string
 }
 
-func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFleet, error) {
+// DesktopFleetReader exposes the existing authenticated reads to app backends.
+// It selects one saved identity without changing the active CLI context.
+type DesktopFleetReader struct{ auth *config.AuthConfig }
+
+func NewDesktopFleetReader(account, org string) (*DesktopFleetReader, error) {
 	if org == "" {
-		return DesktopFleet{}, errors.New("choose an organization")
+		return nil, errors.New("choose an organization")
 	}
 	auth, err := desktopCloudAuth(account, org)
 	if err != nil {
-		return DesktopFleet{}, err
+		return nil, err
 	}
-	assets, online, presenceErr, err := fetchFleetAssets(ctx, func(ctx context.Context, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
-		return fetchCloudAssetsV2(ctx, auth, onlineOnly)
-	})
+	return &DesktopFleetReader{auth: auth}, nil
+}
+
+func (r *DesktopFleetReader) Assets(ctx context.Context, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
+	return fetchCloudAssetsV2(ctx, r.auth, onlineOnly)
+}
+
+// DesktopFleetOverview retains its sequential CLI lookup behavior.
+func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFleet, error) {
+	reader, err := NewDesktopFleetReader(account, org)
 	if err != nil {
 		return DesktopFleet{}, err
 	}
+	assets, err := reader.Assets(ctx, false)
+	if err != nil {
+		return DesktopFleet{}, err
+	}
+	online, presenceErr := reader.Assets(ctx, true)
+	return reader.Overview(assets, online, presenceErr)
+}
+
+// Overview preserves selector validation and the existing partial-presence result.
+func (r *DesktopFleetReader) Overview(assets, online []*cloudpbv2.Asset, presenceErr error) (DesktopFleet, error) {
+	auth := r.auth
 	present := make(map[string]bool, len(online))
 	for _, a := range online {
 		present[a.GetId()] = true
@@ -53,30 +76,4 @@ func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFlee
 		out.Devices = append(out.Devices, item)
 	}
 	return out, nil
-}
-
-// Fetch independent inventory and broker presence concurrently. Inventory errors
-// fail the refresh; presence errors still allow the inventory to be displayed.
-func fetchFleetAssets(ctx context.Context, fetch func(context.Context, bool) ([]*cloudpbv2.Asset, error)) (assets, online []*cloudpbv2.Asset, presenceErr, err error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type result struct {
-		assets []*cloudpbv2.Asset
-		err    error
-	}
-	presence := make(chan result, 1)
-	go func() {
-		items, e := fetch(ctx, true)
-		presence <- result{items, e}
-	}()
-	assets, err = fetch(ctx, false)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	select {
-	case r := <-presence:
-		return assets, r.assets, r.err, nil
-	case <-ctx.Done():
-		return assets, nil, ctx.Err(), nil
-	}
 }
