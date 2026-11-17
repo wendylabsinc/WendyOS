@@ -363,22 +363,121 @@ func TestAgentInferencePresenceAndFiltering(t *testing.T) {
 	config := campaign.Inference
 	now := time.Now()
 	p := &inferencePresence{}
-	if p.observe(false, now, config) || !p.observe(true, now.Add(time.Second), config) || p.observe(true, now.Add(40*time.Second), config) {
+	if p.observe(false, now, config, 0) || !p.observe(true, now.Add(time.Second), config, 0) || p.observe(true, now.Add(40*time.Second), config, 0) {
 		t.Fatal("presence edge incorrect")
 	}
-	p.observe(false, now.Add(41*time.Second), config)
-	p.observe(false, now.Add(100*time.Second), config) // outage is not empty time
-	if p.observe(true, now.Add(101*time.Second), config) {
+	p.observe(false, now.Add(41*time.Second), config, 0)
+	p.observe(false, now.Add(100*time.Second), config, 0) // outage is not empty time
+	if p.observe(true, now.Add(101*time.Second), config, 0) {
 		t.Fatal("outage rearmed detection")
 	}
-	p.observe(false, now.Add(102*time.Second), config)
-	p.observe(false, now.Add(107*time.Second), config)
-	if !p.observe(true, now.Add(108*time.Second), config) {
+	p.observe(false, now.Add(102*time.Second), config, 0)
+	p.observe(false, now.Add(107*time.Second), config, 0)
+	if !p.observe(true, now.Add(108*time.Second), config, 0) {
 		t.Fatal("empty observations did not rearm")
 	}
 	filtered, err := validateDetections(config, []inference.Detection{{Label: "cat", Score: 1}, {Label: "person", Score: .5}, {Label: "person", Score: .99}})
 	if err != nil || len(filtered) != 1 {
 		t.Fatalf("incorrect label/threshold filtering: %v, %v", filtered, err)
+	}
+}
+
+// A model slower than the 5 s the presence allows between observations, such
+// as a Transformers model that takes 9 s a frame on a Jetson Orin Nano's CPU,
+// raised its event once and never again: every observation looked like the
+// end of an outage, so no run of empty frames ever lasted clear_after.
+func TestPresenceClearsWhenTheModelIsSlowerThanTheGapAllowance(t *testing.T) {
+	campaign, err := data.ParseCampaign(inferenceTestYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := campaign.Inference // rate 1, clear_after 5s, cooldown 30s
+	start := time.Now()
+	round := scoringRound(1, 9000)
+	frame := func(n int) time.Time { return start.Add(time.Duration(n) * 9 * time.Second) }
+	p := &inferencePresence{}
+	if !p.observe(true, frame(0), config, round) {
+		t.Fatal("the first detection did not raise the event")
+	}
+	if p.observe(true, frame(1), config, round) {
+		t.Fatal("a person who stayed raised the event again")
+	}
+	p.observe(false, frame(2), config, round)
+	p.observe(false, frame(3), config, round) // Empty for 9 s; clear_after is 5 s.
+	if p.present {
+		t.Fatal("two empty frames 9 s apart did not clear the presence")
+	}
+	if !p.observe(true, frame(5), config, round) { // 45 s after the first event; the cooldown is 30 s.
+		t.Fatal("a later detection did not raise the event again")
+	}
+
+	// An outage is still not empty time: the camera went away for a minute,
+	// far longer than the model's round.
+	p.observe(false, frame(6), config, round)
+	outage := frame(6).Add(time.Minute)
+	p.observe(false, outage, config, round)
+	if !p.present {
+		t.Fatal("an outage counted as empty time")
+	}
+	p.observe(false, outage.Add(9*time.Second), config, round)
+	if p.present {
+		t.Fatal("empty frames after the outage did not clear the presence")
+	}
+
+	// Two cameras scored in turn are each seen every 18 s.
+	if round := scoringRound(2, 9000); round != 18*time.Second {
+		t.Fatalf("round of two cameras = %s", round)
+	}
+	// A prediction that does not say how long it took keeps the old allowance.
+	if round := scoringRound(1, 0); round != 0 {
+		t.Fatalf("round without an inference time = %s", round)
+	}
+}
+
+// The same through the job, as reported: at rate 1, a model that takes 9 s a
+// frame notified once and never again, however often the person came back.
+func TestAgentInferenceWithASlowModelRaisesItsEventAgain(t *testing.T) {
+	// One observation per prediction, 9 s after the one before; the last
+	// comes 45 s after the first event, past the 30 s cooldown.
+	seconds := []int{0, 9, 18, 27, 45}
+	start := time.Now()
+	var mu sync.Mutex
+	observed := 0
+	previous := inferenceNow
+	inferenceNow = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		now := start.Add(time.Duration(seconds[min(observed, len(seconds)-1)]) * time.Second)
+		observed++
+		return now
+	}
+	t.Cleanup(func() { inferenceNow = previous })
+
+	_, factory, sender, _ := newInferenceTestService(t, true)
+	session := receiveInference(t, factory.sessions)
+	input := receiveInference(t, session.inputs)
+	receiveInference(t, session.inputs)
+	frame := func(people int) {
+		result := inference.Result{Type: "prediction", SourceID: input.SourceID, Generation: input.Generation, InferMs: 9000}
+		for range people {
+			result.Detections = append(result.Detections, inference.Detection{Label: "person", Score: .99})
+		}
+		session.results <- result
+	}
+	frame(1)
+	first := receiveInference(t, sender.requests)
+	frame(1) // The person stays,
+	frame(0) // leaves,
+	frame(0) // is gone for 9 s, longer than clear_after,
+	frame(1) // and comes back.
+	second := receiveInference(t, sender.requests)
+	if first.ID == second.ID || second.SourceID != input.SourceID {
+		t.Fatalf("second event %+v after %+v", second, first)
+	}
+	select {
+	case extra := <-sender.requests:
+		t.Fatalf("a person who stayed raised the event again: %+v", extra)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
