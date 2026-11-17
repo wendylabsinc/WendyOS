@@ -44,6 +44,12 @@ type WendyPowerServiceClient interface {
 	// macOS agent, and with FAILED_PRECONDITION while an agent or OS update is
 	// being installed, because a reboot then would interrupt it. An agent
 	// that predates this service answers UNIMPLEMENTED.
+	//
+	// A mode the device has no equivalent for fails with FAILED_PRECONDITION,
+	// and a mode the agent does not know fails with INVALID_ARGUMENT, so a
+	// request for a special boot never turns into a normal reboot. While one
+	// reboot is pending, a request for the same mode succeeds as that reboot
+	// and a request for another mode fails with FAILED_PRECONDITION.
 	Reboot(ctx context.Context, in *RebootRequest, opts ...grpc.CallOption) (*RebootResponse, error)
 }
 
@@ -87,6 +93,12 @@ type WendyPowerServiceServer interface {
 	// macOS agent, and with FAILED_PRECONDITION while an agent or OS update is
 	// being installed, because a reboot then would interrupt it. An agent
 	// that predates this service answers UNIMPLEMENTED.
+	//
+	// A mode the device has no equivalent for fails with FAILED_PRECONDITION,
+	// and a mode the agent does not know fails with INVALID_ARGUMENT, so a
+	// request for a special boot never turns into a normal reboot. While one
+	// reboot is pending, a request for the same mode succeeds as that reboot
+	// and a request for another mode fails with FAILED_PRECONDITION.
 	Reboot(context.Context, *RebootRequest) (*RebootResponse, error)
 	mustEmbedUnimplementedWendyPowerServiceServer()
 }

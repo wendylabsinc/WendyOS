@@ -21,8 +21,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type RebootMode int32
+
+const (
+	// A normal boot into the installed OS.
+	RebootMode_REBOOT_MODE_UNSPECIFIED RebootMode = 0
+	// NVIDIA Jetson forced-recovery mode (USB recovery mode), the mode a
+	// Jetson is flashed in. Only Jetson boards have it. The device leaves
+	// the network and stays in this mode until it is flashed over USB or
+	// power-cycled, so nothing answers from it once it has gone down.
+	RebootMode_REBOOT_MODE_FORCED_RECOVERY RebootMode = 1
+)
+
+// Enum value maps for RebootMode.
+var (
+	RebootMode_name = map[int32]string{
+		0: "REBOOT_MODE_UNSPECIFIED",
+		1: "REBOOT_MODE_FORCED_RECOVERY",
+	}
+	RebootMode_value = map[string]int32{
+		"REBOOT_MODE_UNSPECIFIED":     0,
+		"REBOOT_MODE_FORCED_RECOVERY": 1,
+	}
+)
+
+func (x RebootMode) Enum() *RebootMode {
+	p := new(RebootMode)
+	*p = x
+	return p
+}
+
+func (x RebootMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RebootMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendy_agent_services_v2_power_service_proto_enumTypes[0].Descriptor()
+}
+
+func (RebootMode) Type() protoreflect.EnumType {
+	return &file_wendy_agent_services_v2_power_service_proto_enumTypes[0]
+}
+
+func (x RebootMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RebootMode.Descriptor instead.
+func (RebootMode) EnumDescriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_power_service_proto_rawDescGZIP(), []int{0}
+}
+
 type RebootRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What the device boots into. Unset is a normal boot.
+	Mode          RebootMode `protobuf:"varint,1,opt,name=mode,proto3,enum=wendy.agent.services.v2.RebootMode" json:"mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -55,6 +108,13 @@ func (x *RebootRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RebootRequest.ProtoReflect.Descriptor instead.
 func (*RebootRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_power_service_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *RebootRequest) GetMode() RebootMode {
+	if x != nil {
+		return x.Mode
+	}
+	return RebootMode_REBOOT_MODE_UNSPECIFIED
 }
 
 type RebootResponse struct {
@@ -97,9 +157,14 @@ var File_wendy_agent_services_v2_power_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_power_service_proto_rawDesc = "" +
 	"\n" +
-	"+wendy/agent/services/v2/power_service.proto\x12\x17wendy.agent.services.v2\"\x0f\n" +
-	"\rRebootRequest\"\x10\n" +
-	"\x0eRebootResponse2n\n" +
+	"+wendy/agent/services/v2/power_service.proto\x12\x17wendy.agent.services.v2\"H\n" +
+	"\rRebootRequest\x127\n" +
+	"\x04mode\x18\x01 \x01(\x0e2#.wendy.agent.services.v2.RebootModeR\x04mode\"\x10\n" +
+	"\x0eRebootResponse*J\n" +
+	"\n" +
+	"RebootMode\x12\x1b\n" +
+	"\x17REBOOT_MODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bREBOOT_MODE_FORCED_RECOVERY\x10\x012n\n" +
 	"\x11WendyPowerService\x12Y\n" +
 	"\x06Reboot\x12&.wendy.agent.services.v2.RebootRequest\x1a'.wendy.agent.services.v2.RebootResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
@@ -115,19 +180,22 @@ func file_wendy_agent_services_v2_power_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_power_service_proto_rawDescData
 }
 
+var file_wendy_agent_services_v2_power_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_wendy_agent_services_v2_power_service_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_wendy_agent_services_v2_power_service_proto_goTypes = []any{
-	(*RebootRequest)(nil),  // 0: wendy.agent.services.v2.RebootRequest
-	(*RebootResponse)(nil), // 1: wendy.agent.services.v2.RebootResponse
+	(RebootMode)(0),        // 0: wendy.agent.services.v2.RebootMode
+	(*RebootRequest)(nil),  // 1: wendy.agent.services.v2.RebootRequest
+	(*RebootResponse)(nil), // 2: wendy.agent.services.v2.RebootResponse
 }
 var file_wendy_agent_services_v2_power_service_proto_depIdxs = []int32{
-	0, // 0: wendy.agent.services.v2.WendyPowerService.Reboot:input_type -> wendy.agent.services.v2.RebootRequest
-	1, // 1: wendy.agent.services.v2.WendyPowerService.Reboot:output_type -> wendy.agent.services.v2.RebootResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: wendy.agent.services.v2.RebootRequest.mode:type_name -> wendy.agent.services.v2.RebootMode
+	1, // 1: wendy.agent.services.v2.WendyPowerService.Reboot:input_type -> wendy.agent.services.v2.RebootRequest
+	2, // 2: wendy.agent.services.v2.WendyPowerService.Reboot:output_type -> wendy.agent.services.v2.RebootResponse
+	2, // [2:3] is the sub-list for method output_type
+	1, // [1:2] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_power_service_proto_init() }
@@ -140,13 +208,14 @@ func file_wendy_agent_services_v2_power_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_power_service_proto_rawDesc), len(file_wendy_agent_services_v2_power_service_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_wendy_agent_services_v2_power_service_proto_goTypes,
 		DependencyIndexes: file_wendy_agent_services_v2_power_service_proto_depIdxs,
+		EnumInfos:         file_wendy_agent_services_v2_power_service_proto_enumTypes,
 		MessageInfos:      file_wendy_agent_services_v2_power_service_proto_msgTypes,
 	}.Build()
 	File_wendy_agent_services_v2_power_service_proto = out.File
