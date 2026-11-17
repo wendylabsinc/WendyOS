@@ -123,12 +123,27 @@ func TestLiteDesktopSessionCameraConsoleAndWiFi(t *testing.T) {
 	default:
 		t.Fatal("camera not unsubscribed")
 	}
-	if err := b.StartLogs("", 13); err != nil {
+	if err := b.StartLogs("", 13, session); err != nil {
 		t.Fatal(err)
+	}
+	if err := b.StartLogs("", 14, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.StopLogs(13, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.StartLogs("", 13, session); err == nil {
+		t.Fatal("late observer replaced the current subscription")
+	}
+	if err := b.StopLogs(14, session+1); err == nil {
+		t.Fatal("stale session accepted")
+	}
+	if err := b.StartLogs("", 15, session+1); err == nil {
+		t.Fatal("wrong session attached a console")
 	}
 	f.console <- liteclient.ConsoleChunk{Data: []byte("console"), Stderr: true}
 	event = nextLiteEvent(t, b)
-	if event.Log.Body != "console" || event.Log.Level != LogError || event.Stream != 13 {
+	if event.Log.Body != "console" || event.Log.Level != LogError || event.Stream != 14 || event.Session != session {
 		t.Fatalf("console = %#v", event)
 	}
 	if err := b.JoinWiFi(session+1, "home", "secret", 0, false); err == nil {

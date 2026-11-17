@@ -8,6 +8,9 @@ transition_record is a local JSON qualification from a previously observed,
 owner-approved WendyOS update on this exact board, using the schema below. No
 known repeatable transition means the hardware case remains pending; this
 program will not invent module unload/rebind commands or a renumbering result.
+Start with accelerator-renumbering-qualification.txt when there is no previous
+qualification. --catalog reads a saved official device manifest without network
+access; --verify-artifact also checks downloaded bytes against its selected row.
 
 transition_record schema (all fields required):
   schema: wendy.accelerator-transition.v1; method: wendy-os-update
@@ -52,6 +55,51 @@ helpers = module("renumber_helpers", "jetson-gpu-rehearsal.py")
 npu = module("renumber_npu", "qualcomm-npu-rehearsal.py")
 ROOT = helpers.ROOT
 MESH_EVIDENCE = "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498192"
+GCS_BASE = "https://storage.googleapis.com/wendyos-images-public"
+
+
+def artifact_catalog(path, device, storage):
+    """Mirror manifest.go's OTA storage selection, with pinned-byte metadata."""
+    supported = {"dragonwing-iq-9075": {"ufs"}, "jetson-agx-orin": {"emmc", "nvme"},
+                 "jetson-agx-thor": {"nvme"}}
+    if storage not in supported.get(device, set()):
+        raise ValueError("select the exact supported device and observed storage medium")
+    manifest = helpers.artifact(str(path))
+    raw = json.loads(Path(manifest["path"]).read_text())
+    if raw.get("device_id") != device:
+        raise ValueError("manifest device_id differs from the reserved board")
+    versions, unavailable = {}, {}
+    for version, entry in raw["versions"].items():
+        prefix = "nvme_ota_update" if storage == "nvme" and entry.get("nvme_ota_update_path") else "ota_update"
+        artifact_path = entry.get(prefix + "_path", "")
+        checksum = entry.get(prefix + "_checksum", "")
+        size = entry.get(prefix + "_size_bytes")
+        parts = Path(artifact_path).parts
+        if (not artifact_path or artifact_path.startswith("/") or ".." in parts or
+                str(Path(artifact_path)) != artifact_path or not artifact_path.endswith(".wendy") or
+                any(c in artifact_path for c in "?#") or "latest" in artifact_path.lower() or
+                any(ord(c) < 33 for c in artifact_path) or
+                not re.fullmatch(r"[0-9a-f]{64}", checksum) or type(size) is not int or size <= 0):
+            unavailable[version] = "no complete pinned .wendy OTA descriptor for this storage"
+            continue
+        versions[version] = {"url": GCS_BASE + "/" + artifact_path, "sha256": checksum,
+                             "size_bytes": size, "manifest_field": prefix}
+    return {"device": device, "storage": storage, "manifest": manifest,
+            "versions": versions, "unavailable": unavailable,
+            "renumbering_qualification": "not_observed"}
+
+
+def verify_catalog_artifact(catalog, version, path):
+    if version not in catalog["versions"]:
+        raise ValueError("selected version has no complete compatible OTA descriptor")
+    expected = catalog["versions"][version]
+    actual = helpers.artifact(str(path))
+    size = Path(actual["path"]).stat().st_size
+    if actual["sha256"] != expected["sha256"] or size != expected["size_bytes"]:
+        raise ValueError("downloaded artifact size or SHA256 differs from the selected manifest row")
+    return {"device": catalog["device"], "storage": catalog["storage"], "version": version,
+            "manifest": catalog["manifest"], **expected, "local_path": actual["path"],
+            "renumbering_qualification": "not_observed"}
 
 
 def absolute_path(value, name):
@@ -159,6 +207,9 @@ def generate(inventory, output):
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip())
     out = output.resolve(); out.mkdir(mode=0o700, parents=True, exist_ok=False)
+    guide = out / "accelerator-renumbering-qualification.txt"
+    helpers.write(guide, Path(__file__).with_name(guide.name).read_text())
+    artifacts["qualification_guide"] = helpers.artifact(str(guide))
     app = "sh.wendy.renumber." + uuid.uuid4().hex[:8]
     project = out / "project"
     if is_npu:
@@ -281,7 +332,9 @@ Qualification log {a['transition_observation']['path']}; recovery {a['recovery_r
    its owner review the hashed qualification log: this exact supported WendyOS
    update must previously have changed this path's real device numbers. A generic
    reboot or guessed module reload is not a qualified transition. Missing prior
-   evidence leaves the case pending; do not make up expected numbers. Confirm
+   evidence leaves the case pending; follow accelerator-renumbering-qualification.txt
+   to acquire, select and verify official artifacts and observe a first transition.
+   Do not make up expected numbers. Confirm
    rollback artifacts, storage layout, saved settings and the owner's recovery
    route. The generator did not approve or execute an update.
    Verify physical serial, saved device info and installed candidate Agent bytes
@@ -384,8 +437,28 @@ changes its mesh verdict, and no offline generator test constitutes hardware evi
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--inventory", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--inventory", type=Path)
+    mode.add_argument("--catalog", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--device")
+    parser.add_argument("--storage")
+    parser.add_argument("--version")
+    parser.add_argument("--verify-artifact", type=Path)
     args = parser.parse_args()
-    generate(args.inventory, args.output)
-    print("Prepared three NOT RUN device observations; qualification still requires human review")
+    if args.catalog:
+        if not args.device or not args.storage or args.output or (args.verify_artifact and not args.version):
+            parser.error("catalog requires --device and --storage; verification also requires --version; output is stdout")
+        result = artifact_catalog(args.catalog, args.device, args.storage)
+        if args.verify_artifact:
+            result = verify_catalog_artifact(result, args.version, args.verify_artifact)
+        elif args.version:
+            if args.version not in result["versions"]:
+                parser.error("selected version has no compatible OTA descriptor")
+            result["versions"] = {args.version: result["versions"][args.version]}
+        print(json.dumps(result, indent=2))
+    else:
+        if not args.output or args.device or args.storage or args.version or args.verify_artifact:
+            parser.error("rehearsal generation requires only --inventory and --output")
+        generate(args.inventory, args.output)
+        print("Prepared three NOT RUN device observations; qualification still requires human review")

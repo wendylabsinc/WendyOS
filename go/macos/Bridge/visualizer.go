@@ -238,10 +238,35 @@ func WDVisualRecording(session C.uint64_t, action C.WDVisualRecordingAction, nam
 	return p
 }
 
+//export WDHomeCampaign
+func WDHomeCampaign(session C.uint64_t, name *C.char, trigger C.int32_t) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	rows, err := desktop.HomeCampaign(uint64(session), C.GoString(name), trigger != 0)
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
+	for i, row := range rows {
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
+	}
+	return p
+}
+
 //export WDGalleryMetadataAt
 func WDGalleryMetadataAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
 	p := alloc[C.WDGalleryMetadataResult](1)
 	metadata, err := desktop.GalleryMetadataAt(C.GoString(selector), C.GoString(episode))
+	if err == nil {
+		var raw []byte
+		raw, err = json.Marshal(metadata)
+		p.json = C.CString(string(raw))
+	}
+	p.status = status(err)
+	return p
+}
+
+//export WDGalleryMediaAt
+func WDGalleryMediaAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
+	p := alloc[C.WDGalleryMetadataResult](1)
+	metadata, err := desktop.GalleryMediaAt(C.GoString(selector), C.GoString(episode))
 	if err == nil {
 		var raw []byte
 		raw, err = json.Marshal(metadata)

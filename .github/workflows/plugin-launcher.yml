@@ -1,26 +1,10 @@
 name: Plugin launcher
 
 on:
+  # Go validation calls this workflow before release and requires this result.
+  # Keep one invocation of each Linux/macOS/Windows launcher check per source.
   workflow_call:
-  pull_request:
-    paths:
-      - 'plugins/wendy/scripts/**'
-      - 'scripts/pin-cli.sh'
-      - 'scripts/test/plugin-launcher/**'
-      - '.github/workflows/plugin-launcher.yml'
-      - '.github/actions/setup-macos-ci/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.gitattributes'
-  push:
-    branches: [main]
-    paths:
-      - 'plugins/wendy/scripts/**'
-      - 'scripts/pin-cli.sh'
-      - 'scripts/test/plugin-launcher/**'
-      - '.github/workflows/plugin-launcher.yml'
-      - '.github/actions/setup-macos-ci/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.gitattributes'
+  workflow_dispatch:
 
 permissions:
   contents: read

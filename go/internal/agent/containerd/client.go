@@ -43,6 +43,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
 	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
@@ -56,7 +57,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
-	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -247,6 +248,12 @@ type Client struct {
 	// tests construct a bare *Client) — suppressRestarts no-ops in that case,
 	// same nil-tolerant treatment as meshDNS above.
 	restartMonitor restartSuppressor
+
+	// appMemoryBudget configures the shared app cgroup; nil means no budget
+	// work. appMemoryBudgetLogged is the state last logged.
+	appMemoryBudget       func() appcgroup.Status
+	appMemoryBudgetMu     sync.Mutex
+	appMemoryBudgetLogged string
 
 	// freeBytes and forceGC are test seams for PruneCache's free-space
 	// measurement and forced-GC pass. NewClient defaults them to
@@ -1446,6 +1453,12 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		// ROS_DOMAIN_ID, which silently lands it on the global default domain 0.
 		return fmt.Errorf("resolving ROS 2 environment for %q: %w", appID, err)
 	}
+	for _, entry := range ros2Env {
+		if entry == "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(nil, false) {
+			c.logger.Info("ROS discovery uses loopback only at container creation; recreate the app after network interfaces change",
+				zap.String(logfields.AppID, appID))
+		}
+	}
 	env = append(env, ros2Env...)
 	env = injectOTELEnvIfNeeded(env, appCfg, appID)
 
@@ -1577,17 +1590,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// collision risk that a hyphen separator would have introduced.
 	//   - Single-container: "system.slice:{systemdSvc}:{appID}"
 	//   - Multi-service:    "system.slice:{systemdSvc}:{appID}@{serviceName}"
+	// On cgroup v2 both sit under /wendy-apps, the shared app memory budget.
 	//
 	// INVARIANT: ApplyEntitlements and CDI helpers must not set CgroupsPath.
 	// The assertion below detects any future violation at runtime (SOC2-CC6).
 	if spec.Linux.CgroupsPath != "" {
 		return fmt.Errorf("security: CgroupsPath was unexpectedly set before assignment (%q); ApplyEntitlements or CDI must not set it", spec.Linux.CgroupsPath)
 	}
-	cgroupSuffix := appID
-	if serviceName != "" {
-		cgroupSuffix = appID + "@" + serviceName
-	}
-	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:%s:%s", sharedenv.SystemdServiceName(), cgroupSuffix)
+	spec.Linux.CgroupsPath = appcgroup.ContainerPath(appID, serviceName, appcgroup.Unified())
 
 	// Apply CPU/memory/PID ceilings from wendy.json (per-service overrides
 	// the app-level default). Malformed values are rejected here rather than
@@ -2494,9 +2504,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		if serialErr != nil {
 			return nil, fmt.Errorf("refreshing serial devices for %q: %w", appName, serialErr)
 		}
-		if changed {
+		policyChanged := c.applyAppResourcePolicy(storedSpec, appID, serviceName)
+		if changed || policyChanged {
 			if updateErr := container.Update(ctx, withUpdatedContainerSpec(storedSpec)); updateErr != nil {
-				return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				if changed {
+					return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				}
+				// The task starts from the saved spec, in its old cgroup.
+				c.logger.Warn("could not save the app resource policy",
+					zap.String("app_name", appName), zap.Error(updateErr))
 			}
 		}
 	} else {
@@ -3107,12 +3123,9 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("reading container spec for %q: %w", appName, err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = tty
 	pspec.Args = command
-	// Defensive copy of Env before use (mirrors the ROS 2 exec path) so we never
-	// mutate the slice backing the cached container spec.
-	pspec.Env = append([]string(nil), pspec.Env...)
 
 	var ioCreator cio.Creator
 	if tty {
@@ -3401,16 +3414,18 @@ const cycloneDDSInlineConfig = `<CycloneDDS><Domain><SharedMemory><Enable>false<
 // every interface and no longer discovers anything beyond the device.
 //
 // interfaces limits discovery to the given peripheral interfaces; with none,
-// CycloneDDS picks the device's interface as it does without a configuration.
+// autodetermine retains CycloneDDS selection when an external IPv4 interface
+// exists. It must be false on loopback-only hosts: selecting lo explicitly and
+// again through autodetermine makes CycloneDDS refuse to create the domain.
 // The names come from rtps.PeripheralInterfaces, which only returns kernel
 // interface names, so they are safe to place in the XML.
-func cycloneDDSBeyondDeviceConfig(interfaces []string) string {
+func cycloneDDSBeyondDeviceConfig(interfaces []string, autodetermine bool) string {
 	var b strings.Builder
 	b.WriteString(`<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/>`)
 	for _, name := range interfaces {
 		b.WriteString(`<NetworkInterface name="` + name + `"/>`)
 	}
-	if len(interfaces) == 0 {
+	if autodetermine {
 		b.WriteString(`<NetworkInterface autodetermine="true"/>`)
 	}
 	b.WriteString(`</Interfaces></General>`)
@@ -3471,7 +3486,15 @@ func buildROS2Env(appCfg *appconfig.AppConfig, appID, serviceName string) ([]str
 		env = append(env, "RMW_IMPLEMENTATION="+rmw)
 		if rmw == appconfig.ROS2DefaultRMW {
 			if scope == appconfig.ROS2ScopePeripherals || scope == appconfig.ROS2ScopeNetwork {
-				env = append(env, "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(peripherals))
+				autodetermine := false
+				if scope == appconfig.ROS2ScopeNetwork {
+					var err error
+					autodetermine, err = ros2HasExternalIPv4()
+					if err != nil {
+						return nil, fmt.Errorf("finding network interfaces for frameworks.ros2: %w", err)
+					}
+				}
+				env = append(env, "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(peripherals, autodetermine))
 			} else {
 				env = append(env, "CYCLONEDDS_URI="+cycloneDDSInlineConfig)
 			}
@@ -3659,6 +3682,7 @@ var startPostStartHookCommand = func(argv []string) (func() error, error) {
 		return nil, errors.New("postStart hook argv is empty")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	oomscore.ResetChild(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -3952,7 +3976,19 @@ var _ services.GroupRestarter = (*Client)(nil)
 // restart through RestartGroup instead of an independent StartContainer, which
 // would leave a secondary attached to the primary's now-dead namespace.
 func (c *Client) GroupRestartAppID(ctx context.Context, appName string) (string, bool) {
-	appID, svcName, err := ParseContainerName(appName)
+	// Underscores are valid in app IDs, so a container name alone cannot
+	// distinguish a service from a single-container app. Use its persisted
+	// ownership and require those labels to reconstruct this exact name.
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return "", false
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return "", false
+	}
+	appID, svcName, err := containerOwnerFromLabels(appName, labels)
 	if err != nil || svcName == "" {
 		return "", false
 	}
