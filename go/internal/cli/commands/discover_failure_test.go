@@ -39,7 +39,7 @@ func TestDiscoveryFailureSurfaces(t *testing.T) {
 		{"identity", "device_identity_mismatch", "identity changed, so the connection was blocked", identityRefusal("board.local", &certs.IdentityMismatchError{WantOrg: 2, WantAsset: "344", GotOrg: 76, GotAsset: "472"})},
 		{"key changed", "device_identity_mismatch", "certificate key changed, so the connection was blocked", &devicepin.PinMismatchError{Key: "board"}},
 		{"wrong org", "device_org_mismatch", "organization", orgMismatchDeviceError{deviceOrg: 76}},
-		{"TLS alert", "tls_rejected", "wrong device clock", newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))},
+		{"TLS alert", "tls_rejected", "missing certificate revocation evidence", newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))},
 		{"TLS timeout", "timeout", "probe deadline", newTLSHandshakeRejectedError(context.DeadlineExceeded)},
 		{"missing credentials", "credentials_missing", "no client certificates", errProvisionedAgentUnauthorized},
 		{"unknown", "probe_failed", "could not verify", errors.New("secret-token\x1b[31m")},

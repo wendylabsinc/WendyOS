@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"testing"
@@ -17,10 +18,12 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/testutil/crltest"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // Exercise the actual gRPC server wiring. An operator issuer first learned
@@ -61,7 +64,8 @@ func TestLiveRPCAfterHintedAndResumedTLS(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			healthpb.RegisterHealthServer(srv, health.NewServer())
+			healthService := health.NewServer()
+			healthpb.RegisterHealthServer(srv, healthService)
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
@@ -129,6 +133,23 @@ func TestLiveRPCAfterHintedAndResumedTLS(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatalf("round %d streaming RPC: %v", round, err)
+				}
+				if round == 2 {
+					// A fresh staple must revoke the already-open, resumed stream,
+					// even though the cached TLS presentation omitted its issuer.
+					now := time.Now()
+					revocation.Default.Offer(issuer.Sign(t, &x509.RevocationList{
+						Number: big.NewInt(2), ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(time.Hour),
+						RevokedCertificateEntries: []x509.RevocationListEntry{{SerialNumber: big.NewInt(42), RevocationTime: now.Add(-time.Minute)}},
+					}))
+					healthService.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+					// The standard health service maps a failed Send to Canceled.
+					if _, err := watch.Recv(); status.Code(err) != codes.Unauthenticated && status.Code(err) != codes.Canceled {
+						t.Fatalf("resumed stream survived revocation: %v", err)
+					}
+					if _, err := service.Check(ctx, &healthpb.HealthCheckRequest{}); status.Code(err) != codes.Unauthenticated {
+						t.Fatalf("resumed connection admitted RPC after revocation: %v", err)
+					}
 				}
 				cancel()
 				conn.Close()

@@ -458,7 +458,7 @@ func TestClockRecoveryNamesASavedProofAndItsRemedy(t *testing.T) {
 	for _, want := range []string{
 		"proof saved 3h0m0s ago",
 		// A failed resend is not counted as sent.
-		"sent 2 times,",
+		"sent 2 times. Check its credentials and certificate revocation evidence",
 		"Next: connect this computer to the internet so it can fetch a fresh time proof, then retry.",
 	} {
 		if !strings.Contains(stderr, want) {
