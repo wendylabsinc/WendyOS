@@ -954,8 +954,9 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 
 func (r *runtime) discoveredCandidates(objects managedObjects, at time.Time) []candidate {
 	// Device1.ServiceData is retained by BlueZ after an advertiser stops.
-	// Only live validated advertising observations may refresh radio selection
-	// or initiate a new CoC dial.
+	// Only live validated advertising observations refresh radio selection.
+	// Connected ACLs may also supply tentative CoC bootstrap targets; those
+	// never count as newly heard advertisements.
 	peers, newlySeen := r.freshness.candidates(objects, at)
 	if len(newlySeen) > 0 {
 		r.discovery.observed(at)
