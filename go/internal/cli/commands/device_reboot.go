@@ -25,10 +25,14 @@ const (
 	// rebootRequestTimeout bounds the Reboot call itself: the agent answers
 	// at once and only then starts the reboot.
 	rebootRequestTimeout = 15 * time.Second
+	// rebootShutdownTimeout bounds the wait for a device to go down. The agent
+	// forces the restart a minute after asking systemd for it, so a device
+	// still answering from the same boot after two minutes did not reboot.
+	rebootShutdownTimeout = 2 * time.Minute
 )
 
 func newDeviceRebootCmd() *cobra.Command {
-	var assumeYes, noWait bool
+	var assumeYes, noWait, recovery bool
 	cmd := &cobra.Command{
 		Use:   "reboot",
 		Short: "Reboot the target device",
@@ -36,11 +40,15 @@ func newDeviceRebootCmd() *cobra.Command {
 			"Running apps stop with the device; apps that are set to restart come back after boot. " +
 			"The command asks for confirmation first; pass --yes to skip the question, which is required when no terminal is attached. " +
 			"--no-wait returns as soon as the device has accepted the request. " +
+			"--recovery reboots an NVIDIA Jetson into forced-recovery (USB recovery) mode, the mode 'wendy os install' flashes it in, " +
+			"without pressing its Force Recovery button; the command then waits only until the device has gone down, because it stays off the network " +
+			"until it is flashed or power-cycled. " +
 			"An unenrolled device accepts a reboot on its setup port, so this also works on a device that cannot finish enrolling. " +
 			"The agent refuses to reboot while an agent or OS update is being installed.",
 		Example: "  wendy device reboot\n" +
 			"  wendy device reboot --yes --device my-device\n" +
-			"  wendy device reboot --yes --no-wait --json",
+			"  wendy device reboot --yes --no-wait --json\n" +
+			"  wendy device reboot --recovery --device my-jetson",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -57,12 +65,14 @@ func newDeviceRebootCmd() *cobra.Command {
 				assumeYes:   assumeYes,
 				interactive: interactive,
 				wait:        !noWait,
+				recovery:    recovery,
 				asJSON:      jsonOutput,
 			}, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Reboot without asking for confirmation")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the device has accepted the reboot instead of waiting for it to come back")
+	cmd.Flags().BoolVar(&recovery, "recovery", false, "Reboot an NVIDIA Jetson into forced-recovery (USB recovery) mode, where it stays until it is flashed or power-cycled")
 	return cmd
 }
 
@@ -71,10 +81,14 @@ type deviceRebootOptions struct {
 	assumeYes bool
 	// interactive is true when a person at a terminal can answer it.
 	interactive bool
-	// wait keeps the command running until the device is back from a new boot.
-	wait   bool
-	asJSON bool
-	// timeout bounds the wait; zero means rebootWaitTimeout.
+	// wait keeps the command running until the device is back from a new
+	// boot, or with recovery, until it has gone down.
+	wait bool
+	// recovery reboots into forced-recovery mode instead of the installed OS.
+	recovery bool
+	asJSON   bool
+	// timeout bounds the wait; zero means rebootWaitTimeout, or
+	// rebootShutdownTimeout with recovery.
 	timeout time.Duration
 }
 
@@ -83,8 +97,8 @@ type deviceRebootOptions struct {
 type deviceRebooter struct {
 	// label names the device in messages.
 	label string
-	// reboot sends the request; nil means the device accepted it.
-	reboot func(context.Context) error
+	// reboot sends the request for mode; nil means the device accepted it.
+	reboot func(context.Context, agentpbv2.RebootMode) error
 	// uptime reconnects to the same device and reads how long it has been up.
 	// An error is a device that cannot be reached; a nil uptime with a nil
 	// error is one that answered without the reading.
@@ -103,10 +117,10 @@ type deviceRebooter struct {
 func connDeviceRebooter(conn *grpcclient.AgentConnection, interactive bool) deviceRebooter {
 	r := deviceRebooter{
 		label: rebootDeviceLabel(conn),
-		reboot: func(ctx context.Context) error {
+		reboot: func(ctx context.Context, mode agentpbv2.RebootMode) error {
 			callCtx, cancel := context.WithTimeout(ctx, rebootRequestTimeout)
 			defer cancel()
-			_, err := agentpbv2.NewWendyPowerServiceClient(conn.Conn).Reboot(callCtx, &agentpbv2.RebootRequest{})
+			_, err := agentpbv2.NewWendyPowerServiceClient(conn.Conn).Reboot(callCtx, &agentpbv2.RebootRequest{Mode: mode})
 			return err
 		},
 		uptime: func(ctx context.Context) (*uint64, error) {
@@ -182,6 +196,9 @@ func spinWhile(title string, work func() error) error {
 // wait, returns only once the device answers from a boot that began after the
 // request.
 func runDeviceReboot(ctx context.Context, r deviceRebooter, opts deviceRebootOptions, out io.Writer) error {
+	if opts.recovery {
+		return runDeviceRecoveryReboot(ctx, r, opts, out)
+	}
 	if !opts.assumeYes {
 		if !opts.interactive {
 			return fmt.Errorf("a reboot stops the apps running on %s until it is back; pass --yes to reboot it", r.label)
@@ -194,13 +211,13 @@ func runDeviceReboot(ctx context.Context, r deviceRebooter, opts deviceRebootOpt
 	}
 
 	requestedAt := r.now()
-	if err := r.reboot(ctx); err != nil {
+	if err := r.reboot(ctx, agentpbv2.RebootMode_REBOOT_MODE_UNSPECIFIED); err != nil {
 		return rebootRequestError(r.label, err)
 	}
 
 	if !opts.wait {
 		if opts.asJSON {
-			return writeJSON(out, map[string]any{"status": "requested", "device": r.label})
+			return writeJSON(out, map[string]any{"status": "requested", "device": r.label, "mode": rebootModeNormal})
 		}
 		_, err := fmt.Fprintln(out, tui.SuccessMessage(fmt.Sprintf("%s is rebooting. It will be unreachable until it has started again, usually about a minute.", r.label)))
 		return err
@@ -230,7 +247,7 @@ func runDeviceReboot(ctx context.Context, r deviceRebooter, opts deviceRebootOpt
 	}
 
 	if opts.asJSON {
-		result := map[string]any{"status": "rebooted", "device": r.label}
+		result := map[string]any{"status": "rebooted", "device": r.label, "mode": rebootModeNormal}
 		if uptime != nil {
 			result["uptimeSeconds"] = *uptime
 		}
@@ -242,6 +259,92 @@ func runDeviceReboot(ctx context.Context, r deviceRebooter, opts deviceRebootOpt
 	}
 	_, err = fmt.Fprintln(out, tui.SuccessMessage(message))
 	return err
+}
+
+// The "mode" values of the command's JSON output.
+const (
+	rebootModeNormal         = "normal"
+	rebootModeForcedRecovery = "forced-recovery"
+)
+
+// runDeviceRecoveryReboot is runDeviceReboot for forced-recovery mode. A device
+// in that mode is off the network until it is flashed or power-cycled, so the
+// wait ends when it has gone down rather than when it is back.
+func runDeviceRecoveryReboot(ctx context.Context, r deviceRebooter, opts deviceRebootOptions, out io.Writer) error {
+	if !opts.assumeYes {
+		if !opts.interactive {
+			return fmt.Errorf("a reboot into forced-recovery mode stops the apps running on %s and takes it off the network until it is flashed or power-cycled; pass --yes to reboot it", r.label)
+		}
+		fmt.Fprintf(out, "A reboot into forced-recovery mode stops the apps running on %s and takes it off the network.\n", tui.Value(r.label))
+		fmt.Fprintln(out, "It stays in recovery mode until it is flashed with 'wendy os install' or power-cycled.")
+		if !r.confirm(fmt.Sprintf("Reboot %s into forced-recovery mode now?", r.label)) {
+			_, err := fmt.Fprintf(out, "Aborted. %s was not rebooted.\n", r.label)
+			return err
+		}
+	}
+
+	requestedAt := r.now()
+	if err := r.reboot(ctx, agentpbv2.RebootMode_REBOOT_MODE_FORCED_RECOVERY); err != nil {
+		return rebootRequestError(r.label, err)
+	}
+	const leave = "Flash it with 'wendy os install', or power-cycle it to leave recovery mode."
+
+	if !opts.wait {
+		if opts.asJSON {
+			return writeJSON(out, map[string]any{"status": "requested", "device": r.label, "mode": rebootModeForcedRecovery})
+		}
+		_, err := fmt.Fprintln(out, tui.SuccessMessage(fmt.Sprintf("%s is rebooting into forced-recovery mode. %s", r.label, leave)))
+		return err
+	}
+
+	timeout := opts.timeout
+	if timeout <= 0 {
+		timeout = rebootShutdownTimeout
+	}
+	await := func() error { return awaitShutdown(ctx, r, requestedAt, timeout) }
+	var err error
+	if r.spin != nil && !opts.asJSON {
+		err = r.spin(fmt.Sprintf("Reboot into forced-recovery mode requested. Waiting for %s to go down...", r.label), await)
+	} else {
+		if !opts.asJSON {
+			fmt.Fprintf(out, "Reboot into forced-recovery mode requested. Waiting for %s to go down...\n", r.label)
+		}
+		err = await()
+	}
+	if err != nil {
+		return err
+	}
+
+	if opts.asJSON {
+		return writeJSON(out, map[string]any{"status": "offline", "device": r.label, "mode": rebootModeForcedRecovery})
+	}
+	_, err = fmt.Fprintln(out, tui.SuccessMessage(fmt.Sprintf("%s has gone down to boot into forced-recovery mode. %s", r.label, leave)))
+	return err
+}
+
+// awaitShutdown polls until the device stops answering. Going down is the last
+// thing the CLI can see of a device bound for forced-recovery mode: the mode
+// has no network, so whether the device reached it is visible only on the USB
+// side. A device that answers from a new boot booted into its OS instead.
+func awaitShutdown(ctx context.Context, r deviceRebooter, requestedAt time.Time, timeout time.Duration) error {
+	for {
+		if err := r.wait(ctx, rebootProbeInterval); err != nil {
+			return fmt.Errorf("waiting for %s to go down: %w", r.label, err)
+		}
+		elapsed := r.now().Sub(requestedAt)
+		uptime, err := r.uptime(ctx)
+		switch {
+		case errors.Is(err, errDeviceIdentityRefused):
+			return err
+		case err != nil:
+			return nil
+		case uptime != nil && time.Duration(*uptime)*time.Second < elapsed:
+			return fmt.Errorf("%s rebooted back into its OS instead of into forced-recovery mode", r.label)
+		}
+		if elapsed >= timeout {
+			return fmt.Errorf("the reboot was accepted, but %s kept answering from the boot it was already in for %s. The host may have refused the reboot", r.label, timeout)
+		}
+	}
 }
 
 // awaitNewBoot polls until the device answers from a boot that began after
@@ -293,7 +396,7 @@ func rebootRequestError(label string, err error) error {
 	switch status.Code(err) {
 	case codes.Unimplemented:
 		return fmt.Errorf("the agent on %s does not support reboot; update it with 'wendy device update' and try again", label)
-	case codes.FailedPrecondition, codes.Unavailable:
+	case codes.FailedPrecondition, codes.Unavailable, codes.InvalidArgument:
 		return fmt.Errorf("cannot reboot %s: %s", label, status.Convert(err).Message())
 	default:
 		return fmt.Errorf("asking %s to reboot: %w", label, err)
