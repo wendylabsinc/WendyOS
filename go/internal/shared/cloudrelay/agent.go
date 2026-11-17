@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,8 @@ type Agent struct {
 	Credentials         func() (string, string, []byte)
 	Logger              *zap.Logger
 	MTLSPort            int
+	OnRegistered        func() // the device is reachable through the relay again
+	OnLost              func() // the relay stayed down after a registration; the device is not reachable
 	signing, encryption *ecdsa.PrivateKey
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
@@ -56,28 +59,59 @@ type Agent struct {
 	preferredSource     func(*net.TCPAddr) (net.IP, error)
 	pathReachable       func(context.Context, string) bool
 	presenceMaxAge      time.Duration
+	// lostAfter is how long a registered relay must stay down before OnLost.
+	lostAfter    time.Duration
+	registeredAt time.Time
 }
 
 var errPresenceRefresh = errors.New("refreshing Cloud presence before transport timeout")
 
+// lostAfterDefault outlasts a broker deploy and the reconnect backoff, so only
+// a real outage takes the cloud mark back.
+const lostAfterDefault = 2 * time.Minute
+
+// lostConnection: a session ended in a way that leaves the device unreachable
+// until it registers again. A planned rotation reconnects at once.
+func lostConnection(err error) bool {
+	return !errors.Is(err, errPresenceRefresh) && !errors.Is(err, errPresencePathMoved) && !errors.Is(err, errPresenceSourceRemoved)
+}
+
 func (a *Agent) Run(ctx context.Context) {
 	backoff := time.Second
+	lostAfter := a.lostAfter
+	if lostAfter <= 0 {
+		lostAfter = lostAfterDefault
+	}
+	var downSince time.Time // a registered session ended and none came back yet
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := a.runOnce(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		if errors.Is(err, errPresenceRefresh) || errors.Is(err, errPresencePathMoved) || errors.Is(err, errPresenceSourceRemoved) {
+		wasUp := a.registeredAt.After(started)
+		if !lostConnection(err) {
+			if wasUp {
+				downSince = time.Time{}
+			}
 			a.Logger.Info("reconnecting cloud presence", zap.Error(err))
 			backoff = time.Second
 			continue
+		}
+		if wasUp {
+			downSince = time.Now()
 		}
 		if time.Since(started) > time.Minute {
 			backoff = time.Second
 		}
 		if err != nil {
 			a.Logger.Warn("cloud relay connection failed, reconnecting", zap.Error(err), zap.Duration("backoff", backoff))
+		}
+		if !downSince.IsZero() && time.Since(downSince) >= lostAfter {
+			downSince = time.Time{}
+			if a.OnLost != nil {
+				a.OnLost()
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -404,6 +438,10 @@ func (a *Agent) runOnce(parent context.Context) error {
 		return fmt.Errorf("invalid presence acceptance")
 	}
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
+	a.registeredAt = time.Now()
+	if a.OnRegistered != nil {
+		a.OnRegistered()
+	}
 	// Cloud Run closes even active streaming requests at one hour. Rotate
 	// presence deliberately before that deadline, keeping its lease and the
 	// independently owned data sessions rather than treating it as a failure.
@@ -781,11 +819,11 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		return serveDatagrams(session, d)
 	}
 	port := int(d.Port)
-	if string(d.ServiceDescriptor) == "wendy-agent" && a.MTLSPort > 0 {
+	agentSession := a.isAgentSession(string(d.ServiceDescriptor), port)
+	if agentSession {
 		port = a.MTLSPort
 	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	local, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(d.Host, strconv.Itoa(port)))
+	local, err := dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
 	if err != nil {
 		return err
 	}
@@ -868,4 +906,29 @@ func (a *Agent) expireSavedOffers() {
 			_ = os.Remove(filepath.Join(a.StateDir, entry.Name()))
 		}
 	}
+}
+
+// isAgentSession covers an app tunnel aimed at the agent's own port too, so
+// no relay session reaches the agent looking like an on-device caller.
+func (a *Agent) isAgentSession(descriptor string, port int) bool {
+	return a.MTLSPort > 0 && (descriptor == "wendy-agent" || port == a.MTLSPort)
+}
+
+// RelaySourceIP is the loopback address relay sessions to the agent come
+// from, so the agent can tell a cloud session from other loopback callers.
+var RelaySourceIP = net.IPv4(127, 0, 0, 2)
+
+// dialLocalService dials the agent's own sessions from RelaySourceIP so it can
+// tell them apart; app tunnels dial plainly, as their NAT rules match 127.0.0.1.
+func dialLocalService(ctx context.Context, host, port string, agentSession bool) (net.Conn, error) {
+	addr := net.JoinHostPort(host, port)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	if ip := net.ParseIP(host); agentSession && runtime.GOOS == "linux" && ip != nil && ip.To4() != nil && ip.IsLoopback() {
+		tagged := dialer
+		tagged.LocalAddr = &net.TCPAddr{IP: RelaySourceIP}
+		if c, err := tagged.DialContext(ctx, "tcp", addr); err == nil {
+			return c, nil
+		}
+	}
+	return dialer.DialContext(ctx, "tcp", addr)
 }

@@ -15,8 +15,10 @@ import (
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/typeurl/v2"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
 	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -160,6 +162,7 @@ func (c *Client) restoreRunningTaskResources(ctx context.Context, ctr containerd
 	if !runningTaskStillCurrent(ctx, ctr, pid) {
 		return nil
 	}
+	c.warnIfOutsideAppMemoryBudget(ctr.ID(), pid)
 	if _, err := c.ensureDBusProxyForStart(ctx, ctr.ID(), spec.Mounts); err != nil {
 		return err
 	}
@@ -184,6 +187,28 @@ func (c *Client) restoreRunningTaskResources(ctx context.Context, ctr containerd
 	}
 	keep = runningTaskStillCurrent(ctx, ctr, pid)
 	return nil
+}
+
+// readProcCgroup is replaced in tests.
+var readProcCgroup = os.ReadFile
+
+// warnIfOutsideAppMemoryBudget reads the task's live cgroup: a failed restart
+// may have saved the new placement while the old task still runs. Without an
+// applied budget there is nothing to move into, so it stays quiet.
+func (c *Client) warnIfOutsideAppMemoryBudget(containerName string, pid uint32) {
+	if st, ok := c.EnsureAppMemoryBudget(); !ok || !st.Limited {
+		return
+	}
+	membership, err := readProcCgroup(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		c.logger.Warn("could not check whether a running app is in the app memory budget",
+			zap.String("app_name", containerName), zap.Error(err))
+		return
+	}
+	if !appcgroup.InBudget(string(membership)) {
+		c.logger.Warn("running app is outside the app memory budget; restart the app to move it",
+			zap.String("app_name", containerName))
+	}
 }
 
 func runningTaskStillCurrent(ctx context.Context, ctr containerdclient.Container, pid uint32) bool {
