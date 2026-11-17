@@ -116,11 +116,14 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
                 runDirectory: WendyE2EEnvironment.cliRunDirectory,
                 fallbackDirectory: repositoryRootDirectoryURL.appendingPathComponent("go/bin").path
             )
-            let cliEnvironment = Self.roleEnvironment(
+            var cliEnvironment = Self.roleEnvironment(
                 sandbox: cliSandbox,
                 binDirectory: cliBinDirectory,
                 machineOS: cliOS
             )
+            if let directory = recorder.goCoverageDirectoryPath {
+                cliEnvironment["GOCOVERDIR"] = directory
+            }
             let agentSandbox = Self.roleSandbox(
                 role: "agent",
                 runDirectory: WendyE2EEnvironment.agentRunDirectory,

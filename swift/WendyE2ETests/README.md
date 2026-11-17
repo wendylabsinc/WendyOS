@@ -59,6 +59,70 @@ bash Scripts/E2ETest.sh \
 
 Repeat `--filter` to pass multiple test filters.
 
+### Collect Go source coverage
+
+Coverage is opt-in. For example, collect two local CLI tests:
+
+```bash
+bash Scripts/E2ETest.sh --coverage --no-managed-agent \
+  --output-dir ../Build/e2e \
+  --filter "prints CLI and system information" \
+  --filter "prints JSON info for automation"
+```
+
+Use `--managed-agent` on an isolated Ubuntu host to include the managed Go
+Agent. Existing device Agents are never replaced; CLI-only runs explicitly
+record the Agent as uninstrumented. Remote CLI transport and managed macOS
+Agent coverage are currently unsupported. `WENDY_E2E_COVERAGE=true` is equivalent
+to `--coverage`; combining coverage with `--parallel` is an error.
+
+The runner builds dedicated binaries under the attempt's `coverage/bin`, leaving
+ordinary build outputs alone. It builds Swift tests once, then runs each selected
+test in a separate sequential process. This adds process startup overhead per
+test. All scenario sessions belonging to that test accumulate into the same
+recorder identity. Parameterized cases belong to their test's interval.
+
+The managed Agent is started and checked for readiness before measurement. Its
+atomic counters reset once before each test process starts and export after that
+process exits, including its scenario hooks, deferred cleanup and session teardown,
+while the Agent is alive. Background Agent activity during that interval is
+included. Initialization before the interval is excluded. Its private Unix socket
+control and CLI invocation receipts exist only in `e2e_coverage` builds.
+
+Native files remain under `observations/<suite>/<test>/coverage/go/`.
+`coverage/coverage.out` beside them is the derived per-test profile. The attempt's
+`coverage/coverage.out` combines test evidence by source with Go's
+`covdata merge -pcombine`, so shared CLI/Agent packages have one denominator.
+Percentages use covered statements divided by statements, including zero-hit
+packages linked into the measured binaries. They are never averages of tests.
+This is platform-specific coverage of linked main-module Go packages; third-party
+dependencies, unlinked packages and non-Go source are outside its scope.
+
+`coverage/source.json` records source content identity, revision, Go version,
+binary provenance and package/file scope. Generated Go files (identified by the
+standard generated-code header) and the test-only hooks are excluded from derived
+handwritten-source profiles, including when mixed with handwritten files in one
+package. Original native metadata and counters remain intact. `test.json` and
+`attempt.json` carry coverage status and summaries; `coverage/summary.json` also
+lists skipped tests, tests without Go observations and incomplete intervals.
+No data has no percentage. Collection errors fail the attempt while preserving
+the original test result. Timeouts and missing counters remain incomplete.
+Existing attempt IDs cannot be reused in coverage mode.
+
+HTML is generated only when requested, using the same source checkout:
+
+```bash
+python3 Scripts/E2ECoverage.py report --run-dir /path/to/attempt --html
+```
+
+The existing **Swift E2E Tests** workflow accepts `coverage: true` for a test-only
+Ubuntu run with its usual raw artifact upload. Coverage runs skip AI analysis,
+GitHub review comments and Slack notifications. Use selective `tests` filters for
+validation; the full suite includes operations unsuitable for shared machines.
+
+Framework verification (real instrumented fixture binaries using the Agent hook,
+separate from product E2E assertions): `python3 Scripts/E2ECoverage_test.py -v`.
+
 ### Test against a remote device
 
 From `swift/`:
