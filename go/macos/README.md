@@ -267,7 +267,7 @@ left in the board. It includes the docs' bundled videos, an Orin Nano J14 pin di
 and board-specific Dragonwing switch instructions for both entering EDL and returning to normal boot.
 Offline 3D guides reuse the existing Orin Nano, Raspberry Pi 5, and IQ-9075 assets with
 camera presets, connector highlights, a J14 jumper overlay, and the modeled SW2-3 actuator.
-IQ-8275 retains its own S2-8 diagram; the IQ-9075 model is not presented as an IQ-8275.
+IQ-8275 retains its own DIP switch 3 diagram; the IQ-9075 model is not presented as an IQ-8275.
 The pin diagram follows NVIDIA's Orin Nano carrier specification SP-11324-001 v1.3,
 figure 1-4 and table 3-4. Custom carriers need their vendor's instructions.
 
