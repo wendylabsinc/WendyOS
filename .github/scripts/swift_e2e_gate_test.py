@@ -22,14 +22,15 @@ def job_condition(text, job):
     return " ".join(match[1].split()).removeprefix("${{").removesuffix("}}").strip()
 
 
-def evaluate(condition, results, attempt, event, run_cancelled=False):
+def evaluate(condition, results, attempt, event, run_cancelled=False, coverage=False):
     """Translate the small expression subset these gates use into Python."""
     python = re.sub(r"contains\(needs\.\*\.result, ('\w+')\)", r"(\1 in results)", condition)
     python = python.replace("always()", "True").replace("cancelled()", "run_cancelled")
     python = python.replace("github.run_attempt", "attempt").replace("github.event_name", "event")
+    python = python.replace("inputs.coverage", "coverage")
     python = python.replace("&&", " and ").replace("||", " or ")
     python = re.sub(r"!(?!=)", " not ", python)
-    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled}
+    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled, "coverage": coverage}
     return bool(eval(python, {"__builtins__": {}}, names))
 
 
@@ -71,6 +72,14 @@ class GateTests(unittest.TestCase):
         for results in (("skipped", "cancelled"), ("skipped", "failure"), ("skipped", "success")):
             with self.subTest(results):
                 self.assertEqual(self.started(results, run_cancelled=True), (False, False))
+
+    def test_coverage_never_runs_analysis_or_notifications(self):
+        for results, attempt, event in itertools.product(
+            itertools.product(("success", "failure", "cancelled", "skipped"), repeat=2),
+            ("1", "2"), ("workflow_dispatch", "workflow_call", "push")
+        ):
+            for condition in (self.analyze, self.passed):
+                self.assertFalse(evaluate(condition, results, attempt, event, coverage=True))
 
     def test_every_run_starts_at_most_one_and_never_loses_a_finished_job(self):
         outcomes = ("success", "failure", "cancelled", "skipped")

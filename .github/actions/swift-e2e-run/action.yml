@@ -2,6 +2,10 @@ name: Swift E2E Run
 description: Run one WendyAgent Swift E2E route and upload its raw artifact.
 
 inputs:
+  coverage:
+    description: Collect sequential Go source coverage (local Ubuntu managed Agent).
+    required: false
+    default: 'false'
   tests:
     description: Comma-separated SwiftPM test filters.
     required: false
@@ -59,6 +63,7 @@ runs:
         AGENT_OS: ${{ inputs.agent_os }}
         TRANSPORT: ${{ inputs.transport }}
         MANAGED_AGENT: ${{ inputs.managed_agent }}
+        COVERAGE: ${{ inputs.coverage }}
         TEST_TIMEOUT_MINUTES: ${{ inputs.test_timeout_minutes }}
         DEVICE_ADDRESS: ${{ inputs.device_address }}
         TESTS: ${{ inputs.tests }}
@@ -125,6 +130,7 @@ runs:
         require_match AGENT_OS "$AGENT_OS" '^[A-Za-z0-9._-]{1,40}$'
         require_match TRANSPORT "$TRANSPORT" '^[A-Za-z0-9._-]{1,40}$'
         require_match MANAGED_AGENT "$MANAGED_AGENT" '^(true|false)$'
+        require_match COVERAGE "$COVERAGE" '^(true|false)$'
         require_match TEST_TIMEOUT_MINUTES "$TEST_TIMEOUT_MINUTES" '^(0|[1-9][0-9]{0,3})$'
         if (( 10#$TEST_TIMEOUT_MINUTES > 1440 )); then
           echo "ERROR: invalid TEST_TIMEOUT_MINUTES" >&2
@@ -143,6 +149,7 @@ runs:
         write_output validated true
         write_output tests "$TESTS"
         write_output managed_agent "$MANAGED_AGENT"
+        write_output coverage "$COVERAGE"
         write_output device_address "$DEVICE_ADDRESS"
         write_output cli_os "$CLI_OS"
         write_output agent_os "$AGENT_OS"
@@ -161,6 +168,7 @@ runs:
         AGENT_OS: ${{ inputs.agent_os }}
         TRANSPORT: ${{ inputs.transport }}
         MANAGED_AGENT: ${{ inputs.managed_agent }}
+        COVERAGE: ${{ inputs.coverage }}
         TEST_TIMEOUT_MINUTES: ${{ inputs.test_timeout_minutes }}
         DEVICE_ADDRESS: ${{ inputs.device_address }}
         TESTS: ${{ inputs.tests }}
@@ -212,6 +220,7 @@ runs:
         Require-Match AGENT_OS $env:AGENT_OS '^[A-Za-z0-9._-]{1,40}$'
         Require-Match TRANSPORT $env:TRANSPORT '^[A-Za-z0-9._-]{1,40}$'
         Require-Match MANAGED_AGENT $env:MANAGED_AGENT '^(true|false)$'
+        Require-Match COVERAGE $env:COVERAGE '^false$'
         Require-Match TEST_TIMEOUT_MINUTES $env:TEST_TIMEOUT_MINUTES '^(0|[1-9][0-9]{0,3})$'
         if ([long]$env:TEST_TIMEOUT_MINUTES -gt 1440) { throw 'invalid TEST_TIMEOUT_MINUTES' }
         Reject-Newline DEVICE_ADDRESS $env:DEVICE_ADDRESS
@@ -411,6 +420,7 @@ runs:
         WENDY_E2E_AGENT_OS: ${{ steps.validate-unix.outputs.agent_os }}
         WENDY_E2E_TRANSPORT: ${{ steps.validate-unix.outputs.transport }}
         WENDY_E2E_TEST_TIMEOUT_SECONDS: ${{ steps.validate-unix.outputs.test_timeout_seconds }}
+        WENDY_E2E_COVERAGE: ${{ steps.validate-unix.outputs.coverage }}
         MANAGED_AGENT: ${{ steps.validate-unix.outputs.managed_agent }}
         DEVICE_ADDRESS: ${{ steps.validate-unix.outputs.device_address }}
       run: |
