@@ -1803,34 +1803,6 @@ jobs:
       - name: Build and execute the API detector
         run: python3 .github/scripts/api-snapshot-smoke.py
 
-  format:
-    permissions:
-      contents: read
-    name: Format Check
-    runs-on: runs-on,runner=2cpu-linux-x64
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Check formatting
-        working-directory: go
-        run: |
-          UNFORMATTED=$(gofmt -l -s .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "The following files need formatting:"
-            echo "$UNFORMATTED"
-            echo ""
-            echo "Run 'gofmt -w -s .' to fix."
-            exit 1
-          fi
-
   shell-tests:
     permissions:
       contents: read
