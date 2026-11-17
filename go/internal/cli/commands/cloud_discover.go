@@ -521,7 +521,11 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.
 
 		newConn, err := asset.reconnect(ctx, auth, brokerURL)
 		if err != nil {
-			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			if resp.GetSupervision() == nil {
+				return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			}
+			// A trial that never listens is replaced only at its deadline.
+			newConn = nil
 		}
 		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
 			return asset.reconnect(ctx, auth, brokerURL)

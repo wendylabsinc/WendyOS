@@ -130,17 +130,6 @@ func awaitAgentVerdict(ctx context.Context, conn *grpcclient.AgentConnection, re
 	}
 }
 
-// reportAgentVerdict waits for the verdict on the agent with sha, re-dialling
-// the device conn reached (never discovery, which could pick another device);
-// announce tells the user the check takes time.
-func reportAgentVerdict(ctx context.Context, conn *grpcclient.AgentConnection, sha string, announce func()) (agentVerdict, *grpcclient.AgentConnection, error) {
-	same := conn
-	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
-		return reconnectAgentAfterRestart(ctx, same)
-	}
-	return awaitAgentVerdict(ctx, conn, reconnect, sha, announce)
-}
-
 // printRejectedJSON gives --json callers (and the MCP tool) a rejection, at a
 // trial or at the check before it; running is the agent the device runs now.
 func printRejectedJSON(err error, running string) {
@@ -175,14 +164,22 @@ func announceAgentCheck(w io.Writer) func() {
 	}
 }
 
-// confirmAgentOrContinue waits for the verdict on a routine update and keeps
-// going with whichever agent the device runs; it fails only when the device
-// cannot be reached again.
-func confirmAgentOrContinue(ctx context.Context, conn *grpcclient.AgentConnection, sha string, w io.Writer) (*grpcclient.AgentConnection, error) {
-	_, conn, err := reportAgentVerdict(ctx, conn, sha, announceAgentCheck(w))
+// confirmAgentAfterRestart waits for the verdict on a routine update and keeps
+// going with whichever agent the device ends up on. With a supervisor, a
+// failed first reconnect is not final: a trial that never listens is replaced
+// only at its deadline, so the verdict wait keeps dialling.
+func confirmAgentAfterRestart(ctx context.Context, supervised bool, reconnect func(context.Context) (*grpcclient.AgentConnection, error), sha string, w io.Writer) (*grpcclient.AgentConnection, error) {
+	conn, err := reconnect(ctx)
+	if err != nil {
+		if !supervised {
+			return nil, fmt.Errorf("agent did not come back after update: %w", err)
+		}
+		conn = nil
+	}
+	_, conn, err = awaitAgentVerdict(ctx, conn, reconnect, sha, announceAgentCheck(w))
 	if err != nil {
 		if conn == nil {
-			return nil, err
+			return nil, fmt.Errorf("agent did not come back after update: %w", err)
 		}
 		fmt.Fprintf(w, "%v\nContinuing with the agent the device runs now.\n", err)
 	}

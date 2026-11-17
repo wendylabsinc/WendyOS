@@ -325,3 +325,32 @@ func TestUploadSpinnerShowsNoErrorForOutcomesTheCommandGoesOnFrom(t *testing.T) 
 		t.Fatal("a failure must still show as one")
 	}
 }
+
+// A trial that hangs before it listens is replaced only at its deadline, long
+// after the first reconnect gives up.
+func TestConfirmAgentAfterRestartOutlastsAFailedFirstReconnect(t *testing.T) {
+	fastVerdict(t)
+	back := &scriptedVersionClient{steps: []versionStep{
+		supervised("2026.10.30-154553", "approved", "rejected", "new", "did not pass its checks within 3m0s"),
+	}}
+	dials := 0
+	reconnect := func(context.Context) (*grpcclient.AgentConnection, error) {
+		if dials++; dials == 1 {
+			return nil, errors.New("timed out waiting for the agent")
+		}
+		return &grpcclient.AgentConnection{AgentService: back}, nil
+	}
+	var out strings.Builder
+	conn, err := confirmAgentAfterRestart(context.Background(), true, reconnect, "new", &out)
+	if err != nil || conn == nil {
+		t.Fatalf("the command must go on with the agent the device fell back to: conn %v, err %v", conn, err)
+	}
+	if !strings.Contains(out.String(), "Continuing with the agent the device runs now") {
+		t.Fatalf("the rejection must be reported, got %q", out.String())
+	}
+
+	dials = 0
+	if _, err := confirmAgentAfterRestart(context.Background(), false, reconnect, "new", &out); err == nil {
+		t.Fatal("a device without the supervisor has no deadline to wait for: the failed reconnect is final")
+	}
+}

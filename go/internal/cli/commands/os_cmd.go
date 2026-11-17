@@ -1602,14 +1602,12 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 	conn.Close()
 
-	fmt.Print("Waiting for agent to restart...")
-	newConn, err := reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	fmt.Println("Waiting for agent to restart...")
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, conn)
 	}
-	fmt.Println(" done.")
 	// The OS update must not start while the new agent is on trial.
-	return confirmAgentOrContinue(ctx, newConn, sha, os.Stdout)
+	return confirmAgentAfterRestart(ctx, versionResp.GetSupervision() != nil, reconnect, sha, os.Stdout)
 }
 
 // Seams over the release lookup and download, the upload and the OS step for tests.

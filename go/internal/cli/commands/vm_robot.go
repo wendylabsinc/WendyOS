@@ -438,11 +438,11 @@ func reconcileSimulatorRobotWithAgentUpdate(ctx context.Context, conn *grpcclien
 	if err := sleepContext(ctx, defaultAgentRestartInitialDelay); err != nil {
 		return nil, err
 	}
-	conn, err = reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		return conn, fmt.Errorf("agent did not come back after update: %w", err)
+	prior := conn
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, prior)
 	}
-	if conn, err = confirmAgentOrContinue(ctx, conn, sha, os.Stderr); err != nil {
+	if conn, err = confirmAgentAfterRestart(ctx, info.GetSupervision() != nil, reconnect, sha, os.Stderr); err != nil {
 		return conn, err
 	}
 	// Retry once, including the live capability check. A release may still lack

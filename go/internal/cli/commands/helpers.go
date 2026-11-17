@@ -3326,18 +3326,11 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 
 	conn.Close()
 
-	fmt.Fprintf(terminaloutput.Stderr, "Waiting for agent to restart...")
-	newConn, err := reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		fmt.Fprintf(terminaloutput.Stderr, " failed.\n")
-		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	fmt.Fprintf(terminaloutput.Stderr, "Waiting for agent to restart...\n")
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, conn)
 	}
-	fmt.Fprintf(terminaloutput.Stderr, " ready.\n")
-	verdictConn, err := confirmAgentOrContinue(ctx, newConn, sha, terminaloutput.Stderr)
-	if err != nil {
-		return nil, err
-	}
-	return verdictConn, nil
+	return confirmAgentAfterRestart(ctx, resp.GetSupervision() != nil, reconnect, sha, terminaloutput.Stderr)
 }
 
 // checkAndOfferUpdateFn is a seam over checkAndOfferUpdate. It exists for tests
