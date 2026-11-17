@@ -49,9 +49,14 @@ func (s *Supervisor) adoptInbox(ctx context.Context, st *State, build string) (s
 		// next fetch decides again.
 		return "", commit
 	}
+	// unpromote gives a confirmed trial its grace back when the upload that
+	// would end it does not become a trial after all.
+	unpromote := func() {}
 	if t := st.Trial; t != nil && t.Confirmed && t.SHA256 != in.SHA256 {
 		// It passed its checks and a new upload follows: its grace ends here,
 		// and it becomes the fallback for the next trial.
+		before := *st
+		unpromote = func() { *st = before }
 		st.Promote(t.Build)
 	}
 	if t := st.Trial; t != nil {
@@ -81,6 +86,7 @@ func (s *Supervisor) adoptInbox(ctx context.Context, st *State, build string) (s
 		return "", commit
 	}
 	if !in.Explicit && st.GivenUp(in.SHA256, in.Version, build) {
+		unpromote()
 		return "this agent already failed its checks on this OS build", commit
 	}
 
@@ -91,24 +97,28 @@ func (s *Supervisor) adoptInbox(ctx context.Context, st *State, build string) (s
 		path = bin
 		if _, err := os.Stat(bin); errors.Is(err, os.ErrNotExist) {
 			// Removed before it was complete; that says nothing about the agent.
+			unpromote()
 			return "", commit
 		}
 	}
 	if path == upload {
 		// The check runs it, and a file without an x bit cannot run, even as root.
 		if err := os.Chmod(upload, 0o755); err != nil {
+			unpromote()
 			return fmt.Sprintf("preparing the new agent: %v", err), keep
 		}
 	}
 	ver, err := Check(ctx, path, Want{SHA256: in.SHA256, Arch: s.cfg.Arch}, s.deps.RunVersion)
 	if err != nil && ctx.Err() != nil {
 		// Stopped mid-check: not a verdict, check it again on the next start.
+		unpromote()
 		return "", keep
 	}
 	if err == nil && in.Version != "" && strings.TrimPrefix(ver, "v") != strings.TrimPrefix(in.Version, "v") {
 		err = fmt.Errorf("release %s holds agent %s", in.Version, ver)
 	}
 	if err != nil {
+		unpromote()
 		if in.Seed && errors.Is(err, ErrNoContract) {
 			// Older CLIs and releases still seed such agents.
 			s.deps.Log.Info("skipping the /config agent: it predates the agent supervisor")
@@ -124,13 +134,16 @@ func (s *Supervisor) adoptInbox(ctx context.Context, st *State, build string) (s
 		// (nightly) image; the newer agent wins, as after an OS update.
 		s.deps.Log.Info("skipping the /config agent: the device already runs the same or a newer one",
 			zap.String("seed", ver), zap.String("running", current))
+		unpromote()
 		return "", commit
 	}
 	if path == upload {
 		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+			unpromote()
 			return fmt.Sprintf("preparing the agent store: %v", err), keep
 		}
 		if err := os.Rename(upload, bin); err != nil {
+			unpromote()
 			return fmt.Sprintf("storing the new agent: %v", err), keep
 		}
 	}

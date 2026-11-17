@@ -652,6 +652,25 @@ func TestAdoptInboxEndsTheGraceOfAConfirmedTrial(t *testing.T) {
 	}
 }
 
+func TestAdoptInboxKeepsAConfirmedTrialInItsGraceWhenTheNextUploadIsRefused(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs an ELF test binary")
+	}
+	s := newInboxSupervisor(t, func(context.Context, string) (string, error) { return "", errors.New("exit status 1") })
+	next := dropInInbox(t, s.cfg.Store, "next", Incoming{Explicit: true, RemoteVia: "lan"})
+	st := State{
+		Approved: &Agent{SHA256: "fallback", Version: "2026.11.03-000000"},
+		Trial:    &Trial{Agent: Agent{SHA256: "first", Version: "2026.11.04-000000"}, Confirmed: true, Build: "build-1"},
+	}
+	reason, _ := s.adoptInbox(context.Background(), &st, "build-1")
+	if reason == "" || !st.IsRejected(next, "build-1") {
+		t.Fatalf("the upload must be refused: reason %q, state %+v", reason, st)
+	}
+	if st.Trial == nil || st.Trial.SHA256 != "first" || !st.Trial.Confirmed || st.Approved == nil || st.Approved.SHA256 != "fallback" {
+		t.Fatalf("a refused upload must not end the grace of the agent before it: %+v", st)
+	}
+}
+
 func TestAdoptInboxJudgesAReCheckAgainWhenTheUserSendsIt(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("needs an ELF test binary")
