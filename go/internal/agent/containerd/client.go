@@ -43,6 +43,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
 	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
@@ -56,7 +57,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
-	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -247,6 +248,12 @@ type Client struct {
 	// tests construct a bare *Client) — suppressRestarts no-ops in that case,
 	// same nil-tolerant treatment as meshDNS above.
 	restartMonitor restartSuppressor
+
+	// appMemoryBudget configures the shared app cgroup; nil means no budget
+	// work. appMemoryBudgetLogged is the state last logged.
+	appMemoryBudget       func() appcgroup.Status
+	appMemoryBudgetMu     sync.Mutex
+	appMemoryBudgetLogged string
 
 	// freeBytes and forceGC are test seams for PruneCache's free-space
 	// measurement and forced-GC pass. NewClient defaults them to
@@ -1583,17 +1590,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// collision risk that a hyphen separator would have introduced.
 	//   - Single-container: "system.slice:{systemdSvc}:{appID}"
 	//   - Multi-service:    "system.slice:{systemdSvc}:{appID}@{serviceName}"
+	// On cgroup v2 both sit under /wendy-apps, the shared app memory budget.
 	//
 	// INVARIANT: ApplyEntitlements and CDI helpers must not set CgroupsPath.
 	// The assertion below detects any future violation at runtime (SOC2-CC6).
 	if spec.Linux.CgroupsPath != "" {
 		return fmt.Errorf("security: CgroupsPath was unexpectedly set before assignment (%q); ApplyEntitlements or CDI must not set it", spec.Linux.CgroupsPath)
 	}
-	cgroupSuffix := appID
-	if serviceName != "" {
-		cgroupSuffix = appID + "@" + serviceName
-	}
-	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:%s:%s", sharedenv.SystemdServiceName(), cgroupSuffix)
+	spec.Linux.CgroupsPath = appcgroup.ContainerPath(appID, serviceName, appcgroup.Unified())
 
 	// Apply CPU/memory/PID ceilings from wendy.json (per-service overrides
 	// the app-level default). Malformed values are rejected here rather than
@@ -2500,9 +2504,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		if serialErr != nil {
 			return nil, fmt.Errorf("refreshing serial devices for %q: %w", appName, serialErr)
 		}
-		if changed {
+		policyChanged := c.applyAppResourcePolicy(storedSpec, appID, serviceName)
+		if changed || policyChanged {
 			if updateErr := container.Update(ctx, withUpdatedContainerSpec(storedSpec)); updateErr != nil {
-				return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				if changed {
+					return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				}
+				// The task starts from the saved spec, in its old cgroup.
+				c.logger.Warn("could not save the app resource policy",
+					zap.String("app_name", appName), zap.Error(updateErr))
 			}
 		}
 	} else {
@@ -3113,12 +3123,9 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("reading container spec for %q: %w", appName, err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = tty
 	pspec.Args = command
-	// Defensive copy of Env before use (mirrors the ROS 2 exec path) so we never
-	// mutate the slice backing the cached container spec.
-	pspec.Env = append([]string(nil), pspec.Env...)
 
 	var ioCreator cio.Creator
 	if tty {
@@ -3675,6 +3682,7 @@ var startPostStartHookCommand = func(argv []string) (func() error, error) {
 		return nil, errors.New("postStart hook argv is empty")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	oomscore.ResetChild(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

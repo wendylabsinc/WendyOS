@@ -442,7 +442,7 @@ func provisionInstallJobMedia(ctx context.Context, target drive, fb installJobFi
 	if err := checkpoint("writing_config", false); err != nil {
 		return &onboarding.ProvisioningError{Err: err}
 	}
-	d, attached, provErr := provisionConfigWithRetry(ctx, target, fb.creds, fb.name, nil, true, nil)
+	d, attached, provErr := provisionConfigWithRetry(ctx, target, fb.creds, fb.name, nil, true, agentSeed{})
 	var ejectErr error
 	// A drive that dropped off the bus may have another disk at its old path.
 	if attached {
@@ -525,7 +525,7 @@ func prepareOrinJobWorkspace(fp *flashpack.Flashpack, fb installJobFirstBoot, de
 	}
 	configRel, err := filepath.Rel(fp.FlashImagesDir(), fp.ConfigImage())
 	if err == nil {
-		err = installJobInjectOrinConfig(filepath.Join(workspace, configRel), fb.creds, fb.name, nil, os.Stdout, detail, nil)
+		err = installJobInjectOrinConfig(filepath.Join(workspace, configRel), fb.creds, fb.name, nil, os.Stdout, detail, agentSeed{})
 	}
 	if err != nil {
 		_ = os.RemoveAll(workspace)
@@ -656,7 +656,7 @@ func prepareThorJobWorkspace(fp *flashpack.Flashpack, fb installJobFirstBoot, de
 	if !fb.requested() {
 		return workspace, nil
 	}
-	if err := installJobInjectThorConfig(configImage, fb.creds, fb.name, nil, os.Stdout, detail, nil); err != nil {
+	if err := installJobInjectThorConfig(configImage, fb.creds, fb.name, nil, os.Stdout, detail, agentSeed{}); err != nil {
 		_ = os.RemoveAll(workspace)
 		return "", err
 	}

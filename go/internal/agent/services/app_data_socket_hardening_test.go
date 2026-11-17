@@ -384,6 +384,12 @@ func TestAppIDFromCgroup(t *testing.T) {
 		// literal directory name instead of translating it to a systemd scope
 		// (observed on WendyOS 0.16.0 devices).
 		{"cgroupfs single service", "0::/system.slice/system.slice:edge-agent:com.example.a\n", "com.example.a", true},
+		{"budgeted cgroup single service", "0::/wendy-apps/system.slice:edge-agent:com.example.a\n", "com.example.a", true},
+		{"budgeted cgroup multi service", "0::/wendy-apps/system.slice:edge-agent:com.example.a@worker\n", "com.example.a", true},
+		{"ros2 helper wendy-ros2-cli-sidecar-fastrtps is not an app", "0::/wendy-apps/wendy-ros2-cli-sidecar-fastrtps\n", "", false},
+		{"ros2 helper wendy-ros2-host-inspector is not an app", "0::/wendy-apps/wendy-ros2-host-inspector\n", "", false},
+		{"ros2 helper wendy-ros2-system-cli is not an app", "0::/wendy-apps/wendy-ros2-system-cli\n", "", false},
+		{"budgeted child forgery yields parent id", "0::/wendy-apps/system.slice:edge-agent:com.attacker/system.slice:edge-agent:com.victim\n", "com.attacker", true},
 		{"cgroupfs multi service strips suffix", "0::/system.slice/system.slice:edge-agent:com.example.a@worker\n", "com.example.a", true},
 		{"cgroupfs other systemd service", "0::/system.slice/system.slice:other-agent:com.example.a\n", "", false},
 		// FORGERY ATTEMPT (cgroupfs): a peer that owns app com.attacker and has
