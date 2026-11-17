@@ -280,7 +280,7 @@
 
     struct DragonwingSwitchDiagram: View {
         var boot = false
-        var pole = "SW2-3"
+        var pole = "DIP switch 3"
         var number = "3"
         var body: some View {
             HStack(spacing: 28) {
@@ -309,7 +309,7 @@
                             : "Power off, move \(pole) toward the printed ON label, then power on to enter EDL."
                     )
                     Text(
-                        "\(pole) only. Leave the other switches unchanged. Match the ON marking on your EVK; this drawing shows the switch upright."
+                        "Use only switch 3 in the MODE bank. Leave switches 1, 2 and 4 unchanged. Match the printed ON marking; this drawing shows the switch upright."
                     )
                     .font(.caption).foregroundStyle(.secondary)
                     Label("Mac ↔ USB0 (USB-C)", systemImage: "cable.connector").font(.callout)
