@@ -25,6 +25,9 @@ type Meta struct {
 	ImageVersion string    `json:"imageVersion,omitempty"`
 	ImageSource  string    `json:"imageSource,omitempty"`
 	DiskBytes    int64     `json:"diskBytes,omitempty"`
+	// Arch is the guest architecture, fixed at creation. Empty means ARM64
+	// (see GuestArch) and is what every VM created before it existed has.
+	Arch Arch `json:"arch,omitempty"`
 	// MAC is allocated once per newly-created VM, not derived from its name.
 	MAC string `json:"mac,omitempty"`
 
