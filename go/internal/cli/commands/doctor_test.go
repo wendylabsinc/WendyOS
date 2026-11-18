@@ -557,3 +557,9 @@ func TestDoctorFallsBackToTheRecordedGuestArch(t *testing.T) {
 		t.Errorf("looked up %v, want qemu-system-x86_64 from the sidecar", looked)
 	}
 }
+
+func TestDoctorFirmwareLabelDoesNotNameOneGuest(t *testing.T) {
+	if label := doctorCheckLabel("qemu_firmware"); strings.Contains(label, "ARM64") || strings.Contains(label, "x86") {
+		t.Errorf("firmware check label %q names one guest architecture; the check follows the VM's", label)
+	}
+}
