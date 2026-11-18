@@ -117,6 +117,8 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 // connectToCloudAgentWithAuthExpecting checks a saved identity before treating
 // a Cloud name match as the same device (see connectToPinnedCloudName).
 func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err

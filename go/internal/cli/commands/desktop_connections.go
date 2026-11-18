@@ -290,19 +290,28 @@ func localCloudCandidates(ctx context.Context, asset cloudDiscoveryDevice, expec
 	if len(addresses) != 0 {
 		return addresses
 	}
+	addDevice := func(d models.LANDevice) {
+		if d.IsMTLS && (matches(d.ID, d.DisplayName, d.Hostname) || matches(models.CanonicalDevicePrincipal(d.PrincipalURI), d.DisplayName, d.Hostname)) {
+			add(d.IPAddress, d.Port, d.NetworkInterface)
+		}
+	}
+	if browse, ok := ctx.Value(cloudLANBrowseKey{}).(*cloudLANBrowse); ok {
+		browse.visit(ctx, func(d models.LANDevice) bool {
+			addDevice(d)
+			return len(addresses) != 0
+		})
+		return addresses
+	}
 	// On a cold launch the background browse may not have populated the cache.
-	browseCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	browseCtx, cancel := context.WithTimeout(ctx, cloudLANBrowseTimeout)
 	defer cancel()
-	for event := range discovery.StreamLAN(browseCtx, discovery.StreamOptions{UseCache: true}) {
-		d := event.Device
+	for event := range cloudLANStream(browseCtx, discovery.StreamOptions{UseCache: true}) {
 		if event.Kind != discovery.LANFound && event.Kind != discovery.LANUpdated {
 			continue
 		}
-		if d.IsMTLS && (matches(d.ID, d.DisplayName, d.Hostname) || matches(models.CanonicalDevicePrincipal(d.PrincipalURI), d.DisplayName, d.Hostname)) {
-			add(d.IPAddress, d.Port, d.NetworkInterface)
-			if len(addresses) != 0 {
-				return addresses
-			}
+		addDevice(event.Device)
+		if len(addresses) != 0 {
+			return addresses
 		}
 	}
 	return addresses

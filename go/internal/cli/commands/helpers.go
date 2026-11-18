@@ -3868,6 +3868,13 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		}
 	}
 
+	if selected, matched, err := connectKnownCloudName(ctx, device, cfg); matched {
+		if err == nil && isDefault {
+			noteImplicitDevice(device, implicitDefaultDevice)
+		}
+		return selected, err
+	}
+
 	// Check if the device flag matches a discovered device ID (e.g.
 	// "adb:emulator-5554"). Skip this for anything that looks like a network
 	// address — a ".local" mDNS name, hostname, or IP all contain a "." (or
