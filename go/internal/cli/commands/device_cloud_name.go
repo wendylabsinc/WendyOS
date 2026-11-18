@@ -19,6 +19,33 @@ type cloudNameResolutionError struct{ error }
 
 func (e *cloudNameResolutionError) Unwrap() error { return e.error }
 
+// A Cloud-authenticated name binding already identifies an agent. Resolve it
+// with its pinned session before probing unrelated external providers or DNS.
+// Addresses, provider selectors, and names learned only from LAN keep their
+// existing resolution order.
+func connectKnownCloudName(ctx context.Context, device string, options resolveConfig) (*SelectedDevice, bool, error) {
+	if device == "" || strings.ContainsAny(device, ".:/[]") || cloudFallbackDisabled("") || options.enrollmentTrustRecovery {
+		return nil, false, nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, false, nil
+	}
+	pin, _, pinned := lookupPin(cfg, pinKeyForAddr(device))
+	expected := expectedIdentityForPin(pin)
+	if !pinned || pin.Source != config.PinSourceCloud || pin.CloudGRPC == "" || expected == nil || expected.EntityType != certs.EntityAsset || expected.EntityID == "" {
+		return nil, false, nil
+	}
+	conn, err := connectToPinnedCloudName(ctx, cfg, device)
+	if err == nil && !options.suppressUpdateCheck && !options.readOnlyMonitoring {
+		conn, err = checkAndOfferUpdateFn(ctx, conn)
+	}
+	if err != nil {
+		return nil, true, &cloudNameResolutionError{err}
+	}
+	return &SelectedDevice{Agent: conn}, true, nil
+}
+
 // An explicit Cloud display name or UUID need not exist in local DNS. After
 // local name resolution fails, look up that same selection in Cloud. Addresses
 // and typed transport selectors keep their original connection semantics.
@@ -28,6 +55,10 @@ func connectUnresolvedCloudName(ctx context.Context, device string, cause error,
 			err = &cloudNameResolutionError{err}
 		}
 	}()
+	var resolved *cloudNameResolutionError
+	if errors.As(cause, &resolved) {
+		return nil, cause, false
+	}
 	missingExpected := errors.Is(cause, certs.ErrExpectedDeviceIdentity)
 	if device == "" || strings.ContainsAny(device, ".:/[]") || net.ParseIP(device) != nil ||
 		cause == nil || ctx.Err() != nil || cloudFallbackDisabled("") ||

@@ -268,6 +268,8 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			// nil off Jetson, on agents predating the field, and on the
 			// BLE/provider paths.
 			var powerMode *agentpb.PowerMode
+			var osUpdateStatus *agentpb.GetOSUpdateStatusResponse
+			var organization *deviceOrganizationInfo
 
 			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
 				cliLogln("Connecting to %s via Bluetooth...", tui.Device(target.Bluetooth.DisplayName))
@@ -285,16 +287,10 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				osVersion = bleResp.GetOsVersion()
 				cpuArch = bleResp.GetCpuArchitecture()
 			} else if target.Agent != nil {
-				if err := ctx.Err(); err != nil {
+				var resp *agentpb.GetAgentVersionResponse
+				resp, osUpdateStatus, organization, err = fetchDeviceInfo(ctx, target.Agent)
+				if err != nil {
 					return err
-				}
-				resp, cached := target.Agent.CachedAgentVersion()
-				if !cached {
-					var respErr error
-					resp, respErr = target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-					if respErr != nil {
-						return fmt.Errorf("getting agent version: %w", respErr)
-					}
 				}
 				agentVersion = resp.GetVersion()
 				osName = resp.GetOs()
@@ -337,21 +333,6 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			} else {
 				return fmt.Errorf("selected device does not support this command")
 			}
-
-			// Read only the persisted update outcome. A live engine scan can mount
-			// inactive partitions and probe boot firmware; it belongs to the explicit
-			// `wendy os update-status` command. Older agents may not support this RPC.
-			var osUpdateStatus *agentpb.GetOSUpdateStatusResponse
-			if target.Agent != nil {
-				statusCtx, cancel := context.WithTimeout(ctx, deviceInfoOSUpdateTimeout)
-				if resp, err := target.Agent.AgentService.GetOSUpdateStatus(statusCtx,
-					&agentpb.GetOSUpdateStatusRequest{}); err == nil {
-					osUpdateStatus = resp
-				}
-				cancel()
-			}
-
-			organization := deviceOrganization(ctx, target.Agent)
 
 			var latestVersion string
 			if checkUpdates {

@@ -225,6 +225,8 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 		}
 		return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
 	}
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	if selector.TenantUUID != "" {
 		assets, err := fetchDefaultCloudAssetsV2Fn(ctx, auth, true)
 		if err != nil {
