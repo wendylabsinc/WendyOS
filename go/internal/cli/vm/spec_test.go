@@ -292,3 +292,73 @@ func TestARM64ArgsAreUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// withoutMachineAccelCPU drops the -machine, -accel and -cpu pairs, the only
+// arguments that differ between the two guests.
+func withoutMachineAccelCPU(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-machine", "-accel", "-cpu":
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
+func TestX86ArgsUseQ35AndTheHostCPUUnderKVM(t *testing.T) {
+	x86 := testSpec()
+	x86.Arch, x86.Accel = ArchAMD64, AccelKVM
+	args, err := x86.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-machine q35", "-accel kvm", "-cpu host"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("x86-64 KVM args missing %q; got %q", want, joined)
+		}
+	}
+	arm := testSpec()
+	arm.Accel = AccelKVM
+	armArgs, err := arm.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(withoutMachineAccelCPU(args), "\n"), strings.Join(withoutMachineAccelCPU(armArgs), "\n"); got != want {
+		t.Errorf("x86-64 args differ from ARM64 beyond machine, accel and cpu:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestX86ArgsNameACPUModelWhenEmulated(t *testing.T) {
+	spec := testSpec()
+	spec.Arch, spec.Accel = ArchAMD64, AccelTCG
+	args, err := spec.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-machine q35", "-accel tcg", "-cpu Skylake-Client"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("emulated x86-64 args missing %q; got %q", want, joined)
+		}
+	}
+	for _, arg := range args {
+		if arg == "max" {
+			t.Errorf("emulated x86-64 args use -cpu max, which crashes Mesa's renderer: %q", joined)
+		}
+	}
+}
+
+func TestBinaryFollowsTheGuestArchitecture(t *testing.T) {
+	x86 := testSpec()
+	x86.Arch = ArchAMD64
+	if got := strings.TrimSuffix(filepath.Base(x86.Binary()), ".exe"); got != "qemu-system-x86_64" {
+		t.Errorf("x86-64 Binary() = %q, want qemu-system-x86_64", got)
+	}
+	if got := strings.TrimSuffix(filepath.Base(testSpec().Binary()), ".exe"); got != "qemu-system-aarch64" {
+		t.Errorf("zero-Arch Binary() = %q, want qemu-system-aarch64", got)
+	}
+}

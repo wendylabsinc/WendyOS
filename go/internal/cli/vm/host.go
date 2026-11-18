@@ -1,6 +1,7 @@
-// Package vm runs a WendyOS ARM64 virtual machine on the developer's own
-// machine, so WendyOS can be evaluated and developed against without a Jetson
-// or a Raspberry Pi on the desk.
+// Package vm runs a WendyOS virtual machine on the developer's own machine, so
+// WendyOS can be evaluated and developed against without a Jetson or a
+// Raspberry Pi on the desk. The guest is ARM64, or x86-64 when the VM was
+// created for it.
 package vm
 
 import (

@@ -20,13 +20,18 @@ type Spec struct {
 	ESPEmulatorPath string
 	Profile         string
 	Name            string
-	DiskPath        string
-	FirmwareCode    string
-	FirmwareVars    string
-	MemoryMiB       int
-	CPUs            int
-	Accel           Accel
-	Net             NetConfig
+	// Arch is the guest architecture; the zero value is ARM64.
+	Arch         Arch
+	DiskPath     string
+	FirmwareCode string
+	FirmwareVars string
+	// FirmwareVarsTemplate is the packaged variables template an x86-64
+	// guest's store is copied from. Empty for ARM64.
+	FirmwareVarsTemplate string
+	MemoryMiB            int
+	CPUs                 int
+	Accel                Accel
+	Net                  NetConfig
 
 	// ConsoleLog, when set, sends the guest console and QEMU's own diagnostics
 	// to this file instead of the terminal. A detached VM has no terminal to
@@ -39,8 +44,8 @@ type Spec struct {
 	SerialPort int
 }
 
-// Binary names the emulator. Always the aarch64 system emulator: the guest is
-// ARM64 whatever the host is, because real WendyOS devices are ARM64.
+// Binary names the emulator: the system emulator for the guest architecture,
+// whatever the host is.
 func (s Spec) Binary() string {
 	if IsLiteProfile(s.Profile) {
 		if s.ESPEmulatorPath != "" {
@@ -49,11 +54,11 @@ func (s Spec) Binary() string {
 		return "esp-emu"
 	}
 	if runtime.GOOS == "windows" {
-		if path, err := FindQEMU(ArchARM64, runtime.GOOS); err == nil {
+		if path, err := FindQEMU(s.Arch, runtime.GOOS); err == nil {
 			return path
 		}
 	}
-	return "qemu-system-aarch64"
+	return s.Arch.QEMUBinary()
 }
 
 // Args returns the full argument list for Binary().
@@ -90,9 +95,9 @@ func (s Spec) Args() ([]string, error) {
 		// Names the guest in ps, so one VM can be found and stopped without
 		// matching on the emulator binary.
 		"-name", s.Name,
-		"-machine", MachineType(ArchARM64, s.Accel),
+		"-machine", MachineType(s.Arch, s.Accel),
 		"-accel", string(s.Accel),
-		"-cpu", CPUModel(ArchARM64, s.Accel),
+		"-cpu", CPUModel(s.Arch, s.Accel),
 		"-smp", strconv.Itoa(cpus),
 		"-m", strconv.Itoa(mem),
 
