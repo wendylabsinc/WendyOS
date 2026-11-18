@@ -11,19 +11,29 @@
 #   - WDY-2174: Dependabot PRs run the deterministic, secretless dependency policy in
 #     this same required job instead of receiving any repository secret. The policy
 #     rejects non-dependency changes and validates Action updates as published releases.
-#   - The model review is opt-in through the `review: security` label, like the other
-#     AI reviews. The Dependabot policy calls no model and still runs on every
-#     Dependabot PR without a label.
+#   - Human model reviews run when a PR becomes ready, or on an explicit rerun.
+#     Dependabot retains its deterministic policy on opened/synchronize/reopened,
+#     including drafts; the policy calls no model and receives no secrets.
 name: AI Security Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Open, non-draft same-repository PR to review again"
+        required: true
+        type: string
+      expected_head_sha:
+        description: "Exact immutable PR head SHA to review"
+        required: true
+        type: string
+
 concurrency:
-  # Unrelated label events must not cancel an active requested review.
-  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: security' && github.run_id || 'review' }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}"
   cancel-in-progress: true
 
 env:
@@ -34,17 +44,57 @@ jobs:
   security-review:
     name: Claude Security Review
     if: >-
+      (github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       !contains(github.event.pull_request.labels.*.name, 'ai-suggestion') &&
-      ((github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action != 'labeled') ||
-      (contains(github.event.pull_request.labels.*.name, 'review: security') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'review: security')))
+      ((github.event.pull_request.user.login == 'dependabot[bot]' &&
+      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened')) ||
+      (github.event.action == 'ready_for_review' && !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]'))) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
       pull-requests: write
     steps:
+      - name: Resolve and validate review target
+        if: env.IS_DEPENDABOT != 'true'
+        id: review-target
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TARGET_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          TARGET_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
+          TARGET_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        with:
+          script: |
+            const number = process.env.TARGET_PR_NUMBER;
+            const head = process.env.TARGET_HEAD_SHA;
+            if (!/^[1-9][0-9]*$/.test(number) || !Number.isSafeInteger(Number(number)) || !/^[0-9a-f]{40}$/.test(head)) {
+              throw new Error("A PR number and immutable expected head SHA are required");
+            }
+            if (context.eventName === "workflow_dispatch" && context.ref !== "refs/heads/main") {
+              throw new Error("Review reruns must use the trusted main workflow");
+            }
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: Number(number)});
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.number !== Number(number) || pr.state !== "open" || pr.draft !== false ||
+                pr.head?.repo?.full_name !== repo || pr.base?.repo?.full_name !== repo ||
+                pr.head?.sha !== head || !/^[0-9a-f]{40}$/.test(pr.base?.sha) ||
+                (process.env.TARGET_BASE_SHA && pr.base.sha !== process.env.TARGET_BASE_SHA) ||
+                context.actor === "dependabot[bot]" || pr.user?.login === "dependabot[bot]") {
+              throw new Error("Review target must be an open, non-draft, same-repository human PR at the expected revision");
+            }
+            if (pr.base.ref !== "main" || pr.labels.some(label => label.name === "ai-suggestion")) {
+              throw new Error("Security review target is outside the permitted PR policy");
+            }
+            core.setOutput("number", String(pr.number));
+            core.setOutput("head", pr.head.sha);
+            core.setOutput("base", pr.base.sha);
+            core.setOutput("title", pr.title);
+            core.setOutput("body", pr.body || "");
+
       - name: Verify origin repo
+        if: env.IS_DEPENDABOT == 'true'
         env:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
@@ -58,7 +108,7 @@ jobs:
         if: env.IS_DEPENDABOT != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.review-target.outputs.base }}
           persist-credentials: false
 
       - name: Bootstrap pinned batched reviewer when absent from base
@@ -87,7 +137,7 @@ jobs:
       - name: Fetch immutable review history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ env.IS_DEPENDABOT == 'true' && github.event.pull_request.base.sha || steps.review-target.outputs.base }}
           path: review-history
           fetch-depth: 0
           sparse-checkout: .github/scripts
@@ -96,10 +146,10 @@ jobs:
       - name: Fetch PR metadata and diff
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ env.IS_DEPENDABOT == 'true' && github.event.pull_request.number || steps.review-target.outputs.number }}
           REPO: ${{ github.repository }}
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ env.IS_DEPENDABOT == 'true' && github.event.pull_request.head.sha || steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ env.IS_DEPENDABOT == 'true' && github.event.pull_request.base.sha || steps.review-target.outputs.base }}
         run: |
           set -euo pipefail
           metadata_tmp="$(mktemp)"
@@ -370,8 +420,8 @@ jobs:
       - name: Validate complete review input
         if: env.IS_DEPENDABOT != 'true'
         env:
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
         run: |
           python3 .github/scripts/security_review.py prepare-input \
             --metadata pr_meta.json \
@@ -385,7 +435,7 @@ jobs:
         env:
           # SECURITY: This isolated step needs GH_TOKEN only to fetch the prior bot comment for stateful review; fork PRs are rejected before token use.
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
           python3 .github/scripts/security_review.py fetch-state \
@@ -396,6 +446,21 @@ jobs:
       - name: Install Anthropic SDK
         if: env.IS_DEPENDABOT != 'true'
         run: pip install --quiet anthropic==0.97.0
+
+      - name: Recheck review target before model use
+        if: env.IS_DEPENDABOT != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
 
       - name: Run security review
         if: env.IS_DEPENDABOT != 'true'
@@ -424,13 +489,28 @@ jobs:
             --review "$REVIEW_FILE" \
             --output "$COMMENT_FILE"
 
+      - name: Recheck review target before publication
+        if: env.IS_DEPENDABOT != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
+
       - name: Post security review comment
         if: env.IS_DEPENDABOT != 'true'
         env:
           COMMENT_FILE: ${{ runner.temp }}/comment.md
           # SECURITY: GH_TOKEN is required here only to update the single bot-owned review comment after repo and PR inputs are validated.
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
           python3 .github/scripts/security_review.py post-comment \

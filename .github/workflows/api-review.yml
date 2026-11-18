@@ -2,21 +2,26 @@ name: AI Compatibility Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Same-repository PR to validate without publishing"
+        description: "Same-repository PR to validate or review again"
         required: true
         type: string
       expected_head_sha:
-        description: "Exact PR head SHA approved for this validation"
+        description: "Exact immutable PR head SHA to validate or review"
         required: true
         type: string
+      mode:
+        description: "Validate without publishing, or rerun the trusted main review"
+        required: true
+        default: validate
+        type: choice
+        options: [validate, review]
 
 concurrency:
-  # Unrelated label events must not cancel an active requested review.
-  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: api' && github.run_id || 'review' }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}"
   cancel-in-progress: true
 
 jobs:
@@ -25,12 +30,12 @@ jobs:
     # Repository secrets are unavailable to forks and Dependabot. Never execute
     # their PR code or give them a credentialed model-review fallback.
     if: >-
-      github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'review: api') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'review: api') &&
+      ((github.event_name == 'pull_request' && github.event.action == 'ready_for_review' &&
+      !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
+      github.event.pull_request.user.login != 'dependabot[bot]') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'review'))
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
@@ -38,11 +43,43 @@ jobs:
       pull-requests: write
     env:
       REPO: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
       CLAUDE_MODEL: claude-opus-5-5
     steps:
+      - name: Resolve and validate review target
+        id: review-target
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TARGET_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          TARGET_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
+          TARGET_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        with:
+          script: |
+            const number = process.env.TARGET_PR_NUMBER;
+            const head = process.env.TARGET_HEAD_SHA;
+            if (!/^[1-9][0-9]*$/.test(number) || !Number.isSafeInteger(Number(number)) || !/^[0-9a-f]{40}$/.test(head)) {
+              throw new Error("A PR number and immutable expected head SHA are required");
+            }
+            if (context.eventName === "workflow_dispatch" && context.ref !== "refs/heads/main") {
+              throw new Error("Review reruns must use the trusted main workflow");
+            }
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: Number(number)});
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.number !== Number(number) || pr.state !== "open" || pr.draft !== false ||
+                pr.head?.repo?.full_name !== repo || pr.base?.repo?.full_name !== repo ||
+                pr.head?.sha !== head || !/^[0-9a-f]{40}$/.test(pr.base?.sha) ||
+                (process.env.TARGET_BASE_SHA && pr.base.sha !== process.env.TARGET_BASE_SHA) ||
+                context.actor === "dependabot[bot]" || pr.user?.login === "dependabot[bot]") {
+              throw new Error("Review target must be an open, non-draft, same-repository human PR at the expected revision");
+            }
+            core.setOutput("number", String(pr.number));
+            core.setOutput("head", pr.head.sha);
+            core.setOutput("base", pr.base.sha);
+            core.exportVariable("EXPECTED_BASE_SHA", pr.base.sha);
+            core.setOutput("title", pr.title);
+            core.setOutput("body", pr.body || "");
+
       - name: Resolve current trusted main automation
         id: trusted-automation
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -172,6 +209,20 @@ jobs:
       # Review the complete diff semantically. Snapshot or protobuf-file hashes
       # confuse comments/formatting with API decisions, and cannot find durable
       # contracts such as network constants, storage paths, or config formats.
+      - name: Recheck review target before model use
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
+
       - name: Review API decisions and testing risk
         id: review
         env:
@@ -203,7 +254,7 @@ jobs:
         if: always() && steps.public-result.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: api-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          name: api-review-${{ steps.review-target.outputs.number }}-${{ steps.review-target.outputs.head }}
           path: ${{ runner.temp }}/api-review-result.json
           if-no-files-found: warn
           retention-days: 14
@@ -211,8 +262,24 @@ jobs:
       # Publish incomplete reviews too, retaining the failed check and previous
       # accepted decisions. Checkboxes track the maintainer's API acceptance;
       # unchecked decisions are not an additional merge gate.
-      - name: Publish API decision checklist and labels
+      - name: Recheck review target before publication
         if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
+        id: publication-target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
+
+      - name: Publish API decision checklist and labels
+        if: always() && steps.publication-target.outcome == 'success' && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -263,7 +330,7 @@ jobs:
 
   validate-candidate:
     name: Validate candidate API review without publication
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'validate'
     needs: validate-candidate-tests
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
@@ -304,7 +371,8 @@ jobs:
           metadata="$RUNNER_TEMP/api-review-pr-meta.json"
           gh api "repos/$REPO/pulls/$PR_NUMBER" > "$metadata"
           jq -e --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" \
-            '.head.repo.full_name == $repo and .head.sha == $head and .state == "open"' "$metadata" > /dev/null
+            '.head.repo.full_name == $repo and .base.repo.full_name == $repo and
+             .head.sha == $head and .state == "open" and .draft == false' "$metadata" > /dev/null
           base_sha=$(jq -r '.base.sha' "$metadata")
           [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
           diff_base_sha=$(git merge-base "$base_sha" "$EXPECTED_HEAD_SHA")
@@ -318,6 +386,16 @@ jobs:
           python3 .github/scripts/api_review_comment.py fetch-state \
             --repo "$REPO" --pr-number "$PR_NUMBER" \
             --output "$RUNNER_TEMP/previous-api-review.json"
+
+      - name: Recheck validation target before model use
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
 
       - name: Run candidate evidence review and reconciliation
         id: candidate

@@ -2,26 +2,72 @@ name: Docs Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [ready_for_review]
     branches: [main]
 
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Open, non-draft same-repository PR to review again"
+        required: true
+        type: string
+      expected_head_sha:
+        description: "Exact immutable PR head SHA to review"
+        required: true
+        type: string
+
 concurrency:
-  # Unrelated label events must not cancel an active requested review.
-  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: docs' && github.run_id || 'review' }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}"
   cancel-in-progress: true
 
 jobs:
   docs-review:
     name: Review docs coverage
     if: >-
-      contains(github.event.pull_request.labels.*.name, 'review: docs') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'review: docs') &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      ((github.event_name == 'pull_request' && github.event.action == 'ready_for_review' &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]') ||
+      github.event_name == 'workflow_dispatch')
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
       pull-requests: write
     steps:
+      - name: Resolve and validate review target
+        id: review-target
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TARGET_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          TARGET_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
+          TARGET_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        with:
+          script: |
+            const number = process.env.TARGET_PR_NUMBER;
+            const head = process.env.TARGET_HEAD_SHA;
+            if (!/^[1-9][0-9]*$/.test(number) || !Number.isSafeInteger(Number(number)) || !/^[0-9a-f]{40}$/.test(head)) {
+              throw new Error("A PR number and immutable expected head SHA are required");
+            }
+            if (context.eventName === "workflow_dispatch" && context.ref !== "refs/heads/main") {
+              throw new Error("Review reruns must use the trusted main workflow");
+            }
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: Number(number)});
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.number !== Number(number) || pr.state !== "open" || pr.draft !== false ||
+                pr.head?.repo?.full_name !== repo || pr.base?.repo?.full_name !== repo ||
+                pr.head?.sha !== head || !/^[0-9a-f]{40}$/.test(pr.base?.sha) ||
+                (process.env.TARGET_BASE_SHA && pr.base.sha !== process.env.TARGET_BASE_SHA) ||
+                context.actor === "dependabot[bot]" || pr.user?.login === "dependabot[bot]") {
+              throw new Error("Review target must be an open, non-draft, same-repository human PR at the expected revision");
+            }
+            if (pr.base.ref !== "main") throw new Error("Review target must use main as its base");
+            core.setOutput("number", String(pr.number));
+            core.setOutput("head", pr.head.sha);
+            core.setOutput("base", pr.base.sha);
+            core.setOutput("title", pr.title);
+            core.setOutput("body", pr.body || "");
+
       - name: Resolve current trusted main automation
         id: trusted-automation
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -50,10 +96,10 @@ jobs:
       - name: Get PR diff
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
           REPO: ${{ github.repository }}
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -83,13 +129,27 @@ jobs:
             python3 .github/scripts/review_sources_test.py
           fi
 
+      - name: Recheck review target before model use
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
+
       - name: Review docs with Claude
         env:
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PR_TITLE: ${{ github.event.pull_request.title || '' }}
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ steps.review-target.outputs.title }}
+          PR_BODY: ${{ steps.review-target.outputs.body }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
           REPO_NAME: ${{ github.event.repository.name }}
           REVIEW_FILE: ${{ runner.temp }}/review.md
         run: |
@@ -364,11 +424,25 @@ jobs:
           print(f'Prepared docs review comment at {comment_path}')
           PYEOF
 
+      - name: Recheck review target before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
+          EXPECTED_HEAD_SHA: ${{ steps.review-target.outputs.head }}
+          EXPECTED_BASE_SHA: ${{ steps.review-target.outputs.base }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" | jq -e \
+            --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.state == "open" and .draft == false and .head.repo.full_name == $repo and
+             .base.repo.full_name == $repo and .head.sha == $head and .base.sha == $base' > /dev/null
+
       - name: Post docs review comment
         env:
           COMMENT_FILE: ${{ runner.temp }}/comment.md
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.review-target.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
           python3 << 'PYEOF'
