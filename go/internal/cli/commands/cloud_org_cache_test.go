@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -30,7 +31,9 @@ func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 	t.Cleanup(func() { listOrgsFromCloud = old })
 	name := "Robotics"
 	var lookupErr error
+	lookups := 0
 	listOrgsFromCloud = func(_ context.Context, lookup *config.AuthConfig) ([]*pb.Organization, error) {
+		lookups++
 		// The issuer must survive: it is what keeps a cnf-bound token on DPoP
 		// instead of going out as a Bearer that Cloud rejects (WDY-3524).
 		if lookup.OAuthIssuer != auth.OAuthIssuer || lookup.APIKey != "current-token" {
@@ -47,9 +50,17 @@ func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 		t.Fatalf("persisted name = %q", got)
 	}
 	name = "Renamed Robotics"
+	if got := cloudOrganizationName(ctx, auth); got != "Robotics" || lookups != 1 {
+		t.Fatalf("fresh cache triggered a lookup: name=%q lookups=%d", got, lookups)
+	}
+	expireOrganizationNameCache(t)
 	if got := cloudOrganizationName(ctx, auth); got != name {
 		t.Fatalf("refreshed name = %q", got)
 	}
+	if lookups != 2 {
+		t.Fatalf("expired cache did not refresh: lookups=%d", lookups)
+	}
+	expireOrganizationNameCache(t)
 	lookupErr = errors.New("offline")
 	if got := cloudOrganizationName(ctx, auth); got != name {
 		t.Fatalf("offline name = %q", got)
@@ -57,6 +68,9 @@ func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 	lookupErr, name = nil, ""
 	if got := cloudOrganizationName(ctx, auth); got != "Renamed Robotics" {
 		t.Fatalf("empty response erased cached name: %q", got)
+	}
+	if lookups != 4 {
+		t.Fatalf("failed refresh incorrectly renewed the cache: lookups=%d", lookups)
 	}
 	// An access token that would need a refresh is never refreshed by a
 	// display lookup: the last known name stands.
@@ -76,6 +90,32 @@ func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dir, "organization-names.json"))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("name cache was not persisted privately")
+	}
+}
+
+func expireOrganizationNameCache(t *testing.T) {
+	t.Helper()
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "organization-names.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache map[string]json.RawMessage
+	if err := json.Unmarshal(data, &cache); err != nil {
+		t.Fatal(err)
+	}
+	// A pre-TTL cache has no timestamps and must refresh on its next read.
+	delete(cache, "updatedAt")
+	data, err = json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 
