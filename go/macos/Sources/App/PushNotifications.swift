@@ -156,10 +156,16 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
     }
 
     #if os(iOS)
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
-        let tap = MobileNotificationTap(userInfo: response.notification.request.content.userInfo)
-        await MobileNotificationRouting.shared.receive(tap)
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
+        let tap = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            ? MobileNotificationTap(userInfo: response.notification.request.content.userInfo) : nil
+        // UIKit updates its snapshot when this callback completes. Keep both
+        // routing and completion on main; the async delegate bridge can resume
+        // its completion on a cooperative executor and crash during activation.
+        DispatchQueue.main.async {
+            if let tap { MobileNotificationRouting.shared.receive(tap) }
+            completionHandler()
+        }
     }
     #endif
 

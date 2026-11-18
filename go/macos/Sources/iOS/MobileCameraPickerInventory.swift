@@ -14,3 +14,24 @@ struct CameraPickerInventory {
         }
     }
 }
+
+
+extension GoClient {
+    // A picker refresh must query inventory even when detail navigation already
+    // has this device connected. Its temporary session never replaces that view.
+    func cameraChoices(device: Device) async throws -> [Camera] {
+        let queue = DispatchQueue(label: "dev.wendy.mobile.camera-choices", qos: .userInitiated)
+        let handle = WDPreviewCreate()
+        guard handle != 0 else { throw WendyError(message: "Camera access is paused. Try again.") }
+        let result: Result<[Camera], Error> = await withTaskCancellationHandler {
+            do {
+                return .success(try await BlockingWork.run(on: queue) {
+                    try Self.withCString(device.selector) { try Self.readCameras(WDPreviewCameras(handle, $0, device.requiresMTLS ? 1 : 0)) }
+                })
+            } catch { return .failure(error) }
+        } onCancel: { WDPreviewCancel(handle) }
+        _ = try? await BlockingWork.run(on: queue, unlessCancelled: false) { WDPreviewClose(handle) }
+        try Task.checkCancellation()
+        return try result.get()
+    }
+}

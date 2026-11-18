@@ -107,3 +107,18 @@ enum MobileNotificationRecording {
         throw WendyError(message: "This recording is still being saved or is no longer available. Tap the alert again in a moment, or check Data.")
     }
 }
+
+// These messages are authored by the app, rather than returned by a device.
+// Preserve their actionable guidance while sanitizing all other failures.
+enum MobileNotificationMessage {
+    static func display(_ failure: WendyError) -> String {
+        let messages: Set<String> = [
+            "Switch to this alert’s organization in Settings to open it.",
+            "This alert has an invalid reference.",
+            "This alert’s device is no longer available in this organization.",
+            "This notification is no longer available.",
+            "This recording is still being saved or is no longer available. Tap the alert again in a moment, or check Data."
+        ]
+        return messages.contains(failure.message) ? failure.message : PresentedFailure(failure).message
+    }
+}

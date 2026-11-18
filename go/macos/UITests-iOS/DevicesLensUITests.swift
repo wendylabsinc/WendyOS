@@ -902,6 +902,109 @@ final class DevicesLensUITests: XCTestCase {
         print("DEVICE_QA warm recording library: \(Date().timeIntervalSince(warm)) s")
     }
 
+    func testRecordingKindsFromIndexBeforeSlowDetails() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_GALLERY_FIXTURE"] == "1")
+        launch()
+        _ = openDevice("Devices UI QA", source: "local")
+        XCTAssertTrue(app.segmentedControls.buttons["Data"].waitForExistence(timeout: 30), app.debugDescription)
+        app.segmentedControls.buttons["Data"].tap()
+        app.buttons["All recordings"].tap()
+        XCTAssertTrue(app.buttons["data.episode.media-video"].waitForExistence(timeout: 10))
+        for (label, id) in [("Video", "video"), ("Audio", "audio"), ("ROS bag", "ros"), ("Mixed", "mixed"), ("Images", "images"), ("Dataset", "dataset")] {
+            let start = Date()
+            app.buttons["data.kindFilter"].firstMatch.tap()
+            app.buttons[label].firstMatch.tap()
+            XCTAssertTrue(app.buttons["data.episode.media-" + id].waitForExistence(timeout: 3))
+            let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "data.episode.media-"))
+            XCTAssertEqual(rows.count, 1, "Wrong rows for " + label)
+            print("FILTER_QA \(label): \(Date().timeIntervalSince(start)) seconds")
+        }
+        capture("All recording kind filters checked")
+    }
+
+    func testCameraPickerKeepsSelectionAcrossSearchAndRefresh() async throws {
+        guard let address = ProcessInfo.processInfo.environment["WENDY_UI_GALLERY_CONTROL"],
+              let base = URL(string: address), base.host == "127.0.0.1" else { throw XCTSkip("Requires local gallery fixture") }
+        func changeCameras(_ state: String) async throws {
+            var request = URLRequest(url: base.appendingPathComponent("cameras/" + state)); request.httpMethod = "POST"
+            let (_, response) = try await URLSession.shared.data(for: request)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        }
+        try await changeCameras("full")
+        if let socket = ProcessInfo.processInfo.environment["WENDY_UI_AGENT_SOCKET"] { app.launchEnvironment["WENDY_AGENT_SOCKET"] = socket }
+        continueAfterFailure = false
+        app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        app.launch()
+        if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
+        XCTAssertTrue(app.otherElements["home.widgets.ready"].waitForExistence(timeout: 20))
+        let add = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Add widgets")).firstMatch
+        if add.exists { add.tap() } else {
+            let widget = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
+            widget.press(forDuration: 0.7); app.buttons["Edit"].tap(); app.buttons["Add widget"].tap()
+        }
+        app.buttons["Add Camera feed"].tap()
+        app.buttons["home.widget.selectDevices"].tap()
+        let device = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Devices UI QA")).firstMatch
+        XCTAssertTrue(device.waitForExistence(timeout: 15)); device.tap()
+        app.buttons["home.widget.selectResource"].tap()
+        XCTAssertTrue(app.buttons["QA Camera"].waitForExistence(timeout: 30), app.debugDescription); app.buttons["QA Camera"].tap()
+        app.buttons["home.widget.selectResource"].tap()
+        let search = app.searchFields["Search cameras"]
+        search.tap(); search.typeText("NoSuchCamera")
+        XCTAssertTrue(app.buttons["QA Camera"].exists, "Search erased selected camera")
+        app.buttons["Clear text"].tap()
+        search.typeText("\n")
+        if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+        try await changeCameras("empty")
+        app.collectionViews["home.widget.resourceList"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).press(forDuration: 0.1, thenDragTo: app.collectionViews["home.widget.resourceList"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)))
+        XCTAssertTrue(app.staticTexts["Not currently reported"].firstMatch.waitForExistence(timeout: 15), "Refresh did not fetch current camera inventory")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "QA Camera")).firstMatch.exists, "Refresh removed the selected camera")
+        capture("Camera choice retained when unavailable")
+        try await changeCameras("full")
+        app.collectionViews["home.widget.resourceList"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).press(forDuration: 0.1, thenDragTo: app.collectionViews["home.widget.resourceList"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)))
+        XCTAssertTrue(app.staticTexts["Not currently reported"].firstMatch.waitForNonExistence(timeout: 15))
+    }
+
+    func testLiveNotificationTap() throws {
+        let mode = ProcessInfo.processInfo.environment["WENDY_UI_NOTIFICATION_EXPECT"] ?? ""
+        try XCTSkipUnless(!mode.isEmpty)
+        launch()
+        _ = openDevice("joannis-agx-thor", source: "cloud")
+        XCTAssertTrue(app.segmentedControls.buttons["Settings"].waitForExistence(timeout: 30), app.debugDescription)
+        app.segmentedControls.buttons["Settings"].tap()
+        let notifications = app.buttons["device.settings.Notifications"]
+        for _ in 0..<5 { if notifications.isHittable { break }; app.swipeUp() }
+        notifications.tap()
+        XCTAssertTrue(app.navigationBars["Notifications"].waitForExistence(timeout: 10))
+        let enable = app.buttons["Enable notifications on this device"]
+        if enable.waitForExistence(timeout: 3) && enable.isEnabled {
+            enable.tap()
+            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            let allow = springboard.buttons["Allow"]
+            if allow.waitForExistence(timeout: 5) { allow.tap() }
+        }
+        XCUIDevice.shared.press(.home)
+        print("NOTIFICATION_QA_READY")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Wendy QA routing")).firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 60), springboard.debugDescription)
+        banner.tap()
+        if mode == "organization" {
+            XCTAssertTrue(app.staticTexts["Switch to this alert’s organization in Settings to open it."].waitForExistence(timeout: 15))
+            XCTAssertFalse(app.buttons["recording.channels"].exists)
+        } else {
+            let opened = app.buttons["recording.channels"].waitForExistence(timeout: 40)
+            if !opened && app.alerts.buttons["Details"].exists {
+                app.alerts.buttons["Details"].tap()
+                print("NOTIFICATION_QA_DETAILS: " + app.debugDescription)
+                capture("Notification failure details")
+            }
+            XCTAssertTrue(opened, app.debugDescription)
+            XCTAssertFalse(app.buttons["Retry playback"].exists)
+        }
+        capture("Notification routing " + mode)
+    }
+
     private func openDevice(_ name: String, source: String) -> XCUIElement {
         let tile = app.buttons["devices.home.\(source)"]
         XCTAssertTrue(tile.waitForExistence(timeout: 15))

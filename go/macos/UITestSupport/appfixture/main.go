@@ -34,13 +34,20 @@ const webApp = "people-counter"
 // A campaign clip for the Activity → episode picker UI check.
 type activityService struct {
 	v2.UnimplementedDataServiceServer
+	gallery bool
 }
 
-func (activityService) Episodes(context.Context, *v2.DataEpisodesRequest) (*v2.DataEpisodesResponse, error) {
+func (a activityService) Episodes(context.Context, *v2.DataEpisodesRequest) (*v2.DataEpisodesResponse, error) {
+	if a.gallery {
+		return galleryEpisodes(), nil
+	}
 	return &v2.DataEpisodesResponse{Episodes: []*v2.DataEpisode{{Id: "test-person", Name: "QA doorway", StartedUnixNanos: 1793995200000000000}}}, nil
 }
 
-func (activityService) Inspect(_ context.Context, req *v2.DataInspectRequest) (*v2.DataInspectResponse, error) {
+func (a activityService) Inspect(ctx context.Context, req *v2.DataInspectRequest) (*v2.DataInspectResponse, error) {
+	if a.gallery {
+		return galleryInspect(ctx, req)
+	}
 	if req.Episode != "test-person" {
 		return nil, status.Error(codes.NotFound, "unknown episode")
 	}
@@ -139,6 +146,8 @@ func (t telemetry) StreamLogs(req *pb.StreamLogsRequest, stream grpc.ServerStrea
 
 // Keep the advertised address fixed across outages, as it would be when a board returns.
 type fixtureDevice struct {
+	gallery    bool
+	cameras    *cameraService
 	mu         sync.Mutex
 	address    string
 	socket     string
@@ -158,8 +167,8 @@ func (d *fixtureDevice) setOnline(online bool) (int, error) {
 		d.address = listener.Addr().String()
 		d.generation++
 		server := grpc.NewServer()
-		v2.RegisterDataServiceServer(server, activityService{})
-		pb.RegisterWendyVideoServiceServer(server, &cameraService{})
+		v2.RegisterDataServiceServer(server, activityService{gallery: d.gallery})
+		pb.RegisterWendyVideoServiceServer(server, d.cameras)
 		pb.RegisterWendyContainerServiceServer(server, d.apps)
 		pb.RegisterWendyAgentServiceServer(server, deviceService{})
 		pb.RegisterWendyTelemetryServiceServer(server, telemetry{generation: d.generation})
@@ -188,6 +197,7 @@ func (d *fixtureDevice) setOnline(online bool) (int, error) {
 func main() {
 	socket := flag.String("socket", "", "optional private Unix socket for simulator UI tests")
 	recovery := flag.Bool("recovery", false, "enable the loopback controls for the connection recovery test")
+	gallery := flag.Bool("gallery", false, "provide all recording kinds and mutable camera choices")
 	flag.Parse()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -197,7 +207,7 @@ func main() {
 	}
 	defer web.Close()
 	apps := &containers{port: uint32(web.Addr().(*net.TCPAddr).Port)}
-	device := fixtureDevice{apps: apps, address: "127.0.0.1:0", socket: *socket}
+	device := fixtureDevice{apps: apps, address: "127.0.0.1:0", socket: *socket, gallery: *gallery, cameras: &cameraService{advanced: *gallery}}
 	if _, err := device.setOnline(true); err != nil {
 		log.Fatal(err)
 	}
@@ -207,6 +217,15 @@ func main() {
 		log.Fatal(err)
 	}
 	mux := http.NewServeMux()
+	if *gallery {
+		log.Printf("Gallery control URL: http://%s", web.Addr())
+		mux.HandleFunc("POST /cameras/{state}", func(w http.ResponseWriter, r *http.Request) {
+			device.cameras.mu.Lock()
+			device.cameras.empty = r.PathValue("state") == "empty"
+			device.cameras.mu.Unlock()
+			fmt.Fprintln(w, "ok")
+		})
+	}
 	if *recovery {
 		log.Printf("Recovery control URL: http://%s/recovery", web.Addr())
 		for _, state := range []string{"online", "offline"} {

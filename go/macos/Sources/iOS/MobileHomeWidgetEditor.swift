@@ -227,7 +227,10 @@ struct HomeWidgetEditor: View {
                 HStack { Text("Loading " + resourceKind.lowercased() + " choices…"); Spacer(); ProgressView() }
             }
             if !widget.resource.isEmpty {
-                Section("Selected") { resourceRow(widget.resource, widget.resourceTitle.isEmpty ? widget.resource : widget.resourceTitle) }
+                Section("Selected") {
+                    resourceRow(widget.resource, widget.resourceTitle.isEmpty ? widget.resource : widget.resourceTitle,
+                                available: widget.kind != .camera || cameraInventory.available.contains(widget.resource))
+                }
             }
             Section {
                 ForEach(cameras.filter { $0.stableID != widget.resource && matchesResource($0.name) }, id: \.orderKey) { camera in
@@ -253,6 +256,7 @@ struct HomeWidgetEditor: View {
                 }
             }
         }
+        .accessibilityIdentifier("home.widget.resourceList")
         .navigationTitle("Choose a " + resourceKind.lowercased()).navigationBarTitleDisplayMode(.inline)
         .searchable(text: $resourceSearch, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search " + resourceKind.lowercased() + "s")
         .task(id: widget.devices.first?.id) { await loadChoices() }
@@ -275,6 +279,15 @@ struct HomeWidgetEditor: View {
         guard let device, !loading else { return }
         loading = true; error = nil; defer { loading = false }
         let scope = model.mobileCloudSelectionKey
+        if widget.kind == .camera {
+            do {
+                let rows = try await GoClient.shared.cameraChoices(device: device)
+                guard !Task.isCancelled, scope == model.mobileCloudSelectionKey else { return }
+                cameraInventory.merge(rows)
+                if cameraInventory.available.isEmpty { error = "No cameras are currently reported. Your selection is kept." }
+            } catch { if !Task.isCancelled { self.error = PresentedFailure(error.localizedDescription).message } }
+            return
+        }
         await model.connect(device)
         guard !Task.isCancelled, scope == model.mobileCloudSelectionKey, model.mobileScopeIsCurrent,
               model.selectedDeviceReady, model.connected?.id == device.id else {
@@ -283,10 +296,6 @@ struct HomeWidgetEditor: View {
         let session = model.deviceSession
         do {
             switch widget.kind {
-            case .camera:
-                if let problem = model.camerasErrorFailure { throw problem }
-                cameraInventory.merge(model.cameras)
-                if cameras.isEmpty { error = "No cameras with a stable identity were reported." }
             case .campaign:
                 let rows = try await GoClient.shared.campaigns(session: session)
                 guard !Task.isCancelled, session == model.deviceSession, scope == model.mobileCloudSelectionKey else { return }

@@ -17,12 +17,22 @@ var cameraFrame []byte
 
 type cameraService struct {
 	pb.UnimplementedWendyVideoServiceServer
-	mu   sync.Mutex
-	gain int32
+	mu              sync.Mutex
+	gain            int32
+	advanced, empty bool
 }
 
-func (*cameraService) ListVideoDevices(context.Context, *pb.ListVideoDevicesRequest) (*pb.ListVideoDevicesResponse, error) {
-	return &pb.ListVideoDevicesResponse{Devices: []*pb.VideoDevice{{Id: 1, Name: "QA Camera", StableId: "qa:camera", PixelFormats: []string{"MJPG"}}}}, nil
+func (c *cameraService) ListVideoDevices(context.Context, *pb.ListVideoDevicesRequest) (*pb.ListVideoDevicesResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.empty {
+		return &pb.ListVideoDevicesResponse{}, nil
+	}
+	rows := []*pb.VideoDevice{{Id: 1, Name: "QA Camera", StableId: "qa:camera", PixelFormats: []string{"MJPG"}}}
+	if c.advanced {
+		rows = append(rows, &pb.VideoDevice{Id: 2, Name: "QA Back Camera", StableId: "qa:back", PixelFormats: []string{"MJPG"}})
+	}
+	return &pb.ListVideoDevicesResponse{Devices: rows}, nil
 }
 func (*cameraService) StreamVideo(_ *pb.StreamVideoRequest, stream grpc.ServerStreamingServer[pb.VideoFrame]) error {
 	ticker := time.NewTicker(200 * time.Millisecond)

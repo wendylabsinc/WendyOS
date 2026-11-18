@@ -252,7 +252,7 @@ struct MobileRootView: View {
                 notificationPresentation = MobileNotificationPresentation(device: device, cameraID: camera)
             } else { select(device) }
         } catch {
-            if !Task.isCancelled, model.mobileCloudSelectionKey == scope, notificationRouting.pending?.id == tap.id { model.alert = error.localizedDescription }
+            if !Task.isCancelled, model.mobileCloudSelectionKey == scope, notificationRouting.pending?.id == tap.id { model.alertFailure = WendyError(error) }
         }
     }
 
@@ -322,7 +322,7 @@ struct MobileRootView: View {
             }
             Button("Details") { details = model.alert; model.alert = nil }
             Button("OK", role: .cancel) { model.alert = nil }
-        } message: { Text(PresentedFailure(model.alertFailure ?? WendyError(message: "")).message) }
+        } message: { Text(MobileNotificationMessage.display(model.alertFailure ?? WendyError(message: ""))) }
         .sheet(isPresented: Binding(get: { details != nil }, set: { if !$0 { details = nil } })) {
             NavigationStack { ScrollView { Text(PresentedFailure(details ?? "").details).font(.caption.monospaced()).textSelection(.enabled).padding() }.navigationTitle("Details").toolbar { Button("Done") { details = nil } } }
         }

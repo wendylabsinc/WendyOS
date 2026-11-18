@@ -2,6 +2,11 @@ import XCTest
 @testable import WendyMobile
 
 final class MobileNotificationTests: XCTestCase {
+    func testNotificationGuidanceRemainsReadableWithoutExposingUnknownErrors() {
+        let message = "Switch to this alert’s organization in Settings to open it."
+        XCTAssertEqual(MobileNotificationMessage.display(WendyError(message: message)), message)
+        XCTAssertEqual(MobileNotificationMessage.display(WendyError(message: "internal server details")), "Wendy could not complete this request. Try again.")
+    }
     let org = "11111111-1111-1111-1111-111111111111"
     let event = "22222222-2222-2222-2222-222222222222"
     let deviceID = "33333333-3333-3333-3333-333333333333"
