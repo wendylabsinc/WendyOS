@@ -63,6 +63,28 @@ For broad hardware inspection, filter the device capability list:
 wendy device hardware list --category camera
 ```
 
+### Camera pipelines run without root
+
+The agent runs as root, but on Linux the GStreamer processes it starts to capture, encode and receive camera video do not. Each one runs as the `nobody` user with only the `video` and `render` groups, no capabilities, and `no_new_privs` set, so a bug in a GStreamer plugin that parses bytes from a camera is not a root compromise of the device. That matters most for an IP camera, which is a network peer. A camera read through the PipeWire session runs as the `wendy` user instead, because only that user can reach the session.
+
+This is a privilege drop, not a full sandbox: the process still sees the device's filesystem and network, and can open every device node those two groups can.
+
+Set `WENDY_CAMERA_SANDBOX` in `/etc/default/wendy-agent` and restart the agent to change it:
+
+| Value | Camera pipelines run |
+|-------|----------------------|
+| unset or `on` | Without root. On a device that cannot start a process that way, the agent logs `camera sandbox unavailable` once with the cause, and runs them as root as earlier agents did. |
+| `require` | Without root. On a device that cannot start a process that way, the stream fails with `camera sandbox unavailable and WENDY_CAMERA_SANDBOX=require` and the cause. |
+| `off` | As root. The agent logs `camera sandbox is off` when it starts. |
+
+A pipeline that starts without root and then fails is never retried as root. If a camera that worked with an earlier agent now fails, a device node it needs may not be open to the `video` or `render` group on that device. For a USB or CSI camera the error then says `Permission denied` and names this setting; an IP camera reports only that its pipeline failed. Turn the sandbox off to get the camera back, and report the device and camera model:
+
+```sh
+WENDY_CAMERA_SANDBOX=off
+```
+
+The file lives on the OS partition, so an OS update resets it.
+
 ## Share a camera opened by an app
 
 Wendy viewers and snapshots share one capture stream. If an app opens the

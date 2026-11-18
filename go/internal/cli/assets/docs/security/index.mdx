@@ -85,6 +85,11 @@ target that enforces it; there is no legacy device-credential write fallback.
 baseline seccomp profile, explicit capability grants, and entitlement-gated access to hardware,
 Bluetooth (D-Bus proxied), and host networking. No entitlement, no access.
 
+**Camera pipelines.** The agent runs as root, but the GStreamer processes it starts for USB, CSI
+and IP cameras run as an unprivileged user with no capabilities and `no_new_privs`. They keep the
+host's filesystem view and network. See
+[Camera pipelines run without root](/docs/hardware/camera#camera-pipelines-run-without-root).
+
 ## Software Bill of Materials & build provenance
 
 Every WendyOS release includes SPDX SBOMs for each shipped binary, Swift packages, and the whole-repo source tree. Release archives for the `wendy` CLI and `wendy-agent` also carry Sigstore-backed SLSA build provenance and SBOM attestations, verifiable without managing signing keys.
