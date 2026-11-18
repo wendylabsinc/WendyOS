@@ -334,15 +334,18 @@ func TestRunShapedPipelines_AddsEncoderAsSoonAsAViewerArrives(t *testing.T) {
 }
 
 func TestRunShapedPipelines_DropsEncoderOnlyAfterGrace(t *testing.T) {
+	const grace = 150 * time.Millisecond
 	demand := newFakeEncodeDemand(true, true)
 	launches := newRecordedLaunches()
-	runShaped(t, demand, 150*time.Millisecond, launches)
+	runShaped(t, demand, grace, launches)
 	if shape := launches.next(t, time.Second); !shape.encode {
 		t.Fatal("first launch has no encoder for a viewer")
 	}
 	demand.set(false, true)
-	launches.none(t, 75*time.Millisecond)
-	if shape := launches.next(t, 425*time.Millisecond); shape.encode {
+	// The grace starts once the loop reads the change, so it cannot end within
+	// half of it. The relaunch comes after the rest, with room for a slow runner.
+	launches.none(t, grace/2)
+	if shape := launches.next(t, grace+2*time.Second); shape.encode {
 		t.Fatal("relaunch after the grace still runs the encoder")
 	}
 	if restarts, encodes := demand.reported(); restarts != 1 || !reflect.DeepEqual(encodes, []bool{true, false}) {
@@ -351,7 +354,9 @@ func TestRunShapedPipelines_DropsEncoderOnlyAfterGrace(t *testing.T) {
 }
 
 func TestRunShapedPipelines_FlappingViewerKeepsTheEncoder(t *testing.T) {
-	const grace = 150 * time.Millisecond
+	// The grace is long next to the 50ms toggles, so a scheduling delay on a
+	// loaded runner cannot stretch one absence into a whole grace.
+	const grace = time.Second
 	demand := newFakeEncodeDemand(true, true)
 	launches := newRecordedLaunches()
 	runShaped(t, demand, grace, launches)
@@ -360,6 +365,8 @@ func TestRunShapedPipelines_FlappingViewerKeepsTheEncoder(t *testing.T) {
 		demand.set(i%2 == 1, true)
 		time.Sleep(50 * time.Millisecond)
 	}
+	// Past a grace from the last absence, so a timer any of them left running
+	// would have fired by now.
 	launches.none(t, grace+50*time.Millisecond)
 	if shapes, _ := launches.recorded(); len(shapes) != 1 {
 		t.Errorf("%d launches, want exactly one: %+v", len(shapes), shapes)

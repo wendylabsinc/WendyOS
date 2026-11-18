@@ -129,14 +129,17 @@ func TestDeviceHub_DemandChangedFiresOnJoinAndLeave(t *testing.T) {
 
 	// Nobody reads between these two joins. A poke that blocked on the full
 	// channel would hang the second subscribe while it holds the hub mutex.
+	// The goroutine reports through joinErr, never through t: the test may
+	// already have failed and returned while it is still stuck in a join.
 	done := make(chan struct{})
 	var ids []int
+	var joinErr error
 	go func() {
 		defer close(done)
 		for range 2 {
 			id, _, err := h.subscribePixels()
 			if err != nil {
-				t.Errorf("subscribePixels: %v", err)
+				joinErr = err
 				return
 			}
 			ids = append(ids, id)
@@ -144,9 +147,12 @@ func TestDeviceHub_DemandChangedFiresOnJoinAndLeave(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(2 * time.Second): // only guards against a hang
 		drainDemand(changed) // free the stuck join so the deferred unsubscribe can lock
 		t.Fatal("two joins with no receive between them blocked")
+	}
+	if joinErr != nil {
+		t.Fatalf("subscribePixels: %v", joinErr)
 	}
 	for _, id := range ids {
 		h.unsubscribe(id)
