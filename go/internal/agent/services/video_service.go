@@ -581,15 +581,25 @@ func (h *deviceHub) subscribeKind(raw bool) (int, chan *videoFrame, error) {
 // subscribeKind and subscribePixels. The dimensions are independent:
 // explicitHolder records who, if anyone, asserted the hub's stream parameters,
 // while raw and pixels (at most one of them) select which kind of frame this
-// subscriber receives. A pixel join on a hub whose producer has already refused
-// pixels is turned away here, under h.mu, so it cannot slip in after the
-// refusal closed the others.
+// subscriber receives.
+//
+// A raw or pixel join on a hub whose producer has already refused that kind is
+// turned away here, under h.mu, so it cannot slip in after the refusal closed
+// the others. For raw this matters beyond the wait: a camera captured as MJPEG
+// refuses raw but still publishes decoded frames for pixel subscribers, and
+// broadcast hands those to every open raw subscriber. getOrCreateHub's
+// up-front rawRefusal check runs in a separate h.mu section, so a producer's
+// rawNotOffered can land between it and this one.
 func (h *deviceHub) subscribeAsKind(explicitHolder string, raw, pixels bool) (int, chan *videoFrame, error) {
 	ch := make(chan *videoFrame, 4)
 	h.mu.Lock()
 	if h.ctx.Err() != nil {
 		h.mu.Unlock()
 		return 0, nil, status.Errorf(codes.Unavailable, "video hub is shutting down")
+	}
+	if reason := h.rawReason; raw && h.rawState == rawUnavailable {
+		h.mu.Unlock()
+		return 0, nil, errRawUnavailable(reason())
 	}
 	if refused := h.demand.refused; pixels && refused != nil {
 		h.mu.Unlock()
@@ -1806,8 +1816,9 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 					return nil, 0, nil, refusal
 				}
 			}
-			// A pixel join on a hub that refused pixels is answered by
-			// subscribeAsKind itself, with the refusal.
+			// subscribeAsKind checks both refusals again under h.mu: the
+			// producer may refuse raw after the check above, and refuses
+			// pixels only there.
 			id, ch, err = h.subscribeAsKind(explicitHolder, raw, pixels)
 			s.mu.Unlock()
 			if err != nil {

@@ -271,6 +271,55 @@ func TestDeviceHub_RawRefusedButPixelsOfferedOnMJPEG(t *testing.T) {
 	}
 }
 
+// A raw join that reaches the hub after the producer refused raw — the window
+// between getOrCreateHub's up-front rawRefusal and its subscribe — must be
+// refused there too. The hub still publishes tap frames for pixel subscribers,
+// and a raw subscriber let in would receive decoded MJPEG as if it were raw.
+func TestDeviceHub_RawJoinAfterRefusalGetsNoTapFrames(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+
+	idPix, chPix, err := h.subscribePixels()
+	if err != nil {
+		t.Fatalf("subscribePixels: %v", err)
+	}
+	defer h.unsubscribe(idPix)
+
+	decoded := &agentpb.RawFormat{Width: 1280, Height: 720, Fourcc: fourccYUYV, BytesPerLine: 2560}
+	h.pixelsOffered(decoded)
+	h.rawNotOffered(fixedReason("camera is captured as MJPEG at 1280x720; raw frames are not offered"))
+
+	idRaw, chRaw, err := h.subscribeKind(true)
+	if err == nil {
+		defer h.unsubscribe(idRaw)
+	}
+	h.publishRaw(make([]byte, 4), 13, decoded)
+	if chRaw != nil {
+		select {
+		case f, ok := <-chRaw:
+			if ok {
+				t.Fatalf("raw subscriber on a hub that refused raw received a tap frame (%s)", describeRawFormat(f.rawFmt))
+			}
+		default:
+		}
+	}
+	if err == nil {
+		t.Fatal("raw join after the refusal was let in")
+	}
+	if st, _ := status.FromError(err); st.Code() != codes.FailedPrecondition || !streamreason.Has(err, streamreason.RawUnavailable) {
+		t.Errorf("raw join after the refusal got %v, want FailedPrecondition with %s", err, streamreason.RawUnavailable)
+	}
+	if !strings.Contains(err.Error(), "MJPEG") {
+		t.Errorf("refusal must carry the producer's reason: %v", err)
+	}
+	// The pixel subscriber is unaffected.
+	select {
+	case <-chPix:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("pixel subscriber received nothing")
+	}
+}
+
 func TestDeviceHub_EncodedStreamRestartedClearsWebMState(t *testing.T) {
 	h, cancel := newTestHub(t)
 	defer cancel()
