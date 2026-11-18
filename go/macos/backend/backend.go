@@ -41,6 +41,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	previews                cameraPreviews
 	osUpdate                mobileOSRun
 	recordings              recordingReads
 	gallery                 galleryConnections
@@ -477,6 +478,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.previewsReset(true)
 	b.recordings.setActive(false)
 	b.tunnelSession.SetActive(false)
 	b.resetNearbyDiscovery(true)
