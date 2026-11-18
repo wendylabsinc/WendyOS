@@ -138,7 +138,7 @@ func (id *Identity) Start(cmd *exec.Cmd) error {
 	}
 	if id.own {
 		// The uid has no passwd entry. GLib warns on stderr when it has to look
-		// for a home directory there, so name one that nobody can write.
+		// for a home directory there, so name one that no helper can write.
 		cmd.Env = append(cmd.Environ(), "HOME=/")
 	}
 	startOnce.Do(func() { go noNewPrivsThread() })
