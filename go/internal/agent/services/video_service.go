@@ -3391,7 +3391,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 		sink.rawNotOffered(plan.rawRefusalReason())
 	}
 	if tapFmt != nil {
-		go s.pumpRawTap(ctx, rawR, tapFmt, sink, path)
+		go s.pumpRawTap(ctx, rawR, tapFmt, sink, path, nil) //nolint:errcheck // nil liveness: the pump only logs
 	}
 
 	defer func() {
@@ -3452,6 +3452,17 @@ func (r *cameraPipeReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// gstTimeoutError is the error for a capture that went quiet: it never started
+// (nothing within first) or it stopped (nothing for idle).
+func gstTimeoutError(sawChunk bool, first, idle time.Duration) error {
+	if sawChunk {
+		return status.Errorf(codes.DeadlineExceeded,
+			"camera stopped producing video for %s; reconnect to restart capture", idle)
+	}
+	return status.Errorf(codes.DeadlineExceeded,
+		"camera produced no video within %s", first)
+}
+
 // gstStreamEnd distinguishes startup failure from a capture that stopped
 // delivering video. Cancellation takes precedence over either timeout.
 func gstStreamEnd(readErr error, timedOut, sawChunk bool, ctxErr error) error {
@@ -3459,12 +3470,7 @@ func gstStreamEnd(readErr error, timedOut, sawChunk bool, ctxErr error) error {
 		return ctxErr
 	}
 	if timedOut {
-		if sawChunk {
-			return status.Errorf(codes.DeadlineExceeded,
-				"camera stopped producing video for %s; reconnect to restart capture", cameraIdleTimeout)
-		}
-		return status.Errorf(codes.DeadlineExceeded,
-			"camera produced no video within %s", firstFrameTimeout)
+		return gstTimeoutError(sawChunk, firstFrameTimeout, cameraIdleTimeout)
 	}
 	if readErr == nil {
 		return nil

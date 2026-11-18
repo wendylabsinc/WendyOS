@@ -27,6 +27,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -407,41 +409,110 @@ func stackedModeAbove(devicePath string, w, h uint32) (uint32, uint32) {
 	return w, bestH
 }
 
+// tapIdlePoll is how often an idle pump checks whether anyone wants frames again.
+// tapResumeDiscard is how many frames it throws away when demand returns: the
+// pipe and the leaky queue in front of it hold frames from before anyone asked.
+const (
+	tapIdlePoll      = 50 * time.Millisecond
+	tapResumeDiscard = 4
+)
+
+// tapLiveness makes the pump the watchdog of a pipeline whose only output is the
+// tap (no encoder, so nothing else would notice a camera that stopped). first
+// bounds the wait for the first frame and idle the gap between frames after it.
+type tapLiveness struct{ first, idle time.Duration }
+
 // pumpRawTap reads whole frames off the raw pipe and hands them to the hub while
-// anyone wants them. It always drains: a tee whose branch stops being read stalls
-// the encoder branch with it, so frames nobody wants are read and dropped.
+// anyone wants them. While nobody does it does not read at all, and re-checks
+// every tapIdlePoll.
+//
+// Not reading is safe for the rest of the pipeline: the tap branch sits behind
+// rawTapQueue, which is leaky, so a full pipe makes that queue drop frames inside
+// GStreamer instead of blocking the tee. Measured with fd 3 never read, encoded
+// output kept flowing at a steady rate for 7 s; a later on-device test confirms
+// this on real hardware. The payoff is that nothing is converted or copied for a
+// frame nobody wants, which matters now that every MJPEG camera writes decoded
+// frames to the tap.
+//
+// When demand returns, the first tapResumeDiscard frames are dropped: they were
+// stuck in the pipe and queue and are stale.
+//
+// live == nil means the pipeline also encodes: there are no deadlines and the end
+// of the tap is only logged. live != nil means the tap is the pipeline's only
+// output: each read has a deadline (first until the first frame, idle after it)
+// and expiry returns the DeadlineExceeded errors gstStreamEnd gives. The deadline
+// applies only while reading; an idle pump holds none. If every consumer of a
+// tap-only pipeline leaves, the hub cancels ctx, so returning on ctx.Done() while
+// idle is all that is needed.
 //
 // Frames are fixed-size (bytes_per_line x height), so the pipe needs no framing
 // protocol; a short read means the pipeline ended. Timestamps are taken here
 // rather than from GStreamer: the raw branch carries no metadata, and wall-clock
 // at arrival is what the encoded path reports too.
-func (s *VideoService) pumpRawTap(ctx context.Context, r *os.File, format *agentpb.RawFormat, sink rawSink, device string) {
+func (s *VideoService) pumpRawTap(ctx context.Context, r *os.File, format *agentpb.RawFormat, sink rawSink, device string, live *tapLiveness) error {
 	defer r.Close() //nolint:errcheck
 	frameBytes := int(format.GetBytesPerLine()) * int(format.GetHeight())
 	if frameBytes <= 0 || frameBytes > maxRawFrameBytes {
 		s.logger.Warn("raw frame tap has an unusable frame size; not reading it",
 			zap.String("device", device), zap.Int("frame_bytes", frameBytes))
-		return
+		return nil
 	}
 	buf := make([]byte, frameBytes)
 	var frames, delivered uint64
+	var idle, sawFrame bool
+	var discard int
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !sink.wantRaw() {
+			idle = true
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(tapIdlePoll):
+			}
+			continue
+		}
+		if idle {
+			idle = false
+			discard = tapResumeDiscard
+		}
+		if live != nil {
+			d := live.first
+			if sawFrame {
+				d = live.idle
+			}
+			_ = r.SetReadDeadline(time.Now().Add(d))
+		}
 		if _, err := io.ReadFull(r, buf); err != nil {
-			if ctx.Err() == nil && err != io.EOF {
+			if live != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if errors.Is(err, os.ErrDeadlineExceeded) {
+					return gstTimeoutError(sawFrame, live.first, live.idle)
+				}
+				if err != io.EOF {
+					return status.Errorf(codes.Internal, "failed to read raw frame tap: %v", err)
+				}
+			} else if ctx.Err() == nil && err != io.EOF {
 				s.logger.Debug("raw frame tap ended", zap.String("device", device), zap.Error(err))
 			}
 			s.logger.Debug("raw frame tap closed", zap.String("device", device),
 				zap.Uint64("frames", frames), zap.Uint64("delivered", delivered))
-			return
+			return nil
 		}
+		sawFrame = true
 		frames++
-		if !sink.wantRaw() {
-			continue // nobody listening: keep the tee flowing, spend nothing on a copy
+		if discard > 0 {
+			discard--
+			continue
 		}
 		data := make([]byte, frameBytes)
 		copy(data, buf)
 		if !sink.publishRaw(data, uint64(time.Now().UnixNano()), format) {
-			return // hub has no subscribers of any kind; the producer is stopping
+			return nil // hub has no subscribers of any kind; the producer is stopping
 		}
 		delivered++
 	}
