@@ -149,7 +149,7 @@ func selectPrivateAliasCandidate(alias privateDeviceAlias, tenant meshid.Tenant,
 		if alias.uuid != "" {
 			return false
 		}
-		label, valid := meshname.FriendlyLabel(name)
+		label, valid := meshname.ShortDeviceLabel(name)
 		return valid && label == alias.label
 	}
 	add := func(device meshid.Device, trusted bool) *privateAliasCandidate {
