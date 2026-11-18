@@ -29,14 +29,15 @@ import (
 // snapshot and verified target identity, so LAN and Cloud can share a channel
 // without sharing trust between accounts, renewed credentials, or devices.
 func desktopSessionConnection(ctx context.Context, auth *config.AuthConfig, target string, dial func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
-	return desktopSessionConnect(ctx, auth, target, dial, false)
+	return desktopSessionConnect(ctx, auth, target, nil, dial)
 }
 
-func desktopSessionFreshConnection(ctx context.Context, auth *config.AuthConfig, target string, dial func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
-	return desktopSessionConnect(ctx, auth, target, dial, true)
+// desktopSessionFreshConnection replaces stale, the channel being recovered.
+func desktopSessionFreshConnection(ctx context.Context, auth *config.AuthConfig, target string, stale *grpcclient.AgentConnection, dial func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+	return desktopSessionConnect(ctx, auth, target, stale, dial)
 }
 
-func desktopSessionConnect(ctx context.Context, auth *config.AuthConfig, target string, dial func(context.Context) (*grpcclient.AgentConnection, error), fresh bool) (*grpcclient.AgentConnection, error) {
+func desktopSessionConnect(ctx context.Context, auth *config.AuthConfig, target string, stale *grpcclient.AgentConnection, dial func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 	g, ok := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
 	if !ok {
 		return dial(ctx)
@@ -51,8 +52,8 @@ func desktopSessionConnect(ctx context.Context, auth *config.AuthConfig, target 
 	if err != nil {
 		return nil, err
 	}
-	if fresh {
-		return g.devices.Refresh(ctx, key, dial)
+	if stale != nil {
+		return g.devices.Refresh(ctx, key, stale, dial)
 	}
 	return g.devices.Acquire(ctx, key, dial)
 }
@@ -151,7 +152,7 @@ func desktopReconnectableCloudConnection(ctx context.Context, auth *config.AuthC
 	}
 	conn.Reconnect = func(next context.Context) (*grpcclient.AgentConnection, error) {
 		next = carryTunnelSession(next, ctx)
-		return desktopSessionFreshConnection(next, auth, cloudDiscoveryIdentity(auth, asset).IdentityKey(), func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return desktopSessionFreshConnection(next, auth, cloudDiscoveryIdentity(auth, asset).IdentityKey(), conn, func(ctx context.Context) (*grpcclient.AgentConnection, error) {
 			return desktopReconnectableCloudConnection(ctx, auth, asset, brokerURL)
 		})
 	}

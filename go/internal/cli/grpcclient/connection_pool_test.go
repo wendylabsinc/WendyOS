@@ -371,13 +371,23 @@ func TestConnectionPoolRefreshKeepsUsersAndSharesReplacement(t *testing.T) {
 	if one.Conn.GetState() != connectivity.Ready {
 		t.Fatal("initial connection is not ready")
 	}
-	two, err := pool.Refresh(ctx, "device", dial)
+	two, err := pool.Refresh(ctx, "device", one, dial)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if one.Conn == two.Conn || dials.Load() != 2 {
 		t.Fatal("refresh reused ready channel")
 	}
+	// A second recovery of the same stale channel, after the first finished,
+	// joins its replacement instead of evicting it.
+	again, err := pool.Refresh(ctx, "device", one, dial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Conn != two.Conn || dials.Load() != 2 {
+		t.Fatal("repeated refresh of a stale channel replaced its replacement")
+	}
+	again.Close()
 	if one.Conn.GetState() != connectivity.Ready {
 		t.Fatal("refresh interrupted existing user")
 	}

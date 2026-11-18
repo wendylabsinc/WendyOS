@@ -41,9 +41,10 @@ func (p *ConnectionPool) Lookup(ctx context.Context, key string) (*AgentConnecti
 	return p.acquire(ctx, key, nil)
 }
 
-// Refresh replaces a ready channel without interrupting its current users.
-// Concurrent refreshes join the replacement while its setup is pending.
-func (p *ConnectionPool) Refresh(ctx context.Context, key string, dial func(context.Context) (*AgentConnection, error)) (*AgentConnection, error) {
+// Refresh replaces stale, a channel the pool returned for key, without
+// interrupting its current users. Every refresh of the same stale channel
+// shares one replacement, including after that replacement is ready.
+func (p *ConnectionPool) Refresh(ctx context.Context, key string, stale *AgentConnection, dial func(context.Context) (*AgentConnection, error)) (*AgentConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -52,7 +53,7 @@ func (p *ConnectionPool) Refresh(ctx context.Context, key string, dial func(cont
 		p.mu.Unlock()
 		return nil, context.Canceled
 	}
-	if e := p.entries[key]; e != nil && e.conn != nil {
+	if e := p.entries[key]; e != nil && e.holds(stale) {
 		delete(p.entries, key)
 		if e.users == 0 {
 			p.closeEntry(e)
@@ -60,6 +61,11 @@ func (p *ConnectionPool) Refresh(ctx context.Context, key string, dial func(cont
 	}
 	p.mu.Unlock()
 	return p.acquire(ctx, key, dial)
+}
+
+// holds reports whether e's ready channel is conn or one of its handles.
+func (e *pooledConnection) holds(conn *AgentConnection) bool {
+	return e.conn != nil && conn != nil && (e.conn == conn || (conn.Conn != nil && e.conn.Conn == conn.Conn))
 }
 
 func (p *ConnectionPool) acquire(ctx context.Context, key string, dial func(context.Context) (*AgentConnection, error)) (*AgentConnection, error) {
