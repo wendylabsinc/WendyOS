@@ -147,13 +147,21 @@ final class CameraFeed: ObservableObject, Identifiable {
 
 struct CameraFeedDisplay: View {
     @ObservedObject var feed: CameraFeed
+    var open: (() -> Void)? = nil
+
     var body: some View {
         if let frame = feed.thermalFrame {
-            ThermalCameraDisplay(feed: feed, frame: frame)
-        } else if let image = feed.jpeg {
-            Image(decorative: image, scale: 1).resizable().scaledToFit()
+            ThermalCameraDisplay(feed: feed, frame: frame, open: open)
         } else {
-            CameraDisplayView(decoder: feed.decoder)
+            Group {
+                if let image = feed.jpeg {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                } else {
+                    CameraDisplayView(decoder: feed.decoder)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { open?() }
         }
     }
 }
