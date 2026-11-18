@@ -1,6 +1,6 @@
 import Foundation
 
-enum MobileRecordingKind: String, Equatable, CaseIterable {
+enum MobileRecordingKind: String, Equatable, CaseIterable, Codable {
     case mixed = "Mixed", video = "Video", audio = "Audio", rosbag = "ROS bag", images = "Images", dataset = "Dataset", unknown = "Recording"
 
     init(agentKind: String) {
@@ -16,7 +16,7 @@ enum MobileRecordingKind: String, Equatable, CaseIterable {
     }
 }
 
-struct MobileRecordingEpisode: Identifiable, Equatable {
+struct MobileRecordingEpisode: Identifiable, Equatable, Codable {
     let id, title: String
     let started: Date?
     let bytes: Int64

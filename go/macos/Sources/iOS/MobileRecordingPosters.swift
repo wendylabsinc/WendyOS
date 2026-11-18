@@ -13,6 +13,8 @@ enum RecordingPoster {
     private struct Key: Hashable { let device: String; let episode: String }
     private var entries: [Key: RecordingPoster] = [:]
     private var order: [Key] = []
+    private let scope: String?
+    init(scope: String? = nil) { self.scope = scope }
 
     func poster(device: Device, episode: String) -> RecordingPoster? {
         entries[Key(device: recordingDeviceID(device), episode: episode)]
@@ -22,6 +24,11 @@ enum RecordingPoster {
         let key = Key(device: recordingDeviceID(device), episode: episode)
         guard entries[key] == nil else { return }
         do {
+            let diskKey = scope.map { $0 + "/poster/" + key.device + "/" + episode + "/" + file }
+            if let diskKey, let data = await RecordingDiskCache.shared.read(diskKey), let image = UIImage(data: data) {
+                try Task.checkCancellation()
+                insert(.image(image), for: key); return
+            }
             // A row that only flashes by while scrolling shouldn't start a transfer.
             try await Task.sleep(for: .milliseconds(180))
             guard entries[key] == nil else { return }
@@ -39,6 +46,9 @@ enum RecordingPoster {
             }
             try Task.checkCancellation()
             insert(result, for: key)
+            if let diskKey, case .image(let image) = result, let bytes = image.jpegData(compressionQuality: 0.8) {
+                await RecordingDiskCache.shared.write(bytes, key: diskKey)
+            }
         } catch { /* Keep the type-specific artwork; a later appearance can try again. */ }
     }
 

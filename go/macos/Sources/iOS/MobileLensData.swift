@@ -98,15 +98,17 @@ struct RecordingRead: Sendable {
     // Independent screen refresh counters must not invalidate one another.
     private var lastRefresh: [String: Int] = [:]
     private var refreshedAt: [String: Date] = [:]
+    private let scope: String?
     private let now: () -> Date
     private let fetch: @Sendable (MobileRecordingTarget) async -> RecordingRead
     private let fetchDetails: @Sendable (Device, [MobileRecordingEpisode]) async throws -> [MobileRecordingEpisode]
 
-    init(now: @escaping () -> Date = Date.init,
+    init(scope: String? = nil, now: @escaping () -> Date = Date.init,
          fetch: @escaping @Sendable (MobileRecordingTarget) async -> RecordingRead = RecordingRead.fetch,
          details: @escaping @Sendable (Device, [MobileRecordingEpisode]) async throws -> [MobileRecordingEpisode] = { device, episodes in
              try await GoClient.shared.recordingDetails(device: device, episodes: episodes)
          }) {
+        self.scope = scope
         self.now = now
         self.fetch = fetch
         self.fetchDetails = details
@@ -123,6 +125,15 @@ struct RecordingRead: Sendable {
         let force = lastRefresh[consumer].map { $0 != refresh } ?? (refresh != 0)
         if force { attempted = [:]; detailProblems = [:] }
         lastRefresh[consumer] = refresh
+        if let scope {
+            for target in targets where reads[target.id]?.library == nil {
+                let saved = await RecordingDiskCache.shared.readIndex(scope + "/index/" + target.id)
+                guard !Task.isCancelled, generations[consumer] == run else { return }
+                if reads[target.id]?.library == nil, let saved, let device = target.routes.first {
+                    reads[target.id] = RecordingRead(target: target, library: MobileRecordingLibrary(device: device, model: saved.model, episodes: saved.episodes, warning: "Showing saved recordings while checking for updates."), problem: "Showing saved recordings while checking for updates.")
+                }
+            }
+        }
         let remaining = targets.filter { $0.id != priority }
         // Check nearby routes first so a cloud fleet cannot delay a local device.
         let ordered = targets.filter { $0.id == priority }
@@ -176,6 +187,7 @@ struct RecordingRead: Sendable {
                     detailProblems[read.target.id] = nil
                 }
                 reads[read.target.id] = current
+                if read.library != nil { await persist(current.library, id: read.target.id) }
                 if let target = remaining.next() { group.addTask { await fetch(target) } }
             }
         }
@@ -183,6 +195,11 @@ struct RecordingRead: Sendable {
         loadingConsumers.remove(consumer)
         loading = !loadingConsumers.isEmpty
         await loadDetails(for: ordered.map(\.id), run: run, consumer: consumer)
+    }
+
+    private func persist(_ library: MobileRecordingLibrary?, id: String) async {
+        guard let scope, let library else { return }
+        await RecordingDiskCache.shared.writeIndex(SavedRecordingIndex(model: library.model, episodes: library.episodes), key: scope + "/index/" + id)
     }
 
     private func loadDetails(for ids: [String], run: Int, consumer: String) async {
@@ -213,6 +230,7 @@ struct RecordingRead: Sendable {
                     reads[id] = next
                     attempted[id, default: []].formUnion(batch.map(\.id))
                     if known.count < batch.count { detailProblems[id] = "Some episode details could not be read on \(library.device.title)." }
+                    await persist(next.library, id: id)
                 } catch {
                     guard !Task.isCancelled, generations[consumer] == run else { return }
                     detailProblems[id] = "\(library.device.title): \(PresentedFailure(error.localizedDescription).details)"

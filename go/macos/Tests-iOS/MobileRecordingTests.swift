@@ -134,6 +134,48 @@ final class RecordingSpeedTests: XCTestCase {
         XCTAssertTrue(catalog.reads.isEmpty, "Removed targets must not remain accessible from cached inventory")
     }
 
+    @MainActor func testLeavingDuringIndexingKeepsCompletedDetailBatches() async {
+        let scope = UUID().uuidString
+        let target = target
+        let rows = (0..<128).map { MobileRecordingEpisode(id: String($0), title: String($0), started: nil, bytes: 100,
+                                                        duration: nil, trigger: nil, kind: .unknown, synced: nil, topics: []) }
+        let catalog = RecordingCatalog(scope: scope, fetch: { target in
+            RecordingRead(target: target, library: MobileRecordingLibrary(device: target.routes[0], model: nil, episodes: rows, warning: nil), problem: nil)
+        }, details: { _, episodes in
+            if episodes.first?.id == "64" { try await Task.sleep(for: .seconds(60)) }
+            return episodes.map { row in var copy = row; copy.detailsLoaded = true; return copy }
+        })
+        var savedCount = 0
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await catalog.load([target], refresh: 0, priority: nil) }
+            for _ in 0..<50 {
+                let saved = await RecordingDiskCache.shared.readIndex(scope + "/index/board")
+                savedCount = saved?.episodes.filter(\.detailsLoaded).count ?? 0
+                if savedCount == 64 { break }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            group.cancelAll()
+        }
+        XCTAssertEqual(savedCount, 64, "Completed details must persist before the entire scan finishes")
+    }
+
+    @MainActor func testRelaunchRestoresLabeledIndexButStillRefreshes() async {
+        let scope = UUID().uuidString
+        let fixture = RecordingSpeedFixture()
+        let first = RecordingCatalog(scope: scope, fetch: { await fixture.fetch($0) }, details: { await fixture.loadDetails($0, $1) })
+        await first.load([target], refresh: 0, priority: nil)
+        await fixture.configure(fail: true)
+        let reopened = RecordingCatalog(scope: scope, fetch: { await fixture.fetch($0) }, details: { await fixture.loadDetails($0, $1) })
+        await reopened.load([target], refresh: 0, priority: nil)
+        XCTAssertEqual(reopened.reads["board"]?.library?.episodes.first?.trigger, "Person")
+        XCTAssertTrue(reopened.reads["board"]?.problem?.contains("Showing saved recordings") == true)
+        let counts = await fixture.counts()
+        XCTAssertEqual(counts.0, 2, "A disk snapshot must not prevent a fresh inventory request")
+        let other = RecordingCatalog(scope: scope + "other", fetch: { await fixture.fetch($0) })
+        await other.load([target], refresh: 0, priority: nil)
+        XCTAssertNil(other.reads["board"]?.library)
+    }
+
     @MainActor func testHomeLoadCannotDiscardVisibleGalleryRead() async {
         let fixture = RecordingSpeedFixture()
         await fixture.configure(delay: .milliseconds(100))

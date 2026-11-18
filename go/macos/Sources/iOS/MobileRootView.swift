@@ -196,7 +196,7 @@ struct MobileRootView: View {
     }
 
     private var presentedTabs: some View {
-        MobileRecordingScope { surface }.id(model.mobileCloudSelectionKey)
+        MobileRecordingScope(scope: model.mobileCloudSelectionKey) { surface }.id(model.mobileCloudSelectionKey)
         .sheet(isPresented: $showingChat) {
             MobileLensChat(model: model, chooseDevice: { showingChat = false; enter(.devices); homeTab = .home })
                 .presentationDetents([.medium, .large])

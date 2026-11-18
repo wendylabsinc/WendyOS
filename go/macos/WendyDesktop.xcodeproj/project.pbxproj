@@ -48,6 +48,7 @@
 		1E44FCF701782E2337236E5C /* SiteRoomCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0FD78A95A6F8642DAC85357 /* SiteRoomCapture.swift */; };
 		2054375A5977FF55666B68F3 /* HomeWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C346DD1F50E7077D61A811B9 /* HomeWidgetTests.swift */; };
 		208C0E9F54D7F70AEF42FA8E /* UnitreeMotionDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527F884C5D6A85892B2986F9 /* UnitreeMotionDriver.swift */; };
+		20D61152641B1C08BE6F7E16 /* MobileRecordingDiskCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD0B4DCF7ADF7CE3BA95E74 /* MobileRecordingDiskCache.swift */; };
 		21805F5A70B8CD5EF18ABE3B /* DeviceChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4CC89666184527D86018FD /* DeviceChatView.swift */; };
 		231FFC2629E5283477116560 /* UnitreeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F64D9550FF2B1B30B931811 /* UnitreeClient.swift */; };
 		242167659010421CEAED4A73 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 956D04288AC871766E33F388 /* IOKit.framework */; };
@@ -189,6 +190,7 @@
 		91304A73F40E332BA0FA844E /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
 		913F1A05C9B4169F66DFAA4E /* CameraDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */; };
 		92B8920DD04474E29475F183 /* ChatCloudSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4CBC7C8ABEC458177AA44B /* ChatCloudSettings.swift */; };
+		92D722255A6EB966696E78B8 /* MobileIndependentCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA65868A2B5FCC948448DE5B /* MobileIndependentCamera.swift */; };
 		93B23A2E3D9EDC9087659488 /* PresentedFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */; };
 		93BDD157A718F2BBA02A98D4 /* SimulatorClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EF1B380CC110B5531DD514 /* SimulatorClient.swift */; };
 		946DD3354B835B1C67FB270E /* MobileAppBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F8B5DECBBAC2EAA7EB1130 /* MobileAppBrowser.swift */; };
@@ -230,6 +232,7 @@
 		ACCBF6B3442BD1604F1DA83C /* SiteArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECAA28D11C8E08FA5A802CB4 /* SiteArchive.swift */; };
 		AE632E07D7E1F86F196D97D7 /* NetworkTrafficTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B10FC85047A5E2FEDBDDE41 /* NetworkTrafficTests.swift */; };
 		AEC62CE279318FE73303E500 /* DeviceViewfinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */; };
+		AEDE2315D159EB8E1AD7EBED /* RecordingDiskCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30FC83ADF9A7E82C2E3CFB2C /* RecordingDiskCacheTests.swift */; };
 		AF28993980F7F75714350D0A /* AsyncActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */; };
 		AF7E4000003DC6763697795B /* SiteTwinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C3E32837C8B119C15C3627 /* SiteTwinTests.swift */; };
 		B061F27052770E2B349352C4 /* DeviceOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB4ECB73A974D1CD7FE6DE57 /* DeviceOverview.swift */; };
@@ -424,6 +427,7 @@
 		0D2DEE3E46A9E3BB11B73526 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		0E245D3AB2FE090DD5A1D0D4 /* RobotLensCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotLensCalibration.swift; sourceTree = "<group>"; };
 		0F13D570193EF9CC9CB12330 /* MobileRecordingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRecordingTests.swift; sourceTree = "<group>"; };
+		0FD0B4DCF7ADF7CE3BA95E74 /* MobileRecordingDiskCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRecordingDiskCache.swift; sourceTree = "<group>"; };
 		1097F49EB713F0CFB90322DB /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteWorkspace.swift; sourceTree = "<group>"; };
 		10ABDA820D872A8026204A1D /* MobileLoadingPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileLoadingPlaceholder.swift; sourceTree = "<group>"; };
@@ -453,6 +457,7 @@
 		2D87C37A4E1EEEA08AC4E951 /* DeviceSettingsRead.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSettingsRead.swift; sourceTree = "<group>"; };
 		2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
 		2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignSettingsView.swift; sourceTree = "<group>"; };
+		30FC83ADF9A7E82C2E3CFB2C /* RecordingDiskCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingDiskCacheTests.swift; sourceTree = "<group>"; };
 		3123CE49AF22AD71C953CCE2 /* AppsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppsView.swift; sourceTree = "<group>"; };
 		325187846ED881AA053327DA /* SiteRobotPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotPanel.swift; sourceTree = "<group>"; };
 		37814D56A945DF55B3199567 /* SiteCameraColorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteCameraColorTests.swift; sourceTree = "<group>"; };
@@ -603,6 +608,7 @@
 		E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupClient.swift; sourceTree = "<group>"; };
 		E9769FE92218D369CAE4C7B1 /* LiteDeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteDeviceView.swift; sourceTree = "<group>"; };
 		EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBluetoothView.swift; sourceTree = "<group>"; };
+		EA65868A2B5FCC948448DE5B /* MobileIndependentCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileIndependentCamera.swift; sourceTree = "<group>"; };
 		EA837B0B3D516DBB577F5548 /* MobileCameras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCameras.swift; sourceTree = "<group>"; };
 		EB4ECB73A974D1CD7FE6DE57 /* DeviceOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceOverview.swift; sourceTree = "<group>"; };
 		EBC666362E8AC1DED444AD88 /* BlockingWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockingWork.swift; sourceTree = "<group>"; };
@@ -881,6 +887,7 @@
 				72B368A49DE636D3D5AD9E35 /* MobileTests.swift */,
 				2345545B53969E5C11A54A84 /* OSUpdateTests.swift */,
 				D5B2D6E09E17A33A168BD805 /* RealityProjectionTests.swift */,
+				30FC83ADF9A7E82C2E3CFB2C /* RecordingDiskCacheTests.swift */,
 				7B0E3F194BE38E6E52C85C51 /* RememberedAIDeviceTests.swift */,
 				4749AF6EB1435827581A9E20 /* SetupConnectivityTests.swift */,
 			);
@@ -950,6 +957,7 @@
 				1A8B17E90C086DF554B4A149 /* MobileHomeWidgetEditor.swift */,
 				54BEF4540D341CDCAE7286B7 /* MobileHomeWidgetModel.swift */,
 				6F4F738C2194C259334DFA81 /* MobileHomeWidgets.swift */,
+				EA65868A2B5FCC948448DE5B /* MobileIndependentCamera.swift */,
 				C6B6B33D3974FD8B957B585C /* MobileLensContent.swift */,
 				11989D9F81DE33926C6744D5 /* MobileLensData.swift */,
 				82AC2E778CCB1834490684FD /* MobileLensViews.swift */,
@@ -957,6 +965,7 @@
 				D82158ABFAEE221FC6FDCAC9 /* MobilePlatform.swift */,
 				D75F511A7F81D16A68154921 /* MobileRealityProjection.swift */,
 				EDB6ECAA67E9890B0CF2C13E /* MobileRecordingCards.swift */,
+				0FD0B4DCF7ADF7CE3BA95E74 /* MobileRecordingDiskCache.swift */,
 				28E74260209A4087633FC774 /* MobileRecordingLibrary.swift */,
 				12719292A8185A6D6C4C2306 /* MobileRecordingPicker.swift */,
 				1C385F83B0B5AD396BE0685C /* MobileRecordingPosters.swift */,
@@ -1258,12 +1267,12 @@
 			projectRoot = "";
 			targets = (
 				061A3B38F40254E591224986 /* WendyDesktop */,
+				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 				66549B7B32DEF8896208E2C0 /* WendyDesktopTests */,
 				4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */,
 				ACDB653814C81DAD375DF0E3 /* WendyMobileNetwork */,
 				9F296B433343571747FBC234 /* WendyMobileTests */,
 				5198757F852AB57452928A68 /* WendyMobileUITests */,
-				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 			);
 		};
 /* End PBXProject section */
@@ -1586,6 +1595,7 @@
 				888D6BB400B84E7AF24C6C28 /* MobileHomeWidgetEditor.swift in Sources */,
 				3D854BC21CB053E2F63A5411 /* MobileHomeWidgetModel.swift in Sources */,
 				9741A810FCC59F00A09F78A5 /* MobileHomeWidgets.swift in Sources */,
+				92D722255A6EB966696E78B8 /* MobileIndependentCamera.swift in Sources */,
 				8AB110A3F0E8F4DFD2411AC1 /* MobileLensContent.swift in Sources */,
 				E022926994D8FA6445C54B5F /* MobileLensData.swift in Sources */,
 				C030F868D356184175923A14 /* MobileLensViews.swift in Sources */,
@@ -1593,6 +1603,7 @@
 				4C5CF7A1B3ED504E7994B90B /* MobilePlatform.swift in Sources */,
 				887AF890C1AA1CBC4FE336A5 /* MobileRealityProjection.swift in Sources */,
 				5AEBF29BA828D490E66E39E5 /* MobileRecordingCards.swift in Sources */,
+				20D61152641B1C08BE6F7E16 /* MobileRecordingDiskCache.swift in Sources */,
 				2B299C6B91E78CA498A2F771 /* MobileRecordingLibrary.swift in Sources */,
 				19197FBE444FC737355F63DE /* MobileRecordingPicker.swift in Sources */,
 				A4BBEB92874CDA4E6FFB5BDB /* MobileRecordingPosters.swift in Sources */,
@@ -1681,6 +1692,7 @@
 				12E87D30FBA90B9E67946EB6 /* MobileTests.swift in Sources */,
 				7871C2F62F3B005FE5A4533B /* OSUpdateTests.swift in Sources */,
 				F1C015CFB0B33DA98C73936F /* RealityProjectionTests.swift in Sources */,
+				AEDE2315D159EB8E1AD7EBED /* RecordingDiskCacheTests.swift in Sources */,
 				EA45271F574840B94264193E /* RememberedAIDeviceTests.swift in Sources */,
 				BEF50250E18D26E944E8FA3C /* SetupConnectivityTests.swift in Sources */,
 				AF7E4000003DC6763697795B /* SiteTwinTests.swift in Sources */,

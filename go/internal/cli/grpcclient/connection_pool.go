@@ -238,7 +238,7 @@ func (p *ConnectionPool) Close() {
 func (c *AgentConnection) sharedHandle(release func() error) *AgentConnection {
 	h := &AgentConnection{
 		Conn: c.Conn, Host: c.Host, MeshHost: c.MeshHost, Addr: c.Addr,
-		DevicePinKey: c.DevicePinKey, NoSavedIdentity: c.NoSavedIdentity,
+		DevicePinKey:  c.DevicePinKey,
 		SimulatorName: c.SimulatorName, IsMTLS: c.IsMTLS, IsSessionProxy: c.IsSessionProxy,
 		CertInfo: c.CertInfo, RegistryDialer: c.RegistryDialer, IsCloudV2: c.IsCloudV2,
 		OperatorMeshTarget: c.OperatorMeshTarget, AppDialer: c.AppDialer, Reconnect: c.Reconnect,
@@ -247,7 +247,7 @@ func (c *AgentConnection) sharedHandle(release func() error) *AgentConnection {
 		ProvisioningService: c.ProvisioningService, TelemetryService: c.TelemetryService,
 		FileSyncService: c.FileSyncService, TimeSyncService: c.TimeSyncService, BuildService: c.BuildService,
 		SensorPairingService: c.SensorPairingService, UnitreeService: c.UnitreeService,
-		RobotArmService: c.RobotArmService, DriverService: c.DriverService, McuService: c.McuService,
+		RobotArmService: c.RobotArmService, DriverService: c.DriverService,
 		DataService: c.DataService, CalibratedFrameService: c.CalibratedFrameService,
 		observedServerOrg: c.observedServerOrg, observedServerTenant: c.observedServerTenant,
 		observedServerIdentity: c.observedServerIdentity, identityMismatch: c.identityMismatch,

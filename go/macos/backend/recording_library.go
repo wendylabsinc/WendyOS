@@ -88,7 +88,7 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 		cancel()
 		return nil, nil, nil, err
 	}
-	return ctx, conn, func(err error) {
+	return withRecordingCache(ctx, selector), conn, func(err error) {
 		cancel()
 		// Discard a broken relay so the next read can establish a fresh one.
 		// Canceling one screen must not interrupt another reader.

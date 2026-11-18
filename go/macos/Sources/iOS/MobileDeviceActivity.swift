@@ -1,9 +1,14 @@
 import SwiftUI
 
 struct MobileRecordingScope<Content: View>: View {
-    @StateObject private var catalog = RecordingCatalog()
-    @State private var posters = RecordingPosters()
+    @StateObject private var catalog: RecordingCatalog
+    @State private var posters: RecordingPosters
     @ViewBuilder let content: () -> Content
+    init(scope: String, @ViewBuilder content: @escaping () -> Content) {
+        _catalog = StateObject(wrappedValue: RecordingCatalog(scope: scope))
+        _posters = State(initialValue: RecordingPosters(scope: scope))
+        self.content = content
+    }
     var body: some View { content().environmentObject(catalog).environment(\.recordingPosters, posters) }
 }
 
@@ -57,7 +62,7 @@ struct MobileDeviceActivity: View {
     let select: (Device) -> Void
     @EnvironmentObject private var catalog: RecordingCatalog
     @Environment(\.scenePhase) private var phase
-    @State private var posters = RecordingPosters()
+    @State private var posters: RecordingPosters
     @State private var playing: ActivityAlert?
     @State private var refresh = 0
     @State private var updateStatus: DeviceUpdateSnapshot?
@@ -68,6 +73,7 @@ struct MobileDeviceActivity: View {
 
     init(model: AppModel, isVisible: Bool, segment: Binding<MobileActivitySegment>, select: @escaping (Device) -> Void) {
         self.model = model
+        _posters = State(initialValue: RecordingPosters(scope: model.mobileCloudSelectionKey))
         self.isVisible = isVisible
         _segment = segment
         self.select = select

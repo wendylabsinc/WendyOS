@@ -429,6 +429,15 @@ func visualDownloadTo(ctx context.Context, client pb.DataServiceClient, episode 
 	if err != nil || len(want) != sha256.Size {
 		return errors.New("file has no valid checksum")
 	}
+	if hit, err := cachedRecordingFile(ctx, file, target); hit {
+		return err
+	}
+	return cacheRecordingDownload(ctx, file, target, func(writer io.Writer) error {
+		return visualDownloadUncached(ctx, client, episode, file, want, writer)
+	})
+}
+
+func visualDownloadUncached(ctx context.Context, client pb.DataServiceClient, episode string, file data.File, want []byte, target io.Writer) error {
 	s, err := client.Download(ctx, &pb.DataDownloadRequest{Episode: episode, Path: file.Path})
 	if err != nil {
 		return err

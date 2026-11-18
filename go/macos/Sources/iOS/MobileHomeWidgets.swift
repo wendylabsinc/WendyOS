@@ -15,12 +15,7 @@ struct HomeWidgetDeck: View {
     @EnvironmentObject private var catalog: RecordingCatalog
     @Environment(\.scenePhase) private var phase
     @State private var active: HomeWidget?
-    @State private var activeCamera: UUID?
-    @State private var connectingCamera: UUID?
-    @State private var cameraProblem: (UUID, String)?
-    @State private var actions = AsyncActions()
     @Environment(\.recordingPosters) private var posters
-    @State private var expandedCamera: HomeWidget?
     @State private var visible = false
     @State private var refresh = 0
     @State private var dragged: UUID?
@@ -62,15 +57,12 @@ struct HomeWidgetDeck: View {
                 Text("Drag to reorder · drag the corner to resize · tap to configure")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }.task { await actions.run() }
-        .onChange(of: editing) { _, value in if value { activeCamera = nil } else { dragged = nil; resizing = nil; resizePreview = nil } }
+        }
+        .onChange(of: editing) { _, value in if !value { dragged = nil; resizing = nil; resizePreview = nil } }
         .onAppear { visible = true }
-        .onDisappear { visible = false; activeCamera = nil }
+        .onDisappear { visible = false }
         .task(id: LoadKey(targets: targets, inventory: RecordingSources(model: model).inventory, active: visible && phase == .active, refresh: refresh)) {
             if visible && phase == .active { await catalog.load(targets, refresh: refresh, priority: nil, consumer: "home.widgets", retaining: RecordingSources(model: model).inventory) }
-        }
-        .fullScreenCover(item: $expandedCamera) { widget in
-            HomeWidgetSession(widget: widget, model: model)
         }
         .sheet(item: $active) { widget in
             if widget.kind == .gallery, let id = galleryDevice ?? widget.devices.first?.id,
@@ -120,7 +112,6 @@ struct HomeWidgetDeck: View {
             .contextMenu {
                 Button("Edit", systemImage: "pencil") { beginEditing() }
                 Button("Delete widget", systemImage: "trash", role: .destructive) {
-                    if activeCamera == widget.id { activeCamera = nil }
                     store.remove(widget.id)
                 }
             }
@@ -200,34 +191,11 @@ struct HomeWidgetDeck: View {
         let offline = device.map { HomeWidgetInventory.status($0, model: model) == "Offline" } ?? true
         VStack(alignment: .leading, spacing: 6) {
             if widget.kind == .camera {
-                Group {
-                if activeCamera == widget.id, model.selectedDeviceReady, model.connected?.id == device?.id,
-                   let feed = model.cameraFeeds.first(where: { $0.camera.stableID == widget.resource }) {
-                    HomeWidgetCamera(feed: feed, model: model, compact: true)
-                        .onScrollVisibilityChange(threshold: 0.05) { if !$0 { activeCamera = nil } }
-                } else {
-                    Button { actions.submit { await openCamera(widget) } } label: {
-                        ZStack {
-                            RecordingAppearance.ink
-                            Image(systemName: offline ? "video.slash" : "play.circle.fill").font(.title).foregroundStyle(.white.opacity(0.85))
-                            VStack { Spacer(); Text(widget.resourceTitle).font(.caption2).lineLimit(1).foregroundStyle(.white).padding(6) }
-                        }.frame(maxWidth: .infinity, maxHeight: .infinity).clipShape(.rect(cornerRadius: 12))
-                    }.buttonStyle(.plain).disabled(offline || connectingCamera != nil).accessibilityLabel("Watch " + widget.resourceTitle)
-                }
-                }.overlay(alignment: .bottomTrailing) {
-                    Button {
-                        activeCamera = nil
-                        expandedCamera = widget
-                    } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 30, height: 30)
-                            .background(.black.opacity(0.6), in: .circle)
-                            .frame(width: 44, height: 44)
-                    }.buttonStyle(.plain).foregroundStyle(.white)
-                        .disabled(offline || connectingCamera != nil)
-                        .accessibilityLabel("Open camera full screen")
-                }
+                if let device {
+                    IndependentCameraWidget(device: device, resource: widget.resource, title: widget.resourceTitle,
+                                            enabled: !offline && !editing && phase == .active && active == nil)
+                        .id(model.mobileCloudSelectionKey + widget.id.uuidString + device.selector + widget.resource)
+                } else { Text("Camera unavailable").font(.caption).foregroundStyle(.secondary) }
             } else {
                 Text(widget.resourceTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(device?.title ?? widget.devices.first?.title ?? "Device unavailable").font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -239,17 +207,14 @@ struct HomeWidgetDeck: View {
                     Image(systemName: widget.kind.symbol).font(.system(size: 36)).foregroundStyle(widget.kind.color.opacity(0.6)).frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else { Spacer(minLength: 0) }
             }
-            if widget.kind != .camera || (widget.size != .small && activeCamera != widget.id) {
-                Button(offline ? "Offline" : widget.kind == .camera ? "Watch camera" : widget.kind == .campaign ? (widget.size == .small ? "Record" : "Record a clip") : (widget.size == .small ? "Open" : "Open web portal")) {
-                    if widget.kind == .camera { actions.submit { await openCamera(widget) } }
-                    else { activeCamera = nil; active = widget }
+            if widget.kind != .camera {
+                Button(offline ? "Offline" : widget.kind == .campaign ? (widget.size == .small ? "Record" : "Record a clip") : (widget.size == .small ? "Open" : "Open web portal")) {
+                    active = widget
                 }.font(.caption.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
                     .background(widget.kind == .campaign ? Color.red.opacity(0.12) : MobileLensStyle.green, in: .capsule)
                     .foregroundStyle(widget.kind == .campaign ? Color.red : .white)
-                    .disabled(offline || connectingCamera != nil)
+                    .disabled(offline)
             }
-            if connectingCamera == widget.id { ProgressView().controlSize(.mini) }
-            if cameraProblem?.0 == widget.id { Text(cameraProblem?.1 ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(2) }
         }
     }
     @ViewBuilder private func builtIn(_ widget: HomeWidget) -> some View {
@@ -298,22 +263,7 @@ struct HomeWidgetDeck: View {
             .background(MobileLensStyle.green.opacity(0.08), in: .rect(cornerRadius: 12))
         }.buttonStyle(.plain).foregroundStyle(MobileLensStyle.green)
     }
-    private func beginEditing() { activeCamera = nil; editing = true }
-    private func openCamera(_ widget: HomeWidget) async {
-        guard let device = HomeWidgetInventory.resolve(widget.devices.first, model: model), connectingCamera == nil else { return }
-        activeCamera = nil; cameraProblem = nil; connectingCamera = widget.id
-        defer { connectingCamera = nil }
-        let scope = model.mobileCloudSelectionKey
-        await model.connect(device)
-        guard !Task.isCancelled, scope == model.mobileCloudSelectionKey, model.mobileScopeIsCurrent else { return }
-        guard model.selectedDeviceReady, model.connected?.id == device.id else {
-            cameraProblem = (widget.id, model.detailError?.message ?? "Could not connect to the device."); return
-        }
-        guard model.cameraFeeds.contains(where: { $0.camera.stableID == widget.resource }) else {
-            cameraProblem = (widget.id, model.camerasError ?? "This camera is unavailable. Edit the widget to choose another."); return
-        }
-        activeCamera = widget.id
-    }
+    private func beginEditing() { editing = true }
     @ViewBuilder private func gallery(_ widget: HomeWidget) -> some View {
         let libraries = catalog.reads.values.compactMap(\.library).filter { library in
             widget.devices.isEmpty || widget.devices.contains { $0.id == recordingDeviceID(library.device) }
@@ -332,7 +282,7 @@ struct HomeWidgetDeck: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: widget.size == .small ? 1 : 3), spacing: 6) {
                     ForEach(Array(entries.prefix(widget.size == .small ? 1 : widget.size == .large ? 6 : 3).enumerated()), id: \.offset) { _, entry in
                         Button {
-                            galleryDevice = recordingDeviceID(entry.0); selectedEpisode = entry.1.id; activeCamera = nil; active = widget
+                            galleryDevice = recordingDeviceID(entry.0); selectedEpisode = entry.1.id; active = widget
                         } label: {
                             ZStack(alignment: .bottomLeading) {
                                 RecordingThumbnail(device: entry.0, episode: entry.1)
@@ -350,7 +300,7 @@ struct HomeWidgetDeck: View {
                 if widget.size != .small { Text("\(entries.count) recordings").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 Spacer(minLength: 0)
                 Button("Open gallery") {
-                    selectedEpisode = nil; galleryDevice = widget.devices.first?.id; activeCamera = nil
+                    selectedEpisode = nil; galleryDevice = widget.devices.first?.id
                     if widget.devices.isEmpty { recordings() } else { active = widget }
                 }.font(.caption2.weight(.semibold)).foregroundStyle(MobileLensStyle.green)
             }
