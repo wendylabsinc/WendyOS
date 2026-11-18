@@ -98,6 +98,20 @@ jobs:
           version: '34.0'
           repo-token: ${{ github.token }}
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install pinned Go generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
       - name: Check shared gRPC API contracts
         run: bash swift/Scripts/GenerateProto.sh --check-shared-grpc-api-contracts
 

@@ -428,7 +428,7 @@
       "depends_on": [
         "01"
       ],
-      "scope": "Use local contract repositories to test off-master pins, missing/extra aliases, unavailable sources and generated drift. Verify failed generation leaves committed output unchanged.",
+      "scope": "Use local contract repositories to test off-main pins, missing/extra aliases, unavailable sources and generated drift. Verify failed generation leaves committed output unchanged.",
       "acceptance": "Every negative fixture fails for the intended reason; a valid pinned catalogue generates a clean tree. External policy validation is recorded separately.",
       "entry_keys": [
         "2799",
@@ -5219,7 +5219,7 @@
       "package": "18",
       "status": "verified",
       "audit_finding": "CI checks pin ancestry and regenerated output. The authoritative ancestry script is downloaded from service-protos, whose implementation and tests are outside this checkout.",
-      "required_follow_up": "Add fixtures for an off-master pin, unavailable policy source and generated drift; verify the external policy tests separately.",
+      "required_follow_up": "Add fixtures for an off-main pin, unavailable policy source and generated drift; verify the external policy tests separately.",
       "evidence": [
         {
           "test": ".github/scripts/shared_contracts_test.py",

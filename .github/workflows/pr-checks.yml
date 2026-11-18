@@ -14,18 +14,24 @@ concurrency:
 jobs:
   shared-grpc-api-contracts:
     name: Shared gRPC API contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The unified check regenerates both Go and Swift with the existing tools.
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Verify shared contract pin is on service-protos main
-        run: |
-          source Proto/shared-grpc-api-contracts.sh
-          check_shared_grpc_api_contracts_ancestry
+      - uses: ./.github/actions/setup-macos-ci
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: '26.3'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

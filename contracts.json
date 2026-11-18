@@ -1,0 +1,475 @@
+{
+  "commit": "a1d6fc3d292fcff219d8d8be9f4d71d7c5373755",
+  "paths": [
+    "wendy/agent/services/v1/shared.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_container_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_shell_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto",
+    "wendy/agent/services/v1/wendy_agent_v1_video_service.proto",
+    "wendy/agent/services/v2/shared.proto",
+    "wendy/agent/services/v2/device_info_service.proto",
+    "wendy/agent/services/v2/agent_update_service.proto",
+    "wendy/agent/services/v2/os_update_service.proto",
+    "wendy/agent/services/v2/driver_service.proto",
+    "wendy/agent/services/v2/arduino_mcu_service.proto",
+    "wendy/agent/services/v2/wifi_service.proto",
+    "wendy/agent/services/v2/bluetooth_service.proto",
+    "wendy/agent/services/v2/container_service.proto",
+    "wendy/agent/services/v2/provisioning_service.proto",
+    "wendy/agent/services/v2/audio_service.proto",
+    "wendy/agent/services/v2/telemetry_service.proto",
+    "wendy/agent/services/v2/file_sync_service.proto",
+    "wendy/agent/services/v2/mesh_service.proto",
+    "wendy/agent/services/v2/local_mesh_admin_service.proto",
+    "wendy/agent/services/v2/ros2_service.proto",
+    "wendy/agent/services/v2/timesync_service.proto",
+    "wendy/agent/services/v2/build_service.proto",
+    "wendy/agent/services/v2/build_delivery_service.proto",
+    "wendy/agent/services/v2/calibrated_frame_service.proto",
+    "wendy/agent/services/v2/robot_arm_service.proto",
+    "wendy/agent/services/v2/sensor_pairing_service.proto",
+    "wendy/agent/services/v2/unitree_service.proto",
+    "wendy/agent/services/v2/unitree_robot_service.proto",
+    "wendy/agent/services/v2/sensor_service.proto",
+    "wendy/agent/services/v2/tunnel_service.proto",
+    "wendy/agent/services/v2/data_service.proto",
+    "apps.proto",
+    "certificates.proto",
+    "tunnel.proto",
+    "users.proto",
+    "wendycloud/v2/apns.proto",
+    "wendycloud/v2/device_access.proto",
+    "wendycloud/v2/roles.proto",
+    "wendycloud/v2/mesh.proto",
+    "wendycloud/v2/users.proto",
+    "wendycloud/v2/tunnel.proto",
+    "wendycloud/v2/apps.proto",
+    "wendycloud/v2/assets.proto",
+    "wendycloud/v2/certificates.proto",
+    "wendycloud/v2/deployments.proto",
+    "wendycloud/v2/signed_request.proto",
+    "wendycloud/v2/relay_mcp.proto",
+    "wendycloud/v2/postbox.proto",
+    "wendycloud/v2/registry.proto",
+    "wendycloud/v2/organizations.proto",
+    "wendycloud/v2/notifications.proto",
+    "wendycloud/v2/device_enrollment.proto",
+    "wendycloud/v2/pki_admin.proto",
+    "wendy/options.proto",
+    "pkicore/v1/types.proto",
+    "pkicore/v1/engine.proto",
+    "pkicore/v1/fabric_management.proto",
+    "pkicore/v1/fabric_relay.proto",
+    "wendy/system/v1/notifications.proto",
+    "wendylite/v1/sensorlink.proto",
+    "wendycloud/tunnel/v2/tunnel.proto",
+    "wendycloud/tunnel/lite/v1/relay.proto",
+    "wendyauth/v1/envelope.proto",
+    "wendy/agent/apps/v1/recording.proto"
+  ],
+  "stage": {
+    "apps.proto": "cloud/apps.proto",
+    "certificates.proto": "cloud/certificates.proto",
+    "tunnel.proto": "cloud/tunnel.proto",
+    "users.proto": "cloud/users.proto"
+  },
+  "plugin_paths": [
+    [
+      "wendy/agent/services/v1/shared.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_container_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_shell_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
+    ],
+    [
+      "wendy/agent/services/v1/shared.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_container_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_shell_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
+    ],
+    [
+      "wendy/agent/services/v2/shared.proto",
+      "wendy/agent/services/v2/device_info_service.proto",
+      "wendy/agent/services/v2/agent_update_service.proto",
+      "wendy/agent/services/v2/os_update_service.proto",
+      "wendy/agent/services/v2/driver_service.proto",
+      "wendy/agent/services/v2/arduino_mcu_service.proto",
+      "wendy/agent/services/v2/wifi_service.proto",
+      "wendy/agent/services/v2/bluetooth_service.proto",
+      "wendy/agent/services/v2/container_service.proto",
+      "wendy/agent/services/v2/provisioning_service.proto",
+      "wendy/agent/services/v2/audio_service.proto",
+      "wendy/agent/services/v2/telemetry_service.proto",
+      "wendy/agent/services/v2/file_sync_service.proto",
+      "wendy/agent/services/v2/mesh_service.proto",
+      "wendy/agent/services/v2/local_mesh_admin_service.proto",
+      "wendy/agent/services/v2/ros2_service.proto",
+      "wendy/agent/services/v2/timesync_service.proto",
+      "wendy/agent/services/v2/build_service.proto",
+      "wendy/agent/services/v2/build_delivery_service.proto",
+      "wendy/agent/services/v2/calibrated_frame_service.proto",
+      "wendy/agent/services/v2/robot_arm_service.proto",
+      "wendy/agent/services/v2/sensor_pairing_service.proto",
+      "wendy/agent/services/v2/unitree_service.proto",
+      "wendy/agent/services/v2/unitree_robot_service.proto",
+      "wendy/agent/services/v2/sensor_service.proto",
+      "wendy/agent/services/v2/tunnel_service.proto",
+      "wendy/agent/services/v2/data_service.proto"
+    ],
+    [
+      "wendy/agent/services/v2/shared.proto",
+      "wendy/agent/services/v2/device_info_service.proto",
+      "wendy/agent/services/v2/agent_update_service.proto",
+      "wendy/agent/services/v2/os_update_service.proto",
+      "wendy/agent/services/v2/driver_service.proto",
+      "wendy/agent/services/v2/arduino_mcu_service.proto",
+      "wendy/agent/services/v2/wifi_service.proto",
+      "wendy/agent/services/v2/bluetooth_service.proto",
+      "wendy/agent/services/v2/container_service.proto",
+      "wendy/agent/services/v2/provisioning_service.proto",
+      "wendy/agent/services/v2/audio_service.proto",
+      "wendy/agent/services/v2/telemetry_service.proto",
+      "wendy/agent/services/v2/file_sync_service.proto",
+      "wendy/agent/services/v2/mesh_service.proto",
+      "wendy/agent/services/v2/local_mesh_admin_service.proto",
+      "wendy/agent/services/v2/ros2_service.proto",
+      "wendy/agent/services/v2/timesync_service.proto",
+      "wendy/agent/services/v2/build_service.proto",
+      "wendy/agent/services/v2/build_delivery_service.proto",
+      "wendy/agent/services/v2/calibrated_frame_service.proto",
+      "wendy/agent/services/v2/robot_arm_service.proto",
+      "wendy/agent/services/v2/sensor_pairing_service.proto",
+      "wendy/agent/services/v2/unitree_service.proto",
+      "wendy/agent/services/v2/unitree_robot_service.proto",
+      "wendy/agent/services/v2/sensor_service.proto",
+      "wendy/agent/services/v2/tunnel_service.proto",
+      "wendy/agent/services/v2/data_service.proto"
+    ],
+    [
+      "apps.proto",
+      "Proto/cloud/assets.proto",
+      "certificates.proto",
+      "Proto/cloud/data_ingest.proto",
+      "Proto/cloud/deployments.proto",
+      "Proto/cloud/mesh.proto",
+      "Proto/cloud/notifications.proto",
+      "Proto/cloud/organizations.proto",
+      "tunnel.proto",
+      "users.proto"
+    ],
+    [
+      "apps.proto",
+      "Proto/cloud/assets.proto",
+      "certificates.proto",
+      "Proto/cloud/data_ingest.proto",
+      "Proto/cloud/deployments.proto",
+      "Proto/cloud/mesh.proto",
+      "Proto/cloud/notifications.proto",
+      "Proto/cloud/organizations.proto",
+      "tunnel.proto",
+      "users.proto"
+    ],
+    [
+      "wendycloud/v2/apns.proto",
+      "wendycloud/v2/device_access.proto",
+      "wendycloud/v2/roles.proto",
+      "wendycloud/v2/mesh.proto",
+      "wendycloud/v2/users.proto",
+      "wendycloud/v2/tunnel.proto",
+      "wendycloud/v2/apps.proto",
+      "wendycloud/v2/assets.proto",
+      "wendycloud/v2/certificates.proto",
+      "wendycloud/v2/deployments.proto",
+      "wendycloud/v2/signed_request.proto",
+      "wendycloud/v2/relay_mcp.proto",
+      "wendycloud/v2/postbox.proto",
+      "wendycloud/v2/registry.proto",
+      "wendycloud/v2/organizations.proto",
+      "wendycloud/v2/notifications.proto",
+      "wendycloud/v2/device_enrollment.proto",
+      "wendycloud/v2/pki_admin.proto",
+      "wendy/options.proto"
+    ],
+    [
+      "wendycloud/v2/apns.proto",
+      "wendycloud/v2/device_access.proto",
+      "wendycloud/v2/roles.proto",
+      "wendycloud/v2/mesh.proto",
+      "wendycloud/v2/users.proto",
+      "wendycloud/v2/tunnel.proto",
+      "wendycloud/v2/apps.proto",
+      "wendycloud/v2/assets.proto",
+      "wendycloud/v2/certificates.proto",
+      "wendycloud/v2/deployments.proto",
+      "wendycloud/v2/signed_request.proto",
+      "wendycloud/v2/relay_mcp.proto",
+      "wendycloud/v2/postbox.proto",
+      "wendycloud/v2/registry.proto",
+      "wendycloud/v2/organizations.proto",
+      "wendycloud/v2/notifications.proto",
+      "wendycloud/v2/device_enrollment.proto",
+      "wendycloud/v2/pki_admin.proto",
+      "wendy/options.proto"
+    ],
+    [
+      "pkicore/v1/types.proto",
+      "pkicore/v1/engine.proto",
+      "pkicore/v1/fabric_management.proto",
+      "pkicore/v1/fabric_relay.proto"
+    ],
+    [
+      "wendy/system/v1/notifications.proto"
+    ],
+    [
+      "wendy/system/v1/notifications.proto"
+    ],
+    [
+      "Proto/wendy/lite/wendy_com_msg.proto",
+      "Proto/wendy/lite/wendy_conf.proto"
+    ],
+    [
+      "wendylite/v1/sensorlink.proto"
+    ],
+    [
+      "wendycloud/tunnel/v2/tunnel.proto",
+      "wendycloud/tunnel/lite/v1/relay.proto"
+    ],
+    [
+      "wendycloud/tunnel/v2/tunnel.proto",
+      "wendycloud/tunnel/lite/v1/relay.proto"
+    ],
+    [
+      "wendyauth/v1/envelope.proto"
+    ],
+    [
+      "wendy/agent/apps/v1/recording.proto"
+    ],
+    [
+      "Proto/org_invites.proto"
+    ],
+    [
+      "Proto/org_invites.proto"
+    ],
+    [
+      "wendy/agent/services/v1/shared.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_container_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto",
+      "wendy/agent/services/v2/sensor_service.proto",
+      "wendy/agent/services/v2/provisioning_service.proto",
+      "wendy/agent/services/v2/robot_arm_service.proto",
+      "wendy/agent/services/v2/bluetooth_service.proto",
+      "wendy/agent/services/v2/local_mesh_admin_service.proto",
+      "wendy/agent/services/v2/build_delivery_service.proto",
+      "wendylite/v1/sensorlink.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_video_service.proto",
+      "wendy/agent/services/v2/device_info_service.proto"
+    ],
+    [
+      "wendy/agent/services/v1/shared.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_container_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto",
+      "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto",
+      "wendy/agent/services/v2/sensor_service.proto",
+      "wendy/agent/services/v2/provisioning_service.proto",
+      "wendy/agent/services/v2/robot_arm_service.proto",
+      "wendy/agent/services/v2/bluetooth_service.proto",
+      "wendy/agent/services/v2/local_mesh_admin_service.proto",
+      "wendy/agent/services/v2/build_delivery_service.proto",
+      "wendylite/v1/sensorlink.proto"
+    ],
+    [
+      "apps.proto",
+      "Proto/cloud/assets.proto",
+      "certificates.proto",
+      "Proto/cloud/deployments.proto",
+      "Proto/cloud/notifications.proto",
+      "Proto/cloud/organizations.proto",
+      "tunnel.proto",
+      "users.proto"
+    ],
+    [
+      "apps.proto",
+      "Proto/cloud/assets.proto",
+      "certificates.proto",
+      "Proto/cloud/deployments.proto",
+      "Proto/cloud/notifications.proto",
+      "Proto/cloud/organizations.proto",
+      "tunnel.proto",
+      "users.proto"
+    ],
+    [
+      "Proto/opentelemetry/proto/resource/v1/resource.proto",
+      "Proto/opentelemetry/proto/logs/v1/logs.proto",
+      "Proto/opentelemetry/proto/common/v1/common.proto",
+      "Proto/opentelemetry/proto/collector/logs/v1/logs_service.proto",
+      "Proto/opentelemetry/proto/collector/trace/v1/trace_service.proto",
+      "Proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto",
+      "Proto/opentelemetry/proto/trace/v1/trace.proto",
+      "Proto/opentelemetry/proto/metrics/v1/metrics.proto"
+    ],
+    [
+      "Proto/opentelemetry/proto/resource/v1/resource.proto",
+      "Proto/opentelemetry/proto/logs/v1/logs.proto",
+      "Proto/opentelemetry/proto/common/v1/common.proto",
+      "Proto/opentelemetry/proto/collector/logs/v1/logs_service.proto",
+      "Proto/opentelemetry/proto/collector/trace/v1/trace_service.proto",
+      "Proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto",
+      "Proto/opentelemetry/proto/trace/v1/trace.proto",
+      "Proto/opentelemetry/proto/metrics/v1/metrics.proto"
+    ]
+  ],
+  "imports": {
+    "Proto/org_invites.proto": "org_invites.proto",
+    "Proto/cloud/deployments.proto": "cloud/deployments.proto",
+    "Proto/cloud/organizations.proto": "cloud/organizations.proto",
+    "Proto/cloud/notifications.proto": "cloud/notifications.proto",
+    "Proto/cloud/data_ingest.proto": "cloud/data_ingest.proto",
+    "Proto/cloud/assets.proto": "cloud/assets.proto",
+    "Proto/cloud/mesh.proto": "cloud/mesh.proto",
+    "Proto/wendy/lite/wendy_conf.proto": "wendy_conf.proto",
+    "Proto/wendy/lite/wendy_com_msg.proto": "wendy_com_msg.proto",
+    "Proto/github.com/containerd/containerd/api/types/platform.proto": "github.com/containerd/containerd/api/types/platform.proto",
+    "Proto/github.com/containerd/containerd/api/types/metrics.proto": "github.com/containerd/containerd/api/types/metrics.proto",
+    "Proto/github.com/containerd/containerd/api/types/fieldpath.proto": "github.com/containerd/containerd/api/types/fieldpath.proto",
+    "Proto/github.com/containerd/containerd/api/types/sandbox.proto": "github.com/containerd/containerd/api/types/sandbox.proto",
+    "Proto/github.com/containerd/containerd/api/types/event.proto": "github.com/containerd/containerd/api/types/event.proto",
+    "Proto/github.com/containerd/containerd/api/types/descriptor.proto": "github.com/containerd/containerd/api/types/descriptor.proto",
+    "Proto/github.com/containerd/containerd/api/types/introspection.proto": "github.com/containerd/containerd/api/types/introspection.proto",
+    "Proto/github.com/containerd/containerd/api/types/mount.proto": "github.com/containerd/containerd/api/types/mount.proto",
+    "Proto/github.com/containerd/containerd/api/services/events/v1/events.proto": "github.com/containerd/containerd/api/services/events/v1/events.proto",
+    "Proto/github.com/containerd/containerd/api/services/ttrpc/events/v1/events.proto": "github.com/containerd/containerd/api/services/ttrpc/events/v1/events.proto",
+    "Proto/github.com/containerd/containerd/api/services/containers/v1/containers.proto": "github.com/containerd/containerd/api/services/containers/v1/containers.proto",
+    "Proto/github.com/containerd/containerd/api/services/sandbox/v1/sandbox.proto": "github.com/containerd/containerd/api/services/sandbox/v1/sandbox.proto",
+    "Proto/github.com/containerd/containerd/api/services/version/v1/version.proto": "github.com/containerd/containerd/api/services/version/v1/version.proto",
+    "Proto/github.com/containerd/containerd/api/services/leases/v1/leases.proto": "github.com/containerd/containerd/api/services/leases/v1/leases.proto",
+    "Proto/github.com/containerd/containerd/api/services/namespaces/v1/namespace.proto": "github.com/containerd/containerd/api/services/namespaces/v1/namespace.proto",
+    "Proto/github.com/containerd/containerd/api/services/streaming/v1/streaming.proto": "github.com/containerd/containerd/api/services/streaming/v1/streaming.proto",
+    "Proto/github.com/containerd/containerd/api/services/introspection/v1/introspection.proto": "github.com/containerd/containerd/api/services/introspection/v1/introspection.proto",
+    "Proto/github.com/containerd/containerd/api/services/diff/v1/diff.proto": "github.com/containerd/containerd/api/services/diff/v1/diff.proto",
+    "Proto/github.com/containerd/containerd/api/services/content/v1/content.proto": "github.com/containerd/containerd/api/services/content/v1/content.proto",
+    "Proto/github.com/containerd/containerd/api/services/transfer/v1/transfer.proto": "github.com/containerd/containerd/api/services/transfer/v1/transfer.proto",
+    "Proto/github.com/containerd/containerd/api/services/images/v1/images.proto": "github.com/containerd/containerd/api/services/images/v1/images.proto",
+    "Proto/github.com/containerd/containerd/api/services/snapshots/v1/snapshots.proto": "github.com/containerd/containerd/api/services/snapshots/v1/snapshots.proto",
+    "Proto/github.com/containerd/containerd/api/services/tasks/v1/tasks.proto": "github.com/containerd/containerd/api/services/tasks/v1/tasks.proto",
+    "Proto/github.com/containerd/containerd/api/types/transfer/importexport.proto": "github.com/containerd/containerd/api/types/transfer/importexport.proto",
+    "Proto/github.com/containerd/containerd/api/types/transfer/streaming.proto": "github.com/containerd/containerd/api/types/transfer/streaming.proto",
+    "Proto/github.com/containerd/containerd/api/types/transfer/imagestore.proto": "github.com/containerd/containerd/api/types/transfer/imagestore.proto",
+    "Proto/github.com/containerd/containerd/api/types/transfer/progress.proto": "github.com/containerd/containerd/api/types/transfer/progress.proto",
+    "Proto/github.com/containerd/containerd/api/types/transfer/registry.proto": "github.com/containerd/containerd/api/types/transfer/registry.proto",
+    "Proto/github.com/containerd/containerd/api/types/task/task.proto": "github.com/containerd/containerd/api/types/task/task.proto",
+    "Proto/github.com/containerd/containerd/api/types/runc/options/oci.proto": "github.com/containerd/containerd/api/types/runc/options/oci.proto",
+    "Proto/github.com/containerd/containerd/api/types/runtimeoptions/v1/api.proto": "github.com/containerd/containerd/api/types/runtimeoptions/v1/api.proto",
+    "Proto/google/rpc/code.proto": "google/rpc/code.proto",
+    "Proto/google/rpc/status.proto": "google/rpc/status.proto",
+    "Proto/google/rpc/error_details.proto": "google/rpc/error_details.proto",
+    "Proto/opentelemetry/proto/resource/v1/resource.proto": "opentelemetry/proto/resource/v1/resource.proto",
+    "Proto/opentelemetry/proto/logs/v1/logs.proto": "opentelemetry/proto/logs/v1/logs.proto",
+    "Proto/opentelemetry/proto/common/v1/common.proto": "opentelemetry/proto/common/v1/common.proto",
+    "Proto/opentelemetry/proto/collector/logs/v1/logs_service.proto": "opentelemetry/proto/collector/logs/v1/logs_service.proto",
+    "Proto/opentelemetry/proto/collector/trace/v1/trace_service.proto": "opentelemetry/proto/collector/trace/v1/trace_service.proto",
+    "Proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto": "opentelemetry/proto/collector/metrics/v1/metrics_service.proto",
+    "Proto/opentelemetry/proto/trace/v1/trace.proto": "opentelemetry/proto/trace/v1/trace.proto",
+    "Proto/opentelemetry/proto/metrics/v1/metrics.proto": "opentelemetry/proto/metrics/v1/metrics.proto"
+  },
+  "outputs": [
+    {
+      "path": "go/proto/gen",
+      "patterns": [
+        "*.pb.go"
+      ]
+    },
+    {
+      "path": "swift/WendyAgentCore/Sources/WendyAgentGRPC/Proto",
+      "patterns": [
+        "*.pb.swift",
+        "*.grpc.swift"
+      ]
+    },
+    {
+      "path": "swift/WendyAgentCore/Sources/WendyCloudGRPC/Proto",
+      "patterns": [
+        "*.pb.swift",
+        "*.grpc.swift"
+      ]
+    },
+    {
+      "path": "swift/WendyAgentCore/Sources/OpenTelemetryGRPC/Proto",
+      "patterns": [
+        "*.pb.swift",
+        "*.grpc.swift"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "command": [
+        "buf",
+        "--version"
+      ],
+      "expect": "1.75.0"
+    },
+    {
+      "command": [
+        "protoc",
+        "--version"
+      ],
+      "expect": "libprotoc 34.0"
+    },
+    {
+      "command": [
+        "protoc-gen-go",
+        "--version"
+      ],
+      "expect": "protoc-gen-go v1.36.11"
+    },
+    {
+      "command": [
+        "protoc-gen-go-grpc",
+        "--version"
+      ],
+      "expect": "protoc-gen-go-grpc 1.6.2"
+    },
+    {
+      "command": [
+        "protoc-gen-swift",
+        "--version"
+      ],
+      "expect": "protoc-gen-swift 1.39.0"
+    },
+    {
+      "command": [
+        "protoc-gen-grpc-swift-2",
+        "--version"
+      ],
+      "expect": "protoc-gen-grpc-swift-2 2.3.0"
+    }
+  ],
+  "compiler": "protoc",
+  "swift_public_imports": true,
+  "repair": "bash scripts/contracts.sh generate"
+}
