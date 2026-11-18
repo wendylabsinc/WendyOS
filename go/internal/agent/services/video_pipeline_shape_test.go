@@ -1,10 +1,19 @@
 package services
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -146,5 +155,593 @@ func TestTapFormat_FollowsPixelsNotRaw(t *testing.T) {
 	csi, err := shapedPlan(pipelineShape{encode: true}, &agentpb.StreamVideoRequest{}, camera.TransportCSI, pipeWireSource{}, map[string]bool{"x264enc": true, "libcamerasrc": true})
 	if err != nil || tapFormat(csi) != nil {
 		t.Errorf("CSI: err=%v tapFormat=%v", err, tapFormat(csi))
+	}
+}
+
+// --- running the pipeline in the shape its subscribers need ---
+
+// fakeEncodeDemand is a hub's demand as the producer reads it.
+type fakeEncodeDemand struct {
+	mu       sync.Mutex
+	encoded  bool
+	raw      bool
+	restarts int
+	encodes  []bool
+	changed  chan struct{}
+}
+
+func newFakeEncodeDemand(encoded, raw bool) *fakeEncodeDemand {
+	return &fakeEncodeDemand{encoded: encoded, raw: raw, changed: make(chan struct{}, 1)}
+}
+
+func (d *fakeEncodeDemand) wantEncoded() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.encoded
+}
+
+func (d *fakeEncodeDemand) wantRaw() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.raw
+}
+
+func (d *fakeEncodeDemand) demandChanged() <-chan struct{} { return d.changed }
+
+func (d *fakeEncodeDemand) encodedStreamRestarted() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.restarts++
+}
+
+func (d *fakeEncodeDemand) setPipelineEncodes(encodes bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.encodes = append(d.encodes, encodes)
+}
+
+// set changes the demand and pokes demandChanged, as a hub does on every join
+// and leave.
+func (d *fakeEncodeDemand) set(encoded, raw bool) {
+	d.mu.Lock()
+	d.encoded, d.raw = encoded, raw
+	d.mu.Unlock()
+	select {
+	case d.changed <- struct{}{}:
+	default:
+	}
+}
+
+func (d *fakeEncodeDemand) reported() (restarts int, encodes []bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.restarts, append([]bool(nil), d.encodes...)
+}
+
+// recordedLaunches is a launch func that records each shape and blocks until
+// its ctx ends, unless failWith returns an error for that shape first.
+type recordedLaunches struct {
+	failWith func(pipelineShape) error
+	started  chan pipelineShape
+	mu       sync.Mutex
+	shapes   []pipelineShape
+	ctxs     []context.Context
+}
+
+func newRecordedLaunches() *recordedLaunches {
+	return &recordedLaunches{started: make(chan pipelineShape, 64)}
+}
+
+func (l *recordedLaunches) launch(ctx context.Context, shape pipelineShape) error {
+	l.mu.Lock()
+	l.shapes = append(l.shapes, shape)
+	l.ctxs = append(l.ctxs, ctx)
+	l.mu.Unlock()
+	l.started <- shape
+	if l.failWith != nil {
+		if err := l.failWith(shape); err != nil {
+			return err
+		}
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (l *recordedLaunches) recorded() ([]pipelineShape, []context.Context) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]pipelineShape(nil), l.shapes...), append([]context.Context(nil), l.ctxs...)
+}
+
+// next waits for the next launch.
+func (l *recordedLaunches) next(t *testing.T, within time.Duration) pipelineShape {
+	t.Helper()
+	select {
+	case shape := <-l.started:
+		return shape
+	case <-time.After(within):
+		t.Fatalf("no launch within %v", within)
+		return pipelineShape{}
+	}
+}
+
+// none fails if a launch starts within d.
+func (l *recordedLaunches) none(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case shape := <-l.started:
+		t.Fatalf("unexpected launch %+v", shape)
+	case <-time.After(d):
+	}
+}
+
+// runShaped runs runShapedPipelines in the background. stop cancels its ctx and
+// returns what it returned.
+func runShaped(t *testing.T, demand encodeDemand, grace time.Duration, l *recordedLaunches) (stop func() error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runShapedPipelines(ctx, demand, grace, l.launch) }()
+	var once sync.Once
+	var err error
+	stop = func() error {
+		once.Do(func() {
+			cancel()
+			select {
+			case err = <-result:
+			case <-time.After(5 * time.Second):
+				t.Error("runShapedPipelines did not return after its ctx was cancelled")
+			}
+		})
+		return err
+	}
+	t.Cleanup(func() { stop() }) //nolint:errcheck
+	return stop
+}
+
+func TestRunShapedPipelines_StartsWithoutEncoderForPixelOnlyDemand(t *testing.T) {
+	demand := newFakeEncodeDemand(false, true)
+	launches := newRecordedLaunches()
+	stop := runShaped(t, demand, time.Second, launches)
+	if shape := launches.next(t, time.Second); shape.encode {
+		t.Fatal("first launch runs the encoder with only pixel subscribers")
+	}
+	if restarts, encodes := demand.reported(); restarts != 0 || !reflect.DeepEqual(encodes, []bool{false}) {
+		t.Errorf("restarts=%d setPipelineEncodes=%v, want 0 and [false]", restarts, encodes)
+	}
+	if err := stop(); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled loop returned %v, want context.Canceled", err)
+	}
+}
+
+func TestRunShapedPipelines_AddsEncoderAsSoonAsAViewerArrives(t *testing.T) {
+	demand := newFakeEncodeDemand(false, true)
+	launches := newRecordedLaunches()
+	runShaped(t, demand, time.Minute, launches)
+	launches.next(t, time.Second)
+	demand.set(true, true)
+	if shape := launches.next(t, 500*time.Millisecond); !shape.encode {
+		t.Fatal("relaunch for a viewer has no encoder")
+	}
+	_, ctxs := launches.recorded()
+	if ctxs[0].Err() == nil {
+		t.Error("the launch without the encoder is still running")
+	}
+	if restarts, encodes := demand.reported(); restarts != 1 || !reflect.DeepEqual(encodes, []bool{false, true}) {
+		t.Errorf("restarts=%d setPipelineEncodes=%v, want 1 and [false true]", restarts, encodes)
+	}
+}
+
+func TestRunShapedPipelines_DropsEncoderOnlyAfterGrace(t *testing.T) {
+	demand := newFakeEncodeDemand(true, true)
+	launches := newRecordedLaunches()
+	runShaped(t, demand, 150*time.Millisecond, launches)
+	if shape := launches.next(t, time.Second); !shape.encode {
+		t.Fatal("first launch has no encoder for a viewer")
+	}
+	demand.set(false, true)
+	launches.none(t, 75*time.Millisecond)
+	if shape := launches.next(t, 425*time.Millisecond); shape.encode {
+		t.Fatal("relaunch after the grace still runs the encoder")
+	}
+	if restarts, encodes := demand.reported(); restarts != 1 || !reflect.DeepEqual(encodes, []bool{true, false}) {
+		t.Errorf("restarts=%d setPipelineEncodes=%v, want 1 and [true false]", restarts, encodes)
+	}
+}
+
+func TestRunShapedPipelines_FlappingViewerKeepsTheEncoder(t *testing.T) {
+	const grace = 150 * time.Millisecond
+	demand := newFakeEncodeDemand(true, true)
+	launches := newRecordedLaunches()
+	runShaped(t, demand, grace, launches)
+	launches.next(t, time.Second)
+	for i := 0; i < 12; i++ { // 600ms: the viewer leaves and returns every 50ms
+		demand.set(i%2 == 1, true)
+		time.Sleep(50 * time.Millisecond)
+	}
+	launches.none(t, grace+50*time.Millisecond)
+	if shapes, _ := launches.recorded(); len(shapes) != 1 {
+		t.Errorf("%d launches, want exactly one: %+v", len(shapes), shapes)
+	}
+}
+
+func TestRunShapedPipelines_FallsBackWhenThereIsNoTap(t *testing.T) {
+	const grace = 50 * time.Millisecond
+	demand := newFakeEncodeDemand(false, true)
+	launches := newRecordedLaunches()
+	launches.failWith = func(shape pipelineShape) error {
+		if !shape.encode {
+			return errNoTapOnlyPipeline
+		}
+		return nil
+	}
+	runShaped(t, demand, grace, launches)
+	if shape := launches.next(t, time.Second); shape.encode {
+		t.Fatal("first launch was not without the encoder")
+	}
+	if shape := launches.next(t, time.Second); !shape.encode {
+		t.Fatal("pipeline without a tap was not relaunched with the encoder")
+	}
+	demand.set(true, true)
+	demand.set(false, true)
+	launches.none(t, 6*grace)
+	shapes, _ := launches.recorded()
+	if !reflect.DeepEqual(shapes, []pipelineShape{{encode: false}, {encode: true}}) {
+		t.Errorf("launches = %+v, want one without the encoder, then one with it", shapes)
+	}
+}
+
+func TestRunShapedPipelines_NilDemandLaunchesOnceEncoded(t *testing.T) {
+	boom := errors.New("boom")
+	var shapes []pipelineShape
+	err := runShapedPipelines(context.Background(), nil, time.Millisecond, func(_ context.Context, shape pipelineShape) error {
+		shapes = append(shapes, shape)
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the launch's own", err)
+	}
+	if !reflect.DeepEqual(shapes, []pipelineShape{{encode: true}}) {
+		t.Errorf("launches = %+v, want one with the encoder", shapes)
+	}
+}
+
+func TestRunShapedPipelines_ReturnsTheLaunchError(t *testing.T) {
+	for name, encoded := range map[string]bool{"with encoder": true, "without encoder": false} {
+		t.Run(name, func(t *testing.T) {
+			boom := errors.New("boom")
+			launches := newRecordedLaunches()
+			launches.failWith = func(pipelineShape) error { return boom }
+			result := make(chan error, 1)
+			go func() {
+				result <- runShapedPipelines(context.Background(), newFakeEncodeDemand(encoded, true), time.Millisecond, launches.launch)
+			}()
+			select {
+			case err := <-result:
+				if !errors.Is(err, boom) {
+					t.Errorf("err = %v, want the launch's own", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("loop did not end when its launch failed")
+			}
+			if shapes, _ := launches.recorded(); len(shapes) != 1 || shapes[0].encode != encoded {
+				t.Errorf("launches = %+v, want one with encode=%v", shapes, encoded)
+			}
+		})
+	}
+}
+
+// offerRecorder is a hub sink that records the order of a producer's offers and
+// what the tap published. publishRaw answers false, as a hub with nobody left
+// does, so a tap-only pipeline ends after its first frame.
+type offerRecorder struct {
+	mu     sync.Mutex
+	events []string
+	frames []string
+}
+
+func (o *offerRecorder) record(event string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.events = append(o.events, event)
+}
+
+func (o *offerRecorder) wantRaw() bool { return true }
+func (o *offerRecorder) publishRaw(data []byte, _ uint64, _ *agentpb.RawFormat) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.frames = append(o.frames, string(data))
+	return false
+}
+func (o *offerRecorder) rawOffered(*agentpb.RawFormat)    { o.record("raw offered") }
+func (o *offerRecorder) rawNotOffered(func() string)      { o.record("raw not offered") }
+func (o *offerRecorder) pixelsOffered(*agentpb.RawFormat) { o.record("pixels offered") }
+
+func (o *offerRecorder) seen() (events, frames []string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.events...), append([]string(nil), o.frames...)
+}
+
+// fakeGstLaunch writes a stand-in for gst-launch-1.0 that prints "encoded" on
+// stdout, writes tap to fd 3 when it is not empty, and then waits.
+func fakeGstLaunch(t *testing.T, tap string) string {
+	t.Helper()
+	script := "#!/bin/sh\nprintf encoded\n"
+	if tap != "" {
+		script += "printf " + tap + " >&3\n"
+	}
+	script += "exec /bin/sleep 60\n"
+	program := filepath.Join(t.TempDir(), "gst-launch-1.0")
+	if err := os.WriteFile(program, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return program
+}
+
+var tinyTapFormat = &agentpb.RawFormat{Width: 2, Height: 1, Fourcc: fourccYUYV, BytesPerLine: 4}
+
+func TestRunCameraPipeline_OffersPixelsBeforeTheRawDecision(t *testing.T) {
+	for name, c := range map[string]struct {
+		raw, pixels *agentpb.RawFormat
+		want        []string
+	}{
+		"raw capture":   {tinyTapFormat, tinyTapFormat, []string{"pixels offered", "raw offered"}},
+		"mjpeg capture": {nil, tinyTapFormat, []string{"pixels offered", "raw not offered"}},
+		"no tap":        {nil, nil, []string{"raw not offered"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			sink := &offerRecorder{}
+			svc := &VideoService{logger: zap.NewNop()}
+			plan := gstPipelinePlan{args: []string{fakeGstLaunch(t, "")}, raw: c.raw, pixels: c.pixels, rawWhy: "test"}
+			err := svc.runCameraPipeline(ctx, func([]byte, frameTimestamp, agentpb.VideoCodec) bool { return false },
+				"/dev/video4", gstEncoderResult{element: "x264enc"}, plan, nil, sink, nil)
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if events, _ := sink.seen(); !reflect.DeepEqual(events, c.want) {
+				t.Errorf("offers = %v, want %v", events, c.want)
+			}
+		})
+	}
+}
+
+func TestRunCameraPipeline_TapOnlyReadsOnlyTheTap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sink := &offerRecorder{}
+	svc := &VideoService{logger: zap.NewNop()}
+	plan := gstPipelinePlan{args: []string{fakeGstLaunch(t, "abcd")}, pixels: tinyTapFormat, tapOnly: true, rawWhy: "test"}
+	var broadcasts atomic.Int32
+	err := svc.runCameraPipeline(ctx, func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
+		broadcasts.Add(1)
+		return true
+	}, "/dev/video4", gstEncoderResult{element: "x264enc"}, plan, nil, sink, nil)
+	if ctx.Err() != nil {
+		t.Fatal("tap-only pipeline did not end when the hub had nobody left")
+	}
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if n := broadcasts.Load(); n != 0 {
+		t.Errorf("tap-only pipeline broadcast %d stdout chunks", n)
+	}
+	events, frames := sink.seen()
+	if !reflect.DeepEqual(frames, []string{"abcd"}) {
+		t.Errorf("tap published %q, want one frame \"abcd\"", frames)
+	}
+	if want := []string{"pixels offered", "raw not offered"}; !reflect.DeepEqual(events, want) {
+		t.Errorf("offers = %v, want %v", events, want)
+	}
+}
+
+func TestTapDeliveries_CountsTapFramesAndKeepsTheHubsInterfaces(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+	var delivered atomic.Bool
+	var sink rawSink = tapDeliveries{hubSink: h, delivered: &delivered}
+	if _, ok := sink.(encodeDemand); !ok {
+		t.Fatal("the wrapped hub hides encodeDemand: the producer would always encode")
+	}
+	if _, ok := sink.(pixelSink); !ok {
+		t.Fatal("the wrapped hub hides pixelSink: pixel subscribers would be turned away")
+	}
+	if sink.publishRaw([]byte("abcd"), 1, tinyTapFormat) || delivered.Load() {
+		t.Fatal("a frame with nobody to receive it counted as delivered")
+	}
+	id, ch, err := h.subscribePixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.unsubscribe(id)
+	if !sink.publishRaw([]byte("abcd"), 2, tinyTapFormat) || !delivered.Load() {
+		t.Fatal("a tap frame that reached a pixel subscriber did not count as delivered")
+	}
+	if frame := <-ch; string(frame.data) != "abcd" {
+		t.Errorf("pixel subscriber got %q", frame.data)
+	}
+}
+
+// fakeGStreamer puts stand-ins for gst-inspect-1.0 (listing x264enc, h264parse
+// and the extra elements) and gst-launch-1.0 first on PATH. Each launch appends
+// its arguments to the returned log; a launch whose pipeline names x264enc
+// prints "encoded" on stdout, and every launch writes one tapBytes frame to fd 3
+// when tapBytes > 0.
+func fakeGStreamer(t *testing.T, tapBytes int, extra ...string) (launchLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	launchLog = filepath.Join(dir, "launches")
+	inspect := "echo 'x264: x264enc: H.264 encoder'\necho 'videoparsersbad: h264parse: H.264 parser'\n"
+	for _, e := range extra {
+		inspect += "echo 'test: " + e + ": test element'\n"
+	}
+	launch := "echo \"$*\" >> " + launchLog + "\ncase \"$*\" in\n*x264enc*) printf encoded ;;\nesac\n"
+	if tapBytes > 0 {
+		launch += "/usr/bin/head -c " + strconv.Itoa(tapBytes) + " /dev/zero >&3\n"
+	}
+	launch += "exec /bin/sleep 60\n"
+	for name, body := range map[string]string{"gst-inspect-1.0": inspect, "gst-launch-1.0": launch} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	return launchLog
+}
+
+// launchedPipelines reads a fakeGStreamer launch log.
+func launchedPipelines(t *testing.T, launchLog string) []string {
+	t.Helper()
+	b, err := os.ReadFile(launchLog)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+func waitForFrame(t *testing.T, ch chan *videoFrame, what string) *videoFrame {
+	t.Helper()
+	select {
+	case frame, ok := <-ch:
+		if !ok {
+			t.Fatalf("channel closed waiting for %s", what)
+		}
+		return frame
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no %s within 5s", what)
+		return nil
+	}
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting until %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// streamIntoHub runs streamGStreamer for h's camera in the background, the way
+// runProducer feeds a hub. The returned func cancels it and returns its error.
+func streamIntoHub(t *testing.T, svc *VideoService, h *deviceHub, req *agentpb.StreamVideoRequest, transport camera.Transport) (stop func() error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- svc.streamGStreamer(ctx, func(data []byte, _ frameTimestamp, codec agentpb.VideoCodec) bool {
+			return h.produce(&videoFrame{data: data, codec: codec})
+		}, "/dev/video4", req, transport, "", pipeWireSource{}, h)
+	}()
+	var once sync.Once
+	var err error
+	stop = func() error {
+		once.Do(func() {
+			cancel()
+			select {
+			case err = <-result:
+			case <-time.After(10 * time.Second):
+				t.Error("streamGStreamer did not return after its ctx was cancelled")
+			}
+		})
+		return err
+	}
+	t.Cleanup(func() { stop() }) //nolint:errcheck
+	return stop
+}
+
+func TestStreamGStreamer_RunsTheEncoderOnlyWhileAViewerWatches(t *testing.T) {
+	withYUYVModes(t, [][2]uint32{{640, 480}})
+	const frameBytes = 640 * 2 * 480
+	launchLog := fakeGStreamer(t, frameBytes)
+	h, cancelHub := newTestHub(t)
+	defer cancelHub()
+	pixelID, pixels, err := h.subscribePixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.unsubscribe(pixelID)
+	svc := &VideoService{logger: zap.NewNop(), encoderIdleGrace: 100 * time.Millisecond}
+	stop := streamIntoHub(t, svc, h, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, camera.TransportUSB)
+
+	if frame := waitForFrame(t, pixels, "pixel frame"); len(frame.data) != frameBytes {
+		t.Fatalf("pixel frame is %d bytes, want %d", len(frame.data), frameBytes)
+	}
+	if h.pipelineEncodes() {
+		t.Error("pipeline encodes with only a pixel subscriber")
+	}
+	if got := launchedPipelines(t, launchLog); len(got) != 1 || strings.Contains(got[0], "x264enc") {
+		t.Fatalf("launches = %q, want one without the encoder", got)
+	}
+
+	viewerID, viewer, err := h.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame := waitForFrame(t, viewer, "encoded chunk"); frame.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || string(frame.data) != "encoded" {
+		t.Fatalf("viewer got codec=%v %q", frame.codec, frame.data)
+	}
+	if !h.pipelineEncodes() {
+		t.Error("pipeline does not encode for a viewer")
+	}
+	if got := launchedPipelines(t, launchLog); len(got) != 2 || !strings.Contains(got[1], "x264enc") {
+		t.Fatalf("launches = %q, want a second one with the encoder", got)
+	}
+	waitForFrame(t, pixels, "pixel frame after the encoder was added")
+
+	h.unsubscribe(viewerID)
+	waitUntil(t, "the encoder is dropped after the grace", func() bool { return !h.pipelineEncodes() })
+	waitUntil(t, "a third launch starts", func() bool { return len(launchedPipelines(t, launchLog)) >= 3 })
+	waitForFrame(t, pixels, "pixel frame after the encoder was dropped")
+	if got := launchedPipelines(t, launchLog); len(got) != 3 || strings.Contains(got[2], "x264enc") {
+		t.Errorf("launches = %q, want a third and last one without the encoder", got)
+	}
+	if err := stop(); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled stream returned %v, want context.Canceled", err)
+	}
+}
+
+func TestStreamGStreamer_CameraWithoutATapKeepsTheEncoder(t *testing.T) {
+	// A libcamerasrc capture has no tap, like a PipeWire one. (In production a
+	// CSI camera's producer is given no hub to read demand from at all.)
+	launchLog := fakeGStreamer(t, 0, "libcamerasrc")
+	h, cancelHub := newTestHub(t)
+	defer cancelHub()
+	pixelID, pixels, err := h.subscribePixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.unsubscribe(pixelID)
+	svc := &VideoService{logger: zap.NewNop(), encoderIdleGrace: 50 * time.Millisecond}
+	stop := streamIntoHub(t, svc, h, &agentpb.StreamVideoRequest{}, camera.TransportCSI)
+
+	select {
+	case _, ok := <-pixels:
+		if ok {
+			t.Fatal("pixel subscriber got a frame from a camera with no tap")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pixel subscriber was left waiting on a camera with no tap")
+	}
+	if err := h.subscriberErr(pixelID); !errors.Is(err, errPixelsUnavailable) {
+		t.Errorf("pixel subscriber closed with %v, want errPixelsUnavailable", err)
+	}
+	waitUntil(t, "the pipeline starts", func() bool { return len(launchedPipelines(t, launchLog)) == 1 })
+	time.Sleep(200 * time.Millisecond) // four graces: long enough to see a wrong relaunch
+	if got := launchedPipelines(t, launchLog); len(got) != 1 || !strings.Contains(got[0], "x264enc") {
+		t.Errorf("launches = %q, want exactly one, with the encoder", got)
+	}
+	if !h.pipelineEncodes() {
+		t.Error("pipeline without a tap reports that it does not encode")
+	}
+	if err := stop(); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled stream returned %v, want context.Canceled", err)
 	}
 }

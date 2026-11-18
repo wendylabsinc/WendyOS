@@ -1084,6 +1084,11 @@ type VideoService struct {
 	// stored control even when the write fails -- must be testable without one.
 	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
 
+	// encoderIdleGrace is how long a local camera's pipeline keeps its H.264
+	// encoder after the last viewer or recording leaves while raw or pixel
+	// subscribers remain (runShapedPipelines). Zero means defaultEncoderIdleGrace.
+	encoderIdleGrace time.Duration
+
 	ctx    context.Context    // cancelled on Shutdown; hub contexts are derived from this
 	cancel context.CancelFunc // cancels ctx
 	wg     sync.WaitGroup     // tracks active runProducer goroutines
@@ -1101,11 +1106,12 @@ type VideoService struct {
 func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, rosRuntime ...ROS2Runtime) *VideoService {
 	svcCtx, cancel := context.WithCancel(ctx)
 	svc := &VideoService{
-		logger:     logger,
-		ctx:        svcCtx,
-		cancel:     cancel,
-		hubs:       make(map[string]*deviceHub),
-		sampleSeqs: make(map[string]*atomic.Uint64),
+		logger:           logger,
+		ctx:              svcCtx,
+		cancel:           cancel,
+		hubs:             make(map[string]*deviceHub),
+		sampleSeqs:       make(map[string]*atomic.Uint64),
+		encoderIdleGrace: defaultEncoderIdleGrace, // 30 s
 		globDevices: func() ([]string, error) {
 			return filepath.Glob("/dev/video*")
 		},
@@ -2255,6 +2261,33 @@ func (s *VideoService) captureNode(ctx context.Context, broadcast func([]byte, f
 	return s.captureLocalCamera(ctx, broadcast, path, req, transport, libcameraID, h)
 }
 
+// hubSink is everything a hub offers the producer that feeds it.
+type hubSink interface {
+	rawSink
+	pixelSink
+	encodeDemand
+}
+
+var _ hubSink = (*deviceHub)(nil)
+
+// tapDeliveries passes everything through to the hub and records when the tap
+// has handed a frame to subscribers. A pipeline without the encoder delivers
+// only through the tap, so without this a camera that failed mid-stream under
+// pixel subscribers would look as if it had never started, and another source
+// would take over under them.
+type tapDeliveries struct {
+	hubSink
+	delivered *atomic.Bool
+}
+
+func (t tapDeliveries) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
+	ok := t.hubSink.publishRaw(data, tsNs, format)
+	if ok {
+		t.delivered.Store(true)
+	}
+	return ok
+}
+
 // captureLocalCamera reads a USB/unknown camera, preferring the cheapest source: raw V4L2
 // keeps MJPEG capture and the best-mode probe, so the graph is only worth its
 // raw-plus-re-encode cost once the device refuses a second streaming consumer.
@@ -2264,9 +2297,13 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	}
 	// A second source may only take over before a frame has reached subscribers: restarting
 	// mid-stream splices a new resolution and SPS into what downstream reads as one timeline.
-	// Plain bool, not atomic: send runs on this producer goroutine's capture loop, and every
-	// read below happens after that loop has returned.
-	var delivered bool
+	// Frames the tap hands to subscribers count too (tapDeliveries): a pipeline without the
+	// encoder delivers nothing else. Atomic, because the tap's pump runs on a goroutine of
+	// its own.
+	var delivered atomic.Bool
+	if hub, ok := sink.(hubSink); ok {
+		sink = tapDeliveries{hubSink: hub, delivered: &delivered}
+	}
 	// The native path hands us the camera's own H.264 and never sees a decoded
 	// frame, so it is the one local source with no raw frames to offer. Its first
 	// delivered frame is the proof it is the path in use, and the moment a raw
@@ -2274,10 +2311,12 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	nativePhase := true
 	send := func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
 		ok := broadcast(data, stamp, codec)
-		if ok && nativePhase && !delivered {
+		if ok && nativePhase && !delivered.Load() {
 			sink.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
 		}
-		delivered = delivered || ok
+		if ok {
+			delivered.Store(true)
+		}
 		return ok
 	}
 
@@ -2287,7 +2326,7 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 		s.logger.Info("native H.264 not supported, falling back to GStreamer", zap.String("device", path))
 		err = s.streamGStreamer(ctx, send, path, req, transport, libcameraID, pipeWireSource{}, sink)
 	}
-	if !isCameraInUse(err) || delivered || ctx.Err() != nil {
+	if !isCameraInUse(err) || delivered.Load() || ctx.Err() != nil {
 		return err
 	}
 
@@ -2312,7 +2351,7 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	// can act on, and a graph error names a pipeline they did not ask for. Once the shared
 	// stream has shipped frames the camera is demonstrably readable, so its own error wins.
 	pwErr := s.streamGStreamer(ctx, send, path, req, transport, libcameraID, pipeWireSource{serial: serial}, sink)
-	if pwErr == nil || ctx.Err() != nil || isCameraInUse(pwErr) || delivered {
+	if pwErr == nil || ctx.Err() != nil || isCameraInUse(pwErr) || delivered.Load() {
 		return pwErr
 	}
 	s.logger.Warn("PipeWire capture failed for a held camera",
@@ -3299,7 +3338,25 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 	}
 	s.logger.Info("GStreamer encoder selected", zap.String("encoder", enc.element), zap.String("codec", enc.codec.String()))
 
-	var plan gstPipelinePlan
+	// run starts one planned pipeline. Each launch gets its own command, bound to
+	// that launch's ctx, so cancelling a launch kills only its process.
+	run := func(ctx context.Context, plan gstPipelinePlan) error {
+		args := plan.args
+		var cmd *exec.Cmd
+		if pw.serial != 0 {
+			// The agent runs as root outside any session, so a PipeWire client it
+			// spawns must be pointed at the wendy session. Without it the client
+			// reaches the system-wide daemon, whose graph is empty.
+			var envErr error
+			if cmd, envErr = audio.Command(ctx, args[0], args[1:]...); envErr != nil {
+				return status.Errorf(codes.Unavailable, "PipeWire session unavailable: %v", envErr)
+			}
+		} else {
+			cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+		}
+		return s.runCameraPipeline(ctx, broadcast, path, enc, plan, cmd, sink, nil)
+	}
+
 	if useArgusSource(transport, s.hostIsJetson(), available) {
 		// Argus indexes sensors by sensor-id; /dev/videoN maps to sensor-id N for
 		// the common single-CSI-camera case. The device id was already range-checked
@@ -3309,28 +3366,37 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 		sensorID := int(req.GetDeviceId())
 		s.logger.Info("CSI camera on Jetson — capturing via nvarguscamerasrc (Argus)",
 			zap.Int("sensor_id", sensorID), zap.String("encoder", enc.element))
+		var plan gstPipelinePlan
 		plan.args = buildArgusGStreamerArgs(gstPath, req, sensorID, enc.element, enc.hasH264Parse, available)
 		plan.rawWhy = "CSI cameras on Jetson are captured through Argus; raw frames are not offered"
-	} else {
-		plan, err = planGStreamerPipeline(gstPath, path, req, enc.element, enc.hasH264Parse, transport, libcameraID, pw, available)
+		// Argus has no tap, so it always encodes: one launch, as before.
+		return run(ctx, plan)
+	}
+
+	// The element set and the encoder stay as chosen above; only the shape is
+	// planned again for each launch. A sink that is not a hub has no demand to
+	// read, and gets one launch with the encoder.
+	demand, _ := sink.(encodeDemand)
+	return runShapedPipelines(ctx, demand, s.encoderGrace(), func(ctx context.Context, shape pipelineShape) error {
+		plan, err := planGStreamerPipelineShaped(shape, gstPath, path, req, enc.element, enc.hasH264Parse, transport, libcameraID, pw, available)
+		if errors.Is(err, errNoTapOnlyPipeline) {
+			return err // unwrapped: runShapedPipelines relaunches with the encoder
+		}
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to build GStreamer pipeline: %v", err)
 		}
+		s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encoder", shape.encode))
+		return run(ctx, plan)
+	})
+}
+
+// encoderGrace is how long a pipeline keeps its encoder with no encoded
+// subscriber. Zero, as in a service built as a struct literal, means the default.
+func (s *VideoService) encoderGrace() time.Duration {
+	if s.encoderIdleGrace > 0 {
+		return s.encoderIdleGrace
 	}
-	args := plan.args
-	var cmd *exec.Cmd
-	if pw.serial != 0 {
-		// The agent runs as root outside any session, so a PipeWire client it
-		// spawns must be pointed at the wendy session. Without it the client
-		// reaches the system-wide daemon, whose graph is empty.
-		var envErr error
-		if cmd, envErr = audio.Command(ctx, args[0], args[1:]...); envErr != nil {
-			return status.Errorf(codes.Unavailable, "PipeWire session unavailable: %v", envErr)
-		}
-	} else {
-		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
-	}
-	return s.runCameraPipeline(ctx, broadcast, path, enc, plan, cmd, sink, nil)
+	return defaultEncoderIdleGrace
 }
 
 // runCameraPipeline owns both subprocess pipes and an optional app-provided
@@ -3383,6 +3449,12 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	if tapFmt != nil {
 		rawW.Close() //nolint:errcheck
 	}
+	// This start's pixel offer goes immediately before the raw decision, which
+	// consumes it (video_hub_demand.go): a start that never offered pixels is read
+	// as having no tap, and its pixel subscribers are turned away.
+	if ps, ok := sink.(pixelSink); ok && plan.pixels != nil {
+		ps.pixelsOffered(plan.pixels)
+	}
 	if plan.raw != nil {
 		sink.rawOffered(plan.raw)
 		s.logger.Info("raw frame tap open", zap.String("device", path),
@@ -3390,7 +3462,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	} else {
 		sink.rawNotOffered(plan.rawRefusalReason())
 	}
-	if tapFmt != nil {
+	if tapFmt != nil && !plan.tapOnly {
 		go s.pumpRawTap(ctx, rawR, tapFmt, sink, path, nil) //nolint:errcheck // nil liveness: the pump only logs
 	}
 
@@ -3415,6 +3487,13 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 				zap.String("encoder", enc.element), zap.String("stderr", msg), zap.Error(runErr))
 		}
 	}()
+
+	if plan.tapOnly {
+		// No encoder, so stdout carries nothing and the tap is this pipeline's only
+		// output. The pump is its watchdog, with the deadlines the encoded read
+		// below has; its error goes through the same teardown.
+		return s.pumpRawTap(ctx, rawR, tapFmt, sink, path, &tapLiveness{first: firstFrameTimeout, idle: cameraIdleTimeout})
+	}
 
 	// StdoutPipe is an os.Pipe. Bound every read, including after startup:
 	// a UVC transfer failure can leave gst alive with both output pipes silent.
