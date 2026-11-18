@@ -10,6 +10,9 @@ type namespaceIdentity struct{ device, inode uint64 }
 type poolKey struct {
 	namespace     namespaceIdentity
 	iface, domain int
+	// publish separates the participant that writes on a graph from the one
+	// that only reads it: see Config.Publish.
+	publish bool
 }
 type resolvedTarget struct {
 	key poolKey
@@ -28,7 +31,8 @@ type poolEntry struct {
 }
 
 // Pool owns one physical participant per namespace, resolved interface and DDS
-// domain. It must be closed by its owner after its consumers have shut down.
+// domain, and a second one there for the consumers that publish.
+// It must be closed by its owner after its consumers have shut down.
 // An individual lease's cancellation never cancels another consumer's discovery.
 type Pool struct {
 	mu       sync.Mutex
@@ -153,8 +157,35 @@ type Lease struct {
 	changed chan struct{}
 	done    chan struct{}
 	stop    func() bool
-	closed  bool              // pool.mu
-	subs    map[GUID]struct{} // participant.mu
+	closed  bool                 // pool.mu
+	subs    map[GUID]struct{}    // participant.mu
+	writers map[*Writer]struct{} // pool.mu
+}
+
+// NewWriter announces a writer on the lease's participant, which must have
+// been acquired with Config.Publish. The writer is closed with the lease.
+func (l *Lease) NewWriter(pub Publication) (*Writer, error) {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	if l.closed {
+		return nil, errors.New("rtps: lease closed")
+	}
+	// Drop the writers their owner has already closed, so a long-lived lease
+	// does not keep every writer it ever had.
+	for w := range l.writers {
+		if w.isClosed() {
+			delete(l.writers, w)
+		}
+	}
+	w, err := l.entry.participant.NewWriter(pub)
+	if err != nil {
+		return nil, err
+	}
+	if l.writers == nil {
+		l.writers = map[*Writer]struct{}{}
+	}
+	l.writers[w] = struct{}{}
+	return w, nil
 }
 
 func (p *Pool) leaseLocked(ctx context.Context, key poolKey, entry *poolEntry) *Lease {
@@ -266,6 +297,10 @@ func (l *Lease) closeLocked() {
 	for guid := range l.subs {
 		l.unsubscribeLocked(guid)
 	}
+	for w := range l.writers {
+		_ = w.Close()
+	}
+	l.writers = nil
 	p.mu.Lock()
 	delete(p.leases, l)
 	p.mu.Unlock()

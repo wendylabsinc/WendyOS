@@ -84,13 +84,20 @@ type Config struct {
 	// any socket is opened. It lets callers reject a PID that was recycled after
 	// they enumerated the target process.
 	VerifyNetworkNamespace func() bool
+	// Publish lets the participant write topics (see NewWriter). It then tells
+	// its peers that it announces publications and wants their subscriptions.
+	// Peers act on that only when they first meet a participant, so it cannot
+	// be switched on later. Without it the participant stays read-only and no
+	// peer sends it subscription traffic.
+	Publish bool
 	// Logf, when set, receives progress lines. Discovery failures are usually
 	// silent by nature, so this is the only way to see what happened.
 	Logf      func(format string, args ...any)
 	namespace *networkNamespace // pinned by Pool during construction
 }
 
-// Participant is a read-only RTPS participant on one domain.
+// Participant is an RTPS participant on one domain. It reads topics, and
+// writes them when Config.Publish is set.
 type Participant struct {
 	cfg    Config
 	prefix GUIDPrefix
@@ -98,6 +105,9 @@ type Participant struct {
 	mcast *net.UDPConn // joined to the SPDP multicast group
 	ucast *net.UDPConn // our unicast locator, for both meta and user traffic
 	local net.IP
+	// localNet is the network local sits on. A writer prefers reader
+	// addresses inside it.
+	localNet *net.IPNet
 
 	mu        sync.Mutex
 	endpoints map[GUID]*Endpoint
@@ -176,6 +186,9 @@ type Participant struct {
 	// reader can discover image topics but can never receive a frame from them.
 	fragments     map[fragmentKey]*fragmentSet
 	fragmentBytes int
+
+	// Publishing state, guarded by mu and used only when cfg.Publish is set.
+	publishState
 }
 
 // WriterHistogram reports how many DATA and HEARTBEAT submessages arrived per
@@ -264,6 +277,15 @@ func newParticipant(cfg Config) *Participant {
 		nextEntity:  1,
 		seqByWriter: map[uint32]SequenceNumber{},
 		fragments:   map[fragmentKey]*fragmentSet{},
+		publishState: publishState{
+			writers:    map[uint32]*Writer{},
+			readers:    map[GUID]*remoteReader{},
+			peerUser:   map[GUIDPrefix][]Locator{},
+			hbCount:    map[uint32]uint32{},
+			subReaders: map[GUIDPrefix]*sedpSubReader{},
+			pubHistory: map[SequenceNumber][]byte{},
+			acks:       map[ackKey]*ackState{},
+		},
 	}
 }
 
@@ -385,6 +407,7 @@ func (p *Participant) resolveInterface() (*net.Interface, error) {
 			return nil, err
 		}
 		p.local = ip
+		p.localNet = networkOf(iface, ip)
 		return iface, nil
 	}
 	ifaces, err := HostInterfaces()
@@ -411,6 +434,20 @@ func firstIPv4(iface *net.Interface) (net.IP, error) {
 		}
 	}
 	return nil, fmt.Errorf("rtps: %s has no IPv4 address", iface.Name)
+}
+
+// networkOf returns the network of iface that ip is an address of, or nil.
+func networkOf(iface *net.Interface, ip net.IP) *net.IPNet {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.Equal(ip) {
+			return &net.IPNet{IP: ipnet.IP.Mask(ipnet.Mask), Mask: ipnet.Mask}
+		}
+	}
+	return nil
 }
 
 // Close releases the participant's sockets.
@@ -492,6 +529,7 @@ func (p *Participant) removePeerLocked(prefix GUIDPrefix) {
 			delete(p.endpoints, guid)
 		}
 	}
+	p.removePeerReadersLocked(prefix)
 	p.discoveryChangedLocked()
 }
 
@@ -607,8 +645,19 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 	}
 	p.statRTPS.Add(1)
 	p.renewPeer(msg.Prefix)
+	// dst is the participant the following submessages are addressed to, when
+	// the sender said. Only a writer's incoming requests are filtered on it.
+	var dst GUIDPrefix
 	for _, s := range msg.Submessages {
 		switch s.Kind {
+		case subINFO_DST:
+			if len(s.Body) >= len(dst) {
+				copy(dst[:], s.Body)
+			}
+		case subACKNACK:
+			if p.cfg.Publish && (dst == GUIDPrefix{} || dst == p.prefix) {
+				p.handleAcknack(msg.Prefix, s)
+			}
 		case subHEARTBEAT:
 			p.statHeartbeat.Add(1)
 			p.handleHeartbeat(msg.Prefix, s, src)
@@ -630,6 +679,15 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 				p.statSEDP.Add(1)
 				p.noteSEDPReceived(msg.Prefix, d.WriterID, d.WriterSN)
 				p.handleSEDPPublication(d)
+			case entitySEDPSubWriter:
+				if p.cfg.Publish {
+					p.markSubscriptionReceived(msg.Prefix, d.WriterSN)
+					p.handleSEDPSubscription(msg.Prefix, d)
+					break
+				}
+				// A read-only participant treats it as any other writer it
+				// never subscribed to.
+				fallthrough
 			default:
 				if len(d.Payload) != 0 {
 					p.statUserData.Add(1)
@@ -652,6 +710,13 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 			}
 			p.statUserData.Add(1)
 			p.handleUserDataFrag(msg.Prefix, f)
+		case subGAP:
+			if !p.cfg.Publish {
+				continue
+			}
+			if gap, err := ParseGap(s); err == nil && gap.WriterID == entitySEDPSubWriter {
+				p.handleSubscriptionGap(msg.Prefix, gap)
+			}
 		}
 	}
 }
@@ -681,6 +746,10 @@ func (p *Participant) handleHeartbeat(prefix GUIDPrefix, s Submessage, src *net.
 	p.seenMu.Lock()
 	p.seenHB[hb.WriterID]++
 	p.seenMu.Unlock()
+	if hb.WriterID == entitySEDPSubWriter && p.cfg.Publish {
+		p.handleSubscriptionHeartbeat(prefix, hb, s.Flags&0x02 != 0)
+		return
+	}
 	if hb.WriterID != entitySEDPPubWriter {
 		return
 	}
@@ -745,7 +814,7 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 	if _, err := parameterListLength(d.Payload[4:], order); err != nil {
 		return
 	}
-	var metaUnicast []Locator
+	var metaUnicast, userUnicast []Locator
 	seenLocators := map[string]bool{}
 	now := time.Now()
 	lease := time.Duration(leaseSeconds) * time.Second
@@ -772,6 +841,14 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 					metaUnicast = append(metaUnicast, l)
 				}
 			}
+		case pidDefaultUnicastLocator:
+			// Where the peer's readers take samples unless they name their own
+			// locator. Only a writer sends there.
+			if l, ok := paramLocator(prm.value, order); ok && p.cfg.Publish && len(userUnicast) < maxReaderLocators {
+				if addr, valid := l.UDPAddr(); valid && !addr.IP.IsMulticast() {
+					userUnicast = append(userUnicast, l)
+				}
+			}
 		}
 	}
 	if len(metaUnicast) == 0 {
@@ -784,6 +861,9 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 	p.mu.Lock()
 	_, seen := p.peers[prefix]
 	p.peers[prefix] = metaUnicast
+	if p.cfg.Publish {
+		p.setPeerUserLocatorsLocked(prefix, userUnicast)
+	}
 	p.peerExpiry[prefix] = expiry
 	p.peerLease[prefix] = lease
 	last := p.lastReply[prefix]
@@ -805,6 +885,22 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 	for _, l := range metaUnicast {
 		if addr, ok := l.UDPAddr(); ok && p.sendTo(addr, dgram) {
 			p.statRepliesSent.Add(1)
+		}
+	}
+	if !seen && p.cfg.Publish {
+		// The peer is about to learn who we are; tell it what we write rather
+		// than leave its readers unmatched until the next announce tick. A
+		// peer that has not finished taking in our announcement drops this
+		// (CycloneDDS does) and asks again with an ACKNACK, see handleAcknack.
+		p.mu.Lock()
+		sync := p.publicationSyncLocked(true)
+		p.mu.Unlock()
+		for _, dgram := range sync {
+			for _, l := range metaUnicast {
+				if addr, ok := l.UDPAddr(); ok {
+					p.sendTo(addr, dgram)
+				}
+			}
 		}
 	}
 }
@@ -1150,7 +1246,11 @@ func (p *Participant) spdpDatagram() []byte {
 	b.addGUID(pidParticipantGUID, GUID{Prefix: p.prefix, EntityID: entityParticipant})
 	b.addLocator(pidMetatrafficUnicastLocator, loc)
 	b.addLocator(pidDefaultUnicastLocator, loc)
-	b.addUint32(pidBuiltinEndpointSet, builtinEndpoints)
+	endpoints := uint32(builtinEndpoints)
+	if p.cfg.Publish {
+		endpoints |= publishEndpoints
+	}
+	b.addUint32(pidBuiltinEndpointSet, endpoints)
 	b.addDuration(pidParticipantLeaseDuration, leaseSeconds, 0)
 	payload := b.finish()
 
@@ -1168,6 +1268,9 @@ func (p *Participant) announce() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, dgram := range p.subAnnounce {
+		p.sendDiscoveryLocked(dgram)
+	}
+	for _, dgram := range p.publicationSyncLocked(false) {
 		p.sendDiscoveryLocked(dgram)
 	}
 }
