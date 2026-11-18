@@ -3362,8 +3362,11 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	// first ExtraFiles slot). It is created before Start so the child inherits it,
 	// and the parent's write end is closed right after, so EOF reaches the reader
 	// when the child exits.
+	// An MJPEG pipeline tees decoded frames there too (plan.pixels), so the pipe
+	// must exist and be drained even though raw subscribers are refused.
+	tapFmt := tapFormat(plan)
 	var rawR, rawW *os.File
-	if plan.raw != nil {
+	if tapFmt != nil {
 		rawR, rawW, err = os.Pipe()
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to create raw frame pipe: %v", err)
@@ -3377,14 +3380,18 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 		}
 		return status.Errorf(codes.Internal, "failed to start GStreamer: %v", err)
 	}
-	if plan.raw != nil {
+	if tapFmt != nil {
 		rawW.Close() //nolint:errcheck
+	}
+	if plan.raw != nil {
 		sink.rawOffered(plan.raw)
 		s.logger.Info("raw frame tap open", zap.String("device", path),
 			zap.String("format", describeRawFormat(plan.raw)))
-		go s.pumpRawTap(ctx, rawR, plan.raw, sink, path)
 	} else {
 		sink.rawNotOffered(plan.rawRefusalReason())
+	}
+	if tapFmt != nil {
+		go s.pumpRawTap(ctx, rawR, tapFmt, sink, path)
 	}
 
 	defer func() {

@@ -31,3 +31,8 @@ func mjpegPixelsFormat(w, h uint32) *agentpb.RawFormat {
 	}
 	return &agentpb.RawFormat{Width: w, Height: h, Fourcc: fourccYUYV, BytesPerLine: w * 2}
 }
+
+// tapFormat is the format of the frames the pipeline writes to rawTapFD, or nil
+// when it writes none. runCameraPipeline opens and drains the pipe whenever this
+// is non-nil: a pipeline whose fd 3 has no reader or no descriptor would fail.
+func tapFormat(plan gstPipelinePlan) *agentpb.RawFormat { return plan.pixels }

@@ -131,3 +131,20 @@ func TestPlan_DefaultShapeEqualsUnshapedPlanner(t *testing.T) {
 		})
 	}
 }
+
+func TestTapFormat_FollowsPixelsNotRaw(t *testing.T) {
+	withMJPEGDevice(t)
+	mjpeg := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1280, Height: 720}, map[string]bool{"x264enc": true, "jpegdec": true})
+	if mjpeg.raw != nil || tapFormat(mjpeg) != mjpeg.pixels || tapFormat(mjpeg) == nil {
+		t.Errorf("MJPEG: raw=%v tapFormat=%v", mjpeg.raw, tapFormat(mjpeg))
+	}
+	withYUYVModes(t, [][2]uint32{{640, 480}})
+	raw := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{"x264enc": true})
+	if raw.raw == nil || tapFormat(raw) != raw.raw {
+		t.Errorf("raw: raw=%v tapFormat=%v", raw.raw, tapFormat(raw))
+	}
+	csi, err := shapedPlan(pipelineShape{encode: true}, &agentpb.StreamVideoRequest{}, camera.TransportCSI, pipeWireSource{}, map[string]bool{"x264enc": true, "libcamerasrc": true})
+	if err != nil || tapFormat(csi) != nil {
+		t.Errorf("CSI: err=%v tapFormat=%v", err, tapFormat(csi))
+	}
+}
