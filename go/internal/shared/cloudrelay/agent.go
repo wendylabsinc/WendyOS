@@ -77,6 +77,7 @@ func lostConnection(err error) bool {
 }
 
 func (a *Agent) Run(ctx context.Context) {
+	defer a.Verifier.Close()
 	backoff := time.Second
 	lostAfter := a.lostAfter
 	if lostAfter <= 0 {
@@ -618,6 +619,11 @@ func (a *Agent) runOnce(parent context.Context) error {
 			// new path. Re-presenting it saves an IssuePresenceLease round
 			// trip; if the broker does refuse it, that attempt drops it.
 			keepLease = true
+			// Pooled relay connections were dialed over the old path. A removed
+			// source leaves them dead until keepalive notices, and they still
+			// look ready; a moved path leaves them on the route presence is
+			// leaving. Later sessions dial again, as each one did before pooling.
+			a.Verifier.relays.retire()
 			return err
 		case <-renewal.C:
 			if workerDone != nil || renewing != nil {
@@ -810,7 +816,7 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 }
 
 func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.SessionOffer, c claims, d *pb.DialInstruction) error {
-	session, err := join(ctx, broker, o.SessionGrantJws, c, a.signing, pb.JoinRole_JOIN_ROLE_AGENT, a.Verifier.dialRelay)
+	session, err := join(ctx, broker, o.SessionGrantJws, c, a.signing, pb.JoinRole_JOIN_ROLE_AGENT, a.Verifier, string(d.ServiceDescriptor))
 	if err != nil {
 		return err
 	}

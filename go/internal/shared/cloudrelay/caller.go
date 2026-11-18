@@ -220,7 +220,7 @@ func openPortSession(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, v
 	if c.Request != binding(descriptor) || c.Caller != binding(publicDER(key)) {
 		return nil, fmt.Errorf("Cloud tunnel grant request/key mismatch")
 	}
-	s, err := join(ctx, response.Broker, response.SessionGrantJws, c, key, pb.JoinRole_JOIN_ROLE_CALLER, verifier.dialRelay)
+	s, err := join(ctx, response.Broker, response.SessionGrantJws, c, key, pb.JoinRole_JOIN_ROLE_CALLER, verifier, service)
 	if err != nil {
 		return nil, err
 	}
