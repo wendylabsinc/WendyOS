@@ -49,6 +49,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Install build cache tools
         shell: bash
@@ -58,11 +60,6 @@ jobs:
             brew list --versions "$formula" >/dev/null 2>&1 || missing+=("$formula")
           done
           if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Verify documented Swift Agent configuration
         timeout-minutes: 4
@@ -203,6 +200,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Install build cache tools
         shell: bash
@@ -212,11 +211,6 @@ jobs:
             brew list --versions "$formula" >/dev/null 2>&1 || missing+=("$formula")
           done
           if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Capture selected Xcode version
         id: xcode

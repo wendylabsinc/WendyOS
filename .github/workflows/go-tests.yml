@@ -909,10 +909,9 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
+          xcode-version: '26.5'
+
       - name: Require native macOS SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -970,14 +969,13 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
+        with:
+          xcode-version: '26.5'
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: '26.5'
       - name: Install native build dependencies
         run: brew install xcodegen pkg-config libusb cmake ninja
       - name: Build and test native app

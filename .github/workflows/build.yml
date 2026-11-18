@@ -363,6 +363,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -507,6 +509,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Install build cache tools
         shell: bash
@@ -528,11 +532,6 @@ jobs:
         run: |
           tar -C swift/WendyAgentMac/Resources/runtime -xzf \
             "${RUNNER_TEMP}/wendy-macos-runtime-guest/wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}.tar.gz"
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Identify Release build cache
         id: release_cache
