@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -132,7 +134,7 @@ var desktopCloudDial func(context.Context, *config.AuthConfig, cloudDiscoveryDev
 // Restart recovery explicitly requests a fresh channel. Keep the Cloud target
 // identity even when the original route was LAN; a DHCP address is not identity.
 func desktopReconnectableCloudConnection(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
-	conn, err := desktopCloudConnection(ctx, auth, asset, brokerURL)
+	conn, err := connectCloudDevicePreferLAN(ctx, auth, asset, brokerURL)
 	if err != nil {
 		return nil, err
 	}
@@ -145,14 +147,23 @@ func desktopReconnectableCloudConnection(ctx context.Context, auth *config.AuthC
 	return conn, nil
 }
 
-func desktopCloudConnection(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
+func connectCloudDevicePreferLAN(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	expected := cloudDiscoveryIdentity(auth, asset)
 	// A stale local sighting must not turn a remote open into a long timeout.
 	localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	candidates := desktopLocalCandidates(localCtx, asset, expected)
+	if os.Getenv("WENDY_TLS_DEBUG") != "" {
+		fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] LAN candidates for %s: %v\n", expected.IdentityKey(), candidates)
+	}
 	conn := raceDesktopLocal(localCtx, candidates, auth.Certificates[0], expected)
 	cancel()
 	if conn != nil {
+		// A CLI restart must retain the selected identity and wait for the
+		// device to return, even if its LAN address changes during the restart.
+		conn.Reconnect = func(next context.Context) (*grpcclient.AgentConnection, error) {
+			return asset.reconnect(carryTunnelSession(next, ctx), auth, brokerURL)
+		}
+		cliLogln("Connected to %s via LAN (%s).", asset.GetName(), conn.Addr)
 		return conn, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -162,9 +173,13 @@ func desktopCloudConnection(ctx context.Context, auth *config.AuthConfig, asset 
 	if dial == nil {
 		dial = connectCloudDiscoveryTransport
 	}
+	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
 	conn, err := dial(ctx, auth, asset, brokerURL)
 	if err != nil {
 		return nil, err
+	}
+	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); !native {
+		return conn, nil
 	}
 	// Force the lazy gRPC handshake before sharing the channel with waiters.
 	version, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
@@ -190,6 +205,9 @@ func raceDesktopLocal(ctx context.Context, candidates []string, cert config.Cert
 	for _, address := range candidates[:count] {
 		go func() {
 			conn, err := dial(ctx, address, cert, expected)
+			if err != nil && os.Getenv("WENDY_TLS_DEBUG") != "" {
+				fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] LAN candidate %s: %v\n", address, err)
+			}
 			if err != nil && conn != nil {
 				conn.Close()
 				conn = nil
@@ -298,8 +316,8 @@ func desktopLocalInterface(zone string) (*net.Interface, error) {
 }
 
 // A link-local address is meaningful only on a known, currently up interface.
-// Other addresses must be on a local subnet. Neither condition establishes
-// identity; the subsequent mTLS handshake still does that independently.
+// Private addresses can cross LAN subnets or a VPN; public addresses must be
+// on a local subnet. These are routing hints only: mTLS verifies the identity.
 func desktopLocalAddressCandidates(ip string, port int, iface string, onLink func(string) bool, lookup func(string) (*net.Interface, error)) []string {
 	address, err := netip.ParseAddr(strings.TrimSpace(ip))
 	if err != nil || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() {
@@ -322,7 +340,7 @@ func desktopLocalAddressCandidates(ip string, port int, iface string, onLink fun
 		if address.Is6() {
 			address = address.WithZone(zone)
 		}
-	} else if address.Zone() != "" || !onLink(address.String()) {
+	} else if address.Zone() != "" || (!address.IsPrivate() && !onLink(address.String())) {
 		return nil
 	}
 	if port > 65535 {

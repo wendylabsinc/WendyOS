@@ -147,7 +147,7 @@ func TestDesktopConnectionsCancellationDoesNotFallBack(t *testing.T) {
 		t.Error("cancelled local attempt started a Cloud connection")
 		return nil, errors.New("unexpected fallback")
 	}
-	if conn, err := desktopCloudConnection(ctx, auth, asset, ""); conn != nil || !errors.Is(err, context.Canceled) {
+	if conn, err := connectCloudDiscoveryDevice(ctx, auth, asset, ""); conn != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, %v", conn, err)
 	}
 }
