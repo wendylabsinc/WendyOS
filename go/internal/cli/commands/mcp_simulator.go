@@ -224,9 +224,10 @@ func fetchMCPSimulatorImage(ctx context.Context, version string) (string, string
 	if err != nil {
 		return "", "", nil, err
 	}
-	device, exists := manifest.Devices[vmDeviceKey]
+	board := vm.ArchARM64.BoardID()
+	device, exists := manifest.Devices[board]
 	if !exists {
-		return "", "", nil, fmt.Errorf("no published %s image; provide a local image", vmDeviceKey)
+		return "", "", nil, fmt.Errorf("no published %s image; provide a local image", board)
 	}
 	if version == "" {
 		version = device.Latest

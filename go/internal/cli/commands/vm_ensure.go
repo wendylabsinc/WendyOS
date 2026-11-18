@@ -335,7 +335,7 @@ var createSimulator = func(name string) error {
 		return ErrUserCancelled
 	}
 	cliLogln("Creating simulator %q...", name)
-	if err := createVM(os.Stderr, name, "", "", defaultSimulatorDiskGiB, false, 0); err != nil {
+	if err := createVM(os.Stderr, name, "", "", defaultSimulatorDiskGiB, false, 0, ""); err != nil {
 		return fmt.Errorf("%w: %w", errSimulatorUnavailable, err)
 	}
 	return attachSimulatorProfile(name, profile)

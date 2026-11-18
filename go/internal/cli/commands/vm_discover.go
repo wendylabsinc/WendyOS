@@ -195,7 +195,7 @@ func attachSimulators(collection *models.DevicesCollection, vms []models.LANDevi
 }
 
 // isSimulatorBoard reports whether a device type names one of the Builder's
-// VM boards (vmDeviceKey and its x86 sibling). A positive signal: no physical
+// VM boards (vm-arm64 and vm-x86-64). A positive signal: no physical
 // board id starts this way, so a real device can never be filed as a VM.
 func isSimulatorBoard(deviceType string) bool {
 	return strings.HasPrefix(deviceType, "vm-")

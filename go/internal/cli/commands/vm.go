@@ -39,7 +39,7 @@ func newVMCmd() *cobra.Command {
 }
 
 func newVMCreateCmd() *cobra.Command {
-	var image, version, profile string
+	var image, version, profile, arch string
 	var diskGiB, prNumber int
 	var nightly bool
 
@@ -58,6 +58,9 @@ func newVMCreateCmd() *cobra.Command {
 				return err
 			}
 			if vm.IsLiteProfile(selectedProfile) {
+				if cmd.Flags().Changed("arch") {
+					return fmt.Errorf("--arch applies to WendyOS simulators; %s runs ESP32-C6 firmware", selectedProfile)
+				}
 				if nightly || prNumber != 0 || cmd.Flags().Changed("disk") {
 					return fmt.Errorf("wendy-lite does not use --nightly, --pr or --disk; supply a merged ESP32-C6 --image or use the stable firmware")
 				}
@@ -71,7 +74,7 @@ func newVMCreateCmd() *cobra.Command {
 				}
 				return err
 			}
-			if err := runVMCreate(cmd, name, image, version, diskGiB, nightly, prNumber); err != nil {
+			if err := runVMCreate(cmd, name, image, version, diskGiB, nightly, prNumber, arch); err != nil {
 				return err
 			}
 			return attachSimulatorProfile(name, selectedProfile)
@@ -82,6 +85,7 @@ func newVMCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
+	cmd.Flags().StringVar(&arch, "arch", "", "Guest architecture: arm64 or amd64 (default: this computer's default; a local --image is treated as arm64)")
 	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1, so101, rosmaster-r2, wendy-lite or wendy-lite-native (provisioned on first connection)")
 	return cmd
 }
@@ -135,18 +139,44 @@ var promptVMCreateNameFn = func() (string, error) {
 
 // runVMCreate provisions a VM from a local image when one is named, and from the
 // published image otherwise.
-func runVMCreate(cmd *cobra.Command, name, image, version string, diskGiB int, nightly bool, pr int) error {
-	return createVMContext(cmd.Context(), cmd.OutOrStdout(), name, image, version, diskGiB, nightly, pr)
+func runVMCreate(cmd *cobra.Command, name, image, version string, diskGiB int, nightly bool, pr int, archFlag string) error {
+	return createVMContext(cmd.Context(), cmd.OutOrStdout(), name, image, version, diskGiB, nightly, pr, archFlag)
 }
 
 // createVM provisions a VM, writing progress to out. Split from the cobra
 // command so the simulator picker can provision one without a *cobra.Command.
-func createVM(out io.Writer, name, image, version string, diskGiB int, nightly bool, pr int) error {
-	return createVMContext(context.Background(), out, name, image, version, diskGiB, nightly, pr)
+func createVM(out io.Writer, name, image, version string, diskGiB int, nightly bool, pr int, archFlag string) error {
+	return createVMContext(context.Background(), out, name, image, version, diskGiB, nightly, pr, archFlag)
 }
 
-func createVMContext(ctx context.Context, out io.Writer, name, image, version string, diskGiB int, nightly bool, pr int) error {
+// resolveCreateArch is the guest architecture a new simulator gets: the flag
+// when given, ARM64 for a local image without it (existing scripts pass ARM64
+// images), and this host's default otherwise. Native Windows runs only the
+// ARM64 guest.
+func resolveCreateArch(flag, image, goos string) (vm.Arch, error) {
+	arch := defaultGuestArchFn()
+	switch {
+	case flag != "":
+		parsed, err := vm.ParseArch(flag)
+		if err != nil {
+			return "", err
+		}
+		arch = parsed
+	case image != "":
+		arch = vm.ArchARM64
+	}
+	if arch == vm.ArchAMD64 && goos == "windows" {
+		return "", errors.New("--arch amd64 is not available on native Windows: the simulator there runs the ARM64 guest")
+	}
+	return arch, nil
+}
+
+func createVMContext(ctx context.Context, out io.Writer, name, image, version string, diskGiB int, nightly bool, pr int, archFlag string) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	arch, err := resolveCreateArch(archFlag, image, runtime.GOOS)
+	if err != nil {
 		return err
 	}
 	if image != "" && (version != "" || nightly || pr > 0) {
@@ -164,6 +194,10 @@ func createVMContext(ctx context.Context, out io.Writer, name, image, version st
 	if err := store.CheckCreatable(name); err != nil {
 		return err
 	}
+	// An x86-64 image booted as ARM64 hangs in firmware without an error.
+	if image != "" && archFlag == "" {
+		fmt.Fprintln(out, "Treating the local image as ARM64; pass --arch amd64 for an x86-64 image.")
+	}
 	diskBytes, err := vmDiskBytes(diskGiB)
 	if err != nil {
 		return err
@@ -180,7 +214,7 @@ func createVMContext(ctx context.Context, out io.Writer, name, image, version st
 	path, resolvedVersion := image, ""
 	if path == "" {
 		var cleanup func()
-		if path, resolvedVersion, cleanup, err = fetchPublishedVMImageContext(ctx, version, nightly, pr); err != nil {
+		if path, resolvedVersion, cleanup, err = fetchPublishedVMImageContext(ctx, arch, version, nightly, pr); err != nil {
 			return err
 		}
 		defer cleanup()
@@ -200,7 +234,7 @@ func createVMContext(ctx context.Context, out io.Writer, name, image, version st
 		return err
 	}
 
-	meta := vm.Meta{ImageVersion: resolvedVersion, ImageSource: vmImageSource(image, nightly, pr)}
+	meta := vm.Meta{Arch: arch, ImageVersion: resolvedVersion, ImageSource: vmImageSource(image, nightly, pr)}
 	if err := store.CreateFromContext(ctx, name, stream, stream.uncompressedSize, diskBytes, meta); err != nil {
 		return vmStorageError(err, store.DiskPath(name), stream.uncompressedSize, diskBytes)
 	}
@@ -884,23 +918,21 @@ func pickVMName(action string) (string, error) {
 	return pickFromItemsWithColumns("Select a VM to "+action, items, simulatorPickerColumns())
 }
 
-// The VM's manifest key is its WENDYOS_BOARD_ID, the same string the image
-// bakes into /etc/wendyos/device-type. Every board is keyed that way, so this
-// is not a name to choose freely.
-const (
-	vmDeviceKey  = "vm-arm64"
-	vmStorageKey = "disk"
-)
+// The VM's manifest key is its WENDYOS_BOARD_ID (vm.Arch.BoardID), the same
+// string the image bakes into /etc/wendyos/device-type. Every board is keyed
+// that way, so it is not a name to choose freely.
+const vmStorageKey = "disk"
 
 // fetchPublishedVMImage resolves the published VM image, downloading it if the
 // cache does not already hold it. It returns the local path and the version tag
 // it resolved to, which the caller records so a stopped VM still knows what it
 // is running.
-func fetchPublishedVMImage(version string, nightly bool, pr int) (string, string, func(), error) {
-	return fetchPublishedVMImageContext(context.Background(), version, nightly, pr)
+func fetchPublishedVMImage(arch vm.Arch, version string, nightly bool, pr int) (string, string, func(), error) {
+	return fetchPublishedVMImageContext(context.Background(), arch, version, nightly, pr)
 }
 
-func fetchPublishedVMImageContext(ctx context.Context, version string, nightly bool, pr int) (string, string, func(), error) {
+func fetchPublishedVMImageContext(ctx context.Context, arch vm.Arch, version string, nightly bool, pr int) (string, string, func(), error) {
+	board := arch.BoardID()
 	fetchMain := func() (*mainManifest, error) { return fetchMainManifestContext(ctx) }
 	if pr > 0 {
 		fetchMain = func() (*mainManifest, error) { return fetchPRMainManifestContext(ctx, pr) }
@@ -909,12 +941,12 @@ func fetchPublishedVMImageContext(ctx context.Context, version string, nightly b
 	if err != nil {
 		return "", "", nil, err
 	}
-	dev, ok := mm.Devices[vmDeviceKey]
+	dev, ok := mm.Devices[board]
 	if !ok {
 		if pr > 0 {
-			return "", "", nil, fmt.Errorf("PR %d published no %s image; check the build finished for that device", pr, vmDeviceKey)
+			return "", "", nil, fmt.Errorf("PR %d published no %s image; check the build finished for that device", pr, board)
 		}
-		return "", "", nil, fmt.Errorf("no published %s image yet; build one and pass --image", vmDeviceKey)
+		return "", "", nil, fmt.Errorf("no published %s image yet; build one and pass --image", board)
 	}
 
 	// PR entries are always published as nightlies, so their tag lives in
@@ -929,7 +961,7 @@ func fetchPublishedVMImageContext(ctx context.Context, version string, nightly b
 		}
 	}
 	if ver == "" {
-		return "", "", nil, fmt.Errorf("no %s release published yet; retry with --nightly, or build one and pass --image", vmDeviceKey)
+		return "", "", nil, fmt.Errorf("no %s release published yet; retry with --nightly, or build one and pass --image", board)
 	}
 
 	dm, err := fetchDeviceManifestContext(ctx, dev.ManifestPath)
