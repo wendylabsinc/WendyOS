@@ -483,7 +483,14 @@ func (s *VideoService) pumpRawTap(ctx context.Context, r *os.File, format *agent
 			if sawFrame {
 				d = live.idle
 			}
-			_ = r.SetReadDeadline(time.Now().Add(d))
+			if err := r.SetReadDeadline(time.Now().Add(d)); err != nil {
+				// The deadline is the only watchdog here; without it a stalled camera
+				// would block this read forever.
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return status.Errorf(codes.Internal, "failed to set raw frame tap read deadline: %v", err)
+			}
 		}
 		if _, err := io.ReadFull(r, buf); err != nil {
 			if live != nil {

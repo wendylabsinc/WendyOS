@@ -815,6 +815,30 @@ func TestPumpRawTap_AloneReportsACameraThatNeverStarted(t *testing.T) {
 	}
 }
 
+func TestPumpRawTap_AloneFailsWhenTheReadDeadlineCannotBeSet(t *testing.T) {
+	// A regular file does not support deadlines (os.ErrNoDeadline).
+	f, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &pumpTestSink{}
+	sink.want.Store(true)
+	s := &VideoService{logger: zap.NewNop()}
+	done := make(chan error, 1)
+	go func() {
+		done <- s.pumpRawTap(context.Background(), f, pumpTestFormat, sink, "test",
+			&tapLiveness{first: time.Hour, idle: time.Hour})
+	}()
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Internal || !strings.Contains(err.Error(), "read deadline") {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pump blocked instead of reporting that it cannot watch the camera")
+	}
+}
+
 func TestPumpRawTap_ReturnsWhenContextEndsWhileIdle(t *testing.T) {
 	sink := &pumpTestSink{}
 	_, _, done, cancel := startPump(t, sink, &tapLiveness{first: time.Hour, idle: time.Hour})
