@@ -176,10 +176,29 @@ func galleryHasVisualMedia(manifest data.Manifest) bool {
 }
 
 func galleryContentKinds(manifest data.Manifest) []string {
-	names := map[string]string{"video": "Video", "image": "Images", "audio": "Audio", "device_stats": "Device stats", "events": "Events", "robot_data": "Robot data"}
+	found := map[string]bool{}
+	for _, f := range manifest.Files {
+		p, media := strings.ToLower(f.Path), strings.ToLower(f.MediaType)
+		switch {
+		case strings.HasPrefix(media, "video/") || strings.HasSuffix(p, ".mp4") || strings.HasSuffix(p, ".h264") || strings.HasSuffix(p, ".h265") || strings.HasSuffix(p, ".hevc") || strings.HasSuffix(p, ".mov") || strings.HasSuffix(p, ".mjpeg"):
+			found["Video"] = true
+		case strings.HasPrefix(media, "image/") || strings.HasSuffix(p, ".jpg") || strings.HasSuffix(p, ".jpeg") || strings.HasSuffix(p, ".png"):
+			found["Images"] = true
+		case strings.HasPrefix(media, "audio/") || strings.HasSuffix(p, ".wav"):
+			found["Audio"] = true
+		case p == "telemetry.jsonl":
+			found["Device stats"] = true
+		case p == "events.jsonl":
+			found["Events"] = true
+		case strings.HasPrefix(p, "ros2/") && (strings.HasSuffix(p, ".db3") || strings.HasSuffix(p, ".mcap")):
+			found["Robot data"] = true
+		}
+	}
 	out := []string{}
-	for _, kind := range data.ContentTypes(manifest.Files) {
-		out = append(out, names[kind])
+	for _, kind := range []string{"Video", "Images", "Audio", "Device stats", "Events", "Robot data"} {
+		if found[kind] {
+			out = append(out, kind)
+		}
 	}
 	return out
 }
