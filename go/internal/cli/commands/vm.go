@@ -323,7 +323,8 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 	if _, err := os.Stat(store.DiskPath(name)); err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("no VM named %q; create one with 'wendy vm create %s'", name, name)
 	}
-	if meta, ok := store.ReadMeta(name); ok && vm.IsLiteProfile(meta.Profile) {
+	meta, metaOK := store.ReadMeta(name)
+	if metaOK && vm.IsLiteProfile(meta.Profile) {
 		emulator, err := ensureESPEmulator(context.Background())
 		if err != nil {
 			return vm.Spec{}, nil, err
@@ -337,12 +338,22 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 		}
 		return spec, store, nil
 	}
-	if err := ensureQEMUFn(context.Background(), vm.ArchARM64); err != nil {
+	// A value this CLI does not know (a newer CLI, a hand edit) is never
+	// booted as ARM64: the guest would hang in firmware.
+	if !meta.Arch.Valid() {
+		return vm.Spec{}, nil, fmt.Errorf("VM %q records guest architecture %q, which this version of wendy cannot run; update wendy or recreate the VM", name, meta.Arch)
+	}
+	arch := meta.GuestArch()
+	if err := ensureQEMUFn(context.Background(), arch); err != nil {
+		return vm.Spec{}, nil, err
+	}
+	accel := vm.AccelFor(arch, runtime.GOOS, runtime.GOARCH)
+	if err := checkEmulatedGuestFn(arch, accel, runtime.GOOS); err != nil {
 		return vm.Spec{}, nil, err
 	}
 
 	brew := vm.BrewPrefix()
-	firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), vm.ArchARM64, runtime.GOOS, brew)
+	firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), arch, runtime.GOOS, brew)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
@@ -375,15 +386,27 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 	}
 
 	return vm.Spec{
-		Name:         name,
-		DiskPath:     store.DiskPath(name),
-		FirmwareCode: firmware.Code,
-		FirmwareVars: store.VarsPath(name),
-		MemoryMiB:    o.memoryMiB,
-		CPUs:         o.cpus,
-		Accel:        vm.AccelFor(vm.ArchARM64, runtime.GOOS, runtime.GOARCH),
-		Net:          net,
+		Name:                 name,
+		Arch:                 arch,
+		DiskPath:             store.DiskPath(name),
+		FirmwareCode:         firmware.Code,
+		FirmwareVars:         store.VarsPath(name),
+		FirmwareVarsTemplate: firmware.VarsTemplate,
+		MemoryMiB:            o.memoryMiB,
+		CPUs:                 o.cpus,
+		Accel:                accel,
+		Net:                  net,
 	}, store, nil
+}
+
+// checkEmulatedGuestFn refuses an x86-64 guest that would run emulated on an
+// emulator too old for it; a seam so tests need no QEMU.
+var checkEmulatedGuestFn = vm.CheckEmulatedGuest
+
+// vmStartLine is the foreground start's first line: the guest, how it runs
+// and how it is networked.
+func vmStartLine(name string, spec vm.Spec) string {
+	return fmt.Sprintf("Starting %s (%s guest, %s acceleration, %s networking).", name, spec.Arch.Label(), spec.Accel, spec.Net.Mode)
 }
 
 // runVMStart boots a VM, either attached to this terminal or in the background.
@@ -453,7 +476,11 @@ func runVMStart(cmd *cobra.Command, name string, o vmStartOptions) error {
 		return nil
 	}
 
-	fmt.Fprintf(out, "Starting %s (%s acceleration, %s networking).\n", name, spec.Accel, spec.Net.Mode)
+	if vm.IsLiteProfile(spec.Profile) {
+		fmt.Fprintf(out, "Starting %s (%s acceleration, %s networking).\n", name, spec.Accel, spec.Net.Mode)
+	} else {
+		fmt.Fprintln(out, vmStartLine(name, spec))
+	}
 	vmPrintPortMove(out, spec, o, preferred)
 	vmPrintReachability(out, name, spec.Net, spec.Net.AgentPort)
 	fmt.Fprintln(out, "Press Ctrl-A then X to power it off.")
@@ -628,16 +655,30 @@ func newVMListCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "No VMs. Create one with 'wendy vm create <name>'.")
 				return nil
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tSTATE\tADDRESS\tVERSION")
-			for _, st := range statuses {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-					st.Name, vmStateLabel(st), firstNonEmpty(vmAddress(st), "-"),
-					firstNonEmpty(st.Meta.ImageVersion, "-"))
-			}
-			return w.Flush()
+			return writeVMListTable(cmd.OutOrStdout(), statuses)
 		},
 	}
+}
+
+// writeVMListTable prints the human-readable VM list.
+func writeVMListTable(out io.Writer, statuses []vm.Status) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSTATE\tARCH\tADDRESS\tVERSION")
+	for _, st := range statuses {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			st.Name, vmStateLabel(st), firstNonEmpty(vmListArch(st), "-"),
+			firstNonEmpty(vmAddress(st), "-"), firstNonEmpty(st.Meta.ImageVersion, "-"))
+	}
+	return w.Flush()
+}
+
+// vmListArch is a WendyOS VM's guest architecture; Wendy Lite VMs run
+// ESP32-C6 firmware and have none.
+func vmListArch(st vm.Status) string {
+	if vm.IsLiteProfile(st.Meta.Profile) {
+		return ""
+	}
+	return string(st.Meta.GuestArch())
 }
 
 // vmStateLabel distinguishes a VM that is booting from one that is up: the run
@@ -668,6 +709,7 @@ func vmAddress(st vm.Status) string {
 type vmListEntry struct {
 	Name    string `json:"name"`
 	State   string `json:"state"`
+	Arch    string `json:"arch,omitempty"`
 	Address string `json:"address,omitempty"`
 	Version string `json:"version,omitempty"`
 	Source  string `json:"source,omitempty"`
@@ -680,6 +722,7 @@ func vmListJSON(statuses []vm.Status) []vmListEntry {
 		e := vmListEntry{
 			Name:    st.Name,
 			State:   vmStateLabel(st),
+			Arch:    vmListArch(st),
 			Version: st.Meta.ImageVersion,
 			Source:  st.Meta.ImageSource,
 			PID:     st.State.PID,

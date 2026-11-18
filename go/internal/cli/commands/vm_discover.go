@@ -289,7 +289,7 @@ func (f *simulatorFilter) Changed() <-chan struct{} { return f.changed }
 // re-check what it has listed. Bounded by the boot budget: a VM that never
 // answers is one that never announced itself either.
 func (f *simulatorFilter) learn(ctx context.Context, name string, port int) {
-	deadline := time.Now().Add(simulatorBootTimeout())
+	deadline := time.Now().Add(simulatorBootTimeout(name))
 	for {
 		if hostname := askVMHostname(ctx, name, port); hostname != "" {
 			// Best-effort: a store that cannot be written costs the next
