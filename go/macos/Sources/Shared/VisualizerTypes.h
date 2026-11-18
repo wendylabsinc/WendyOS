@@ -59,6 +59,7 @@ typedef struct { WDStatus status; char **paths; size_t count; } WDRecordingExpor
 uint64_t WDBeginRecordingRead(void);
 void WDEndRecordingRead(uint64_t request);
 WDRecordingLibraryResult *WDRecordingLibrary(uint64_t request, char *selector, int32_t secure);
+WDRecordingLibraryResult *WDNotificationRecording(uint64_t request, char *selector, int32_t secure, char *campaign, char *event);
 WDRecordingLibraryResult *WDRecordingDetails(uint64_t request, char *selector, int32_t secure, char **episodes, size_t count);
 void WDRecordingLibraryFree(WDRecordingLibraryResult *value);
 typedef struct { WDStatus status; char *format; uint8_t *bytes; size_t count; } WDRecordingThumbnailResult;

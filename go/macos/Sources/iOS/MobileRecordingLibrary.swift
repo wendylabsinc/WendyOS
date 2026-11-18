@@ -126,6 +126,20 @@ extension GoClient {
         }
     }
 
+    func notificationRecording(device: Device, campaign: String, eventID: String) async throws -> MobileRecordingEpisode? {
+        try await readRecordings(device: device) { request, selector, secure in
+            try Self.withCString(campaign) { campaign in
+                try Self.withCString(eventID) { event in
+                    guard let p = WDNotificationRecording(request, selector, secure, campaign, event) else { throw WendyError(message: "Recording response unavailable.") }
+                    defer { WDRecordingLibraryFree(p) }
+                    try Self.check(p.pointee.status)
+                    guard p.pointee.count == 1, let row = p.pointee.items?.pointee else { return nil }
+                    return Self.recordingEpisode(row)
+                }
+            }
+        }
+    }
+
     func recordingLibrary(device: Device) async throws -> MobileRecordingLibrary {
         try await readRecordings(device: device) { request, selector, secure in
             guard let p = WDRecordingLibrary(request, selector, secure) else {

@@ -260,6 +260,13 @@ func readRecordingDetails(ctx context.Context, client pb.DataServiceClient, ids 
 }
 func summarizeRecording(e *pb.DataEpisode, m *data.Manifest) RecordingEpisode {
 	row := RecordingEpisode{ID: e.GetId(), Title: e.GetName(), Started: e.GetStartedUnixNanos(), Bytes: e.GetSizeBytes(), Duration: -1}
+	if m == nil && e.GetMedia() != nil {
+		index := &data.Manifest{}
+		for _, media := range e.GetMedia().GetFiles() {
+			index.Files = append(index.Files, data.File{Path: media.GetPath(), MediaType: media.GetMediaType(), Size: 1})
+		}
+		row.Kind, _ = recordingKind(index)
+	}
 	if m != nil {
 		row.DetailsLoaded = true
 		row.Campaign = m.Trigger.CampaignName
@@ -381,6 +388,24 @@ func recordingKind(m *data.Manifest) (string, []string) {
 	for _, file := range m.Files {
 		if file.Size <= 0 {
 			continue
+		}
+		media := strings.ToLower(file.MediaType)
+		name := path.Base(file.Path)
+		if strings.HasPrefix(media, "audio/") {
+			audio = true
+		}
+		if strings.HasPrefix(media, "image/") {
+			images = true
+		}
+		if strings.HasPrefix(file.Path, "ros2/") && (strings.HasSuffix(file.Path, ".mcap") || strings.HasSuffix(file.Path, ".db3")) {
+			ros = true
+		}
+		if strings.HasPrefix(media, "video/") && !strings.HasPrefix(name, "snapshot-") {
+			if strings.HasSuffix(name, ".mp4") {
+				movie = true
+			} else {
+				video = true
+			}
 		}
 		switch RecordingPreviewFormat(file) {
 		case "image":

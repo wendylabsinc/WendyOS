@@ -125,6 +125,7 @@ WDStatus *WDPushRegistration(char *account, uint8_t *token, size_t count, char *
 WDStatus *WDManageDevice(uint64_t session, char *account, char *organization, char *device, char *name, int32_t remove);
 typedef struct {
     char *id, *title, *body;
+    char *organization_id, *deep_link, *recording_event_id, *recording_campaign;
     double created_at;
 } WDInboxNotification;
 typedef struct {
@@ -133,5 +134,6 @@ typedef struct {
     size_t count;
 } WDInboxResult;
 WDInboxResult *WDInbox(char *account);
+WDInboxResult *WDNotification(char *account, char *organization, char *id);
 void WDInboxFree(WDInboxResult *value);
 #endif

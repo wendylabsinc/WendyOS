@@ -155,6 +155,14 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
         }
     }
 
+    #if os(iOS)
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        let tap = MobileNotificationTap(userInfo: response.notification.request.content.userInfo)
+        await MobileNotificationRouting.shared.receive(tap)
+    }
+    #endif
+
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .list, .sound])
     }

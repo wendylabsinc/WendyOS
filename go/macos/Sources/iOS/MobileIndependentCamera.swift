@@ -7,6 +7,7 @@ struct IndependentCameraWidget: View {
     let resource: String
     let title: String
     let enabled: Bool
+    var automaticallyPlay = false
     @Environment(\.scenePhase) private var phase
     @State private var playing = false
     @State private var expanded = false
@@ -15,6 +16,7 @@ struct IndependentCameraWidget: View {
     private var running: Bool { playing && phase == .active && (enabled || expanded) && (onScreen || expanded) }
     var body: some View {
         surface
+            .onAppear { if automaticallyPlay { playing = true } }
             .clipShape(.rect(cornerRadius: 12))
             .onScrollVisibilityChange(threshold: 0.05) { onScreen = $0 }
             .task(id: running) { if running { await preview.run(device: device, resource: resource) } }

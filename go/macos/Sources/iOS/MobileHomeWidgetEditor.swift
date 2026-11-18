@@ -56,7 +56,8 @@ struct HomeWidgetEditor: View {
     var cancel: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var actions = AsyncActions()
-    @State private var cameras: [Camera] = []
+    @State private var cameraInventory = CameraPickerInventory()
+    private var cameras: [Camera] { cameraInventory.cameras }
     @State private var campaigns: [DeviceCampaign] = []
     @State private var apps: [DeviceApp] = []
     @State private var deviceSearch = ""
@@ -159,7 +160,7 @@ struct HomeWidgetEditor: View {
                             if !selected {
                                 widget.devices = [HomeWidgetDevice(candidate)]
                                 widget.resource = ""; widget.resourceTitle = ""
-                                cameras = []; campaigns = []; apps = []; error = nil
+                                cameraInventory = .init(); campaigns = []; apps = []; error = nil
                             }
                             path.removeLast()
                         }
@@ -230,7 +231,7 @@ struct HomeWidgetEditor: View {
             }
             Section {
                 ForEach(cameras.filter { $0.stableID != widget.resource && matchesResource($0.name) }, id: \.orderKey) { camera in
-                    resourceRow(camera.stableID, camera.name)
+                    resourceRow(camera.stableID, camera.name, available: cameraInventory.available.contains(camera.stableID))
                 }
                 ForEach(campaigns.filter { $0.name != widget.resource && matchesResource($0.name) }) { campaign in
                     resourceRow(campaign.name, campaign.name)
@@ -263,11 +264,11 @@ struct HomeWidgetEditor: View {
         return query.isEmpty || title.localizedCaseInsensitiveContains(query)
     }
 
-    private func resourceRow(_ id: String, _ title: String) -> some View {
+    private func resourceRow(_ id: String, _ title: String, available: Bool = true) -> some View {
         Button {
             widget.resource = id; widget.resourceTitle = title
             path.removeLast()
-        } label: { selectionLabel(title, selected: widget.resource == id) }
+        } label: { selectionLabel(title, subtitle: available ? nil : "Not currently reported", selected: widget.resource == id) }.disabled(!available)
     }
 
     private func loadChoices() async {
@@ -284,7 +285,7 @@ struct HomeWidgetEditor: View {
             switch widget.kind {
             case .camera:
                 if let problem = model.camerasErrorFailure { throw problem }
-                cameras = model.cameras.filter { !$0.stableID.isEmpty }
+                cameraInventory.merge(model.cameras)
                 if cameras.isEmpty { error = "No cameras with a stable identity were reported." }
             case .campaign:
                 let rows = try await GoClient.shared.campaigns(session: session)

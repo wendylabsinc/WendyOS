@@ -12,6 +12,9 @@ enum MobileInventorySource: CaseIterable, Hashable {
 }
 
 struct MobileRootView: View {
+    @ObservedObject private var notificationRouting = MobileNotificationRouting.shared
+    @State private var notificationPresentation: MobileNotificationPresentation?
+    @State private var openingNotification: UUID?
     @StateObject private var appearances = DeviceAppearanceStore()
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
@@ -64,6 +67,31 @@ struct MobileRootView: View {
             // A source list can reload in the new organization; a device or log route cannot.
             homePath = homePath.filter { if case .device = $0 { return false }; return true }
             recordingPicker = nil
+            notificationPresentation = nil
+        }
+        .task(id: "\(notificationRouting.pending?.id.uuidString ?? "")/\(model.mobileCloudSelectionKey)/\(model.initialized)/\(model.account?.signedIn == true)/\(scenePhase == .active)") {
+            await openPendingNotification()
+        }
+        .overlay(alignment: .top) {
+            if openingNotification != nil {
+                HStack {
+                    ProgressView("Opening alert…")
+                    Button("Cancel") { if let tap = notificationRouting.pending { notificationRouting.finish(tap) } }
+                }.padding().background(.regularMaterial, in: .capsule).padding()
+            }
+        }
+        .sheet(item: $notificationPresentation) { route in
+            NavigationStack {
+                Group {
+                    if let episode = route.episode {
+                        DataVisualizerView(session: 0, deviceName: route.device.title, initialEpisode: episode.id,
+                                           recordingDevice: route.device, recordingKind: episode.kind, startPlaying: true)
+                    } else if let camera = route.cameraID {
+                        IndependentCameraWidget(device: route.device, resource: camera, title: "Camera", enabled: true, automaticallyPlay: true)
+                    }
+                }.navigationTitle(route.episode?.title ?? route.device.title)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { notificationPresentation = nil } } }
+            }
         }
         .modifier(NearbySetupPrompt())
         .environmentObject(appearances)
@@ -183,6 +211,48 @@ struct MobileRootView: View {
         switch homePath.last {
         case .inventory, .device: true
         default: false
+        }
+    }
+
+    private func openPendingNotification() async {
+        guard model.initialized, scenePhase == .active, let tap = notificationRouting.pending else { return }
+        guard let account = model.account, account.signedIn, !model.mobileCloudOrganization.isEmpty else {
+            accounts = true; return
+        }
+        let scope = model.mobileCloudSelectionKey
+        openingNotification = tap.id
+        var consume = true
+        defer {
+            if openingNotification == tap.id { openingNotification = nil }
+            if !Task.isCancelled && consume { notificationRouting.finish(tap) }
+        }
+        do {
+            guard let reference = tap.reference else {
+                if tap.malformedCloudReference { throw WendyError(message: "This alert has an invalid reference.") }
+                openActivity(); return
+            }
+            guard reference.organizationID == model.mobileCloudOrganization else {
+                consume = false
+                throw WendyError(message: "Switch to this alert’s organization in Settings to open it.")
+            }
+            let notification = try await model.client.notification(account: account.context, reference: reference)
+            let destination = try MobileNotificationDestination(notification: notification, reference: reference)
+            let fleet = try await model.client.fleet(account: account.context, org: reference.organizationID)
+            try Task.checkCancellation()
+            guard notificationRouting.pending?.id == tap.id, model.mobileCloudSelectionKey == scope else { return }
+            guard let device = fleet.devices.first(where: { $0.id == destination.deviceID })?.device else {
+                throw WendyError(message: "This alert’s device is no longer available in this organization.")
+            }
+            showingChat = false; accounts = false; recordingPicker = nil
+            if let eventID = destination.recordingEventID, let campaign = destination.recordingCampaign {
+                let episode = try await MobileNotificationRecording.find(device: device, campaign: campaign, eventID: eventID)
+                guard !Task.isCancelled, notificationRouting.pending?.id == tap.id, model.mobileCloudSelectionKey == scope else { return }
+                notificationPresentation = MobileNotificationPresentation(device: device, episode: episode)
+            } else if let camera = destination.cameraID {
+                notificationPresentation = MobileNotificationPresentation(device: device, cameraID: camera)
+            } else { select(device) }
+        } catch {
+            if !Task.isCancelled, model.mobileCloudSelectionKey == scope, notificationRouting.pending?.id == tap.id { model.alert = error.localizedDescription }
         }
     }
 
