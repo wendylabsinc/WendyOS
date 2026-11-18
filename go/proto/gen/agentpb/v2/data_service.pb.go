@@ -1942,16 +1942,13 @@ type DataInferenceWorkerImageResponse struct {
 	// from, at tag "latest". Empty when this agent cannot run the worker in a
 	// container, and then there is nothing to build.
 	Repository string `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
-	// Names the build context below. The agent runs only an image whose
-	// sh.wendy.inference.deps label is this value; a build receives it as the
-	// DEPS_HASH build argument.
+	// Names the files the agent's image is built from. The agent runs only an
+	// image whose sh.wendy.inference.deps label is this value. A client whose
+	// own files have another hash ships other worker dependencies than this
+	// agent, and cannot build an image the agent would run.
 	DepsHash string `protobuf:"bytes,2,opt,name=deps_hash,json=depsHash,proto3" json:"deps_hash,omitempty"`
 	// True when an image with that label is already on the device.
-	Present bool `protobuf:"varint,3,opt,name=present,proto3" json:"present,omitempty"`
-	// The files to build the image from, by name, its Dockerfile included.
-	// Empty when present. They are the agent's own, so the image matches the
-	// agent whatever the version of the client that builds it.
-	BuildContext  map[string][]byte `protobuf:"bytes,4,rep,name=build_context,json=buildContext,proto3" json:"build_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Present       bool `protobuf:"varint,3,opt,name=present,proto3" json:"present,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2005,13 +2002,6 @@ func (x *DataInferenceWorkerImageResponse) GetPresent() bool {
 		return x.Present
 	}
 	return false
-}
-
-func (x *DataInferenceWorkerImageResponse) GetBuildContext() map[string][]byte {
-	if x != nil {
-		return x.BuildContext
-	}
-	return nil
 }
 
 type DataRecordingExportRequest struct {
@@ -2316,17 +2306,13 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x05fleet\x18\x03 \x01(\tR\x05fleet\x12<\n" +
 	"\x06sealed\x18\x04 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06sealed\x12\x1a\n" +
 	"\bwarnings\x18\x05 \x03(\tR\bwarnings\"!\n" +
-	"\x1fDataInferenceWorkerImageRequest\"\xac\x02\n" +
+	"\x1fDataInferenceWorkerImageRequest\"y\n" +
 	" DataInferenceWorkerImageResponse\x12\x1e\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\tR\n" +
 	"repository\x12\x1b\n" +
 	"\tdeps_hash\x18\x02 \x01(\tR\bdepsHash\x12\x18\n" +
-	"\apresent\x18\x03 \x01(\bR\apresent\x12p\n" +
-	"\rbuild_context\x18\x04 \x03(\v2K.wendy.agent.services.v2.DataInferenceWorkerImageResponse.BuildContextEntryR\fbuildContext\x1a?\n" +
-	"\x11BuildContextEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\x85\x01\n" +
+	"\apresent\x18\x03 \x01(\bR\apresent\"\x85\x01\n" +
 	"\x1aDataRecordingExportRequest\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +
@@ -2375,7 +2361,7 @@ func file_wendy_agent_services_v2_data_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_data_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_data_service_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_wendy_agent_services_v2_data_service_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_wendy_agent_services_v2_data_service_proto_goTypes = []any{
 	(*DataEventsRequest)(nil),                // 0: wendy.agent.services.v2.DataEventsRequest
 	(*DataEventsResponse)(nil),               // 1: wendy.agent.services.v2.DataEventsResponse
@@ -2413,8 +2399,7 @@ var file_wendy_agent_services_v2_data_service_proto_goTypes = []any{
 	(*DataRecordingExportRequest)(nil),       // 33: wendy.agent.services.v2.DataRecordingExportRequest
 	(*DataRecordingExportAckRequest)(nil),    // 34: wendy.agent.services.v2.DataRecordingExportAckRequest
 	(*DataRecordingExportAckResponse)(nil),   // 35: wendy.agent.services.v2.DataRecordingExportAckResponse
-	nil,                                      // 36: wendy.agent.services.v2.DataInferenceWorkerImageResponse.BuildContextEntry
-	(*recordingpb.StoredRecord)(nil),         // 37: wendy.agent.apps.v1.StoredRecord
+	(*recordingpb.StoredRecord)(nil),         // 36: wendy.agent.apps.v1.StoredRecord
 }
 var file_wendy_agent_services_v2_data_service_proto_depIdxs = []int32{
 	2,  // 0: wendy.agent.services.v2.DataSourcesResponse.sources:type_name -> wendy.agent.services.v2.DataSource
@@ -2429,50 +2414,49 @@ var file_wendy_agent_services_v2_data_service_proto_depIdxs = []int32{
 	23, // 9: wendy.agent.services.v2.DataCampaignDisarmResponse.campaign:type_name -> wendy.agent.services.v2.DataCampaign
 	12, // 10: wendy.agent.services.v2.DataCampaignDisarmResponse.recording:type_name -> wendy.agent.services.v2.DataEpisode
 	12, // 11: wendy.agent.services.v2.DataCampaignRemoveResponse.sealed:type_name -> wendy.agent.services.v2.DataEpisode
-	36, // 12: wendy.agent.services.v2.DataInferenceWorkerImageResponse.build_context:type_name -> wendy.agent.services.v2.DataInferenceWorkerImageResponse.BuildContextEntry
-	0,  // 13: wendy.agent.services.v2.DataService.Events:input_type -> wendy.agent.services.v2.DataEventsRequest
-	33, // 14: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
-	34, // 15: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
-	3,  // 16: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
-	6,  // 17: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
-	7,  // 18: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
-	8,  // 19: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
-	9,  // 20: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
-	10, // 21: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
-	11, // 22: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
-	16, // 23: wendy.agent.services.v2.DataService.DeleteEpisode:input_type -> wendy.agent.services.v2.DataDeleteEpisodeRequest
-	19, // 24: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
-	20, // 25: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
-	21, // 26: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
-	22, // 27: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
-	25, // 28: wendy.agent.services.v2.DataService.CampaignArm:input_type -> wendy.agent.services.v2.DataCampaignArmRequest
-	27, // 29: wendy.agent.services.v2.DataService.CampaignDisarm:input_type -> wendy.agent.services.v2.DataCampaignDisarmRequest
-	29, // 30: wendy.agent.services.v2.DataService.CampaignRemove:input_type -> wendy.agent.services.v2.DataCampaignRemoveRequest
-	31, // 31: wendy.agent.services.v2.DataService.InferenceWorkerImage:input_type -> wendy.agent.services.v2.DataInferenceWorkerImageRequest
-	1,  // 32: wendy.agent.services.v2.DataService.Events:output_type -> wendy.agent.services.v2.DataEventsResponse
-	37, // 33: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
-	35, // 34: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
-	4,  // 35: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
-	12, // 36: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
-	12, // 37: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
-	13, // 38: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
-	14, // 39: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
-	15, // 40: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
-	18, // 41: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
-	17, // 42: wendy.agent.services.v2.DataService.DeleteEpisode:output_type -> wendy.agent.services.v2.DataDeleteEpisodeResponse
-	23, // 43: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
-	24, // 44: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
-	23, // 45: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
-	12, // 46: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
-	26, // 47: wendy.agent.services.v2.DataService.CampaignArm:output_type -> wendy.agent.services.v2.DataCampaignArmResponse
-	28, // 48: wendy.agent.services.v2.DataService.CampaignDisarm:output_type -> wendy.agent.services.v2.DataCampaignDisarmResponse
-	30, // 49: wendy.agent.services.v2.DataService.CampaignRemove:output_type -> wendy.agent.services.v2.DataCampaignRemoveResponse
-	32, // 50: wendy.agent.services.v2.DataService.InferenceWorkerImage:output_type -> wendy.agent.services.v2.DataInferenceWorkerImageResponse
-	32, // [32:51] is the sub-list for method output_type
-	13, // [13:32] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	0,  // 12: wendy.agent.services.v2.DataService.Events:input_type -> wendy.agent.services.v2.DataEventsRequest
+	33, // 13: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
+	34, // 14: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
+	3,  // 15: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
+	6,  // 16: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
+	7,  // 17: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
+	8,  // 18: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
+	9,  // 19: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
+	10, // 20: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
+	11, // 21: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
+	16, // 22: wendy.agent.services.v2.DataService.DeleteEpisode:input_type -> wendy.agent.services.v2.DataDeleteEpisodeRequest
+	19, // 23: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
+	20, // 24: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
+	21, // 25: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
+	22, // 26: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
+	25, // 27: wendy.agent.services.v2.DataService.CampaignArm:input_type -> wendy.agent.services.v2.DataCampaignArmRequest
+	27, // 28: wendy.agent.services.v2.DataService.CampaignDisarm:input_type -> wendy.agent.services.v2.DataCampaignDisarmRequest
+	29, // 29: wendy.agent.services.v2.DataService.CampaignRemove:input_type -> wendy.agent.services.v2.DataCampaignRemoveRequest
+	31, // 30: wendy.agent.services.v2.DataService.InferenceWorkerImage:input_type -> wendy.agent.services.v2.DataInferenceWorkerImageRequest
+	1,  // 31: wendy.agent.services.v2.DataService.Events:output_type -> wendy.agent.services.v2.DataEventsResponse
+	36, // 32: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
+	35, // 33: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
+	4,  // 34: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
+	12, // 35: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
+	12, // 36: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
+	13, // 37: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
+	14, // 38: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
+	15, // 39: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
+	18, // 40: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
+	17, // 41: wendy.agent.services.v2.DataService.DeleteEpisode:output_type -> wendy.agent.services.v2.DataDeleteEpisodeResponse
+	23, // 42: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
+	24, // 43: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
+	23, // 44: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
+	12, // 45: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
+	26, // 46: wendy.agent.services.v2.DataService.CampaignArm:output_type -> wendy.agent.services.v2.DataCampaignArmResponse
+	28, // 47: wendy.agent.services.v2.DataService.CampaignDisarm:output_type -> wendy.agent.services.v2.DataCampaignDisarmResponse
+	30, // 48: wendy.agent.services.v2.DataService.CampaignRemove:output_type -> wendy.agent.services.v2.DataCampaignRemoveResponse
+	32, // 49: wendy.agent.services.v2.DataService.InferenceWorkerImage:output_type -> wendy.agent.services.v2.DataInferenceWorkerImageResponse
+	31, // [31:50] is the sub-list for method output_type
+	12, // [12:31] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_data_service_proto_init() }
@@ -2486,7 +2470,7 @@ func file_wendy_agent_services_v2_data_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_data_service_proto_rawDesc), len(file_wendy_agent_services_v2_data_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   37,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

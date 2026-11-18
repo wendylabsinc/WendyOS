@@ -3,10 +3,11 @@
 # agent mounts its own worker.py and accelerator.py read-only, so the worker
 # itself can never differ from the agent that drives it.
 #
-# The agent embeds this file, pyproject.toml and uv.lock, and serves them to
-# `wendy data campaign deploy`, which builds the image for the device and
-# pushes it to the device registry. Those three files are the whole build
-# context. By hand, in a directory that holds them:
+# The agent and the CLI both compile in this file, pyproject.toml and uv.lock.
+# `wendy data campaign deploy` builds the CLI's copy for the device and pushes
+# the image to the device registry; the agent runs it only when its own copy
+# is the same. Those three files are the whole build context. By hand, in a
+# directory that holds them:
 #   docker build --build-arg DEPS_HASH="$(cat Dockerfile pyproject.toml uv.lock | sha256sum | cut -c1-16)" .
 FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS base
 

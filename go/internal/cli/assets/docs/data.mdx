@@ -220,10 +220,12 @@ first time you deploy a campaign with inference to such a device,
 pushes it to the device, as `wendy run` does for an app: a few minutes and a
 push of about 1.2 GB, once per device, and again only after an agent update
 that changes the worker's dependencies. That needs Docker running on your
-machine. Without Docker, or over a connection through Wendy Cloud, the
-campaign is deployed all the same, one line says why there is no image, and
-the model runs as a process of the agent, on a Python runtime the agent
-downloads on first use. That is also how it runs on a macOS agent, and for a
+machine, and a CLI and agent on matching versions: the CLI builds only its own
+files, and the agent runs only an image built from the same ones. Without
+Docker, over a connection through Wendy Cloud, or when the CLI and the agent
+ship different worker dependencies, the campaign is deployed all the same, one
+line says why there is no image, and the model runs as a process of the agent,
+on a Python runtime the agent downloads on first use. That is also how it runs on a macOS agent, and for a
 campaign that asks for TensorRT or can use it on the device.
 `inference_status.accelerator.isolation` says which it is (`container` or
 `process`), and `isolation_reason` why it is not a container and what to do

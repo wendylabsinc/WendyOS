@@ -43,9 +43,11 @@ func WorkerImageReference(registryPrefix string) string {
 // and the Dockerfile hash them.
 var workerImageFiles = []string{"Dockerfile", "pyproject.toml", "uv.lock"}
 
-// WorkerBuildContext is what the worker's image is built from. The agent
-// serves it to the command line, so that an image is always built from the
-// files of the agent that will run it, whatever the command line's version.
+// WorkerBuildContext is what the worker's image is built from. The agent and
+// the command line compile in this one copy. The command line builds its own
+// copy and never files a device sends: a device is less trusted than the
+// machine that builds for it. An agent runs the result only when its own
+// copy is the same (DepsHash), so the two must ship the same files.
 func WorkerBuildContext() map[string][]byte {
 	files := map[string][]byte{}
 	for _, name := range workerImageFiles {
@@ -119,7 +121,7 @@ type ContainerFactory struct {
 const (
 	containerNotStarted = "the worker did not start in its container: "
 	// What an operator does about a missing or outdated image.
-	deployForImage = "deploy the campaign with a current wendy CLI on a machine with Docker, which builds the image and pushes it to this device"
+	deployForImage = "deploy the campaign with a wendy CLI of this agent's version on a machine with Docker, which builds the image and pushes it to this device"
 )
 
 func (f *ContainerFactory) Start(ctx context.Context, config data.CampaignInference) (Session, error) {
@@ -194,28 +196,22 @@ func (f *ContainerFactory) imageUnusable(ctx context.Context) string {
 	return ""
 }
 
-// WorkerImageInfo is what the command line needs to put the worker's image
-// on the device.
+// WorkerImageInfo is what the command line needs to decide whether to put
+// the worker's image on the device. None of it is an input to its build.
 type WorkerImageInfo struct {
-	// Repository is where to push it in the device registry. Empty when this
-	// agent can run no worker in a container, and there is nothing to build.
+	// Repository is where the agent looks in the device registry. Empty when
+	// this agent can run no worker in a container, and nothing is to be built.
 	Repository string
 	DepsHash   string
 	// Present is whether an image for DepsHash is already on the device.
 	Present bool
-	// BuildContext is what to build it from, when it is not.
-	BuildContext map[string][]byte
 }
 
 func (f *ContainerFactory) WorkerImage(ctx context.Context) WorkerImageInfo {
 	if f.unavailable() != "" {
 		return WorkerImageInfo{}
 	}
-	info := WorkerImageInfo{Repository: WorkerRepository, DepsHash: DepsHash(), Present: f.imageUnusable(ctx) == ""}
-	if !info.Present {
-		info.BuildContext = WorkerBuildContext()
-	}
-	return info
+	return WorkerImageInfo{Repository: WorkerRepository, DepsHash: DepsHash(), Present: f.imageUnusable(ctx) == ""}
 }
 
 // RemoveStaleImage removes a worker image built for another agent version,

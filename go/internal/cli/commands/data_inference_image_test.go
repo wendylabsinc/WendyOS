@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/user"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -44,9 +43,10 @@ func (c *workerImageClient) CampaignDeploy(context.Context, *agentpbv2.DataCampa
 	return &agentpbv2.DataCampaign{Name: "people", State: "armed", Revision: "0123456789abcdef", PlanJson: []byte(deployedPlanJSON)}, nil
 }
 
+// missingWorkerImage is the answer of an agent of this CLI's version on a
+// device without the image.
 func missingWorkerImage() *agentpbv2.DataInferenceWorkerImageResponse {
-	return &agentpbv2.DataInferenceWorkerImageResponse{Repository: "wendy-inference-worker", DepsHash: "62dfd59926b6a643",
-		BuildContext: map[string][]byte{"Dockerfile": []byte("FROM scratch\n"), "uv.lock": []byte("lock\n")}}
+	return &agentpbv2.DataInferenceWorkerImageResponse{Repository: inference.WorkerRepository, DepsHash: inference.DepsHash()}
 }
 
 // deployWith runs a campaign deploy against client, with Docker running or
@@ -59,15 +59,15 @@ func deployWith(t *testing.T, client *workerImageClient, conn *grpcclient.AgentC
 	})
 	dockerVersionOKFn = func(context.Context) bool { return dockerRunning }
 	isInteractiveTerminalFn = func() bool { return false }
-	buildInferenceWorkerImageFn = func(ctx context.Context, _ *grpcclient.AgentConnection, info *agentpbv2.DataInferenceWorkerImageResponse) error {
-		client.calls = append(client.calls, "build "+info.GetRepository()+" "+info.GetDepsHash())
+	buildInferenceWorkerImageFn = func(ctx context.Context, _ *grpcclient.AgentConnection, platform string) error {
+		client.calls = append(client.calls, "build "+platform)
 		if !detachedJSONRun(ctx) {
 			t.Error("build progress would go to stdout")
 		}
 		return buildErr
 	}
 	if conn == nil {
-		conn = &grpcclient.AgentConnection{}
+		conn = linuxDevice("arm64")
 	}
 	conn.DataService = client
 	var out, notices bytes.Buffer
@@ -76,11 +76,29 @@ func deployWith(t *testing.T, client *workerImageClient, conn *grpcclient.AgentC
 	return out.String(), notices.String(), err
 }
 
+// linuxDevice is a connection to a device whose agent reports Linux on the
+// given architecture.
+func linuxDevice(architecture string) *grpcclient.AgentConnection {
+	conn := &grpcclient.AgentConnection{}
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: architecture})
+	return conn
+}
+
 func TestCampaignDeployPutsTheWorkerImageOnTheDevice(t *testing.T) {
 	const deployed = "Campaign people: armed (revision 0123456789ab)\n"
-	const build = "build wendy-inference-worker 62dfd59926b6a643"
+	const build = "build linux/arm64"
 	cloud := func() *grpcclient.AgentConnection {
-		return &grpcclient.AgentConnection{Reconnect: func(context.Context) (*grpcclient.AgentConnection, error) { return nil, nil }}
+		conn := linuxDevice("arm64")
+		conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) { return nil, nil }
+		return conn
+	}
+	otherPlatform := func(os, architecture string) *grpcclient.AgentConnection {
+		conn := &grpcclient.AgentConnection{}
+		conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: os, CpuArchitecture: architecture})
+		return conn
+	}
+	answer := func(repository, depsHash string) *workerImageClient {
+		return &workerImageClient{image: &agentpbv2.DataInferenceWorkerImageResponse{Repository: repository, DepsHash: depsHash}}
 	}
 	for _, test := range []struct {
 		name     string
@@ -91,8 +109,26 @@ func TestCampaignDeployPutsTheWorkerImageOnTheDevice(t *testing.T) {
 		calls    string
 		notice   string // what stderr must say; "" means nothing at all
 	}{
-		{name: "the device has the image", client: &workerImageClient{image: &agentpbv2.DataInferenceWorkerImageResponse{Repository: "wendy-inference-worker", DepsHash: "62dfd59926b6a643", Present: true}},
+		{name: "the device has the image", client: &workerImageClient{image: &agentpbv2.DataInferenceWorkerImageResponse{Repository: inference.WorkerRepository, DepsHash: inference.DepsHash(), Present: true}},
 			calls: "image?,deploy"},
+		{name: "an amd64 device", client: &workerImageClient{image: missingWorkerImage()}, conn: linuxDevice("amd64"),
+			calls: "image?,build linux/amd64,deploy", notice: "The model worker image is on the device."},
+		// The device's answer is compared with what this CLI builds, and is
+		// never an input to a build: on any difference nothing is built.
+		{name: "an agent with other worker dependencies", client: answer(inference.WorkerRepository, "0000000000000000"),
+			calls: "image?,deploy", notice: "this CLI and the device's agent ship different worker dependencies, so this CLI cannot build the image that agent runs. The campaign is deployed either way. To run it in a container, bring the CLI and the device's agent to matching versions"},
+		{name: "a hash that is no hash", client: answer(inference.WorkerRepository, inference.DepsHash()+" --build-arg HTTP_PROXY=http://evil.example"),
+			calls: "image?,deploy", notice: "ship different worker dependencies"},
+		{name: "another repository", client: answer("someone-elses-app", inference.DepsHash()),
+			calls: "image?,deploy", notice: "the device asks for an image this CLI does not build"},
+		{name: "a repository on another registry", client: answer("evil.example/"+inference.WorkerRepository, inference.DepsHash()),
+			calls: "image?,deploy", notice: "the device asks for an image this CLI does not build"},
+		{name: "a repository that is a path", client: answer("../../"+inference.WorkerRepository, inference.DepsHash()),
+			calls: "image?,deploy", notice: "the device asks for an image this CLI does not build"},
+		{name: "a device that reports another OS", client: &workerImageClient{image: missingWorkerImage()}, conn: otherPlatform("darwin", "arm64"),
+			calls: "image?,deploy", notice: "there is no worker image for the platform the device reports"},
+		{name: "a device that reports no real architecture", client: &workerImageClient{image: missingWorkerImage()}, conn: otherPlatform("linux", "arm64 --output type=local,dest=/"),
+			calls: "image?,deploy", notice: "there is no worker image for the platform the device reports"},
 		{name: "the device lacks the image", client: &workerImageClient{image: missingWorkerImage()},
 			calls: "image?," + build + ",deploy", notice: "The model worker image is on the device."},
 		// An agent that predates the image gets exactly the deploy it got before.
@@ -177,7 +213,7 @@ func (registryOnlyDevice) IsProvisioned(context.Context, *agentpb.IsProvisionedR
 }
 
 // Opt-in integration: the real build and push, the way `wendy run` does them,
-// of exactly what an agent serves, to a throwaway registry that stands in
+// of the files compiled into this CLI, to a throwaway registry that stands in
 // for a device's. Set WENDY_INFERENCE_PUSH_REGISTRY to its host:port (plain
 // HTTP, such as a local `registry:2` container). Needs Docker.
 func TestWorkerImageBuildsAndPushesToARegistry(t *testing.T) {
@@ -198,10 +234,8 @@ func TestWorkerImageBuildsAndPushesToARegistry(t *testing.T) {
 		RegistryDialer: func(ctx context.Context, _ int) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", registry)
 		}}
-	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: runtime.GOARCH})
-	info := &agentpbv2.DataInferenceWorkerImageResponse{Repository: inference.WorkerRepository, DepsHash: inference.DepsHash(), BuildContext: inference.WorkerBuildContext()}
 	// Progress on stderr, as campaign deploy asks for with --json.
-	if err := buildInferenceWorkerImage(context.WithValue(ctx, detachedJSONRunKey{}, true), conn, info); err != nil {
+	if err := buildInferenceWorkerImage(context.WithValue(ctx, detachedJSONRunKey{}, true), conn, inferenceWorkerPlatforms[runtime.GOARCH]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -255,45 +289,4 @@ func TestWorkerImageBuildsAndPushesToARegistry(t *testing.T) {
 	}
 	t.Logf("pushed %s/%s:latest for linux/%s: %d layers of %d MiB together, label %s=%s",
 		registry, inference.WorkerRepository, runtime.GOARCH, len(manifest.Layers), pushed>>20, inference.WorkerImageDepsLabel, inference.DepsHash())
-}
-
-// The device names the repository, the build argument and the files; none of
-// them may reach outside the build directory or the registry path.
-func TestWorkerImageFromTheDeviceIsHeldToPlainNames(t *testing.T) {
-	dir := t.TempDir()
-	if err := writeInferenceBuildContext(dir, missingWorkerImage().GetBuildContext()); err != nil {
-		t.Fatal(err)
-	}
-	if written, err := os.ReadFile(filepath.Join(dir, "Dockerfile")); err != nil || string(written) != "FROM scratch\n" {
-		t.Fatalf("Dockerfile %q: %v", written, err)
-	}
-	for name, files := range map[string]map[string][]byte{
-		"no Dockerfile":  {"uv.lock": nil},
-		"a path":         {"Dockerfile": nil, "../../.ssh/authorized_keys": []byte("key")},
-		"a subdirectory": {"Dockerfile": nil, "a/b": nil},
-		"a hidden file":  {"Dockerfile": nil, ".dockerignore": nil},
-		"too large":      {"Dockerfile": make([]byte, inferenceContextMaxBytes+1)},
-	} {
-		parent := t.TempDir()
-		target := filepath.Join(parent, "context")
-		if err := os.Mkdir(target, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := writeInferenceBuildContext(target, files); err == nil {
-			t.Errorf("%s: accepted", name)
-		}
-		if entries, _ := os.ReadDir(parent); len(entries) != 1 {
-			t.Errorf("%s: wrote outside the build directory: %v", name, entries)
-		}
-	}
-	for name, info := range map[string]*agentpbv2.DataInferenceWorkerImageResponse{
-		"a repository path": {Repository: "../../etc", DepsHash: "62dfd59926b6a643"},
-		"a registry host":   {Repository: "evil.example/worker", DepsHash: "62dfd59926b6a643"},
-		"a build argument":  {Repository: "wendy-inference-worker", DepsHash: "x --build-arg HTTP_PROXY=evil"},
-	} {
-		info.BuildContext = missingWorkerImage().GetBuildContext()
-		if err := buildInferenceWorkerImage(context.Background(), &grpcclient.AgentConnection{}, info); !errors.Is(err, errInvalidInferenceImage) {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
 }

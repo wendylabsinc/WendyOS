@@ -619,34 +619,41 @@ A worker runs in a container when all of these hold:
 
 **The image, on first deploy.** When you deploy a campaign with inference to
 a device that can use the image and does not have it, `wendy data campaign
-deploy` first asks the device's agent for the image's build files, builds the
-image with Docker for the device's architecture, and pushes it to the device's
-registry, the same way `wendy run` delivers an app. Expect a build of about a
-minute on a fast connection, longer when your machine's architecture differs
-from the device's, and a push of about 1.2 GB; on the device the image takes
-roughly twice that, for the pushed layers and their unpacked copy. Your machine needs Docker running, and internet access for the
-base image and the Python packages. The device needs neither: its Python
-runtime arrives in the image. This happens once per device, and again only
-after an agent update that changes the worker's dependencies; other deploys
-find the image there and go straight on.
+deploy` first builds the image with Docker for the device's architecture and
+pushes it to the device's registry, the same way `wendy run` delivers an app.
+Expect a build of about a minute on a fast connection, longer when your
+machine's architecture differs from the device's, and a push of about 1.2 GB;
+on the device the image takes roughly twice that, for the pushed layers and
+their unpacked copy. Your machine needs Docker running, and internet access
+for the base image and the Python packages. The device needs neither: its
+Python runtime arrives in the image. This happens once per device, and again
+only after an agent update that changes the worker's dependencies; other
+deploys find the image there and go straight on.
+
+The CLI builds only the files that ship inside the CLI itself, never anything
+a device sends. The agent ships the same files and runs only an image built
+from exactly them, so the two have to match: the CLI asks the agent which
+build it runs, and when that is not the CLI's own, the CLI builds nothing,
+deploys the campaign, and says once that the CLI and the agent ship different
+worker dependencies. The worker then runs as a process until the CLI and the
+agent are on matching versions. Most CLI and agent versions do match here: the
+files change only when the worker's Python dependencies or its image do.
 
 The build never stands in the way of the deploy. Without Docker, over a
 connection through Wendy Cloud (where the image is not pushed), or when the
 build or the push fails or takes more than 30 minutes, the campaign is
 deployed as before, one line on stderr says why, and the worker runs as a
-process; `isolation_reason` then says to deploy the campaign with a current
-CLI on a machine with Docker. Pressing Ctrl-C during the build cancels the
-deploy. Build progress and these notices go to stderr, so `--json` output is
-still the plan alone. An agent that predates the image is deployed to exactly
-as before. Only `wendy data campaign deploy` builds the image; a campaign
-deployed another way, such as from the desktop app, runs its worker as a
-process until a deploy from the CLI has put the image on the device.
+process; `isolation_reason` then says to deploy the campaign with a CLI of the
+agent's version on a machine with Docker. Pressing Ctrl-C during the build
+cancels the deploy. Build progress and these notices go to stderr, so `--json`
+output is still the plan alone. An agent that predates the image is deployed
+to exactly as before. Only `wendy data campaign deploy` builds the image; a
+campaign deployed another way, such as from the desktop app, runs its worker
+as a process until a deploy from the CLI has put the image on the device.
 
-The image is built from the agent's own files, so it matches the agent
-whatever the CLI's version, and the agent runs only an image labelled for
-exactly those files. An agent update that changes the worker's dependencies
-removes the old image when it starts; workers then run as a process, with
-that reason, until the next `wendy data campaign deploy` builds the new one.
+An agent update that changes the worker's dependencies removes the old image
+when it starts; workers then run as a process, with that reason, until a
+`wendy data campaign deploy` from a CLI of the new version builds the new one.
 A worker that is already running keeps running as it is; it uses the image
 the next time it starts, for example after `wendy data campaign disarm` and
 `arm`. Like an app's image, the worker image is trusted as far as whoever can

@@ -1,8 +1,8 @@
 name: Inference worker image
 
 # The image the agent runs its campaign model worker in is never published:
-# `wendy data campaign deploy` builds it from files the agent serves and pushes
-# it to the device registry. This workflow is the one place where that build
+# `wendy data campaign deploy` builds it from files compiled into the CLI and
+# pushes it to the device registry. This workflow is the one place where that build
 # and the real worker in the resulting image run, on both architectures.
 
 on:
@@ -47,11 +47,11 @@ jobs:
         run: |
           sudo apt-get update --error-on=any
           sudo apt-get install -y pkg-config libasound2-dev libusb-1.0-0-dev
-      # The image built from exactly the build context the agent serves, and
+      # The image built from exactly the files the CLI and the agent embed, and
       # the agent's own worker.py in it through the agent's container factory:
       # read-only root, no capabilities, a model downloaded into the shared
       # cache, and a frame in and its answer out.
-      - name: Build the served context and run the agent's worker in the image
+      - name: Build the embedded files and run the agent's worker in the image
         env:
           WENDY_INFERENCE_SMOKE: "1"
         run: |

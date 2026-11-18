@@ -8,9 +8,10 @@ import (
 )
 
 // InferenceWorkerImage tells the command line which image this agent runs a
-// campaign's model worker in and whether the device has it, and hands it the
-// files to build it from. An agent whose worker never runs in a container
-// answers with no repository, and the command line builds nothing.
+// campaign's model worker in and whether the device has it. The command line
+// builds its own files, and only when they are this agent's. An agent whose
+// worker never runs in a container answers with no repository, and the
+// command line builds nothing.
 func (s *DataService) InferenceWorkerImage(ctx context.Context, _ *agentpbv2.DataInferenceWorkerImageRequest) (*agentpbv2.DataInferenceWorkerImageResponse, error) {
 	if s.inference == nil {
 		return &agentpbv2.DataInferenceWorkerImageResponse{}, nil
@@ -22,5 +23,5 @@ func (s *DataService) InferenceWorkerImage(ctx context.Context, _ *agentpbv2.Dat
 		return &agentpbv2.DataInferenceWorkerImageResponse{}, nil
 	}
 	info := images.WorkerImage(ctx)
-	return &agentpbv2.DataInferenceWorkerImageResponse{Repository: info.Repository, DepsHash: info.DepsHash, Present: info.Present, BuildContext: info.BuildContext}, nil
+	return &agentpbv2.DataInferenceWorkerImageResponse{Repository: info.Repository, DepsHash: info.DepsHash, Present: info.Present}, nil
 }

@@ -115,11 +115,14 @@ type DataServiceClient interface {
 	// CampaignDisarm does, and reports a worker still stopping after 10 s the
 	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(ctx context.Context, in *DataCampaignRemoveRequest, opts ...grpc.CallOption) (*DataCampaignRemoveResponse, error)
-	// InferenceWorkerImage describes the container image a campaign's model
-	// worker runs in, so that the command line can build it and push it to the
-	// device registry before deploying a campaign with inference. The agent
-	// never pulls the image from a network: without it, the worker runs as a
-	// process of the agent. It is what `wendy data campaign deploy` calls.
+	// InferenceWorkerImage says which container image a campaign's model
+	// worker runs in and whether the device has it, so that the command line
+	// can decide whether to build that image, from its own files, and push it
+	// to the device registry before deploying a campaign with inference. The
+	// agent never pulls the image from a network: without it, the worker runs
+	// as a process of the agent. It is what `wendy data campaign deploy` calls.
+	// Nothing in the response is an input to a build: a client compares it
+	// with what it would build and builds nothing on a mismatch.
 	InferenceWorkerImage(ctx context.Context, in *DataInferenceWorkerImageRequest, opts ...grpc.CallOption) (*DataInferenceWorkerImageResponse, error)
 }
 
@@ -413,11 +416,14 @@ type DataServiceServer interface {
 	// CampaignDisarm does, and reports a worker still stopping after 10 s the
 	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error)
-	// InferenceWorkerImage describes the container image a campaign's model
-	// worker runs in, so that the command line can build it and push it to the
-	// device registry before deploying a campaign with inference. The agent
-	// never pulls the image from a network: without it, the worker runs as a
-	// process of the agent. It is what `wendy data campaign deploy` calls.
+	// InferenceWorkerImage says which container image a campaign's model
+	// worker runs in and whether the device has it, so that the command line
+	// can decide whether to build that image, from its own files, and push it
+	// to the device registry before deploying a campaign with inference. The
+	// agent never pulls the image from a network: without it, the worker runs
+	// as a process of the agent. It is what `wendy data campaign deploy` calls.
+	// Nothing in the response is an input to a build: a client compares it
+	// with what it would build and builds nothing on a mismatch.
 	InferenceWorkerImage(context.Context, *DataInferenceWorkerImageRequest) (*DataInferenceWorkerImageResponse, error)
 	mustEmbedUnimplementedDataServiceServer()
 }

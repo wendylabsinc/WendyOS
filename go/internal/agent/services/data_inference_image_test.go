@@ -25,13 +25,13 @@ func TestInferenceWorkerImageIsWhatTheFactoryNeeds(t *testing.T) {
 		}
 		return response
 	}
-	info := inference.WorkerImageInfo{Repository: "wendy-inference-worker", DepsHash: "62dfd59926b6a643", BuildContext: map[string][]byte{"Dockerfile": []byte("FROM scratch\n")}}
+	info := inference.WorkerImageInfo{Repository: "wendy-inference-worker", DepsHash: "62dfd59926b6a643"}
 	missing := ask(&DataService{inference: &campaignInferenceManager{factory: workerImageFactory{info}}})
-	if missing.GetRepository() != info.Repository || missing.GetDepsHash() != info.DepsHash || missing.GetPresent() || string(missing.GetBuildContext()["Dockerfile"]) != "FROM scratch\n" {
+	if missing.GetRepository() != info.Repository || missing.GetDepsHash() != info.DepsHash || missing.GetPresent() {
 		t.Fatalf("an agent without the image answered %v", missing)
 	}
-	info.Present, info.BuildContext = true, nil
-	if present := ask(&DataService{inference: &campaignInferenceManager{factory: workerImageFactory{info}}}); !present.GetPresent() || len(present.GetBuildContext()) != 0 {
+	info.Present = true
+	if present := ask(&DataService{inference: &campaignInferenceManager{factory: workerImageFactory{info}}}); !present.GetPresent() {
 		t.Fatalf("an agent with the image answered %v", present)
 	}
 	// An agent whose worker never runs in a container asks for no image: one
@@ -40,7 +40,7 @@ func TestInferenceWorkerImageIsWhatTheFactoryNeeds(t *testing.T) {
 		"process factory": {inference: &campaignInferenceManager{factory: &inference.ManagedFactory{}}},
 		"no inference":    {},
 	} {
-		if response := ask(service); response.GetRepository() != "" || len(response.GetBuildContext()) != 0 {
+		if response := ask(service); response.GetRepository() != "" || response.GetPresent() {
 			t.Fatalf("%s answered %v", name, response)
 		}
 	}

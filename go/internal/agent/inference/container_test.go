@@ -218,13 +218,13 @@ func TestContainerFallsBackToTheProcessAndSaysWhy(t *testing.T) {
 			reason: "this agent's device registry, which holds the model worker image, is unavailable"},
 		// What an older command line, or one without Docker, leaves behind.
 		{name: "no image on the device", configure: func(f *ContainerFactory) { f.Runtime.(*shRuntime).labels = nil }, runtime: &shRuntime{script: ready}, config: cpu,
-			reason: "this device has no model worker image; deploy the campaign with a current wendy CLI on a machine with Docker, which builds the image and pushes it to this device"},
+			reason: "this device has no model worker image; deploy the campaign with a wendy CLI of this agent's version on a machine with Docker, which builds the image and pushes it to this device"},
 		{name: "an image for another agent", runtime: &shRuntime{script: ready}, config: cpu,
 			configure: func(f *ContainerFactory) {
 				f.Runtime.(*shRuntime).labels = map[string]string{WorkerImageDepsLabel: "0000000000000000"}
 			},
 			reason: `the model worker image on this device was built for another agent version (its sh.wendy.inference.deps label is "0000000000000000", this agent needs "` + DepsHash() +
-				`"); deploy the campaign with a current wendy CLI on a machine with Docker, which builds the image and pushes it to this device`},
+				`"); deploy the campaign with a wendy CLI of this agent's version on a machine with Docker, which builds the image and pushes it to this device`},
 		{name: "the campaign can use TensorRT", configure: func(f *ContainerFactory) { f.Process.Hardware = func() Hardware { return orin } },
 			runtime: &shRuntime{script: ready}, config: yoloInference(""),
 			reason: "the worker image has no TensorRT, which this campaign asks for or can use on this device"},
@@ -360,9 +360,9 @@ func TestContainerThatKeepsExitingYieldsToTheProcess(t *testing.T) {
 	again.Close()
 }
 
-// The agent serves the build context, the Dockerfile labels the image with
-// its hash, and the agent runs only an image with that label, so all three
-// must name the same files the same way.
+// The command line builds the build context, the Dockerfile labels the image
+// with its hash, and the agent runs only an image with that label, so all
+// three must name the same files the same way.
 func TestWorkerImageIsBuiltForTheHashTheAgentChecks(t *testing.T) {
 	hash := sha256.New()
 	served := WorkerBuildContext()
@@ -397,7 +397,7 @@ func TestWorkerImageInfoTellsTheCommandLineWhatToBuild(t *testing.T) {
 	runtime := &shRuntime{}
 	factory := containerFactory(t, runtime, &processCalls{})
 	present := factory.WorkerImage(context.Background())
-	if present.Repository != "wendy-inference-worker" || present.DepsHash != DepsHash() || !present.Present || present.BuildContext != nil {
+	if want := (WorkerImageInfo{Repository: "wendy-inference-worker", DepsHash: DepsHash(), Present: true}); present != want {
 		t.Fatalf("with the image on the device: %+v", present)
 	}
 	if testWorkerImage != WorkerImageReference("localhost:5000/") {
@@ -406,13 +406,14 @@ func TestWorkerImageInfoTellsTheCommandLineWhatToBuild(t *testing.T) {
 	for name, labels := range map[string]map[string]string{"no image": nil, "another agent's image": {WorkerImageDepsLabel: "0000000000000000"}} {
 		runtime.labels = labels
 		absent := factory.WorkerImage(context.Background())
-		if absent.Repository != "wendy-inference-worker" || absent.DepsHash != DepsHash() || absent.Present || len(absent.BuildContext["Dockerfile"]) == 0 || len(absent.BuildContext) != 3 {
-			t.Fatalf("%s: repository %q, hash %q, present %v, %d context files", name, absent.Repository, absent.DepsHash, absent.Present, len(absent.BuildContext))
+		// The agent says what it needs and never what to build it from.
+		if want := (WorkerImageInfo{Repository: "wendy-inference-worker", DepsHash: DepsHash()}); absent != want {
+			t.Fatalf("%s: %+v", name, absent)
 		}
 	}
 	// An agent that can run no container asks for nothing to be built.
 	factory.Runtime = nil
-	if info := factory.WorkerImage(context.Background()); info.Repository != "" || info.BuildContext != nil {
+	if info := factory.WorkerImage(context.Background()); info != (WorkerImageInfo{}) {
 		t.Fatalf("without containerd: %+v", info)
 	}
 }
@@ -490,8 +491,7 @@ func (d dockerRuntime) RunInferenceWorker(ctx context.Context, worker WorkerCont
 }
 
 // Opt-in integration: the image built from exactly the build context the
-// agent serves to the command line, and the real worker.py in it, through the
-// factory. Nothing here needs an agent, a camera or containerd.
+// command line builds, and the real worker.py in it, through the factory. Nothing here needs an agent, a camera or containerd.
 func TestContainerWorkerImageSmoke(t *testing.T) {
 	if os.Getenv("WENDY_INFERENCE_SMOKE") == "" {
 		t.Skip("set WENDY_INFERENCE_SMOKE=1; needs docker, builds the worker image and downloads a model")
