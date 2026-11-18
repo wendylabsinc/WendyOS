@@ -2,8 +2,9 @@
 
 Exclusion is a path and suffix policy over the locations the repository's protocol
 generators write to. It does not confirm a file came from a generator, and most
-excluded outputs have no regeneration check. PR attributes, headers, vendor roots
-and lockfiles never define review policy.
+excluded outputs have no regeneration check. PR attributes and generated headers
+never define review policy. Maintained schemas, generator programs and dependency
+pins remain review inputs.
 """
 from __future__ import annotations
 
@@ -28,6 +29,35 @@ SOURCE_ONLY_RULE = (
 def is_generated_path(path: str) -> bool:
     if not valid_path(path):
         return False
+    # Fixed audited output families. Match binding suffixes, preserving
+    # adjacent schemas, handwritten adapters, generator settings and pins.
+    swift_roots = (
+        "Sources/WendyKit/Generated/", "Sources/FabricProto/Generated/",
+        "swift/Sources/Proto/",
+        "WendyCompanionSDK/Sources/WendyProtos/Generated/shared-grpc-api-contracts/",
+    )
+    if path.startswith(swift_roots) and path.endswith((".pb.swift", ".grpc.swift")):
+        return True
+    if path.startswith("proto/") and path.endswith(".pb.go"):
+        return True
+    if path.startswith("console/src/generated/") and path.endswith(".ts"):
+        return True
+    if path.startswith("clip-store/app/generated/") and path.endswith(("_pb2.py", "_pb2_grpc.py")):
+        return True
+    if path.startswith("Sources/WendyKMSDRM/vendor/") and path.endswith(".h"):
+        return True
+    if path == "Sources/CStbTrueType/include/stb_truetype.h":
+        return True
+    # Vendored output is not maintained implementation. Schema, generator and
+    # version/provenance inputs stay visible even inside that audited root.
+    if path.startswith("vendor/"):
+        name = path.rsplit("/", 1)[-1]
+        inputs = {"go.mod", "go.sum", "modules.txt", "Package.swift", "Package.resolved", "PIN"}
+        return not (path.endswith((".proto", ".lock")) or name in inputs
+                    or name.startswith(("generate", "regen")))
+    upstream = "meta-arduino-extensions/recipes-bsp/wendyos-mcu/files/"
+    if path in {upstream + name for name in ("stm32u5x.cfg", "stm32x5x_common.cfg", "mem_helper.tcl", "target/swj-dp.tcl")}:
+        return True
     # go/scripts/generate-proto.sh writes protoc Go output here.
     if path.startswith("go/proto/gen/") and path.endswith(".pb.go"):
         return True

@@ -289,7 +289,7 @@ def parse_comment_state(bodies: list[str]) -> list[dict]:
     return records
 
 
-def model_prior_state(records: list[dict], findings=None) -> dict:
+def model_prior_state(records: list[dict], findings=None, *, public_only=True) -> dict:
     decisions = []
     for record in records:
         decision = record["decision"]
@@ -305,8 +305,8 @@ def model_prior_state(records: list[dict], findings=None) -> dict:
         })
     result = {"version": STATE_VERSION, "decisions": decisions}
     if findings:
-        result["compatibility_findings"] = compatibility_state.validate_records(findings)
-    return validate_prior_state(result)
+        result["compatibility_findings"] = compatibility_state.validate_records(findings, public_only=public_only)
+    return validate_prior_state(result, public_only=public_only)
 
 
 def _fresh_id(decision: dict, used: set[str]) -> str:
@@ -785,18 +785,29 @@ def list_review_comments(repo: str, pr_number: int, github) -> list[dict]:
     raise ValueError("Could not enumerate all previous API review comments")
 
 
-def fetch_state(repo: str, pr_number: int, output: Path, github) -> None:
+def fetch_state(repo: str, pr_number: int, output: Path, github, *, destination_bound=False) -> None:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or pr_number <= 0:
         raise ValueError("Invalid repository or PR number")
+    destination = compat.repository_destination(github.request("GET", f"/repos/{repo}"), repo) if destination_bound else None
+    public_only = not destination or destination["visibility"] == "public"
     comments = list_review_comments(repo, pr_number, github)
-    state = model_prior_state(authoritative_records(comments), compatibility_state.parse(authoritative_bodies(comments)))
+    state = model_prior_state(authoritative_records(comments),
+                              compatibility_state.parse(authoritative_bodies(comments), public_only=public_only),
+                              public_only=public_only)
+    if destination:
+        compat.target_evidence(state, destination)
     output.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: str, diff_bytes: bytes, github) -> bool:
+def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: str, diff_bytes: bytes, github, *, destination_bound=False) -> bool:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or pr_number <= 0:
         raise ValueError("Invalid repository or PR number")
-    compat.public_result(result)
+    destination = None
+    if destination_bound:
+        destination = compat.publication_result(result, github.request("GET", f"/repos/{repo}"), repo)
+    else:
+        compat.public_result(result)
+    public_only = not destination or destination["visibility"] == "public"
     validate_result(result, head_sha, base_sha)
     diff = ""
     if result["status"] in {"complete", "skipped"}:
@@ -810,12 +821,12 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         from api_review import evidence_catalog, parse_diff, finding_catalog
         from review_sources import source_diff
         source, _ = source_diff(diff)
-        assessment = {"revisions": {"repository": repo, "base": result["diff_base_sha"], "head": head_sha}, "visibility": "public"}
+        assessment = {"revisions": {"repository": repo, "base": result["diff_base_sha"], "head": head_sha}, "visibility": destination["visibility"] if destination else "public"}
         changed = finding_catalog(evidence_catalog(parse_diff(source)), assessment)
         supplemental = result.get("evidence_catalog", {})
-        if (not isinstance(supplemental, dict) or any(not isinstance(ref, dict) or ref.get("visibility") != "public" for ref in supplemental.values())
+        if (not isinstance(supplemental, dict) or any(not isinstance(ref, dict) or ref.get("visibility") != assessment["visibility"] for ref in supplemental.values())
                 or any(ref.get("repository") != repo or ref.get("revision") not in {head_sha, result["diff_base_sha"]} for ref in supplemental.values())):
-            raise ValueError("Publication requires public same-repository immutable evidence")
+            raise ValueError("Publication requires same-repository immutable evidence matching destination visibility")
         compat.validate_aggregate(result, changed, supplemental)
     root = f"/repos/{repo}"
     issue = f"{root}/issues/{pr_number}"
@@ -846,7 +857,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
     continuations = []
     try:
         prior_records = authoritative_records(existing)
-        if complete and prior_state_digest(model_prior_state(prior_records, compatibility_state.parse(authoritative_bodies(existing)))) != result["prior_state_sha256"]:
+        if complete and prior_state_digest(model_prior_state(prior_records, compatibility_state.parse(authoritative_bodies(existing), public_only=public_only), public_only=public_only)) != result["prior_state_sha256"]:
             raise ValueError("API review state changed during reconciliation; prior acceptance was preserved")
         if complete:
             try:
@@ -940,7 +951,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
     if labels:
         github.request("POST", f"{issue}/labels", {"labels": labels})
     reviewer = "joannis"
-    if (result["decisions"] and pull["user"]["login"].lower() != reviewer
+    if (repo.lower() == "wendylabsinc/wendyos" and result["decisions"] and pull["user"]["login"].lower() != reviewer
             and not any(user["login"].lower() == reviewer for user in pull["requested_reviewers"])):
         github.request("POST", f"{pull_path}/requested_reviewers", {"reviewers": [reviewer]})
     # Only a fully published replacement may remove old continuation pages.
@@ -962,18 +973,20 @@ def main() -> int:
     fetch.add_argument("--repo", required=True)
     fetch.add_argument("--pr-number", required=True, type=int)
     fetch.add_argument("--output", required=True)
+    fetch.add_argument("--destination-bound", action="store_true")
     publish_parser = commands.add_parser("publish")
     for option in ("result", "repo", "expected-head-sha", "expected-base-sha"):
         publish_parser.add_argument("--" + option, required=True)
     publish_parser.add_argument("--pr-number", required=True, type=int)
     publish_parser.add_argument("--dry-run", action="store_true")
+    publish_parser.add_argument("--destination-bound", action="store_true")
     args = parser.parse_args()
     token = os.environ.get("GH_TOKEN")
     if not token:
         raise ValueError("GH_TOKEN is required for API review state")
     github = GitHub(token)
     if args.command == "fetch-state":
-        fetch_state(args.repo, args.pr_number, Path(args.output), github)
+        fetch_state(args.repo, args.pr_number, Path(args.output), github, destination_bound=args.destination_bound)
         return 0
     result_path = Path(args.result)
     result = json.loads(result_path.read_text())
@@ -985,7 +998,7 @@ def main() -> int:
     if args.dry_run:
         github = DryRunGitHub(github)
     complete = publish(result, args.repo, args.pr_number, args.expected_head_sha,
-                       args.expected_base_sha, diff_bytes, github)
+                       args.expected_base_sha, diff_bytes, github, destination_bound=args.destination_bound)
     if args.dry_run:
         print(github.summary())
     return 0 if complete else 1
