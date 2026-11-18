@@ -644,6 +644,8 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
+	genericSensorFeed := services.NewGenericSensorFeed()
+	sensorSup.SetGenericSink(genericSensorFeed)
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
@@ -1549,12 +1551,36 @@ func main() {
 	// bind-mounts this socket into entitled containers). Disabled with
 	// WENDY_LOCAL_SOCKET=off.
 	var localSocketServer *grpc.Server
+	var sensorReadServer *grpc.Server
 	if os.Getenv("WENDY_LOCAL_SOCKET") != "off" {
+		// A sensor reader must not inherit the full administrative API. This
+		// listener registers only the two read-only generic sensor RPCs.
+		sensorReadServer = services.NewSensorReadServer(genericSensorFeed)
+		sensorLis, sensorErr := localsocket.Listen(oci.SensorReadSocketHostPath)
+		if sensorErr == nil {
+			sensorErr = os.Chown(oci.SensorReadSocketHostPath, -1, int(oci.SensorReadSocketGID))
+			if sensorErr != nil {
+				sensorLis.Close()
+			}
+		}
+		if sensorErr != nil {
+			logger.Error("Failed to listen on sensor-read socket", zap.Error(sensorErr))
+		} else {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := sensorReadServer.Serve(sensorLis); err != nil {
+					logger.Error("Sensor-read server error", zap.Error(err))
+				}
+			}()
+		}
 		localSocketServer = grpc.NewServer(
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
 		registerAllServices(localSocketServer)
+		// Generic samples are available only to explicitly trusted local apps.
+		agentpbv2.RegisterWendySensorServiceServer(localSocketServer, genericSensorFeed)
 		agentpbv2.RegisterWendyUnitreeServiceServer(localSocketServer, unitreeSvc)
 		agentpbv2.RegisterWendyUnitreeRobotServiceServer(localSocketServer, unitreeRobotSvc)
 
@@ -1878,6 +1904,9 @@ func main() {
 	}
 	if localSocketServer != nil {
 		shutdown.servers = append(shutdown.servers, namedGRPCServer{"local socket", localSocketServer})
+	}
+	if sensorReadServer != nil {
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"sensor read", sensorReadServer})
 	}
 	shutdown.servers = append(shutdown.servers, namedGRPCServer{"OTEL", otelServer})
 	mtlsMu.Lock()
