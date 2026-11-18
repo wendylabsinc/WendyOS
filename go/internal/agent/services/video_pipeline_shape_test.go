@@ -909,7 +909,7 @@ func TestRunCameraPipeline_TapOnlyFailureNamesNoEncoder(t *testing.T) {
 	plan := gstPipelinePlan{args: []string{program}, pixels: tinyTapFormat, tapOnly: true, rawWhy: "test"}
 	err := svc.runCameraPipeline(ctx, func([]byte, frameTimestamp, agentpb.VideoCodec) bool { return true },
 		"/dev/video4", gstEncoderResult{element: "x264enc"}, plan, nil, &offerRecorder{}, nil)
-	const label = "no encoder (decoded frames only)"
+	const label = "no encoder (uncompressed frames only)"
 	if err == nil || !strings.Contains(err.Error(), "using "+label) || strings.Contains(err.Error(), "x264enc") {
 		t.Errorf("err = %v, want it to name %q and not the encoder that did not run", err, label)
 	}

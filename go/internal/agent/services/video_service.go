@@ -3495,7 +3495,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	// A pipeline without the encoder must not be reported as failing in one.
 	encoderLabel := enc.element
 	if plan.tapOnly {
-		encoderLabel = "no encoder (decoded frames only)"
+		encoderLabel = "no encoder (uncompressed frames only)"
 	}
 
 	defer func() {
