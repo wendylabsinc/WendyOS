@@ -612,8 +612,9 @@ A worker runs in a container when all of these hold:
 
 In a container the worker has a read-only root filesystem, no Linux
 capabilities, no devices, and its own process, mount and IPC namespaces. Of
-the device's files it sees its own code, read-only, and the `home/` and
-`models/` directories of the agent's `inference` folder. It keeps the host's
+the device's files it sees its own code, read-only, the `home/` and `models/`
+directories of the agent's `inference` folder, and, read-only, `/sys` and the
+resolver configuration that come with the host's network. It keeps that
 network, which it needs to download a model, and the root user ID, which owns
 those directories. The container is not an app: it is absent from
 `wendy device apps list`, and where the device has a shared memory budget for
@@ -622,19 +623,20 @@ its campaign stops, and when the agent starts.
 
 The container's Python runtime is an image (about 1.3 GB unpacked on arm64)
 that the agent downloads on first use, in place of the managed Python
-installation a process needs. The image holds only the worker's dependencies; the worker's
-code is the agent's own, so the two cannot differ, and an image built for
-other dependencies than the agent's is refused.
+installation a process needs. The image holds only the worker's dependencies;
+the worker's code is the agent's own, so the two cannot differ, and an image
+built for other dependencies than the agent's is refused.
 
 A campaign never stops for lack of a container. If the image cannot be
 downloaded within 15 minutes, is refused, or the worker does not become ready
 in its container, the worker starts as a process as before, and
 `isolation_reason` says what went wrong. A container that could not be created
 at all, such as one whose image could not be downloaded, is not tried again
-for 10 minutes. If a model's container exits three
-times within 10 minutes, without being asked to and without reporting an error
-of its own, that model runs as a process for an hour. If the process cannot
-start either, `inference_status.error` reports both failures.
+for 10 minutes. If a model's container exits three times within 10 minutes,
+without being asked to and without reporting an error of its own, that model
+runs as a process for an hour. If the process cannot start either,
+`inference_status.error` reports its failure, followed by the container's
+when a container was tried at that start.
 
 #### Accelerators
 
