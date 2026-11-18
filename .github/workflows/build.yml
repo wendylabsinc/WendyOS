@@ -57,7 +57,7 @@ permissions:
   contents: read
 
 env:
-  XCODE_VERSION: '26.5'
+  XCODE_VERSION: '27.1'
 
 jobs:
   validate-go:
