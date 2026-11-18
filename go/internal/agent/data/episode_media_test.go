@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestContentTypesFromSavedFiles(t *testing.T) {
-	files := []File{{Path: "one", MediaType: "video/mp4"}, {Path: "two.MP4"}, {Path: "audio.wav"}, {Path: "telemetry.jsonl"}, {Path: "events.jsonl"}, {Path: "ros2/messages.mcap"}, {Path: "image.png"}}
-	want := []string{"video", "image", "audio", "device_stats", "events", "robot_data"}
-	if got := ContentTypes(files); !reflect.DeepEqual(got, want) {
+func TestEpisodeMediaPreservesManifestValues(t *testing.T) {
+	files := []File{{Path: "clip.mp4", MediaType: "video/mp4"}, {Path: "telemetry.jsonl", MediaType: "application/x-ndjson"}, {Path: "events.jsonl", MediaType: "application/x-ndjson"}, {Path: "legacy.wav"}}
+	want := []EpisodeFileMedia{{Path: "clip.mp4", MediaType: "video/mp4"}, {Path: "telemetry.jsonl", MediaType: "application/x-ndjson"}, {Path: "events.jsonl", MediaType: "application/x-ndjson"}, {Path: "legacy.wav"}}
+	if got := episodeMediaFiles(files); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
-	if got := ContentTypes(nil); got == nil || len(got) != 0 {
+	if got := episodeMediaFiles(nil); got == nil || len(got) != 0 {
 		t.Fatalf("known empty must be [], got %v", got)
 	}
 }
@@ -39,7 +39,7 @@ func TestListSummarizesExistingManifestsWithoutRewriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].SizeBytes != 17 || !reflect.DeepEqual(rows[0].ContentTypes, []string{"video", "device_stats"}) {
+	if len(rows) != 1 || rows[0].SizeBytes != 17 || !reflect.DeepEqual(rows[0].MediaFiles, []EpisodeFileMedia{{Path: "clip.mp4"}, {Path: "telemetry.jsonl"}}) {
 		t.Fatalf("unexpected list: %+v", rows)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))

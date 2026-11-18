@@ -1832,7 +1832,7 @@ func (m *Manager) List() ([]EpisodeInfo, error) {
 		for _, f := range mf.Files {
 			size += f.Size
 		}
-		out = append(out, EpisodeInfo{ContentTypes: ContentTypes(mf.Files), ID: mf.ID, Name: mf.Name, State: mf.State, StartedUnixNanos: mf.StartedUnixNanos, SizeBytes: size, BootID: mf.BootID})
+		out = append(out, EpisodeInfo{MediaFiles: episodeMediaFiles(mf.Files), ID: mf.ID, Name: mf.Name, State: mf.State, StartedUnixNanos: mf.StartedUnixNanos, SizeBytes: size, BootID: mf.BootID})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartedUnixNanos > out[j].StartedUnixNanos })
 	return out, nil

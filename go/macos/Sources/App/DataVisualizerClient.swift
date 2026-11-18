@@ -1,14 +1,20 @@
 import Foundation
 import Synchronization
 
+struct DataVisualEpisodeFileMedia: Codable, Equatable, Sendable {
+    let path: String
+    let mediaType: String
+    enum CodingKeys: String, CodingKey { case path; case mediaType = "media_type" }
+}
+
 struct DataVisualEpisode: Identifiable, Equatable {
     let id, name, state: String
     let started: Date
     let bytes: Int64
-    var contentTypes: [String]? = nil
-    static func contentTypes(_ row: WDVisualEpisode) -> [String]? {
-        guard let json = row.content_types_json else { return nil }
-        return try? JSONDecoder().decode([String].self, from: Data(String(cString: json).utf8))
+    var mediaFiles: [DataVisualEpisodeFileMedia]? = nil
+    static func mediaFiles(_ row: WDVisualEpisode) -> [DataVisualEpisodeFileMedia]? {
+        guard let json = row.media_files_json else { return nil }
+        return try? JSONDecoder().decode([DataVisualEpisodeFileMedia].self, from: Data(String(cString: json).utf8))
     }
     var title: String { name.isEmpty ? id : name }
 }
