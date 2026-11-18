@@ -909,8 +909,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
-        with:
-          xcode-version: '26.5'
 
       - name: Require native macOS SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
@@ -969,8 +967,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
-        with:
-          xcode-version: '26.5'
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

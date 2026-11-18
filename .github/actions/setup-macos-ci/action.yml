@@ -1,10 +1,5 @@
 name: Prepare self-hosted macOS CI
-description: Provision base tools, check disk space, and select a job-local Xcode.
-
-inputs:
-  xcode-version:
-    description: Required Xcode version. Leave empty for shell-only jobs.
-    default: ''
+description: Provision base tools and check disk space on the Mac runner.
 
 runs:
   using: composite
@@ -27,10 +22,3 @@ runs:
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       with:
         persist-credentials: false
-
-    - name: Select required Xcode
-      if: inputs.xcode-version != ''
-      shell: bash
-      env:
-        REQUIRED_XCODE: ${{ inputs.xcode-version }}
-      run: bash .github/scripts/select-macos-ci-xcode.sh "$REQUIRED_XCODE"

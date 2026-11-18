@@ -56,9 +56,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  XCODE_VERSION: '26.5'
-
 jobs:
   validate-go:
     name: Go validation
@@ -363,8 +360,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -509,8 +504,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-macos-ci
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Install build cache tools
         shell: bash

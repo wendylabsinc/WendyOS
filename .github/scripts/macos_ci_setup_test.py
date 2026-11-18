@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute Mac toolchain setup against disposable command and app fixtures."""
+"""Execute Mac base-tool setup against disposable command fixtures."""
 
 import os
 from pathlib import Path
@@ -7,8 +7,9 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
-SELECT = ROOT / '.github/scripts/select-macos-ci-xcode.sh'
 PROVISION = ROOT / '.github/scripts/provision-macos-ci.sh'
 
 
@@ -17,61 +18,37 @@ class MacOSSetupTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.apps = self.root / 'Applications with spaces'
-        self.apps.mkdir()
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         self.output = self.root / 'environment'
         self.calls = self.root / 'calls'
-        self.env = dict(os.environ, XCODES_DIRECTORY=str(self.apps),
+        self.env = dict(os.environ,
                         GITHUB_ENV=str(self.output), CALLS=str(self.calls),
                         PATH=str(self.bin) + os.pathsep + os.environ['PATH'])
-        self.command(self.bin / 'xcrun', 'printf "%s:%s\\n" "$DEVELOPER_DIR" "$*" >> "$CALLS"\nexit "${SDK_STATUS:-0}"')
 
     def command(self, path, body):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('#!/bin/bash\n' + body + '\n')
         path.chmod(0o755)
 
-    def app(self, version):
-        developer = self.apps / f'Xcode-{version}.app/Contents/Developer'
-        self.command(developer / 'usr/bin/xcodebuild', f'echo "Xcode {version}"\necho "Build version fixture"')
-        return developer
-
-    def select(self, version, **env):
-        return subprocess.run(['bash', str(SELECT), version], env=dict(self.env, **env),
-                              capture_output=True, text=True, timeout=10)
-
-    def test_selects_exact_version_without_changing_global_selection(self):
-        self.app('26.3')
-        wanted = self.app('26.5.0')
-        self.command(self.bin / 'xcode-select', 'echo unexpected-global-selection >> "$CALLS"\nexit 99')
-        result = self.select('26.5', DEVELOPER_DIR='/wrong/global/selection')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.output.read_text(), f'DEVELOPER_DIR={wanted}\n')
-        calls = self.calls.read_text().splitlines()
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(all(line.startswith(str(wanted) + ':') for line in calls))
-
-    def test_missing_version_reports_provisioning_command(self):
-        self.app('26.3')
-        result = self.select('26.5')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('provision-macos-ci.sh 26.5', result.stderr)
-        self.assertFalse(self.output.exists())
-
-    def test_missing_sdk_does_not_export_unusable_xcode(self):
-        self.app('26.5')
-        result = self.select('26.5', SDK_STATUS='1')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.output.exists())
-
-    def test_invalid_version_is_rejected_before_running_tools(self):
-        result = self.select('26.5; touch unexpected')
-        self.assertEqual(result.returncode, 2)
-        self.assertFalse(self.calls.exists())
+    def test_build_jobs_use_active_xcode_and_homebrew_python(self):
+        for filename in ('build.yml', 'go-tests.yml', 'swift-tests.yml'):
+            workflow = yaml.safe_load((ROOT / '.github/workflows' / filename).read_text())
+            for name, job in workflow['jobs'].items():
+                steps = job.get('steps', [])
+                if not any(step.get('uses') == './.github/actions/setup-macos-ci' for step in steps):
+                    continue
+                with self.subTest(workflow=filename, job=name):
+                    self.assertNotIn('XCODE_VERSION', workflow.get('env', {}))
+                    for step in steps:
+                        self.assertNotIn('setup-xcode', step.get('uses', ''))
+                        self.assertNotIn('setup-python', step.get('uses', ''))
+                        self.assertNotIn('xcode-version', step.get('with', {}))
+                        self.assertNotIn('DEVELOPER_DIR', step.get('env', {}))
 
     def test_base_installs_only_missing_packages_and_uses_brew_python(self):
+        for name in ('xcode-select', 'xcodebuild', 'xcrun', 'xcodes'):
+            self.command(self.bin / name, 'echo unexpected-xcode-call >> "$CALLS"\nexit 99')
         prefix = self.root / 'brew'
         python_bin = prefix / 'opt/python@3.12/libexec/bin'
         self.command(python_bin / 'python3', 'echo managed-python >> "$CALLS"')
@@ -98,12 +75,13 @@ bash "$PROVISION" --base
         path_output = self.root / 'path'
         result = subprocess.run(['bash', '-c', driver], capture_output=True, text=True,
                                 env=dict(self.env, FIXTURE_PREFIX=str(prefix),
-                                         PROVISION=str(PROVISION), GITHUB_PATH=str(path_output)), timeout=10)
+                                         PROVISION=str(PROVISION), GITHUB_PATH=str(path_output),
+                                         DEVELOPER_DIR='/existing/Xcode.app/Contents/Developer'), timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls.read_text().splitlines(),
                          ['installed-python', 'managed-git', 'managed-python'])
         self.assertEqual(path_output.read_text().splitlines()[-1], str(python_bin))
-        self.assertIn('HOMEBREW_NO_ASK=1', self.output.read_text())
+        self.assertEqual(self.output.read_text(), 'HOMEBREW_NO_ASK=1\n')
 
 
 if __name__ == '__main__':
