@@ -38,6 +38,7 @@ const (
 	DataService_CampaignArm_FullMethodName                = "/wendy.agent.services.v2.DataService/CampaignArm"
 	DataService_CampaignDisarm_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignDisarm"
 	DataService_CampaignRemove_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignRemove"
+	DataService_InferenceWorkerImage_FullMethodName       = "/wendy.agent.services.v2.DataService/InferenceWorkerImage"
 )
 
 // DataServiceClient is the client API for DataService service.
@@ -114,6 +115,12 @@ type DataServiceClient interface {
 	// CampaignDisarm does, and reports a worker still stopping after 10 s the
 	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(ctx context.Context, in *DataCampaignRemoveRequest, opts ...grpc.CallOption) (*DataCampaignRemoveResponse, error)
+	// InferenceWorkerImage describes the container image a campaign's model
+	// worker runs in, so that the command line can build it and push it to the
+	// device registry before deploying a campaign with inference. The agent
+	// never pulls the image from a network: without it, the worker runs as a
+	// process of the agent. It is what `wendy data campaign deploy` calls.
+	InferenceWorkerImage(ctx context.Context, in *DataInferenceWorkerImageRequest, opts ...grpc.CallOption) (*DataInferenceWorkerImageResponse, error)
 }
 
 type dataServiceClient struct {
@@ -322,6 +329,16 @@ func (c *dataServiceClient) CampaignRemove(ctx context.Context, in *DataCampaign
 	return out, nil
 }
 
+func (c *dataServiceClient) InferenceWorkerImage(ctx context.Context, in *DataInferenceWorkerImageRequest, opts ...grpc.CallOption) (*DataInferenceWorkerImageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataInferenceWorkerImageResponse)
+	err := c.cc.Invoke(ctx, DataService_InferenceWorkerImage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataServiceServer is the server API for DataService service.
 // All implementations must embed UnimplementedDataServiceServer
 // for forward compatibility.
@@ -396,6 +413,12 @@ type DataServiceServer interface {
 	// CampaignDisarm does, and reports a worker still stopping after 10 s the
 	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error)
+	// InferenceWorkerImage describes the container image a campaign's model
+	// worker runs in, so that the command line can build it and push it to the
+	// device registry before deploying a campaign with inference. The agent
+	// never pulls the image from a network: without it, the worker runs as a
+	// process of the agent. It is what `wendy data campaign deploy` calls.
+	InferenceWorkerImage(context.Context, *DataInferenceWorkerImageRequest) (*DataInferenceWorkerImageResponse, error)
 	mustEmbedUnimplementedDataServiceServer()
 }
 
@@ -459,6 +482,9 @@ func (UnimplementedDataServiceServer) CampaignDisarm(context.Context, *DataCampa
 }
 func (UnimplementedDataServiceServer) CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CampaignRemove not implemented")
+}
+func (UnimplementedDataServiceServer) InferenceWorkerImage(context.Context, *DataInferenceWorkerImageRequest) (*DataInferenceWorkerImageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InferenceWorkerImage not implemented")
 }
 func (UnimplementedDataServiceServer) mustEmbedUnimplementedDataServiceServer() {}
 func (UnimplementedDataServiceServer) testEmbeddedByValue()                     {}
@@ -791,6 +817,24 @@ func _DataService_CampaignRemove_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataService_InferenceWorkerImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataInferenceWorkerImageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).InferenceWorkerImage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_InferenceWorkerImage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).InferenceWorkerImage(ctx, req.(*DataInferenceWorkerImageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataService_ServiceDesc is the grpc.ServiceDesc for DataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -861,6 +905,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CampaignRemove",
 			Handler:    _DataService_CampaignRemove_Handler,
+		},
+		{
+			MethodName: "InferenceWorkerImage",
+			Handler:    _DataService_InferenceWorkerImage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
