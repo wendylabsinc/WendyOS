@@ -439,6 +439,9 @@ type videoFrame struct {
 	// webmJoin, on a VP8 frame, is where a viewer that joined after the stream
 	// began can start; nil when it cannot start in this frame (see webmJoins).
 	webmJoin *webmJoinPoint
+	// webmWhole, on a VP8 frame, is how many of its leading bytes end between
+	// two WebM elements; the rest open an element a later frame completes.
+	webmWhole int
 }
 
 type frameTimestamp struct {
@@ -764,6 +767,16 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	return h.broadcast(frame)
 }
 
+// sampleGap reports that frames were lost between two a subscriber took in
+// turn. produce numbers a source's frames without a break, so the hub dropping
+// one for a slow subscriber, or a producer restart, shows as a jump in the
+// identities that subscriber sees. Unlike dequeueDrops it needs no call paired
+// with the channel receive, so it still holds for frames that waited in a ring
+// or a drain buffer. Zero is a frame nobody numbered and proves nothing.
+func sampleGap(prev, next uint64) bool {
+	return prev != 0 && next != 0 && next != prev+1
+}
+
 // broadcast delivers a frame to the subscribers that want its kind — encoded
 // video to viewers, VIDEO_CODEC_RAW frames to raw subscribers — dropping for
 // slow consumers. Returns false when there are no subscribers left (producer
@@ -775,7 +788,8 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 // GStreamer and IP camera pipelines, h264ParameterSets on the native V4L2
 // path. VP8 is one WebM container rather than a run of frames, so
 // each VP8 frame also carries the stream's initialization and, where a Cluster
-// opening on a key frame was found, a join point for late viewers.
+// opening on a key frame was found, a join point for late viewers. It carries
+// how much of the frame ends between two elements too (see webmViewer).
 //
 // This is delivery only: it mints nothing. Call produce for a frame arriving
 // from the producer, and broadcast to put an existing frame onto a further
@@ -799,6 +813,7 @@ func (h *deviceHub) broadcast(frame *videoFrame) bool {
 	if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
 		frame.decoderInit = h.webmInit.feed(frame.data)
 		frame.webmJoin = h.webmJoins.feed(frame.data, frame.decoderInit)
+		frame.webmWhole = h.webmJoins.whole
 	}
 	for id, sub := range h.subs {
 		if sub.closed || sub.raw != raw {
@@ -2582,8 +2597,9 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 	adapt := len(adaptive) > 0 && adaptive[0]
 	// A VP8 viewer that joined after the stream began waits for a join point,
 	// where it is sent the WebM initialization and a Cluster opening on a key
-	// frame: nothing before that could be demuxed or decoded.
-	joined := false
+	// frame: nothing before that could be demuxed or decoded. One the hub
+	// dropped frames for waits for the next join point in the same way.
+	var vp8 webmViewer
 	for {
 		select {
 		case <-ctx.Done():
@@ -2630,12 +2646,10 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				}
 			}
 			data := frame.data
-			if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 && !joined {
-				if frame.webmJoin == nil {
+			if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
+				if data = vp8.next(frame); len(data) == 0 {
 					continue
 				}
-				joined = true
-				data = frame.webmJoin.join(frame.data)
 			}
 			started := time.Now()
 			// frame.data is an immutable, per-frame allocation produced by the
