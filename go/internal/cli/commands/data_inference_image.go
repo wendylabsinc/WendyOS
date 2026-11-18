@@ -81,7 +81,7 @@ func ensureInferenceWorkerImage(ctx context.Context, conn *grpcclient.AgentConne
 		return nil
 	}
 	if isCloudConnection(conn) {
-		noInferenceWorkerImage(notices, "this connection goes through Wendy Cloud, and the image is about 1.2 GB", "deploy the campaign again over a direct connection to the device")
+		noInferenceWorkerImage(notices, "this connection goes through Wendy Cloud, and the image is over 1 GB", "deploy the campaign again over a direct connection to the device")
 		return nil
 	}
 	if ready, _ := dockerDaemonReady(ctx); !ready {

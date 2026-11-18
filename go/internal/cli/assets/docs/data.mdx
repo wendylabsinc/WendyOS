@@ -218,7 +218,7 @@ On a device with containerd, the agent runs the model in a container. The
 first time you deploy a campaign with inference to such a device,
 `wendy data campaign deploy` builds the container's image on your machine and
 pushes it to the device, as `wendy run` does for an app: a few minutes and a
-push of about 1.2 GB, once per device, and again only after an agent update
+push of 1.2 to 1.4 GB, once per device, and again only after an agent update
 that changes the worker's dependencies. That needs Docker running on your
 machine, and a CLI and agent on matching versions: the CLI builds only its own
 files, and the agent runs only an image built from the same ones. Without

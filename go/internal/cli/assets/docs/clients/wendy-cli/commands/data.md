@@ -622,9 +622,9 @@ a device that can use the image and does not have it, `wendy data campaign
 deploy` first builds the image with Docker for the device's architecture and
 pushes it to the device's registry, the same way `wendy run` delivers an app.
 Expect a build of about a minute on a fast connection, longer when your
-machine's architecture differs from the device's, and a push of about 1.2 GB;
-on the device the image takes roughly twice that, for the pushed layers and
-their unpacked copy. Your machine needs Docker running, and internet access
+machine's architecture differs from the device's, and a push of 1.2 GB
+(arm64) or 1.4 GB (amd64); on the device the image takes roughly twice that,
+for the pushed layers and their unpacked copy. Your machine needs Docker running, and internet access
 for the base image and the Python packages. The device needs neither: its
 Python runtime arrives in the image. This happens once per device, and again
 only after an agent update that changes the worker's dependencies; other
