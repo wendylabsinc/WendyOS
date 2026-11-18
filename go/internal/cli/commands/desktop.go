@@ -178,6 +178,9 @@ func DesktopConnect(ctx context.Context, selector string) (*grpcclient.AgentConn
 	if strings.TrimSpace(selector) == "" {
 		return nil, errors.New("choose a device")
 	}
+	if os.Getenv("WENDY_AGENT_SOCKET") == "" && desktopPinnedLAN(ctx, selector) {
+		return DesktopConnectSecureLAN(ctx, mcpStartupAddress(selector))
+	}
 	return connectMCPDevice(ctx, selector)
 }
 
@@ -208,6 +211,9 @@ func DesktopRecordingConnect(ctx context.Context, selector string, secureLAN boo
 	}
 	if !target.matches(auth) {
 		return nil, failure.Wrap(errors.New("this recording device is outside the current Cloud organization"), failure.AccountMismatch, failure.ChooseAccount)
+	}
+	if conn, err := desktopExistingCloudConnection(ctx, auth, target.String()); conn != nil || err != nil {
+		return conn, err
 	}
 	devices, err := listCloudDiscoveryDevices(ctx, auth, true)
 	if err != nil {
@@ -364,10 +370,21 @@ func DesktopConnectSecureLAN(ctx context.Context, selector string) (*grpcclient.
 	if err := prepareDefaultCloudCertificate(ctx, auth); err != nil {
 		return nil, fmt.Errorf("renewing device connection credentials: %w", err)
 	}
-	target := newDialTargetCandidates(pinKeyForAddr(selector), resolveAddrCandidates(ctx, selector))
+	target := newDialTarget(pinKeyForAddr(selector), selector)
 	target.RequiresMTLS = true
-	conn, _, err := dialAgentLadderWithCerts(ctx, target, auth.Certificates)
-	return conn, err
+	key := "lan:" + selector
+	if target.Expected != nil {
+		key = target.Expected.IdentityKey()
+	}
+	return desktopSessionConnection(ctx, auth, key, func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		// A shared channel needs no repeat DNS lookup. Only its creator resolves.
+		target.Candidates = resolveAddrCandidates(ctx, selector)
+		if len(target.Candidates) > 0 {
+			target.Addr = target.Candidates[0]
+		}
+		conn, _, err := dialAgentLadderWithCerts(ctx, target, auth.Certificates)
+		return conn, err
+	})
 }
 
 // Addresses and transports may change while the enrolled identity stays the same.

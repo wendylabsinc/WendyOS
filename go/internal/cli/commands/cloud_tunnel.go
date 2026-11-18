@@ -161,6 +161,17 @@ func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cl
 }
 
 func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
+	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); native {
+		expected := cloudDiscoveryIdentity(auth, asset)
+		desktopRememberCloudTarget(ctx, auth, asset, expected.IdentityKey())
+		return desktopSessionConnection(ctx, auth, expected.IdentityKey(), func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return desktopReconnectableCloudConnection(ctx, auth, asset, brokerURL)
+		})
+	}
+	return connectCloudDiscoveryTransport(ctx, auth, asset, brokerURL)
+}
+
+func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

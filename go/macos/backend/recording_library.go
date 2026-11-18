@@ -82,7 +82,7 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 	// and playback reads. Keep secure LAN policy in the cache identity.
 	key := fmt.Sprintf("recording:%t:%s", secure, selector)
 	conn, release, err := b.galleryAcquireWith(ctx, key, func(dialCtx context.Context) (*grpcclient.AgentConnection, error) {
-		return commands.DesktopRecordingConnect(dialCtx, selector, secure)
+		return commands.DesktopRecordingConnect(b.tunnelSession.Context(dialCtx), selector, secure)
 	})
 	if err != nil {
 		cancel()
