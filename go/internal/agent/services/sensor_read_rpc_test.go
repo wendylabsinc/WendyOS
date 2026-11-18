@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"testing"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	sensorpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"google.golang.org/grpc"
@@ -45,16 +45,11 @@ func TestSensorReadRPCStreamDisconnectAndNoControlPlane(t *testing.T) {
 	if err != nil || len(m.GetSensors()) != 1 {
 		t.Fatalf("manifest %v %v", m, err)
 	}
-	var origins map[uint32]SensorOrigin
-	values := headers.Get(SensorOriginsHeader)
-	if len(values) != 1 {
-		t.Fatalf("missing origins: %v", headers)
+	if len(headers.Get("wendy-sensor-origins-bin")) != 0 {
+		t.Fatal("identity must not be sent in response headers")
 	}
-	if err := json.Unmarshal([]byte(values[0]), &origins); err != nil {
-		t.Fatal(err)
-	}
-	if got := origins[m.Sensors[0].ChannelId]; got.Source != "asset:1" || got.ChannelID != 1 {
-		t.Fatalf("wrong origin: %+v", got)
+	if got := m.Sensors[0].GetSource(); got.GetPairingKey() != "asset:1" || got.GetChannelId() != 1 {
+		t.Fatalf("wrong source: %v", got)
 	}
 	for _, tc := range []struct {
 		ids  []uint32
@@ -197,6 +192,58 @@ func TestSensorReadBlockedSendTerminates(t *testing.T) {
 			defer feed.mu.Unlock()
 			if len(feed.subscribers) != 0 {
 				t.Fatal("reader leaked")
+			}
+		})
+	}
+}
+
+// The old JSON response header exceeded an 8 KiB client header limit at only
+// 64 channels. Identity now belongs to the typed body, up to the feed's limit.
+func TestSensorReadManifestFitsSmallHeaderLimit(t *testing.T) {
+	for _, count := range []int{64, 1024} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			feed := NewGenericSensorFeed()
+			pairing := mcusource.SensorPairing{SourcePrincipalURI: certs.DeviceSPIFFEURI("5c9e14bb-49c0-4178-9cc5-493a151f9885", "eec8d3ea-542f-491f-8554-29ecb2bf1ee4"), Transport: "wendycom"}
+			if err := pairing.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			descriptors := make([]*sensorpb.SensorDescriptor, count)
+			for i := range descriptors {
+				descriptors[i] = &sensorpb.SensorDescriptor{ChannelId: uint32(i), InputId: uint32(i / 2), Name: fmt.Sprintf("sensor-%d", i), Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "vendor.example.v1", SampleBytes: 2}}}
+			}
+			accepted, _, release := feed.Mount(pairing, descriptors)
+			defer release()
+			if len(accepted) != count {
+				t.Fatalf("accepted %d/%d", len(accepted), count)
+			}
+			server := NewSensorReadServer(feed)
+			lis := bufconn.Listen(65536)
+			defer lis.Close()
+			go server.Serve(lis)
+			defer server.Stop()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, err := grpc.NewClient("passthrough:///sensor-read", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithMaxHeaderListSize(8192), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			var headers metadata.MD
+			manifest, err := agentpb.NewWendySensorServiceClient(conn).GetSensorManifest(ctx, &agentpb.GetSensorManifestRequest{}, grpc.Header(&headers))
+			if err != nil {
+				t.Fatalf("manifest failed with 8 KiB header limit: %v", err)
+			}
+			if len(manifest.GetSensors()) != count {
+				t.Fatalf("got %d/%d channels", len(manifest.GetSensors()), count)
+			}
+			if len(headers.Get("wendy-sensor-origins-bin")) != 0 {
+				t.Fatal("source identity still sent as a response header")
+			}
+			for i, descriptor := range manifest.Sensors {
+				source := descriptor.GetSource()
+				if source == nil || source.PairingKey != pairing.Key() || source.ChannelId != uint32(i) || source.InputId != uint32(i/2) || descriptor.ChannelId == source.ChannelId {
+					t.Fatalf("channel %d has incorrect identity: %v", i, descriptor)
+				}
 			}
 		})
 	}

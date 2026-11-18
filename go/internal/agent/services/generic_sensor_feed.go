@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"math"
 	"sort"
 	"sync"
@@ -13,21 +12,19 @@ import (
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 // GenericSensorFeed exposes paired, authenticated generic samples on the local
 // read-only socket. It never handles device keys or decodes application schemas.
-// Channel and input IDs are session-local. The manifest response metadata maps
+// Channel and input IDs are session-local. Each descriptor's typed source maps
 // these IDs back to the paired source and its native IDs. No history is replayed.
 type GenericSensorFeed struct {
 	agentpbv2.UnimplementedWendySensorServiceServer
 	mu          sync.Mutex
 	next        uint32
 	channels    map[uint32]*sensorlinkpb.SensorDescriptor
-	origins     map[uint32]SensorOrigin
 	subscribers map[*genericSubscription]bool
 }
 
@@ -38,21 +35,8 @@ type genericSubscription struct {
 	err    error
 }
 
-// SensorOriginsHeader carries a JSON object keyed by forwarded channel ID.
-// Binary gRPC metadata allows source names to contain arbitrary UTF-8. This is
-// local forwarding metadata, not a change to the shared SensorLink wire schema.
-const SensorOriginsHeader = "wendy-sensor-origins-bin"
-
-// SensorOrigin identifies the original channel independently of connection-local
-// routing IDs and user-facing names. Source is the authenticated pairing key.
-type SensorOrigin struct {
-	Source    string `json:"source"`
-	ChannelID uint32 `json:"channel_id"`
-	InputID   uint32 `json:"input_id"`
-}
-
 func NewGenericSensorFeed() *GenericSensorFeed {
-	return &GenericSensorFeed{channels: make(map[uint32]*sensorlinkpb.SensorDescriptor), origins: make(map[uint32]SensorOrigin), subscribers: make(map[*genericSubscription]bool)}
+	return &GenericSensorFeed{channels: make(map[uint32]*sensorlinkpb.SensorDescriptor), subscribers: make(map[*genericSubscription]bool)}
 }
 
 // NewSensorReadServer deliberately excludes all control-plane RPCs and reflection.
@@ -84,7 +68,8 @@ func (s *GenericSensorFeed) Mount(p mcusource.SensorPairing, descriptors []*sens
 			inputs[d.InputId] = id
 		}
 		clone.InputId = inputs[d.InputId]
-		s.origins[id] = SensorOrigin{Source: p.Key(), ChannelID: d.ChannelId, InputID: d.InputId}
+		// Identity comes from the authenticated pairing, never the source payload.
+		clone.Source = &sensorlinkpb.SensorSource{PairingKey: p.Key(), ChannelId: d.ChannelId, InputId: d.InputId}
 		accepted = append(accepted, d.ChannelId)
 		s.channels[id] = clone
 	}
@@ -129,7 +114,6 @@ func (s *GenericSensorFeed) Mount(p mcusource.SensorPairing, descriptors []*sens
 		active = false
 		for _, id := range ids {
 			delete(s.channels, id)
-			delete(s.origins, id)
 			for sub := range s.subscribers {
 				if sub.ids[id] {
 					s.endSubscription(sub, status.Error(codes.Unavailable, "sensor disconnected; refresh manifest"))
@@ -140,7 +124,7 @@ func (s *GenericSensorFeed) Mount(p mcusource.SensorPairing, descriptors []*sens
 	return accepted, publish, release
 }
 
-func (s *GenericSensorFeed) GetSensorManifest(ctx context.Context, _ *agentpbv2.GetSensorManifestRequest) (*sensorlinkpb.SensorManifest, error) {
+func (s *GenericSensorFeed) GetSensorManifest(_ context.Context, _ *agentpbv2.GetSensorManifestRequest) (*sensorlinkpb.SensorManifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := &sensorlinkpb.SensorManifest{}
@@ -148,16 +132,6 @@ func (s *GenericSensorFeed) GetSensorManifest(ctx context.Context, _ *agentpbv2.
 		result.Sensors = append(result.Sensors, proto.Clone(d).(*sensorlinkpb.SensorDescriptor))
 	}
 	sort.Slice(result.Sensors, func(i, j int) bool { return result.Sensors[i].ChannelId < result.Sensors[j].ChannelId })
-	// The identity map and manifest are captured under the same lock.
-	if grpc.ServerTransportStreamFromContext(ctx) != nil {
-		origins, err := json.Marshal(s.origins)
-		if err != nil {
-			return nil, status.Error(codes.Internal, "encode sensor origins")
-		}
-		if err := grpc.SetHeader(ctx, metadata.Pairs(SensorOriginsHeader, string(origins))); err != nil {
-			return nil, err
-		}
-	}
 	return result, nil
 }
 

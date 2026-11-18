@@ -16,7 +16,7 @@ sensor allowlist. It is not a per-source or per-channel authorization mechanism.
 
 Use the existing `wendy.agent.services.v2.WendySensorService` generated client:
 
-1. Call `GetSensorManifest`, collecting its response headers as well as the body.
+1. Call `GetSensorManifest` to get the sensor descriptors and their typed sources.
 2. Select the returned channel IDs whose `sensor.schema` your app understands.
 3. Call `StreamSensors` with those IDs. Cancel the RPC when finished.
 4. If a source disconnects, refresh the manifest and retry with backoff. There is
@@ -32,41 +32,39 @@ Forwarded `channel_id` and `input_id` values are local routing IDs. They change
 when a source reconnects or the agent restarts. Do not persist them as identities.
 The original display name, schema, sample size and rate are preserved.
 
-`GetSensorManifest` includes a `wendy-sensor-origins-bin` response header. Its
-value, after the gRPC library's binary-metadata decoding, is UTF-8 JSON keyed by
-the forwarded channel ID:
+Each returned descriptor contains an optional `SensorSource source` message:
 
 ```json
 {
-  "17": { "source": "asset:123", "channel_id": 1, "input_id": 0 }
+  "channelId": 17,
+  "source": { "pairingKey": "asset:123", "channelId": 1, "inputId": 0 }
 }
 ```
 
-`source` is the authenticated pairing key: a device SPIFFE principal for current
-PKI pairings, or `asset:<id>` for legacy numeric pairings. Persist the tuple
-`(source, channel_id)` from this metadata. The body and identity map describe the
-same manifest snapshot. The same display name on two devices does not imply the
-same source. `input_id` identifies alternate formats of one physical input.
-This header is additive, local forwarding metadata; the shared SensorLink
-protobuf definitions and firmware protocol are unchanged.
+`source.pairing_key` is the authenticated immediate upstream pairing key: a
+device SPIFFE principal for current PKI pairings, or `asset:<id>` for legacy
+numeric pairings. Persist `(source.pairing_key, source.channel_id)` to identify
+a paired channel. `source.input_id` identifies alternate formats of one physical
+input on that device. These are channel identities, not sensor serial numbers.
+The same display name on two devices does not imply the same source.
+
+The forwarding agent sets this field from its authenticated pairing and original
+channel/input IDs, replacing any upstream-provided value. It is descriptive
+metadata, not an authorization grant. Direct sources and older agents can omit
+it; clients must check message presence. Older readers can ignore the additive
+field. No new firmware or RPC signatures are required.
 
 For example, with the existing Go generated client (`client`):
 
 ```go
-var headers metadata.MD
-manifest, err := client.GetSensorManifest(ctx,
-    &agentpbv2.GetSensorManifestRequest{}, grpc.Header(&headers))
+manifest, err := client.GetSensorManifest(ctx, &agentpbv2.GetSensorManifestRequest{})
 if err != nil { return err }
-var origins map[string]struct {
-    Source string `json:"source"`
-    ChannelID uint32 `json:"channel_id"`
-    InputID uint32 `json:"input_id"`
+for _, sensor := range manifest.GetSensors() {
+    source := sensor.GetSource()
+    if source == nil { continue } // direct source or older forwarding agent
+    // Identify by source.GetPairingKey() and source.GetChannelId().
+    // Select by sensor.GetSensor().GetSchema(), then stream sensor.GetChannelId().
 }
-values := headers.Get("wendy-sensor-origins-bin")
-if len(values) != 1 { return fmt.Errorf("sensor origin metadata missing") }
-if err := json.Unmarshal([]byte(values[0]), &origins); err != nil { return err }
-// Choose manifest.Sensors entries by schema and origins, then stream their IDs.
-_ = manifest
 ```
 
 ## Samples and lifecycle

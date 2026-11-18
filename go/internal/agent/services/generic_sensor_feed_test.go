@@ -8,6 +8,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	sensorpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestGenericSensorFeedIsolationLifetimeAndBackpressure(t *testing.T) {
@@ -17,7 +18,7 @@ func TestGenericSensorFeedIsolationLifetimeAndBackpressure(t *testing.T) {
 	_, pub2, close2 := s.Mount(mcusource.SensorPairing{SourceAssetID: 2}, descriptors)
 	defer close2()
 	m, _ := s.GetSensorManifest(context.Background(), &agentpb.GetSensorManifestRequest{})
-	if len(m.Sensors) != 2 || m.Sensors[0].ChannelId == m.Sensors[1].ChannelId || s.origins[m.Sensors[0].ChannelId].Source == s.origins[m.Sensors[1].ChannelId].Source {
+	if len(m.Sensors) != 2 || m.Sensors[0].ChannelId == m.Sensors[1].ChannelId || m.Sensors[0].GetSource().GetPairingKey() == m.Sensors[1].GetSource().GetPairingKey() {
 		t.Fatalf("source collision: %v", m)
 	}
 	id1, id2 := m.Sensors[0].ChannelId, m.Sensors[1].ChannelId
@@ -83,7 +84,7 @@ func BenchmarkGenericSensorFeedWithoutReaders(b *testing.B) {
 func TestGenericManifestPreservesFormatsAndIdentityAcrossReconnect(t *testing.T) {
 	feed := NewGenericSensorFeed()
 	descriptors := []*sensorpb.SensorDescriptor{
-		{ChannelId: 0, InputId: 7, Name: "温度", Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "vendor.unknown.v9", RateHz: 0, SampleBytes: 2}}},
+		{ChannelId: 0, InputId: 7, Name: "温度", Source: &sensorpb.SensorSource{PairingKey: "spoofed", ChannelId: 99, InputId: 99}, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "vendor.unknown.v9", RateHz: 0, SampleBytes: 2}}},
 		{ChannelId: 9, InputId: 7, Name: "alternative", Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "vendor.other", SampleBytes: 4}}},
 	}
 	ids, pub, release := feed.Mount(mcusource.SensorPairing{SourceAssetID: 3}, descriptors)
@@ -95,11 +96,15 @@ func TestGenericManifestPreservesFormatsAndIdentityAcrossReconnect(t *testing.T)
 	if first.Name != "温度" || first.GetSensor().Schema != "vendor.unknown.v9" || first.InputId != second.InputId {
 		t.Fatal(manifest)
 	}
-	origin := feed.origins[first.ChannelId]
+	source := proto.Clone(first.GetSource()).(*sensorpb.SensorSource)
+	if source.GetPairingKey() != "asset:3" || source.GetChannelId() != 0 || source.GetInputId() != 7 {
+		t.Fatalf("untrusted source identity: %v", source)
+	}
+	first.Source.PairingKey = "mutated client"
 	descriptors[0].Name = "mutated upstream"
 	first.Name = "mutated client"
 	refreshed, _ := feed.GetSensorManifest(context.Background(), nil)
-	if refreshed.Sensors[0].Name != "温度" {
+	if refreshed.Sensors[0].Name != "温度" || !proto.Equal(refreshed.Sensors[0].Source, source) {
 		t.Fatal("manifest aliases mutable descriptors")
 	}
 	// Zero, equal and reset timestamps are legitimate opaque source timestamps.
@@ -112,7 +117,7 @@ func TestGenericManifestPreservesFormatsAndIdentityAcrossReconnect(t *testing.T)
 	_, _, release = feed.Mount(mcusource.SensorPairing{SourceAssetID: 3}, descriptors)
 	defer release()
 	refreshed, _ = feed.GetSensorManifest(context.Background(), nil)
-	if refreshed.Sensors[0].ChannelId == first.ChannelId || feed.origins[refreshed.Sensors[0].ChannelId] != origin {
+	if refreshed.Sensors[0].ChannelId == first.ChannelId || !proto.Equal(refreshed.Sensors[0].GetSource(), source) {
 		t.Fatal("reconnect lost source identity or reused old routing ID")
 	}
 }
