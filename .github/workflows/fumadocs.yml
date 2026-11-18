@@ -286,7 +286,7 @@ jobs:
               DEPLOY_PATHS=("${DEPLOY_PATH}" "latest")
             fi
           else
-            BRANCH="$(sanitize "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}")"
+            BRANCH="$(sanitize "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" | tr '.' '-')"
             if [[ ! "${DOCS_COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
               echo "::error::Unsupported commit SHA for docs deploy path: ${DOCS_COMMIT_SHA}"
               exit 1
