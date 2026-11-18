@@ -65,7 +65,7 @@ func defaultDoctorDeps() doctorDeps {
 			cmd.WaitDelay = 250 * time.Millisecond
 			return cmd.Run()
 		},
-		firmware: func(goos, prefix string) error { _, err := vm.FindFirmware(goos, prefix); return err },
+		firmware: func(goos, prefix string) error { _, err := vm.FindFirmware(vm.ArchARM64, goos, prefix); return err },
 		validate: validateMCPProject, probe: doctorProbeTarget,
 	}
 }

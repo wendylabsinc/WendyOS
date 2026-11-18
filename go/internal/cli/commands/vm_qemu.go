@@ -39,7 +39,10 @@ var (
 		}
 		return accepted, err
 	}
-	findQEMUFirmwareFn    = vm.FindFirmware
+	findQEMUFirmwareFn = func(goos, brewPrefix string) (string, error) {
+		firmware, err := vm.FindFirmware(vm.ArchARM64, goos, brewPrefix)
+		return firmware.Code, err
+	}
 	installQEMUFirmwareFn = installQEMUFirmwareViaBrew
 	ensureQEMUFirmwareFn  = func(ctx context.Context) (string, error) {
 		return ensureQEMUFirmwareForHostOS(ctx, runtime.GOOS, vm.BrewPrefix())

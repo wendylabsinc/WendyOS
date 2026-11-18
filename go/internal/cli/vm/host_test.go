@@ -61,16 +61,16 @@ func TestWindowsFirmwareFollowsQEMUInstallation(t *testing.T) {
 		}
 		firmware := filepath.Join(dir, "share", "edk2-aarch64-code.fd")
 		stubFirmware(t, map[string]int64{firmware: pflashBytes})
-		if got, err := FindFirmware("windows", ""); err != nil || got != firmware {
-			t.Fatalf("firmware=%q err=%v want %q", got, err, firmware)
+		if got, err := FindFirmware(ArchARM64, "windows", ""); err != nil || got.Code != firmware {
+			t.Fatalf("firmware=%q err=%v want %q", got.Code, err, firmware)
 		}
 	}
 	// A PATH shim need not have firmware beside it. Keep the default install
 	// as a fallback even when the executable lives elsewhere.
 	firmware := filepath.Join(root, "qemu", "share", "edk2-aarch64-code.fd")
 	stubFirmware(t, map[string]int64{firmware: pflashBytes})
-	if got, err := FindFirmware("windows", ""); err != nil || got != firmware {
-		t.Fatalf("default firmware fallback=%q err=%v want %q", got, err, firmware)
+	if got, err := FindFirmware(ArchARM64, "windows", ""); err != nil || got.Code != firmware {
+		t.Fatalf("default firmware fallback=%q err=%v want %q", got.Code, err, firmware)
 	}
 }
 
@@ -204,17 +204,17 @@ func TestFindQEMUNamesTheEmulatorForTheGuest(t *testing.T) {
 }
 
 func TestFirmwareCandidatesUsesBrewPrefixFirstOnDarwin(t *testing.T) {
-	got := FirmwareCandidates("darwin", "/opt/homebrew")
+	got := FirmwareCandidates(ArchARM64, "darwin", "/opt/homebrew")
 	if len(got) == 0 {
 		t.Fatal("no candidates for darwin")
 	}
-	if got[0] != "/opt/homebrew/share/qemu/edk2-aarch64-code.fd" {
-		t.Errorf("first darwin candidate = %q, want the brew-prefix path", got[0])
+	if got[0].Code != "/opt/homebrew/share/qemu/edk2-aarch64-code.fd" {
+		t.Errorf("first darwin candidate = %q, want the brew-prefix path", got[0].Code)
 	}
 }
 
 func TestFirmwareCandidatesCoversDebianAndFedoraLayoutsOnLinux(t *testing.T) {
-	got := strings.Join(FirmwareCandidates("linux", ""), "\n")
+	got := strings.Join(firmwareCodes(FirmwareCandidates(ArchARM64, "linux", "")), "\n")
 	for _, want := range []string{
 		"/usr/share/AAVMF/AAVMF_CODE.fd",
 		"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
@@ -251,12 +251,12 @@ func TestFindFirmwareReturnsTheFirstUsableCandidate(t *testing.T) {
 	want := "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
 	stubFirmware(t, map[string]int64{want: pflashBytes})
 
-	got, err := FindFirmware("linux", "")
+	got, err := FindFirmware(ArchARM64, "linux", "")
 	if err != nil {
 		t.Fatalf("FindFirmware() error = %v", err)
 	}
-	if got != want {
-		t.Errorf("FindFirmware() = %q, want %q", got, want)
+	if got != (Firmware{Code: want}) {
+		t.Errorf("FindFirmware() = %+v, want code %q and no template", got, want)
 	}
 }
 
@@ -270,18 +270,18 @@ func TestFindFirmwareSkipsUnpaddedFirmware(t *testing.T) {
 		padded: pflashBytes,
 	})
 
-	got, err := FindFirmware("linux", "")
+	got, err := FindFirmware(ArchARM64, "linux", "")
 	if err != nil {
 		t.Fatalf("FindFirmware() error = %v", err)
 	}
-	if got != padded {
-		t.Errorf("FindFirmware() = %q, want the padded %q", got, padded)
+	if got.Code != padded {
+		t.Errorf("FindFirmware() = %q, want the padded %q", got.Code, padded)
 	}
 }
 
 func TestFindFirmwareRejectsAnUnpaddedOnlyHost(t *testing.T) {
 	stubFirmware(t, map[string]int64{"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd": 2 << 20})
-	if _, err := FindFirmware("linux", ""); !errors.Is(err, ErrFirmwareNotFound) {
+	if _, err := FindFirmware(ArchARM64, "linux", ""); !errors.Is(err, ErrFirmwareNotFound) {
 		t.Errorf("unpadded-only host should report firmware not found; got %v", err)
 	}
 }
@@ -289,7 +289,7 @@ func TestFindFirmwareRejectsAnUnpaddedOnlyHost(t *testing.T) {
 func TestFindFirmwareErrorNamesTheInstallCommand(t *testing.T) {
 	stubFirmware(t, nil)
 
-	_, err := FindFirmware("darwin", "/opt/homebrew")
+	_, err := FindFirmware(ArchARM64, "darwin", "/opt/homebrew")
 	if err == nil {
 		t.Fatal("expected an error when no firmware is installed")
 	}
@@ -298,5 +298,125 @@ func TestFindFirmwareErrorNamesTheInstallCommand(t *testing.T) {
 	}
 	if !errors.Is(err, ErrFirmwareNotFound) {
 		t.Errorf("error should wrap ErrFirmwareNotFound; got %#v", err)
+	}
+}
+
+// x86FirmwarePairs is the packaged OVMF pairs, checked against Debian 12,
+// Ubuntu 24.04, Fedora, Arch and openSUSE Tumbleweed packages.
+var x86FirmwarePairs = []struct{ goos, prefix, code, vars string }{
+	{"linux", "", "/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"},
+	{"linux", "", "/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"},
+	{"linux", "", "/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd"},
+	{"linux", "", "/usr/share/edk2/x64/OVMF_CODE.4m.fd", "/usr/share/edk2/x64/OVMF_VARS.4m.fd"},
+	{"linux", "", "/usr/share/qemu/ovmf-x86_64-4m-code.bin", "/usr/share/qemu/ovmf-x86_64-4m-vars.bin"},
+	{"linux", "", "/usr/share/qemu/ovmf-x86_64-code.bin", "/usr/share/qemu/ovmf-x86_64-vars.bin"},
+	{"linux", "", "/usr/share/qemu/edk2-x86_64-code.fd", "/usr/share/qemu/edk2-i386-vars.fd"},
+	{"darwin", "/usr/local/Cellar-prefix", "/usr/local/Cellar-prefix/share/qemu/edk2-x86_64-code.fd", "/usr/local/Cellar-prefix/share/qemu/edk2-i386-vars.fd"},
+	{"darwin", "", "/opt/homebrew/share/qemu/edk2-x86_64-code.fd", "/opt/homebrew/share/qemu/edk2-i386-vars.fd"},
+	{"darwin", "", "/usr/local/share/qemu/edk2-x86_64-code.fd", "/usr/local/share/qemu/edk2-i386-vars.fd"},
+}
+
+func TestX86FirmwareFindsEachPackagedPair(t *testing.T) {
+	for _, pair := range x86FirmwarePairs {
+		stubFirmware(t, map[string]int64{pair.code: 1, pair.vars: 1})
+		got, err := FindFirmware(ArchAMD64, pair.goos, pair.prefix)
+		if err != nil || got != (Firmware{Code: pair.code, VarsTemplate: pair.vars}) {
+			t.Errorf("%s %s: got %+v, %v; want code %q with template %q", pair.goos, pair.code, got, err, pair.code, pair.vars)
+		}
+	}
+}
+
+func TestX86FirmwareNeedsBothFiles(t *testing.T) {
+	for _, pair := range x86FirmwarePairs {
+		stubFirmware(t, map[string]int64{pair.code: 1})
+		if got, err := FindFirmware(ArchAMD64, pair.goos, pair.prefix); !errors.Is(err, ErrFirmwareNotFound) {
+			t.Errorf("%s without its variables template: got %+v, %v; want not found", pair.code, got, err)
+		}
+		stubFirmware(t, map[string]int64{pair.code: 1, pair.vars: 0})
+		if got, err := FindFirmware(ArchAMD64, pair.goos, pair.prefix); !errors.Is(err, ErrFirmwareNotFound) {
+			t.Errorf("%s with an empty template: got %+v, %v; want not found", pair.code, got, err)
+		}
+	}
+}
+
+func TestX86FirmwareNeverOffersSecureBootBuilds(t *testing.T) {
+	// Secure Boot builds refuse WendyOS's unsigned GRUB.
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		for _, c := range FirmwareCandidates(ArchAMD64, goos, "/opt/homebrew") {
+			for _, path := range []string{c.Code, c.VarsTemplate} {
+				for _, marker := range []string{"secboot", ".ms.", "_MS", "-ms-", "snakeoil", "secure"} {
+					if strings.Contains(path, marker) {
+						t.Errorf("%s candidate %q looks like a Secure Boot build (%q)", goos, path, marker)
+					}
+				}
+			}
+		}
+	}
+	stubFirmware(t, map[string]int64{"/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd": 1, "/usr/share/edk2/x64/OVMF_VARS.4m.fd": 1})
+	if got, err := FindFirmware(ArchAMD64, "linux", ""); !errors.Is(err, ErrFirmwareNotFound) {
+		t.Errorf("a host with only the Secure Boot code image: got %+v, %v; want not found", got, err)
+	}
+}
+
+func TestX86FirmwareErrorNamesTheGuestAndThePackages(t *testing.T) {
+	stubFirmware(t, nil)
+	_, err := FindFirmware(ArchAMD64, "linux", "")
+	if !errors.Is(err, ErrFirmwareNotFound) {
+		t.Fatalf("linux: %v, want ErrFirmwareNotFound", err)
+	}
+	if msg := err.Error(); !strings.HasPrefix(msg, "no x86-64 UEFI firmware found") || !strings.Contains(msg, "apt install ovmf (or dnf install edk2-ovmf)") {
+		t.Errorf("linux error = %q", msg)
+	}
+	_, err = FindFirmware(ArchAMD64, "darwin", "/opt/homebrew")
+	if !errors.Is(err, ErrFirmwareNotFound) || !strings.Contains(err.Error(), "brew install qemu") || !strings.HasPrefix(err.Error(), "no x86-64 UEFI firmware found") {
+		t.Errorf("darwin error = %v", err)
+	}
+	if len(FirmwareCandidates(ArchAMD64, "windows", "")) != 0 {
+		t.Error("native Windows has x86-64 firmware candidates; the x86-64 guest is not offered there")
+	}
+}
+
+func TestARM64FirmwareIsUnchanged(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ProgramFiles", root)
+	saved := vmLookPath
+	t.Cleanup(func() { vmLookPath = saved })
+	vmLookPath = func(string) (string, error) { return "", fs.ErrNotExist }
+	winDir := filepath.Join(root, "qemu")
+	for _, tc := range []struct {
+		goos, prefix string
+		want         []string
+	}{
+		{"linux", "", []string{
+			"/usr/share/AAVMF/AAVMF_CODE.fd",
+			"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+			"/usr/share/edk2/aarch64/QEMU_EFI.silent.fd",
+			"/usr/share/qemu/edk2-aarch64-code.fd",
+		}},
+		{"darwin", "/brew", []string{
+			"/brew/share/qemu/edk2-aarch64-code.fd",
+			"/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+			"/usr/local/share/qemu/edk2-aarch64-code.fd",
+		}},
+		{"windows", "", []string{
+			filepath.Join(winDir, "share", "edk2-aarch64-code.fd"),
+			filepath.Join(winDir, "edk2-aarch64-code.fd"),
+		}},
+	} {
+		for _, arch := range []Arch{ArchARM64, Arch("")} {
+			got := FirmwareCandidates(arch, tc.goos, tc.prefix)
+			if strings.Join(firmwareCodes(got), "\n") != strings.Join(tc.want, "\n") {
+				t.Errorf("%s ARM64 candidates = %v, want %v", tc.goos, firmwareCodes(got), tc.want)
+			}
+			for _, c := range got {
+				if c.VarsTemplate != "" {
+					t.Errorf("%s ARM64 candidate %q has a variables template %q", tc.goos, c.Code, c.VarsTemplate)
+				}
+			}
+		}
+	}
+	stubFirmware(t, nil)
+	if _, err := FindFirmware(ArchARM64, "linux", ""); err == nil || !strings.HasPrefix(err.Error(), "no ARM64 UEFI firmware found; install it with apt install qemu-efi-aarch64 (or dnf install edk2-aarch64) (looked in: ") {
+		t.Errorf("ARM64 not-found text changed: %v", err)
 	}
 }
