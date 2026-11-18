@@ -70,12 +70,15 @@ type ROS2Service struct {
 	// bagDir is the host directory holding rosbag2 recordings. Variable for
 	// tests; defaults to the containerd package's ROS2BagDir.
 	bagDir string
+	// pulseExportURL is ros2_pulse's Prometheus endpoint, read by MonitorHz
+	// before it falls back to `ros2 topic hz`. Empty turns that off.
+	pulseExportURL string
 }
 
 // NewROS2Service creates a new ROS2Service backed by the given runtime.
 // bagDir is the host directory where bag recordings are stored.
 func NewROS2Service(logger *zap.Logger, runtime ROS2Runtime, bagDir string) *ROS2Service {
-	return &ROS2Service{logger: logger, runtime: runtime, bagDir: bagDir}
+	return &ROS2Service{logger: logger, runtime: runtime, bagDir: bagDir, pulseExportURL: pulseExportURLFromEnv()}
 }
 
 // ros2SC is a resolved per-RMW sidecar plus the DDS domain to use for a call.
@@ -728,6 +731,9 @@ func (s *ROS2Service) MonitorHz(req *agentpbv2.MonitorROS2HzRequest, stream grpc
 		return err
 	}
 	if err := validateROS2GraphName(req.GetTopic()); err != nil {
+		return err
+	}
+	if handled, err := s.monitorHzFromPulse(req.GetTopic(), stream); handled {
 		return err
 	}
 	sc := s.pickSidecarForTopic(ctx, scs, req.GetTopic())
