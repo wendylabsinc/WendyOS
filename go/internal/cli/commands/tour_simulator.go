@@ -122,12 +122,12 @@ func runRobotTour(cmd *cobra.Command, projectDir string) (runErr error) {
 		fmt.Fprintln(out, tui.Header("Preparing your robot"))
 		fmt.Fprintln(out, "The first run can take a few minutes.")
 		if err := runTourStep(ctx, out, "Setting up QEMU", func() error {
-			return ensureQEMUFn(ctx)
+			return ensureQEMUFn(ctx, vm.ArchARM64)
 		}); err != nil {
 			return err
 		}
 		if err := runTourStep(ctx, out, "Setting up ARM64 firmware", func() error {
-			_, err := ensureQEMUFirmwareFn(ctx)
+			_, err := ensureQEMUFirmwareFn(ctx, vm.ArchARM64)
 			return err
 		}); err != nil {
 			return err

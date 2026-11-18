@@ -303,12 +303,12 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 		}
 		return spec, store, nil
 	}
-	if err := ensureQEMUFn(context.Background()); err != nil {
+	if err := ensureQEMUFn(context.Background(), vm.ArchARM64); err != nil {
 		return vm.Spec{}, nil, err
 	}
 
 	brew := vm.BrewPrefix()
-	firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), runtime.GOOS, brew)
+	firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), vm.ArchARM64, runtime.GOOS, brew)
 	if err != nil {
 		return vm.Spec{}, nil, err
 	}
@@ -343,7 +343,7 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 	return vm.Spec{
 		Name:         name,
 		DiskPath:     store.DiskPath(name),
-		FirmwareCode: firmware,
+		FirmwareCode: firmware.Code,
 		FirmwareVars: store.VarsPath(name),
 		MemoryMiB:    o.memoryMiB,
 		CPUs:         o.cpus,
@@ -566,13 +566,13 @@ func vmPrintReachability(out io.Writer, name string, net vm.NetConfig, hostPort 
 // ensureQEMUFn resolves the emulator, prompting to install it where that is
 // possible. A package var so both start paths share one message and tests can
 // describe a host without QEMU.
-var ensureQEMUFn = func(ctx context.Context) error {
-	return ensureQEMUForHostOS(ctx, runtime.GOOS)
+var ensureQEMUFn = func(ctx context.Context, arch vm.Arch) error {
+	return ensureQEMUForHostOS(ctx, arch, runtime.GOOS)
 }
 
 // findQEMUFn resolves the emulator binary; indirected so tests can describe
 // a host that does not have it.
-var findQEMUFn = func(goos string) (string, error) { return vm.FindQEMU(vm.ArchARM64, goos) }
+var findQEMUFn = vm.FindQEMU
 
 func newVMListCmd() *cobra.Command {
 	return &cobra.Command{
