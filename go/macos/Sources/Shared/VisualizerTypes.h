@@ -70,6 +70,7 @@ void WDRecordingExportsFree(WDRecordingExportsResult *value);
 
 typedef struct { WDStatus status; char *json; } WDGalleryMetadataResult;
 WDGalleryMetadataResult *WDGalleryMetadataAt(char *selector, char *episode);
+WDGalleryMetadataResult *WDGalleryMediaAt(char *selector, char *episode);
 void WDGalleryMetadataFree(WDGalleryMetadataResult *value);
 
 WDVisualSnapshotResult *WDVisualGalleryDataAt(char *selector, char *episode, int summary);

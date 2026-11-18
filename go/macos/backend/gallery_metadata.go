@@ -23,6 +23,15 @@ type GalleryMetadata struct {
 }
 
 func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, error) {
+	return b.galleryMetadataAt(selector, episode, false)
+}
+
+// GalleryMediaAt reads only the manifest; content filtering never needs event logs.
+func (b *Backend) GalleryMediaAt(selector, episode string) (GalleryMetadata, error) {
+	return b.galleryMetadataAt(selector, episode, true)
+}
+
+func (b *Backend) galleryMetadataAt(selector, episode string, mediaOnly bool) (GalleryMetadata, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	conn, release, err := b.galleryAcquire(ctx, selector)
@@ -44,6 +53,10 @@ func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, 
 	}
 	if manifest.ID != episode {
 		return GalleryMetadata{}, errors.New("recording identity mismatch")
+	}
+	if mediaOnly {
+		return GalleryMetadata{Types: []string{}, Labels: []string{}, Complete: true,
+			ContentKinds: galleryContentKinds(manifest), HasVisualMedia: galleryHasVisualMedia(manifest)}, nil
 	}
 	var events []byte
 	complete := true

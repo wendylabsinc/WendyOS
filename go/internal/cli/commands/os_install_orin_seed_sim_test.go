@@ -131,7 +131,7 @@ func TestOrinFullInstallSeedSim(t *testing.T) {
 		}
 		injected := filepath.Join(ws, configRel)
 		var log strings.Builder
-		if err := injectRecoveryConfig(injected, creds, name, nil, &log, func(string) {}, agent); err != nil {
+		if err := injectRecoveryConfig(injected, creds, name, nil, &log, func(string) {}, agentSeed{local: agent}); err != nil {
 			t.Fatalf("run %d: inject: %v\n%s", i, err, log.String())
 		}
 		if s := strings.TrimSpace(log.String()); s != "" {
@@ -362,7 +362,7 @@ func TestVerifySeed(t *testing.T) {
 	written := func(name string, creds ...wendyconf.WifiCredential) []byte {
 		t.Helper()
 		files := memTarget{}
-		if err := writeConfigFilesTo(files, nil, creds, name, nil); err != nil {
+		if err := writeConfigFilesTo(files, configAgent{}, creds, name, nil); err != nil {
 			t.Fatal(err)
 		}
 		return files["wendy.conf"]

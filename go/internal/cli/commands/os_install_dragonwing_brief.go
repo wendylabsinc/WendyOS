@@ -34,14 +34,18 @@ func briefStep(n int, text string) string {
 	return "    " + briefNum.Render(fmt.Sprintf("%d.", n)) + " " + text
 }
 
-// IQ9 instructions use the MODE bank's visible 1–4 labels. IQ8 keeps its
-// board-specific EDL pole.
+// IQ9 instructions use the MODE bank's visible 1–4 labels.
 func iq9075SwitchGuide() edlGuide {
 	return dipSwitchGuide("MODE switch 3", "up (ON)", "down (OFF)",
-		"  The MODE switch bank is labelled 1–4; use switch 3.")
+		"  Find the four switches numbered 1–4 in the MODE bank.\n  Move only switch 3. Leave switches 1, 2 and 4 unchanged.")
 }
 
-func iq8275SwitchGuide() edlGuide { return dipSwitchGuide("S2-8", "ON", "OFF", "") }
+// Qualcomm identifies the IQ-8275 EDL switch as SW2-3, pushed up for ON:
+// https://dragonwingdocs.qualcomm.com/Linux/devices/iq8275-evk/update-software/flash-using-qualcomm-launcher
+func iq8275SwitchGuide() edlGuide {
+	return dipSwitchGuide("DIP switch 3", "up (ON)", "down (OFF)",
+		"  Find the four switches numbered 1–4 in the MODE bank.\n  Move only switch 3. Leave switches 1, 2 and 4 unchanged.")
+}
 
 func dipSwitchGuide(pole, on, off, bankHint string) edlGuide {
 	return edlGuide{
@@ -61,7 +65,7 @@ func dipSwitchGuide(pole, on, off, bankHint string) edlGuide {
 			bankHint,
 			"",
 			briefStep(1, "Power the board "+briefDim.Render("off")+"."),
-			briefStep(2, "Flip "+briefKey.Render(pole)+" "+briefKey.Render(on)+"."),
+			briefStep(2, "Move only "+briefKey.Render(pole)+" "+briefKey.Render(on)+"."),
 			briefStep(3, "Power the board on. It boots straight into EDL and shows no"),
 			"       display output — that is expected.",
 			"",

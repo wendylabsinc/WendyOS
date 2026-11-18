@@ -14,6 +14,7 @@ import (
 	bubbleTable "github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -520,11 +521,19 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.
 
 		newConn, err := asset.reconnect(ctx, auth, brokerURL)
 		if err != nil {
-			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			if resp.GetSupervision() == nil {
+				return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			}
+			// A trial that never listens is replaced only at its deadline.
+			newConn = nil
 		}
+		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return asset.reconnect(ctx, auth, brokerURL)
+		}
+		_, newConn, err = awaitAgentVerdict(ctx, newConn, reconnect, sha256Hash, func() {})
 		updatedVersion, _ := newConn.CachedAgentVersion()
 		newConn.Close()
-		return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, version: updatedVersion}
+		return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, version: updatedVersion, err: err}
 	}
 }
 

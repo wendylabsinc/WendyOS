@@ -264,6 +264,19 @@ func WDGalleryMetadataAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
 	return p
 }
 
+//export WDGalleryMediaAt
+func WDGalleryMediaAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
+	p := alloc[C.WDGalleryMetadataResult](1)
+	metadata, err := desktop.GalleryMediaAt(C.GoString(selector), C.GoString(episode))
+	if err == nil {
+		var raw []byte
+		raw, err = json.Marshal(metadata)
+		p.json = C.CString(string(raw))
+	}
+	p.status = status(err)
+	return p
+}
+
 //export WDGalleryMetadataFree
 func WDGalleryMetadataFree(p *C.WDGalleryMetadataResult) {
 	if p == nil {
