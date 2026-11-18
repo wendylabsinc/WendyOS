@@ -4539,7 +4539,6 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 				cliLogln("Connecting to %s via Wendy Cloud relay...", choice.CloudV2.GetName())
 				return cloudLiteSelectedDevice(cloudAuth, choice.CloudV2, selector)
 			}
-			cliLogln("Connecting to %s via cloud tunnel...", choice.CloudV2.GetName())
 			conn, err := connectCloudAssetV2(ctx, cloudAuth, choice.CloudV2, dm.cloud.brokerURL)
 			if err != nil {
 				return nil, err
@@ -4550,7 +4549,6 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		if err != nil {
 			return nil, err
 		}
-		cliLogln("Connecting to %s via cloud tunnel...", choice.Cloud.GetName())
 		conn, err := connectCloudAsset(ctx, cloudAuth, choice.Cloud, dm.cloud.brokerURL)
 		if err != nil {
 			return nil, err
