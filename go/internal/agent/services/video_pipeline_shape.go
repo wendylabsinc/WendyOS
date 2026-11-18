@@ -37,7 +37,14 @@ func mjpegPixelsFormat(w, h uint32) *agentpb.RawFormat {
 // tapFormat is the format of the frames the pipeline writes to rawTapFD, or nil
 // when it writes none. runCameraPipeline opens and drains the pipe whenever this
 // is non-nil: a pipeline whose fd 3 has no reader or no descriptor would fail.
-func tapFormat(plan gstPipelinePlan) *agentpb.RawFormat { return plan.pixels }
+// The planners set pixels wherever they set raw; falling back to raw keeps fd 3
+// open for a plan that has a tap of either kind.
+func tapFormat(plan gstPipelinePlan) *agentpb.RawFormat {
+	if plan.pixels != nil {
+		return plan.pixels
+	}
+	return plan.raw
+}
 
 // defaultEncoderIdleGrace is how long a pipeline keeps its encoder after the
 // last viewer or recording leaves while apps still read its frames. Dropping the
@@ -158,6 +165,14 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 			graceTimer, graceUp = nil, nil
 			// A viewer may have arrived as the timer fired; the next pass then
 			// keeps the encoder instead.
+			//
+			// One arriving after this check, before stop has killed the
+			// pipeline, may be handed the last of the old pipeline's output and
+			// then the new pipeline's stream from its start (the loop relaunches
+			// with the encoder for it). The window is the few milliseconds the
+			// kill takes, and the new stream opens with a keyframe the viewer's
+			// decoder can start from, so it is accepted rather than closed by
+			// holding the hub's lock across the kill.
 			if encoderIdle() {
 				stop()
 				return true, nil

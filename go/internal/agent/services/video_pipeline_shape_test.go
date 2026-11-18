@@ -142,6 +142,17 @@ func TestPlan_DefaultShapeEqualsUnshapedPlanner(t *testing.T) {
 	}
 }
 
+func TestTapFormat_FallsBackToRawWithoutPixels(t *testing.T) {
+	// Every planner sets pixels beside raw, but a plan built by hand with only
+	// a raw tap still writes fd 3, which must then be opened and drained.
+	if got := tapFormat(gstPipelinePlan{raw: tinyTapFormat}); got != tinyTapFormat {
+		t.Errorf("tapFormat = %v for a plan with only a raw tap, want its raw format", got)
+	}
+	if got := tapFormat(gstPipelinePlan{}); got != nil {
+		t.Errorf("tapFormat = %v for a plan with no tap, want nil", got)
+	}
+}
+
 func TestTapFormat_FollowsPixelsNotRaw(t *testing.T) {
 	withMJPEGDevice(t)
 	mjpeg := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1280, Height: 720}, map[string]bool{"x264enc": true, "jpegdec": true})

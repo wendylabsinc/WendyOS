@@ -876,7 +876,9 @@ func (h *deviceHub) wantRaw() bool {
 	return false
 }
 
-// publishRaw hands one raw capture frame to the hub's raw subscribers.
+// publishRaw hands one frame from the tap to the hub's raw and pixel
+// subscribers, which receive the same VIDEO_CODEC_RAW frames (see broadcast).
+// It reports false once the hub has no subscribers of any kind.
 func (h *deviceHub) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
 	format = describeThermalCapture(h.thermalProfile, format)
 	return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format})
