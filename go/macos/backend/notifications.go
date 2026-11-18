@@ -42,3 +42,9 @@ func (b *Backend) Inbox(account string) ([]*cloudpb.Notification, error) {
 	defer done()
 	return commands.DesktopInbox(ctx, account)
 }
+
+func (b *Backend) Notification(account, organization, id string) (*cloudpb.Notification, error) {
+	ctx, done := b.begin()
+	defer done()
+	return commands.DesktopNotification(ctx, account, organization, id)
+}
