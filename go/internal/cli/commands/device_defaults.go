@@ -219,6 +219,12 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 	if !selector.matches(auth) {
 		return nil, selector.missingAuth()
 	}
+	if conn, err := desktopExistingCloudConnection(ctx, auth, selector.String()); conn != nil || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
+	}
 	if selector.TenantUUID != "" {
 		assets, err := fetchDefaultCloudAssetsV2Fn(ctx, auth, true)
 		if err != nil {

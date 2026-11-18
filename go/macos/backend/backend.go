@@ -89,11 +89,18 @@ type Backend struct {
 	vpnProbes           *vpnProbes
 }
 
+type secureLANConnectionKey struct{}
+
 func New() *Backend {
 	b := &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second, unpinDevice: commands.DesktopUnpin}
 	b.tunnelSession.SetActive(true)
 	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
-		return connectDesktopTarget(b.tunnelSession.Context(ctx), selector)
+		ctx = b.tunnelSession.Context(ctx)
+		if secure, _ := ctx.Value(secureLANConnectionKey{}).(bool); secure {
+			conn, err := commands.DesktopConnectSecureLAN(ctx, selector)
+			return conn, nil, err
+		}
+		return connectDesktopTarget(ctx, selector)
 	}
 	return b
 }
@@ -331,7 +338,9 @@ func (b *Backend) ConnectTargetRequest(selector string, forgetIdentity bool, req
 	var lite liteConnection
 	var err error
 	if requiresMTLS {
-		conn, err = commands.DesktopConnectSecureLAN(targetCtx, selector)
+		// Preview backends inherit this callback and therefore the parent's
+		// account-scoped pool, including for explicit secure LAN selections.
+		conn, lite, err = b.connectTarget(context.WithValue(targetCtx, secureLANConnectionKey{}, true), selector)
 	} else if b.connectDevice != nil {
 		conn, err = b.connectDevice(targetCtx, selector)
 	} else {
