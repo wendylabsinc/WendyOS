@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -3623,6 +3624,7 @@ type resolveConfig struct {
 	sameTargetFallback       defaultDeviceSameTargetFallback
 	readOnlyMonitoring       bool
 	enrollmentTrustRecovery  bool
+	knownCloudLookup         *knownCloudLookup
 }
 
 var (
@@ -3749,21 +3751,33 @@ func ExcludeProviders(keys ...string) resolveOption {
 // (issue #1171). This is the single funnel every command uses to obtain a
 // device, so the clock fix applies to info, run, deploy, ros2 bag, etc.
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
-	sel, err := resolveTargetInner(ctx, opts...)
+	known := &knownCloudLookup{}
+	innerOpts := append(slices.Clip(opts), recordKnownCloudLookup(known))
+	resolve := func() (*SelectedDevice, error) {
+		known.err = nil
+		return resolveTargetInner(ctx, innerOpts...)
+	}
+	sel, err := resolve()
 	for range 2 {
 		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
 		if !retry {
 			err = confirmErr
 			break
 		}
-		sel, err = resolveTargetInner(ctx, opts...)
+		sel, err = resolve()
 	}
 	if err != nil {
 		device := resolveOptionsDevice(opts)
 		if device == "" {
 			device = deviceFlag
 		}
-		if conn, cloudErr, attempted := connectUnresolvedCloudName(ctx, device, err, opts...); attempted {
+		if known.err != nil {
+			// Cloud already failed to reach this pinned name before the local
+			// path ran. Its answer names the next useful action.
+			if localMissDefersToCloud(ctx, device, err) {
+				err = &cloudNameResolutionError{known.err}
+			}
+		} else if conn, cloudErr, attempted := connectUnresolvedCloudName(ctx, device, err, opts...); attempted {
 			err = cloudErr
 			if err == nil {
 				sel = &SelectedDevice{Agent: conn}
@@ -3873,6 +3887,8 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 			noteImplicitDevice(device, implicitDefaultDevice)
 		}
 		return selected, err
+	} else if err != nil && cfg.knownCloudLookup != nil {
+		cfg.knownCloudLookup.err = err
 	}
 
 	// Check if the device flag matches a discovered device ID (e.g.

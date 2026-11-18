@@ -38,14 +38,10 @@ func TestKnownCloudNameSkipsProviderAndDNSDiscovery(t *testing.T) {
 	}
 	want := &grpcclient.AgentConnection{}
 	calls := 0
-	var lookupErr error
 	connectCloudLookupFn = func(_ context.Context, auth *config.AuthConfig, name, _ string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
 		calls++
 		if auth.CloudGRPC != "cloud.test:443" || name != "42" || expected == nil || expected.OrgID != 7 || expected.EntityID != "42" {
 			t.Fatal("Cloud shortcut lost the pinned device or session")
-		}
-		if lookupErr != nil {
-			return nil, lookupErr
 		}
 		return want, nil
 	}
@@ -53,11 +49,112 @@ func TestKnownCloudNameSkipsProviderAndDNSDiscovery(t *testing.T) {
 	if err != nil || selected == nil || selected.Agent != want || calls != 1 {
 		t.Fatalf("known Cloud connection = %v, %v; calls=%d", selected, err, calls)
 	}
-	// Even a Cloud-side resolver error must not trigger an unpinned retry.
-	lookupErr = unresolvedCloudNameError()
-	_, err = resolveTarget(context.Background(), SelectDevice("known-camera"), SuppressUpdateCheck())
-	if !errors.Is(err, lookupErr) || calls != 2 {
-		t.Fatalf("Cloud failure = %v, calls=%d; want original error without retry", err, calls)
+}
+
+// stubKnownCloudNameLocalPath pins known-camera through Cloud and keeps the
+// local path offline. It reports how often local DNS was asked for the name.
+func stubKnownCloudNameLocalPath(t *testing.T) *int {
+	t.Helper()
+	restoreDeviceGlobals(t)
+	stubNonInteractive(t)
+	stubUnresolvedCloudPinSideEffects(t)
+	setPinCache(t)
+	// Real credentials, so the local mTLS dial reaches name resolution.
+	auth, _ := legacyLiteTestPKI(t, 7, certs.AssetURN(7, 42))
+	auth.CloudGRPC = "cloud.test:443"
+	setTempConfig(t, &config.Config{
+		Auth:       []config.AuthConfig{*auth},
+		DevicePins: map[string]config.DevicePin{"known-camera": {OrgID: 7, CloudGRPC: "cloud.test:443", AssetID: "42", Source: config.PinSourceCloud}},
+	})
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldLookup, oldBrowse, oldDiscover := osLookupHostFn, lanBrowseFn, discoverLANDevices
+	oldUSB, oldFind, oldMesh, oldResolver := usbDirectCandidatesFn, findDeviceByIDFn, meshDirectoryRead, net.DefaultResolver
+	t.Cleanup(func() {
+		osLookupHostFn, lanBrowseFn, discoverLANDevices = oldLookup, oldBrowse, oldDiscover
+		usbDirectCandidatesFn, findDeviceByIDFn, meshDirectoryRead, net.DefaultResolver = oldUSB, oldFind, oldMesh, oldResolver
+	})
+	meshDirectoryRead = func(context.Context) (sessionbroker.OperatorDirectory, error) {
+		return sessionbroker.OperatorDirectory{}, nil
+	}
+	// gRPC retries DNS itself after the CLI's resolver misses.
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, unresolvedCloudNameError()
+		},
+	}
+	lookups := 0
+	osLookupHostFn = func(_ context.Context, host string) ([]string, error) {
+		if host == "known-camera" {
+			lookups++
+		}
+		return nil, unresolvedCloudNameError()
+	}
+	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
+	discoverLANDevices = lanBrowseFn
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	findDeviceByIDFn = func(context.Context, string) *SelectedDevice { return nil }
+	return &lookups
+}
+
+var knownCloudNameOptions = []resolveOption{SelectDevice("known-camera"), SuppressUpdateCheck(), SuppressProvisioningHint(), DisableSessionBroker(), NonInteractive()}
+
+func TestKnownCloudNameFailureFallsBackToLocalPath(t *testing.T) {
+	stubKnownCloudNameLocalPath(t)
+	offline := commandErrorf(errDeviceOffline, "device is enrolled but offline")
+	calls := 0
+	connectCloudLookupFn = func(context.Context, *config.AuthConfig, string, string, *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+		calls++
+		return nil, offline
+	}
+	local := &SelectedDevice{Agent: &grpcclient.AgentConnection{}}
+	findDeviceByIDFn = func(_ context.Context, device string) *SelectedDevice {
+		if device != "known-camera" {
+			t.Errorf("local path looked up %q", device)
+		}
+		return local
+	}
+	selected, err := resolveTarget(context.Background(), knownCloudNameOptions...)
+	if err != nil || selected != local || calls != 1 {
+		t.Fatalf("selection = %v, %v; Cloud calls=%d; want the local device after one Cloud lookup", selected, err, calls)
+	}
+}
+
+func TestKnownCloudNameFailureReportsCloudErrorAfterLocalMiss(t *testing.T) {
+	lookups := stubKnownCloudNameLocalPath(t)
+	for _, want := range []error{
+		commandErrorf(errDeviceOffline, "device is enrolled but offline"),
+		noPinnedCloudLogin("No Cloud login matches the organization saved for device %q.", "known-camera"),
+		// A Cloud-side resolver miss must not trigger an unpinned retry either.
+		unresolvedCloudNameError(),
+	} {
+		*lookups = 0
+		calls := 0
+		connectCloudLookupFn = func(context.Context, *config.AuthConfig, string, string, *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+			calls++
+			return nil, want
+		}
+		_, err := resolveTarget(context.Background(), knownCloudNameOptions...)
+		var resolved *cloudNameResolutionError
+		if !errors.Is(err, want) || !errors.As(err, &resolved) || calls != 1 || *lookups == 0 {
+			t.Fatalf("error = %v; Cloud calls=%d, local lookups=%d; want Cloud's error after one lookup and a local attempt", err, calls, *lookups)
+		}
+	}
+}
+
+func TestKnownCloudNameRefusalSkipsLocalPath(t *testing.T) {
+	lookups := stubKnownCloudNameLocalPath(t)
+	findDeviceByIDFn = func(context.Context, string) *SelectedDevice {
+		t.Error("refused Cloud name scanned external providers")
+		return nil
+	}
+	for _, want := range []error{refuseIdentity("saved device identity changed"), context.Canceled} {
+		connectCloudLookupFn = func(context.Context, *config.AuthConfig, string, string, *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+			return nil, want
+		}
+		if _, err := resolveTarget(context.Background(), knownCloudNameOptions...); !errors.Is(err, want) || *lookups != 0 {
+			t.Fatalf("error = %v, local lookups=%d; want the refusal without a local attempt", err, *lookups)
+		}
 	}
 }
 
