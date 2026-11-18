@@ -46,6 +46,17 @@ class MacOSSetupTests(unittest.TestCase):
                         self.assertNotIn('xcode-version', step.get('with', {}))
                         self.assertNotIn('DEVELOPER_DIR', step.get('env', {}))
 
+    def test_usb_dependencies_are_installed_before_disk_discovery_compilation(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/go-tests.yml').read_text())
+        job = next(job for job in workflow['jobs'].values()
+                   if job.get('name') == 'macOS CLI and device regressions')
+        steps = job['steps']
+        install = next(i for i, step in enumerate(steps)
+                       if 'brew install libusb pkg-config' in step.get('run', ''))
+        compile_usb = next(i for i, step in enumerate(steps)
+                           if 'go test ./go/internal/cli/tegraflash/t234' in step.get('run', ''))
+        self.assertLess(install, compile_usb)
+
     def test_base_installs_only_missing_packages_and_uses_brew_python(self):
         for name in ('xcode-select', 'xcodebuild', 'xcrun', 'xcodes'):
             self.command(self.bin / name, 'echo unexpected-xcode-call >> "$CALLS"\nexit 99')

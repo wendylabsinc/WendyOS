@@ -929,14 +929,14 @@ jobs:
             ${{ runner.temp }}/g1-cache-publication/*.stderr.log
           if-no-files-found: ignore
           retention-days: 7
+      - name: Install CLI native dependencies
+        run: brew install libusb pkg-config
       - name: Test direct and nested USB disk discovery
         shell: bash
         run: |
           go test ./go/internal/cli/tegraflash/t234 -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksNestedHub ' "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksDirect ' "$RUNNER_TEMP/disk-discovery.log"
-      - name: Install CLI native dependencies
-        run: brew install libusb pkg-config
       - name: Verify native Make VERSION in the built CLI
         run: python3 .github/scripts/test-native-make-version.py
       - name: Compile raw-device and target-scoped preparation tests

@@ -5,14 +5,15 @@ active Xcode installation. They do not download Xcode, select a version, change
 `xcode-select`, or override `DEVELOPER_DIR`.
 
 Install Xcode and the iOS simulator runtime on the runner before starting its
-service. Complete any license and first-launch prompts as part of machine setup.
+service. Complete any license prompts and run the first-launch command below
+to install system components such as CoreSimulator.
 The active installation must support the SDKs and Swift features used by the
 repository.
 
 Provision base tools as the runner account in an interactive terminal:
 
 ```sh
-sudo -v
+sudo xcodebuild -runFirstLaunch
 bash .github/scripts/provision-macos-ci.sh --base
 ```
 
