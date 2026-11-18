@@ -158,14 +158,19 @@ func (f *ManagedFactory) workerCrashed(key, reason string) {
 // tensorRTHeldOff says why a model gets no TensorRT now, or "". The reason
 // is the same at every start during the hold, so the agent logs it once.
 func (f *ManagedFactory) tensorRTHeldOff(key string) string {
+	return f.heldOff(key, "the TensorRT worker exited %d times within %d minutes, so TensorRT is off for this model until %s; last exit: %s")
+}
+
+// heldOff formats a key's hold while it lasts: how many exits, within how
+// many minutes, until when, and the last exit. Otherwise "".
+func (f *ManagedFactory) heldOff(key, format string) string {
 	f.crashMu.Lock()
 	defer f.crashMu.Unlock()
 	record := f.crashes[key]
 	if record == nil || !timeNow().Before(record.until) {
 		return ""
 	}
-	return fmt.Sprintf("the TensorRT worker exited %d times within %d minutes, so TensorRT is off for this model until %s; last exit: %s",
-		record.held, int(tensorRTCrashWindow/time.Minute), record.until.UTC().Format(time.RFC3339), record.last)
+	return fmt.Sprintf(format, record.held, int(tensorRTCrashWindow/time.Minute), record.until.UTC().Format(time.RFC3339), record.last)
 }
 
 // tensorRTBinding pins NVIDIA's Python bindings for one TensorRT version.
@@ -291,14 +296,7 @@ func planAccelerator(config data.CampaignInference, hardware Hardware, library s
 // TensorRT bindings. It fails only for a tensorrt campaign that cannot have
 // TensorRT; an auto campaign falls back to the CPU and says why.
 func (f *ManagedFactory) acceleratorPlan(ctx context.Context, root string, config data.CampaignInference) (AcceleratorPlan, error) {
-	var hardware Hardware
-	if f.Hardware != nil && config.EffectiveAccelerator() != data.AcceleratorCPU && config.Backend == "yolo_onnx" {
-		hardware = f.Hardware()
-	}
-	library := ""
-	if hardware.GPUVendor == "nvidia" {
-		library = hostTensorRTVersion()
-	}
+	hardware, library := f.probe(config)
 	plan, binding := planAccelerator(config, hardware, library)
 	if binding != nil {
 		if held := f.tensorRTHeldOff(tensorRTCrashKey(config)); held != "" {
@@ -328,6 +326,20 @@ func (f *ManagedFactory) acceleratorPlan(ctx context.Context, root string, confi
 		return plan, fmt.Errorf("accelerator tensorrt is unavailable: %s", plan.Reason)
 	}
 	return plan, nil
+}
+
+// probe is the device's accelerator evidence for a campaign that could use
+// one: its hardware and its libnvinfer version.
+func (f *ManagedFactory) probe(config data.CampaignInference) (Hardware, string) {
+	var hardware Hardware
+	if f.Hardware != nil && config.EffectiveAccelerator() != data.AcceleratorCPU && config.Backend == "yolo_onnx" {
+		hardware = f.Hardware()
+	}
+	library := ""
+	if hardware.GPUVendor == "nvidia" {
+		library = hostTensorRTVersion()
+	}
+	return hardware, library
 }
 
 // tensorRTBindings returns a directory holding the verified tensorrt package:

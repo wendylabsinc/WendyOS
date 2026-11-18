@@ -1,0 +1,68 @@
+name: Inference worker image
+
+# The image the agent runs its campaign model worker in is never published:
+# `wendy data campaign deploy` builds it from files compiled into the CLI and
+# pushes it to the device registry. This workflow is the one place where that build
+# and the real worker in the resulting image run, on both architectures.
+
+on:
+  pull_request:
+    paths:
+      - 'go/internal/agent/inference/Dockerfile'
+      - 'go/internal/agent/inference/pyproject.toml'
+      - 'go/internal/agent/inference/uv.lock'
+      - 'go/internal/agent/inference/worker.py'
+      - 'go/internal/agent/inference/accelerator.py'
+      - 'go/internal/agent/inference/container.go'
+      - 'go/internal/agent/inference/container_test.go'
+      - 'go/internal/cli/commands/data_inference_image.go'
+      - 'go/internal/cli/commands/data_inference_image_test.go'
+      - '.github/workflows/inference-worker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: inference-worker-image
+      - name: Install CLI compile dependencies
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y pkg-config libasound2-dev libusb-1.0-0-dev
+      # The image built from exactly the files the CLI and the agent embed, and
+      # the agent's own worker.py in it through the agent's container factory:
+      # read-only root, no capabilities, a model downloaded into the shared
+      # cache, and a frame in and its answer out.
+      - name: Build the embedded files and run the agent's worker in the image
+        env:
+          WENDY_INFERENCE_SMOKE: "1"
+        run: |
+          go test ./go/internal/agent/inference -run '^TestContainerWorkerImageSmoke$' -count=1 -timeout 1500s -v | tee "$RUNNER_TEMP/smoke.log"
+          grep -q '^--- PASS: TestContainerWorkerImageSmoke ' "$RUNNER_TEMP/smoke.log"
+      # The command line's own build and push, the path `wendy run` uses, of
+      # the same context, to a registry that stands in for a device's.
+      - name: Build and push as the command line does, to a throwaway registry
+        env:
+          WENDY_INFERENCE_PUSH_REGISTRY: 127.0.0.1:5000
+        run: |
+          docker run --detach --rm --name throwaway-registry --publish 127.0.0.1:5000:5000 registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          go test ./go/internal/cli/commands -run '^TestWorkerImageBuildsAndPushesToARegistry$' -count=1 -timeout 1900s -v | tee "$RUNNER_TEMP/push.log"
+          grep -q '^--- PASS: TestWorkerImageBuildsAndPushesToARegistry ' "$RUNNER_TEMP/push.log"

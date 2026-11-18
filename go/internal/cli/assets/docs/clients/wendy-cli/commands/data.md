@@ -336,6 +336,11 @@ in the current directory: YAML files with a campaign's `version` and `name`
 (compose files and stagefiles are left out). Enter selects a file; Escape or Ctrl-C
 cancels. Non-interactive and `--json` use requires an explicit filename.
 
+For a campaign with inference, deployment first makes sure the device has the
+model worker's container image, building and pushing it when it does not. That
+step needs Docker, never stops the deployment, and writes only to stderr; see
+[Worker isolation](#worker-isolation).
+
 An enrolled device's campaign is registered in Cloud Apps as `campaign:<name>`
 using a matching operator session. Registration failures stop deployment.
 `--skip-cloud-registration` permits an offline deployment; unenrolled devices
@@ -499,11 +504,16 @@ The `upload` and `retention` blocks:
 ### Inference
 
 An `inference` block runs object detection in the agent without a separate model
-application. The agent installs its managed Python runtime and downloads the
-pinned Hugging Face checkpoint on first use; this requires network access and
-disk space in the agent's `inference` folder, outside the episode quota. An
-agent update reuses what an earlier agent downloaded. Remote model code is
-disabled.
+application. The agent runs the model in a worker of its own: in a container
+where it can, and otherwise as a process of the agent (see
+[Worker isolation](#worker-isolation)). The container's Python runtime is an
+image that `wendy data campaign deploy` builds on your machine and pushes to
+the device; a process's is a managed installation the agent downloads on
+first use. Either way the agent downloads the pinned Hugging Face checkpoint
+on first use; this requires network access and disk space, outside the
+episode quota. Models are kept in the agent's `inference` folder
+whichever way the worker runs, so an agent update reuses the models an earlier
+agent downloaded. Remote model code is disabled.
 
 | Field | Required | Description |
 |---|---|---|
@@ -590,6 +600,91 @@ Records written by agents before `box_norm` existed have no `width`, `height`
 or `box_norm`; `box` there is in pixels of the camera's own resolution, which
 the record does not state. Readers that do not know the new fields ignore them.
 
+#### Worker isolation
+
+`inference_status.accelerator.isolation` says how the agent runs the model
+worker: `container` or `process`. For a process, `isolation_reason` says why
+it is not in a container and, where there is something to do about it, what.
+
+A worker runs in a container when all of these hold:
+
+- The agent has containerd. A macOS agent has none.
+- The device has the worker's container image. The agent never downloads it:
+  `wendy data campaign deploy` builds it on your machine and pushes it to the
+  device, as described below.
+- The campaign neither asks for TensorRT nor can use it on this device. The
+  worker image has no TensorRT, so `accelerator: tensorrt`, and
+  `accelerator: auto` with `backend: yolo_onnx` on a device where TensorRT is
+  available, keep the process and its accelerator.
+
+**The image, on first deploy.** When you deploy a campaign with inference to
+a device that can use the image and does not have it, `wendy data campaign
+deploy` first builds the image with Docker for the device's architecture and
+pushes it to the device's registry, the same way `wendy run` delivers an app.
+Expect a build of about a minute on a fast connection, longer when your
+machine's architecture differs from the device's, and a push of 1.2 GB
+(arm64) or 1.4 GB (amd64); on the device the image takes roughly twice that,
+for the pushed layers and their unpacked copy. Your machine needs Docker running, and internet access
+for the base image and the Python packages. The device needs neither: its
+Python runtime arrives in the image. This happens once per device, and again
+only after an agent update that changes the worker's dependencies; other
+deploys find the image there and go straight on.
+
+The CLI builds only the files that ship inside the CLI itself, never anything
+a device sends. The agent ships the same files and runs only an image built
+from exactly them, so the two have to match: the CLI asks the agent which
+build it runs, and when that is not the CLI's own, the CLI builds nothing,
+deploys the campaign, and says once that the CLI and the agent ship different
+worker dependencies. The worker then runs as a process until the CLI and the
+agent are on matching versions. Most CLI and agent versions do match here: the
+files change only when the worker's Python dependencies or its image do.
+
+The build never stands in the way of the deploy. Without Docker, over a
+connection through Wendy Cloud (where the image is not pushed), or when the
+build or the push fails or takes more than 30 minutes, the campaign is
+deployed as before, one line on stderr says why, and the worker runs as a
+process; `isolation_reason` then says to deploy the campaign with a CLI of the
+agent's version on a machine with Docker. Pressing Ctrl-C during the build
+cancels the deploy. Build progress and these notices go to stderr, so `--json`
+output is still the plan alone. An agent that predates the image is deployed
+to exactly as before. Only `wendy data campaign deploy` builds the image; a
+campaign deployed another way, such as from the desktop app, runs its worker
+as a process until a deploy from the CLI has put the image on the device.
+
+An agent update that changes the worker's dependencies removes the old image
+when it starts; workers then run as a process, with that reason, until a
+`wendy data campaign deploy` from a CLI of the new version builds the new one.
+A worker that is already running keeps running as it is; it uses the image
+the next time it starts, for example after `wendy data campaign disarm` and
+`arm`. Like an app's image, the worker image is trusted as far as whoever can
+push to the device's registry.
+
+In a container the worker has a read-only root filesystem, no Linux
+capabilities, no devices, and its own process, mount and IPC namespaces. Of
+the device's files it sees its own code, read-only, the `models/` directory of
+the agent's `inference` folder, and, read-only, `/sys` and the resolver
+configuration that come with the host's network. Its home and temporary
+directory is 64 MiB of memory of its own, which is gone with the container; it
+does not see the `home/` directory a process worker uses. The model cache is
+the one place both write: a worker in a container can change cached model
+files that a process worker, which runs as root, later loads. The container
+keeps the host's network, which it needs to download a model, and the root
+user ID, which owns the model cache. The container is not an app: it is absent
+from `wendy device apps list`, and where the device has a shared memory budget
+for apps, its memory counts toward that. It is removed when its worker exits,
+when its campaign stops, and when the agent starts. The image holds only the
+worker's dependencies; the worker's code is the agent's own, mounted into the
+container, so the two cannot differ.
+
+A campaign never stops for lack of a container. If the image is missing or
+was built for another agent version, or the worker does not become ready in
+its container, the worker starts as a process as before, and
+`isolation_reason` says what went wrong. If a model's container exits three
+times within 10 minutes, without being asked to and without reporting an error
+of its own, that model runs as a process for an hour. If the process cannot
+start either, `inference_status.error` reports its failure, followed by the
+container's when a container was tried at that start.
+
 #### Accelerators
 
 With `accelerator: auto`, a `yolo_onnx` model runs on an NVIDIA Jetson's GPU
@@ -645,7 +740,8 @@ never scores on the CPU: if TensorRT is unavailable the campaign reports
   and the agent log say why, with the end of its stderr.
 
 `inference_status.accelerator` reports what actually runs: `active` (`cpu` or
-`tensorrt`), `degraded` and `reason`, `runtime` and `precision`,
+`tensorrt`), `degraded` and `reason`, `runtime` and `precision`, `isolation`
+and `isolation_reason` (see [Worker isolation](#worker-isolation)),
 `gpu_memory_mib` (what the accelerated path took, measured as described
 under Fallback), and `engine` with its `state` (`checking`, `scheduled` with
 `not_before`, `waiting_for_memory` with `waiting_since`, `waiting_for_cpu`
