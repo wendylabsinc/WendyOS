@@ -166,8 +166,8 @@ read frame; echo "{\"type\":\"error\",\"error\":\"${#frame}\"}"`}
 	if written, err := os.ReadFile(filepath.Join(dir, "worker.py")); err != nil || !bytes.Equal(written, embedded) {
 		t.Fatalf("mounted worker differs from the embedded one: %v", err)
 	}
-	// Only the worker, read-only, and the directories the process uses too.
-	want := []WorkerMount{{dir, true}, {filepath.Join(root, "home"), false}, {filepath.Join(root, "models"), false}}
+	// Only the worker, read-only, and the model cache the process uses too.
+	want := []WorkerMount{{dir, true}, {filepath.Join(root, "models"), false}}
 	if fmt.Sprint(worker.Mounts) != fmt.Sprint(want) || filepath.Dir(dir) != root {
 		t.Fatalf("mounts %+v, want %+v", worker.Mounts, want)
 	}
@@ -175,6 +175,14 @@ read frame; echo "{\"type\":\"error\",\"error\":\"${#frame}\"}"`}
 	env := "\n" + strings.Join(worker.Env, "\n")
 	if !strings.Contains(env, "\nHF_HOME="+filepath.Join(root, "models")) || strings.Contains(env, "agent-secret") || strings.Contains(env, "\nPATH=") {
 		t.Fatalf("environment %q", worker.Env)
+	}
+	// The process worker is root and reads its HOME, so the container gets
+	// none of it: one HOME, its own scratch, and no home on the host.
+	if strings.Count(env, "\nHOME=") != 1 || !strings.Contains(env, "\nHOME=/tmp\n") {
+		t.Fatalf("the container's HOME: %q", worker.Env)
+	}
+	if _, err := os.Stat(filepath.Join(root, "home")); !os.IsNotExist(err) {
+		t.Fatalf("the container path touched the process worker's home: %v", err)
 	}
 }
 
@@ -414,7 +422,7 @@ func (d dockerRuntime) RunInferenceWorker(ctx context.Context, worker WorkerCont
 		}
 	}
 	args := []string{"run", "--rm", "--interactive", "--name", d.name, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-		"--network=host", "--tmpfs=/tmp:size=64m,mode=1777", "--workdir", worker.Dir}
+		"--network=host", "--tmpfs=" + WorkerScratch + ":size=64m,mode=1777,noexec,nosuid,nodev", "--workdir", worker.Dir}
 	if uid := os.Getuid(); uid >= 0 {
 		// Without capabilities the worker reaches only its own user's files.
 		// On a device that is root, the agent's user; here it is the test's.
@@ -475,6 +483,11 @@ func TestContainerWorkerImageSmoke(t *testing.T) {
 	model := filepath.Join(root, "models", "hub", "models--webnn--yolo11n", "snapshots", "9c5acfdd74aaff2d0f47c51b878506361039a51f", "onnx", "yolo11n.onnx")
 	if _, err := os.Stat(model); err != nil {
 		t.Fatalf("the model is not in the shared cache: %v", err)
+	}
+	// Nothing else of the worker's reaches the host: no home for a process
+	// worker to read later.
+	if entries, _ := os.ReadDir(root); len(entries) != 2 {
+		t.Fatalf("the inference directory holds more than the worker and the models: %v", entries)
 	}
 	// A frame of several megabytes goes in over the container's stdin, and
 	// the worker's answer to it comes back over its stdout.

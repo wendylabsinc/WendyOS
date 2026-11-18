@@ -197,7 +197,10 @@ func inferenceWorkerSpec(worker inference.WorkerContainer, hostResolvConf string
 	spec.Process.Env = append(spec.Process.Env, worker.Env...)
 	spec.Process.Capabilities = &localoci.LinuxCapabilities{}
 	spec.Root.Readonly = true
-	spec.Mounts = append(spec.Mounts, localoci.Mount{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777", "size=64m"}})
+	// The worker's HOME and temporary directory: its own, in memory, and gone
+	// with the container. It is charged to the container as memory, so it is
+	// small; a worker on the CPU was measured to leave it empty.
+	spec.Mounts = append(spec.Mounts, localoci.Mount{Destination: inference.WorkerScratch, Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "noexec", "mode=1777", "size=64m"}})
 	for _, mount := range worker.Mounts {
 		access := "rw"
 		if mount.ReadOnly {

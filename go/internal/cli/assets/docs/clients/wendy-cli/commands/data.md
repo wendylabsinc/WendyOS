@@ -612,14 +612,18 @@ A worker runs in a container when all of these hold:
 
 In a container the worker has a read-only root filesystem, no Linux
 capabilities, no devices, and its own process, mount and IPC namespaces. Of
-the device's files it sees its own code, read-only, the `home/` and `models/`
-directories of the agent's `inference` folder, and, read-only, `/sys` and the
-resolver configuration that come with the host's network. It keeps that
-network, which it needs to download a model, and the root user ID, which owns
-those directories. The container is not an app: it is absent from
-`wendy device apps list`, and where the device has a shared memory budget for
-apps, its memory counts toward that. It is removed when its worker exits, when
-its campaign stops, and when the agent starts.
+the device's files it sees its own code, read-only, the `models/` directory of
+the agent's `inference` folder, and, read-only, `/sys` and the resolver
+configuration that come with the host's network. Its home and temporary
+directory is 64 MiB of memory of its own, which is gone with the container; it
+does not see the `home/` directory a process worker uses. The model cache is
+the one place both write: a worker in a container can change cached model
+files that a process worker, which runs as root, later loads. The container
+keeps the host's network, which it needs to download a model, and the root
+user ID, which owns the model cache. The container is not an app: it is absent
+from `wendy device apps list`, and where the device has a shared memory budget
+for apps, its memory counts toward that. It is removed when its worker exits,
+when its campaign stops, and when the agent starts.
 
 The container's Python runtime is an image (about 1.3 GB unpacked on arm64)
 that the agent downloads on first use, in place of the managed Python

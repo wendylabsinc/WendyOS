@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,10 @@ const (
 	WorkerImageDepsLabel = "sh.wendy.inference.deps"
 	// The image's Python environment (Dockerfile in this directory).
 	workerImagePython = "/opt/wendy-inference/venv/bin/python"
+	// WorkerScratch is the one writable place a ContainerRuntime gives the
+	// worker besides its mounts: private to the container, held in memory,
+	// and gone with it. It is the worker's HOME and its temporary directory.
+	WorkerScratch = "/tmp"
 )
 
 // DepsHash names the Python environment the embedded worker needs: the first
@@ -165,22 +170,31 @@ func (f *ContainerFactory) startContainer(ctx context.Context, config data.Campa
 	if err != nil {
 		return nil, err
 	}
-	home, models := filepath.Join(root, "home"), filepath.Join(root, "models")
-	for _, path := range []string{home, models} {
-		if err := os.MkdirAll(path, 0700); err != nil {
-			return nil, err
+	models := filepath.Join(root, "models")
+	if err := os.MkdirAll(models, 0700); err != nil {
+		return nil, err
+	}
+	// The root filesystem and the worker's directory are read-only.
+	env := []string{"PYTHONDONTWRITEBYTECODE=1"}
+	for _, entry := range workerEnvironment(root) {
+		// The process worker runs as root with the inference directory's home
+		// as its HOME, and reads what is there. A contained worker must not be
+		// able to leave it anything, so its HOME is the container's own
+		// scratch, which is gone with the container.
+		if strings.HasPrefix(entry, "HOME=") {
+			entry = "HOME=" + WorkerScratch
 		}
+		env = append(env, entry)
 	}
 	worker := WorkerContainer{
 		Image:       f.Image,
 		ImageLabels: map[string]string{WorkerImageDepsLabel: DepsHash()},
 		Args:        []string{workerImagePython, "-u", filepath.Join(dir, "worker.py")},
-		// The root filesystem and the worker's directory are read-only.
-		Env: append(workerEnvironment(root), "PYTHONDONTWRITEBYTECODE=1"),
-		Dir: dir,
-		// The engine and CUDA caches stay with the process: a worker without
-		// TensorRT has no use for them.
-		Mounts: []WorkerMount{{dir, true}, {home, false}, {models, false}},
+		Env:         env,
+		Dir:         dir,
+		// The model cache is the one thing both workers write. The home, the
+		// engine cache and the CUDA cache stay with the process.
+		Mounts: []WorkerMount{{dir, true}, {models, false}},
 	}
 	key := containerCrashKey(config)
 	return startWorker(ctx, f.launcher(worker), workerConfig{config, plan},

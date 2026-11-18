@@ -45,10 +45,18 @@ func TestInferenceWorkerIsConfinedToItsOwnMounts(t *testing.T) {
 		t.Fatalf("namespaces %+v", spec.Linux.Namespaces)
 	}
 	binds := map[string]string{}
+	scratch := ""
 	for _, mount := range spec.Mounts {
 		if mount.Type == "bind" {
 			binds[mount.Destination] = mount.Source + " " + strings.Join(mount.Options, ",")
 		}
+		if mount.Destination == inference.WorkerScratch {
+			scratch = mount.Type + " " + strings.Join(mount.Options, ",")
+		}
+	}
+	// Its HOME is memory of its own, bounded, and nothing on the host.
+	if scratch != "tmpfs nosuid,nodev,noexec,mode=1777,size=64m" {
+		t.Fatalf("the worker's scratch is %q", scratch)
 	}
 	want := map[string]string{
 		"/data/inference/runtime-1": "/data/inference/runtime-1 bind,ro,nosuid,nodev,noexec",
