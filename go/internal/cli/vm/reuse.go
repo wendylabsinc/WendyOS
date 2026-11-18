@@ -76,6 +76,7 @@ func (s *Store) creationComplete(name string) (bool, error) {
 	if json.Unmarshal(data, &meta) != nil || meta.Name != name {
 		return false, nil
 	}
+	s.fillGuestArch(name, &meta)
 	disk, err := regularVMFile(s.DiskPath(name))
 	if err != nil || disk == nil {
 		return false, err

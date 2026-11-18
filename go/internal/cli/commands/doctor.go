@@ -253,8 +253,19 @@ func doctorGuestArch(d doctorDeps, configDir, selected string) vm.Arch {
 	name, ok := strings.CutPrefix(selected, "vm:")
 	if ok && configDir != "" && vm.ValidName(name) == nil {
 		var meta vm.Meta
-		if d.readJSON(filepath.Join(configDir, "vms", name, "meta.json"), &meta) == nil && meta.Arch.Valid() {
-			return meta.GuestArch()
+		if d.readJSON(filepath.Join(configDir, "vms", name, "meta.json"), &meta) == nil {
+			if meta.Arch == "" && !vm.IsLiteProfile(meta.Profile) {
+				// An older CLI may have dropped arch from meta.json.
+				var sidecar struct {
+					Arch vm.Arch `json:"arch"`
+				}
+				if d.readJSON(filepath.Join(configDir, "vms", name, vm.GuestArchFile), &sidecar) == nil {
+					meta.Arch = sidecar.Arch
+				}
+			}
+			if meta.Arch.Valid() {
+				return meta.GuestArch()
+			}
 		}
 	}
 	return defaultGuestArchFn()

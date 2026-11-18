@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -102,5 +103,44 @@ func TestDefaultArchIsARM64OnEveryHost(t *testing.T) {
 	}
 	if got := DefaultArch(); got != ArchARM64 {
 		t.Errorf("DefaultArch() = %q, want arm64", got)
+	}
+}
+
+// An older CLI reads meta.json into a struct without Arch and writes it back,
+// which drops the field. The VM must still be known as x86-64 afterwards.
+func TestOlderCLIRewriteOfMetaKeepsTheArchitecture(t *testing.T) {
+	s := &Store{Root: t.TempDir()}
+	if err := s.CreateFrom("x86", strings.NewReader("disk"), 4, 4096, Meta{Arch: ArchAMD64}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(s.MetaPath("x86"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old map[string]any
+	if err := json.Unmarshal(data, &old); err != nil {
+		t.Fatal(err)
+	}
+	delete(old, "arch")
+	stripped, _ := json.Marshal(old)
+	if err := os.WriteFile(s.MetaPath("x86"), stripped, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if m, ok := s.ReadMeta("x86"); !ok || m.GuestArch() != ArchAMD64 {
+		t.Errorf("after an older CLI's rewrite: ReadMeta arch %q (read %t), want amd64", m.Arch, ok)
+	}
+	if st, err := s.Status("x86"); err != nil || st.Meta.GuestArch() != ArchAMD64 {
+		t.Errorf("after an older CLI's rewrite: Status arch %q, %v; want amd64", st.Meta.Arch, err)
+	}
+	if ready, backup, err := s.PrepareForReuse("x86"); err != nil || !ready || backup != "" {
+		t.Errorf("after an older CLI's rewrite: reuse = %v, %q, %v; want ready, not preserved as an interrupted create", ready, backup, err)
+	}
+	if err := s.RecordHostname("x86", "wendyos-x86"); err != nil {
+		t.Fatal(err)
+	}
+	repaired, _ := os.ReadFile(s.MetaPath("x86"))
+	if !strings.Contains(string(repaired), `"arch": "amd64"`) {
+		t.Errorf("the next metadata write did not restore arch: %s", repaired)
 	}
 }

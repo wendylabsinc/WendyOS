@@ -533,3 +533,27 @@ func TestDoctorChecksTheEmulatorForTheSelectedVMsArchitecture(t *testing.T) {
 		})
 	}
 }
+
+// An older CLI may have dropped arch from meta.json; doctor reads the
+// guest-arch.json sidecar the VM was created with, through deps.readJSON.
+func TestDoctorFallsBackToTheRecordedGuestArch(t *testing.T) {
+	stubDefaultGuestArch(t, vm.ArchARM64)
+	d := doctorTestDeps(t)
+	home, _ := d.homeDir()
+	dir := filepath.Join(home, ".wendy", "vms", "x1")
+	d.readJSON = func(path string, v any) error {
+		switch path {
+		case filepath.Join(dir, "meta.json"):
+			return json.Unmarshal([]byte(`{"name":"x1"}`), v)
+		case filepath.Join(dir, "guest-arch.json"):
+			return json.Unmarshal([]byte(`{"arch":"amd64"}`), v)
+		}
+		return os.ErrNotExist
+	}
+	var looked []string
+	d.lookPath = func(name string) (string, error) { looked = append(looked, name); return "/private/bin/" + name, nil }
+	doctorExecute(t, d, "--device", "vm:x1")
+	if !slices.Contains(looked, "qemu-system-x86_64") {
+		t.Errorf("looked up %v, want qemu-system-x86_64 from the sidecar", looked)
+	}
+}

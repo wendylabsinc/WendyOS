@@ -127,6 +127,7 @@ func (s *Store) ReadMeta(name string) (m Meta, ok bool) {
 		return Meta{Name: name}, false
 	}
 	m.Name = name
+	s.fillGuestArch(name, &m)
 	return m, true
 }
 

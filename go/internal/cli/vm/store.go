@@ -224,6 +224,11 @@ func (s *Store) CreateFromWithRobotProfileContext(ctx context.Context, name stri
 			return fmt.Errorf("sizing UEFI variable store: %w", err)
 		}
 	}
+	if !IsLiteProfile(meta.Profile) {
+		if err := writeJSON(s.GuestArchPath(name), guestArchRecord{Arch: meta.Arch}); err != nil {
+			return fmt.Errorf("recording VM guest architecture: %w", err)
+		}
+	}
 	meta.Name = name
 	meta.DiskBytes = diskBytes
 	if meta.CreatedAt.IsZero() {

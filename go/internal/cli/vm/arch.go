@@ -1,7 +1,10 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -72,6 +75,40 @@ func ArchForBoard(deviceType string) (Arch, bool) {
 		return ArchAMD64, true
 	}
 	return "", false
+}
+
+// GuestArchFile is a sidecar beside meta.json that records the guest
+// architecture again. CLIs released before the arch field read meta.json into a
+// struct without it and write it back, dropping it; they never touch this file,
+// so a VM keeps its architecture after an older CLI updated its record.
+const GuestArchFile = "guest-arch.json"
+
+type guestArchRecord struct {
+	Arch Arch `json:"arch"`
+}
+
+// GuestArchPath is the VM's guest-architecture sidecar.
+func (s *Store) GuestArchPath(name string) string { return filepath.Join(s.Dir(name), GuestArchFile) }
+
+// recordedGuestArch is the architecture in the VM's sidecar, or "" when it has
+// none. An unknown value is returned as is, so starting the VM refuses it.
+func (s *Store) recordedGuestArch(name string) Arch {
+	data, err := os.ReadFile(s.GuestArchPath(name))
+	if err != nil {
+		return ""
+	}
+	var r guestArchRecord
+	if json.Unmarshal(data, &r) != nil {
+		return ""
+	}
+	return r.Arch
+}
+
+// fillGuestArch restores an architecture an older CLI dropped from meta.json.
+func (s *Store) fillGuestArch(name string, m *Meta) {
+	if m.Arch == "" && !IsLiteProfile(m.Profile) {
+		m.Arch = s.recordedGuestArch(name)
+	}
 }
 
 // GuestArch is the VM's recorded guest architecture. A record written before
