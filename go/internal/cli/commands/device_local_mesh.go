@@ -58,10 +58,13 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Uint32("max-links", 0, "Lite: limit simultaneous mesh connections")
 	configure.Flags().Uint32("ble-links", 0, "Lite: limit simultaneous Bluetooth mesh connections")
 	configure.Flags().Uint32("wifi-links", 0, "Lite: limit simultaneous infrastructure Wi-Fi mesh connections")
+	configure.Flags().Bool("espnow", false, "Lite: enable the ESP-NOW carrier")
+	configure.Flags().Uint32("espnow-channel", 0, "Lite: ESP-NOW 2.4 GHz channel")
+	configure.Flags().Uint32("espnow-links", 0, "Lite: limit outgoing ESP-NOW mesh connections")
 	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous Wi-Fi Aware mesh connections")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		changed := false
-		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ble-mode", "ethernet", "infrastructure-wifi"}, liteNetLimitFlags...) {
+		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ble-mode", "ethernet", "infrastructure-wifi"}, liteNetOnlyFlags...) {
 			changed = changed || cmd.Flags().Changed(name)
 		}
 		interactive := !changed && !jsonOutput && isInteractiveTerminal()
@@ -87,7 +90,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 		if target.External != nil {
 			return configureLiteNet(cmd, target)
 		}
-		for _, name := range liteNetLimitFlags {
+		for _, name := range liteNetOnlyFlags {
 			if cmd.Flags().Changed(name) {
 				return fmt.Errorf("--%s applies to Wendy Lite peers", name)
 			}

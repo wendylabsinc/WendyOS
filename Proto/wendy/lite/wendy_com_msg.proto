@@ -145,6 +145,9 @@ message WendyComNetConfig {
     uint32 wifi_links = 7;
     uint32 nan_links = 8;
     WendyComBleProfile ble_profile = 9;
+    optional bool espnow = 10;
+    optional uint32 espnow_channel = 11;
+    optional uint32 espnow_links = 12; // Locally initiated links, including setup.
 }
 message WendyComNetGetParams {}
 message WendyComNetSetParams { WendyComNetConfig config = 1; }
@@ -170,6 +173,10 @@ message WendyComNetStatus {
     uint32 error_code = 12;
     bool restarting = 13; // saved carrier/profile change; reboot is pending
     uint32 ble_profiles_supported = 14; // bit N corresponds to WendyComBleProfile N
+    optional bool espnow_supported = 15;
+    uint32 espnow_effective_channel = 16;
+    uint32 espnow_active_links = 17;
+    uint32 espnow_error = 18; // ESP-IDF error, zero when ready or disabled.
 }
 
 // Read-only, bounded live projection. One record per page; cursors are opaque.
@@ -191,7 +198,7 @@ message WendyComNetTopologyRecord {
     int64 expires_at_unix_ms = 11;
     uint64 revision = 12;
     int64 issued_at_unix_ms = 13;
-    uint32 transport = 14; // 1 infrastructure Wi-Fi, 2 BLE, 3 NAN
+    uint32 transport = 14; // 1 infrastructure Wi-Fi, 2 BLE, 3 NAN, 4 ESP-NOW
     bytes next_hop_device = 15;
     uint32 owner_role = 16; // 0 legacy device, 1 device, 2 operator
     string owner_principal = 17; // exact public operator principal, at most 1024 UTF-8 bytes
@@ -345,6 +352,7 @@ enum WendyComResult {
     WENDY_COM_RESULT_NET_NO_NAN           = 11;
     WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY = 12;
     WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED = 13;
+    WENDY_COM_RESULT_NET_NO_ESPNOW        = 14;
 }
 
 // Response to a WendyComCommand — request_id matches the request.
