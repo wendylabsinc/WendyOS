@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -20,6 +21,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 // A foreground account generation owns channels. Keys include the credential
@@ -155,44 +158,149 @@ func desktopReconnectableCloudConnection(ctx context.Context, auth *config.AuthC
 	return conn, nil
 }
 
-func connectCloudDevicePreferLAN(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
+// cloudLANBudget bounds the authenticated LAN attempt. A stale local sighting
+// must not turn a remote open into a long timeout.
+const cloudLANBudget = 2 * time.Second
+
+// The LAN attempt runs alone for this head start and then races the Cloud
+// tunnel. A device on the local network normally authenticates within it.
+// Cloud's ip_address for a remote device is usually a private address that
+// silently drops SYNs, so the tunnel must not wait out cloudLANBudget.
+var cloudTunnelHeadStart = 300 * time.Millisecond
+
+func connectCloudDevicePreferLAN(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (conn *grpcclient.AgentConnection, err error) {
 	expected := cloudDiscoveryIdentity(auth, asset)
-	// A stale local sighting must not turn a remote open into a long timeout.
-	localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	candidates := desktopLocalCandidates(localCtx, asset, expected)
-	if os.Getenv("WENDY_TLS_DEBUG") != "" {
-		fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] LAN candidates for %s: %v\n", expected.IdentityKey(), candidates)
-	}
-	conn := raceDesktopLocal(localCtx, candidates, auth.Certificates[0], expected)
-	cancel()
-	if conn != nil {
-		// A CLI restart must retain the selected identity and wait for the
-		// device to return, even if its LAN address changes during the restart.
-		conn.Reconnect = func(next context.Context) (*grpcclient.AgentConnection, error) {
-			return asset.reconnect(carryTunnelSession(next, ctx), auth, brokerURL)
+	_, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
+	localCtx, cancelLocal := context.WithTimeout(ctx, cloudLANBudget)
+	tunnelCtx, cancelTunnel := context.WithCancel(ctx)
+	lan := make(chan *grpcclient.AgentConnection, 1)
+	go func() {
+		candidates := desktopLocalCandidates(localCtx, asset, expected)
+		if os.Getenv("WENDY_TLS_DEBUG") != "" {
+			fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] LAN candidates for %s: %v\n", expected.IdentityKey(), candidates)
 		}
-		cliLogln("Connected to %s via LAN (%s).", asset.GetName(), conn.Addr)
-		return conn, nil
+		lan <- raceDesktopLocal(localCtx, candidates, auth.Certificates[0], expected)
+	}()
+	// tunnel is dialed but may not be established yet; tunnelSettled reports
+	// once whether it is. tunnelErr records a tunnel that failed.
+	var tunnel *grpcclient.AgentConnection
+	var tunnelSettled chan error
+	var tunnelErr error
+	headStart := time.NewTimer(cloudTunnelHeadStart)
+	defer func() {
+		headStart.Stop()
+		cancelLocal()
+		cancelTunnel()
+		if lan != nil {
+			go closeLateConnection(lan)
+		}
+		if tunnel != nil && tunnel != conn {
+			tunnel.Close()
+		}
+	}()
+	startTunnel := func() {
+		cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
+		if tunnel, tunnelErr = cloudTunnelDial()(ctx, auth, asset, brokerURL); tunnelErr != nil {
+			tunnel = nil
+			return
+		}
+		tunnelSettled = make(chan error, 1)
+		go func(conn *grpcclient.AgentConnection) { tunnelSettled <- establishCloudTunnel(tunnelCtx, conn, native) }(tunnel)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	for {
+		select {
+		case local := <-lan:
+			lan = nil
+			if local != nil {
+				// A CLI restart must retain the selected identity and wait for the
+				// device to return, even if its LAN address changes during the restart.
+				local.Reconnect = func(next context.Context) (*grpcclient.AgentConnection, error) {
+					return asset.reconnect(carryTunnelSession(next, ctx), auth, brokerURL)
+				}
+				cliLogln("Connected to %s via LAN (%s).", asset.GetName(), local.Addr)
+				return local, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if tunnel == nil && tunnelErr == nil {
+				startTunnel()
+			}
+			if tunnelErr != nil {
+				return nil, tunnelErr
+			}
+			if !native {
+				// A CLI connection stays lazy: its first call waits for the
+				// tunnel or reports why it failed, as it did without the race.
+				return tunnel, nil
+			}
+		case <-headStart.C:
+			if tunnel == nil && tunnelErr == nil && ctx.Err() == nil {
+				startTunnel()
+			}
+		case settled := <-tunnelSettled:
+			tunnelSettled = nil
+			if settled == nil {
+				return tunnel, nil
+			}
+			if native {
+				tunnel.Close()
+				tunnel, tunnelErr = nil, settled
+			}
+			if lan == nil {
+				if tunnelErr != nil {
+					return nil, tunnelErr
+				}
+				return tunnel, nil
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
-	conn, err := cloudTunnelDial()(ctx, auth, asset, brokerURL)
-	if err != nil {
-		return nil, err
+}
+
+// establishCloudTunnel reports whether a dialed tunnel can win the race. A
+// native channel is shared with waiters, so it completes the lazy handshake
+// first. A CLI channel makes no extra call; its transport only starts early.
+func establishCloudTunnel(ctx context.Context, conn *grpcclient.AgentConnection, native bool) error {
+	if !native {
+		return awaitChannelReady(ctx, conn.Conn)
 	}
-	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); !native {
-		return conn, nil
-	}
-	// Force the lazy gRPC handshake before sharing the channel with waiters.
 	version, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
-		conn.Close()
-		return nil, err
+		return err
 	}
 	conn.CacheAgentVersion(version)
-	return conn, nil
+	return nil
+}
+
+var errChannelNotReady = errors.New("device channel is not ready")
+
+// awaitChannelReady starts cc's transport and waits for its first attempt.
+func awaitChannelReady(ctx context.Context, cc *grpc.ClientConn) error {
+	if cc == nil {
+		return nil // Nothing to establish.
+	}
+	cc.Connect()
+	for {
+		switch state := cc.GetState(); state {
+		case connectivity.Ready:
+			return nil
+		case connectivity.TransientFailure, connectivity.Shutdown:
+			return errChannelNotReady
+		default:
+			if !cc.WaitForStateChange(ctx, state) {
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+// closeLateConnection closes a LAN winner that arrives after the race ended.
+func closeLateConnection(result <-chan *grpcclient.AgentConnection) {
+	if conn := <-result; conn != nil {
+		conn.Close()
+	}
 }
 
 const desktopLocalCandidateLimit = 8
@@ -282,6 +390,11 @@ func localCloudCandidates(ctx context.Context, asset cloudDiscoveryDevice, expec
 			(name != "" && name == asset.GetName()) ||
 			(hostname != "" && strings.TrimSuffix(strings.TrimSuffix(hostname, "."), ".local") == expected.EntityID)
 	}
+	addDevice := func(d models.LANDevice) {
+		if d.IsMTLS && (matches(d.ID, d.DisplayName, d.Hostname) || matches(models.CanonicalDevicePrincipal(d.PrincipalURI), d.DisplayName, d.Hostname)) {
+			add(d.IPAddress, d.Port, d.NetworkInterface)
+		}
+	}
 	// Reserve room for the Cloud hint before cached aliases fill the bounded list.
 	add(asset.GetIpAddress(), 0, "")
 	if cache, err := discoverycache.Load(); err == nil {
@@ -291,15 +404,16 @@ func localCloudCandidates(ctx context.Context, asset cloudDiscoveryDevice, expec
 			}
 		}
 	}
+	browse, browsing := ctx.Value(cloudLANBrowseKey{}).(*cloudLANBrowse)
 	if len(addresses) != 0 {
+		// The hint and cache can be stale after a DHCP change. Add what the
+		// parallel browse has already seen, without waiting for more.
+		if browsing {
+			browse.seen(addDevice)
+		}
 		return addresses
 	}
-	addDevice := func(d models.LANDevice) {
-		if d.IsMTLS && (matches(d.ID, d.DisplayName, d.Hostname) || matches(models.CanonicalDevicePrincipal(d.PrincipalURI), d.DisplayName, d.Hostname)) {
-			add(d.IPAddress, d.Port, d.NetworkInterface)
-		}
-	}
-	if browse, ok := ctx.Value(cloudLANBrowseKey{}).(*cloudLANBrowse); ok {
+	if browsing {
 		browse.visit(ctx, func(d models.LANDevice) bool {
 			addDevice(d)
 			return len(addresses) != 0

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,6 +52,16 @@ func startCloudLANBrowse(ctx context.Context) (context.Context, context.CancelFu
 	return context.WithValue(ctx, cloudLANBrowseKey{}, browse), func() {
 		cancel()
 		<-browse.done
+	}
+}
+
+// seen offers each sighting collected so far, without waiting for more.
+func (b *cloudLANBrowse) seen(accept func(models.LANDevice)) {
+	b.mu.Lock()
+	devices := slices.Clone(b.devices)
+	b.mu.Unlock()
+	for _, device := range devices {
+		accept(device)
 	}
 }
 
