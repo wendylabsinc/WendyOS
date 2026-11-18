@@ -542,7 +542,18 @@ func main() {
 	defer videoSvc.Shutdown()
 
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
-	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory(), Hardware: services.InferenceHardware}, &services.CampaignCloudSender{Cloud: notificationSender})
+	// The model worker runs in a container where there is containerd and a
+	// published image, and as a process of the agent everywhere else.
+	inferenceFactory := &inference.ContainerFactory{Image: inference.WorkerImage,
+		Process: &inference.ManagedFactory{Root: dataManager.InferenceDirectory(), Hardware: services.InferenceHardware}}
+	if ctrdClient != nil {
+		inferenceFactory.Runtime = ctrdClient
+		// Nothing reads the results of a worker an earlier agent left behind.
+		if err := ctrdClient.RemoveInferenceWorkers(ctx); err != nil {
+			logger.Warn("removing earlier model worker containers failed", zap.Error(err))
+		}
+	}
+	stopInference := dataSvc.StartCampaignInference(ctx, inferenceFactory, &services.CampaignCloudSender{Cloud: notificationSender})
 	defer stopInference()
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)

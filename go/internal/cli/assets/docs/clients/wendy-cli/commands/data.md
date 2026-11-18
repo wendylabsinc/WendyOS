@@ -499,11 +499,14 @@ The `upload` and `retention` blocks:
 ### Inference
 
 An `inference` block runs object detection in the agent without a separate model
-application. The agent installs its managed Python runtime and downloads the
-pinned Hugging Face checkpoint on first use; this requires network access and
-disk space in the agent's `inference` folder, outside the episode quota. An
-agent update reuses what an earlier agent downloaded. Remote model code is
-disabled.
+application. The agent runs the model in a worker of its own: in a container
+where it can, and otherwise as a process of the agent (see
+[Worker isolation](#worker-isolation)). On first use it downloads the worker's
+Python runtime, as a container image or as a managed installation, and the
+pinned Hugging Face checkpoint; this requires network access and disk space,
+outside the episode quota. Models are kept in the agent's `inference` folder
+whichever way the worker runs, so an agent update reuses the models an earlier
+agent downloaded. Remote model code is disabled.
 
 | Field | Required | Description |
 |---|---|---|
@@ -590,6 +593,49 @@ Records written by agents before `box_norm` existed have no `width`, `height`
 or `box_norm`; `box` there is in pixels of the camera's own resolution, which
 the record does not state. Readers that do not know the new fields ignore them.
 
+#### Worker isolation
+
+`inference_status.accelerator.isolation` says how the agent runs the model
+worker: `container` or `process`. For a process, `isolation_reason` says why
+it is not in a container.
+
+A worker runs in a container when all of these hold:
+
+- The agent has containerd. A macOS agent has none.
+- The agent's release pins a worker image. A release without one reports
+  `this agent pins no model worker image yet`, and every worker on it is a
+  process.
+- The campaign neither asks for TensorRT nor can use it on this device. The
+  worker image has no TensorRT, so `accelerator: tensorrt`, and
+  `accelerator: auto` with `backend: yolo_onnx` on a device where TensorRT is
+  available, keep the process and its accelerator.
+
+In a container the worker has a read-only root filesystem, no Linux
+capabilities, no devices, and its own process, mount and IPC namespaces. Of
+the device's files it sees its own code, read-only, and the `home/` and
+`models/` directories of the agent's `inference` folder. It keeps the host's
+network, which it needs to download a model, and the root user ID, which owns
+those directories. The container is not an app: it is absent from
+`wendy device apps list`, and where the device has a shared memory budget for
+apps, its memory counts toward that. It is removed when its worker exits, when
+its campaign stops, and when the agent starts.
+
+The container's Python runtime is an image (about 1.3 GB unpacked on arm64)
+that the agent downloads on first use, in place of the managed Python
+installation a process needs. The image holds only the worker's dependencies; the worker's
+code is the agent's own, so the two cannot differ, and an image built for
+other dependencies than the agent's is refused.
+
+A campaign never stops for lack of a container. If the image cannot be
+downloaded within 15 minutes, is refused, or the worker does not become ready
+in its container, the worker starts as a process as before, and
+`isolation_reason` says what went wrong. A container that could not be created
+at all, such as one whose image could not be downloaded, is not tried again
+for 10 minutes. If a model's container exits three
+times within 10 minutes, without being asked to and without reporting an error
+of its own, that model runs as a process for an hour. If the process cannot
+start either, `inference_status.error` reports both failures.
+
 #### Accelerators
 
 With `accelerator: auto`, a `yolo_onnx` model runs on an NVIDIA Jetson's GPU
@@ -645,7 +691,8 @@ never scores on the CPU: if TensorRT is unavailable the campaign reports
   and the agent log say why, with the end of its stderr.
 
 `inference_status.accelerator` reports what actually runs: `active` (`cpu` or
-`tensorrt`), `degraded` and `reason`, `runtime` and `precision`,
+`tensorrt`), `degraded` and `reason`, `runtime` and `precision`, `isolation`
+and `isolation_reason` (see [Worker isolation](#worker-isolation)),
 `gpu_memory_mib` (what the accelerated path took, measured as described
 under Fallback), and `engine` with its `state` (`checking`, `scheduled` with
 `not_before`, `waiting_for_memory` with `waiting_since`, `waiting_for_cpu`

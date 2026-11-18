@@ -149,6 +149,17 @@ func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
 		}
 	}
 
+	dir, err := writeWorkerFiles(root)
+	if err != nil {
+		return "", "", err
+	}
+	return uv, dir, nil
+}
+
+// writeWorkerFiles writes the embedded worker into root's runtime directory,
+// named after a hash of its files, and returns it. A file that already
+// matches is left alone; any other is replaced atomically.
+func writeWorkerFiles(root string) (string, error) {
 	hash := sha256.New()
 	files := []string{"worker.py", "accelerator.py", "pyproject.toml", "uv.lock"}
 	for _, name := range files {
@@ -157,7 +168,7 @@ func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
 	}
 	dir := filepath.Join(root, "runtime-"+hex.EncodeToString(hash.Sum(nil))[:16])
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", "", err
+		return "", err
 	}
 	for _, name := range files {
 		b, _ := assets.ReadFile(name)
@@ -168,20 +179,20 @@ func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
 		}
 		tmp, err := os.CreateTemp(dir, ".asset-*")
 		if err != nil {
-			return "", "", err
+			return "", err
 		}
 		_, writeErr := tmp.Write(b)
 		closeErr := tmp.Close()
 		if err := errors.Join(writeErr, closeErr); err != nil {
 			os.Remove(tmp.Name())
-			return "", "", err
+			return "", err
 		}
 		if err := os.Rename(tmp.Name(), path); err != nil {
 			os.Remove(tmp.Name())
-			return "", "", err
+			return "", err
 		}
 	}
-	return uv, dir, nil
+	return dir, nil
 }
 
 // Binary digests are derived from the corresponding checksum-verified release
@@ -272,6 +283,12 @@ func installUV(ctx context.Context, url, checksum, target, destination string) e
 }
 
 func (f *ManagedFactory) Start(ctx context.Context, config data.CampaignInference) (Session, error) {
+	return f.start(ctx, config, "")
+}
+
+// start runs the worker as a process. notContained is why it is not in a
+// container, for the campaign's status.
+func (f *ManagedFactory) start(ctx context.Context, config data.CampaignInference, notContained string) (Session, error) {
 	uv, dir, err := f.prepare(ctx)
 	if err != nil {
 		return nil, err
@@ -294,7 +311,44 @@ func (f *ManagedFactory) Start(ctx context.Context, config data.CampaignInferenc
 		crashed = func(reason string) { f.workerCrashed(key, reason) }
 	}
 	argv := []string{uv, "run", "--project", dir, "--frozen", "--no-dev", "--no-build", "--managed-python", "--python", "3.12", "python", "-u", filepath.Join(dir, "worker.py")}
-	return startWorker(ctx, argv, dir, runtimeEnvironment(root), workerConfig{config, plan}, crashed)
+	return startWorker(ctx, processLauncher(argv, dir, runtimeEnvironment(root)), workerConfig{config, plan}, crashed, isolation{data.IsolationProcess, notContained})
+}
+
+// isolation is how the agent runs a worker, and why not in a container. It is
+// stamped on what the worker reports of its accelerator, which is where the
+// campaign's status says what the model runs on.
+type isolation struct{ mode, reason string }
+
+// A launcher starts the model process with stderr for its stderr. Cancelling
+// ctx kills it. wait is called when nothing reads stdout any more, and
+// returns how the process ended, like exec.Cmd.Wait, once it has ended and
+// stderr holds everything it wrote.
+type launcher func(ctx context.Context, stderr io.Writer) (stdin io.WriteCloser, stdout io.Reader, wait func() error, err error)
+
+func processLauncher(argv []string, dir string, env []string) launcher {
+	return func(ctx context.Context, stderr io.Writer) (io.WriteCloser, io.Reader, func() error, error) {
+		command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		oomscore.ResetChild(command)
+		command.Dir = dir
+		command.Env = env
+		configureProcess(command)
+		command.Stderr = stderr
+		stdin, err := command.StdinPipe()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		stdout, err := command.StdoutPipe()
+		if err != nil {
+			stdin.Close()
+			return nil, nil, nil, err
+		}
+		if err := command.Start(); err != nil {
+			stdin.Close()
+			stdout.Close()
+			return nil, nil, nil, err
+		}
+		return stdin, stdout, command.Wait, nil
+	}
 }
 
 // The end of a worker's stderr that a status reason and a log line carry: a
@@ -307,29 +361,11 @@ const (
 // startWorker runs the model process, sends it its config line and waits for
 // it to be ready. crashed, when set, is told why the process ended if it ended
 // without being asked to and without reporting an error of its own.
-func startWorker(ctx context.Context, argv []string, dir string, env []string, config workerConfig, crashed func(reason string)) (Session, error) {
+func startWorker(ctx context.Context, launch launcher, config workerConfig, crashed func(reason string), isolated isolation) (Session, error) {
 	childCtx, cancel := context.WithCancel(ctx)
-	command := exec.CommandContext(childCtx, argv[0], argv[1:]...)
-	oomscore.ResetChild(command)
-	command.Dir = dir
-	command.Env = env
-	configureProcess(command)
 	stderr := &tailBuffer{}
-	command.Stderr = stderr
-	stdin, err := command.StdinPipe()
+	stdin, stdout, wait, err := launch(childCtx, stderr)
 	if err != nil {
-		cancel()
-		return nil, err
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		stdin.Close()
-		cancel()
-		return nil, err
-	}
-	if err := command.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
 		cancel()
 		return nil, err
 	}
@@ -358,6 +394,9 @@ func startWorker(ctx context.Context, argv []string, dir string, env []string, c
 			}
 			if result.Type == "error" {
 				reported = true
+			}
+			if result.Accelerator != nil {
+				result.Accelerator.Isolation, result.Accelerator.IsolationReason = isolated.mode, isolated.reason
 			}
 			if !initialized {
 				if result.Type != "ready" {
@@ -405,7 +444,7 @@ func startWorker(ctx context.Context, argv []string, dir string, env []string, c
 		// The cancel below, or one for a protocol violation, is not a request.
 		asked := ctx.Err() != nil || session.closing.Load()
 		cancel()
-		waitErr := command.Wait()
+		waitErr := wait()
 		// What ended the process. After a protocol violation the agent killed
 		// it, so the violation is the reason, not the signal.
 		exit := violation
@@ -529,12 +568,25 @@ const cudaCacheMaxBytes = 512 << 20
 // runtimeEnvironment deliberately excludes agent tokens, cloud credentials,
 // Python injection settings and the agent's home/configuration directories.
 func runtimeEnvironment(root string) []string {
-	env := []string{
+	env := append(workerEnvironment(root),
+		"UV_CACHE_DIR="+filepath.Join(root, "cache"),
+		"UV_PYTHON_INSTALL_DIR="+filepath.Join(root, "python"),
+		"UV_NO_PROGRESS=1")
+	for _, key := range []string{"PATH", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
+
+// workerEnvironment is what the worker needs wherever it runs: as a process,
+// or in a container that mounts these directories at the same paths.
+func workerEnvironment(root string) []string {
+	return []string{
 		"HOME=" + filepath.Join(root, "home"),
-		"UV_CACHE_DIR=" + filepath.Join(root, "cache"),
-		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(root, "python"),
 		"HF_HOME=" + filepath.Join(root, "models"),
-		"UV_NO_PROGRESS=1", "TOKENIZERS_PARALLELISM=false", "OMP_NUM_THREADS=2",
+		"TOKENIZERS_PARALLELISM=false", "OMP_NUM_THREADS=2",
 		// CUDA loads kernels when first used rather than all at start, which
 		// keeps a TensorRT context small. Inert without CUDA.
 		"CUDA_MODULE_LOADING=LAZY",
@@ -546,10 +598,4 @@ func runtimeEnvironment(root string) []string {
 		"CUDA_CACHE_PATH=" + filepath.Join(root, "cuda-cache"),
 		"CUDA_CACHE_MAXSIZE=" + strconv.Itoa(cudaCacheMaxBytes),
 	}
-	for _, key := range []string{"PATH", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
-		if value, ok := os.LookupEnv(key); ok {
-			env = append(env, key+"="+value)
-		}
-	}
-	return env
 }

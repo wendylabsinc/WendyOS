@@ -1,0 +1,105 @@
+name: Inference worker image
+
+# The image the agent runs its campaign model worker in: the worker's locked
+# Python dependencies, and nothing of the worker itself. Publishing does not
+# change any agent. An agent uses an image only once inference.WorkerImage
+# (go/internal/agent/inference/container.go) pins the published digest.
+
+on:
+  pull_request:
+    paths:
+      - 'go/internal/agent/inference/Dockerfile'
+      - 'go/internal/agent/inference/pyproject.toml'
+      - 'go/internal/agent/inference/uv.lock'
+      - 'go/internal/agent/inference/container.go'
+      - 'go/internal/agent/inference/container_test.go'
+      - '.github/workflows/inference-worker.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested worker image for agent releases
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/wendylabsinc/wendy-inference-worker
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build
+        working-directory: go/internal/agent/inference
+        run: |
+          # The agent's inference.DepsHash; the Dockerfile refuses any other.
+          deps="$(cat pyproject.toml uv.lock | sha256sum | cut -c1-16)"
+          echo "DEPS_HASH=$deps" >> "$GITHUB_ENV"
+          docker build --build-arg DEPS_HASH="$deps" -t inference-worker:test .
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: inference-worker-image
+      # The agent's own worker.py, through the agent's container factory, in
+      # this image: read-only root, no capabilities, a model downloaded into
+      # the shared cache, and a frame in and its answer out.
+      - name: Run the agent's worker in the image
+        env:
+          WENDY_INFERENCE_SMOKE_IMAGE: inference-worker:test
+        run: |
+          go test ./go/internal/agent/inference -run '^TestContainerWorkerImageSmoke$' -count=1 -timeout 600s -v | tee "$RUNNER_TEMP/smoke.log"
+          grep -q '^--- PASS: TestContainerWorkerImageSmoke ' "$RUNNER_TEMP/smoke.log"
+      - name: Publish architecture image
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ env.IMAGE_REPOSITORY }}:deps-${{ env.DEPS_HASH }}-${{ matrix.arch }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag inference-worker:test "$IMAGE"
+          docker push "$IMAGE"
+  manifest:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Publish multi-platform manifest
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: go/internal/agent/inference
+        run: |
+          image="$IMAGE_REPOSITORY:deps-$(cat pyproject.toml uv.lock | sha256sum | cut -c1-16)"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create --tag "$image" "$image-amd64" "$image-arm64"
+          digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+          {
+            echo "Published \`$image\`."
+            echo
+            echo "To make agents use it, make the package public, then set \`WorkerImage\` in"
+            echo "\`go/internal/agent/inference/container.go\` to:"
+            echo
+            echo "    $IMAGE_REPOSITORY@$digest"
+          } >> "$GITHUB_STEP_SUMMARY"

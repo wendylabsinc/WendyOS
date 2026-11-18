@@ -274,7 +274,7 @@ func shWorker(t *testing.T, ctx context.Context, script string, crashed func(str
 	if runtime.GOOS == "windows" {
 		t.Skip("needs /bin/sh")
 	}
-	return startWorker(ctx, []string{"/bin/sh", "-c", "read config; " + script}, t.TempDir(), []string{"PATH=" + os.Getenv("PATH")}, workerConfig{}, crashed)
+	return startWorker(ctx, processLauncher([]string{"/bin/sh", "-c", "read config; " + script}, t.TempDir(), []string{"PATH=" + os.Getenv("PATH")}), workerConfig{}, crashed, isolation{})
 }
 
 // crashLog records what startWorker reports as crashes.

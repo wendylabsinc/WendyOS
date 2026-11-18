@@ -155,8 +155,13 @@ type InferenceStatus struct {
 }
 
 // AcceleratorStatus is the engine a campaign's model actually runs on, as the
-// model process reports it, never as the agent planned it.
+// model process reports it, never as the agent planned it. Isolation and its
+// reason are the exception: the agent adds them to each report.
 type AcceleratorStatus struct {
+	// Isolation is how the agent runs the model process: IsolationContainer
+	// or IsolationProcess. IsolationReason says why it is not in a container.
+	Isolation       string `json:"isolation,omitempty"`
+	IsolationReason string `json:"isolation_reason,omitempty"`
 	// Requested is the campaign's accelerator: auto, cpu or tensorrt.
 	Requested string `json:"requested"`
 	// Active is the engine scoring frames now: cpu or tensorrt. It is empty
@@ -185,6 +190,11 @@ type AcceleratorStatus struct {
 	// Parity is the CPU and TensorRT comparison that preceded the switch.
 	Parity *ParityStatus `json:"parity,omitempty"`
 }
+
+const (
+	IsolationContainer = "container"
+	IsolationProcess   = "process"
+)
 
 // EngineStatus is a TensorRT engine's build or cache state.
 type EngineStatus struct {

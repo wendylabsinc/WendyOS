@@ -210,14 +210,24 @@ labels, a confidence threshold, and an inference rate. The agent supports
 Transformers models and compatible YOLO ONNX exports through `backend: yolo_onnx`.
 
 Set an event such as `person_detected` and include the same event in
-`capture.triggers`. On first use, the agent installs its managed Python runtime
-and downloads the pinned model. This needs network access and storage outside
+`capture.triggers`. On first use, the agent downloads the model worker's Python
+runtime and the pinned model. This needs network access and storage outside
 the episode quota. Check `inference_status` in `campaign inspect` to verify
-the runtime and each camera. The rate is an upper bound: a model too slow for
-it scores as fast as it can, and `inference_status.throughput` there shows the
-rate it achieves. The agent publishes the same figures as OpenTelemetry
-metrics named `inference.*`, such as `inference.rate.achieved`; the inference
-reference lists them.
+the runtime and each camera.
+
+The agent runs the model in a container when it has containerd, its release
+pins a worker image, and the campaign neither asks for TensorRT nor can use it
+on the device. Otherwise the model runs as a process of the agent, as it does
+on a macOS agent. A worker that does not start in its container starts as a
+process instead, so a campaign never stops for lack of one.
+`inference_status.accelerator.isolation` says which it is (`container` or
+`process`), and `isolation_reason` why it is not a container. Both use the
+same model cache.
+
+The rate is an upper bound: a model too slow for it scores as fast as it can,
+and `inference_status.throughput` shows the rate it achieves. The agent
+publishes the same figures as OpenTelemetry metrics named `inference.*`, such
+as `inference.rate.achieved`; the inference reference lists them.
 
 `notify.on: event` can deliver a named event immediately; `notify.on: detection`
 requires inference. Delivery can use a configured webhook or Wendy Cloud.
