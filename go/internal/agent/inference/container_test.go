@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -120,8 +121,9 @@ func isolationOf(t *testing.T, session Session) (string, string) {
 
 func TestContainerRunsTheAgentsOwnWorkerOnTheSharedModelCache(t *testing.T) {
 	t.Setenv("WENDY_TOKEN", "agent-secret")
+	// The worker answers a frame with the length of the line it read.
 	runtime := &shRuntime{script: `echo '{"type":"ready","accelerator":{"active":"cpu"}}'
-read frame; echo "$frame" >&2; echo '{"type":"error","error":"done"}'`}
+read frame; echo "{\"type\":\"error\",\"error\":\"${#frame}\"}"`}
 	process := &processCalls{}
 	factory := containerFactory(t, runtime, process)
 	session, err := factory.Start(context.Background(), data.CampaignInference{Model: "owner/model"})
@@ -131,13 +133,19 @@ read frame; echo "$frame" >&2; echo '{"type":"error","error":"done"}'`}
 	if mode, reason := isolationOf(t, session); mode != "container" || reason != "" {
 		t.Fatalf("isolation %q, reason %q", mode, reason)
 	}
-	// A frame reaches the worker over the container's stdin: a line of
-	// base64 well over a pipe's buffer.
-	if err := session.Send(Input{SourceID: "v4l2:/dev/video0", Payload: bytes.Repeat([]byte("frame"), 1<<20)}); err != nil {
+	// A frame reaches the worker whole over the container's stdin: a line
+	// many times the size of a pipe's buffer.
+	frame := Input{SourceID: "v4l2:/dev/video0", Payload: bytes.Repeat([]byte("frame"), 200_000)}
+	line, _ := json.Marshal(frame)
+	if err := session.Send(frame); err != nil {
 		t.Fatal(err)
 	}
-	if results := drain(t, session); len(results) != 1 || results[0].Type != "error" {
-		t.Fatalf("results %+v", results)
+	answers := ""
+	for _, result := range drain(t, session) {
+		answers += result.Type + ":" + result.Error + " "
+	}
+	if want := fmt.Sprintf("error:%d ", len(line)); answers != want {
+		t.Fatalf("the worker answered %q, want %q", answers, want)
 	}
 	_ = session.Close()
 	if started, removed := runtime.counts(); started != 1 || removed != 1 || len(process.reasons) != 0 {
