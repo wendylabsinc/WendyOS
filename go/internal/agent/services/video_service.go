@@ -3696,6 +3696,15 @@ type gstPipelinePlan struct {
 	// Deferred so the probe runs only when a raw subscriber is actually
 	// refused, not on every pipeline start for viewers that never ask.
 	rawWhyLazy func() string
+	// pixels describes the frames on rawTapFD for consumers inside the agent. It
+	// equals raw for a raw capture; an MJPEG capture sets pixels but not raw,
+	// because a gRPC raw subscriber must never be offered decoded MJPEG. nil when
+	// the pipeline has no tap.
+	pixels *agentpb.RawFormat
+	// tapOnly is true only for a pipeline the shaped planner built without an
+	// encoder. Its zero value means "encodes", so plans built elsewhere
+	// (planSharedJPEGPipeline, planJPEGFeedPipeline, the Argus branch) stay valid.
+	tapOnly bool
 }
 
 // rawRefusalReason is the reason a raw subscriber is refused with, as a
@@ -3743,6 +3752,12 @@ func buildGStreamerArgs(gstPath, devicePath string, req *agentpb.StreamVideoRequ
 // this pipeline can also hand out the camera's uncompressed frames, and if not,
 // why (see video_raw_tap.go for the policy).
 func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string, hasH264Parse bool, transport camera.Transport, libcameraID string, pw pipeWireSource, available map[string]bool) (gstPipelinePlan, error) {
+	return planGStreamerPipelineShaped(pipelineShape{encode: true}, gstPath, devicePath, req, encoder, hasH264Parse, transport, libcameraID, pw, available)
+}
+
+// planGStreamerPipelineShaped is planGStreamerPipeline with a choice of shape
+// (see video_pipeline_shape.go): with and without the encoder branch.
+func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string, hasH264Parse bool, transport camera.Transport, libcameraID string, pw pipeWireSource, available map[string]bool) (gstPipelinePlan, error) {
 	var plan gstPipelinePlan
 	// Validate numeric request parameters here (not only at StreamVideo entry) so
 	// buildGStreamerArgs is safe regardless of call site — prevents injection via
@@ -3864,6 +3879,8 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 		plan.rawWhy = "camera is shared through PipeWire; raw frames are not offered"
 	case useMJPEG:
 		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
+		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.
+		plan.pixels = mjpegPixelsFormat(capW, capH)
 	case capW == 0 || capH == 0:
 		plan.rawWhyLazy = func() string { return rawWhyNoCaptureSize(devicePath) }
 	case rawFormatFor(devicePath, capW, capH) == nil:
@@ -3881,6 +3898,10 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 			BytesPerLine: f.bytesPerLine(capW),
 		}
 		capsParts = append(capsParts, "format="+f.gstFormat)
+		plan.pixels = plan.raw
+	}
+	if !shape.encode && plan.pixels == nil {
+		return plan, errNoTapOnlyPipeline
 	}
 
 	// The leaky queue goes as early as the source allows, so a backlog is shed
@@ -3890,6 +3911,11 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	switch {
 	case useMJPEG:
 		stages = append(stages, "image/jpeg,"+strings.Join(capsParts, ","), leakyRawQueue, "jpegdec")
+		if plan.pixels != nil && shape.encode {
+			// Branch the decoded frames off for in-agent consumers; the encoder
+			// branch gets its own leaky queue, as it does after the raw tee.
+			stages = append(stages, "tee name="+rawTeeName, leakyRawQueue)
+		}
 	case usingPipeWire && pw.jpeg:
 		// Name the type and decode it: videoconvert cannot take compressed input.
 		stages = append(stages, "image/jpeg", leakyRawQueue, "jpegdec")
@@ -3897,7 +3923,7 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 		if len(capsParts) > 0 {
 			stages = append(stages, "video/x-raw,"+strings.Join(capsParts, ","))
 		}
-		if plan.raw != nil {
+		if plan.raw != nil && shape.encode {
 			// Branch the untouched capture off BEFORE the queue, crop and encoder,
 			// so the raw subscriber sees the camera's frame and the viewer's path
 			// is unchanged from here on. Each branch gets its own leaky queue: a
@@ -3905,12 +3931,14 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 			// depend on how fast an analytic reader drains fd 3.
 			stages = append(stages, "tee name="+rawTeeName)
 		}
-		stages = append(stages, leakyRawQueue)
+		if shape.encode {
+			stages = append(stages, leakyRawQueue)
+		}
 	}
 	// A stacked thermal mode carries metadata rows a viewer must not see (they
 	// render as a stripe of noise). Encoded subscribers get the picture rows; the
 	// raw tap, branched off above, keeps the whole frame for analytic readers.
-	if rawCapture && capW > 0 && capH > 0 && available["videocrop"] {
+	if shape.encode && rawCapture && capW > 0 && capH > 0 && available["videocrop"] {
 		if top, bottom, ok := thermalPreviewCrop(thermalCapture, capW, capH); ok {
 			stages = append(stages, fmt.Sprintf("videocrop top=%d bottom=%d", top, bottom))
 		} else if rows := stackedMetadataRows(devicePath, capW, capH); rows > 0 {
@@ -3921,11 +3949,26 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 			stages = append(stages, fmt.Sprintf("videocrop %s=%d", edge, rows))
 		}
 	}
-	stages = append(stages, convertStages...)
-	stages = append(stages, encoderSegment(encoder, hasH264Parse, gop), "fdsink fd=1")
-	pipeline := strings.Join(stages, " ! ")
-	if plan.raw != nil {
-		pipeline += fmt.Sprintf(" %s. ! %s ! fdsink fd=%d", rawTeeName, rawTapQueue, rawTapFD)
+	var pipeline string
+	if shape.encode {
+		stages = append(stages, convertStages...)
+		stages = append(stages, encoderSegment(encoder, hasH264Parse, gop), "fdsink fd=1")
+		pipeline = strings.Join(stages, " ! ")
+		if plan.raw != nil {
+			pipeline += fmt.Sprintf(" %s. ! %s ! fdsink fd=%d", rawTeeName, rawTapQueue, rawTapFD)
+		} else if plan.pixels != nil {
+			pipeline += fmt.Sprintf(" %s. ! %s ! %s", rawTeeName, rawTapQueue, mjpegTapTail)
+		}
+	} else {
+		// No encoder: the capture feeds the tap directly, with no tee.
+		plan.tapOnly = true
+		stages = append(stages, rawTapQueue)
+		if plan.raw == nil {
+			stages = append(stages, mjpegTapTail)
+		} else {
+			stages = append(stages, fmt.Sprintf("fdsink fd=%d", rawTapFD))
+		}
+		pipeline = strings.Join(stages, " ! ")
 	}
 	// -q suppresses gst-launch's status messages (e.g. "Setting pipeline to PLAYING")
 	// from being written to stdout and corrupting the binary H264 stream.
