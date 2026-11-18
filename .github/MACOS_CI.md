@@ -14,6 +14,8 @@ Provision base tools as the runner account in an interactive terminal:
 
 ```sh
 sudo xcodebuild -runFirstLaunch
+xcodebuild -downloadComponent MetalToolchain
+xcodebuild -downloadPlatform iOS
 bash .github/scripts/provision-macos-ci.sh --base
 ```
 
@@ -22,6 +24,14 @@ Python 3.12. Initial Homebrew setup can need administrator access. Ordinary
 Homebrew package installation runs as the runner account. Provision machines
 one at a time with their runner services stopped, then restart the service.
 Build jobs install additional formulae such as libusb, xcodegen, and archive tools.
+
+The Swift tests exercise the real Keychain and Secure Enclave. The runner
+account must have an unlocked login keychain. Unlock it interactively as that
+account with `security unlock-keychain ~/Library/Keychains/login.keychain-db`;
+do not pass the password through workflow logs or commit it to configuration.
+The existing macOS disk-image regression job also requires noninteractive sudo
+to execute its disposable disk fixture. Configure that access as part of runner
+administration before enabling the job.
 
 The shared `setup-macos-ci` action repairs missing base tools and exposes
 Homebrew's Python. This avoids the hosted Python installer's sudo requirement

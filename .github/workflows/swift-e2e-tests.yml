@@ -597,13 +597,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          slug() {
-            printf '%s' "$1" \
-              | tr '[:upper:]' '[:lower:]' \
-              | sed -E 's/[^[:alnum:]._-]+/-/g; s/-+/-/g; s/^-//; s/-$//'
-          }
-
-          workflow_id="$(slug "${GITHUB_WORKFLOW:-swift-e2e-tests}")"
+          # Match swift-e2e-run's stable artifact prefix. GITHUB_WORKFLOW names
+          # the caller when this workflow is reused by build.yml.
+          workflow_id=swift-e2e-tests
           printf -v attempt_suffix '%04d' "${GITHUB_RUN_ATTEMPT:-1}"
           echo "run_artifact_id=${workflow_id}.gh${GITHUB_RUN_ID}.run.${attempt_suffix}" >> "$GITHUB_OUTPUT"
           echo "run_dir=${RUNNER_TEMP}/wendy/${workflow_id}.gh${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
