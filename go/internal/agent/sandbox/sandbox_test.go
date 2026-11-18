@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// Without root (and off Linux) there is nothing to drop: Lookup yields no
-// identity, and starting through it is a plain Start.
+// Without root (and off Linux) there is nothing to drop: there is no identity,
+// and starting through none is a plain Start.
 func TestNoIdentityStartsTheCommandUnchanged(t *testing.T) {
-	id, err := Lookup("nobody", "video")
+	id, err := Isolated("video")
 	if err != nil {
 		t.Fatal(err)
 	}

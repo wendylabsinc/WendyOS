@@ -65,9 +65,13 @@ wendy device hardware list --category camera
 
 ### Camera pipelines run without root
 
-The agent runs as root, but on Linux the GStreamer processes it starts to capture, encode and receive camera video do not. Each one runs as the `nobody` user with only the `video` and `render` groups, no capabilities, and `no_new_privs` set, so a bug in a GStreamer plugin that parses bytes from a camera is not a root compromise of the device. That matters most for an IP camera, which is a network peer. A camera read through the PipeWire session runs as the `wendy` user instead, because only that user can reach the session.
+The agent runs as root, but on Linux the GStreamer processes it starts to capture, encode and receive camera video do not. Each one runs with only the `video` and `render` groups, no capabilities, and `no_new_privs` set, so a bug in a GStreamer plugin that parses bytes from a camera is not a root compromise of the device. That matters most for an IP camera, which is a network peer.
 
-This is a privilege drop, not a full sandbox: the process still sees the device's filesystem and network, and can open every device node those two groups can.
+Each of these processes also gets a user id of its own, taken from 60706–61183 when it starts and skipping any id that an account, a group or a running process on the device already has. No two of them share an id, so a pipeline taken over by one camera cannot trace, signal or read the pipeline of another. The ids have no account behind them, so `ps` shows them as numbers. The IP-camera process, which is given the camera's password, additionally closes its memory to other processes before it reads the password. The processes cannot write the GStreamer plugin registry they load: the agent keeps it, as root, in `/run/wendy-sandbox/`.
+
+**Cameras shared through PipeWire are the exception.** A camera that another program already holds is read through the PipeWire session, and only the session's owner can reach it, so that pipeline runs as the `wendy` user. It is still not root, but it shares that user with every other PipeWire camera pipeline and with whatever else `wendy` runs, and it can read and write that user's files.
+
+This is a privilege drop, not a full sandbox: every one of these processes still sees the device's filesystem and network, and can open every device node those two groups can.
 
 Set `WENDY_CAMERA_SANDBOX` in `/etc/default/wendy-agent` and restart the agent to change it:
 

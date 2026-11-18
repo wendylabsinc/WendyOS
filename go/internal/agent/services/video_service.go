@@ -2293,6 +2293,7 @@ const pipeWireProbeTimeout = 2 * time.Second
 // The second return separates a definite "raw" from an inconclusive probe: a deadline or a
 // missing session is not evidence, and treating it as one built a pipeline that stalled.
 func (s *VideoService) nodeServesJPEG(ctx context.Context, gstPath string, serial uint64) (jpeg, known bool) {
+	s.camSandbox.warm(true)
 	probeCtx, cancel := context.WithTimeout(ctx, pipeWireProbeTimeout)
 	defer cancel()
 	cmd, err := audio.Command(probeCtx, gstPath, "-q",

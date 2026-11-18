@@ -3,7 +3,10 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,13 +27,14 @@ func harmless() *exec.Cmd { return exec.Command("true") }
 // often it was asked.
 func refuseSandbox(t *testing.T) *int {
 	t.Helper()
-	orig := sandboxLookup
-	t.Cleanup(func() { sandboxLookup = orig })
+	origIsolated, origLookup := sandboxIsolated, sandboxLookup
+	t.Cleanup(func() { sandboxIsolated, sandboxLookup = origIsolated, origLookup })
 	asked := 0
-	sandboxLookup = func(string, ...string) (*sandbox.Identity, error) {
+	sandboxIsolated = func(...string) (*sandbox.Identity, error) {
 		asked++
 		return nil, errors.New("setgroups: operation not permitted")
 	}
+	sandboxLookup = func(string, ...string) (*sandbox.Identity, error) { return sandboxIsolated() }
 	return &asked
 }
 
@@ -118,6 +122,42 @@ func TestCameraLaunchSitesAreSandboxed(t *testing.T) {
 	err = svc.gstreamerFrames(ctx, []string{"fakesrc"}, func([]byte) {})
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("IP camera helper: %v", err)
+	}
+}
+
+// Root refreshes the registry; a pipeline is told to load it and write none.
+// When root cannot refresh it, the pipeline is told nothing and scans for itself.
+func TestCameraSandboxRegistryIsRootsToWrite(t *testing.T) {
+	dir := t.TempDir()
+	origRegistry, origFallback := gstRegistry, gstFallbackDirs
+	t.Cleanup(func() { gstRegistry, gstFallbackDirs = origRegistry, origFallback })
+	gstRegistry = filepath.Join(dir, "shared", "registry.bin")
+	gstFallbackDirs = nil
+	t.Setenv("PATH", dir)
+	c := &cameraSandbox{logger: zap.NewNop()}
+	if env := c.registryEnv(); env != nil {
+		t.Fatalf("no gst-inspect-1.0, yet the pipeline was pointed at a registry: %v", env)
+	}
+
+	inspect := filepath.Join(dir, "gst-inspect-1.0")
+	// GStreamer writes its registry readable by its owner alone.
+	script := "#!/bin/sh\n[ \"$*\" = '--exists fdsink' ] || exit 2\numask 077; echo plugins > \"$GST_REGISTRY\"\n"
+	if err := os.WriteFile(inspect, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"GST_REGISTRY=" + gstRegistry, "GST_REGISTRY_UPDATE=no"}
+	if env := c.registryEnv(); !slices.Equal(env, want) {
+		t.Fatalf("registry environment = %v; want %v", env, want)
+	}
+	if fi, err := os.Stat(gstRegistry); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("registry mode = %v, %v; want 0644 so a pipeline can read it", fi, err)
+	}
+
+	if err := os.WriteFile(inspect, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if env := c.registryEnv(); env != nil {
+		t.Fatalf("refresh failed, yet the pipeline was pointed at the registry: %v", env)
 	}
 }
 
