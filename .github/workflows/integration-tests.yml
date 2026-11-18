@@ -12,7 +12,7 @@ on:
         required: false
         default: ''
       jobs:
-        description: 'Jobs to run: all, discover, integration (default: all)'
+        description: 'Jobs to run: all, discover, integration, inference (default: all)'
         required: false
         default: 'all'
       platform:
@@ -459,3 +459,105 @@ jobs:
 
           echo "==> Starting tests on $INPUT_HOSTNAME (builder: $BUILDER)"
           WENDY_BUILDX_BUILDER="$BUILDER" go/scripts/test-ci.sh "${TEST_ARGS[@]}" -h "$INPUT_HOSTNAME"
+
+  inference:
+    name: PAIR prompt through Wendy Cloud
+    if: github.event_name == 'workflow_dispatch' && inputs.jobs == 'inference'
+    runs-on:
+      group: wendy-developer
+      labels: [self-hosted, macOS, ARM64, wendy-macos-26]
+    permissions: {}
+    timeout-minutes: 12
+    concurrency:
+      group: ci-login-wendy-developer-macos-26-01
+      cancel-in-progress: false
+    steps:
+      # Reuse the runner's existing sign-in in its login session, as the
+      # keepalive job does. No checkout, build, credential copy or device change.
+      - name: Open the app tunnel and execute a prompt
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $RUNNER_NAME"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 localhost \
+            'env CI=true WENDY_SECRET_STORE=file WENDY_NO_UPDATE_CHECK=1 python3 -' <<'PYTHON'
+          import json
+          import socket
+          import signal
+          import subprocess
+          import tempfile
+          import time
+          import urllib.error
+          import urllib.request
+
+          def interrupted(signum, frame):
+              raise SystemExit(128 + signum)
+
+          for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+              signal.signal(signum, interrupted)
+
+          cli = '/Users/wendy/.github/actions-runner/_work/WendyOS/WendyOS/go/bin/wendy'
+          device = 'cloud://api.wendy.dev:443/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/asset/51809f3d-084d-4014-9b4e-dc03dd8cd6f5'
+          model = 'qwen3.8-flash-next:iq4_nl'
+          base = 'http://127.0.0.1:18081/v1'
+
+          def auth(*args):
+              result = subprocess.run([cli, '--json', 'auth', *args], capture_output=True, timeout=60)
+              if result.returncode:
+                  raise RuntimeError('Stored CI Wendy login failed; inspect its login/keepalive session. Raw credential output withheld.')
+              return json.loads(result.stdout) if args == ('status',) else None
+
+          sessions = auth('status').get('sessions', [])
+          if not any(s.get('context') == 'wendy' and s.get('cloudGrpc') == 'api.wendy.dev:443' for s in sessions):
+              raise RuntimeError('Runner has no exact wendy production login; sign in through its existing CI login session.')
+          auth('use', 'wendy')
+          auth('refresh-certs')
+          current = next((s for s in auth('status').get('sessions', []) if s.get('current')), {})
+          expected = 'spiffe://wendy.sh/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/operator/'
+          if current.get('context') != 'wendy' or not current.get('principalUri', '').startswith(expected):
+              raise RuntimeError('Current login is not a Wendy Labs production operator.')
+          if current.get('certificate', {}).get('expired', True):
+              raise RuntimeError('CI operator certificate is expired or absent.')
+          print('Host:', socket.gethostname(), flush=True)
+          print('Verified Wendy Labs production operator login', flush=True)
+          with socket.socket() as probe:
+              probe.bind(('127.0.0.1', 18081))
+
+          # Keep raw CLI output private: authentication failures may contain
+          # sensitive details. The temporary log is deleted on every exit.
+          with tempfile.TemporaryFile() as log:
+              forward = subprocess.Popen([cli, '--json', 'net', 'forward', '18081:18080', '--device', device], stdout=log, stderr=log)
+              try:
+                  deadline = time.monotonic() + 90
+                  while True:
+                      if forward.poll() is not None:
+                          raise RuntimeError('Wendy forward exited before readiness; raw CLI output withheld.')
+                      try:
+                          with urllib.request.urlopen(base + '/models', timeout=5) as response:
+                              models = json.load(response)
+                          if not any(item.get('id') == model for item in models.get('data', [])):
+                              raise RuntimeError('Flash model is absent from the gateway inventory.')
+                          break
+                      except (urllib.error.URLError, TimeoutError):
+                          if time.monotonic() >= deadline:
+                              raise RuntimeError('Wendy Cloud app tunnel did not become ready within 90 seconds.') from None
+                          time.sleep(1)
+                  body = {'model': model, 'messages': [{'role': 'user', 'content': 'Reply with exactly CI_PAIR_READY'}],
+                          'reasoning_effort': 'none', 'max_tokens': 32, 'temperature': 0, 'stream': False}
+                  request = urllib.request.Request(base + '/chat/completions', data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+                  started = time.monotonic()
+                  with urllib.request.urlopen(request, timeout=150) as response:
+                      result = json.load(response)
+                  text = result['choices'][0]['message']['content'].strip()
+                  if text != 'CI_PAIR_READY':
+                      raise RuntimeError('Inference response did not match the requested CI_PAIR_READY marker.')
+                  print(json.dumps({'model': model, 'response': text, 'seconds': round(time.monotonic() - started, 3)}), flush=True)
+              finally:
+                  forward.terminate()
+                  try:
+                      forward.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      forward.kill()
+                      forward.wait(timeout=5)
+                  print('Owned Wendy forward stopped', flush=True)
+          PYTHON
