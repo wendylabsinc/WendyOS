@@ -365,19 +365,25 @@ func TestRunShapedPipelines_DropsEncoderOnlyAfterGrace(t *testing.T) {
 }
 
 func TestRunShapedPipelines_FlappingViewerKeepsTheEncoder(t *testing.T) {
-	// The grace is long next to the 50ms toggles, so a scheduling delay on a
-	// loaded runner cannot stretch one absence into a whole grace.
+	// Each absence is shorter than the grace, and both together are longer. A
+	// grace timer from the first absence still running when the viewer came back
+	// would fire 350ms into the second; one stopped on its return never fires.
+	// Both margins leave room for a scheduling delay on a loaded runner.
 	const grace = time.Second
+	const absence = 600 * time.Millisecond
 	demand := newFakeEncodeDemand(true, true)
 	launches := newRecordedLaunches()
 	runShaped(t, demand, grace, launches)
 	launches.next(t, time.Second)
-	for i := 0; i < 12; i++ { // 600ms: the viewer leaves and returns every 50ms
-		demand.set(i%2 == 1, true)
-		time.Sleep(50 * time.Millisecond)
-	}
-	// Past a grace from the last absence, so a timer any of them left running
-	// would have fired by now.
+	demand.set(false, true) // the viewer leaves
+	launches.none(t, absence)
+	demand.set(true, true) // comes back for a moment
+	launches.none(t, 50*time.Millisecond)
+	demand.set(false, true) // leaves again
+	launches.none(t, absence)
+	demand.set(true, true) // and stays
+	// Past a grace from the second absence, so a timer it left running would
+	// have fired by now.
 	launches.none(t, grace+50*time.Millisecond)
 	if shapes, _ := launches.recorded(); len(shapes) != 1 {
 		t.Errorf("%d launches, want exactly one: %+v", len(shapes), shapes)
