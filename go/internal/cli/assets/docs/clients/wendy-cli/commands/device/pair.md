@@ -39,6 +39,40 @@ network, the list says so; update that agent to scan from the device instead.
 sensor names. Either flag opens the SensorLink tab, unless `--sensorlink` names
 a source to pair (see below). Use `--list` to print saved SensorLink pairings.
 
+### Sensor channels in ROS 2 apps
+
+A source's cameras and microphones appear on the Wendy device as a camera and a
+microphone. Its other sensor channels, such as a temperature, are published as
+ROS 2 topics inside every ROS 2 app running on the device, on
+`/sensorlink/<source>/<channel>`:
+
+| Channel | Message |
+| --- | --- |
+| Temperature in °C (schema `wendy.temperature.celsius.f32le.v1`) | `sensor_msgs/msg/Temperature` |
+| Any other sensor channel | `std_msgs/msg/UInt8MultiArray` holding the bytes the source sent. `layout.dim[0].label` is the channel's schema. |
+
+`<source>` is the pairing's name, or the source's identity when the pairing has
+no name, and `<channel>` is the name the source gives the channel. Characters
+other than letters and digits become `_`, so a pairing named `porch-board` with a
+`chip-temperature` channel is published on
+`/sensorlink/porch_board/chip_temperature`. The agent logs each topic when it
+starts publishing it; see `wendy device logs --service wendy-agent`.
+
+```sh
+wendy device ros2 topics
+wendy device ros2 echo /sensorlink/porch_board/chip_temperature
+```
+
+- The app needs no entitlement or extra setting. Any ROS 2 app on the device
+  can read these topics; pair with `--sensors` to leave a channel out.
+- Each reading is sent once and is not kept. A subscriber receives the readings
+  that arrive after it starts, with a default or a sensor-data subscription.
+- The agent looks for newly started ROS 2 apps every 10 seconds, so the topics
+  can take about 20 seconds to appear in an app that has just started.
+- An app without ROS 2 cannot read these channels.
+- Audio and video the agent cannot decode are not delivered and are not
+  published to ROS 2.
+
 ### SensorLink scripting
 
 Scripts and agents pair without the tabs. Name one source by its name (case is

@@ -60,6 +60,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/go/internal/agent/robotarm"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ros2sensor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
@@ -78,6 +79,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -646,6 +648,20 @@ func main() {
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
+	// A camera or microphone channel becomes a device. A generic sensor channel
+	// (a temperature, an IMU) has no device to become, so it is published as a
+	// ROS 2 topic inside every running ROS 2 app instead.
+	if rosGraphs := videoSvc.ROS2Graphs(); rosGraphs != nil {
+		sensorBridge := ros2sensor.New(logger, discoveryPool, rosGraphs)
+		go sensorBridge.Run(ctx)
+		sensorSup.SetSensorChannelOpener(func(p mcusource.SensorPairing, d *sensorlinkpb.SensorDescriptor) (mcusource.SensorChannelWriter, error) {
+			channel, err := sensorBridge.OpenChannel(p.Key(), p.Name, d)
+			if err != nil {
+				return nil, err
+			}
+			return channel, nil
+		})
+	}
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
 		certPEM, _, _ := mcuIdentity()

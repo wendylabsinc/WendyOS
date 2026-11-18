@@ -1,0 +1,216 @@
+//go:build linux
+
+package ros2sensor_test
+
+import (
+	"bufio"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"math"
+	"net"
+	"os"
+	"os/exec"
+	"strconv"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ros2sensor"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink/sim"
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
+	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
+	"go.uber.org/zap"
+)
+
+// These tests run the whole path with the real pieces: a simulated SensorLink
+// board that offers only a temperature channel, the agent's supervisor and
+// bridge, and a ROS 2 node subscribed with rclpy. They need a ROS 2 install,
+// so they run through .github/scripts/test-rtps-publisher-ros2.sh and are
+// skipped elsewhere.
+
+type tcpDialer struct{}
+
+func (tcpDialer) Dial(ctx context.Context, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", addr)
+}
+
+// noCameras is the camera loopback of a device whose paired source has no
+// camera: nothing is ever mounted.
+type noCameras struct{}
+
+func (noCameras) EnsureNode(context.Context, uint32, string) error { return nil }
+func (noCameras) NodePath(uint32) (string, bool)                   { return "", false }
+func (noCameras) RemoveCamera(uint32)                              {}
+
+func celsius(v float32) []byte {
+	return binary.LittleEndian.AppendUint32(nil, math.Float32bits(v))
+}
+
+// TestROS2NodeReceivesAPairedTemperatureSensor has the ROS 2 app on the
+// host's network, as an app with the host network entitlement is.
+func TestROS2NodeReceivesAPairedTemperatureSensor(t *testing.T) {
+	subscriber := os.Getenv("WENDY_ROS2_INTEROP_SUBSCRIBER")
+	if subscriber == "" {
+		t.Skip("needs a ROS 2 install; run .github/scripts/test-rtps-publisher-ros2.sh")
+	}
+	for i, rmw := range []string{"rmw_cyclonedds_cpp", "rmw_fastrtps_cpp"} {
+		t.Run(rmw, func(t *testing.T) { pairedSensorReachesROS2Node(t, subscriber, rmw, 90+i, false) })
+	}
+}
+
+// TestIsolatedROS2AppReceivesAPairedTemperatureSensor has the ROS 2 app in a
+// network namespace of its own, as an app is by default, so the agent has to
+// enter that namespace to publish. That takes CAP_SYS_ADMIN; the script runs
+// it in a container that has it.
+func TestIsolatedROS2AppReceivesAPairedTemperatureSensor(t *testing.T) {
+	subscriber := os.Getenv("WENDY_ROS2_INTEROP_SUBSCRIBER")
+	if subscriber == "" || os.Getenv("WENDY_ROS2_INTEROP_NETNS") == "" {
+		t.Skip("needs a ROS 2 install and the right to enter network namespaces; run .github/scripts/test-rtps-publisher-ros2.sh")
+	}
+	for i, rmw := range []string{"rmw_cyclonedds_cpp", "rmw_fastrtps_cpp"} {
+		t.Run(rmw, func(t *testing.T) { pairedSensorReachesROS2Node(t, subscriber, rmw, 95+i, true) })
+	}
+}
+
+func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain int, isolated bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// The board: one generic sensor channel, no camera, no microphone.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go sim.Serve(ctx, ln, sim.Options{
+		Manifest: &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{
+			ChannelId: 3, Name: "chip-temperature",
+			Format: &sensorlinkpb.SensorDescriptor_Sensor{Sensor: &sensorlinkpb.SensorFormat{
+				Schema: "wendy.temperature.celsius.f32le.v1", SampleBytes: 4, RateHz: 50}},
+		}}},
+		Frames:        [][]byte{celsius(20.5), celsius(21), celsius(21.5)},
+		FrameInterval: 20 * time.Millisecond,
+	})
+
+	// The agent. Its only running ROS 2 app is the node started below: on the
+	// host's network like this process, or in a network of its own, which the
+	// agent learns of once the app is up.
+	var appPID atomic.Uint32
+	if !isolated {
+		appPID.Store(uint32(os.Getpid()))
+	}
+	pool := rtps.NewPool()
+	defer pool.Close()
+	apps := func(context.Context) ([]ros2camera.Graph, error) {
+		pid := appPID.Load()
+		if pid == 0 {
+			return nil, nil
+		}
+		return []ros2camera.Graph{{Key: "app", InstanceKey: "app", DomainID: domain,
+			NetworkNamespacePID: pid, HostNetwork: !isolated}}, nil
+	}
+	bridge := ros2sensor.New(zap.NewNop(), pool, apps)
+	go bridge.Run(ctx)
+	supervisor := mcusource.NewSupervisor(zap.NewNop(), noCameras{},
+		func(_ mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
+			return mcusource.NewTCPTransport(tcpDialer{}, addr), nil
+		},
+		func(string) ros2camera.CameraWriter { return nil }, nil)
+	supervisor.SetSensorChannelOpener(func(p mcusource.SensorPairing, d *sensorlinkpb.SensorDescriptor) (mcusource.SensorChannelWriter, error) {
+		channel, err := bridge.OpenChannel(p.Key(), p.Name, d)
+		if err != nil {
+			return nil, err
+		}
+		return channel, nil
+	})
+	pairing := mcusource.SensorPairing{SourceAssetID: 7, OrgID: 1, Name: "porch-board"}
+	go func() { _ = supervisor.RunPairing(ctx, pairing, ln.Addr().String()) }()
+
+	// The app: an ordinary ROS 2 node with a default (reliable) subscription.
+	const count = 12
+	args := []string{subscriber,
+		"--topic", "/sensorlink/porch_board/chip_temperature", "--type", "temperature",
+		"--reliability", "reliable", "--count", strconv.Itoa(count), "--timeout", "60"}
+	cmd := exec.CommandContext(ctx, "python3", args...)
+	if isolated {
+		// A new network namespace starts with its loopback down.
+		cmd = exec.CommandContext(ctx, "unshare", append([]string{"--net", "python3"}, append(args, "--bring-up-loopback")...)...)
+	}
+	// Loopback only unless the script asks for the wider discovery an app
+	// with ROS 2 scope "network" has; the agent publishes on loopback either
+	// way.
+	localhostOnly := os.Getenv("WENDY_ROS2_INTEROP_LOCALHOST_ONLY")
+	if localhostOnly == "" {
+		localhostOnly = "1"
+	}
+	cmd.Env = append(os.Environ(), "RMW_IMPLEMENTATION="+rmw, "ROS_DOMAIN_ID="+strconv.Itoa(domain), "ROS_LOCALHOST_ONLY="+localhostOnly)
+	cmd.Stderr = os.Stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	type record struct {
+		Ready       bool     `json:"ready"`
+		Temperature *float64 `json:"temperature"`
+		FrameID     string   `json:"frame_id"`
+		Sec         int64    `json:"sec"`
+		Graph       *struct {
+			Types      []string `json:"types"`
+			Publishers int      `json:"publishers"`
+		} `json:"graph"`
+	}
+	var records []record
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		var r record
+		if json.Unmarshal(scanner.Bytes(), &r) != nil {
+			continue
+		}
+		if r.Ready && isolated {
+			// The app is running: from now on the agent's list of ROS 2 apps
+			// names its process, as containerd's does for a real app.
+			appPID.Store(uint32(cmd.Process.Pid))
+		}
+		if r.Temperature != nil || r.Graph != nil {
+			records = append(records, r)
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("ROS 2 node did not receive %d temperature messages: %v (%d records)", count, err, len(records))
+	}
+
+	seen := map[float64]bool{}
+	var messages int
+	var graph *record
+	for i := range records {
+		r := &records[i]
+		if r.Graph != nil {
+			graph = r
+			continue
+		}
+		messages++
+		value := *r.Temperature
+		if value != 20.5 && value != 21 && value != 21.5 {
+			t.Fatalf("message %d carries %v °C, which the board never sent", messages, value)
+		}
+		seen[value] = true
+		if r.FrameID != "sensorlink/porch_board" || time.Since(time.Unix(r.Sec, 0)) > time.Minute {
+			t.Fatalf("message %d has frame %q stamped %s", messages, r.FrameID, time.Unix(r.Sec, 0))
+		}
+	}
+	if messages < count || len(seen) != 3 {
+		t.Fatalf("received %d messages covering %v, want at least %d covering all three readings", messages, seen, count)
+	}
+	if graph == nil || graph.Graph.Publishers < 1 || len(graph.Graph.Types) != 1 || graph.Graph.Types[0] != "sensor_msgs/msg/Temperature" {
+		t.Fatalf("the ROS 2 graph reports %+v for the topic, want a publisher of sensor_msgs/msg/Temperature", graph)
+	}
+	if !supervisor.IsPairingConnected(pairing) {
+		t.Fatal("a source that is delivering its sensor is not reported as connected")
+	}
+}

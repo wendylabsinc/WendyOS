@@ -32,7 +32,8 @@ type AudioLoop interface {
 }
 
 // Supervisor runs one reconcile goroutine per pairing: dial the source, mount
-// its camera and microphone channels, and pump frames with backoff.
+// its camera and microphone channels, hand its generic sensor channels to the
+// sensor sink, and pump frames with backoff.
 type Supervisor struct {
 	logger        *zap.Logger
 	lb            Loopback
@@ -40,6 +41,7 @@ type Supervisor struct {
 	newWriter     func(path string) ros2camera.CameraWriter
 	audioLoop     AudioLoop
 	resolveSource SourceResolver
+	openSensor    SensorChannelOpener
 
 	statusMu  sync.Mutex
 	connected map[string]bool
@@ -56,6 +58,25 @@ type SourceResolver func(context.Context, SensorPairing) ([]string, bool)
 // Nil keeps the normal physical-LAN discovery path.
 func (s *Supervisor) SetSourceResolver(resolve SourceResolver) {
 	s.resolveSource = resolve
+}
+
+// SensorChannelWriter takes the samples of one generic sensor channel, such
+// as a temperature. A sample it cannot use is its own to report: the stream
+// carries on.
+type SensorChannelWriter interface {
+	WriteSample(payload []byte)
+	Close() error
+}
+
+// SensorChannelOpener starts delivering one generic sensor channel of a
+// paired source to apps. The writer is closed when the stream ends.
+type SensorChannelOpener func(p SensorPairing, d *sensorlinkpb.SensorDescriptor) (SensorChannelWriter, error)
+
+// SetSensorChannelOpener installs the sink for generic sensor channels before
+// pairings start. Without one those channels are not subscribed to: a camera
+// or microphone has a device to appear as, a sensor value does not.
+func (s *Supervisor) SetSensorChannelOpener(open SensorChannelOpener) {
+	s.openSensor = open
 }
 
 // transportFor is called once per streamOnce attempt (not cached) so each
@@ -283,16 +304,22 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	}
 	cams := cameraChannels(manifest, p.SensorAllowlist)
 	mics := microphoneChannels(manifest, p.SensorAllowlist)
+	var sensors []*sensorlinkpb.SensorDescriptor
+	if s.openSensor != nil {
+		sensors = sensorChannels(manifest, p.SensorAllowlist)
+	}
 	// Lite channels sharing an input are mutually exclusive, including camera
-	// and microphone channels. Prefer cameras, then the lowest channel ID so
-	// manifest reordering does not change the selected mode. Older agent-hosted
-	// sources leave every input ID at zero despite supporting concurrent streams.
+	// and microphone channels. Prefer cameras, then microphones, then sensors,
+	// and within each the lowest channel ID so manifest reordering does not
+	// change the selected mode. Older agent-hosted sources leave every input
+	// ID at zero despite supporting concurrent streams.
 	exclusiveInputs := p.Transport == "wendycom"
 	if exclusiveInputs {
 		sort.Slice(cams, func(i, j int) bool { return cams[i].ChannelId < cams[j].ChannelId })
 		sort.Slice(mics, func(i, j int) bool { return mics[i].ChannelId < mics[j].ChannelId })
+		sort.Slice(sensors, func(i, j int) bool { return sensors[i].ChannelId < sensors[j].ChannelId })
 	}
-	if len(cams) == 0 && len(mics) == 0 {
+	if len(cams) == 0 && len(mics) == 0 && len(sensors) == 0 {
 		return false, nil // nothing to mount; caller backs off and retries
 	}
 
@@ -353,6 +380,26 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		subs = append(subs, ch.ChannelId)
 		usedInputs[ch.InputId] = true
 	}
+	sensorWriters := make(map[uint32]SensorChannelWriter, len(sensors))
+	defer func() {
+		for _, sw := range sensorWriters {
+			sw.Close()
+		}
+	}()
+	for _, ch := range sensors {
+		if exclusiveInputs && usedInputs[ch.InputId] {
+			continue
+		}
+		sw, err := s.openSensor(p, ch)
+		if err != nil {
+			// Per-channel isolation, as for cameras and microphones.
+			s.logger.Warn("skipping sensor channel", zap.String("source", p.Key()), zap.Uint32("channel", ch.ChannelId), zap.Error(err))
+			continue
+		}
+		sensorWriters[ch.ChannelId] = sw
+		subs = append(subs, ch.ChannelId)
+		usedInputs[ch.InputId] = true
+	}
 	if len(subs) == 0 {
 		return false, nil
 	}
@@ -409,9 +456,32 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 				s.setConnected(p, true)
 			}
 			delivered = true
+		} else if sw := sensorWriters[f.ChannelID]; sw != nil {
+			sw.WriteSample(f.Payload)
+			if !delivered {
+				s.setConnected(p, true)
+			}
+			delivered = true
 		}
 	}
 	return delivered, nil
+}
+
+// sensorChannels returns the generic sensor channels: the ones that are
+// neither video nor audio. Media in a codec the agent cannot decode is not
+// among them, so it is never handed to the sensor sink.
+func sensorChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlinkpb.SensorDescriptor {
+	var out []*sensorlinkpb.SensorDescriptor
+	for _, d := range m.GetSensors() {
+		if d.GetSensor() == nil {
+			continue
+		}
+		if len(allow) > 0 && !contains(allow, d.Name) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // cameraChannels returns only video formats the loopback writer supports.

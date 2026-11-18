@@ -980,6 +980,8 @@ type VideoService struct {
 	links       *ipcam.LinkManager
 	loopback    cameraLoopback
 	ros2Cameras *ros2camera.Manager
+	// ros2Graphs lists the running ROS 2 apps; nil without a container runtime.
+	ros2Graphs ros2camera.GraphSource
 	// sensorFrames carries SensorLink camera frames to the hub in-process, so
 	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
 	// in tests and builds without sensor pairing, which read the node as before.
@@ -1172,9 +1174,15 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 			return out, nil
 		}
 	}
+	svc.ros2Graphs = graphs
 	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs, pool)
 	return svc
 }
+
+// ROS2Graphs returns the source of running ROS 2 apps that ROS 2 camera
+// discovery uses, so other producers join the same apps. It is nil when the
+// agent has no container runtime.
+func (s *VideoService) ROS2Graphs() ros2camera.GraphSource { return s.ros2Graphs }
 
 // LoadCameraDHCPAllowlist loads saved permissions, migrating legacy camera links
 // with MAC-matched stored credentials once if no configuration exists. The file
