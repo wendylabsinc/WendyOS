@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	goruntime "runtime"
 	"time"
 
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
@@ -49,7 +50,7 @@ func simulatorBackend() wendymcp.SimulatorBackend {
 	return b
 }
 
-type simulatorImageResolver func(context.Context, string) (string, string, func(), error)
+type simulatorImageResolver func(context.Context, vm.Arch, string) (string, string, func(), error)
 
 func newSimulatorBackend(newStore func() (*vm.Store, error), resolve simulatorImageResolver) wendymcp.SimulatorBackend {
 	return wendymcp.SimulatorBackend{
@@ -146,6 +147,7 @@ func readMCPSimulator(store *vm.Store, name string) (*wendymcp.SimulatorInfo, er
 		info.Profile = st.Meta.Profile
 		return info, nil
 	}
+	info.Arch = string(st.Meta.GuestArch())
 	profile, exists, err := store.ReadRobotProfile(name)
 	if err != nil {
 		info.Error = err.Error()
@@ -167,6 +169,10 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	if vm.IsLiteProfile(opts.Profile) {
 		return createLiteSimulator(ctx, store, opts)
 	}
+	arch, err := resolveCreateArch(opts.Arch, opts.Image, goruntime.GOOS)
+	if err != nil {
+		return nil, err
+	}
 	diskBytes, err := vmDiskBytes(opts.DiskGiB)
 	if err != nil {
 		return nil, err
@@ -187,7 +193,7 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	if path == "" {
 		var cleanup func()
 		var err error
-		path, version, cleanup, err = resolve(ctx, opts.Version)
+		path, version, cleanup, err = resolve(ctx, arch, opts.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +215,7 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	if err := checkVMImageSpace(store.DiskPath(opts.Name), stream.uncompressedSize); err != nil {
 		return nil, err
 	}
-	meta := vm.Meta{ImageVersion: version, ImageSource: source}
+	meta := vm.Meta{Arch: arch, ImageVersion: version, ImageSource: source}
 	reader := simulatorContextReader{ctx: ctx, reader: stream}
 	if err := store.CreateFromWithRobotProfile(opts.Name, reader, stream.uncompressedSize, diskBytes, meta, profile); err != nil {
 		return nil, vmStorageError(err, store.DiskPath(opts.Name), stream.uncompressedSize, diskBytes)
@@ -219,12 +225,12 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 
 // The standalone CLI's downloader owns a terminal progress program. MCP uses
 // explicit contexts and file streams so stdout remains the JSON-RPC channel.
-func fetchMCPSimulatorImage(ctx context.Context, version string) (string, string, func(), error) {
+func fetchMCPSimulatorImage(ctx context.Context, arch vm.Arch, version string) (string, string, func(), error) {
 	manifest, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return "", "", nil, err
 	}
-	board := vm.ArchARM64.BoardID()
+	board := arch.BoardID()
 	device, exists := manifest.Devices[board]
 	if !exists {
 		return "", "", nil, fmt.Errorf("no published %s image; provide a local image", board)
