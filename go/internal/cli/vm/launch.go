@@ -67,6 +67,9 @@ func (s *Store) StartDetached(spec Spec) (State, error) {
 			return State{}, err
 		}
 	}
+	if err := ensureVarsStore(spec); err != nil {
+		return State{}, err
+	}
 	args, err := spec.Args()
 	if err != nil {
 		return State{}, err
@@ -297,6 +300,9 @@ func (s *Store) RunForeground(ctx context.Context, spec Spec, stdin io.Reader, s
 		if err != nil {
 			return err
 		}
+	}
+	if err := ensureVarsStore(spec); err != nil {
+		return err
 	}
 	args, err := spec.Args()
 	if err != nil {

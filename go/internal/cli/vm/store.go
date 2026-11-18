@@ -96,6 +96,12 @@ func (s *Store) CreateFromWithRobotProfileContext(ctx context.Context, name stri
 	if err := ValidName(name); err != nil {
 		return err
 	}
+	if !meta.Arch.Valid() {
+		return fmt.Errorf("unknown guest architecture %q for VM %q: this CLI runs arm64 and amd64", meta.Arch, name)
+	}
+	if !IsLiteProfile(meta.Profile) {
+		meta.Arch = meta.GuestArch()
+	}
 	if profile != nil {
 		if err := profile.Validate(); err != nil {
 			return err
@@ -202,7 +208,9 @@ func (s *Store) CreateFromWithRobotProfileContext(ctx context.Context, name stri
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !IsLiteProfile(meta.Profile) {
+	// An x86-64 store is copied from the firmware's own template at start,
+	// once the firmware in use is known (see ensureVarsStore).
+	if !IsLiteProfile(meta.Profile) && meta.GuestArch() == ArchARM64 {
 		vars, err := os.OpenFile(s.VarsPath(name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return fmt.Errorf("creating UEFI variable store: %w", err)

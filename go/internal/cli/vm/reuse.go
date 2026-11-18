@@ -83,6 +83,11 @@ func (s *Store) creationComplete(name string) (bool, error) {
 	if disk.Size() == 0 || disk.Size() < meta.DiskBytes {
 		return false, nil
 	}
+	// Only an ARM64 VM gets its variable store at create; an x86-64 one is
+	// given its store at first start.
+	if meta.GuestArch() != ArchARM64 {
+		return true, nil
+	}
 	vars, err := regularVMFile(s.VarsPath(name))
 	if err != nil || vars == nil {
 		return false, err
