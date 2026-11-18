@@ -30,8 +30,17 @@ account must have an unlocked login keychain. Unlock it interactively as that
 account with `security unlock-keychain ~/Library/Keychains/login.keychain-db`;
 do not pass the password through workflow logs or commit it to configuration.
 The existing macOS disk-image regression job also requires noninteractive sudo
-to execute its disposable disk fixture. Configure that access as part of runner
-administration before enabling the job.
+to execute its disposable disk fixture. Use `sudo visudo` to allow the exact
+command and temporary executable path for each runner installation. For example,
+with the runner account `wendy` and installation `/Users/wendy/actions-runner`:
+
+```sudoers
+wendy ALL=(root) NOPASSWD: /usr/bin/env WENDY_E2E_DISKIMAGE\=1 /Users/wendy/actions-runner/_work/_temp/install.test *
+```
+
+Validate with `sudo visudo -c`. Adjust the executable path for each runner's
+`RUNNER_TEMP`. The workflow builds this executable, so this grants trusted CI
+code root access on the runner.
 
 The shared `setup-macos-ci` action repairs missing base tools and exposes
 Homebrew's Python. This avoids the hosted Python installer's sudo requirement
