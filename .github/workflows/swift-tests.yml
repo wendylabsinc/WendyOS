@@ -31,9 +31,6 @@ permissions:
   actions: read
   contents: read
 
-env:
-  XCODE_VERSION: '27.1'
-
 jobs:
   test:
     name: Run WendyAgentCore Tests
@@ -59,11 +56,6 @@ jobs:
           done
           if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
       - name: Verify documented Swift Agent configuration
         timeout-minutes: 4
         run: python3 .github/scripts/check-swift-agent-docs.py --evidence "$RUNNER_TEMP/swift-agent-docs"
@@ -79,7 +71,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: Capture selected Xcode version
+      - name: Capture active Xcode version
         id: xcode
         shell: bash
         run: |
@@ -213,12 +205,7 @@ jobs:
           done
           if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
-      - name: Capture selected Xcode version
+      - name: Capture active Xcode version
         id: xcode
         shell: bash
         run: |

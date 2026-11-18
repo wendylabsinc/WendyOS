@@ -56,9 +56,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  XCODE_VERSION: '27.1'
-
 jobs:
   validate-go:
     name: Go validation
@@ -528,11 +525,6 @@ jobs:
         run: |
           tar -C swift/WendyAgentMac/Resources/runtime -xzf \
             "${RUNNER_TEMP}/wendy-macos-runtime-guest/wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}.tar.gz"
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Identify Release build cache
         id: release_cache
