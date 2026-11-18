@@ -28,7 +28,7 @@ func TestSkillStdioReaderPreservesInputErrorDuringCancellation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			input := &cancelOnEOF{cancel: cancel, reader: skillStdioReadFunc(func([]byte) (int, error) {
+			input := &cancelOnInputEnd{cancel: cancel, reader: skillStdioReadFunc(func([]byte) (int, error) {
 				if tc.cancelWhileReading {
 					cancel()
 				}
@@ -38,8 +38,8 @@ func TestSkillStdioReaderPreservesInputErrorDuringCancellation(t *testing.T) {
 			if n, err := reader.Read(make([]byte, 1)); n != 0 || !errors.Is(err, tc.inputErr) {
 				t.Fatalf("input error replaced during cancellation: n=%d err=%v want=%v", n, err, tc.inputErr)
 			}
-			if input.closed.Load() != (tc.inputErr == io.EOF) {
-				t.Fatal("only EOF should mark a clean client disconnect")
+			if terminal := input.terminal.Load(); terminal == nil || !errors.Is(terminal.err, tc.inputErr) {
+				t.Fatalf("terminal read did not record %v", tc.inputErr)
 			}
 			if !errors.Is(ctx.Err(), context.Canceled) {
 				t.Fatalf("terminal input error did not cancel serving: %v", ctx.Err())

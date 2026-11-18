@@ -31,6 +31,8 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			srv := server.NewMCPServer("wendy", "test", server.WithToolCapabilities(true))
 			srv.AddTool(mcpgo.NewTool("run"), s.handleRun)
 			in, client := io.Pipe()
+			defer in.Close()
+			defer client.Close()
 			ctx, stop := context.WithCancel(context.Background())
 			defer stop()
 			served := make(chan error, 1)
@@ -49,11 +51,15 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("run did not start")
 			}
-			if trigger == "client disconnect" {
+			var wantErr error
+			switch trigger {
+			case "client disconnect":
 				_ = client.Close()
-			} else if trigger == "input failure" {
+			case "input failure":
+				wantErr = inputFailure
 				_ = client.CloseWithError(inputFailure)
-			} else {
+			case "server stop":
+				wantErr = context.Canceled
 				stop()
 			}
 			select {
@@ -63,11 +69,8 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			}
 			select {
 			case err := <-served:
-				if trigger == "client disconnect" && err != nil {
-					t.Fatalf("disconnect is a clean shutdown, got %v", err)
-				}
-				if trigger == "input failure" && !errors.Is(err, inputFailure) {
-					t.Fatalf("input failure was masked: %v", err)
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("shutdown returned %v, want %v", err, wantErr)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("server did not return after the run stopped")
