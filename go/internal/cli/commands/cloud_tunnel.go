@@ -163,6 +163,10 @@ func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cl
 func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	// Cloud selects the identity, not the transport. CLI commands also prefer
 	// authenticated LAN; only native sessions retain and share the connection.
+	if cloudTunnelOnly(ctx) {
+		cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
+		return cloudTunnelDial()(ctx, auth, asset, brokerURL)
+	}
 	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); native {
 		expected := cloudDiscoveryIdentity(auth, asset)
 		desktopRememberCloudTarget(ctx, auth, asset, expected.IdentityKey())

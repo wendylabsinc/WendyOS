@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -103,5 +104,62 @@ func TestCLICloudDeviceFallsBackAfterLANFailure(t *testing.T) {
 	}
 	if stdout != "" || strings.Contains(stderr, "via LAN") || strings.Count(stderr, "via cloud tunnel") != 1 {
 		t.Fatalf("incorrect fallback output: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestCloudTunnelOnlyKeepsTunnelForLANDevice(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		name := "CLI"
+		if native {
+			name = "native"
+		}
+		t.Run(name, func(t *testing.T) {
+			auth, asset := desktopConnectionTestSetup(t)
+			desktopLocalCandidates = func(context.Context, cloudDiscoveryDevice, certs.WendyIdentity) []string {
+				return []string{"192.168.1.42:50052"}
+			}
+			var localDials, cloudDials atomic.Int32
+			desktopLocalDial = func(_ context.Context, address string, _ config.CertificateInfo, _ certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+				localDials.Add(1)
+				return &grpcclient.AgentConnection{Addr: address, IsMTLS: true, AgentService: &desktopConnectionVersionClient{}}, nil
+			}
+			desktopCloudDial = func(context.Context, *config.AuthConfig, cloudDiscoveryDevice, string) (*grpcclient.AgentConnection, error) {
+				cloudDials.Add(1)
+				return &grpcclient.AgentConnection{IsMTLS: true, AgentService: &desktopConnectionVersionClient{}, RegistryDialer: func(context.Context, int) (net.Conn, error) {
+					return nil, errors.New("not dialed in this test")
+				}}, nil
+			}
+			ctx := context.Background()
+			wantLocal := int32(0)
+			if native {
+				var session TunnelSession
+				session.SetActive(true)
+				t.Cleanup(func() { session.SetActive(false) })
+				ctx = session.Context(ctx)
+				// The session already shares a LAN channel to this device.
+				shared, err := connectCloudDiscoveryDevice(ctx, auth, asset, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer shared.Close()
+				wantLocal = 1
+			}
+			tunnelCtx := context.WithValue(ctx, cloudTunnelOnlyKey{}, true)
+			selector, err := cloudDiscoveryDeviceDefault(auth, asset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if existing, err := desktopExistingCloudConnection(tunnelCtx, auth, selector); existing != nil || err != nil {
+				t.Fatalf("tunnel-only lookup reused %v, %v", existing, err)
+			}
+			conn, err := connectCloudDiscoveryDevice(tunnelCtx, auth, asset, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if conn.RegistryDialer == nil || cloudDials.Load() != 1 || localDials.Load() != wantLocal {
+				t.Fatalf("RegistryDialer=%v, Cloud dials=%d, LAN dials=%d; want only a Cloud tunnel", conn.RegistryDialer != nil, cloudDials.Load(), localDials.Load())
+			}
+		})
 	}
 }

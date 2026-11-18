@@ -115,6 +115,22 @@ func TestCloudLANBrowseUsesMatchBeforeScanFinishes(t *testing.T) {
 	}
 }
 
+func TestCloudLANBrowseSkippedForTunnelOnlyConnections(t *testing.T) {
+	previous := cloudLANStream
+	t.Cleanup(func() { cloudLANStream = previous })
+	cloudLANStream = func(context.Context, discovery.StreamOptions) <-chan discovery.LANEvent {
+		t.Error("tunnel-only connection browsed the LAN")
+		out := make(chan discovery.LANEvent)
+		close(out)
+		return out
+	}
+	ctx, cancel := startCloudLANBrowse(context.WithValue(context.Background(), cloudTunnelOnlyKey{}, true))
+	defer cancel()
+	if ctx.Value(cloudLANBrowseKey{}) != nil {
+		t.Fatal("tunnel-only connection carries LAN browse results")
+	}
+}
+
 func TestCloudLANBrowseCancellation(t *testing.T) {
 	previous := cloudLANStream
 	t.Cleanup(func() { cloudLANStream = previous })

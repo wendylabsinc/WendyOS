@@ -110,7 +110,7 @@ func (a *automaticVPN) refresh(ctx context.Context, online bool) (vpn.Config, er
 			break
 		}
 	}
-	probes := newVPNProbes(routes, commands.DesktopConnect)
+	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
 	relay, cfg, err := vpn.NewRelayWithInternet(routes, desktopDial, probes.Probe, a.internet)
 	if err != nil {
 		probes.Close()

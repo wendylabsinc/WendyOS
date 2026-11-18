@@ -95,7 +95,8 @@ func desktopRememberCloudTarget(ctx context.Context, auth *config.AuthConfig, as
 // PKI identity from the asset UUID: Cloud can bind it to a different device name.
 func desktopExistingCloudConnection(ctx context.Context, auth *config.AuthConfig, selector string) (*grpcclient.AgentConnection, error) {
 	g, ok := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
-	if !ok {
+	if !ok || cloudTunnelOnly(ctx) {
+		// A shared channel may be on the LAN, without a TCP tunnel transport.
 		return nil, nil
 	}
 	alias, err := desktopConnectionKey(auth, selector)
@@ -130,6 +131,13 @@ func desktopPinnedLAN(ctx context.Context, selector string) bool {
 var desktopLocalCandidates = localCloudCandidates
 var desktopLocalDial = dialDesktopLocal
 var desktopCloudDial func(context.Context, *config.AuthConfig, cloudDiscoveryDevice, string) (*grpcclient.AgentConnection, error)
+
+func cloudTunnelDial() func(context.Context, *config.AuthConfig, cloudDiscoveryDevice, string) (*grpcclient.AgentConnection, error) {
+	if desktopCloudDial != nil {
+		return desktopCloudDial
+	}
+	return connectCloudDiscoveryTransport
+}
 
 // Restart recovery explicitly requests a fresh channel. Keep the Cloud target
 // identity even when the original route was LAN; a DHCP address is not identity.
@@ -169,12 +177,8 @@ func connectCloudDevicePreferLAN(ctx context.Context, auth *config.AuthConfig, a
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dial := desktopCloudDial
-	if dial == nil {
-		dial = connectCloudDiscoveryTransport
-	}
 	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
-	conn, err := dial(ctx, auth, asset, brokerURL)
+	conn, err := cloudTunnelDial()(ctx, auth, asset, brokerURL)
 	if err != nil {
 		return nil, err
 	}

@@ -26,6 +26,10 @@ type cloudLANBrowse struct {
 // localCloudCandidates filters them after Cloud supplies the expected identity.
 // Keep the browse deadline separate from the connection's lifetime.
 func startCloudLANBrowse(ctx context.Context) (context.Context, context.CancelFunc) {
+	if cloudTunnelOnly(ctx) {
+		// A tunnel-only connection never uses LAN candidates.
+		return ctx, func() {}
+	}
 	browseCtx, cancel := context.WithTimeout(ctx, cloudLANBrowseTimeout)
 	browse := &cloudLANBrowse{done: make(chan struct{}), updated: make(chan struct{}, 1)}
 	stream := cloudLANStream(browseCtx, discovery.StreamOptions{UseCache: true})

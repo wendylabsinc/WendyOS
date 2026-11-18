@@ -451,7 +451,7 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 			return vpn.Config{}, err
 		}
 	}
-	probes := newVPNProbes(routes, commands.DesktopConnect)
+	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
 	relay, config, err := vpn.NewRelayWithInternet(routes, dial, probes.Probe, internet)
 	if err != nil {
 		if internet != nil {

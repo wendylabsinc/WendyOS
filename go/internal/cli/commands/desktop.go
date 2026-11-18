@@ -184,6 +184,21 @@ func DesktopConnect(ctx context.Context, selector string) (*grpcclient.AgentConn
 	return connectMCPDevice(ctx, selector)
 }
 
+type cloudTunnelOnlyKey struct{}
+
+// DesktopConnectTunnel is DesktopConnect for VPN flows and their probes. A
+// flow needs the device's TCP ports through RegistryDialer, which only the
+// Cloud tunnel provides, so a Cloud device stays on its tunnel even when it
+// is also on the LAN. The connection is the caller's own, never a shared one.
+func DesktopConnectTunnel(ctx context.Context, selector string) (*grpcclient.AgentConnection, error) {
+	return DesktopConnect(context.WithValue(ctx, cloudTunnelOnlyKey{}, true), selector)
+}
+
+func cloudTunnelOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(cloudTunnelOnlyKey{}).(bool)
+	return only
+}
+
 // DesktopRecordingConnect uses only the mobile app's current Cloud identity.
 // A background library scan must not select a different saved login or start
 // certificate recovery simply because its selector names the same tenant.
