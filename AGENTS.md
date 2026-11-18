@@ -16,8 +16,22 @@ asset to satisfy the PR demonstration requirement.
 
 ## Pull request descriptions
 
-Every PR created from now on must use only the applicable sections below, in
-this order. Keep each section concise and describe only what changed. Omit
+Every PR description opens with one short paragraph for people, then uses only
+the applicable sections below, in this order. When an issue exists, link it on
+the first line, then the opening paragraph:
+
+```markdown
+- **Closes:** [WDY-1234 Problem title](https://linear.app/wendylabsinc/issue/WDY-1234/problem-title)
+
+> **In plain terms:** One short paragraph on what this PR changes for the people
+> using it, and why. Do not repeat the linked issue.
+```
+
+Use **Closes** only when the PR fully resolves the issue, **Advances** for a
+partial delivery, **Related** for context without claimed progress. The issue
+stays the problem statement; the PR is the record of the change.
+
+Then the sections, in this order. Keep each section concise and describe only what changed. Omit
 sections that do not apply instead of writing `None` or describing unchanged
 behavior. Always include the Risk section. Do not add a summary, test plan,
 checklist, or other sections. These limits apply to the PR description, not to
@@ -63,9 +77,10 @@ performing tests or other required checks.
 
 ## Optional AI reviews
 
-Security review runs automatically on PRs ready for review and subsequent pushes.
-To request additional AI reviews, apply the corresponding PR labels:
+AI reviews run only when requested. Apply the corresponding PR labels:
 
+- `review: security` for the security review. Dependabot PRs still run the
+  dependency policy check without a label.
 - `review: api` for API and compatibility review, including a risk recommendation.
 - `review: docs` for documentation coverage suggestions.
 - `review: integration-tests` for integration-test coverage suggestions.

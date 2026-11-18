@@ -236,10 +236,10 @@ func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name
 		all, fetchErr := listCloudDiscoveryDevices(ctx, auth, false)
 		if fetchErr == nil {
 			if name == "" && len(all) > 0 {
-				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check the agents' Cloud presence logs ('wendy cloud discover --all --json' lists enrolled devices)", len(all))
+				return cloudDiscoveryDevice{}, cloudAllDevicesOfflineError(len(all))
 			}
 			if _, e := resolveCloudDiscoveryDevice(all, name); e == nil {
-				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check its Cloud presence logs", name)
+				return cloudDiscoveryDevice{}, cloudDeviceOfflineError(name)
 			}
 		}
 	}

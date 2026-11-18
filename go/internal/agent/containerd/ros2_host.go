@@ -102,6 +102,7 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 	if err := os.WriteFile(ros2HostProfilePath, []byte(ros2HostFastDDSProfile), 0o444); err != nil {
 		return services.ROS2Sidecar{}, err
 	}
+	placeROS2Helper(spec, name, c.ros2HelperUnified())
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return services.ROS2Sidecar{}, err

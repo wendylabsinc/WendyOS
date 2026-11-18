@@ -115,16 +115,35 @@ class MultipartGitHub(FakeGitHub):
 
 
 class RenderingTests(unittest.TestCase):
-    def test_grouped_linked_unchecked_decisions_and_explicit_empty_categories(self):
+    def test_grouped_linked_unchecked_decisions_keep_existing_api_layout(self):
         body = review.render_comment(result(), REPO, diff=REVIEW_DIFF.decode())
         self.assertIn("- [ ] Accept **Native `run.command` launch command** — 🟢 **Additive**.", body)
         self.assertIn(f"/blob/{HEAD}/go/internal/shared/appconfig/appconfig.go#L10-L12", body)
+        self.assertTrue(body.startswith("# API decisions\n\nReviewed "))
         self.assertIn("## Network contracts and constants\n\nNo API decisions changed.", body)
+        self.assertNotIn("<summary>API decisions", body)
+        self.assertLess(body.index("- [ ] Accept"), body.index("## Compatibility review"))
         self.assertIn("**Change:** Add optional `run.command` and `run.cwd`", body)
         self.assertIn("**Compatibility:** Existing `wendy.json` manifests keep their launch behavior.", body)
         self.assertIn("**Code:**", body)
         self.assertIn("  ```diff\n  +config.Command = value", body)
         self.assertNotIn("🔴 **Breaking**.", body)
+
+    def test_existing_api_intro_and_category_order_are_preserved(self):
+        data = result()
+        body = review.render_comment(data, REPO)
+        expected_intro = (
+            f"# API decisions\n\nReviewed [{HEAD[:12]}](https://github.com/{REPO}/commit/{HEAD}). "
+            f"Input coverage: 1 changed files, {len(REVIEW_DIFF):,} diff bytes across 1 complete batch(es); no truncation.\n\n"
+            "Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
+            "these checkboxes do not block merging automatically.\n\n"
+            "**Recommended risk:** medium. The author owns the risk label. Compatibility impact is listed separately for each decision.\n\n"
+        )
+        self.assertTrue(body.startswith(expected_intro))
+        headings = [body.index(f"## {title}\n") for title in review.CATEGORIES.values()]
+        self.assertEqual(headings, sorted(headings))
+        self.assertGreater(body.index("## Compatibility review"), max(headings))
+        self.assertIn("Compatibility was not assessed by this legacy result.", body)
 
     def test_each_compatibility_class_has_a_text_labeled_color_symbol(self):
         for impact, rendered in (
@@ -593,7 +612,7 @@ class MultipartTests(unittest.TestCase):
         pages = [comment for comment in github.comments if review.part_index(comment["body"]) > 0]
         self.assertGreater(len(pages), 1)
         self.assertGreater(primary["id"], max(comment["id"] for comment in pages))
-        self.assertIn("93 decisions", primary["body"])
+        self.assertIn("**Complete checklist:** 93 decisions", primary["body"])
         self.assertIn("11 complete batch(es)", primary["body"])
         for page in pages:
             self.assertIn(f"#issuecomment-{page['id']}", primary["body"])

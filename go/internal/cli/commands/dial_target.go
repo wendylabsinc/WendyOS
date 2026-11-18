@@ -32,6 +32,8 @@ type dialTarget struct {
 	// there are several. It stays the single "primary" address so every caller
 	// and diagnostic that only ever wanted one address keeps working.
 	Addr string
+	// A discovered endpoint explicitly advertising mTLS has no plaintext rung.
+	RequiresMTLS bool
 	// Candidates are every address this dial may try, in the order to try them
 	// (see orderDialCandidates: IPv4, then routable IPv6, then link-local/ULA).
 	// Empty means "just Addr" — read it through dialCandidates, never directly.

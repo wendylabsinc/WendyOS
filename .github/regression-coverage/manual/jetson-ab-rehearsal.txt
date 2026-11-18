@@ -1,0 +1,223 @@
+Jetson physical A/B update and rollback, audit2341
+
+All cases start not_run. Generation reads local files and the pinned updater
+checkout. It does not contact, update, reboot or recover any device. Run separate
+inventories and complete evidence for Orin/tegra234 and Thor/tegra264; one cannot
+qualify the other. The test changes BOTH rootfs slots over its complete sequence.
+Use only a reserved disposable board, serial @SERIAL@, with its named owner.
+
+Preparation and exact target
+
+1. Reserve the actual module/carrier, recovery ECID, serial-console endpoint,
+   storage model/serial/capacity and GPT. Record module/carrier revision, UEFI
+   version, L4T release and kernel. Match the public Agent principal/key and direct
+   management endpoint to the same physical serial. Do not select by IP alone.
+   Keep independent serial console, wired management, stable power and the exact
+   owner-reviewed recovery image/flashpack plus backup. The recovery_record must
+   contain hashes, board-specific button/cable sequence, storage fingerprint,
+   backup restoration instructions and a named person able to recover THIS board.
+   No shared/production app, model or container is to be removed for this test.
+   The owner must authorize the complete reserved-board OTA/reboot/rollback
+   sequence separately from generating it. Record that authorization privately.
+
+2. Inventory fields: board {device_type,soc,storage,serial,device_tree_serial,ecid,
+   owner,carrier,root_disk_serial,firmware,l4t,address,initial_slot,app_partuuid,
+   app_b_partuuid,esp_partuuid,redundancy:{attributes,value},retries:{attributes,
+   value}}; install_seconds,boot_seconds; trial (32 random hex characters);
+   cli_revision,agent_revision (full commits); cli_binary,agent_binary,
+   updater_binary,updater_source,identity_record,recovery_record,authorization_record;
+   artifacts.normal and artifacts.reject each contain archive,descriptor,
+   payload_inspection paths. All record paths must identify existing local files.
+   Use the candidate Agent containing the compatibility fix and the exact pinned
+   updater1f160d407833783755af153a64f1b386e8f922ac. Hash the installed binaries, not
+   just version strings. On the host run:
+     python3 jetson-ab-rehearsal.py inventory.json NEW_PRIVATE_OUTPUT
+   The generated commands pin the direct target, candidate Agent binary and exact
+   artifact URL. Do not add --json to device update: it suppresses OS updates and
+   is incompatible with --artifact-url. Do not substitute `os update`: that verb
+   can fetch a different latest Agent before installing the image.
+
+3. Prepare TWO actual board/storage-specific rootfs-only .wendy images through the
+   existing reviewed producer, with different artifact names/versions. Both must
+   contain the pinned candidate Agent and updater. The reject image differs by
+   the unique executable /@HOOK@, whose bytes must equal generated health-reject.sh:
+   it prints CI2341_HEALTH_REJECT @TRIAL@ and exits1. It performs no other action.
+   Include that hook in the BUILT reject image, never in the running origin image.
+   Normal image has no such hook. Do not overwrite or remove existing health hooks.
+   Verify every production health hook remains present in both images and runnable.
+   No capsule marker may exist in either image. bootloader_update in manifest.json
+   is informational; inspect the actual rootfs marker path. This procedure does
+   not qualify capsule updates or physical power-cut durability.
+
+   Each producer descriptor records url,sha256,size_bytes,storage,artifact_name,
+   artifact_version. Use immutable HTTPS paths without credential queries or
+   moving latest/nightly aliases; reserve the exact objects against replacement.
+   Compare the full local archive hash with the published producer result. The
+   generator checks actual manifest board compatibility and stored payload digest.
+   It does NOT decompress/mount the rootfs or verify the operator's inspection.
+   Each payload_inspection JSON must be independently reviewed and bound to
+   artifact_sha256,rootfs_sha256,agent_sha256,updater_sha256,
+   bootloader_marker_present:false, health_hook_path, health_hook_mode and health_hook_sha256,
+   reviewer. For normal, the health-hook fields are null; for reject mode is "0755" and they match
+   the generated path and bytes. The inspection record must also describe the
+   producer revision, complete health-hook inventory/modes, image read-only mount
+   method, actual rootfs hash and firmware/L4T compatibility review. Do not sign off
+   this record merely by copying fields from a manifest. V1 manifest.sig is reserved
+   and unverified; it is not a signature/authenticity guarantee.
+
+4. Use the generated info/status host commands. On the same physically identified
+   board, through its local serial console, transfer the generated snapshot helper
+   and snapshot-config.json by an owner-approved local method. Do not use SSH or
+   broad remote shell access. First verify python3, util-linux findmnt/lsblk and GNU coreutils timeout are
+   present on the board. Missing observer tools keep the case pending; do not
+   install or replace target packages merely to manufacture a pass. Invoke
+   explicitly as root, with the actually expected
+   initial slot a or b:
+     timeout --signal=TERM --kill-after=5s 180s python3 jetson-ab-snapshot.py snapshot-config.json --slot @ORIGIN@ > baseline.json
+   The expected initial slot is @ORIGIN@, and the first target is @TARGET@. The helper refuses a different
+   DT serial/SoC, device type, running root MAJ:MIN, GPT partition UUID, parent disk
+   serial, updater hash or custom updater paths. APP, APP_b and ESP must share the
+   reserved disk. Unsupported layouts need a separate plan, not relaxed checks.
+   It records both nvbootctrl layers, raw EFI UINT32 attributes/values, live Agent
+   executable hash, boot ID, updater status/check, public durable state and units.
+   `status` may read-only mount the inactive slot, as specified by the updater.
+   Compare nvbootctrl slot, actual mounted root and JSON current_slot; disagreement
+   is a stop condition. Inspect /etc/nv_tegra_release and console UEFI banner against
+   the firmware/L4T record. Preserve both successful and failing command exits.
+   Never read private enrollment keys/tokens into evidence. Require the existing
+   WendyOS to be at least 0.17.0 and already on the pinned .wendy engine family;
+   a pre-0.17/Mender baseline needs separately authorized recovery/requalification.
+
+5. Require no pending engine state, no Agent pending marker and a healthy origin
+   before any install. The default engine state is /data/wendyos-update/state.json;
+   history is installed.json. Locate the Agent's actual configuration directory
+   from its unit/configuration and record only pending-update.json and
+   last-update-result.json there, never the entire configuration or identity key.
+   Snapshot helper deliberately does not assume that Agent directory. If an update
+   is already pending, STOP. The readiness fix requires overall check success;
+   stale-pending volatile-zero Orin recovery is still unfixed. Never delete state,
+   mark-good, commit an unbooted image or fabricate an EFI value to make this pass.
+   Resolve an existing incident under the separate recovery record, retain that
+   failure, and start a fresh baseline only after independent review.
+
+Case A: Agent OTA, actual slot switch and committed second boot
+
+6. For the new Orin exception, require naturally observed volatile attributes0x06,
+   redundancy0, retries1..3 and an overall successful pinned updater `check --json`
+   with the named rootfs A/B redundancy check true. The legacy preparation would
+   refuse this state, while the updater uses boot-chain A/B. For Thor, record actual
+   level/retry state. Writable disabled NV attributes0x07 must be repaired and
+   read back by the Agent before install; enabled settings must remain unchanged.
+   A volatile disabled Thor level must be refused, not promoted to a successful
+   OTA. If no genuine writable-disabled Thor state exists, leave the physical
+   repair subcase not_run and run the ordinary enabled-state OTA separately.
+   Do not unload drivers, write EFI variables, reflash unusual firmware or force
+   values solely to manufacture the precondition.
+
+7. Start a fresh serial transcript and bounded interval of Agent/updater journals
+   before running update_normal on the host. Record start UTC/monotonic time,
+   initial boot ID, initial mounted root/slot, old OS version and prior result
+   timestamp. The command first installs the EXACT candidate Agent via --binary;
+   require its restart/identity match and installed executable hash before crediting
+   the subsequent OS result. Both artifact download and image manifest identities
+   must match the reviewed producer object. Observe at most @INSTALL@ seconds for
+   install plus @BOOT@ seconds for each reboot. This is a human observation bound,
+   not permission to kill an active flash writer. If it expires, mark failure,
+   retain console evidence, interrupt the host CLI once, and inspect the same board.
+   Do not start a second writer, remove power, reboot or erase during an active
+   write. Use the reserved recovery record if it cannot finish safely.
+
+8. Require install progress through image verification and slot scheduling, then
+   a real new boot ID on the opposite exact APP/APP_b partition. For Orin require
+   the boot-chain slot to move; for Thor require the rootfs slot to move. Preserve
+   both layer dumps, firmware banner and Agent/updater journals. A reconnected
+   Agent alone is not success. Run status and a new console snapshot with
+   --slot @TARGET@ --require-agent. Require the exact candidate image
+   version, live Agent/updater hashes, root disk serial, same public device identity,
+   successful commit, no pending state and a new installed.json entry containing
+   this artifact name/version and actual slot. Compare the fresh Agent update result
+   timestamp/outcome with this attempt; an older committed record is not evidence.
+   If systemd committed first, record its fresh exit/result and engine history;
+   an Agent 'nothing pending' response alone does not prove a commit.
+
+9. After commitment, use the operator's local console `systemctl reboot` once.
+   Within @BOOT@ seconds require another new boot ID, SAME committed slot/root,
+   exact binaries/identity and healthy Agent RPC. Repeat snapshots/status. Require
+   no pending state or unexpected rollback, and persisted EFI repair on a genuinely
+   exercised Thor repair case. For Orin compare volatile level/retry observations
+   without asserting a runtime EFI write occurred. This second boot is necessary
+   to distinguish a persistent setting from a volatile value that happened to
+   appear correct immediately after installation.
+
+Case B: fresh target boot rejects health, then returns to the healthy origin
+
+10. Treat the now committed normal image as the known healthy origin; capture its
+    slot, boot ID, version, fresh history and state absence. Run update_reject with
+    a new transcript. It must install to the opposite rootfs, boot that target and
+    execute the exact nonce-bearing failing health hook. Use serial and boot-ID
+    journals to prove the target actually booted. A failed download/preflight or a
+    boot that never reached the hook does not satisfy this case. Do not manually
+    run commit/rollback or alter hooks while the Agent's delegated health gate is
+    active. Require real updater commit rejection, the Agent's automatic rollback
+    decision, and its subsequent reboot to the original healthy slot. Allow the
+    same @INSTALL@ install bound and at most two @BOOT@ reboot windows.
+
+11. Require nonzero update-command result with rollback/health failure, plus fresh
+    CLI status recording rolled-back outcome for THIS attempted artifact. After
+    recovery, snapshot the expected origin slot with --require-agent. Require the
+    prior healthy normal image version/hash/identity, actual origin root MAJ:MIN,
+    no pending engine state, no installed-history entry committing the reject image,
+    and the nonce hook failure in the target's retained journal/serial transcript.
+    Capture the target boot ID and distinct returned-origin boot ID. Then reboot
+    normally once more and require the same healthy origin and no repeated install
+    or rollback loop. Missing early target-boot evidence keeps the automatic rollback
+    case incomplete even if the board is healthy now. A diagnostic timeout, updater
+    generic error, stale result or unrelated health failure is not the intended control.
+
+Case C: explicit pre-reboot rollback of a staged rootfs update
+
+12. This supplemental case tests the shipped updater directly and is not evidence
+    that the Agent's preflight ran. On the recovered healthy origin, again require
+    no pending state and no concurrent updater. With fresh exact-target approval,
+    use the pinned binary on the local console to install the SAME normal artifact
+    from its exact reviewed immutable URL:
+      Run the exact generated console_install_normal command below.
+    Do not reboot yet. This verb does not reboot. Use the same install observation
+    bound, preserve stdout/stderr and exit status, and require phase done, the exact
+    target/manifest and durable state phase swapped targeting the opposite slot.
+    The current boot ID and mounted root must still be the healthy origin.
+    Observe the state without invoking commit. Then run locally:
+      /usr/bin/wendyos-update rollback
+    Require exit0, JSON origin_slot equal to the still-running healthy origin,
+    reboot_required:false, and state.json removed. Do not call switch or mark-good:
+    they have different semantics and cannot substitute for rollback.
+    Perform one normal console `systemctl reboot`; within @BOOT@ seconds require
+    the same origin slot/image, new boot ID, no pending state and healthy identity.
+    If another boot service unexpectedly commits while staging, stop and classify
+    the attempt instead of creating/deleting state to force the test.
+
+Payload digest evidence comes from producer bytes and successful installer
+verification. A mounted filesystem changes during boot; do not compare its live
+whole-partition hash with the pristine image and call that a stable image identity.
+Use the exact booted partition, artifact receipts, version and live binary hashes.
+
+Recovery and results
+
+13. Preserve complete failed attempts before recovery. Restore only the reserved
+    board and disk under the previously approved recovery record, using the known
+    healthy producer artifact or exact board-specific recovery image. Never remove
+    arbitrary EFI/state files, install a broad hook mask, or clean up production
+    models/containers. The failing hook remains only in the rejected inactive lab
+    image until an authorized replacement/recovery overwrites it. End with no
+    pending state, normal health hooks, known healthy image on the required slots,
+    the expected firmware/root disk and authenticated Agent status. Record exact
+    restoration actions, hashes and any data restoration separately.
+
+14. Keep inventory, producer/inspection records, generated source hashes, explicit
+    authorization, all command exits, monotonic/UTC timestamps, serial output,
+    before/after EFI bytes, both slot layers, mounted-root/GPT identity, engine
+    state/history, fresh Agent receipts and complete boot-ID intervals. Independent
+    review must connect them to the same physical serial and artifact. Mark a case
+    passed only after ALL listed observations; missing capability, unsupported
+    layout, unverified image/firmware or incomplete recovery remains not_run/failed
+    as appropriate. No board operations are authorized or proven by generator tests.

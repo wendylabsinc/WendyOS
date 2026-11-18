@@ -47,6 +47,12 @@ type campaignInferenceJob struct {
 	status         data.InferenceStatus
 	generations    map[string]uint64
 	nextGeneration atomic.Uint64
+	// pace outlives a worker, so a restarted one is not reported as too slow
+	// a second time.
+	pace inferencePace
+	// scoringSince is when the running model process started, which is where
+	// its count of scored frames begins.
+	scoringSince time.Time
 }
 
 // StartCampaignInference restores persisted inference plans and supervises their
@@ -189,6 +195,10 @@ func (m *campaignInferenceManager) snapshot(name, revision string) *data.Inferen
 		snapshot.Sources[source] = state
 	}
 	snapshot.Accelerator = acceleratorSnapshot(job.status.Accelerator, time.Now())
+	if job.status.Throughput != nil {
+		throughput := *job.status.Throughput
+		snapshot.Throughput = &throughput
+	}
 	return &snapshot
 }
 
@@ -226,7 +236,7 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 		j.setState("loading", nil)
 		// A new process reports its own accelerator; the last one's is stale.
 		j.mu.Lock()
-		j.status.Accelerator, j.status.Stats = nil, nil
+		j.status.Accelerator, j.status.Stats, j.status.Throughput = nil, nil, nil
 		j.mu.Unlock()
 		err := j.run(ctx)
 		if ctx.Err() != nil {
@@ -254,6 +264,9 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 // Behind a var for tests.
 var inferenceRetryDelay = 5 * time.Second
 
+// inferenceNow is when a prediction is observed. Behind a var for tests.
+var inferenceNow = time.Now
+
 // inferenceStartError is a worker that did not start, as opposed to one that
 // started and then failed.
 type inferenceStartError struct{ error }
@@ -275,6 +288,9 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 	if err != nil {
 		return inferenceStartError{err}
 	}
+	j.mu.Lock()
+	j.scoringSince = time.Now()
+	j.mu.Unlock()
 	sources := map[string]inferenceSource{}
 	defer func() {
 		cancel()
@@ -403,7 +419,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
 			}
 			state := presence[result.SourceID]
-			if state == nil || !state.observe(len(detections) > 0, time.Now(), j.campaign.Inference) {
+			if state == nil || !state.observe(len(detections) > 0, inferenceNow(), j.campaign.Inference, scoringRound(len(sources), result.InferMs)) {
 				continue
 			}
 			record.Type, record.Name = "event", j.campaign.Inference.Event
@@ -501,8 +517,21 @@ type inferencePresence struct {
 	emptySince, lastObserved, lastSent time.Time
 }
 
-func (p *inferencePresence) observe(detected bool, now time.Time, config *data.CampaignInference) bool {
-	maxGap := max(5*time.Second, time.Duration(2/config.Rate*float64(time.Second)))
+// scoringRound is how long the model takes to come back to a camera: the time
+// it took to score one frame, for each of the cameras it scores in turn.
+func scoringRound(cameras int, inferMs float64) time.Duration {
+	return time.Duration(float64(cameras) * inferMs * float64(time.Millisecond))
+}
+
+// observe takes one scored frame of a camera and reports whether it raises
+// the event. round is the scoringRound the frame was scored in.
+func (p *inferencePresence) observe(detected bool, now time.Time, config *data.CampaignInference, round time.Duration) bool {
+	// Frames further apart than this are the two sides of an outage, which is
+	// not empty time. A model slower than its rate scores frames that far
+	// apart all the time, so the allowance follows the model, at twice its
+	// round. Before, such a model never saw clear_after of empty frames, and
+	// raised its event once and never again.
+	maxGap := max(5*time.Second, time.Duration(2/config.Rate*float64(time.Second)), 2*round)
 	if now.Sub(p.lastObserved) > maxGap {
 		p.emptySince = time.Time{}
 	}

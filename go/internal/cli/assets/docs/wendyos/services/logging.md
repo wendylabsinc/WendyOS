@@ -4,7 +4,7 @@ WendyOS uses systemd-journald for log management. All services write to the jour
 
 ## Default behaviour
 
-Whether journal logs survive a reboot depends on `WENDYOS_PERSIST_JOURNAL_LOGS`, whose default tracks `WENDYOS_OTA`. Boards built with the `wendyos-update` OTA stack (`WENDYOS_OTA = "wendy"`) have a `/data` partition and keep persistent logs there. QEMU builds (`WENDYOS_OTA = "none"`) and Raspberry Pi, which sets the option to `0` for now, store logs in volatile memory (`/run/log/journal`), where they are lost on reboot.
+Whether journal logs survive a reboot depends on `WENDYOS_PERSIST_JOURNAL_LOGS`, whose default tracks `WENDYOS_OTA`. Boards built with the `wendyos-update` OTA stack (`WENDYOS_OTA = "wendy"`) have a `/data` partition and keep persistent logs there. The legacy `qemuarm64-wendyos` build (`WENDYOS_OTA = "none"`) and Raspberry Pi, which sets the option to `0` for now, store logs in volatile memory (`/run/log/journal`), where they are lost on reboot. The separate `vm-x86-64-wendyos` image includes A/B OTA and persistent-journal configuration; running under QEMU does not itself imply volatile logging.
 
 ## Persistent journal option
 
@@ -18,12 +18,15 @@ Storage=persistent
 SystemMaxUse=512M
 SystemKeepFree=1G
 RuntimeMaxUse=64M
-MaxRetentionSec=1month
 Compress=yes
 ForwardToSyslog=yes
 ```
 
-**`/lib/systemd/system/var-log.mount`**
+There is deliberately no age-based retention limit. Boards without a working
+clock can timestamp early-boot logs near 1970; an age limit can delete those logs
+when time synchronization corrects the clock. The size limits above bound storage.
+
+**`/usr/lib/systemd/system/var-log.mount`**
 
 Bind-mounts `/data/log` onto `/var/log`:
 

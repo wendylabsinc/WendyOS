@@ -40,6 +40,19 @@ def assert_provenance(test, workflow):
             # unpacked app. The signed app ZIP has its own attested upload.
             if step.get('name') in ['Upload Release build cache', 'Upload notarized app bundle']:
                 continue
+            if name == 'publish-linux-repos' and step['with'].get('name') == 'linux-repository-consumer-evidence':
+                # This contains receipts only, not a release package producer.
+                # Keep the exception exact so a later package upload cannot hide
+                # behind the evidence name or a broad JSON/SPDX glob.
+                prefix = '${{ runner.temp }}/repository-consumer-evidence/'
+                receipt_paths = {'plan.json', 'upload-receipts.json', 'result.json',
+                                 'deb-packages.json', 'rpm-packages.json', '*.log',
+                                 '*-dependencies.txt', '*-helper-hashes.txt',
+                                 '*/result.json', '*/metadata.log', '*/download.log'}
+                test.assertEqual(set(path.splitlines()), {prefix + p for p in receipt_paths} | {
+                    '${{ runner.temp }}/repository-upload-receipts.json',
+                    '${{ runner.temp }}/repository-upload-evidence/*.log'})
+                continue
             test.assertIn(name, ancestors, f'{name}: release must wait for this producer')
             test.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in previous),
                             f'{name}: no producing-job attestation before upload of {path}')
@@ -68,6 +81,16 @@ class ReleaseProvenanceWorkflowTests(unittest.TestCase):
                     del job['permissions']['id-token']
                 else:
                     bad['jobs']['release']['needs'].remove('package-windows')
+                with self.assertRaises(AssertionError):
+                    assert_provenance(self, bad)
+
+    def test_repository_evidence_exception_rejects_release_files_and_broad_globs(self):
+        for path in ('candidate.rpm', 'candidate.spdx.json', '*.json', '**/*'):
+            with self.subTest(path=path):
+                bad = copy.deepcopy(self.workflow)
+                upload = next(s for s in bad['jobs']['publish-linux-repos']['steps']
+                              if s.get('with', {}).get('name') == 'linux-repository-consumer-evidence')
+                upload['with']['path'] += '\n${{ runner.temp }}/repository-consumer-evidence/' + path
                 with self.assertRaises(AssertionError):
                     assert_provenance(self, bad)
 
@@ -102,7 +125,11 @@ class ReleaseProvenanceWorkflowTests(unittest.TestCase):
             root = Path(directory)
             assets = ['nested/agent with spaces.tar.gz', 'cli.zip', 'cli.msi',
                       'agent.deb', 'agent.rpm', 'source.spdx.json']
-            for name in assets + ['macos-release-build-cache.tar.zst', 'app/Contents/MacOS/agent']:
+            for name in assets + ['macos-release-build-cache.tar.zst', 'app/Contents/MacOS/agent',
+                                  'repository-consumer-evidence/plan.json',
+                                  'repository-consumer-evidence/deb-amd64/result.json',
+                                  'repository-consumer-evidence/metadata.log',
+                                  'repository-consumer-evidence/deb-helper-hashes.txt']:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('fixture')
@@ -116,12 +143,12 @@ class ReleaseProvenanceWorkflowTests(unittest.TestCase):
 
     def test_required_ci_runs_both_fixture_suites_on_gate_and_workflow_changes(self):
         build_events = self.workflow.get('on', self.workflow.get(True))
-        self.assertIn('.github/scripts/verify-release.py', build_events['push']['paths'])
+        self.assertIn('.github/scripts/**', build_events['push']['paths'])
         ci = yaml.safe_load((ROOT / '.github/workflows/go-tests.yml').read_text())
         events = ci.get('on', ci.get(True))
-        for event in ['push', 'pull_request']:
-            self.assertIn('.github/scripts/**', events[event]['paths'])
-            self.assertIn('.github/workflows/**', events[event]['paths'])
+        self.assertIn('workflow_call', events)
+        self.assertNotIn('pull_request', events)
+        self.assertIn('.github/workflows/**', build_events['push']['paths'])
         job = ci['jobs']['automation-regressions']
         self.assertNotIn('if', job)
         self.assertTrue(any('run-automation-regressions.py' in s.get('run', '') for s in job['steps']))
