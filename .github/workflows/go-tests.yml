@@ -1102,6 +1102,8 @@ jobs:
         run: bash .github/scripts/test-lite-camera-loopback.sh
       - name: Decode H264 without a producer parser and require regression controls
         run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Hand decoded MJPEG frames to the agent and run the encoder only for viewers
+        run: bash .github/scripts/test-camera-pixels-on-demand.sh
       - name: Decode native H264 for a late viewer and recording and require regression controls
         run: bash .github/scripts/test-native-h264-parameter-sets.sh
       - name: Require VP8 decoding after lost reads and oversized elements
