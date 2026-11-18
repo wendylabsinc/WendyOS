@@ -32,7 +32,7 @@ struct `'wendy device info'` {
      */
     @Test
     func `'--device' selects an explicit device`() async throws {
-        try await self.scenario.run { cli, agent in
+        try await self.scenario.run(useDeviceCache: true) { cli, agent in
             let agentAddress = agent.machine.address
 
             let configScript = Self.setDefaultDeviceConfigScript(
@@ -190,7 +190,7 @@ struct `'wendy device info'` {
      */
     @Test
     func `non-interactive mode prints JSON device information`() async throws {
-        try await self.scenario.run { cli, agent in
+        try await self.scenario.run(useDeviceCache: true) { cli, agent in
             let agentAddress = agent.machine.address
 
             let configScript = Self.setDefaultDeviceConfigScript(agentAddress)
