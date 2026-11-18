@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -571,17 +572,25 @@ func TestTapDeliveries_CountsTapFramesAndKeepsTheHubsInterfaces(t *testing.T) {
 // when tapBytes > 0.
 func fakeGStreamer(t *testing.T, tapBytes int, extra ...string) (launchLog string) {
 	t.Helper()
+	launch := "case \"$*\" in\n*x264enc*) printf encoded ;;\nesac\n"
+	if tapBytes > 0 {
+		launch += "/usr/bin/head -c " + strconv.Itoa(tapBytes) + " /dev/zero >&3\n"
+	}
+	launch += "exec /bin/sleep 60\n"
+	return fakeGStreamerScript(t, launch, extra...)
+}
+
+// fakeGStreamerScript is fakeGStreamer with the rest of gst-launch-1.0 given:
+// launchBody runs after the launch has appended its arguments to the log.
+func fakeGStreamerScript(t *testing.T, launchBody string, extra ...string) (launchLog string) {
+	t.Helper()
 	dir := t.TempDir()
 	launchLog = filepath.Join(dir, "launches")
 	inspect := "echo 'x264: x264enc: H.264 encoder'\necho 'videoparsersbad: h264parse: H.264 parser'\n"
 	for _, e := range extra {
 		inspect += "echo 'test: " + e + ": test element'\n"
 	}
-	launch := "echo \"$*\" >> " + launchLog + "\ncase \"$*\" in\n*x264enc*) printf encoded ;;\nesac\n"
-	if tapBytes > 0 {
-		launch += "/usr/bin/head -c " + strconv.Itoa(tapBytes) + " /dev/zero >&3\n"
-	}
-	launch += "exec /bin/sleep 60\n"
+	launch := "echo \"$*\" >> " + launchLog + "\n" + launchBody
 	for name, body := range map[string]string{"gst-inspect-1.0": inspect, "gst-launch-1.0": launch} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
 			t.Fatal(err)
@@ -743,5 +752,151 @@ func TestStreamGStreamer_CameraWithoutATapKeepsTheEncoder(t *testing.T) {
 	}
 	if err := stop(); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled stream returned %v, want context.Canceled", err)
+	}
+}
+
+func TestStreamGStreamer_ReappliesStoredControlsOnEveryRelaunch(t *testing.T) {
+	withYUYVModes(t, [][2]uint32{{640, 480}})
+	launchLog := fakeGStreamer(t, 640*2*480)
+	h, cancelHub := newTestHub(t)
+	defer cancelHub()
+	pixelID, pixels, err := h.subscribePixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.unsubscribe(pixelID)
+	// The operator stored an exposure. A relaunch closes the camera and opens it
+	// again, and a driver may reset its controls when it does.
+	var applied atomic.Int32
+	svc := &VideoService{
+		logger:           zap.NewNop(),
+		encoderIdleGrace: 100 * time.Millisecond,
+		controls:         newCameraControlStore(filepath.Join(t.TempDir(), "controls.json")),
+		controlIndexFor: func(string) (map[string]uint32, error) {
+			return map[string]uint32{"exposure_time_absolute": 0x009a0902}, nil
+		},
+		applyLocalControls: func(path string, ctrls []controlValue) ([]*agentpb.CameraControlResult, error) {
+			if path != "/dev/video4" || len(ctrls) != 1 || ctrls[0].name != "exposure_time_absolute" || ctrls[0].value != 20 {
+				t.Errorf("applied %v to %s, want exposure_time_absolute=20 on /dev/video4", ctrls, path)
+			}
+			applied.Add(1)
+			return nil, nil
+		},
+	}
+	if err := svc.controls.merge("/dev/video4", []storedControl{{Name: "exposure_time_absolute", Value: 20}}); err != nil {
+		t.Fatal(err)
+	}
+	streamIntoHub(t, svc, h, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, camera.TransportUSB)
+
+	// The first launch is the producer's start, where captureNode applies them.
+	waitForFrame(t, pixels, "pixel frame")
+	if n := applied.Load(); n != 0 {
+		t.Errorf("first launch applied stored controls %d times; captureNode already did", n)
+	}
+	viewerID, viewer, err := h.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForFrame(t, viewer, "encoded chunk")
+	if n := applied.Load(); n != 1 {
+		t.Errorf("stored controls applied %d times by the relaunch for a viewer, want once", n)
+	}
+	h.unsubscribe(viewerID)
+	waitUntil(t, "a third launch starts", func() bool { return len(launchedPipelines(t, launchLog)) >= 3 })
+	if n := applied.Load(); n != 2 {
+		t.Errorf("stored controls applied %d times after two relaunches, want once per relaunch", n)
+	}
+}
+
+func TestStreamGStreamer_WarnsWhenARelaunchFindsTheCameraTaken(t *testing.T) {
+	for name, viewerFirst := range map[string]bool{"relaunch": false, "first launch": true} {
+		t.Run(name, func(t *testing.T) {
+			withYUYVModes(t, [][2]uint32{{640, 480}})
+			// The launch with the encoder finds the camera busy, as when another
+			// process opens it in the gap between two launches.
+			fakeGStreamerScript(t, "case \"$*\" in\n"+
+				"*x264enc*) echo 'ERROR: v4l2src: Device /dev/video4 is busy' >&2; exit 1 ;;\n"+
+				"esac\n/usr/bin/head -c "+strconv.Itoa(640*2*480)+" /dev/zero >&3\nexec /bin/sleep 60\n")
+			h, cancelHub := newTestHub(t)
+			defer cancelHub()
+			core, logs := observer.New(zap.WarnLevel)
+			svc := &VideoService{logger: zap.New(core), encoderIdleGrace: time.Minute}
+			var pixels chan *videoFrame
+			if viewerFirst {
+				viewerID, _, err := h.subscribe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer h.unsubscribe(viewerID)
+			} else {
+				pixelID, ch, err := h.subscribePixels()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer h.unsubscribe(pixelID)
+				pixels = ch
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				result <- svc.streamGStreamer(ctx, func(data []byte, _ frameTimestamp, codec agentpb.VideoCodec) bool {
+					return h.produce(&videoFrame{data: data, codec: codec})
+				}, "/dev/video4", &agentpb.StreamVideoRequest{Width: 640, Height: 480}, camera.TransportUSB, "", pipeWireSource{}, h)
+			}()
+			if !viewerFirst {
+				// The launch without the encoder runs; a viewer relaunches it with one.
+				waitForFrame(t, pixels, "pixel frame")
+				viewerID, _, err := h.subscribe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer h.unsubscribe(viewerID)
+			}
+			var err error
+			select {
+			case err = <-result:
+			case <-time.After(10 * time.Second):
+				t.Fatal("stream did not end when its launch found the camera busy")
+			}
+			if !isCameraInUse(err) {
+				t.Fatalf("err = %v, want the camera in use", err)
+			}
+			var warned []string
+			for _, entry := range logs.FilterLevelExact(zap.WarnLevel).All() {
+				if entry.ContextMap()["device"] == "/dev/video4" && strings.Contains(entry.Message, "another process") {
+					warned = append(warned, entry.Message)
+				}
+			}
+			if viewerFirst && len(warned) != 0 {
+				t.Errorf("a first launch that found the camera busy warned of a relaunch: %q", warned)
+			}
+			if !viewerFirst && len(warned) != 1 {
+				t.Errorf("a relaunch that lost the camera logged %q, want one warning naming /dev/video4", warned)
+			}
+		})
+	}
+}
+
+func TestRunCameraPipeline_TapOnlyFailureNamesNoEncoder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	program := filepath.Join(t.TempDir(), "gst-launch-1.0")
+	script := "#!/bin/sh\necho 'ERROR: from element /GstPipeline:pipeline0/GstJpegDec:jpegdec0: Internal data stream error.' >&2\nexit 1\n"
+	if err := os.WriteFile(program, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	core, logs := observer.New(zap.ErrorLevel)
+	svc := &VideoService{logger: zap.New(core)}
+	plan := gstPipelinePlan{args: []string{program}, pixels: tinyTapFormat, tapOnly: true, rawWhy: "test"}
+	err := svc.runCameraPipeline(ctx, func([]byte, frameTimestamp, agentpb.VideoCodec) bool { return true },
+		"/dev/video4", gstEncoderResult{element: "x264enc"}, plan, nil, &offerRecorder{}, nil)
+	const label = "no encoder (decoded frames only)"
+	if err == nil || !strings.Contains(err.Error(), "using "+label) || strings.Contains(err.Error(), "x264enc") {
+		t.Errorf("err = %v, want it to name %q and not the encoder that did not run", err, label)
+	}
+	failed := logs.FilterMessage("GStreamer pipeline failed").All()
+	if len(failed) != 1 || failed[0].ContextMap()["encoder"] != label {
+		t.Errorf("failure logs = %v, want one with encoder=%q", failed, label)
 	}
 }

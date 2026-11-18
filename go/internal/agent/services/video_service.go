@@ -3382,6 +3382,9 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 	// planned again for each launch. A sink that is not a hub has no demand to
 	// read, and gets one launch with the encoder.
 	demand, _ := sink.(encodeDemand)
+	// started counts the pipelines this call has run. Launches happen one after
+	// another (runShapedPipelines waits for each to return), so it needs no lock.
+	started := 0
 	return runShapedPipelines(ctx, demand, s.encoderGrace(), func(ctx context.Context, shape pipelineShape) error {
 		plan, err := planGStreamerPipelineShaped(shape, gstPath, path, req, enc.element, enc.hasH264Parse, transport, libcameraID, pw, available)
 		if errors.Is(err, errNoTapOnlyPipeline) {
@@ -3390,8 +3393,25 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to build GStreamer pipeline: %v", err)
 		}
-		s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encoder", shape.encode))
-		return run(ctx, plan)
+		relaunch := started > 0
+		started++
+		if relaunch {
+			// The previous pipeline closed the camera and this one opens it again,
+			// as a reconnect does: a driver that resets its controls on reopen
+			// would lose the operator's exposure and gain whenever a viewer
+			// arrives or the grace ends. The first launch has them from
+			// captureNode.
+			s.applyStoredCameraControls(path)
+		}
+		s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encodes", shape.encode))
+		err = run(ctx, plan)
+		if relaunch && isCameraInUse(err) {
+			// The camera was free between the two pipelines, for about a second,
+			// and another process opened it then.
+			s.logger.Warn("camera pipeline could not restart: another process opened the camera while it was released",
+				zap.String("device", path), zap.Bool("encodes", shape.encode), zap.Error(err))
+		}
+		return err
 	})
 }
 
@@ -3470,6 +3490,11 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	if tapFmt != nil && !plan.tapOnly {
 		go s.pumpRawTap(ctx, rawR, tapFmt, sink, path, nil) //nolint:errcheck // nil liveness: the pump only logs
 	}
+	// A pipeline without the encoder must not be reported as failing in one.
+	encoderLabel := enc.element
+	if plan.tapOnly {
+		encoderLabel = "no encoder (decoded frames only)"
+	}
 
 	defer func() {
 		cmd.Process.Kill() //nolint:errcheck
@@ -3486,10 +3511,10 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 			return
 		}
 		msg := strings.TrimSpace(stderrBuf.buf.String())
-		runErr = gstCameraPipelineError(path, enc.element, msg, waitErr, runErr)
+		runErr = gstCameraPipelineError(path, encoderLabel, msg, waitErr, runErr)
 		if runErr != nil {
 			s.logger.Error("GStreamer pipeline failed", zap.String("device", path),
-				zap.String("encoder", enc.element), zap.String("stderr", msg), zap.Error(runErr))
+				zap.String("encoder", encoderLabel), zap.String("stderr", msg), zap.Error(runErr))
 		}
 	}()
 

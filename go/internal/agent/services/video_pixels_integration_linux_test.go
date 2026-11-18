@@ -138,9 +138,9 @@ func TestMJPEGCameraPixelsAndEncoderOnDemand(t *testing.T) {
 		}
 		var launches []any
 		for _, entry := range logs.FilterMessage("starting camera pipeline").All() {
-			launches = append(launches, entry.ContextMap()["encoder"])
+			launches = append(launches, entry.ContextMap()["encodes"])
 		}
-		t.Logf("pipeline launches, encoder on each: %v", launches)
+		t.Logf("pipeline launches, whether each encodes: %v", launches)
 	})
 
 	// Step 2: a pixel subscriber alone gets decoded frames of the picture.
