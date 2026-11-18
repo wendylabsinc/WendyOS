@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -45,10 +44,22 @@ func commandWorker(command *exec.Cmd, stdin io.Reader, stdout, stderr io.Writer)
 type shRuntime struct {
 	script string
 	err    error
+	// labels are those of the worker image on the device. nil is no image.
+	labels  map[string]string
+	deleted []string
 
 	mu      sync.Mutex
 	started []WorkerContainer
 	removed int
+}
+
+func (r *shRuntime) InferenceImageLabels(context.Context, string) (map[string]string, bool, error) {
+	return r.labels, r.labels != nil, nil
+}
+
+func (r *shRuntime) RemoveInferenceImage(_ context.Context, image string) error {
+	r.deleted, r.labels = append(r.deleted, image), nil
+	return nil
 }
 
 func (r *shRuntime) RunInferenceWorker(ctx context.Context, worker WorkerContainer, stdin io.Reader, stdout, stderr io.Writer) (func() error, error) {
@@ -92,13 +103,16 @@ func (p *processCalls) start(ctx context.Context, _ data.CampaignInference, reas
 		workerConfig{}, nil, isolation{data.IsolationProcess, reason})
 }
 
-const testWorkerImage = "ghcr.io/wendylabsinc/wendy-inference-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+const testWorkerImage = "localhost:5000/wendy-inference-worker:latest"
 
-func containerFactory(t *testing.T, runtime ContainerRuntime, process *processCalls) *ContainerFactory {
+// containerFactory is a factory on a device that has this agent's worker
+// image, as after `wendy data campaign deploy` pushed it.
+func containerFactory(t *testing.T, runtime *shRuntime, process *processCalls) *ContainerFactory {
 	t.Helper()
 	if goosWindows() {
 		t.Skip("needs /bin/sh")
 	}
+	runtime.labels = map[string]string{WorkerImageDepsLabel: DepsHash()}
 	return &ContainerFactory{Image: testWorkerImage, Runtime: runtime, Process: &ManagedFactory{Root: t.TempDir()}, process: process.start}
 }
 
@@ -200,15 +214,24 @@ func TestContainerFallsBackToTheProcessAndSaysWhy(t *testing.T) {
 	}{
 		{name: "no containerd", configure: func(f *ContainerFactory) { f.Runtime = nil }, runtime: &shRuntime{script: ready}, config: cpu,
 			reason: "this agent has no containerd"},
-		{name: "no image published", configure: func(f *ContainerFactory) { f.Image = "" }, runtime: &shRuntime{script: ready}, config: cpu,
-			reason: "this agent pins no model worker image yet"},
+		{name: "no device registry", configure: func(f *ContainerFactory) { f.Image = "" }, runtime: &shRuntime{script: ready}, config: cpu,
+			reason: "this agent's device registry, which holds the model worker image, is unavailable"},
+		// What an older command line, or one without Docker, leaves behind.
+		{name: "no image on the device", configure: func(f *ContainerFactory) { f.Runtime.(*shRuntime).labels = nil }, runtime: &shRuntime{script: ready}, config: cpu,
+			reason: "this device has no model worker image; deploy the campaign with a current wendy CLI on a machine with Docker, which builds the image and pushes it to this device"},
+		{name: "an image for another agent", runtime: &shRuntime{script: ready}, config: cpu,
+			configure: func(f *ContainerFactory) {
+				f.Runtime.(*shRuntime).labels = map[string]string{WorkerImageDepsLabel: "0000000000000000"}
+			},
+			reason: `the model worker image on this device was built for another agent version (its sh.wendy.inference.deps label is "0000000000000000", this agent needs "` + DepsHash() +
+				`"); deploy the campaign with a current wendy CLI on a machine with Docker, which builds the image and pushes it to this device`},
 		{name: "the campaign can use TensorRT", configure: func(f *ContainerFactory) { f.Process.Hardware = func() Hardware { return orin } },
 			runtime: &shRuntime{script: ready}, config: yoloInference(""),
 			reason: "the worker image has no TensorRT, which this campaign asks for or can use on this device"},
 		{name: "the campaign asks for TensorRT", runtime: &shRuntime{script: ready}, config: yoloInference("tensorrt"),
 			reason: "the worker image has no TensorRT, which this campaign asks for or can use on this device"},
-		{name: "the image cannot be pulled", runtime: &shRuntime{err: errors.New("preparing model worker image: not found")}, config: cpu,
-			reason: "the worker did not start in its container: preparing model worker image: not found", attempts: 1},
+		{name: "the container cannot be created", runtime: &shRuntime{err: errors.New("creating model worker container: no space left on device")}, config: cpu,
+			reason: "the worker did not start in its container: creating model worker container: no space left on device", attempts: 1},
 		{name: "the worker dies in its container", runtime: &shRuntime{script: `echo 'ImportError: libfoo.so' >&2; exit 1`}, config: cpu,
 			reason: "the worker did not start in its container: loading campaign model: exit status 1: ImportError: libfoo.so\n", attempts: 1},
 	} {
@@ -244,10 +267,10 @@ func btoi(b bool) int {
 // was not used, so the error says both.
 func TestContainerAndProcessBothFailingSaysBoth(t *testing.T) {
 	process := &processCalls{err: errors.New("downloading campaign runtime: no route to host")}
-	factory := containerFactory(t, &shRuntime{err: errors.New("pull failed")}, process)
+	factory := containerFactory(t, &shRuntime{err: errors.New("unpack failed")}, process)
 	_, err := factory.Start(context.Background(), data.CampaignInference{Model: "owner/model"})
 	// The message is what the campaign's status shows.
-	want := "downloading campaign runtime: no route to host; before that, the worker did not start in its container: pull failed"
+	want := "downloading campaign runtime: no route to host; before that, the worker did not start in its container: unpack failed"
 	if message := fmt.Sprint(err); !errors.Is(err, process.err) || message != want {
 		t.Fatalf("start error %q, want %q", message, want)
 	}
@@ -256,40 +279,6 @@ func TestContainerAndProcessBothFailingSaysBoth(t *testing.T) {
 	_, err = factory.Start(context.Background(), data.CampaignInference{Model: "owner/model"})
 	if message := fmt.Sprint(err); !errors.Is(err, process.err) || message != fmt.Sprint(process.err) {
 		t.Fatalf("start error %q", message)
-	}
-}
-
-// An image that cannot be pulled is not pulled again at every worker start.
-func TestContainerThatCannotBeCreatedIsNotTriedAgainForAWhile(t *testing.T) {
-	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
-	previous := timeNow
-	timeNow = func() time.Time { return now }
-	t.Cleanup(func() { timeNow = previous })
-	runtime := &shRuntime{script: `echo '{"type":"ready","accelerator":{"active":"cpu"}}'; sleep 30`, err: errors.New("pull failed")}
-	factory := containerFactory(t, runtime, &processCalls{})
-	start := func() (string, string) {
-		t.Helper()
-		session, err := factory.Start(context.Background(), data.CampaignInference{Model: "owner/model"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer session.Close()
-		return isolationOf(t, session)
-	}
-	for range 3 {
-		if mode, reason := start(); mode != "process" || reason != "the worker did not start in its container: pull failed" {
-			t.Fatalf("isolation %q, reason %q", mode, reason)
-		}
-		now = now.Add(time.Minute)
-	}
-	if started, _ := runtime.counts(); started != 1 {
-		t.Fatalf("the container was tried %d times within the interval", started)
-	}
-	// The image is published; the next attempt, after the interval, finds it.
-	runtime.err = nil
-	now = now.Add(tensorRTBindingsRetry)
-	if mode, _ := start(); mode != "container" {
-		t.Fatalf("after the interval the worker runs as a %s", mode)
 	}
 }
 
@@ -371,41 +360,86 @@ func TestContainerThatKeepsExitingYieldsToTheProcess(t *testing.T) {
 	again.Close()
 }
 
-// The image is labelled by its Dockerfile and checked by the agent, so both
-// must name the lock the same way.
+// The agent serves the build context, the Dockerfile labels the image with
+// its hash, and the agent runs only an image with that label, so all three
+// must name the same files the same way.
 func TestWorkerImageIsBuiltForTheHashTheAgentChecks(t *testing.T) {
 	hash := sha256.New()
-	for _, name := range []string{"pyproject.toml", "uv.lock"} {
+	served := WorkerBuildContext()
+	for _, name := range []string{"Dockerfile", "pyproject.toml", "uv.lock"} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if !bytes.Equal(served[name], b) {
+			t.Fatalf("the build context's %s is not the file in this directory", name)
+		}
 		hash.Write(b)
 	}
-	if want := hex.EncodeToString(hash.Sum(nil))[:16]; DepsHash() != want {
-		t.Fatalf("DepsHash %s, want %s", DepsHash(), want)
-	}
-	dockerfile, err := os.ReadFile("Dockerfile")
-	if err != nil {
-		t.Fatal(err)
+	if want := hex.EncodeToString(hash.Sum(nil))[:16]; DepsHash() != want || len(served) != 3 {
+		t.Fatalf("DepsHash %s, want %s, over %d files", DepsHash(), want, len(served))
 	}
 	for _, want := range []string{
-		`RUN test "$(cat pyproject.toml uv.lock | sha256sum | cut -c1-16)" = "$DEPS_HASH"`,
+		"COPY Dockerfile pyproject.toml uv.lock ./",
+		`RUN test "$(cat Dockerfile pyproject.toml uv.lock | sha256sum | cut -c1-16)" = "$DEPS_HASH"`,
 		WorkerImageDepsLabel + `="$DEPS_HASH"`,
 		"UV_PROJECT_ENVIRONMENT=" + filepath.ToSlash(filepath.Dir(filepath.Dir(workerImagePython))),
 		"uv:" + uvVersion + "@sha256:",
 	} {
-		if !strings.Contains(string(dockerfile), want) {
+		if !strings.Contains(string(served["Dockerfile"]), want) {
 			t.Errorf("Dockerfile lacks %q", want)
 		}
 	}
 }
 
-// An agent must never ship pointing at a tag, which can move or not exist
-// yet: no image at all, or one pinned by digest.
-func TestWorkerImageIsUnsetOrPinnedByDigest(t *testing.T) {
-	if WorkerImage != "" && !regexp.MustCompile(`^ghcr\.io/wendylabsinc/wendy-inference-worker@sha256:[0-9a-f]{64}$`).MatchString(WorkerImage) {
-		t.Fatalf("WorkerImage %q is not pinned by digest", WorkerImage)
+// What the command line is told before it deploys a campaign.
+func TestWorkerImageInfoTellsTheCommandLineWhatToBuild(t *testing.T) {
+	runtime := &shRuntime{}
+	factory := containerFactory(t, runtime, &processCalls{})
+	present := factory.WorkerImage(context.Background())
+	if present.Repository != "wendy-inference-worker" || present.DepsHash != DepsHash() || !present.Present || present.BuildContext != nil {
+		t.Fatalf("with the image on the device: %+v", present)
+	}
+	if testWorkerImage != WorkerImageReference("localhost:5000/") {
+		t.Fatalf("the image is looked up as %q", WorkerImageReference("localhost:5000/"))
+	}
+	for name, labels := range map[string]map[string]string{"no image": nil, "another agent's image": {WorkerImageDepsLabel: "0000000000000000"}} {
+		runtime.labels = labels
+		absent := factory.WorkerImage(context.Background())
+		if absent.Repository != "wendy-inference-worker" || absent.DepsHash != DepsHash() || absent.Present || len(absent.BuildContext["Dockerfile"]) == 0 || len(absent.BuildContext) != 3 {
+			t.Fatalf("%s: repository %q, hash %q, present %v, %d context files", name, absent.Repository, absent.DepsHash, absent.Present, len(absent.BuildContext))
+		}
+	}
+	// An agent that can run no container asks for nothing to be built.
+	factory.Runtime = nil
+	if info := factory.WorkerImage(context.Background()); info.Repository != "" || info.BuildContext != nil {
+		t.Fatalf("without containerd: %+v", info)
+	}
+}
+
+// An agent update that changes the worker's dependencies leaves an image
+// nothing will run again.
+func TestWorkerImageOfAnotherAgentVersionIsRemoved(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		labels  map[string]string
+		removed bool
+	}{
+		{"this agent's image", map[string]string{WorkerImageDepsLabel: DepsHash()}, false},
+		{"another agent's image", map[string]string{WorkerImageDepsLabel: "0000000000000000"}, true},
+		// The name is reserved by convention only: an app could be pushed there.
+		{"not a worker image", map[string]string{"other": "label"}, false},
+		{"no image", nil, false},
+	} {
+		runtime := &shRuntime{}
+		factory := containerFactory(t, runtime, &processCalls{})
+		runtime.labels = test.labels
+		if err := factory.RemoveStaleImage(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if removed := len(runtime.deleted) == 1 && runtime.deleted[0] == testWorkerImage; removed != test.removed || len(runtime.deleted) > 1 {
+			t.Errorf("%s: removed %q", test.name, runtime.deleted)
+		}
 	}
 }
 
@@ -414,13 +448,18 @@ func TestWorkerImageIsUnsetOrPinnedByDigest(t *testing.T) {
 // network, and only the worker's own mounts.
 type dockerRuntime struct{ name string }
 
-func (d dockerRuntime) RunInferenceWorker(ctx context.Context, worker WorkerContainer, stdin io.Reader, stdout, stderr io.Writer) (func() error, error) {
-	for key, want := range worker.ImageLabels {
-		got, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", `{{index .Config.Labels "`+key+`"}}`, worker.Image).Output()
-		if err != nil || strings.TrimSpace(string(got)) != want {
-			return nil, fmt.Errorf("image %s has label %s=%q, and this agent needs %q: %v", worker.Image, key, strings.TrimSpace(string(got)), want, err)
-		}
+func (dockerRuntime) InferenceImageLabels(ctx context.Context, image string) (map[string]string, bool, error) {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{json .Config.Labels}}", image).Output()
+	if err != nil {
+		return nil, false, nil
 	}
+	labels := map[string]string{}
+	return labels, true, json.Unmarshal(out, &labels)
+}
+
+func (dockerRuntime) RemoveInferenceImage(context.Context, string) error { return nil }
+
+func (d dockerRuntime) RunInferenceWorker(ctx context.Context, worker WorkerContainer, stdin io.Reader, stdout, stderr io.Writer) (func() error, error) {
 	args := []string{"run", "--rm", "--interactive", "--name", d.name, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
 		"--network=host", "--tmpfs=" + WorkerScratch + ":size=64m,mode=1777,noexec,nosuid,nodev", "--workdir", worker.Dir}
 	if uid := os.Getuid(); uid >= 0 {
@@ -450,20 +489,29 @@ func (d dockerRuntime) RunInferenceWorker(ctx context.Context, worker WorkerCont
 	}, nil
 }
 
-// Opt-in integration: the real worker.py on a real worker image, through the
-// factory. The image workflow runs it before publishing; nothing here needs
-// an agent, a camera or containerd.
+// Opt-in integration: the image built from exactly the build context the
+// agent serves to the command line, and the real worker.py in it, through the
+// factory. Nothing here needs an agent, a camera or containerd.
 func TestContainerWorkerImageSmoke(t *testing.T) {
-	image := os.Getenv("WENDY_INFERENCE_SMOKE_IMAGE")
-	if image == "" {
-		t.Skip("set WENDY_INFERENCE_SMOKE_IMAGE to a locally built worker image; needs docker and downloads a model")
+	if os.Getenv("WENDY_INFERENCE_SMOKE") == "" {
+		t.Skip("set WENDY_INFERENCE_SMOKE=1; needs docker, builds the worker image and downloads a model")
 	}
 	root := os.Getenv("WENDY_INFERENCE_SMOKE_CACHE")
 	if root == "" {
 		root = t.TempDir()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	buildDir := t.TempDir()
+	for name, contents := range WorkerBuildContext() {
+		if err := os.WriteFile(filepath.Join(buildDir, name), contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	image := "wendy-inference-worker-smoke:" + DepsHash()
+	if out, err := exec.CommandContext(ctx, "docker", "build", "--build-arg", "DEPS_HASH="+DepsHash(), "--tag", image, buildDir).CombinedOutput(); err != nil {
+		t.Fatalf("building the worker image: %v\n%s", err, out)
+	}
 	factory := &ContainerFactory{Image: image, Runtime: dockerRuntime{name: fmt.Sprintf("wendy-inference-smoke-%d", os.Getpid())}, Process: &ManagedFactory{Root: root},
 		process: func(_ context.Context, _ data.CampaignInference, reason string) (Session, error) {
 			return nil, errors.New("no process fallback in this test")

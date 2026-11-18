@@ -9,22 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 )
 
-// WorkerImage is the image the model worker's container runs, pinned by
-// digest. While it is empty, every worker runs as a process. To set it: run
-// .github/workflows/inference-worker.yml with publish, make the package
-// public, check that a device can pull it, and only then write
-// "ghcr.io/wendylabsinc/wendy-inference-worker@sha256:<manifest digest>" here.
-// An image whose dependencies are not this agent's (DepsHash) is refused at
-// start, so changing pyproject.toml or uv.lock needs a new image and pin.
-const WorkerImage = ""
-
 const (
+	// WorkerRepository is the repository in the device registry that holds
+	// the model worker's image, at tag "latest". The agent never pulls it:
+	// `wendy data campaign deploy` builds it and pushes it there, the way
+	// `wendy run` delivers an app's image. The name is reserved by nothing but
+	// this constant, so anything that can push to the registry can replace
+	// the image, as it can replace an app's.
+	WorkerRepository = "wendy-inference-worker"
 	// WorkerImageDepsLabel is the image label holding the DepsHash the image
 	// was built for.
 	WorkerImageDepsLabel = "sh.wendy.inference.deps"
@@ -36,12 +32,35 @@ const (
 	WorkerScratch = "/tmp"
 )
 
-// DepsHash names the Python environment the embedded worker needs: the first
-// 16 hex digits of the SHA-256 of pyproject.toml followed by uv.lock. The
-// image's Dockerfile computes the same and refuses to build with another.
+// WorkerImageReference is the name containerd knows the worker's image by,
+// given the prefix the device registry registers images under, such as
+// "localhost:5000/".
+func WorkerImageReference(registryPrefix string) string {
+	return registryPrefix + WorkerRepository + ":latest"
+}
+
+// workerImageFiles are the image's whole build context, in the order DepsHash
+// and the Dockerfile hash them.
+var workerImageFiles = []string{"Dockerfile", "pyproject.toml", "uv.lock"}
+
+// WorkerBuildContext is what the worker's image is built from. The agent
+// serves it to the command line, so that an image is always built from the
+// files of the agent that will run it, whatever the command line's version.
+func WorkerBuildContext() map[string][]byte {
+	files := map[string][]byte{}
+	for _, name := range workerImageFiles {
+		files[name], _ = assets.ReadFile(name)
+	}
+	return files
+}
+
+// DepsHash names the image the embedded worker needs: the first 16 hex digits
+// of the SHA-256 of its build context. The Dockerfile computes the same and
+// refuses to build with another, and the agent runs no image labelled with
+// another.
 func DepsHash() string {
 	hash := sha256.New()
-	for _, name := range []string{"pyproject.toml", "uv.lock"} {
+	for _, name := range workerImageFiles {
 		b, _ := assets.ReadFile(name)
 		hash.Write(b)
 	}
@@ -64,12 +83,18 @@ type WorkerMount struct {
 	ReadOnly bool
 }
 
-// ContainerRuntime is the containerd surface the worker needs.
+// ContainerRuntime is the containerd surface the worker needs. None of it
+// reaches a network: an image is on the device or it is not.
 type ContainerRuntime interface {
-	// RunInferenceWorker starts the worker, fetching its image on first use.
-	// Cancelling ctx kills it. wait must be called: it returns how the worker
-	// ended, like exec.Cmd.Wait, once it has ended, stdout and stderr hold
-	// everything it wrote, and its container is removed.
+	// InferenceImageLabels are the labels of an image on the device, and
+	// whether it is there at all.
+	InferenceImageLabels(ctx context.Context, image string) (labels map[string]string, found bool, err error)
+	// RemoveInferenceImage removes an image from the device.
+	RemoveInferenceImage(ctx context.Context, image string) error
+	// RunInferenceWorker starts the worker. Cancelling ctx kills it. wait
+	// must be called: it returns how the worker ended, like exec.Cmd.Wait,
+	// once it has ended, stdout and stderr hold everything it wrote, and its
+	// container is removed.
 	RunInferenceWorker(ctx context.Context, worker WorkerContainer, stdin io.Reader, stdout, stderr io.Writer) (wait func() error, err error)
 }
 
@@ -79,7 +104,8 @@ type ContainerRuntime interface {
 // other downloaded. A worker that cannot run in a container runs through
 // Process, exactly as before, and its status says why.
 type ContainerFactory struct {
-	// Image is the worker image; empty means none is published.
+	// Image is the worker image's name in containerd (WorkerImageReference).
+	// Empty means the device registry, and so the image, is unavailable.
 	Image string
 	// Runtime is nil on an agent without containerd.
 	Runtime ContainerRuntime
@@ -88,20 +114,16 @@ type ContainerFactory struct {
 
 	// process starts the fallback. Tests replace it.
 	process func(ctx context.Context, config data.CampaignInference, notContained string) (Session, error)
-
-	// launchFailure is why the last container could not be created at all,
-	// such as an image that cannot be pulled. No container is tried again
-	// for tensorRTBindingsRetry, so an offline device or a missing image
-	// costs one attempt per interval rather than one per worker start.
-	launchMu       sync.Mutex
-	launchFailure  string
-	launchFailedAt time.Time
 }
 
-const containerNotStarted = "the worker did not start in its container: "
+const (
+	containerNotStarted = "the worker did not start in its container: "
+	// What an operator does about a missing or outdated image.
+	deployForImage = "deploy the campaign with a current wendy CLI on a machine with Docker, which builds the image and pushes it to this device"
+)
 
 func (f *ContainerFactory) Start(ctx context.Context, config data.CampaignInference) (Session, error) {
-	plan, reason := f.containerPlan(config)
+	plan, reason := f.containerPlan(ctx, config)
 	attempted := reason == ""
 	if attempted {
 		session, err := f.startContainer(ctx, config, plan)
@@ -126,12 +148,9 @@ func (f *ContainerFactory) Start(ctx context.Context, config data.CampaignInfere
 
 // containerPlan is the worker's accelerator plan when it can run in a
 // container, and otherwise why it cannot.
-func (f *ContainerFactory) containerPlan(config data.CampaignInference) (AcceleratorPlan, string) {
-	switch {
-	case f.Runtime == nil:
-		return AcceleratorPlan{}, "this agent has no containerd"
-	case f.Image == "":
-		return AcceleratorPlan{}, "this agent pins no model worker image yet"
+func (f *ContainerFactory) containerPlan(ctx context.Context, config data.CampaignInference) (AcceleratorPlan, string) {
+	if reason := f.unavailable(); reason != "" {
+		return AcceleratorPlan{}, reason
 	}
 	hardware, library := f.Process.probe(config)
 	plan, binding := planAccelerator(config, hardware, library)
@@ -141,15 +160,80 @@ func (f *ContainerFactory) containerPlan(config data.CampaignInference) (Acceler
 		// that has run in a container, so these campaigns keep the process.
 		return plan, "the worker image has no TensorRT, which this campaign asks for or can use on this device"
 	}
-	if held := f.Process.heldOff(containerCrashKey(config), "the worker's container exited %d times within %d minutes, so this model runs as a process until %s; last exit: %s"); held != "" {
-		return plan, held
+	if reason := f.imageUnusable(ctx); reason != "" {
+		return plan, reason
 	}
-	f.launchMu.Lock()
-	defer f.launchMu.Unlock()
-	if f.launchFailure != "" && timeNow().Sub(f.launchFailedAt) < tensorRTBindingsRetry {
-		return plan, containerNotStarted + f.launchFailure
+	return plan, f.Process.heldOff(containerCrashKey(config), "the worker's container exited %d times within %d minutes, so this model runs as a process until %s; last exit: %s")
+}
+
+// unavailable says why this agent can run no worker in a container at all.
+func (f *ContainerFactory) unavailable() string {
+	switch {
+	case f.Runtime == nil:
+		return "this agent has no containerd"
+	case f.Image == "":
+		return "this agent's device registry, which holds the model worker image, is unavailable"
 	}
-	return plan, ""
+	return ""
+}
+
+// imageUnusable says why the image on the device cannot run this agent's
+// worker, and what to do about it, or "" when it can. It only looks: the
+// agent never fetches the image.
+func (f *ContainerFactory) imageUnusable(ctx context.Context) string {
+	labels, found, err := f.Runtime.InferenceImageLabels(ctx, f.Image)
+	switch {
+	case err != nil:
+		return "the model worker image on this device could not be read: " + err.Error()
+	case !found:
+		return "this device has no model worker image; " + deployForImage
+	case labels[WorkerImageDepsLabel] != DepsHash():
+		return fmt.Sprintf("the model worker image on this device was built for another agent version (its %s label is %q, this agent needs %q); %s",
+			WorkerImageDepsLabel, labels[WorkerImageDepsLabel], DepsHash(), deployForImage)
+	}
+	return ""
+}
+
+// WorkerImageInfo is what the command line needs to put the worker's image
+// on the device.
+type WorkerImageInfo struct {
+	// Repository is where to push it in the device registry. Empty when this
+	// agent can run no worker in a container, and there is nothing to build.
+	Repository string
+	DepsHash   string
+	// Present is whether an image for DepsHash is already on the device.
+	Present bool
+	// BuildContext is what to build it from, when it is not.
+	BuildContext map[string][]byte
+}
+
+func (f *ContainerFactory) WorkerImage(ctx context.Context) WorkerImageInfo {
+	if f.unavailable() != "" {
+		return WorkerImageInfo{}
+	}
+	info := WorkerImageInfo{Repository: WorkerRepository, DepsHash: DepsHash(), Present: f.imageUnusable(ctx) == ""}
+	if !info.Present {
+		info.BuildContext = WorkerBuildContext()
+	}
+	return info
+}
+
+// RemoveStaleImage removes a worker image built for another agent version,
+// which nothing will run again: after an agent update that changes the
+// worker's dependencies it would otherwise stay on the device. An image at
+// the reserved name without the label is not a worker image, and is left.
+func (f *ContainerFactory) RemoveStaleImage(ctx context.Context) error {
+	if f.unavailable() != "" {
+		return nil
+	}
+	labels, found, err := f.Runtime.InferenceImageLabels(ctx, f.Image)
+	if err != nil || !found {
+		return err
+	}
+	if built, ok := labels[WorkerImageDepsLabel]; !ok || built == DepsHash() {
+		return nil
+	}
+	return f.Runtime.RemoveInferenceImage(ctx, f.Image)
 }
 
 // containerCrashKey holds a model's container crashes apart from its TensorRT
@@ -165,7 +249,7 @@ func (f *ContainerFactory) startContainer(ctx context.Context, config data.Campa
 	}
 	// The worker is the agent's own, so it cannot differ from what this agent
 	// expects. Only its dependencies come from the image, which must be built
-	// for exactly this lock.
+	// from exactly this agent's build context.
 	dir, err := writeWorkerFiles(root)
 	if err != nil {
 		return nil, err
@@ -209,12 +293,6 @@ func (f *ContainerFactory) launcher(worker WorkerContainer) launcher {
 		stdinReader, stdin := io.Pipe()
 		stdout, stdoutWriter := io.Pipe()
 		wait, err := f.Runtime.RunInferenceWorker(ctx, worker, stdinReader, stdoutWriter, stderr)
-		f.launchMu.Lock()
-		f.launchFailure, f.launchFailedAt = "", timeNow()
-		if err != nil && ctx.Err() == nil {
-			f.launchFailure = err.Error()
-		}
-		f.launchMu.Unlock()
 		if err != nil {
 			return nil, nil, nil, err
 		}

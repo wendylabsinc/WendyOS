@@ -210,19 +210,24 @@ labels, a confidence threshold, and an inference rate. The agent supports
 Transformers models and compatible YOLO ONNX exports through `backend: yolo_onnx`.
 
 Set an event such as `person_detected` and include the same event in
-`capture.triggers`. On first use, the agent downloads the model worker's Python
-runtime and the pinned model. This needs network access and storage outside
-the episode quota. Check `inference_status` in `campaign inspect` to verify
-the runtime and each camera.
+`capture.triggers`. On first use, the agent downloads the pinned model. This
+needs network access and storage outside the episode quota. Check
+`inference_status` in `campaign inspect` to verify the runtime and each camera.
 
-The agent runs the model in a container when it has containerd, its release
-pins a worker image, and the campaign neither asks for TensorRT nor can use it
-on the device. Otherwise the model runs as a process of the agent, as it does
-on a macOS agent. A worker that does not start in its container starts as a
-process instead, so a campaign never stops for lack of one.
+On a device with containerd, the agent runs the model in a container. The
+first time you deploy a campaign with inference to such a device,
+`wendy data campaign deploy` builds the container's image on your machine and
+pushes it to the device, as `wendy run` does for an app: a few minutes and a
+push of about 1.2 GB, once per device, and again only after an agent update
+that changes the worker's dependencies. That needs Docker running on your
+machine. Without Docker, or over a connection through Wendy Cloud, the
+campaign is deployed all the same, one line says why there is no image, and
+the model runs as a process of the agent, on a Python runtime the agent
+downloads on first use. That is also how it runs on a macOS agent, and for a
+campaign that asks for TensorRT or can use it on the device.
 `inference_status.accelerator.isolation` says which it is (`container` or
-`process`), and `isolation_reason` why it is not a container. Both use the
-same model cache.
+`process`), and `isolation_reason` why it is not a container and what to do
+about it. Both use the same model cache.
 
 The rate is an upper bound: a model too slow for it scores as fast as it can,
 and `inference_status.throughput` shows the rate it achieves. The agent

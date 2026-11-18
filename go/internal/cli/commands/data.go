@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -99,22 +100,40 @@ func newDataCampaignDeployCmd() *cobra.Command {
 		if err := registerCloudApps(cmd.Context(), conn, []string{data.CampaignAppID(plan.Name)}, skipCloudRegistration); err != nil {
 			return err
 		}
-		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
-		if err != nil {
-			return campaignDeployError(err)
-		}
-		if jsonOutput {
-			_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
-			return err
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
-		for _, warning := range campaign.GetWarnings() {
-			fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", warning)
-		}
-		return nil
+		return deployCampaign(cmd.Context(), conn, plan, contents, jsonOutput, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	}}
 	command.Flags().BoolVar(&skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering the campaign in Cloud (offline use)")
 	return command
+}
+
+// deployCampaign deploys a campaign and prints the result to stdout. For a
+// campaign with inference it first puts the model worker's container image on
+// the device (ensureInferenceWorkerImage); that step's progress and notices
+// go to stderr, so stdout carries the result alone.
+func deployCampaign(ctx context.Context, conn *grpcclient.AgentConnection, plan data.Campaign, contents []byte, asJSON bool, stdout, stderr io.Writer) error {
+	if plan.Inference.IsEnabled() {
+		imageCtx := ctx
+		if asJSON || !isInteractiveTerminal() {
+			// Plain build progress on stderr, as for a detached `wendy run --json`.
+			imageCtx = context.WithValue(ctx, detachedJSONRunKey{}, true)
+		}
+		if err := ensureInferenceWorkerImage(imageCtx, conn, stderr); err != nil {
+			return err
+		}
+	}
+	campaign, err := conn.DataService.CampaignDeploy(ctx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
+	if err != nil {
+		return campaignDeployError(err)
+	}
+	if asJSON {
+		_, err = stdout.Write(campaign.GetPlanJson())
+		return err
+	}
+	fmt.Fprintf(stdout, "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
+	for _, warning := range campaign.GetWarnings() {
+		fmt.Fprintf(stdout, "Warning: %s\n", warning)
+	}
+	return nil
 }
 
 // campaignDeployError explains the one refusal a new CLI can get from an

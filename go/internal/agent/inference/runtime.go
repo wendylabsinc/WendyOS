@@ -30,7 +30,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 )
 
-//go:embed worker.py accelerator.py pyproject.toml uv.lock
+//go:embed worker.py accelerator.py pyproject.toml uv.lock Dockerfile
 var assets embed.FS
 
 const uvVersion = "0.10.9"

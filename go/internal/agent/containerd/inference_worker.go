@@ -11,6 +11,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
@@ -27,26 +28,51 @@ const (
 	// version label, which keeps it out of app listings, stats, restarts and
 	// app-sidecar reconciliation. Its value is the worker's image.
 	labelKeyInferenceWorker = "sh.wendy/inference.worker"
-	// inferenceImagePullTimeout ends a pull that hangs, so the campaign gets
-	// its process worker instead of waiting forever. It is the worker's own
-	// ready deadline (inference/runtime.go).
-	inferenceImagePullTimeout = 15 * time.Minute
 )
 
 func inferenceWorkerLabels(worker inference.WorkerContainer) map[string]string {
 	return map[string]string{labelKeyInferenceWorker: worker.Image}
 }
 
-// inferenceImageMu makes campaigns that start together share one pull.
-// ponytail: one lock for every image; per-image locks once there are several.
+// inferenceImageMu makes campaigns that start together share one unpack of
+// the image. ponytail: one lock for every image; per-image locks once there
+// are several.
 var inferenceImageMu sync.Mutex
+
+// InferenceImageLabels implements inference.ContainerRuntime. The image is
+// one the command line pushed to the device registry, which registers it in
+// containerd; nothing here pulls.
+func (c *Client) InferenceImageLabels(ctx context.Context, name string) (map[string]string, bool, error) {
+	ctx = c.withNamespace(ctx)
+	image, err := c.client.GetImage(ctx, name)
+	if errdefs.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	config, err := image.Spec(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	return config.Config.Labels, true, nil
+}
+
+// RemoveInferenceImage implements inference.ContainerRuntime. The delete is
+// synchronous, so the image's layers are collected before it returns.
+func (c *Client) RemoveInferenceImage(ctx context.Context, name string) error {
+	err := c.client.ImageService().Delete(c.withNamespace(ctx), name, images.SynchronousDelete())
+	if errdefs.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
 
 // RunInferenceWorker implements inference.ContainerRuntime.
 func (c *Client) RunInferenceWorker(ctx context.Context, worker inference.WorkerContainer, stdin io.Reader, stdout, stderr io.Writer) (wait func() error, err error) {
 	defer func() {
 		if err != nil && ctx.Err() == nil {
-			// The campaign's status has the reason too; the factory does not
-			// try again for some minutes, so this is not logged at every start.
+			// The campaign's status has the reason too.
 			c.logger.Warn("Model worker container did not start; the worker runs as a process", zap.String("image", worker.Image), zap.Error(err))
 		}
 	}()
@@ -142,19 +168,16 @@ func (c *Client) RunInferenceWorker(ctx context.Context, worker inference.Worker
 	}, nil
 }
 
-// inferenceImage is the worker's image, pulled and unpacked on first use, and
-// refused unless it carries the labels the worker needs.
+// inferenceImage is the worker's image as the command line pushed it,
+// unpacked on first use, and refused unless it carries the labels the worker
+// needs. A cache prune may have dropped the unpacked layers; they are unpacked
+// again from the image's content, which its name keeps on the device.
 func (c *Client) inferenceImage(ctx context.Context, worker inference.WorkerContainer) (containerd.Image, error) {
 	inferenceImageMu.Lock()
 	defer inferenceImageMu.Unlock()
 	image, err := c.client.GetImage(ctx, worker.Image)
 	if err != nil {
-		pullCtx, cancel := context.WithTimeout(ctx, inferenceImagePullTimeout)
-		defer cancel()
-		image, err = c.client.Pull(pullCtx, worker.Image, containerd.WithPullUnpack)
-		if err != nil {
-			return nil, fmt.Errorf("preparing model worker image %q (first use requires downloading the image): %w", worker.Image, err)
-		}
+		return nil, fmt.Errorf("model worker image %q is not on this device: %w", worker.Image, err)
 	}
 	config, err := image.Spec(ctx)
 	if err != nil {
