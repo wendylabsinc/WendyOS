@@ -61,6 +61,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Bool("espnow", false, "Lite: enable the ESP-NOW carrier")
 	configure.Flags().Uint32("espnow-channel", 0, "Lite: ESP-NOW 2.4 GHz channel")
 	configure.Flags().Uint32("espnow-links", 0, "Lite: limit outgoing ESP-NOW mesh connections")
+	configure.Flags().String("espnow-rate", "", "Lite: preferred ESP-NOW unicast rate in Mbit/s (default, 1, 2, 6, 12, 24)")
 	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous Wi-Fi Aware mesh connections")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		changed := false
