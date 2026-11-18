@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +23,6 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -38,7 +36,8 @@ const (
 // production path (runProducer, the shaped GStreamer pipelines, the tap pump,
 // the hub). It proves what the unit tests cannot: that real GStreamer hands
 // in-agent consumers decoded frames, runs the encoder only while a viewer
-// watches, and keeps encoding while nobody reads the tap.
+// watches, and keeps encoding while nobody wants the tap's frames and the pump
+// only drains it at its idle rate.
 //
 // The CI media job runs it after merge; on a device it runs as root beside the
 // agent, so it creates its own node below the agent's bands (96-255) and never
@@ -107,7 +106,9 @@ func TestMJPEGCameraPixelsAndEncoderOnDemand(t *testing.T) {
 	}
 
 	svcCtx, svcCancel := context.WithCancel(ctx)
+	var tapReads atomic.Int64 // whole frames the tap pumps have read off fd 3
 	svc := &VideoService{
+		tapFrameRead:      func(string) { tapReads.Add(1) },
 		logger:            logger,
 		ctx:               svcCtx,
 		cancel:            svcCancel,
@@ -200,28 +201,36 @@ func TestMJPEGCameraPixelsAndEncoderOnDemand(t *testing.T) {
 		t.Fatalf("pixel subscriber lost the picture across the encoder restart: %s; hub error: %v", problem, hub.terminalErr())
 	}
 
-	// Step 5: nobody reads the tap now, and the encoder must not notice.
+	// Step 5: nobody wants the tap's frames now. The pump drains it at its idle
+	// rate, far below the camera's, and the encoder must not notice.
 	hub.unsubscribe(pixelID)
 	pixels.stop()
+	const window = 3 * time.Second
 	before, beforeBytes := viewer.counts()
-	// Sampled twice: nobody reads the tap if its pipe is full and stays so. The
-	// first sample waits long enough for the pipe to fill at any page size.
-	time.Sleep(1500 * time.Millisecond)
-	early, _, earlyErr := tapBacklog()
-	time.Sleep(1500 * time.Millisecond)
-	late, capacity, lateErr := tapBacklog()
+	readsBefore := tapReads.Load()
+	time.Sleep(window)
+	drained := tapReads.Load() - readsBefore
 	after, afterBytes := viewer.counts()
 	// x264enc writes an access unit delimiter ahead of every picture.
 	pictures := bytes.Count(viewer.streamSince(beforeBytes)[:afterBytes-beforeBytes], []byte{0, 0, 1, 9})
-	t.Logf("with the tap unread, the viewer received %d chunks, %d bytes, %d pictures in 3 s (the feed writes %d)",
-		after-before, afterBytes-beforeBytes, pictures, 3*pixelsFixtureFPS)
+	t.Logf("with nobody wanting the tap, the viewer received %d chunks, %d bytes, %d pictures in %s (the feed writes %d)",
+		after-before, afterBytes-beforeBytes, pictures, window, int(window/time.Second)*pixelsFixtureFPS)
 	if after-before < 10 {
-		t.Fatalf("an unread tap stalled the encoded branch: %d chunks in 3 s; hub error: %v", after-before, hub.terminalErr())
+		t.Fatalf("an unread tap stalled the encoded branch: %d chunks in %s; hub error: %v", after-before, window, hub.terminalErr())
 	}
-	if earlyErr != nil || lateErr != nil || late == 0 || early != late {
-		t.Fatalf("tap was read with no pixel subscriber, so this did not test an unread tap: %d then %d bytes waiting (errors %v, %v)", early, late, earlyErr, lateErr)
+	// One frame per tapIdleDrainEvery, plus one the pump may have been reading
+	// for the pixel subscriber as it left and one for timer slack.
+	maxDrained := int64(window/tapIdleDrainEvery) + 2
+	t.Logf("with nobody wanting the tap, the pump read %d frames off it in %s (idle rate: one every %s, at most %d; the feed writes %d)",
+		drained, window, tapIdleDrainEvery, maxDrained, int(window/time.Second)*pixelsFixtureFPS)
+	if drained > maxDrained {
+		t.Fatalf("the pump read %d tap frames in %s with nobody wanting them, more than the idle rate allows (%d)", drained, window, maxDrained)
 	}
-	t.Logf("the tap pipe held %d bytes, unread, at 1.5 s and 3 s; its capacity is %d", late, capacity)
+	// A quarter of the idle rate: a pump that stopped reading altogether is the
+	// stall this rate exists to prevent.
+	if minDrained := int64(window/tapIdleDrainEvery) / 4; drained < minDrained {
+		t.Fatalf("the pump read %d tap frames in %s with nobody wanting them, want at least %d: an idle tap must still be drained", drained, window, minDrained)
+	}
 
 	// Step 6: pixels again, then the viewer leaves: after the grace the
 	// pipeline drops the encoder and the pixel subscriber keeps its frames.
@@ -322,62 +331,6 @@ func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logg
 	}
 	t.Logf("created %s (%s)", path, label)
 	return path
-}
-
-// tapBacklog reports the bytes waiting in the running pipeline's tap pipe (its
-// fd 3), and the pipe's capacity. The pipeline is this process's one
-// gst-launch-1.0 child, and the pipe's read end is the one descriptor this
-// process holds on it, as the agent's write end was closed after the start.
-func tapBacklog() (pending, capacity int, err error) {
-	stats, err := filepath.Glob("/proc/[0-9]*/stat")
-	if err != nil {
-		return 0, 0, err
-	}
-	parent := strconv.Itoa(os.Getpid())
-	var pipe string
-	for _, stat := range stats {
-		b, err := os.ReadFile(stat)
-		if err != nil {
-			continue // exited meanwhile
-		}
-		// pid (comm) state ppid ...
-		line := string(b)
-		lparen, rparen := strings.IndexByte(line, '('), strings.LastIndexByte(line, ')')
-		if lparen < 0 || rparen < lparen || line[lparen+1:rparen] != "gst-launch-1.0" {
-			continue
-		}
-		if fields := strings.Fields(line[rparen+1:]); len(fields) < 2 || fields[1] != parent {
-			continue
-		}
-		if pipe != "" {
-			return 0, 0, errors.New("more than one pipeline is running")
-		}
-		if pipe, err = os.Readlink(filepath.Join(filepath.Dir(stat), "fd", "3")); err != nil {
-			return 0, 0, err
-		}
-	}
-	if !strings.HasPrefix(pipe, "pipe:") {
-		return 0, 0, fmt.Errorf("no pipeline with a pipe on fd 3 (found %q)", pipe)
-	}
-	fds, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		return 0, 0, err
-	}
-	for _, entry := range fds {
-		if link, err := os.Readlink("/proc/self/fd/" + entry.Name()); err != nil || link != pipe {
-			continue
-		}
-		fd, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			return 0, 0, err
-		}
-		if pending, err = unix.IoctlGetInt(fd, fionread); err != nil {
-			return 0, 0, err
-		}
-		capacity, err = unix.FcntlInt(uintptr(fd), unix.F_GETPIPE_SZ, 0)
-		return pending, capacity, err
-	}
-	return 0, 0, fmt.Errorf("this process holds no end of the tap %s", pipe)
 }
 
 // mjpegFeed writes the fixture's JPEG frames into the node.

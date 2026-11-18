@@ -1089,6 +1089,11 @@ type VideoService struct {
 	// subscribers remain (runShapedPipelines). Zero means defaultEncoderIdleGrace.
 	encoderIdleGrace time.Duration
 
+	// tapFrameRead, when set, is called each time a tap pump reads a whole frame
+	// off its pipe, whether it then delivers, discards or drains it. A test hook
+	// for counting reads; nil in production.
+	tapFrameRead func(device string)
+
 	ctx    context.Context    // cancelled on Shutdown; hub contexts are derived from this
 	cancel context.CancelFunc // cancels ctx
 	wg     sync.WaitGroup     // tracks active runProducer goroutines
