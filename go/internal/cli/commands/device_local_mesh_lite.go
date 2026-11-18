@@ -17,7 +17,7 @@ type liteNetProvider interface {
 	ConfigureNet(context.Context, models.ExternalDevice, func(*litepb.WendyComNetConfig) error) (*litepb.WendyComNetStatus, error)
 }
 
-var liteNetOnlyFlags = []string{"max-links", "ble-links", "wifi-links", "nan-links", "espnow", "espnow-channel", "espnow-links"}
+var liteNetOnlyFlags = []string{"max-links", "ble-links", "wifi-links", "nan-links", "espnow", "espnow-channel", "espnow-links", "espnow-rate"}
 
 func inspectLiteNet(cmd *cobra.Command, target *SelectedDevice) error {
 	provider, ok := target.Provider.(liteNetProvider)
@@ -46,9 +46,9 @@ func configureLiteNet(cmd *cobra.Command, target *SelectedDevice) error {
 		changed = changed || cmd.Flags().Changed(name)
 	}
 	if !changed {
-		return fmt.Errorf("specify --participate, --ble, --ble-mode, --infrastructure-wifi, --nan --espnow or a carrier setting; omitted settings are preserved")
+		return fmt.Errorf("specify --participate, --ble, --ble-mode, --infrastructure-wifi, --nan, --espnow or a carrier setting; omitted settings are preserved")
 	}
-	for _, flag := range []string{"espnow", "espnow-channel", "espnow-links"} {
+	for _, flag := range []string{"espnow", "espnow-channel", "espnow-links", "espnow-rate"} {
 		if cmd.Flags().Changed(flag) {
 			status, err := provider.NetStatus(cmd.Context(), *target.External)
 			if err != nil {
@@ -56,6 +56,9 @@ func configureLiteNet(cmd *cobra.Command, target *SelectedDevice) error {
 			}
 			if status == nil || status.EspnowSupported == nil {
 				return fmt.Errorf("device firmware does not expose ESP-NOW settings")
+			}
+			if cmd.Flags().Changed("espnow-rate") && (status.GetDesired() == nil || status.GetDesired().EspnowRate == nil) {
+				return fmt.Errorf("device firmware does not expose ESP-NOW rate settings")
 			}
 			break
 		}
@@ -70,6 +73,21 @@ func configureLiteNet(cmd *cobra.Command, target *SelectedDevice) error {
 }
 
 func updateLiteNetConfig(cmd *cobra.Command, config *litepb.WendyComNetConfig) error {
+	if cmd.Flags().Changed("espnow-rate") {
+		value, err := cmd.Flags().GetString("espnow-rate")
+		if err != nil {
+			return err
+		}
+		name := "WENDY_COM_ESPNOW_RATE_DEFAULT"
+		if value != "default" {
+			name = "WENDY_COM_ESPNOW_RATE_" + value + "_MBPS"
+		}
+		rate, ok := litepb.WendyComEspnowRate_value[name]
+		if !ok {
+			return fmt.Errorf("invalid ESP-NOW rate %q, choose default, 1, 2, 6, 12 or 24", value)
+		}
+		config.EspnowRate = litepb.WendyComEspnowRate(rate).Enum()
+	}
 	if cmd.Flags().Changed("espnow") {
 		value, err := cmd.Flags().GetBool("espnow")
 		if err != nil {
@@ -160,6 +178,9 @@ func printLiteNetStatus(cmd *cobra.Command, status *litepb.WendyComNetStatus) er
 		cmd.Printf("ESP-NOW: %t (supported: %t, applied: %t)\nESP-NOW channel: %d (effective: %d)\nESP-NOW outgoing limit: %d\nESP-NOW active links: %d\n",
 			config.GetEspnow(), status.GetEspnowSupported(), status.GetApplied().GetEspnow(),
 			config.GetEspnowChannel(), status.GetEspnowEffectiveChannel(), config.GetEspnowLinks(), status.GetEspnowActiveLinks())
+		if config != nil && config.EspnowRate != nil {
+			cmd.Printf("ESP-NOW preferred unicast rate: %d Mbit/s\n", int(config.GetEspnowRate()))
+		}
 		if status.GetEspnowError() != 0 {
 			cmd.Printf("ESP-NOW error: 0x%x\n", status.GetEspnowError())
 		}

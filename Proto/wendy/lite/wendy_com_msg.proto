@@ -135,6 +135,14 @@ enum WendyComBleProfile {
     WENDY_COM_BLE_CODED_S2 = 1;
     WENDY_COM_BLE_CODED_S8 = 2;
 }
+enum WendyComEspnowRate {
+    WENDY_COM_ESPNOW_RATE_DEFAULT = 0;
+    WENDY_COM_ESPNOW_RATE_1_MBPS = 1;
+    WENDY_COM_ESPNOW_RATE_2_MBPS = 2;
+    WENDY_COM_ESPNOW_RATE_6_MBPS = 6;
+    WENDY_COM_ESPNOW_RATE_12_MBPS = 12;
+    WENDY_COM_ESPNOW_RATE_24_MBPS = 24;
+}
 message WendyComNetConfig {
     bool enabled = 1;
     bool ble = 2;
@@ -148,6 +156,7 @@ message WendyComNetConfig {
     optional bool espnow = 10;
     optional uint32 espnow_channel = 11;
     optional uint32 espnow_links = 12; // Locally initiated links, including setup.
+    optional WendyComEspnowRate espnow_rate = 13; // Preferred unicast ceiling. Discovery uses 1 Mbit/s.
 }
 message WendyComNetGetParams {}
 message WendyComNetSetParams { WendyComNetConfig config = 1; }

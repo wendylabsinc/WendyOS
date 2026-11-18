@@ -220,6 +220,64 @@ func (WendyComBleProfile) EnumDescriptor() ([]byte, []int) {
 	return file_wendy_com_msg_proto_rawDescGZIP(), []int{3}
 }
 
+type WendyComEspnowRate int32
+
+const (
+	WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_DEFAULT WendyComEspnowRate = 0
+	WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_1_MBPS  WendyComEspnowRate = 1
+	WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_2_MBPS  WendyComEspnowRate = 2
+	WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_6_MBPS  WendyComEspnowRate = 6
+	WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_12_MBPS WendyComEspnowRate = 12
+	WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_24_MBPS WendyComEspnowRate = 24
+)
+
+// Enum value maps for WendyComEspnowRate.
+var (
+	WendyComEspnowRate_name = map[int32]string{
+		0:  "WENDY_COM_ESPNOW_RATE_DEFAULT",
+		1:  "WENDY_COM_ESPNOW_RATE_1_MBPS",
+		2:  "WENDY_COM_ESPNOW_RATE_2_MBPS",
+		6:  "WENDY_COM_ESPNOW_RATE_6_MBPS",
+		12: "WENDY_COM_ESPNOW_RATE_12_MBPS",
+		24: "WENDY_COM_ESPNOW_RATE_24_MBPS",
+	}
+	WendyComEspnowRate_value = map[string]int32{
+		"WENDY_COM_ESPNOW_RATE_DEFAULT": 0,
+		"WENDY_COM_ESPNOW_RATE_1_MBPS":  1,
+		"WENDY_COM_ESPNOW_RATE_2_MBPS":  2,
+		"WENDY_COM_ESPNOW_RATE_6_MBPS":  6,
+		"WENDY_COM_ESPNOW_RATE_12_MBPS": 12,
+		"WENDY_COM_ESPNOW_RATE_24_MBPS": 24,
+	}
+)
+
+func (x WendyComEspnowRate) Enum() *WendyComEspnowRate {
+	p := new(WendyComEspnowRate)
+	*p = x
+	return p
+}
+
+func (x WendyComEspnowRate) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WendyComEspnowRate) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendy_com_msg_proto_enumTypes[4].Descriptor()
+}
+
+func (WendyComEspnowRate) Type() protoreflect.EnumType {
+	return &file_wendy_com_msg_proto_enumTypes[4]
+}
+
+func (x WendyComEspnowRate) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WendyComEspnowRate.Descriptor instead.
+func (WendyComEspnowRate) EnumDescriptor() ([]byte, []int) {
+	return file_wendy_com_msg_proto_rawDescGZIP(), []int{4}
+}
+
 type WendyComNetState int32
 
 const (
@@ -259,11 +317,11 @@ func (x WendyComNetState) String() string {
 }
 
 func (WendyComNetState) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_com_msg_proto_enumTypes[4].Descriptor()
+	return file_wendy_com_msg_proto_enumTypes[5].Descriptor()
 }
 
 func (WendyComNetState) Type() protoreflect.EnumType {
-	return &file_wendy_com_msg_proto_enumTypes[4]
+	return &file_wendy_com_msg_proto_enumTypes[5]
 }
 
 func (x WendyComNetState) Number() protoreflect.EnumNumber {
@@ -272,7 +330,7 @@ func (x WendyComNetState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WendyComNetState.Descriptor instead.
 func (WendyComNetState) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_com_msg_proto_rawDescGZIP(), []int{4}
+	return file_wendy_com_msg_proto_rawDescGZIP(), []int{5}
 }
 
 type WendyComConsoleIo int32
@@ -308,11 +366,11 @@ func (x WendyComConsoleIo) String() string {
 }
 
 func (WendyComConsoleIo) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_com_msg_proto_enumTypes[5].Descriptor()
+	return file_wendy_com_msg_proto_enumTypes[6].Descriptor()
 }
 
 func (WendyComConsoleIo) Type() protoreflect.EnumType {
-	return &file_wendy_com_msg_proto_enumTypes[5]
+	return &file_wendy_com_msg_proto_enumTypes[6]
 }
 
 func (x WendyComConsoleIo) Number() protoreflect.EnumNumber {
@@ -321,7 +379,7 @@ func (x WendyComConsoleIo) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WendyComConsoleIo.Descriptor instead.
 func (WendyComConsoleIo) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_com_msg_proto_rawDescGZIP(), []int{5}
+	return file_wendy_com_msg_proto_rawDescGZIP(), []int{6}
 }
 
 type WendyComResult int32
@@ -393,11 +451,11 @@ func (x WendyComResult) String() string {
 }
 
 func (WendyComResult) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_com_msg_proto_enumTypes[6].Descriptor()
+	return file_wendy_com_msg_proto_enumTypes[7].Descriptor()
 }
 
 func (WendyComResult) Type() protoreflect.EnumType {
-	return &file_wendy_com_msg_proto_enumTypes[6]
+	return &file_wendy_com_msg_proto_enumTypes[7]
 }
 
 func (x WendyComResult) Number() protoreflect.EnumNumber {
@@ -406,7 +464,7 @@ func (x WendyComResult) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WendyComResult.Descriptor instead.
 func (WendyComResult) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_com_msg_proto_rawDescGZIP(), []int{6}
+	return file_wendy_com_msg_proto_rawDescGZIP(), []int{7}
 }
 
 type WendyComChannelErrorReason int32
@@ -439,11 +497,11 @@ func (x WendyComChannelErrorReason) String() string {
 }
 
 func (WendyComChannelErrorReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_com_msg_proto_enumTypes[7].Descriptor()
+	return file_wendy_com_msg_proto_enumTypes[8].Descriptor()
 }
 
 func (WendyComChannelErrorReason) Type() protoreflect.EnumType {
-	return &file_wendy_com_msg_proto_enumTypes[7]
+	return &file_wendy_com_msg_proto_enumTypes[8]
 }
 
 func (x WendyComChannelErrorReason) Number() protoreflect.EnumNumber {
@@ -452,7 +510,7 @@ func (x WendyComChannelErrorReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WendyComChannelErrorReason.Descriptor instead.
 func (WendyComChannelErrorReason) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_com_msg_proto_rawDescGZIP(), []int{7}
+	return file_wendy_com_msg_proto_rawDescGZIP(), []int{8}
 }
 
 // Protocol version, exchanged in the handshake. The major number must match
@@ -1536,7 +1594,8 @@ type WendyComNetConfig struct {
 	BleProfile         WendyComBleProfile     `protobuf:"varint,9,opt,name=ble_profile,json=bleProfile,proto3,enum=WendyComBleProfile" json:"ble_profile,omitempty"`
 	Espnow             *bool                  `protobuf:"varint,10,opt,name=espnow,proto3,oneof" json:"espnow,omitempty"`
 	EspnowChannel      *uint32                `protobuf:"varint,11,opt,name=espnow_channel,json=espnowChannel,proto3,oneof" json:"espnow_channel,omitempty"`
-	EspnowLinks        *uint32                `protobuf:"varint,12,opt,name=espnow_links,json=espnowLinks,proto3,oneof" json:"espnow_links,omitempty"` // Locally initiated links, including setup.
+	EspnowLinks        *uint32                `protobuf:"varint,12,opt,name=espnow_links,json=espnowLinks,proto3,oneof" json:"espnow_links,omitempty"`                      // Locally initiated links, including setup.
+	EspnowRate         *WendyComEspnowRate    `protobuf:"varint,13,opt,name=espnow_rate,json=espnowRate,proto3,enum=WendyComEspnowRate,oneof" json:"espnow_rate,omitempty"` // Preferred unicast ceiling. Discovery uses 1 Mbit/s.
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1653,6 +1712,13 @@ func (x *WendyComNetConfig) GetEspnowLinks() uint32 {
 		return *x.EspnowLinks
 	}
 	return 0
+}
+
+func (x *WendyComNetConfig) GetEspnowRate() WendyComEspnowRate {
+	if x != nil && x.EspnowRate != nil {
+		return *x.EspnowRate
+	}
+	return WendyComEspnowRate_WENDY_COM_ESPNOW_RATE_DEFAULT
 }
 
 type WendyComNetGetParams struct {
@@ -4349,7 +4415,7 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x05error\x18\r \x01(\tR\x05error\"!\n" +
 	"\x1fWendyComBluetoothPowerGetParams\"X\n" +
 	"\x1fWendyComBluetoothPowerSetParams\x125\n" +
-	"\x06config\x18\x01 \x01(\v2\x1d.WendyComBluetoothPowerConfigR\x06config\"\xce\x03\n" +
+	"\x06config\x18\x01 \x01(\v2\x1d.WendyComBluetoothPowerConfigR\x06config\"\x99\x04\n" +
 	"\x11WendyComNetConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x10\n" +
 	"\x03ble\x18\x02 \x01(\bR\x03ble\x12/\n" +
@@ -4365,10 +4431,13 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x06espnow\x18\n" +
 	" \x01(\bH\x00R\x06espnow\x88\x01\x01\x12*\n" +
 	"\x0eespnow_channel\x18\v \x01(\rH\x01R\respnowChannel\x88\x01\x01\x12&\n" +
-	"\fespnow_links\x18\f \x01(\rH\x02R\vespnowLinks\x88\x01\x01B\t\n" +
+	"\fespnow_links\x18\f \x01(\rH\x02R\vespnowLinks\x88\x01\x01\x129\n" +
+	"\vespnow_rate\x18\r \x01(\x0e2\x13.WendyComEspnowRateH\x03R\n" +
+	"espnowRate\x88\x01\x01B\t\n" +
 	"\a_espnowB\x11\n" +
 	"\x0f_espnow_channelB\x0f\n" +
-	"\r_espnow_links\"\x16\n" +
+	"\r_espnow_linksB\x0e\n" +
+	"\f_espnow_rate\"\x16\n" +
 	"\x14WendyComNetGetParams\"B\n" +
 	"\x14WendyComNetSetParams\x12*\n" +
 	"\x06config\x18\x01 \x01(\v2\x12.WendyComNetConfigR\x06config\"\xb8\x06\n" +
@@ -4583,7 +4652,14 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x12WendyComBleProfile\x12\x18\n" +
 	"\x14WENDY_COM_BLE_NORMAL\x10\x00\x12\x1a\n" +
 	"\x16WENDY_COM_BLE_CODED_S2\x10\x01\x12\x1a\n" +
-	"\x16WENDY_COM_BLE_CODED_S8\x10\x02*\x96\x01\n" +
+	"\x16WENDY_COM_BLE_CODED_S8\x10\x02*\xe3\x01\n" +
+	"\x12WendyComEspnowRate\x12!\n" +
+	"\x1dWENDY_COM_ESPNOW_RATE_DEFAULT\x10\x00\x12 \n" +
+	"\x1cWENDY_COM_ESPNOW_RATE_1_MBPS\x10\x01\x12 \n" +
+	"\x1cWENDY_COM_ESPNOW_RATE_2_MBPS\x10\x02\x12 \n" +
+	"\x1cWENDY_COM_ESPNOW_RATE_6_MBPS\x10\x06\x12!\n" +
+	"\x1dWENDY_COM_ESPNOW_RATE_12_MBPS\x10\f\x12!\n" +
+	"\x1dWENDY_COM_ESPNOW_RATE_24_MBPS\x10\x18*\x96\x01\n" +
 	"\x10WendyComNetState\x12\x15\n" +
 	"\x11WENDY_COM_NET_OFF\x10\x00\x12\x1a\n" +
 	"\x16WENDY_COM_NET_STARTING\x10\x01\x12\x19\n" +
@@ -4627,147 +4703,149 @@ func file_wendy_com_msg_proto_rawDescGZIP() []byte {
 	return file_wendy_com_msg_proto_rawDescData
 }
 
-var file_wendy_com_msg_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_wendy_com_msg_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
 var file_wendy_com_msg_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_wendy_com_msg_proto_goTypes = []any{
 	(WendyComAppType)(0),                      // 0: WendyComAppType
 	(WendyComConfPushMode)(0),                 // 1: WendyComConfPushMode
 	(WendyComBluetoothPowerMode)(0),           // 2: WendyComBluetoothPowerMode
 	(WendyComBleProfile)(0),                   // 3: WendyComBleProfile
-	(WendyComNetState)(0),                     // 4: WendyComNetState
-	(WendyComConsoleIo)(0),                    // 5: WendyComConsoleIo
-	(WendyComResult)(0),                       // 6: WendyComResult
-	(WendyComChannelErrorReason)(0),           // 7: WendyComChannelErrorReason
-	(*WendyComProtocolVersion)(nil),           // 8: WendyComProtocolVersion
-	(*WendyComHandshake)(nil),                 // 9: WendyComHandshake
-	(*WendyComPingParams)(nil),                // 10: WendyComPingParams
-	(*WendyComRebootParams)(nil),              // 11: WendyComRebootParams
-	(*WendyComAppPushBeginParams)(nil),        // 12: WendyComAppPushBeginParams
-	(*WendyComAppPushDataParams)(nil),         // 13: WendyComAppPushDataParams
-	(*WendyComAppPushEndParams)(nil),          // 14: WendyComAppPushEndParams
-	(*WendyComAppStartParams)(nil),            // 15: WendyComAppStartParams
-	(*WendyComAppStopParams)(nil),             // 16: WendyComAppStopParams
-	(*WendyComConfPushBeginParams)(nil),       // 17: WendyComConfPushBeginParams
-	(*WendyComConfPushDataParams)(nil),        // 18: WendyComConfPushDataParams
-	(*WendyComConfPushEndParams)(nil),         // 19: WendyComConfPushEndParams
-	(*WendyComGetDeviceIdentityParams)(nil),   // 20: WendyComGetDeviceIdentityParams
-	(*WendyComDeviceIdentity)(nil),            // 21: WendyComDeviceIdentity
-	(*WendyComBluetoothPowerSetting)(nil),     // 22: WendyComBluetoothPowerSetting
-	(*WendyComBluetoothPowerConfig)(nil),      // 23: WendyComBluetoothPowerConfig
-	(*WendyComBluetoothConnectionPower)(nil),  // 24: WendyComBluetoothConnectionPower
-	(*WendyComBluetoothPowerStatus)(nil),      // 25: WendyComBluetoothPowerStatus
-	(*WendyComBluetoothPowerGetParams)(nil),   // 26: WendyComBluetoothPowerGetParams
-	(*WendyComBluetoothPowerSetParams)(nil),   // 27: WendyComBluetoothPowerSetParams
-	(*WendyComNetConfig)(nil),                 // 28: WendyComNetConfig
-	(*WendyComNetGetParams)(nil),              // 29: WendyComNetGetParams
-	(*WendyComNetSetParams)(nil),              // 30: WendyComNetSetParams
-	(*WendyComNetStatus)(nil),                 // 31: WendyComNetStatus
-	(*WendyComNetTopologyParams)(nil),         // 32: WendyComNetTopologyParams
-	(*WendyComNetTopologyRecord)(nil),         // 33: WendyComNetTopologyRecord
-	(*WendyComNetTopologyPage)(nil),           // 34: WendyComNetTopologyPage
-	(*WendyComGetDeviceInfoParams)(nil),       // 35: WendyComGetDeviceInfoParams
-	(*WendyComEnrollmentChallengeParams)(nil), // 36: WendyComEnrollmentChallengeParams
-	(*WendyComEnrollmentChallenge)(nil),       // 37: WendyComEnrollmentChallenge
-	(*WendyComEnrollmentResetParams)(nil),     // 38: WendyComEnrollmentResetParams
-	(*WendyComSyncTimeParams)(nil),            // 39: WendyComSyncTimeParams
-	(*WendyComSyncTimeResult)(nil),            // 40: WendyComSyncTimeResult
-	(*WendyComConsoleAttachParams)(nil),       // 41: WendyComConsoleAttachParams
-	(*WendyComConsoleDetachParams)(nil),       // 42: WendyComConsoleDetachParams
-	(*WendyComConsoleBegin)(nil),              // 43: WendyComConsoleBegin
-	(*WendyComConsoleData)(nil),               // 44: WendyComConsoleData
-	(*WendyComConsoleEnd)(nil),                // 45: WendyComConsoleEnd
-	(*WendyComDeviceInfo)(nil),                // 46: WendyComDeviceInfo
-	(*WendyComCommand)(nil),                   // 47: WendyComCommand
-	(*WendyComResponse)(nil),                  // 48: WendyComResponse
-	(*WendyComEvent)(nil),                     // 49: WendyComEvent
-	(*WendyComOpenChannel)(nil),               // 50: WendyComOpenChannel
-	(*WendyComCloseChannel)(nil),              // 51: WendyComCloseChannel
-	(*WendyComChannelOpen)(nil),               // 52: WendyComChannelOpen
-	(*WendyComChannelClose)(nil),              // 53: WendyComChannelClose
-	(*WendyComChannelError)(nil),              // 54: WendyComChannelError
-	(*WendyComChannelState)(nil),              // 55: WendyComChannelState
-	(*WendyComService)(nil),                   // 56: WendyComService
-	(*WendyComMessage)(nil),                   // 57: WendyComMessage
-	(*sensorlinkpb.GetSensorManifest)(nil),    // 58: wendylite.v1.GetSensorManifest
-	(*sensorlinkpb.Subscribe)(nil),            // 59: wendylite.v1.Subscribe
-	(*sensorlinkpb.Unsubscribe)(nil),          // 60: wendylite.v1.Unsubscribe
-	(*sensorlinkpb.SensorManifest)(nil),       // 61: wendylite.v1.SensorManifest
-	(*sensorlinkpb.SensorData)(nil),           // 62: wendylite.v1.SensorData
+	(WendyComEspnowRate)(0),                   // 4: WendyComEspnowRate
+	(WendyComNetState)(0),                     // 5: WendyComNetState
+	(WendyComConsoleIo)(0),                    // 6: WendyComConsoleIo
+	(WendyComResult)(0),                       // 7: WendyComResult
+	(WendyComChannelErrorReason)(0),           // 8: WendyComChannelErrorReason
+	(*WendyComProtocolVersion)(nil),           // 9: WendyComProtocolVersion
+	(*WendyComHandshake)(nil),                 // 10: WendyComHandshake
+	(*WendyComPingParams)(nil),                // 11: WendyComPingParams
+	(*WendyComRebootParams)(nil),              // 12: WendyComRebootParams
+	(*WendyComAppPushBeginParams)(nil),        // 13: WendyComAppPushBeginParams
+	(*WendyComAppPushDataParams)(nil),         // 14: WendyComAppPushDataParams
+	(*WendyComAppPushEndParams)(nil),          // 15: WendyComAppPushEndParams
+	(*WendyComAppStartParams)(nil),            // 16: WendyComAppStartParams
+	(*WendyComAppStopParams)(nil),             // 17: WendyComAppStopParams
+	(*WendyComConfPushBeginParams)(nil),       // 18: WendyComConfPushBeginParams
+	(*WendyComConfPushDataParams)(nil),        // 19: WendyComConfPushDataParams
+	(*WendyComConfPushEndParams)(nil),         // 20: WendyComConfPushEndParams
+	(*WendyComGetDeviceIdentityParams)(nil),   // 21: WendyComGetDeviceIdentityParams
+	(*WendyComDeviceIdentity)(nil),            // 22: WendyComDeviceIdentity
+	(*WendyComBluetoothPowerSetting)(nil),     // 23: WendyComBluetoothPowerSetting
+	(*WendyComBluetoothPowerConfig)(nil),      // 24: WendyComBluetoothPowerConfig
+	(*WendyComBluetoothConnectionPower)(nil),  // 25: WendyComBluetoothConnectionPower
+	(*WendyComBluetoothPowerStatus)(nil),      // 26: WendyComBluetoothPowerStatus
+	(*WendyComBluetoothPowerGetParams)(nil),   // 27: WendyComBluetoothPowerGetParams
+	(*WendyComBluetoothPowerSetParams)(nil),   // 28: WendyComBluetoothPowerSetParams
+	(*WendyComNetConfig)(nil),                 // 29: WendyComNetConfig
+	(*WendyComNetGetParams)(nil),              // 30: WendyComNetGetParams
+	(*WendyComNetSetParams)(nil),              // 31: WendyComNetSetParams
+	(*WendyComNetStatus)(nil),                 // 32: WendyComNetStatus
+	(*WendyComNetTopologyParams)(nil),         // 33: WendyComNetTopologyParams
+	(*WendyComNetTopologyRecord)(nil),         // 34: WendyComNetTopologyRecord
+	(*WendyComNetTopologyPage)(nil),           // 35: WendyComNetTopologyPage
+	(*WendyComGetDeviceInfoParams)(nil),       // 36: WendyComGetDeviceInfoParams
+	(*WendyComEnrollmentChallengeParams)(nil), // 37: WendyComEnrollmentChallengeParams
+	(*WendyComEnrollmentChallenge)(nil),       // 38: WendyComEnrollmentChallenge
+	(*WendyComEnrollmentResetParams)(nil),     // 39: WendyComEnrollmentResetParams
+	(*WendyComSyncTimeParams)(nil),            // 40: WendyComSyncTimeParams
+	(*WendyComSyncTimeResult)(nil),            // 41: WendyComSyncTimeResult
+	(*WendyComConsoleAttachParams)(nil),       // 42: WendyComConsoleAttachParams
+	(*WendyComConsoleDetachParams)(nil),       // 43: WendyComConsoleDetachParams
+	(*WendyComConsoleBegin)(nil),              // 44: WendyComConsoleBegin
+	(*WendyComConsoleData)(nil),               // 45: WendyComConsoleData
+	(*WendyComConsoleEnd)(nil),                // 46: WendyComConsoleEnd
+	(*WendyComDeviceInfo)(nil),                // 47: WendyComDeviceInfo
+	(*WendyComCommand)(nil),                   // 48: WendyComCommand
+	(*WendyComResponse)(nil),                  // 49: WendyComResponse
+	(*WendyComEvent)(nil),                     // 50: WendyComEvent
+	(*WendyComOpenChannel)(nil),               // 51: WendyComOpenChannel
+	(*WendyComCloseChannel)(nil),              // 52: WendyComCloseChannel
+	(*WendyComChannelOpen)(nil),               // 53: WendyComChannelOpen
+	(*WendyComChannelClose)(nil),              // 54: WendyComChannelClose
+	(*WendyComChannelError)(nil),              // 55: WendyComChannelError
+	(*WendyComChannelState)(nil),              // 56: WendyComChannelState
+	(*WendyComService)(nil),                   // 57: WendyComService
+	(*WendyComMessage)(nil),                   // 58: WendyComMessage
+	(*sensorlinkpb.GetSensorManifest)(nil),    // 59: wendylite.v1.GetSensorManifest
+	(*sensorlinkpb.Subscribe)(nil),            // 60: wendylite.v1.Subscribe
+	(*sensorlinkpb.Unsubscribe)(nil),          // 61: wendylite.v1.Unsubscribe
+	(*sensorlinkpb.SensorManifest)(nil),       // 62: wendylite.v1.SensorManifest
+	(*sensorlinkpb.SensorData)(nil),           // 63: wendylite.v1.SensorData
 }
 var file_wendy_com_msg_proto_depIdxs = []int32{
-	8,  // 0: WendyComHandshake.version:type_name -> WendyComProtocolVersion
+	9,  // 0: WendyComHandshake.version:type_name -> WendyComProtocolVersion
 	0,  // 1: WendyComAppPushBeginParams.app_type:type_name -> WendyComAppType
 	1,  // 2: WendyComConfPushBeginParams.mode:type_name -> WendyComConfPushMode
 	2,  // 3: WendyComBluetoothPowerSetting.mode:type_name -> WendyComBluetoothPowerMode
-	22, // 4: WendyComBluetoothPowerConfig.advertising:type_name -> WendyComBluetoothPowerSetting
-	22, // 5: WendyComBluetoothPowerConfig.connections:type_name -> WendyComBluetoothPowerSetting
-	23, // 6: WendyComBluetoothPowerStatus.desired:type_name -> WendyComBluetoothPowerConfig
-	23, // 7: WendyComBluetoothPowerStatus.applied:type_name -> WendyComBluetoothPowerConfig
-	24, // 8: WendyComBluetoothPowerStatus.connections:type_name -> WendyComBluetoothConnectionPower
-	23, // 9: WendyComBluetoothPowerSetParams.config:type_name -> WendyComBluetoothPowerConfig
+	23, // 4: WendyComBluetoothPowerConfig.advertising:type_name -> WendyComBluetoothPowerSetting
+	23, // 5: WendyComBluetoothPowerConfig.connections:type_name -> WendyComBluetoothPowerSetting
+	24, // 6: WendyComBluetoothPowerStatus.desired:type_name -> WendyComBluetoothPowerConfig
+	24, // 7: WendyComBluetoothPowerStatus.applied:type_name -> WendyComBluetoothPowerConfig
+	25, // 8: WendyComBluetoothPowerStatus.connections:type_name -> WendyComBluetoothConnectionPower
+	24, // 9: WendyComBluetoothPowerSetParams.config:type_name -> WendyComBluetoothPowerConfig
 	3,  // 10: WendyComNetConfig.ble_profile:type_name -> WendyComBleProfile
-	28, // 11: WendyComNetSetParams.config:type_name -> WendyComNetConfig
-	28, // 12: WendyComNetStatus.desired:type_name -> WendyComNetConfig
-	28, // 13: WendyComNetStatus.applied:type_name -> WendyComNetConfig
-	4,  // 14: WendyComNetStatus.state:type_name -> WendyComNetState
-	31, // 15: WendyComNetTopologyPage.status:type_name -> WendyComNetStatus
-	33, // 16: WendyComNetTopologyPage.record:type_name -> WendyComNetTopologyRecord
-	5,  // 17: WendyComConsoleData.io:type_name -> WendyComConsoleIo
-	10, // 18: WendyComCommand.ping:type_name -> WendyComPingParams
-	11, // 19: WendyComCommand.reboot:type_name -> WendyComRebootParams
-	12, // 20: WendyComCommand.app_push_begin:type_name -> WendyComAppPushBeginParams
-	13, // 21: WendyComCommand.app_push_data:type_name -> WendyComAppPushDataParams
-	14, // 22: WendyComCommand.app_push_end:type_name -> WendyComAppPushEndParams
-	15, // 23: WendyComCommand.app_start:type_name -> WendyComAppStartParams
-	16, // 24: WendyComCommand.app_stop:type_name -> WendyComAppStopParams
-	20, // 25: WendyComCommand.get_device_identity:type_name -> WendyComGetDeviceIdentityParams
-	35, // 26: WendyComCommand.get_device_info:type_name -> WendyComGetDeviceInfoParams
-	41, // 27: WendyComCommand.console_attach:type_name -> WendyComConsoleAttachParams
-	42, // 28: WendyComCommand.console_detach:type_name -> WendyComConsoleDetachParams
-	17, // 29: WendyComCommand.conf_push_begin:type_name -> WendyComConfPushBeginParams
-	18, // 30: WendyComCommand.conf_push_data:type_name -> WendyComConfPushDataParams
-	19, // 31: WendyComCommand.conf_push_end:type_name -> WendyComConfPushEndParams
-	58, // 32: WendyComCommand.sensor_link_get_manifest:type_name -> wendylite.v1.GetSensorManifest
-	59, // 33: WendyComCommand.sensor_link_subscribe:type_name -> wendylite.v1.Subscribe
-	60, // 34: WendyComCommand.sensor_link_unsubscribe:type_name -> wendylite.v1.Unsubscribe
-	36, // 35: WendyComCommand.enrollment_challenge:type_name -> WendyComEnrollmentChallengeParams
-	39, // 36: WendyComCommand.sync_time:type_name -> WendyComSyncTimeParams
-	38, // 37: WendyComCommand.enrollment_reset:type_name -> WendyComEnrollmentResetParams
-	29, // 38: WendyComCommand.net_get:type_name -> WendyComNetGetParams
-	30, // 39: WendyComCommand.net_set:type_name -> WendyComNetSetParams
-	32, // 40: WendyComCommand.net_topology:type_name -> WendyComNetTopologyParams
-	26, // 41: WendyComCommand.bluetooth_power_get:type_name -> WendyComBluetoothPowerGetParams
-	27, // 42: WendyComCommand.bluetooth_power_set:type_name -> WendyComBluetoothPowerSetParams
-	6,  // 43: WendyComResponse.result:type_name -> WendyComResult
-	21, // 44: WendyComResponse.device_identity:type_name -> WendyComDeviceIdentity
-	46, // 45: WendyComResponse.device_info:type_name -> WendyComDeviceInfo
-	61, // 46: WendyComResponse.sensor_link_manifest:type_name -> wendylite.v1.SensorManifest
-	37, // 47: WendyComResponse.enrollment_challenge:type_name -> WendyComEnrollmentChallenge
-	40, // 48: WendyComResponse.sync_time:type_name -> WendyComSyncTimeResult
-	31, // 49: WendyComResponse.net_status:type_name -> WendyComNetStatus
-	34, // 50: WendyComResponse.net_topology:type_name -> WendyComNetTopologyPage
-	25, // 51: WendyComResponse.bluetooth_power:type_name -> WendyComBluetoothPowerStatus
-	43, // 52: WendyComEvent.console_begin:type_name -> WendyComConsoleBegin
-	44, // 53: WendyComEvent.console_data:type_name -> WendyComConsoleData
-	45, // 54: WendyComEvent.console_end:type_name -> WendyComConsoleEnd
-	7,  // 55: WendyComChannelError.reason:type_name -> WendyComChannelErrorReason
-	52, // 56: WendyComChannelState.open:type_name -> WendyComChannelOpen
-	53, // 57: WendyComChannelState.close:type_name -> WendyComChannelClose
-	54, // 58: WendyComChannelState.error:type_name -> WendyComChannelError
-	50, // 59: WendyComService.open_channel:type_name -> WendyComOpenChannel
-	51, // 60: WendyComService.close_channel:type_name -> WendyComCloseChannel
-	55, // 61: WendyComService.channel_state:type_name -> WendyComChannelState
-	9,  // 62: WendyComMessage.handshake:type_name -> WendyComHandshake
-	56, // 63: WendyComMessage.service:type_name -> WendyComService
-	47, // 64: WendyComMessage.command:type_name -> WendyComCommand
-	48, // 65: WendyComMessage.response:type_name -> WendyComResponse
-	49, // 66: WendyComMessage.event:type_name -> WendyComEvent
-	62, // 67: WendyComMessage.sensor_data:type_name -> wendylite.v1.SensorData
-	68, // [68:68] is the sub-list for method output_type
-	68, // [68:68] is the sub-list for method input_type
-	68, // [68:68] is the sub-list for extension type_name
-	68, // [68:68] is the sub-list for extension extendee
-	0,  // [0:68] is the sub-list for field type_name
+	4,  // 11: WendyComNetConfig.espnow_rate:type_name -> WendyComEspnowRate
+	29, // 12: WendyComNetSetParams.config:type_name -> WendyComNetConfig
+	29, // 13: WendyComNetStatus.desired:type_name -> WendyComNetConfig
+	29, // 14: WendyComNetStatus.applied:type_name -> WendyComNetConfig
+	5,  // 15: WendyComNetStatus.state:type_name -> WendyComNetState
+	32, // 16: WendyComNetTopologyPage.status:type_name -> WendyComNetStatus
+	34, // 17: WendyComNetTopologyPage.record:type_name -> WendyComNetTopologyRecord
+	6,  // 18: WendyComConsoleData.io:type_name -> WendyComConsoleIo
+	11, // 19: WendyComCommand.ping:type_name -> WendyComPingParams
+	12, // 20: WendyComCommand.reboot:type_name -> WendyComRebootParams
+	13, // 21: WendyComCommand.app_push_begin:type_name -> WendyComAppPushBeginParams
+	14, // 22: WendyComCommand.app_push_data:type_name -> WendyComAppPushDataParams
+	15, // 23: WendyComCommand.app_push_end:type_name -> WendyComAppPushEndParams
+	16, // 24: WendyComCommand.app_start:type_name -> WendyComAppStartParams
+	17, // 25: WendyComCommand.app_stop:type_name -> WendyComAppStopParams
+	21, // 26: WendyComCommand.get_device_identity:type_name -> WendyComGetDeviceIdentityParams
+	36, // 27: WendyComCommand.get_device_info:type_name -> WendyComGetDeviceInfoParams
+	42, // 28: WendyComCommand.console_attach:type_name -> WendyComConsoleAttachParams
+	43, // 29: WendyComCommand.console_detach:type_name -> WendyComConsoleDetachParams
+	18, // 30: WendyComCommand.conf_push_begin:type_name -> WendyComConfPushBeginParams
+	19, // 31: WendyComCommand.conf_push_data:type_name -> WendyComConfPushDataParams
+	20, // 32: WendyComCommand.conf_push_end:type_name -> WendyComConfPushEndParams
+	59, // 33: WendyComCommand.sensor_link_get_manifest:type_name -> wendylite.v1.GetSensorManifest
+	60, // 34: WendyComCommand.sensor_link_subscribe:type_name -> wendylite.v1.Subscribe
+	61, // 35: WendyComCommand.sensor_link_unsubscribe:type_name -> wendylite.v1.Unsubscribe
+	37, // 36: WendyComCommand.enrollment_challenge:type_name -> WendyComEnrollmentChallengeParams
+	40, // 37: WendyComCommand.sync_time:type_name -> WendyComSyncTimeParams
+	39, // 38: WendyComCommand.enrollment_reset:type_name -> WendyComEnrollmentResetParams
+	30, // 39: WendyComCommand.net_get:type_name -> WendyComNetGetParams
+	31, // 40: WendyComCommand.net_set:type_name -> WendyComNetSetParams
+	33, // 41: WendyComCommand.net_topology:type_name -> WendyComNetTopologyParams
+	27, // 42: WendyComCommand.bluetooth_power_get:type_name -> WendyComBluetoothPowerGetParams
+	28, // 43: WendyComCommand.bluetooth_power_set:type_name -> WendyComBluetoothPowerSetParams
+	7,  // 44: WendyComResponse.result:type_name -> WendyComResult
+	22, // 45: WendyComResponse.device_identity:type_name -> WendyComDeviceIdentity
+	47, // 46: WendyComResponse.device_info:type_name -> WendyComDeviceInfo
+	62, // 47: WendyComResponse.sensor_link_manifest:type_name -> wendylite.v1.SensorManifest
+	38, // 48: WendyComResponse.enrollment_challenge:type_name -> WendyComEnrollmentChallenge
+	41, // 49: WendyComResponse.sync_time:type_name -> WendyComSyncTimeResult
+	32, // 50: WendyComResponse.net_status:type_name -> WendyComNetStatus
+	35, // 51: WendyComResponse.net_topology:type_name -> WendyComNetTopologyPage
+	26, // 52: WendyComResponse.bluetooth_power:type_name -> WendyComBluetoothPowerStatus
+	44, // 53: WendyComEvent.console_begin:type_name -> WendyComConsoleBegin
+	45, // 54: WendyComEvent.console_data:type_name -> WendyComConsoleData
+	46, // 55: WendyComEvent.console_end:type_name -> WendyComConsoleEnd
+	8,  // 56: WendyComChannelError.reason:type_name -> WendyComChannelErrorReason
+	53, // 57: WendyComChannelState.open:type_name -> WendyComChannelOpen
+	54, // 58: WendyComChannelState.close:type_name -> WendyComChannelClose
+	55, // 59: WendyComChannelState.error:type_name -> WendyComChannelError
+	51, // 60: WendyComService.open_channel:type_name -> WendyComOpenChannel
+	52, // 61: WendyComService.close_channel:type_name -> WendyComCloseChannel
+	56, // 62: WendyComService.channel_state:type_name -> WendyComChannelState
+	10, // 63: WendyComMessage.handshake:type_name -> WendyComHandshake
+	57, // 64: WendyComMessage.service:type_name -> WendyComService
+	48, // 65: WendyComMessage.command:type_name -> WendyComCommand
+	49, // 66: WendyComMessage.response:type_name -> WendyComResponse
+	50, // 67: WendyComMessage.event:type_name -> WendyComEvent
+	63, // 68: WendyComMessage.sensor_data:type_name -> wendylite.v1.SensorData
+	69, // [69:69] is the sub-list for method output_type
+	69, // [69:69] is the sub-list for method input_type
+	69, // [69:69] is the sub-list for extension type_name
+	69, // [69:69] is the sub-list for extension extendee
+	0,  // [0:69] is the sub-list for field type_name
 }
 
 func init() { file_wendy_com_msg_proto_init() }
@@ -4844,7 +4922,7 @@ func file_wendy_com_msg_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_com_msg_proto_rawDesc), len(file_wendy_com_msg_proto_rawDesc)),
-			NumEnums:      8,
+			NumEnums:      9,
 			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   0,
