@@ -270,3 +270,25 @@ func TestEveryPathArgumentEscapesCommas(t *testing.T) {
 		}
 	}
 }
+
+// TestARM64ArgsAreUnchanged pins the ARM64 command line byte for byte. The
+// literals were printed from the launcher before it learned about other guest
+// architectures; an ARM64 guest must keep launching exactly this way.
+func TestARM64ArgsAreUnchanged(t *testing.T) {
+	for accel, want := range map[Accel]string{
+		AccelHVF: "-name\ndev\n-machine\nvirt,gic-version=3\n-accel\nhvf\n-cpu\nhost\n-smp\n4\n-m\n4096\n-drive\nif=pflash,format=raw,readonly=on,file=/fw/code.fd\n-drive\nif=pflash,format=raw,file=/vms/dev/efivars.fd\n-drive\nfile=/vms/dev/disk.img,if=none,format=raw,id=hd0\n-device\nvirtio-blk-pci,drive=hd0\n-display\nnone\n-chardev\nfile,id=console,append=on,path=/vms/dev/console.log\n-serial\nchardev:console\n-monitor\nnone\n-qmp\nunix:/vms/dev/qmp.sock,server=on,wait=off\n-netdev\nuser,id=net0,hostfwd=tcp:127.0.0.1:50051-:50051,hostfwd=tcp:127.0.0.1:50052-:50052,hostfwd=tcp:127.0.0.1:5000-:5000\n-device\nvirtio-net-pci,netdev=net0,mac=52:54:00:12:34:56",
+		AccelKVM: "-name\ndev\n-machine\nvirt\n-accel\nkvm\n-cpu\nhost\n-smp\n4\n-m\n4096\n-drive\nif=pflash,format=raw,readonly=on,file=/fw/code.fd\n-drive\nif=pflash,format=raw,file=/vms/dev/efivars.fd\n-drive\nfile=/vms/dev/disk.img,if=none,format=raw,id=hd0\n-device\nvirtio-blk-pci,drive=hd0\n-display\nnone\n-chardev\nfile,id=console,append=on,path=/vms/dev/console.log\n-serial\nchardev:console\n-monitor\nnone\n-qmp\nunix:/vms/dev/qmp.sock,server=on,wait=off\n-netdev\nuser,id=net0,hostfwd=tcp:127.0.0.1:50051-:50051,hostfwd=tcp:127.0.0.1:50052-:50052,hostfwd=tcp:127.0.0.1:5000-:5000\n-device\nvirtio-net-pci,netdev=net0,mac=52:54:00:12:34:56",
+		AccelTCG: "-name\ndev\n-machine\nvirt\n-accel\ntcg\n-cpu\ncortex-a57\n-smp\n4\n-m\n4096\n-drive\nif=pflash,format=raw,readonly=on,file=/fw/code.fd\n-drive\nif=pflash,format=raw,file=/vms/dev/efivars.fd\n-drive\nfile=/vms/dev/disk.img,if=none,format=raw,id=hd0\n-device\nvirtio-blk-pci,drive=hd0\n-display\nnone\n-chardev\nfile,id=console,append=on,path=/vms/dev/console.log\n-serial\nchardev:console\n-monitor\nnone\n-qmp\nunix:/vms/dev/qmp.sock,server=on,wait=off\n-netdev\nuser,id=net0,hostfwd=tcp:127.0.0.1:50051-:50051,hostfwd=tcp:127.0.0.1:50052-:50052,hostfwd=tcp:127.0.0.1:5000-:5000\n-device\nvirtio-net-pci,netdev=net0,mac=52:54:00:12:34:56",
+	} {
+		spec := Spec{Name: "dev", DiskPath: "/vms/dev/disk.img", FirmwareCode: "/fw/code.fd", FirmwareVars: "/vms/dev/efivars.fd",
+			MemoryMiB: 4096, CPUs: 4, ConsoleLog: "/vms/dev/console.log", QMPPath: "/vms/dev/qmp.sock", Accel: accel,
+			Net: NetConfig{Mode: NetUser, AgentPort: 50051, RegistryPort: 5000, MAC: "52:54:00:12:34:56"}}
+		args, err := spec.Args()
+		if err != nil {
+			t.Fatalf("%s: %v", accel, err)
+		}
+		if got := strings.Join(args, "\n"); got != want {
+			t.Errorf("%s ARM64 arguments changed:\n got %q\nwant %q", accel, got, want)
+		}
+	}
+}

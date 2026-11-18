@@ -19,13 +19,13 @@ func TestFindQEMUOnWindows(t *testing.T) {
 	saved := vmLookPath
 	t.Cleanup(func() { vmLookPath = saved })
 	vmLookPath = func(string) (string, error) { return "", fs.ErrNotExist }
-	if _, err := FindQEMU("windows"); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := FindQEMU(ArchARM64, "windows"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing binary: %v", err)
 	}
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := FindQEMU("windows"); err == nil {
+	if _, err := FindQEMU(ArchARM64, "windows"); err == nil {
 		t.Fatal("accepted a directory as QEMU")
 	}
 	if err := os.Remove(path); err != nil {
@@ -34,15 +34,15 @@ func TestFindQEMUOnWindows(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := FindQEMU("windows"); err != nil || got != path {
+	if got, err := FindQEMU(ArchARM64, "windows"); err != nil || got != path {
 		t.Fatalf("got %q, %v; want %q", got, err, path)
 	}
-	if _, err := FindQEMU("linux"); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := FindQEMU(ArchARM64, "linux"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("used Windows fallback on Linux: %v", err)
 	}
 	preferred := filepath.Join(t.TempDir(), "qemu-system-aarch64.exe")
 	vmLookPath = func(string) (string, error) { return preferred, nil }
-	if got, err := FindQEMU("windows"); err != nil || got != preferred {
+	if got, err := FindQEMU(ArchARM64, "windows"); err != nil || got != preferred {
 		t.Fatalf("PATH did not take precedence: %q, %v", got, err)
 	}
 }
@@ -87,20 +87,41 @@ func stubKVM(t *testing.T, present bool) {
 	}
 }
 
+// stubHostX86V3 controls whether the fake host CPU has the x86-64-v3 features.
+func stubHostX86V3(t *testing.T, v3 bool) {
+	t.Helper()
+	orig := vmHostX86V3
+	t.Cleanup(func() { vmHostX86V3 = orig })
+	vmHostX86V3 = func() bool { return v3 }
+}
+
 func TestAccelFor(t *testing.T) {
-	stubKVM(t, true)
 	for _, tc := range []struct {
+		arch         Arch
 		goos, goarch string
+		kvmOpens, v3 bool
 		want         Accel
 	}{
-		{"darwin", "arm64", AccelHVF},
-		{"linux", "arm64", AccelKVM},
-		{"darwin", "amd64", AccelTCG},
-		{"linux", "amd64", AccelTCG},
-		{"windows", "amd64", AccelTCG},
+		{ArchARM64, "darwin", "arm64", true, false, AccelHVF},
+		{ArchARM64, "linux", "arm64", true, false, AccelKVM},
+		{ArchARM64, "darwin", "amd64", true, false, AccelTCG},
+		{ArchARM64, "linux", "amd64", true, false, AccelTCG},
+		{ArchARM64, "windows", "amd64", true, false, AccelTCG},
+		{Arch(""), "linux", "arm64", true, false, AccelKVM},
+		{ArchAMD64, "linux", "amd64", true, true, AccelKVM},
+		{ArchAMD64, "linux", "amd64", false, true, AccelTCG}, // /dev/kvm cannot be opened
+		{ArchAMD64, "linux", "amd64", true, false, AccelTCG}, // CPU below x86-64-v3
+		{ArchAMD64, "darwin", "amd64", false, true, AccelHVF},
+		{ArchAMD64, "darwin", "amd64", false, false, AccelTCG},
+		{ArchAMD64, "darwin", "arm64", false, false, AccelTCG},
+		{ArchAMD64, "linux", "arm64", true, false, AccelTCG},
+		{ArchAMD64, "windows", "amd64", false, true, AccelTCG},
+		{ArchARM64, "linux", "amd64", true, true, AccelTCG},
 	} {
-		if got := AccelFor(tc.goos, tc.goarch); got != tc.want {
-			t.Errorf("AccelFor(%q, %q) = %q, want %q", tc.goos, tc.goarch, got, tc.want)
+		stubKVM(t, tc.kvmOpens)
+		stubHostX86V3(t, tc.v3)
+		if got := AccelFor(tc.arch, tc.goos, tc.goarch); got != tc.want {
+			t.Errorf("AccelFor(%q, %q, %q) with kvm=%t v3=%t = %q, want %q", tc.arch, tc.goos, tc.goarch, tc.kvmOpens, tc.v3, got, tc.want)
 		}
 	}
 }
@@ -109,7 +130,7 @@ func TestAccelForFallsBackToTCGWithoutKVM(t *testing.T) {
 	// No nested virt, or the user is not in the kvm group. Emulating is slow but
 	// works; asking for KVM without it aborts.
 	stubKVM(t, false)
-	if got := AccelFor("linux", "arm64"); got != AccelTCG {
+	if got := AccelFor(ArchARM64, "linux", "arm64"); got != AccelTCG {
 		t.Errorf("AccelFor(linux, arm64) without /dev/kvm = %q, want tcg", got)
 	}
 }
@@ -117,26 +138,68 @@ func TestAccelForFallsBackToTCGWithoutKVM(t *testing.T) {
 func TestCPUModelAndMachineType(t *testing.T) {
 	// Accelerated hosts pass the physical CPU through; TCG must name a concrete
 	// ARMv8 model because there is no host CPU to inherit.
-	if got := CPUModel(AccelHVF); got != "host" {
+	if got := CPUModel(ArchARM64, AccelHVF); got != "host" {
 		t.Errorf("CPUModel(hvf) = %q, want host", got)
 	}
-	if got := CPUModel(AccelKVM); got != "host" {
+	if got := CPUModel(ArchARM64, AccelKVM); got != "host" {
 		t.Errorf("CPUModel(kvm) = %q, want host", got)
 	}
-	if got := CPUModel(AccelTCG); got != "cortex-a57" {
+	if got := CPUModel(ArchARM64, AccelTCG); got != "cortex-a57" {
 		t.Errorf("CPUModel(tcg) = %q, want cortex-a57", got)
 	}
 
 	// HVF has no GICv2 emulation, so it must pin GICv3. KVM must NOT: an ARM64
 	// host with a GICv2 aborts on a GICv3 request, where the default matches.
-	if got := MachineType(AccelHVF); !strings.Contains(got, "gic-version=3") {
+	if got := MachineType(ArchARM64, AccelHVF); !strings.Contains(got, "gic-version=3") {
 		t.Errorf("MachineType(hvf) = %q, want gic-version=3", got)
 	}
-	if got := MachineType(AccelKVM); got != "virt" {
+	if got := MachineType(ArchARM64, AccelKVM); got != "virt" {
 		t.Errorf("MachineType(kvm) = %q, want plain virt so the host GIC is matched", got)
 	}
-	if got := MachineType(AccelTCG); got != "virt" {
+	if got := MachineType(ArchARM64, AccelTCG); got != "virt" {
 		t.Errorf("MachineType(tcg) = %q, want plain virt", got)
+	}
+}
+
+func TestX86CPUModelAndMachine(t *testing.T) {
+	// The image is built for x86-64-v3. Accelerated, the host CPU (checked to
+	// be v3) is passed through. Emulated, a named v3 model is used: -cpu max
+	// boots but makes Mesa's software renderer abort.
+	for accel, want := range map[Accel]string{AccelKVM: "host", AccelHVF: "host", AccelTCG: "Skylake-Client"} {
+		if got := CPUModel(ArchAMD64, accel); got != want {
+			t.Errorf("CPUModel(amd64, %s) = %q, want %q", accel, got, want)
+		}
+		if got := MachineType(ArchAMD64, accel); got != "q35" {
+			t.Errorf("MachineType(amd64, %s) = %q, want q35", accel, got)
+		}
+	}
+}
+
+func TestFindQEMUNamesTheEmulatorForTheGuest(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ProgramFiles", root)
+	saved := vmLookPath
+	t.Cleanup(func() { vmLookPath = saved })
+	var asked []string
+	vmLookPath = func(name string) (string, error) {
+		asked = append(asked, name)
+		return "", fs.ErrNotExist
+	}
+	if _, err := FindQEMU(ArchAMD64, "linux"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing x86-64 emulator: %v", err)
+	}
+	if len(asked) != 1 || asked[0] != "qemu-system-x86_64" {
+		t.Fatalf("looked up %v, want [qemu-system-x86_64]", asked)
+	}
+	path := filepath.Join(root, "qemu", "qemu-system-x86_64.exe")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := FindQEMU(ArchAMD64, "windows"); err != nil || got != path {
+		t.Fatalf("windows fallback = %q, %v; want %q", got, err, path)
 	}
 }
 

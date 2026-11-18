@@ -172,7 +172,7 @@ func TestSimulatorBootTimeoutScalesWithAcceleration(t *testing.T) {
 	// An emulated boot takes minutes, so the budget must not be a
 	// hardware-sized one; an accelerated host should not wait that long.
 	got := simulatorBootTimeout()
-	if vm.AccelFor(runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
+	if vm.AccelFor(vm.ArchARM64, runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
 		if got < 2*time.Minute {
 			t.Errorf("simulatorBootTimeout() = %v, too short for an emulated boot", got)
 		}

@@ -49,7 +49,7 @@ func (s Spec) Binary() string {
 		return "esp-emu"
 	}
 	if runtime.GOOS == "windows" {
-		if path, err := FindQEMU(runtime.GOOS); err == nil {
+		if path, err := FindQEMU(ArchARM64, runtime.GOOS); err == nil {
 			return path
 		}
 	}
@@ -90,9 +90,9 @@ func (s Spec) Args() ([]string, error) {
 		// Names the guest in ps, so one VM can be found and stopped without
 		// matching on the emulator binary.
 		"-name", s.Name,
-		"-machine", MachineType(s.Accel),
+		"-machine", MachineType(ArchARM64, s.Accel),
 		"-accel", string(s.Accel),
-		"-cpu", CPUModel(s.Accel),
+		"-cpu", CPUModel(ArchARM64, s.Accel),
 		"-smp", strconv.Itoa(cpus),
 		"-m", strconv.Itoa(mem),
 

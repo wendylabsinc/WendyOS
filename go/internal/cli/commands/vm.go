@@ -347,7 +347,7 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 		FirmwareVars: store.VarsPath(name),
 		MemoryMiB:    o.memoryMiB,
 		CPUs:         o.cpus,
-		Accel:        vm.AccelFor(runtime.GOOS, runtime.GOARCH),
+		Accel:        vm.AccelFor(vm.ArchARM64, runtime.GOOS, runtime.GOARCH),
 		Net:          net,
 	}, store, nil
 }
@@ -572,7 +572,7 @@ var ensureQEMUFn = func(ctx context.Context) error {
 
 // findQEMUFn resolves the emulator binary; indirected so tests can describe
 // a host that does not have it.
-var findQEMUFn = vm.FindQEMU
+var findQEMUFn = func(goos string) (string, error) { return vm.FindQEMU(vm.ArchARM64, goos) }
 
 func newVMListCmd() *cobra.Command {
 	return &cobra.Command{

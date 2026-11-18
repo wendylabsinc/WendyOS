@@ -53,7 +53,7 @@ const simulatorPortSearchTries = 8
 // host runs the guest natively, while anything else emulates every instruction
 // and a cold WendyOS boot takes minutes rather than seconds.
 func simulatorBootTimeout() time.Duration {
-	if vm.AccelFor(runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
+	if vm.AccelFor(vm.ArchARM64, runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
 		return 5 * time.Minute
 	}
 	return 90 * time.Second
