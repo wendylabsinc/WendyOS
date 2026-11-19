@@ -563,11 +563,19 @@ type deviceHub struct {
 	// explicit consumer has left degrades back to a defaulted hub that episode
 	// capture may restart. Protected by h.mu.
 	subExplicit map[int]string
-	// restarted marks that this hub's producer was torn down by an episode
-	// capture takeover (takeOverDefaultedHub) rather than by a fault or a
-	// normal last-unsubscribe. Parameter-less subscribers use it to reattach
-	// to the replacement hub after their channel closes. Protected by h.mu.
-	restarted bool
+	// restarted marks that this hub's producer was torn down by a takeover
+	// (an episode capture's, takeOverDefaultedHub, or a camera share's,
+	// takeOverHubForShare) rather than by a fault or a normal
+	// last-unsubscribe. Parameter-less subscribers use it to reattach to the
+	// replacement hub after their channel closes. restartedForShare says the
+	// takeover was a share's, so the ended streams name the right cause.
+	// Protected by h.mu.
+	restarted         bool
+	restartedForShare bool
+	// captureFree is made on demand for a share waiting on a recording
+	// (camera_share_mode.go) and closed by unsubscribe once no subscriber
+	// holds the hub's parameters as an episode capture. Protected by h.mu.
+	captureFree chan struct{}
 	// sampleSeq is the per-device sample counter, shared with every hub that
 	// has served the same device key. It outlives the hub so sample identities
 	// stay monotonic across producer restarts within one episode.
@@ -686,6 +694,7 @@ func (h *deviceHub) unsubscribe(id int) uint64 {
 	delete(h.subs, id)
 	delete(h.subDrops, id)
 	delete(h.subExplicit, id)
+	h.releaseCaptureHoldLocked()
 	if len(h.subs) == 0 {
 		h.cancel()
 	}
@@ -711,14 +720,22 @@ func (h *deviceHub) heldExplicitly() (holder string, held bool) {
 	return holder, lowest != -1
 }
 
-// wasRestarted reports whether this hub's producer was torn down by an
-// episode-capture takeover. Subscribers that observe their channel closed
-// check it to distinguish "the stream is being restarted at the campaign's
-// parameters, reattach" from "the producer stopped, give up".
+// wasRestarted reports whether this hub's producer was torn down by a
+// takeover. Subscribers that observe their channel closed check it to
+// distinguish "the stream is being restarted at other parameters, reattach"
+// from "the producer stopped, give up".
 func (h *deviceHub) wasRestarted() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.restarted
+}
+
+// wasRestartedForShare reports whether the takeover that restarted this hub
+// was a camera share's rather than an episode capture's.
+func (h *deviceHub) wasRestartedForShare() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.restarted && h.restartedForShare
 }
 
 // drops reports how many frames the hub has dropped for one subscriber so far.
@@ -2007,15 +2024,16 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 // the wrapped message names the holder and both parameter sets.
 var errCameraHeldExplicitly = errors.New("camera is held at explicitly requested stream parameters")
 
-// errCameraReleaseTimeout is the named refusal for a capture takeover whose
-// outgoing producer did not release the device within hubTeardownTimeout.
+// errCameraReleaseTimeout is the named refusal for a takeover (an episode
+// capture's or a camera share's) whose outgoing producer did not release the
+// device within hubTeardownTimeout.
 // Starting the replacement anyway is worse than refusing: the old producer
 // still holds the file descriptor, VIDIOC_S_FMT returns EBUSY, and the
 // replacement hub fails to produce anything at all, so every parameter-less
 // subscriber that reattached to it loses the camera as well as the campaign
 // losing its capture. Refusing costs this one campaign source its clip and
 // leaves the running stream untouched.
-var errCameraReleaseTimeout = errors.New("camera did not release in time for a capture takeover")
+var errCameraReleaseTimeout = errors.New("camera did not release in time for its producer to restart")
 
 // isCameraCaptureRefusal reports whether err is one of the named camera
 // refusals a campaign records in its manifest instead of failing the whole
@@ -2795,15 +2813,19 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				if err := h.terminalErr(); err != nil {
 					return err
 				}
-				// A capture takeover ends this stream rather than splicing new
+				// A takeover ends this stream rather than splicing new
 				// sequence parameter sets into it mid-timeline; the client
 				// reconnects and joins the restarted producer as a new stream.
 				if h.wasRestarted() {
+					cause := "episode capture restarted the camera producer at the campaign's requested parameters"
+					if h.wasRestartedForShare() {
+						cause = shareRestartCause
+					}
 					// Machine-readable so a client can tell this apart from
 					// every other Unavailable and rejoin by itself; the CLI's
 					// `camera view` does exactly that.
 					return streamreason.New(codes.Unavailable,
-						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+						"video stream ended: "+cause+"; reconnect to join the new stream",
 						streamreason.CameraProducerRestarted, nil)
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.
