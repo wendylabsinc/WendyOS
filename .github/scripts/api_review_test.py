@@ -738,8 +738,12 @@ class CommandTests(unittest.TestCase):
             (directory / "meta.json").write_text(json.dumps(metadata() if meta is None else meta))
             (directory / "pr.diff").write_bytes(diff() if raw is None else raw)
             args = argparse.Namespace(metadata=str(directory / "meta.json"), diff=str(directory / "pr.diff"), repo=REPO, pr_number=42, expected_head_sha=HEAD_SHA, expected_base_sha=BASE_SHA, output=str(directory / "result.json"), model="test-model")
-            effect = (lambda *a, **kw: unassessed_fixture(error(*a, **kw))) if callable(error) else error
-            with patch.object(api_review, "review_model", return_value=unassessed_fixture(payload or {"risk": "low", "decisions": []}), side_effect=effect) as model:
+            from unified_review_test import fixture
+            effect = (lambda *a, **kw: fixture(unassessed_fixture(error(*a, **kw)))) if callable(error) else error
+            def identities(value, prior, model):
+                value["decisions"] = [dict(d, prior_ids=[], relationship="new", reason="") for d in value["decisions"]]
+                return value
+            with patch.object(api_review.unified, "reconcile", side_effect=identities), patch.object(api_review, "review_model", return_value=fixture(unassessed_fixture(payload or {"risk": "low", "decisions": []})), side_effect=effect) as model:
                 exit_code = api_review.command_review(args)
             return exit_code, json.loads((directory / "result.json").read_text()), model
 
@@ -898,7 +902,9 @@ class CommandTests(unittest.TestCase):
     def test_duplicate_decisions_are_retained_only_once(self):
         code, result, _ = self.run_review(payload={"risk": "high", "decisions": [decision(), decision()]})
         self.assertEqual(code, 0)
-        self.assertEqual(result["decisions"], [dict(decision(), prior_ids=[], relationship="new", reason="")])
+        from unified_review_test import fixture
+        expected = fixture({"decisions": [decision()]})["decisions"][0]
+        self.assertEqual(result["decisions"], [dict(expected, prior_ids=[], relationship="new", reason="")])
 
     def test_input_failure_writes_incomplete_result_without_model_call(self):
         code, result, model = self.run_review(meta=metadata(additions=2))
