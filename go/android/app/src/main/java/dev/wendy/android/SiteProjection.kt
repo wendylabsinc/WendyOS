@@ -86,9 +86,9 @@ object SiteProjection {
     }
 
     const val VERTEX = """#version 300 es
-uniform mat4 uMVP; in vec3 aPosition; in vec3 aNormal; out vec3 vWorld; out float vLight;
+uniform mat4 uMVP; in vec3 aPosition; in vec3 aNormal; in vec2 aUV; out vec2 vUV; out vec3 vWorld; out float vLight;
 void main() {
-    gl_Position = uMVP * vec4(aPosition, 1.0); vWorld = aPosition;
+    gl_Position = uMVP * vec4(aPosition, 1.0); vWorld = aPosition; vUV = aUV;
     vLight = 0.38 + 0.62 * abs(dot(normalize(aNormal + vec3(0.0, 1e-6, 0.0)), normalize(vec3(0.35, 0.9, 0.25))));
 }"""
 
@@ -96,6 +96,7 @@ void main() {
     const val FRAGMENT = """#version 300 es
 precision highp float;
 uniform vec3 uColor; uniform int uCount;
+uniform sampler2D uTexture; uniform float uTextured; uniform vec4 uTextureScale; uniform vec4 uTextureBias; in vec2 vUV;
 uniform mat4 uWorldToCamera[4];
 uniform vec4 uLens[4];        // fx, fy, cx, cy
 uniform vec4 uSize[4];        // width, height, extent x, extent y
@@ -138,7 +139,10 @@ void main() {
     if (uCount > 1) project(1, uCamera1, uDepth1);
     if (uCount > 2) project(2, uCamera2, uDepth2);
     if (uCount > 3) project(3, uCamera3, uDepth3);
-    fragColor = vec4(bestQuality > 0.0 ? projected : uColor * vLight, 1.0);
+    vec4 base = vec4(uColor, 1.0);
+    if (uTextured > 0.5) base *= texture(uTexture, vec2(vUV.x, 1.0-vUV.y)) * uTextureScale + uTextureBias;
+    if (base.a < 0.01) discard;
+    fragColor = vec4(bestQuality > 0.0 ? projected : base.rgb * vLight, base.a);
 }"""
 
     const val DEPTH_VERTEX = """#version 300 es

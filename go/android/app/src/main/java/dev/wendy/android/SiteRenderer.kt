@@ -229,10 +229,11 @@ object SiteRay {
     }
 }
 
-private class SiteRendererGL : GLSurfaceView.Renderer {
-    private class Uploaded(val buffer: Int, val count: Int, val color: FloatArray)
+internal class SiteRendererGL : GLSurfaceView.Renderer {
+    private class Uploaded(val buffer: Int, val count: Int, val color: FloatArray, val texture: Int, val material: SiteTexture?)
     private var meshes = emptyList<Uploaded>()
     private var pending: SiteGeometry? = null
+    private val textures = SiteTextureGL()
     var markers: List<SiteMarker> = emptyList()
     /** Cameras whose latest picture is projected onto the model (iOS live imagery). */
     var projectors: List<SiteProjector> = emptyList()
@@ -253,14 +254,21 @@ private class SiteRendererGL : GLSurfaceView.Renderer {
         GLES20.glClearColor(0.94f, 0.93f, 0.90f, 1f)
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         program = link("""
-            uniform mat4 uMVP; attribute vec3 aPosition; attribute vec3 aNormal; varying float vLight;
-            void main() { gl_Position = uMVP * vec4(aPosition, 1.0); vLight = 0.38 + 0.62 * abs(dot(normalize(aNormal + vec3(0.0, 1e-6, 0.0)), normalize(vec3(0.35, 0.9, 0.25)))); }
+            uniform mat4 uMVP; attribute vec3 aPosition; attribute vec3 aNormal; attribute vec2 aUV; varying vec2 vUV; varying float vLight;
+            void main() { vUV = aUV; gl_Position = uMVP * vec4(aPosition, 1.0); vLight = 0.38 + 0.62 * abs(dot(normalize(aNormal + vec3(0.0, 1e-6, 0.0)), normalize(vec3(0.35, 0.9, 0.25)))); }
         """, """
-            precision mediump float; uniform vec3 uColor; uniform float uLit; varying float vLight;
-            void main() { gl_FragColor = vec4(uColor * mix(1.0, vLight, uLit), 1.0); }
+            precision mediump float; uniform vec3 uColor; uniform float uLit; varying float vLight; varying vec2 vUV;
+            uniform sampler2D uTexture; uniform float uTextured; uniform vec4 uTextureScale; uniform vec4 uTextureBias;
+            void main() {
+                vec4 base = vec4(uColor, 1.0);
+                if (uTextured > 0.5) base *= texture2D(uTexture, vec2(vUV.x, 1.0-vUV.y)) * uTextureScale + uTextureBias;
+                if (base.a < 0.01) discard;
+                gl_FragColor = vec4(base.rgb * mix(1.0, vLight, uLit), base.a);
+            }
         """)
         projection.create(::link)
         meshes = emptyList()
+        textures.contextLost()
         pending = pending ?: lastGeometry
     }
     private var lastGeometry: SiteGeometry? = null
@@ -273,7 +281,7 @@ private class SiteRendererGL : GLSurfaceView.Renderer {
         meshes.forEachIndexed { index, mesh ->
             if (index in projection.excludedMeshes) return@forEachIndexed
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mesh.buffer)
-            GLES20.glVertexAttribPointer(projection.depthPosition, 3, GLES20.GL_FLOAT, false, 24, 0)
+            GLES20.glVertexAttribPointer(projection.depthPosition, 3, GLES20.GL_FLOAT, false, 32, 0)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.count)
         }
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
@@ -294,18 +302,24 @@ private class SiteRendererGL : GLSurfaceView.Renderer {
         val modelPosition = GLES20.glGetAttribLocation(modelProgram, "aPosition"); val modelNormal = GLES20.glGetAttribLocation(modelProgram, "aNormal")
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(modelProgram, "uMVP"), 1, false, vp, 0)
         if (ready.isNotEmpty()) projection.bind(ready) else GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uLit"), 1f)
+        val modelUV = GLES20.glGetAttribLocation(modelProgram, "aUV")
+        if (modelUV >= 0) GLES20.glEnableVertexAttribArray(modelUV)
         val modelColor = GLES20.glGetUniformLocation(modelProgram, "uColor")
         GLES20.glEnableVertexAttribArray(modelPosition); GLES20.glEnableVertexAttribArray(modelNormal)
         for (mesh in meshes) {
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mesh.buffer)
-            GLES20.glVertexAttribPointer(modelPosition, 3, GLES20.GL_FLOAT, false, 24, 0)
-            GLES20.glVertexAttribPointer(modelNormal, 3, GLES20.GL_FLOAT, false, 24, 12)
+            GLES20.glVertexAttribPointer(modelPosition, 3, GLES20.GL_FLOAT, false, 32, 0)
+            GLES20.glVertexAttribPointer(modelNormal, 3, GLES20.GL_FLOAT, false, 32, 12)
+            if (modelUV >= 0) GLES20.glVertexAttribPointer(modelUV, 2, GLES20.GL_FLOAT, false, 32, 24)
+            textures.bind(modelProgram, mesh.texture, mesh.material)
             GLES20.glUniform3fv(modelColor, 1, mesh.color, 0)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.count)
         }
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+        if (modelUV >= 0) GLES20.glDisableVertexAttribArray(modelUV)
         GLES20.glDisableVertexAttribArray(modelPosition); GLES20.glDisableVertexAttribArray(modelNormal)
         GLES20.glUseProgram(program)
+        textures.bind(program, 0, null)
         val position = GLES20.glGetAttribLocation(program, "aPosition"); val normal = GLES20.glGetAttribLocation(program, "aNormal")
         val mvp = GLES20.glGetUniformLocation(program, "uMVP"); val color = GLES20.glGetUniformLocation(program, "uColor"); val lit = GLES20.glGetUniformLocation(program, "uLit")
         GLES20.glUniform1f(lit, 1f)
@@ -340,16 +354,18 @@ private class SiteRendererGL : GLSurfaceView.Renderer {
 
     private fun upload(geometry: SiteGeometry) {
         if (meshes.isNotEmpty()) GLES20.glDeleteBuffers(meshes.size, meshes.map { it.buffer }.toIntArray(), 0)
+        textures.clear(geometry.meshes.mapNotNull { it.texture?.bytes }.distinct().size)
         val ids = IntArray(geometry.meshes.size)
         if (ids.isNotEmpty()) GLES20.glGenBuffers(ids.size, ids, 0)
         meshes = geometry.meshes.mapIndexed { index, mesh ->
-            val interleaved = FloatArray(mesh.positions.size * 2)
+            val interleaved = FloatArray(mesh.positions.size / 3 * 8)
             for (v in 0 until mesh.positions.size / 3) {
-                for (axis in 0..2) { interleaved[v * 6 + axis] = mesh.positions[v * 3 + axis]; interleaved[v * 6 + 3 + axis] = mesh.normals[v * 3 + axis] }
+                for (axis in 0..2) { interleaved[v * 8 + axis] = mesh.positions[v * 3 + axis]; interleaved[v * 8 + 3 + axis] = mesh.normals[v * 3 + axis] }
             }
+            for (v in 0 until mesh.positions.size / 3) for (axis in 0..1) interleaved[v * 8 + 6 + axis] = mesh.uv.getOrElse(v * 2 + axis) { 0f }
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, ids[index])
             GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, interleaved.size * 4, floatBuffer(interleaved), GLES20.GL_STATIC_DRAW)
-            Uploaded(ids[index], mesh.positions.size / 3, mesh.color)
+            Uploaded(ids[index], mesh.positions.size / 3, mesh.color, mesh.texture?.let(textures::upload) ?: 0, mesh.texture)
         }
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
     }

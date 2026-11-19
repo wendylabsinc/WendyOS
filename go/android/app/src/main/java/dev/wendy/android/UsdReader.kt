@@ -9,13 +9,13 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 // A small, bounded reader for the USDZ site models iOS saves (RoomPlan, SceneKit and photo captures).
-// It reads geometry only: meshes and cubes, their transforms, display or preview-surface colors, the
+// It reads meshes and cubes, transforms, embedded preview-surface textures and colors, the
 // layer's metersPerUnit and upAxis. It never follows references outside the archive or runs scripts.
 
 class UsdFormatException(message: String) : Exception(message)
 
 /** One mesh, triangulated, in metres with Y up. Positions and normals are xyz per vertex, three vertices per triangle. */
-class SiteMesh(val name: String, val positions: FloatArray, val normals: FloatArray, val color: FloatArray)
+class SiteMesh(val name: String, val positions: FloatArray, val normals: FloatArray, val color: FloatArray, val uv: FloatArray = FloatArray(0), val texture: SiteTexture? = null)
 
 class SiteGeometry(val meshes: List<SiteMesh>) {
     val triangles get() = meshes.sumOf { it.positions.size / 9 }
@@ -44,8 +44,8 @@ object UsdReader {
     /** Reads a USDZ archive (or a bare usda or usdc layer) into triangles in metres, Y up. */
     fun read(bytes: ByteArray): SiteGeometry {
         if (bytes.size > MAXIMUM_BYTES) throw UsdFormatException("This model is too large. Export a USDZ model smaller than 128 MB.")
-        val layer = layerBytes(bytes)
-        return compose(parseLayer(layer))
+        val archive = UsdAssets.read(bytes)
+        return compose(parseLayer(archive.layer), archive)
     }
 
     internal fun parseLayer(bytes: ByteArray): UsdLayer = when {
@@ -54,28 +54,9 @@ object UsdReader {
         else -> throw UsdFormatException("Choose a self-contained USDZ model of the site.")
     }
 
-    /** USDZ's first file is its default layer (USDZ specification). */
-    private fun layerBytes(bytes: ByteArray): ByteArray {
-        if (bytes.size < 4 || bytes[0] != 0x50.toByte() || bytes[1] != 0x4b.toByte()) return bytes
-        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                val name = entry.name.lowercase()
-                if (entry.isDirectory || name.contains("..")) continue
-                if (name.endsWith(".usdc") || name.endsWith(".usda") || name.endsWith(".usd")) {
-                    val out = java.io.ByteArrayOutputStream()
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) { val n = zip.read(buffer); if (n < 0) break; out.write(buffer, 0, n); if (out.size() > MAXIMUM_BYTES) throw UsdFormatException("This model is too large.") }
-                    return out.toByteArray()
-                }
-            }
-        }
-        throw UsdFormatException("This USDZ file has no USD layer.")
-    }
-
     // MARK: Composition
 
-    private fun compose(layer: UsdLayer): SiteGeometry {
+    private fun compose(layer: UsdLayer, assets: UsdAssets): SiteGeometry {
         val meshes = mutableListOf<SiteMesh>()
         var triangles = 0
         val scale = if (layer.metersPerUnit.isFinite() && layer.metersPerUnit > 0) layer.metersPerUnit else 1.0
@@ -85,7 +66,7 @@ object UsdReader {
             val (local, reset) = localTransform(prim)
             val world = if (reset) local else multiply(local, parent)
             when (prim.type) {
-                "Mesh" -> mesh(prim, world, layer, scale, zUp)?.let { triangles += it.positions.size / 9; meshes += it }
+                "Mesh" -> mesh(prim, world, layer, scale, zUp, assets).forEach { triangles += it.positions.size / 9; meshes += it }
                 "Cube" -> cube(prim, world, layer, scale, zUp)?.let { triangles += it.positions.size / 9; meshes += it }
             }
             if (triangles > MAXIMUM_TRIANGLES) throw UsdFormatException("This model has too many triangles to show.")
@@ -96,24 +77,39 @@ object UsdReader {
         return SiteGeometry(meshes)
     }
 
-    private fun mesh(prim: UsdPrim, world: DoubleArray, layer: UsdLayer, scale: Double, zUp: Boolean): SiteMesh? {
-        val points = (prim.attributes["points"] as? FloatArray) ?: (prim.attributes["points"] as? DoubleArray)?.let { d -> FloatArray(d.size) { d[it].toFloat() } } ?: return null
-        val indices = prim.attributes["faceVertexIndices"] as? IntArray ?: return null
-        val counts = prim.attributes["faceVertexCounts"] as? IntArray ?: return null
-        val vertexCount = points.size / 3
-        val out = ArrayList<Float>(indices.size * 3)
+    private fun mesh(prim: UsdPrim, world: DoubleArray, layer: UsdLayer, scale: Double, zUp: Boolean, assets: UsdAssets): List<SiteMesh> {
+        val points = (prim.attributes["points"] as? FloatArray) ?: (prim.attributes["points"] as? DoubleArray)?.let { d -> FloatArray(d.size) { d[it].toFloat() } } ?: return emptyList()
+        val indices = prim.attributes["faceVertexIndices"] as? IntArray ?: return emptyList()
+        val counts = prim.attributes["faceVertexCounts"] as? IntArray ?: return emptyList()
+        val subsets = prim.children.mapNotNull { layer.prims[it] }.filter { it.type == "GeomSubset" && it.attributes["elementType"] == "face" }
+        val owners = HashMap<Int, UsdPrim>()
+        for (subset in subsets) for (face in subset.attributes["indices"] as? IntArray ?: intArrayOf()) {
+            if (face !in counts.indices || owners.put(face, subset) != null) throw UsdFormatException("Invalid material subsets")
+        }
+        val groups = LinkedHashMap<String, Pair<ArrayList<Float>, ArrayList<Float>>>()
+        val materials = HashMap<String, UsdMaterial>()
         var cursor = 0
-        for (count in counts) {
-            if (count < 3 || cursor + count > indices.size) { cursor += maxOf(count, 0); continue }
-            for (k in 1 until count - 1) for (corner in intArrayOf(indices[cursor], indices[cursor + k], indices[cursor + k + 1])) {
-                if (corner !in 0 until vertexCount) throw UsdFormatException("A mesh in this model is damaged.")
+        for ((face, count) in counts.withIndex()) {
+            if (count < 3 || count > indices.size - cursor) throw UsdFormatException("Invalid mesh face")
+            val owner = owners[face] ?: prim
+            val material = materials.getOrPut(owner.path) { UsdMaterial.resolve(owner, prim, layer, assets) }
+            val (out, uv) = groups.getOrPut(owner.path) { ArrayList<Float>() to ArrayList<Float>() }
+            for (k in 1 until count - 1) for (faceCorner in intArrayOf(cursor, cursor + k, cursor + k + 1)) {
+                if (out.size / 9 >= MAXIMUM_TRIANGLES) throw UsdFormatException("This model has too many triangles")
+                val corner = indices[faceCorner]
+                if (corner !in 0 until points.size / 3) throw UsdFormatException("Invalid mesh vertex")
                 val p = transform(points[corner * 3].toDouble(), points[corner * 3 + 1].toDouble(), points[corner * 3 + 2].toDouble(), world, scale, zUp)
-                out += p[0]; out += p[1]; out += p[2]
+                if (p.any { !it.isFinite() }) throw UsdFormatException("Invalid mesh coordinates")
+                out.addAll(p.toList())
+                if (material.texture != null) uv.addAll(material.coordinates(prim, face, faceCorner, corner).toList())
             }
             cursor += count
         }
-        if (out.isEmpty()) return null
-        return finish(prim, out.toFloatArray(), layer)
+        return groups.map { (path, data) ->
+            val base = finish(prim, data.first.toFloatArray(), layer)
+            val material = materials.getValue(path)
+            SiteMesh(base.name, base.positions, base.normals, material.color, data.second.toFloatArray(), material.texture)
+        }
     }
 
     private fun cube(prim: UsdPrim, world: DoubleArray, layer: UsdLayer, scale: Double, zUp: Boolean): SiteMesh {
@@ -364,6 +360,8 @@ private class CrateReader(private val data: ByteArray) {
                     val name = path.substringAfterLast('.')
                     val prim = prims.getOrPut(owner) { UsdPrim(owner) }
                     fields["default"]?.let { prim.attributes[name] = value(it) }
+                    fields["connectionPaths"]?.let { prim.relationships["$name.connect"] = pathList(it) }
+                    fields["interpolation"]?.let { prim.attributes["$name:interpolation"] = value(it) }
                 }
                 8 -> {
                     val owner = path.substringBeforeLast('.')
@@ -419,7 +417,7 @@ private class CrateReader(private val data: ByteArray) {
             1, 2, 3, 4 -> payload.toInt()
             5, 6 -> payload
             8, 9 -> java.lang.Float.intBitsToFloat(payload.toInt()).toDouble()
-            11 -> tokens.getOrNull(payload.toInt())
+            11, 12 -> tokens.getOrNull(payload.toInt())
             10 -> strings.getOrNull(payload.toInt())?.let { tokens.getOrNull(it) }
             19, 20, 22, 23, 24, 26, 27, 28, 30 -> {
                 val n = when (type) { 19, 20, 22 -> 2; 27, 28, 30 -> 4; else -> 3 }
@@ -432,10 +430,13 @@ private class CrateReader(private val data: ByteArray) {
         var p = payload.toInt()
         if (p !in 0 until data.size) return null
         if (!array) return when (type) {
+            12 -> strings.getOrNull(buffer.getInt(p))?.let { tokens.getOrNull(it) }
             9 -> buffer.getDouble(p)
             15 -> DoubleArray(16) { buffer.getDouble(p + it * 8) }
             16 -> DoubleArray(4) { buffer.getDouble(p + it * 8) }
             17 -> DoubleArray(4) { buffer.getFloat(p + it * 4).toDouble() }
+            19 -> DoubleArray(2) { buffer.getDouble(p + it * 8) }
+            20 -> FloatArray(2) { buffer.getFloat(p + it * 4) }
             23 -> DoubleArray(3) { buffer.getDouble(p + it * 8) }
             24 -> FloatArray(3) { buffer.getFloat(p + it * 4) }
             27 -> DoubleArray(4) { buffer.getDouble(p + it * 8) }
@@ -616,14 +617,18 @@ private class UsdaReader(private val text: String) {
         i++ // '='
         space(sameLine = true)
         val name = words.lastOrNull() ?: run { skipLine(); return }
-        val isRelationship = words.firstOrNull() == "rel"
+        val isRelationship = "rel" in words || name.endsWith(".connect")
         val type = words.dropLast(1).lastOrNull() ?: ""
         val value = value()
         if (isRelationship) {
             prim.relationships[name] = when (value) { is String -> listOf(value); is List<*> -> value.filterIsInstance<String>(); else -> emptyList() }
-        } else prim.attributes[name.removeSuffix(".connect")] = typed(type, value)
+        } else prim.attributes[name] = typed(type, value)
         space(sameLine = true)
-        if (peek() == '(') i = matching(i) + 1
+        if (i < text.length && peek() == '(') {
+            val end = matching(i)
+            Regex("interpolation\\s*=\\s*\"(\\w+)\"").find(text.substring(i, end))?.let { prim.attributes["$name:interpolation"] = it.groupValues[1] }
+            i = end + 1
+        }
     }
 
     private fun typed(type: String, value: Any?): Any? {
@@ -651,7 +656,7 @@ private class UsdaReader(private val text: String) {
             '(' -> list(')')
             '"' -> quoted()
             '<' -> { val end = text.indexOf('>', i); val v = text.substring(i + 1, end); i = end + 1; v }
-            '@' -> { val end = text.indexOf('@', i + 1); i = end + 1; null }
+            '@' -> { val end = text.indexOf('@', i + 1); if (end < 0) throw UsdFormatException("Unclosed asset path"); val path = text.substring(i + 1, end); i = end + 1; path }
             else -> { val w = word(); w.toDoubleOrNull() ?: w }
         }
     }
