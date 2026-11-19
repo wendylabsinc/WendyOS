@@ -78,11 +78,11 @@ performing tests or other required checks.
 ## Optional AI reviews
 
 AI reviews run when a PR is marked ready for review and skip drafts. Keep a PR
-draft while working, then mark it ready when the change is done and self-reviewed.
-Use `workflow_dispatch` with the PR number and exact head SHA for a rerun from
-`main`; API review's default manual mode remains nonpublishing validation.
-Dependabot keeps its secretless dependency policy on PR updates, including drafts.
-API review recommends risk in its comment but does not change the author's risk label.
+in draft while working, then mark it ready when done and self-reviewed.
+Use `workflow_dispatch` with an existing ready-for-review `run_id` to rerun its
+original PR revision while the PR remains ready. API dispatch without `run_id`
+keeps the existing nonpublishing validation mode. Dependabot's secretless policy
+continues on PR updates, including drafts. API review does not change risk labels.
 
 ## Setup
 
