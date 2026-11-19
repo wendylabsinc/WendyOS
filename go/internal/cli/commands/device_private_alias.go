@@ -303,7 +303,7 @@ func selectPrivateAliasCandidate(alias privateDeviceAlias, tenant meshid.Tenant,
 	}
 	for _, candidate := range candidates {
 		if !candidate.trusted {
-			return privateAliasCandidate{}, fmt.Errorf("cannot authenticate friendly private alias %q from LAN discovery alone: %w; refresh trusted inventory with 'wendy cloud discover' or use device-<uuid>.wendy.internal", alias.host, certs.ErrExpectedDeviceIdentity)
+			return privateAliasCandidate{}, fmt.Errorf("cannot authenticate friendly private alias %q from LAN discovery alone: %w; try the same hostname when Cloud inventory is reachable, or use device-<uuid>.wendy.internal", alias.host, certs.ErrExpectedDeviceIdentity)
 		}
 		return *candidate, nil
 	}

@@ -22,29 +22,50 @@ A value made only of digits, such as `283`, is rejected: it is not a hostname or
 
 ### Private Wendy Net hostnames
 
-With a signed-in organization selected, pass a short device hostname or the
-UUID from the device's certificate. The CLI discovers and authenticates the
-device through mesh, LAN, or Cloud within that organization.
+Sign in with [`wendy cloud login`](./commands/cloud/login.md) and select the
+device's organization. Pass a short device hostname or its certificate UUID.
+The CLI discovers and authenticates the device through mesh, LAN, or Cloud
+within that organization.
 
 ```sh
 wendy --device jetson.wendy.internal device info
 wendy --device device-${DEVICE_UUID}.wendy.internal device info
 ```
 
-Allow up to three seconds for discovery. A friendly name needs a signed mesh
-name, authenticated Cloud inventory, or a saved binding. If the CLI reports an
-ambiguous name or an incomplete mesh directory, use the UUID form.
+For a device enrolled with a UUID, use the `id` field from
+`wendy cloud discover --json` as `DEVICE_UUID`. Valid DNS labels keep their
+repeated hyphens. A legacy display name such as `Jetson A` becomes
+`jetson-a.wendy.internal`.
 
-For an offline LAN peer, prepare a trusted binding while Cloud inventory is
-available. Run `wendy cloud discover` to refresh the device's inventory binding
-or connect once using the short hostname. You can also use the UUID directly.
+The CLI gathers mesh, LAN, and Cloud candidates in parallel with a three-second
+budget. A friendly name needs a signed mesh name, authenticated Cloud inventory,
+or a saved binding. The certificate authenticates the UUID form directly, so
+it works with a LAN sighting alone. Use the UUID form when a name is ambiguous
+or the mesh directory is incomplete.
 
-`wendy device set-default jetson.wendy.internal` saves the alias with its
-selected organization. To clear an alias binding after an intentional device
-replacement, select that organization and run
-`wendy device unpin jetson.wendy.internal`. Refresh trusted inventory before
-connecting to the replacement by name.
+For offline LAN use, connect once by the exact short hostname while Cloud
+inventory is reachable. The CLI checks the trusted binding and the peer's
+certificate before saving the binding under that hostname.
 
+Set the short hostname as the default device for this organization.
+
+```sh
+wendy device set-default jetson.wendy.internal
+```
+
+If you switch organizations, use [`wendy auth use`](./commands/auth/use.md)
+to return to the saved context or select a device explicitly. After an
+intentional replacement, select the organization and run the following command.
+It clears the hostname's saved binding for the selected organization only.
+
+```sh
+wendy device unpin jetson.wendy.internal
+```
+
+Use `wendy cloud discover --json` to check the replacement's UUID in the
+authenticated roster. Then connect by short hostname while Cloud inventory is
+reachable so the CLI can verify and save the replacement's binding. If the
+replacement has yet to be enrolled, complete enrollment first.
 
 ## 2. `WENDY_DEVICE`
 

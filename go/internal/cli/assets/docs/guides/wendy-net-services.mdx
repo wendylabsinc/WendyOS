@@ -227,20 +227,10 @@ The app connects directly through its device's relay grant. The
 
 ### Select a device from the CLI
 
-The CLI accepts short hostnames in `--device` within the current organization.
-Use a signed mesh name, authenticated Cloud inventory, or a previously trusted
-binding for offline LAN use. If the mesh directory is incomplete or multiple
-devices share the name, use the UUID form.
-
-For example, select a device by its friendly name or UUID:
-
-```sh
-wendy --device jetson.wendy.internal device info
-wendy --device device-${DEVICE_UUID}.wendy.internal device info
-```
-
-See [private hostname selection](/docs/advanced/clients/wendy-cli/device-selection#private-wendy-net-hostnames)
-for offline LAN recovery, saved defaults, and pin removal.
+The CLI uses authenticated device discovery to select a device by short
+hostname in `--device` without a desktop VPN or app entitlement. See
+[the CLI device selection guide](/docs/advanced/clients/wendy-cli/device-selection)
+for examples, trust requirements, and recovery steps.
 
 ## Try the complete Python example
 
