@@ -152,9 +152,12 @@ func TestLiteBuildRef(t *testing.T) {
 	}
 }
 
-// TestCloneLiteSources clones a branch and a tag of a local repository
-// through a file:// URL, as the flow clones GitHub.
-func TestCloneLiteSources(t *testing.T) {
+// liteTestRepo makes a local wendy-lite repository with a tag "t1" and a
+// branch "feature/x", which the tests clone through a file:// URL, as the
+// flow clones GitHub. It returns the URL and the commits of the tag and the
+// branch.
+func liteTestRepo(t *testing.T) (url, tagged, branch string) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -175,47 +178,155 @@ func TestCloneLiteSources(t *testing.T) {
 		}
 		git("add", "file.txt")
 		git("commit", "--quiet", "-m", content)
-		return git("rev-parse", "--short", "HEAD")
+		return git("rev-parse", "HEAD")
 	}
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	git("init", "--quiet")
-	tagged := commit("tagged")
+	tagged = commit("tagged")
 	git("tag", "t1")
 	git("checkout", "--quiet", "-b", "feature/x")
-	branch := commit("branch")
-	url := "file://" + filepath.ToSlash(repo)
+	branch = commit("branch")
+	return "file://" + filepath.ToSlash(repo), tagged, branch
+}
+
+// setLiteBuildRoot makes the build cache a temporary folder.
+func setLiteBuildRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "wendy-lite-build")
+	orig := liteBuildRoot
+	t.Cleanup(func() { liteBuildRoot = orig })
+	liteBuildRoot = func() (string, error) { return root, nil }
+	return root
+}
+
+// TestOpenLiteBuildFolder opens the build folders of a branch and a tag in
+// the cache, and checks the cache lock.
+func TestOpenLiteBuildFolder(t *testing.T) {
+	url, tagged, branch := liteTestRepo(t)
+	root := setLiteBuildRoot(t)
+	ctx := context.Background()
 
 	for _, tc := range []struct{ ref, content, commit string }{
 		{"feature/x", "branch", branch},
 		{"t1", "tagged", tagged},
 	} {
-		dir, got, err := cloneLiteSources(context.Background(), url, tc.ref)
+		dir, commit, release, err := openLiteBuildFolder(ctx, url, tc.ref)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.ref, err)
 		}
-		t.Cleanup(func() { os.RemoveAll(dir) })
-		if got != tc.commit {
-			t.Errorf("%s: commit = %s, want %s", tc.ref, got, tc.commit)
+		release()
+		if commit != tc.commit || dir != filepath.Join(root, litebuild.BuildFolderName(tc.commit)) {
+			t.Errorf("%s: folder %s at %s, want the folder of %s", tc.ref, dir, commit, tc.commit)
 		}
 		data, err := os.ReadFile(filepath.Join(dir, "file.txt"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(data) != tc.content {
-			t.Errorf("%s: clone has %q, want %q", tc.ref, data, tc.content)
+			t.Errorf("%s: the folder has %q, want %q", tc.ref, data, tc.content)
 		}
 	}
 
-	// An unknown ref: an error, and no temporary folder left behind.
-	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "wendy-lite-build-*"))
-	_, _, err := cloneLiteSources(context.Background(), url, "does-not-exist")
-	if err == nil || !strings.Contains(err.Error(), "does-not-exist") {
-		t.Errorf("clone of an unknown ref = %v, want an error naming it", err)
+	// While a build holds the cache, another one stops.
+	_, _, release, err := openLiteBuildFolder(ctx, url, "t1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	after, _ := filepath.Glob(filepath.Join(os.TempDir(), "wendy-lite-build-*"))
-	if len(after) != len(before) {
-		t.Errorf("temporary folders: %d before, %d after the failed clone", len(before), len(after))
+	if _, _, _, err := openLiteBuildFolder(ctx, url, "t1"); err == nil || !strings.Contains(err.Error(), "another Wendy Lite build is running") {
+		t.Errorf("with the cache locked: %v", err)
+	}
+	release()
+
+	// An unknown ref: an error naming it, and the cache is unlocked.
+	if _, _, _, err := openLiteBuildFolder(ctx, url, "does-not-exist"); err == nil || !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("unknown ref: %v, want an error naming it", err)
+	}
+	_, _, release, err = openLiteBuildFolder(ctx, url, "t1")
+	if err != nil {
+		t.Fatalf("the cache stayed locked after the failure: %v", err)
+	}
+	release()
+}
+
+func TestLiteBuildConfigureReason(t *testing.T) {
+	dir := t.TempDir()
+	const profile = `{"board":"seeed_xiao"}`
+	write := func(name, content string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reason := func() string {
+		t.Helper()
+		r, err := liteBuildConfigureReason(dir, profile, "1.2.3", "v6.0.3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+
+	if r := reason(); !strings.Contains(r, "not configured") {
+		t.Errorf("without sdkconfig: %q", r)
+	}
+	write("sdkconfig", litebuild.BuildProfileLine(profile)+"\n"+litebuild.VersionOption+"=\"1.2.3\"\n")
+	if r := reason(); !strings.Contains(r, "CMake") {
+		t.Errorf("without CMakeCache.txt: %q", r)
+	}
+	write("build/CMakeCache.txt", "")
+	if r := reason(); r != "" {
+		t.Errorf("configured: %q", r)
+	}
+	write("build/project_description.json", `{"git_revision": "v6.0.3-dirty"}`)
+	if r := reason(); r != "" {
+		t.Errorf("configured with the same ESP-IDF: %q", r)
+	}
+	write("build/project_description.json", `{"git_revision": "v6.1"}`)
+	if r := reason(); !strings.Contains(r, "ESP-IDF v6.1") {
+		t.Errorf("configured with another ESP-IDF: %q", r)
+	}
+}
+
+// TestResetLiteBuildFolder checks that the reset before configure.py deletes
+// the ESP-IDF build folder and restores the tracked files, and keeps the
+// untracked files.
+func TestResetLiteBuildFolder(t *testing.T) {
+	url, _, _ := liteTestRepo(t)
+	setLiteBuildRoot(t)
+	dir, _, release, err := openLiteBuildFolder(context.Background(), url, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for name, content := range map[string]string{
+		"file.txt":             "changed by the build",
+		"sdkconfig":            "untracked",
+		"build/CMakeCache.txt": "",
+	} {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := resetLiteBuildFolder(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "file.txt")); string(data) != "branch" {
+		t.Errorf("tracked file = %q, want it restored", data)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "sdkconfig")); string(data) != "untracked" {
+		t.Errorf("untracked file = %q, want it kept", data)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build")); !os.IsNotExist(err) {
+		t.Errorf("the build folder stays: %v", err)
 	}
 }

@@ -201,15 +201,20 @@ func CheckAppDefaults(projectPath, version, profile string) (AppDefaultsStatus, 
 	status := AppDefaultsStatus{
 		State:   AppDefaultsOutdated,
 		Version: values[VersionOption],
-		// Older Wendy Lite versions wrote flat YAML with the 2 characters
-		// \n between the lines. Configuration values have no \n, so this
-		// does not change a JSON profile.
-		Profile: strings.ReplaceAll(values[BuildProfileOption], `\n`, "\n"),
+		Profile: storedProfile(values),
 	}
 	if status.Version == version && sameProfile(status.Profile, profile) {
 		status.State = AppDefaultsOK
 	}
 	return status, nil
+}
+
+// storedProfile returns the build profile in the string options of
+// sdkconfig text (kconfigStrings). Older Wendy Lite versions wrote flat YAML
+// with the 2 characters \n between the lines. Configuration values have no
+// \n, so this does not change a JSON profile.
+func storedProfile(values map[string]string) string {
+	return strings.ReplaceAll(values[BuildProfileOption], `\n`, "\n")
 }
 
 // kconfigStrings returns the string options of sdkconfig text, unescaped:

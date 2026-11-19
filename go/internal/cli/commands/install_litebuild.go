@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 )
 
 // liteBuildValue is the install picker value of the entry that builds Wendy
@@ -37,31 +38,46 @@ func liteBuildPickerItem() tui.PickerItem {
 
 // Seams for tests.
 var (
-	// liteBuildAnswersPath returns the file that keeps the configurator
-	// answers between runs.
-	liteBuildAnswersPath = func() (string, error) {
+	// liteBuildRoot returns the cache folder of the Wendy Lite build: the
+	// build folders (see litebuild.PrepareSources), the answers and the
+	// lock.
+	liteBuildRoot = func() (string, error) {
 		dir, err := config.CacheDir()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(dir, "wendy-lite-build", "answers.json"), nil
+		return filepath.Join(dir, "wendy-lite-build"), nil
+	}
+
+	// liteBuildAnswersPath returns the file that keeps the configurator
+	// answers between runs.
+	liteBuildAnswersPath = func() (string, error) {
+		root, err := liteBuildRoot()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(root, "answers.json"), nil
 	}
 )
 
 // runLiteBuild builds Wendy Lite from source and flashes it:
 //
 //  1. check EIM, the ESP-IDF Installation Manager
-//  2. check git, then clone the wendy-lite tag or branch (see liteBuildRef)
-//     from GitHub into a temporary folder
-//  3. ask the configurator questions of the clone's master configuration;
+//  2. check git, then reuse or clone the build folder of the commit of the
+//     wendy-lite tag or branch (see liteBuildRef and openLiteBuildFolder)
+//  3. ask the configurator questions of the folder's master configuration;
 //     the answers of the last run are the defaults
 //  4. ask for Wi-Fi, the device name and Cloud enrollment: the content of
 //     the wendy_conf partition
 //  5. install the ESP-IDF version that the answers need
-//  6. run tools/configure.py with the answers, then idf.py build
+//  6. run tools/configure.py with the answers when the folder is not
+//     configured for them (liteBuildConfigureReason), then idf.py build
 //  7. idf.py merge-bin, and write wendy_conf into the merged image
 //  8. flash it as the catalog firmware is flashed, then enroll
-func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) (err error) {
+//
+// The build folder stays in the cache for the next build of the same
+// commit, which is incremental when the answers are the same.
+func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
 	if jsonOutput || !isInteractiveTerminal() {
 		return usageErrorf("the Wendy Lite build asks questions: run it in an interactive terminal, without --json")
 	}
@@ -74,24 +90,14 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 		return err
 	}
 	ref := liteBuildRef(nightly, version)
-	dir, commit, err := cloneLiteSources(ctx, espidftoolchain.WendyLiteGitURL, ref)
+	dir, fullCommit, release, err := openLiteBuildFolder(ctx, espidftoolchain.WendyLiteGitURL, ref)
 	if err != nil {
 		return err
 	}
-	// The folder, large once built, is removed at the end, except when the
-	// run fails after the build started: its output and logs then help, and
-	// it holds the two sdkconfig files to compare. A Ctrl-C is such a
-	// failure, so it does not wait for the deletion.
-	keep := false
-	defer func() {
-		if keep && err != nil {
-			fmt.Printf("\nThe build folder is kept: %s\n", dir)
-			return
-		}
-		removeLiteBuildDir(dir)
-	}()
+	defer release()
+	commit := litebuild.ShortVersion(fullCommit)
 
-	// Questions, from the master configuration of the clone: the code that
+	// Questions, from the master configuration of the folder: the code that
 	// is built.
 	model, err := litebuild.LoadFile(litebuild.MasterConfPath(dir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -132,13 +138,14 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 		return err
 	}
 	// Not used by the build: written to compare with configure.py's
-	// sdkconfig.wendy when the folder is kept.
+	// sdkconfig.defaults.wendy.
 	sdkconfigText := model.SdkconfigText(model.Header(result.Inputs), result.Inputs, result.Solution)
 	if err := os.WriteFile(filepath.Join(dir, "sdkconfig.wendy.go"), []byte(sdkconfigText), 0o644); err != nil {
 		return err
 	}
 
-	// Device configuration: the wendy_conf partition.
+	// Device configuration: the wendy_conf partition. It holds the Wi-Fi
+	// password, so it stays in memory, out of the build folder.
 	prov, err := resolveLiteProvisioning(wifi, deviceName, preOpts)
 	if err != nil {
 		return err
@@ -147,10 +154,6 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err != nil {
 		return fmt.Errorf("serializing device config: %w", err)
 	}
-	// 0o600: it holds the Wi-Fi password.
-	if err := os.WriteFile(filepath.Join(dir, "wendy_conf.bin"), payload, 0o600); err != nil {
-		return err
-	}
 
 	fmt.Println()
 	if err := espidftoolchain.EnsureIDF(ctx, build.eimVersion); err != nil {
@@ -158,10 +161,25 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	}
 
 	fmt.Printf("\nBuild folder: %s\n", dir)
-	keep = true
-	configureArgs := append([]string{"tools/configure.py"}, build.configure...)
-	if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "python", configureArgs...); err != nil {
-		return fmt.Errorf("tools/configure.py: %w", err)
+	sourceVersion, err := litebuild.SourceVersion(ctx, dir)
+	if err != nil {
+		return err
+	}
+	reason, err := liteBuildConfigureReason(dir, model.BuildProfile(result.Inputs), sourceVersion, build.eimVersion)
+	if err != nil {
+		return err
+	}
+	if reason == "" {
+		fmt.Println("The build folder is configured for these answers: tools/configure.py is skipped.")
+	} else {
+		fmt.Printf("Configuring the build: %s.\n", reason)
+		if err := resetLiteBuildFolder(ctx, dir); err != nil {
+			return err
+		}
+		configureArgs := append([]string{"tools/configure.py"}, build.configure...)
+		if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "python", configureArgs...); err != nil {
+			return fmt.Errorf("tools/configure.py: %w", err)
+		}
 	}
 	if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "idf.py", build.idfArgs("build")...); err != nil {
 		return fmt.Errorf("idf.py build: %w", err)
@@ -177,6 +195,9 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err := img.SetPartition("wendy_conf", payload); err != nil {
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
+	// The image is in memory: another build can use the cache during the
+	// flash.
+	release()
 	fmt.Printf("\nBuilt Wendy Lite %s (%s) for the %s.\n", ref, commit, chipModelName(chip))
 
 	port, autoDiscover, err := detectLiteInstallPort(discovery.SerialPortInfo{}, true)
@@ -188,14 +209,6 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	}
 	// No version: the device reports the version it was built with.
 	return flashLiteImage(ctx, img, chip, port, autoDiscover, prov, "")
-}
-
-// removeLiteBuildDir removes the build folder, and warns when it cannot, so
-// that the user can delete it.
-func removeLiteBuildDir(dir string) {
-	if err := os.RemoveAll(dir); err != nil {
-		fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("The build folder %s is not removed: %v", dir, err)))
-	}
 }
 
 // ensureLiteBuildEIM checks that EIM is installed, and offers to install it
@@ -227,26 +240,86 @@ func liteBuildRef(nightly bool, version string) string {
 	return litebuild.DefaultRef
 }
 
-// cloneLiteSources clones the tag or branch ref of the wendy-lite repository
-// at url into a new temporary folder, without history. It returns the folder
-// and the short commit.
-func cloneLiteSources(ctx context.Context, url, ref string) (dir, commit string, err error) {
-	dir, err = os.MkdirTemp("", "wendy-lite-build-")
+// openLiteBuildFolder returns the build folder of the commit of ref, the
+// tag or branch of the wendy-lite repository at url, and the commit. It locks
+// the build cache first: release unlocks it, and calling it more than once is
+// harmless. Then it removes the old build folders (litebuild.PruneBuildFolders),
+// and reuses or clones the folder of the commit (litebuild.PrepareSources).
+func openLiteBuildFolder(ctx context.Context, url, ref string) (dir, commit string, release func(), err error) {
+	root, err := liteBuildRoot()
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	fmt.Printf("Cloning wendy-lite %s from %s into %s...\n", ref, url, dir)
-	// --branch takes a tag or a branch.
-	if _, err := litebuild.Git(ctx, "", "clone", "--quiet", "--depth", "1", "--branch", ref, url, dir); err != nil {
-		os.RemoveAll(dir)
-		return "", "", fmt.Errorf("cloning wendy-lite %q (check the tag or branch name): %w", ref, err)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", "", nil, err
 	}
-	out, err := litebuild.Git(ctx, dir, "rev-parse", "--short", "HEAD")
+	// One lock for the cache: the cleanup removes folders that another
+	// build could use.
+	unlock, err := flock.Acquire(filepath.Join(root, ".lock"), 0)
+	if errors.Is(err, flock.ErrTimeout) {
+		return "", "", nil, fmt.Errorf("another Wendy Lite build is running (it uses %s): wait until it ends", root)
+	}
 	if err != nil {
-		os.RemoveAll(dir)
-		return "", "", err
+		return "", "", nil, fmt.Errorf("locking the Wendy Lite build cache %s: %w", root, err)
 	}
-	return dir, strings.TrimSpace(out), nil
+	defer func() {
+		if err != nil {
+			unlock()
+		}
+	}()
+
+	fmt.Printf("Looking up wendy-lite %s at %s...\n", ref, url)
+	commit, tag, err := litebuild.ResolveRef(ctx, url, ref)
+	if err != nil {
+		return "", "", nil, err
+	}
+	logf := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
+	warnf := func(format string, args ...any) {
+		fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf(format, args...)))
+	}
+	litebuild.PruneBuildFolders(root, commit, logf, warnf)
+	dir, commit, err = litebuild.PrepareSources(ctx, root, url, ref, commit, tag, logf)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return dir, commit, unlock, nil
+}
+
+// liteBuildConfigureReason tells why the wendy-lite checkout in dir needs
+// tools/configure.py for the build profile and the version (see
+// litebuild.ConfigureReason), or for ESP-IDF eimVersion: the CMake
+// configuration is missing, or was made with another ESP-IDF version. It
+// returns "" when the checkout is configured, and idf.py build is then
+// incremental.
+func liteBuildConfigureReason(dir, profile, version, eimVersion string) (string, error) {
+	reason, err := litebuild.ConfigureReason(dir, profile, version)
+	if err != nil || reason != "" {
+		return reason, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build", "CMakeCache.txt")); err != nil {
+		return "the build folder has no CMake configuration", nil
+	}
+	if configured := espidftoolchain.BuildIDFVersion(dir); configured != "" && !espidftoolchain.SameIDFVersion(configured, eimVersion) {
+		return fmt.Sprintf("the build folder was configured with ESP-IDF %s, and this build uses ESP-IDF %s", configured, eimVersion), nil
+	}
+	return "", nil
+}
+
+// resetLiteBuildFolder prepares the wendy-lite checkout in dir for
+// tools/configure.py. It deletes the ESP-IDF build folder, as the fullclean
+// of idf.py set-target does: deleting it here also works when another
+// ESP-IDF version made it, or when fullclean refuses it (no CMakeCache.txt).
+// It restores the tracked files, which a build changes (the component
+// manager rewrites dependencies.lock for its target): configure.py would
+// otherwise add -dirty to the version.
+func resetLiteBuildFolder(ctx context.Context, dir string) error {
+	if err := os.RemoveAll(filepath.Join(dir, "build")); err != nil {
+		return fmt.Errorf("removing the ESP-IDF build folder: %w", err)
+	}
+	if _, err := litebuild.Git(ctx, dir, "reset", "--quiet", "--hard"); err != nil {
+		return fmt.Errorf("restoring the wendy-lite sources: %w", err)
+	}
+	return nil
 }
 
 // runLiteBuildCommand runs name in dir, in the environment of the ESP-IDF
