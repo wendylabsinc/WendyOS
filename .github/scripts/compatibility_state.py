@@ -86,6 +86,15 @@ def parse(bodies):
     return validate_records(records)
 
 
+def finding_id(finding):
+    """The existing history identity, shared with human-acceptance checks."""
+    if finding.get("prior_id"):
+        return finding["prior_id"]
+    stored = {k: finding[k] for k in FINDING_FIELDS}
+    seed = json.dumps(stored, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(("compatibility-v1:" + seed).encode()).hexdigest()
+
+
 def current(result):
     """Apply explicit source-backed updates; absence is never resolution."""
     public_only = result.get("input_visibility") != "private"
@@ -93,11 +102,8 @@ def current(result):
     by_id = {record["id"]: record for record in previous}
     used = set()
     for finding in result.get("compatibility_findings", []):
-        identifier = finding.get("prior_id", "")
+        identifier = finding_id(finding)
         stored = {k: finding[k] for k in FINDING_FIELDS}
-        if not identifier:
-            seed = json.dumps(stored, sort_keys=True, separators=(",", ":"))
-            identifier = hashlib.sha256(("compatibility-v1:" + seed).encode()).hexdigest()
         if identifier in used:
             raise ReviewError("Multiple compatibility findings claim one identity")
         if finding.get("prior_id") and identifier not in by_id:

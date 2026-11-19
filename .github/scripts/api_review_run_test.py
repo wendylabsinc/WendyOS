@@ -19,7 +19,7 @@ import api_review
 import api_review_comment as comments
 from api_review_test import metadata, diff, decision, model_decision, HEAD_SHA, BASE_SHA, REPO, unassessed_fixture
 from api_review_comment_test import result, large_result, bot_comment, MultipartGitHub, pull
-from unified_review_test import fixture as unified_fixture, singleton_groups
+from unified_review_test import fixture as unified_fixture
 
 
 class FullRunTests(unittest.TestCase):
@@ -112,8 +112,6 @@ class FullRunTests(unittest.TestCase):
                     response["decisions"][0].update(concern=finding, impact="breaking")
                 else:
                     response = unified_fixture(response)
-            else:
-                response = singleton_groups(response["matches"])
             return self.message(response)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -258,7 +256,7 @@ class FullRunTests(unittest.TestCase):
                             "relationship": "changed", "reason": "Combined contract changed."}]}
         fixed = copy.deepcopy(bad)
         fixed["matches"][0].update(relationship="ambiguous", reason="Multiple plausible predecessors.")
-        responses = [unified_fixture(unassessed_fixture({"risk": "high", "decisions": [model_decision(title="Combined contract")]})), singleton_groups(bad["matches"]), singleton_groups(fixed["matches"])]
+        responses = [unified_fixture(unassessed_fixture({"risk": "high", "decisions": [model_decision(title="Combined contract")]})), bad, fixed]
         requests = []
 
         def transport(request):

@@ -348,7 +348,9 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
                 and (prior["decision"]["impact"] != semantic["impact"]
                      or unified.concern_changed(prior["decision"], semantic))):
             relationship = "changed"
-            reason = "Compatibility impact changed; fresh human review is required."
+            reason = ("Compatibility impact changed; fresh human review is required."
+                      if prior["decision"]["impact"] != semantic["impact"] else
+                      "The attached compatibility concern changed; fresh human review is required.")
         if prior is None:
             identifier = _fresh_id(semantic, used)
             used.add(identifier)

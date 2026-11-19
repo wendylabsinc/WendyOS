@@ -652,7 +652,7 @@ def review_batches(metadata: dict[str, Any], batches: list[DiffBatch], repo: str
         unique = {}
         for finding in combined["compatibility_findings"]:
             key = finding.get("prior_id") or json.dumps(finding, sort_keys=True)
-            if key in unique and unique[key] != finding and not metadata["_compatibility"].get("unified"):
+            if key in unique and unique[key] != finding:
                 raise ReviewError("Conflicting compatibility identity across batches; prior review preserved")
             unique[key] = finding
         combined["compatibility_findings"] = list(unique.values())
@@ -820,7 +820,7 @@ def reconciliation_failure(error: Exception, sdk: Any, stage: str) -> str:
             "prior acceptance was preserved")
 
 
-def reconcile_decisions(decisions: list[dict[str, Any]], prior: dict[str, Any], model: str) -> list[dict[str, Any]]:
+def reconcile_decisions(decisions: list[dict[str, Any]], prior: dict[str, Any], model: str, *, responses=None) -> list[dict[str, Any]]:
     if not decisions:
         return []
     if not prior["decisions"]:
@@ -865,6 +865,9 @@ If response_repair is present, correct the previous response using the same curr
             raise ReviewError(reconciliation_failure(error, anthropic, "request")) from error
         # Truncation and provider failures are not evidence of a complete match
         # set, so neither enters response repair.
+        if responses is not None:
+            responses.append({"stage": "identity", "attempt": attempt + 1, "stop_reason": message.stop_reason,
+                "text": "".join(block.text for block in message.content if block.type == "text" and isinstance(block.text, str))})
         response = provider_text(message, reconciliation=True)
         payload: Any = None
         try:
@@ -935,7 +938,7 @@ def command_review(args: argparse.Namespace) -> int:
         result["input_visibility"] = metadata["_compatibility"]["visibility"]
         result["context_limits"] = metadata["_compatibility"]["limits"]
         result["evidence_catalog"] = metadata["_compatibility"]["catalog"]
-        result["model_call_policy"] = "One evidence call per batch and one consolidation/identity call when items exist; at most one shape repair each. SDK retries disabled."
+        result["model_call_policy"] = "One evidence call per batch and one identity call when current and prior items exist; at most one shape repair each. Only exact duplicate items including evidence are removed. SDK retries disabled."
         payload = review_batches(metadata, batches, args.repo, args.model, parsed)
         payload["model_responses"] = result["model_responses"]
         payload = unified.reconcile(payload, prior, args.model)
