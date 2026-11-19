@@ -78,6 +78,8 @@ func TestPrintCameraShareNotice_SlowAgentPrintsNothing(t *testing.T) {
 	}
 	orig := os.Stderr
 	os.Stderr = w
+	// Restored even when the test fails or panics before the read below.
+	t.Cleanup(func() { os.Stderr = orig })
 	start := time.Now()
 	printCameraShareNotice(context.Background(), &grpcclient.AgentConnection{AgentService: blockingHW{}}, shareCfg(""))
 	elapsed := time.Since(start)

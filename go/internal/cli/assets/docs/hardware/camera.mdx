@@ -133,8 +133,12 @@ Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps. For the real
 ```
 
 The line is not printed for `"mode": "direct"`, for apps without a camera
-entitlement, or when the agent reports no shared mode (an older agent, or no
-shareable camera).
+entitlement, for compose projects, or when the agent reports no shared mode
+(an older agent, or no shareable camera).
+
+When the app is deployed, it gets a node for every shared camera plugged in at
+that moment, not only for the one it opens, so each of those cameras counts as
+shared by the app (see below).
 
 ### Apps that need `"mode": "direct"`
 
@@ -156,6 +160,12 @@ mode.
 ```
 
 ### Viewers and recordings
+
+A camera is shared while any app holds a node for it, and an app holds one for
+every shared camera that was plugged in when it was deployed. That includes a
+stopped app: its nodes stay until the app is removed. So while any such app
+exists, even a stopped one, every camera it holds a node for runs only at its
+shared mode, including cameras the app never opens.
 
 While a camera is shared:
 
