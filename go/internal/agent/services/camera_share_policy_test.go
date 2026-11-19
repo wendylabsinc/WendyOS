@@ -3,7 +3,11 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -36,7 +40,11 @@ func shareTestService(t *testing.T, formats []uint32, sizes map[uint32][][2]uint
 		}
 		return false
 	}
-	frameRatesFor = func(string, uint32, uint32, uint32) []uint32 { return rates }
+	lastRateQuery = rateQuery{}
+	frameRatesFor = func(_ string, pixfmt, w, h uint32) []uint32 {
+		lastRateQuery = rateQuery{pixfmt, w, h}
+		return rates
+	}
 	isDepthOrInfraredNode = func(string) bool { return false }
 
 	s := &VideoService{loopback: newFakeLoopback()}
@@ -45,6 +53,11 @@ func shareTestService(t *testing.T, formats []uint32, sizes map[uint32][][2]uint
 	s.gstMemo.available = map[string]bool{"jpegdec": true}
 	return s
 }
+
+// rateQuery records what shareDecisionFor asked frameRatesFor.
+type rateQuery struct{ pixfmt, w, h uint32 }
+
+var lastRateQuery rateQuery
 
 func usbCam() *agentpb.VideoDevice {
 	return &agentpb.VideoDevice{Path: "/dev/video4", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB}
@@ -64,6 +77,9 @@ func TestShareDecision_MJPEGCameraSharesYUYVAtItsDefaultSize(t *testing.T) {
 	if want := (sharedMode{1280, 720, "YUYV", 2560, 30}); d.Mode != want {
 		t.Errorf("Mode = %+v, want %+v", d.Mode, want)
 	}
+	if want := (rateQuery{v4l2PixFmtMJPEG, 1280, 720}); lastRateQuery != want {
+		t.Errorf("rate query = %+v, want %+v", lastRateQuery, want)
+	}
 	if got := d.Mode.String(); got != "1280x720 YUYV, 30 fps" {
 		t.Errorf("String = %q", got)
 	}
@@ -81,6 +97,9 @@ func TestShareDecision_RawOnlyCameraSharesItsOwnFormat(t *testing.T) {
 	}
 	if want := (sharedMode{640, 480, "UYVY", 1280, 30}); d.Mode != want {
 		t.Errorf("Mode = %+v, want %+v", d.Mode, want)
+	}
+	if want := (rateQuery{v4l2PixFmtUYVY, 640, 480}); lastRateQuery != want {
+		t.Errorf("rate query = %+v, want %+v", lastRateQuery, want)
 	}
 }
 
@@ -135,6 +154,103 @@ func TestShareDecision_RefusalsNameTheirReason(t *testing.T) {
 				t.Errorf("got Shared=%v Reason=%q, want refusal %q", d.Shared, d.Reason, tc.want)
 			}
 		})
+	}
+}
+
+func TestShareDecision_NoTapNamesThePlannersReason(t *testing.T) {
+	// A camera that advertises no frame size has nothing to tap.
+	s := shareTestService(t, []uint32{v4l2PixFmtYUYV}, map[uint32][][2]uint32{}, nil)
+	d := s.shareDecisionFor(context.Background(), usbCam())
+	want := "no shared mode: camera advertises no discrete frame size to capture raw frames at"
+	if d.Shared || d.Reason != want {
+		t.Errorf("got Shared=%v Reason=%q, want %q", d.Shared, d.Reason, want)
+	}
+}
+
+func TestShareDecision_PlannerErrorIsReported(t *testing.T) {
+	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), nil)
+	dev := usbCam()
+	dev.Path = "/dev/video4 !"
+	d := s.shareDecisionFor(context.Background(), dev)
+	if d.Shared || !strings.HasPrefix(d.Reason, "no shared mode: ") || d.Reason == "no shared mode: " {
+		t.Errorf("got Shared=%v Reason=%q, want a planner error after the prefix", d.Shared, d.Reason)
+	}
+}
+
+func TestGstElements_RetriesAFailureAndKeepsASuccess(t *testing.T) {
+	prev := gstDiscover
+	t.Cleanup(func() { gstDiscover = prev })
+	var calls int
+	fail := true
+	gstDiscover = func() (string, map[string]bool, error) {
+		calls++
+		if fail {
+			return "", nil, errors.New("no gst")
+		}
+		return "gst", map[string]bool{"jpegdec": true}, nil
+	}
+	s := &VideoService{}
+	if _, _, err := s.gstElements(); err == nil {
+		t.Fatal("first call: want error")
+	}
+	fail = false
+	path, avail, err := s.gstElements()
+	if err != nil || path != "gst" || !avail["jpegdec"] {
+		t.Fatalf("after failure: %q %v %v", path, avail, err)
+	}
+	if _, _, err := s.gstElements(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Errorf("listings = %d, want 2 (failure, success; no relist)", calls)
+	}
+}
+
+func TestGstElements_ConcurrentCallersShareOneListing(t *testing.T) {
+	prev := gstDiscover
+	t.Cleanup(func() { gstDiscover = prev })
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	gstDiscover = func() (string, map[string]bool, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return "", nil, errors.New("slow failure")
+	}
+	s := &VideoService{}
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	run := func() {
+		defer wg.Done()
+		_, _, err := s.gstElements()
+		errs <- err
+	}
+	wg.Add(1)
+	go run()
+	<-started
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go run()
+	}
+	// The lock is free while the listing runs, so these callers reach the wait.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err == nil {
+			t.Error("a waiter did not see the shared failure")
+		}
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("listings = %d, want 1", n)
+	}
+	// The failure was not cached: a later call lists again.
+	gstDiscover = func() (string, map[string]bool, error) { return "gst", map[string]bool{"x": true}, nil }
+	if _, _, err := s.gstElements(); err != nil {
+		t.Errorf("later call: %v", err)
 	}
 }
 

@@ -148,23 +148,26 @@ func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoD
 	return shareDecision{Shared: true, Mode: mode}
 }
 
-// gstElementsMemo is a successful gst listing kept for the service's life.
+// gstElementsMemo is a successful gst listing kept for the service's life, and
+// the one listing in flight, if any.
 type gstElementsMemo struct {
 	mu        sync.Mutex
 	gstPath   string
 	available map[string]bool
+	inflight  *gstListing
 }
 
-// gstElements finds gst-launch-1.0 and lists the installed elements, once. A
-// failure is returned and not remembered, so installing GStreamer later works
-// without a restart.
-func (s *VideoService) gstElements() (gstPath string, available map[string]bool, err error) {
-	m := &s.gstMemo
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.available != nil {
-		return m.gstPath, m.available, nil
-	}
+// gstListing is one attempt at listing; callers that arrive meanwhile wait on done.
+type gstListing struct {
+	done      chan struct{}
+	gstPath   string
+	available map[string]bool
+	err       error
+}
+
+// gstDiscover finds gst-launch-1.0 and lists the installed elements. Behind a
+// var so tests can count and fail listings.
+var gstDiscover = func() (string, map[string]bool, error) {
 	launch, err := resolveGSTBinary("gst-launch-1.0")
 	if err != nil {
 		return "", nil, err
@@ -177,8 +180,40 @@ func (s *VideoService) gstElements() (gstPath string, available map[string]bool,
 	if err != nil {
 		return "", nil, err
 	}
-	m.gstPath, m.available = launch, elements
 	return launch, elements, nil
+}
+
+// gstElements finds gst-launch-1.0 and lists the installed elements, once. The
+// returned element map is shared and read-only. Callers that arrive while a
+// listing runs wait for its result instead of starting another; a failure is
+// shared with those waiting but not remembered, so installing GStreamer later
+// works without a restart. The lock is never held across the listing.
+func (s *VideoService) gstElements() (gstPath string, available map[string]bool, err error) {
+	m := &s.gstMemo
+	m.mu.Lock()
+	if m.available != nil {
+		defer m.mu.Unlock()
+		return m.gstPath, m.available, nil
+	}
+	if l := m.inflight; l != nil {
+		m.mu.Unlock()
+		<-l.done
+		return l.gstPath, l.available, l.err
+	}
+	l := &gstListing{done: make(chan struct{})}
+	m.inflight = l
+	m.mu.Unlock()
+
+	l.gstPath, l.available, l.err = gstDiscover()
+
+	m.mu.Lock()
+	if l.err == nil {
+		m.gstPath, m.available = l.gstPath, l.available
+	}
+	m.inflight = nil
+	m.mu.Unlock()
+	close(l.done)
+	return l.gstPath, l.available, l.err
 }
 
 // v4l2FrmIvalEnum matches struct v4l2_frmivalenum (52 bytes). The union is the
@@ -205,6 +240,9 @@ var (
 // vidiocEnumFrameintervals is VIDIOC_ENUM_FRAMEINTERVALS.
 const vidiocEnumFrameintervals = 0xC034564B
 
+// v4l2FrmivalTypeDiscrete is V4L2_FRMIVAL_TYPE_DISCRETE.
+const v4l2FrmivalTypeDiscrete = 1
+
 // frameRatesFor lists the discrete frame rates (frames per second, rounded) a
 // camera advertises for one format and size. Read-only open, so it answers
 // while the camera is streaming. Behind a var so tests can describe a camera.
@@ -221,7 +259,7 @@ var frameRatesFor = func(path string, pixfmt, width, height uint32) []uint32 {
 			uintptr(unsafe.Pointer(&e))); errno != 0 {
 			break
 		}
-		if e.Type != v4l2FrmsizeTypeDiscrete || e.Numerator == 0 {
+		if e.Type != v4l2FrmivalTypeDiscrete || e.Numerator == 0 {
 			continue
 		}
 		rates = append(rates, uint32(math.Round(float64(e.Denominator)/float64(e.Numerator))))
