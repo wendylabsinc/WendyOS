@@ -90,6 +90,18 @@ func (r *shareTestReader) next(timeout time.Duration) ([]byte, int64) {
 	return frame, b.timestampNanos()
 }
 
+// tryNext is next without the failure: ok is false when no frame arrives in
+// timeout.
+func (r *shareTestReader) tryNext(timeout time.Duration) (frame []byte, ts int64, ok bool) {
+	r.t.Helper()
+	fds := []unix.PollFd{{Fd: int32(r.fd), Events: unix.POLLIN}}
+	if n, err := unix.Poll(fds, int(timeout.Milliseconds())); err != nil || n == 0 {
+		return nil, 0, false
+	}
+	frame, ts = r.next(time.Second)
+	return frame, ts, true
+}
+
 func (r *shareTestReader) stop() {
 	typ := int32(v4l2BufTypeVideoCapture)
 	_ = r.ioctl(vidiocStreamoff, unsafe.Pointer(&typ))
@@ -196,6 +208,10 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 	}
 	if blankTs/1000 != ts2/1000 {
 		t.Fatalf("blank timestamp %d µs, want %d µs", blankTs/1000, ts2/1000)
+	}
+	// The ring is black throughout: the next frame, if any, is not the earlier one.
+	if second, _, ok := late.tryNext(200 * time.Millisecond); ok && !bytes.Equal(second, blankFrame(mode)) {
+		t.Fatal("a new reader's second frame is neither black nor absent (the earlier frame leaked)")
 	}
 
 	if err := w.Close(); err != nil {
