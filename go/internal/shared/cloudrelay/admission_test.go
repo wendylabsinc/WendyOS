@@ -23,6 +23,12 @@ import (
 // never joins a session, with grants that expire after ttl seconds.
 func absentAgentRelay(t *testing.T, ttl int64) (*Verifier, *grpc.ClientConn) {
 	t.Helper()
+	verifier, cloudConn, _ := absentAgentRelayWith(t, ttl)
+	return verifier, cloudConn
+}
+
+func absentAgentRelayWith(t *testing.T, ttl int64) (*Verifier, *grpc.ClientConn, *testRelay) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +59,7 @@ func absentAgentRelay(t *testing.T, ttl int64) (*Verifier, *grpc.ClientConn) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cloudConn.Close() })
-	return verifier, cloudConn
+	return verifier, cloudConn, r
 }
 
 func openAbsentAgent(ctx context.Context, verifier *Verifier, cloudConn *grpc.ClientConn) error {

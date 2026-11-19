@@ -58,16 +58,21 @@ type testRelay struct {
 	signing, encryption []byte
 	requested           chan *pb.RequestTunnelRequest
 	grantTTL            int64 // admission window of issued grants in seconds; 0 is 60
-	offers              chan *pb.SessionOffer
-	present             chan struct{}
-	ack                 chan struct{}
-	paired              chan struct{}
-	joins               int
-	joined              map[pb.JoinRole]bool
-	grant               claims
-	callerPub           *ecdsa.PublicKey
-	grantJWS            string
-	toCaller, toAgent   chan *pb.TunnelFrame
+	// cloudAhead is how far Cloud's and the broker's clock runs ahead of this
+	// process's, which is the agent's: a device whose clock is behind.
+	cloudAhead time.Duration
+	// refuseCaller, when set, answers a proven caller join with this refusal.
+	refuseCaller      *pb.SessionRefused
+	offers            chan *pb.SessionOffer
+	present           chan struct{}
+	ack               chan struct{}
+	paired            chan struct{}
+	joins             int
+	joined            map[pb.JoinRole]bool
+	grant             claims
+	callerPub         *ecdsa.PublicKey
+	grantJWS          string
+	toCaller, toAgent chan *pb.TunnelFrame
 }
 
 func (r *testRelay) artifact(c claims, typ string) string {
@@ -88,6 +93,7 @@ func (r *testRelay) artifact(c claims, typ string) string {
 	y.FillBytes(sig[32:])
 	return input + "." + b64.EncodeToString(sig)
 }
+func (r *testRelay) cloudNow() time.Time { return time.Now().Add(r.cloudAhead) }
 func (r *testRelay) broker() *pb.BrokerInstance {
 	return &pb.BrokerInstance{Endpoint: r.endpoint, Audience: "test-relay/incarnation/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
 }
@@ -109,7 +115,7 @@ func (r *testRelay) IssuePresenceLease(ctx context.Context, req *pb.IssuePresenc
 	r.issues++
 	r.signing = bytes.Clone(req.AgentSigningPublicKeySpkiDer)
 	r.encryption = bytes.Clone(req.AgentKeyAgreementPublicKeySpkiDer)
-	now := time.Now().Unix()
+	now := r.cloudNow().Unix()
 	r.lease = claims{Iss: r.verifier.Issuer, Aud: r.broker().Audience, Iat: now, Exp: now + 300, JTI: uuid.NewString(), Correlation: req.CorrelationId, Route: "opaque-route", Signing: binding(r.signing), Encryption: binding(r.encryption)}
 	if r.rotateRoute {
 		r.lease.Route = uuid.NewString()
@@ -387,6 +393,12 @@ func (r *testRelay) JoinSession(s grpc.BidiStreamingServer[pb.JoinSessionRequest
 	p := m.GetProof()
 	if p == nil || !bytes.Equal(p.ChallengeId, ch.ChallengeId) || !verifyProof(pub, "join", c, artifact, label, ch, p.Signature) {
 		return fmt.Errorf("invalid join holder proof")
+	}
+	if r.refuseCaller != nil && o.Role == pb.JoinRole_JOIN_ROLE_CALLER {
+		if e = s.Send(&pb.JoinSessionResponse{Message: &pb.JoinSessionResponse_Refused{Refused: r.refuseCaller}}); e != nil {
+			return e
+		}
+		return status.Error(codes.FailedPrecondition, "session refused")
 	}
 	r.mu.Lock()
 	if r.joined[o.Role] {
