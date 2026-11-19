@@ -1052,6 +1052,8 @@ type VideoService struct {
 	// claiming it; see v4l2CapturePixelFormats. Injectable so tests can
 	// describe a camera without a V4L2 node.
 	capturePixelFormats func(path string) ([]uint32, bool)
+	// gstMemo caches a successful element listing; see gstElements.
+	gstMemo gstElementsMemo
 	// readStableNames returns the udev by-id / by-path names keyed by resolved
 	// device path. Injectable so the enumeration can be tested without
 	// /dev/v4l. See video_stable_id.go for why these exist.
