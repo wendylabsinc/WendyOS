@@ -32,7 +32,7 @@ source connection and may change. Disconnects end affected subscriptions; slow
 readers are disconnected when their bounded queue fills. No old samples are
 replayed on subscription. This requires an agent and CLI supporting `sensor-read`;
 do not substitute `admin` when an older agent lacks the read API. See
-[Read generic SensorLink samples](sensor-read.md) for source identity, API usage
+[Read generic SensorLink samples](/docs/advanced/device/sensor-read) for source identity, API usage
 and forwarding limits.
 
 ## Notifications
