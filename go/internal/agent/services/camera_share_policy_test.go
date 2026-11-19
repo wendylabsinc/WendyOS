@@ -40,9 +40,9 @@ func shareTestService(t *testing.T, formats []uint32, sizes map[uint32][][2]uint
 		}
 		return false
 	}
-	lastRateQuery = rateQuery{}
+	setLastRateQuery(rateQuery{})
 	frameRatesFor = func(_ string, pixfmt, w, h uint32) []uint32 {
-		lastRateQuery = rateQuery{pixfmt, w, h}
+		setLastRateQuery(rateQuery{pixfmt, w, h})
 		return rates
 	}
 	isDepthOrInfraredNode = func(string) bool { return false }
@@ -57,7 +57,25 @@ func shareTestService(t *testing.T, formats []uint32, sizes map[uint32][][2]uint
 // rateQuery records what shareDecisionFor asked frameRatesFor.
 type rateQuery struct{ pixfmt, w, h uint32 }
 
-var lastRateQuery rateQuery
+// lastRateQuery is the latest query, under rateQueryMu: a share decision can
+// run on a goroutine of its own (an adopted share's mode check) beside the
+// test's.
+var (
+	rateQueryMu   sync.Mutex
+	lastRateQuery rateQuery
+)
+
+func setLastRateQuery(q rateQuery) {
+	rateQueryMu.Lock()
+	lastRateQuery = q
+	rateQueryMu.Unlock()
+}
+
+func latestRateQuery() rateQuery {
+	rateQueryMu.Lock()
+	defer rateQueryMu.Unlock()
+	return lastRateQuery
+}
 
 func usbCam() *agentpb.VideoDevice {
 	return &agentpb.VideoDevice{Path: "/dev/video4", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB}
@@ -77,8 +95,8 @@ func TestShareDecision_MJPEGCameraSharesYUYVAtItsDefaultSize(t *testing.T) {
 	if want := (sharedMode{1280, 720, "YUYV", 2560, 30}); d.Mode != want {
 		t.Errorf("Mode = %+v, want %+v", d.Mode, want)
 	}
-	if want := (rateQuery{v4l2PixFmtMJPEG, 1280, 720}); lastRateQuery != want {
-		t.Errorf("rate query = %+v, want %+v", lastRateQuery, want)
+	if want := (rateQuery{v4l2PixFmtMJPEG, 1280, 720}); latestRateQuery() != want {
+		t.Errorf("rate query = %+v, want %+v", latestRateQuery(), want)
 	}
 	if got := d.Mode.String(); got != "1280x720 YUYV, 30 fps" {
 		t.Errorf("String = %q", got)
@@ -98,8 +116,8 @@ func TestShareDecision_RawOnlyCameraSharesItsOwnFormat(t *testing.T) {
 	if want := (sharedMode{640, 480, "UYVY", 1280, 30}); d.Mode != want {
 		t.Errorf("Mode = %+v, want %+v", d.Mode, want)
 	}
-	if want := (rateQuery{v4l2PixFmtUYVY, 640, 480}); lastRateQuery != want {
-		t.Errorf("rate query = %+v, want %+v", lastRateQuery, want)
+	if want := (rateQuery{v4l2PixFmtUYVY, 640, 480}); latestRateQuery() != want {
+		t.Errorf("rate query = %+v, want %+v", latestRateQuery(), want)
 	}
 }
 
