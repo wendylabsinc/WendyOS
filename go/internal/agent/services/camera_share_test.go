@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -121,7 +123,21 @@ type csHarness struct {
 	probed    []string // paths hasVideoCapture or capturePixelFormats saw
 	udev      func(nr int) bool
 	held      map[string][]deviceHolder // by path
+	holderErr error                     // the holder scan fails with it
 	removedAt map[int]time.Time         // fake time of each node's RemoveAuxNode
+}
+
+func (h *csHarness) setHolderErr(err error) {
+	h.mu.Lock()
+	h.holderErr = err
+	h.mu.Unlock()
+}
+
+// vanish takes a node away as something outside the agent would.
+func (h *csHarness) vanish(nr int) {
+	h.loop.mu.Lock()
+	delete(h.loop.aux, nr)
+	h.loop.mu.Unlock()
 }
 
 // newCSHarness builds a service whose /dev holds cams, whose loopback is the
@@ -143,7 +159,7 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	}
 
 	prevPath, prevOpen := cameraSharesPath, openShareNode
-	prevClock, prevUdev, prevHolders := shareRemovalClock, shareNodeUdevDone, deviceHolders
+	prevClock, prevUdev, prevHolders := shareRemovalClock, shareNodeUdevDone, shareNodeHolders
 	cameraSharesPath = filepath.Join(t.TempDir(), "camera-shares.json")
 	openShareNode = h.open
 	shareRemovalClock = h.clock
@@ -153,14 +169,17 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		h.mu.Unlock()
 		return udev == nil || udev(nr)
 	}
-	deviceHolders = func(path string) []deviceHolder {
+	shareNodeHolders = func(nr int) ([]deviceHolder, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		return append([]deviceHolder(nil), h.held[path]...)
+		if h.holderErr != nil {
+			return nil, h.holderErr
+		}
+		return append([]deviceHolder(nil), h.held[shareNodePath(nr)]...), nil
 	}
 	t.Cleanup(func() {
 		cameraSharesPath, openShareNode = prevPath, prevOpen
-		shareRemovalClock, shareNodeUdevDone, deviceHolders = prevClock, prevUdev, prevHolders
+		shareRemovalClock, shareNodeUdevDone, shareNodeHolders = prevClock, prevUdev, prevHolders
 	})
 
 	core, logs := observer.New(zap.DebugLevel)
@@ -837,6 +856,7 @@ func TestCameraShareState_SurvivesReload(t *testing.T) {
 		Camera          camera.Identity
 		Mode            sharedMode
 		Node            int
+		Siblings        []string
 	}
 	snapshot := func(s *VideoService) map[string][]rec {
 		s.shares.mu.Lock()
@@ -844,7 +864,7 @@ func TestCameraShareState_SurvivesReload(t *testing.T) {
 		out := map[string][]rec{}
 		for id, c := range s.shares.containers {
 			for _, r := range c.shares {
-				out[id] = append(out[id], rec{c.app, r.cameraName, r.cameraPath, r.camera, r.mode, r.node})
+				out[id] = append(out[id], rec{c.app, r.cameraName, r.cameraPath, r.camera, r.mode, r.node, r.siblings})
 			}
 		}
 		return out
@@ -1110,6 +1130,8 @@ func TestRemoveShareNode_ARemovalTheDriverRefusesIsRetried(t *testing.T) {
 	h.loop.mu.Unlock()
 	h.s.RemoveCameraShares("cv-a")
 	h.drainRemovals()
+	h.s.SyncCameraShares(context.Background(), nil) // refused again: said once
+	h.drainRemovals()
 	if n := h.logged("camera share: left /dev/video255 in place: removing it did not take; it is removed later"); n != 1 {
 		t.Errorf("refusal line logged %d times, want 1; logs: %v", n, h.logs.All())
 	}
@@ -1250,5 +1272,453 @@ func TestProcDeviceHolders_FindsOtherProcessesHoldingTheDevice(t *testing.T) {
 	}
 	if got := procDeviceHolders(filepath.Join(root, "missing")); got != nil {
 		t.Errorf("a missing device has holders: %+v", got)
+	}
+}
+
+// opensOf counts how many writers were opened on path.
+func (h *csHarness) opensOf(path string) int {
+	n := 0
+	for _, node := range h.openedNodes() {
+		if node.path == path {
+			n++
+		}
+	}
+	return n
+}
+
+// Fix round 1, I1: X's record keeps 255 across a reboot that removed the node;
+// W, sharing the same camera, must get another number, and nothing done for X
+// may touch W's node.
+func TestCreateCameraShares_NeverTakesANumberAnotherShareHolds(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.writeState(`{"version":1,"containers":{"cv-x":{"app":"x","shares":[` +
+		csStateRecord(csBrio(), "/dev/video0", testSharedMode, 255) + `]}}}`)
+	h.s.loadCameraShares()
+
+	h.s.CreateCameraShares(context.Background(), "cv-w", "sh.wendy.cv-w")
+	recs := h.records("cv-w")
+	if len(recs) != 1 || recs[0].node == 255 {
+		t.Fatalf("cv-w's records = %+v; it must not get 255, which cv-x holds", recs)
+	}
+	w := recs[0].node
+
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-x"}, {ID: "cv-w", Running: true}})
+	if n := h.opensOf("/dev/video255"); n > 1 {
+		t.Errorf("/dev/video255 opened %d times", n)
+	}
+	if n := h.opensOf(shareNodePath(w)); n != 1 {
+		t.Errorf("cv-w's node opened %d times, want 1 (at create)", n)
+	}
+
+	h.s.RemoveCameraShares("cv-x")
+	h.drainRemovals()
+	if live := h.loop.liveAux(); !slices.Contains(live, w) || slices.Contains(h.loop.removedAux(), w) {
+		t.Errorf("cv-x's removal touched cv-w's node %d: live %v, removed %v", w, live, h.loop.removedAux())
+	}
+	if recs := h.records("cv-w"); len(recs) != 1 || recs[0].io == nil {
+		t.Errorf("cv-w's share is gone: %+v", recs)
+	}
+}
+
+// Fix round 1, I1: two records of one camera on one number (as a file from
+// before the fix can hold): the node gets one writer, and the record without
+// it never removes the other's node.
+func TestSyncCameraShares_TwoRecordsOnOneNumberNeverShareANode(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.writeState(`{"version":1,"containers":{` +
+		`"cv-w":{"app":"w","shares":[` + csStateRecord(csBrio(), "/dev/video0", testSharedMode, 255) + `]},` +
+		`"cv-x":{"app":"x","shares":[` + csStateRecord(csBrio(), "/dev/video0", testSharedMode, 255) + `]}}}`)
+	h.loop.addLiveAux(255, "Brio 101")
+	h.s.loadCameraShares()
+
+	listed := []CameraShareContainer{{ID: "cv-w", Running: true}, {ID: "cv-x", Running: true}}
+	h.s.SyncCameraShares(context.Background(), listed)
+	h.s.SyncCameraShares(context.Background(), listed)
+	if n := h.opensOf("/dev/video255"); n != 1 {
+		t.Errorf("/dev/video255 opened %d times, want once", n)
+	}
+
+	h.s.RemoveCameraShares("cv-x")
+	h.drainRemovals()
+	if got := h.loop.removedAux(); len(got) != 0 {
+		t.Errorf("removing cv-x removed %v, cv-w's node", got)
+	}
+	h.s.RemoveCameraShares("cv-w")
+	h.drainRemovals()
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{255}) {
+		t.Errorf("removing cv-w removed %v, want [255]", got)
+	}
+}
+
+// Fix round 1, I2: a camera of the same model seen beside the shared one is
+// another camera, so the share never follows it.
+func TestResolveShareCamera_ASameModelCameraSeenBesideItIsNeverFollowed(t *testing.T) {
+	brio := csBrio()
+	other := csCamera{"video2", "Brio 101", brio.formats, camera.Identity{Device: csPort("1-3"), Index: "0", Name: "Brio 101"}}
+
+	t.Run("plugged in after create, then the shared one unplugged", func(t *testing.T) {
+		h := newCSHarness(t, brio)
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		r := h.records("cv-a")[0]
+		h.mu.Lock()
+		h.cams["video2"] = other
+		h.mu.Unlock()
+		if path, ok := h.s.currentSharePath(r); !ok || path != "/dev/video0" {
+			t.Fatalf("with both present: %q, %v; want /dev/video0", path, ok)
+		}
+		shares := h.stateFile()["containers"].(map[string]any)["cv-a"].(map[string]any)["shares"].([]any)
+		if got := shares[0].(map[string]any)["sameModelPorts"]; !reflect.DeepEqual(got, []any{other.id.Device}) {
+			t.Errorf("state file sameModelPorts = %v, want [%s]", got, other.id.Device)
+		}
+
+		h.mu.Lock()
+		delete(h.cams, "video0")
+		h.mu.Unlock()
+		if path, ok := h.s.currentSharePath(r); ok {
+			t.Errorf("after the shared camera left: resolved to %s, the other camera", path)
+		}
+
+		reloaded := &VideoService{logger: zap.NewNop()}
+		reloaded.loadCameraShares()
+		if got := reloaded.shares.containers["cv-a"].shares[0].siblings; !reflect.DeepEqual(got, []string{other.id.Device}) {
+			t.Errorf("reloaded siblings = %v, want [%s]", got, other.id.Device)
+		}
+	})
+
+	t.Run("present at create", func(t *testing.T) {
+		h := newCSHarness(t, brio, other)
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		for _, r := range h.records("cv-a") {
+			want := other.id.Device
+			if r.camera == other.id {
+				want = brio.id.Device
+			}
+			if !reflect.DeepEqual(r.siblings, []string{want}) {
+				t.Errorf("record of %s: siblings %v, want [%s]", r.camera.Device, r.siblings, want)
+			}
+		}
+	})
+
+	t.Run("a camera only ever seen alone is followed to a new port", func(t *testing.T) {
+		h := newCSHarness(t, brio)
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		r := h.records("cv-a")[0]
+		if _, ok := h.s.currentSharePath(r); !ok {
+			t.Fatal("the camera does not resolve while present")
+		}
+		h.mu.Lock()
+		delete(h.cams, "video0")
+		h.cams["video2"] = other // the same camera, on another port
+		h.mu.Unlock()
+		if path, ok := h.s.currentSharePath(r); !ok || path != "/dev/video2" {
+			t.Errorf("moved camera = %q, %v; want /dev/video2", path, ok)
+		}
+	})
+}
+
+// Fix round 1, M1: once Shutdown begins, nothing is stored or adopted.
+func TestShutdown_NothingIsStoredOrAdoptedAfterIt(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.Shutdown()
+
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true}})
+	if n := h.opensOf("/dev/video255"); n != 1 {
+		t.Errorf("a sync after Shutdown opened the node again (%d opens)", n)
+	}
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+	if n := h.logged("camera share: cv-b gets the real cameras: the video service is shutting down"); n != 1 {
+		t.Errorf("Create after Shutdown: line logged %d times; logs: %v", n, h.logs.All())
+	}
+	if len(h.records("cv-b")) != 0 || len(h.loop.shareCalls()) != 1 {
+		t.Errorf("Create after Shutdown made %v", h.loop.shareCalls())
+	}
+}
+
+// Fix round 1, M1: a Remove of a container whose Create is still running ends
+// with the container sharing nothing.
+func TestRemoveCameraShares_DuringItsCreateLeavesNoShare(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csC920())
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h.openHook = func(string) {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	created := make(chan struct{})
+	go func() {
+		defer close(created)
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	}()
+	<-entered
+	h.s.RemoveCameraShares("cv-a") // nothing stored yet: it returns at once
+	close(release)
+	<-created
+	h.drainRemovals()
+
+	if recs := h.records("cv-a"); len(recs) != 0 {
+		t.Errorf("cv-a still shares %d cameras", len(recs))
+	}
+	if got := h.loop.liveAux(); len(got) != 0 {
+		t.Errorf("nodes left: %v", got)
+	}
+	for _, line := range []string{
+		"camera share: cv-a gets the real camera Brio 101 (/dev/video0): " + shareRefusedRemoved,
+		"camera share: cv-a gets the real camera C920 (/dev/video4): " + shareRefusedRemoved,
+	} {
+		if n := h.logged(line); n != 1 {
+			t.Errorf("%q logged %d times; logs: %v", line, n, h.logs.All())
+		}
+	}
+	for _, n := range h.openedNodes() {
+		if n.closes.Load() != 1 {
+			t.Errorf("%s's writer closed %d times, want 1", n.path, n.closes.Load())
+		}
+	}
+}
+
+// Fix round 1, M2: a decision that arrives when the setup is over makes no node.
+func TestCreateCameraShares_ADecisionAtTheDeadlineMakesNothing(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prev := frameRatesFor
+	frameRatesFor = func(path string, pixfmt, w, ht uint32) []uint32 {
+		cancel() // the setup ends as the decision is made
+		return prev(path, pixfmt, w, ht)
+	}
+	h.s.CreateCameraShares(ctx, "cv-a", "sh.wendy.cv-a")
+	if n := len(h.loop.shareCalls()); n != 0 {
+		t.Errorf("%d nodes made after the setup ended", n)
+	}
+	if n := h.logged("camera share: cv-a gets the real camera Brio 101 (/dev/video0): camera sharing setup was cancelled"); n != 1 {
+		t.Errorf("cancelled line logged %d times; logs: %v", n, h.logs.All())
+	}
+}
+
+// Fix round 1, M3: a camera the policy refuses is logged with the policy's
+// reason, even when its identity cannot be read.
+func TestCreateCameraShares_PolicyReasonComesBeforeTheIdentity(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csH264Cam())
+	h.s.cameraIdentity = func(string) (camera.Identity, error) { return camera.Identity{}, errors.New("no device link") }
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	if n := h.logged("camera share: cv-a gets the real camera Logi H264 (/dev/video2): the camera produces H.264 itself; sharing it comes in a later release"); n != 1 {
+		t.Errorf("policy line logged %d times; logs: %v", n, h.logs.All())
+	}
+	if n := h.logged("Logi H264 (/dev/video2): its sysfs identity could not be read"); n != 0 {
+		t.Errorf("the refused camera got an identity warning; logs: %v", h.logs.All())
+	}
+	if n := h.logged("camera share: cv-a gets the real camera Brio 101 (/dev/video0): its sysfs identity could not be read: no device link"); n != 1 {
+		t.Errorf("identity line for the shared camera logged %d times; logs: %v", n, h.logs.All())
+	}
+}
+
+// Fix round 1, 8b review: a queued removal reserves its number even when its
+// node is gone (a reboot), so a new share never lands on it.
+func TestCreateCameraShares_NeverTakesANumberARemovalHolds(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.writeState(`{"version":1,"containers":{},"removing":[{"node":255,"name":"Brio 101"}]}`)
+	h.s.loadCameraShares()
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	if recs := h.records("cv-a"); len(recs) != 1 || recs[0].node != 254 {
+		t.Errorf("cv-a's records = %+v, want node 254: 255 is queued for removal", recs)
+	}
+}
+
+// Fix round 1, 8b review: an entry that outlived its node never removes a node
+// made at its number afterwards.
+func TestRemoveShareNode_AStaleEntryNeverRemovesANewNode(t *testing.T) {
+	setup := func(t *testing.T) *csHarness {
+		h := newCSHarness(t, csBrio())
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		h.setHeld("/dev/video255", deviceHolder{PID: 7, Comm: "app"})
+		h.s.RemoveCameraShares("cv-a")
+		h.drainRemovals()
+		if !reflect.DeepEqual(h.pendingRemovals(), []int{255}) {
+			t.Fatalf("pending = %v, want [255]", h.pendingRemovals())
+		}
+		h.vanish(255) // removed outside the agent; the entry stays
+		h.setHeld("/dev/video255")
+		return h
+	}
+
+	t.Run("a share made meanwhile takes another number", func(t *testing.T) {
+		h := setup(t)
+		h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+		if recs := h.records("cv-b"); len(recs) != 1 || recs[0].node != 254 {
+			t.Fatalf("cv-b's records = %+v, want node 254", recs)
+		}
+		h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-b", Running: true}})
+		h.drainRemovals()
+		if got := h.loop.removedAux(); len(got) != 0 {
+			t.Errorf("RemoveAuxNode called on %v", got)
+		}
+		if live := h.loop.liveAux(); !reflect.DeepEqual(live, []int{254}) || len(h.pendingRemovals()) != 0 {
+			t.Errorf("live %v, pending %v; want cv-b's 254 and no entry", live, h.pendingRemovals())
+		}
+	})
+
+	t.Run("another kind of node took the number", func(t *testing.T) {
+		h := setup(t)
+		h.loop.addLiveAux(255, "Wendy sensor 0") // as the two-plane path could
+		h.s.SyncCameraShares(context.Background(), nil)
+		h.drainRemovals()
+		if got := h.loop.removedAux(); len(got) != 0 {
+			t.Errorf("RemoveAuxNode called on %v", got)
+		}
+		if n := h.logged("camera share: /dev/video255 is no longer the share node of Brio 101; it is left alone"); n != 1 {
+			t.Errorf("left-alone line logged %d times; logs: %v", n, h.logs.All())
+		}
+		if len(h.pendingRemovals()) != 0 {
+			t.Errorf("pending = %v, want none", h.pendingRemovals())
+		}
+	})
+}
+
+// Fix round 1, 8b review: a state file holding a node both as a share and as
+// a removal keeps the share.
+func TestSyncCameraShares_ARecordWinsOverARemovalOfItsNumber(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.writeState(`{"version":1,"containers":{"cv-a":{"app":"a","shares":[` +
+		csStateRecord(csBrio(), "/dev/video0", testSharedMode, 255) + `]}},"removing":[{"node":255,"name":"Brio 101"}]}`)
+	h.loop.addLiveAux(255, "Brio 101")
+	h.s.loadCameraShares()
+
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true}})
+	h.drainRemovals()
+	if got := h.loop.removedAux(); len(got) != 0 {
+		t.Errorf("the record's node was removed: %v", got)
+	}
+	if n := h.logged("camera share: dropped the queued removal of /dev/video255: a share's record holds it"); n != 1 {
+		t.Errorf("dropped line logged %d times; logs: %v", n, h.logs.All())
+	}
+	if n := h.opensOf("/dev/video255"); n != 1 {
+		t.Errorf("the record was not adopted (%d opens)", n)
+	}
+	if state := h.stateFile(); state["removing"] != nil {
+		t.Errorf("state file still lists the removal: %v", state["removing"])
+	}
+}
+
+// Fix round 1, 8b review: when who holds a node cannot be told, it is kept.
+func TestRemoveShareNode_AHolderScanThatFailsKeepsTheNode(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.setHolderErr(errors.New("open /proc: permission denied"))
+	h.s.RemoveCameraShares("cv-a")
+	h.drainRemovals()
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	line := "camera share: left /dev/video255 in place: what has it open could not be read (open /proc: permission denied); it is removed later"
+	if n := h.logged(line); n != 1 {
+		t.Errorf("scan-failure line logged %d times, want 1; logs: %v", n, h.logs.All())
+	}
+	if got := h.loop.removedAux(); len(got) != 0 || !reflect.DeepEqual(h.pendingRemovals(), []int{255}) {
+		t.Errorf("removed %v, pending %v; want nothing removed and 255 kept", got, h.pendingRemovals())
+	}
+	h.setHolderErr(nil)
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{255}) {
+		t.Errorf("removed %v once the scan works, want [255]", got)
+	}
+}
+
+// Fix round 1, 8b review: each thing about a removal is said once, however
+// often it is retried.
+func TestRemoveShareNode_RepeatedNotesAreLoggedOnce(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.setUdev(func(int) bool { return false })
+	h.setHeld("/dev/video255", deviceHolder{PID: 7, Comm: "app"})
+	h.s.RemoveCameraShares("cv-a")
+	for i := 0; i < 3; i++ {
+		h.drainRemovals()
+		h.s.SyncCameraShares(context.Background(), nil)
+	}
+	h.drainRemovals()
+	for _, line := range []string{
+		"camera share: /dev/video255 is not settled after 2s",
+		"camera share: left /dev/video255 in place: it is open in pid 7 (app); it is removed later",
+	} {
+		if n := h.logged(line); n != 1 {
+			t.Errorf("%q logged %d times, want 1", line, n)
+		}
+	}
+}
+
+// Fix round 1, 8b review: a removal stuck in the system cannot hold Shutdown.
+func TestShutdown_IsBoundedWhenARemovalIsStuck(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	prevWait := shareRemovalShutdownWait
+	shareRemovalShutdownWait = 100 * time.Millisecond
+	t.Cleanup(func() { shareRemovalShutdownWait = prevWait })
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+
+	scanning, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	stuck := shareNodeHolders
+	shareNodeHolders = func(nr int) ([]deviceHolder, error) {
+		once.Do(func() { close(scanning) })
+		<-release // a stat on a hung mount
+		return stuck(nr)
+	}
+	t.Cleanup(func() { drainShareRemovals(t, h.s) })
+	t.Cleanup(func() { close(release) })
+
+	h.s.RemoveCameraShares("cv-a")
+	<-scanning
+	start := time.Now()
+	h.s.Shutdown()
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("Shutdown took %s with a removal stuck", took)
+	}
+	if n := h.logged("camera share: a share node removal is still running after 100ms; shutting down without it"); n != 1 {
+		t.Errorf("bounded-wait line logged %d times; logs: %v", n, h.logs.All())
+	}
+}
+
+// Fix round 1, 8b review: the share removal's holder scan takes the node's
+// device number from sysfs, and says when it cannot scan.
+func TestSysfsShareNodeHolders_ReadsTheDeviceNumberFromSysfs(t *testing.T) {
+	sysfs, proc := t.TempDir(), t.TempDir()
+	prevSysfs, prevProc := videoSysfsRoot, procRoot
+	videoSysfsRoot, procRoot = sysfs, proc
+	t.Cleanup(func() { videoSysfsRoot, procRoot = prevSysfs, prevProc })
+
+	fi, err := os.Stat("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdev := uint64(fi.Sys().(*syscall.Stat_t).Rdev)
+	if err := os.MkdirAll(filepath.Join(sysfs, "video255"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dev := fmt.Sprintf("%d:%d\n", unix.Major(rdev), unix.Minor(rdev))
+	if err := os.WriteFile(filepath.Join(sysfs, "video255", "dev"), []byte(dev), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(proc, "100", "fd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "100", "comm"), []byte("v4l_id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", filepath.Join(proc, "100", "fd", "3")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := sysfsShareNodeHolders(255)
+	if err != nil || len(got) != 1 || got[0].PID != 100 || got[0].Comm != "v4l_id" {
+		t.Errorf("sysfsShareNodeHolders(255) = %+v, %v; want pid 100 (v4l_id)", got, err)
+	}
+	if _, err := sysfsShareNodeHolders(254); err == nil {
+		t.Error("a node with no sysfs entry gave no error")
+	}
+	procRoot = filepath.Join(proc, "missing")
+	if _, err := sysfsShareNodeHolders(255); err == nil {
+		t.Error("an unreadable /proc gave no error")
 	}
 }

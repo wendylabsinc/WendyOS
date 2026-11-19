@@ -1537,6 +1537,27 @@ func TestAllocateAuxNodeNumber_BandExhausted(t *testing.T) {
 	}
 }
 
+// A number the caller holds without a node (a camera share's record across a
+// reboot) is passed over like a taken one; with nothing to skip the allocator
+// is AllocateAuxNodeNumber.
+func TestAllocateAuxNodeNumberSkipping_PassesOverHeldNumbers(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, _ := newTestLoopback(t, h)
+	h.setNodeExists(IDBandEnd-1, true)
+
+	nr, err := l.AllocateAuxNodeNumberSkipping(func(nr int) bool { return nr == IDBandEnd || nr == IDBandEnd-2 })
+	if err != nil || nr != IDBandEnd-3 {
+		t.Errorf("AllocateAuxNodeNumberSkipping = %d, %v; want %d", nr, err, IDBandEnd-3)
+	}
+	if nr, err := l.AllocateAuxNodeNumberSkipping(nil); err != nil || nr != IDBandEnd {
+		t.Errorf("AllocateAuxNodeNumberSkipping(nil) = %d, %v; want %d", nr, err, IDBandEnd)
+	}
+	if _, err := l.AllocateAuxNodeNumberSkipping(func(int) bool { return true }); !errors.Is(err, ErrBandExhausted) {
+		t.Errorf("skipping every number: error = %v, want ErrBandExhausted", err)
+	}
+}
+
 // A share node goes through the announce_all_caps=1 add; every other node
 // keeps the exclusive-caps add. (The flag itself is set in
 // newLoopbackConfig, covered by the Linux test.)

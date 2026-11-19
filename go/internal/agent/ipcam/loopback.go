@@ -842,12 +842,24 @@ func (l *Loopback) fireIdleGrace(camID uint32, cp *camPump, gen uint64) {
 // skip check is the honest option; silently reusing a camera's number would
 // point an app at the wrong camera's frames.
 func (l *Loopback) AllocateAuxNodeNumber() (int, error) {
+	return l.AllocateAuxNodeNumberSkipping(nil)
+}
+
+// AllocateAuxNodeNumberSkipping is AllocateAuxNodeNumber that also passes over
+// every number skip reports (nil skips nothing more). It is for a caller that
+// holds numbers whose nodes do not exist right now: a camera share's record
+// keeps its number across a reboot, which removes every node, until the
+// container's next start makes the node again.
+func (l *Loopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
 	taken := map[int]struct{}{}
 	for _, cam := range l.reg.List() {
 		taken[int(cam.ID)] = struct{}{}
 	}
 	for nr := IDBandEnd; nr >= IDBandStart; nr-- {
 		if _, ok := taken[nr]; ok {
+			continue
+		}
+		if skip != nil && skip(nr) {
 			continue
 		}
 		if l.deps.nodeExists(nr) {

@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -80,27 +82,30 @@ func (realShareClock) Now() time.Time                         { return time.Now(
 func (realShareClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // Seams for the removal of share nodes: its clock, whether udev has processed
-// a node's add event, and which other processes hold a device open.
+// a node's add event, and which other processes hold a node open (an error
+// means that could not be told). deviceHolders is the path-based scan Task 9's
+// replug check uses.
 var (
 	shareRemovalClock shareClock = realShareClock{}
 	shareNodeUdevDone            = udevProcessedVideoNode
+	shareNodeHolders             = sysfsShareNodeHolders
 	deviceHolders                = procDeviceHolders
 )
 
-// shareRemoval is a share node waiting to be removed. nr, name, made and
-// checkName never change once it is queued; running and holder are guarded by
-// cameraShares.mu.
+// shareRemovalShutdownWait bounds how long Shutdown waits for removal attempts
+// still in flight; a variable so tests can shorten it.
+var shareRemovalShutdownWait = 3 * time.Second
+
+// shareRemoval is a share node waiting to be removed. nr, name and made never
+// change once it is queued; running and noted are guarded by cameraShares.mu.
 type shareRemoval struct {
 	nr   int
 	name string // the label it was made with: the camera's name
 	// made is when this agent made the node; zero for a node an earlier agent
 	// made, which counts as settled.
-	made time.Time
-	// checkName: the node was neither made nor opened by this agent, so its
-	// sysfs name is checked before it is removed.
-	checkName bool
-	running   bool // an attempt is in flight
-	holder    int  // the pid last logged as holding it
+	made    time.Time
+	running bool            // an attempt is in flight
+	noted   map[string]bool // what was logged about it, so each is said once
 }
 
 // CameraShareContainer is one Wendy container as SyncCameraShares sees it.
@@ -118,10 +123,15 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 	ctx, cancel := context.WithTimeout(ctx, cameraShareCreateBudget)
 	defer cancel()
 	log := s.shareLogger()
-	if s.ctx != nil && s.ctx.Err() != nil {
-		log.Info(fmt.Sprintf("camera share: %s gets the real cameras: the video service is shutting down", containerID))
+	creation, ok := s.beginShareCreation(containerID)
+	if !ok || (s.ctx != nil && s.ctx.Err() != nil) {
+		log.Info(fmt.Sprintf("camera share: %s gets the real cameras: %s", containerID, shareRefusedStopping))
+		if ok {
+			s.endShareCreation(containerID, creation)
+		}
 		return
 	}
+	defer s.endShareCreation(containerID, creation)
 	// Available can load the module on its first call, so it is timed too.
 	unavailable, ok := withinBudget(ctx, func() bool { return s.loopback == nil || s.loopback.Available() != nil })
 	switch {
@@ -165,22 +175,60 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 			}
 			return
 		}
-		s.createCameraShare(ctx, containerID, appID, dev)
+		s.createCameraShare(ctx, containerID, appID, dev, creation)
+	}
+}
+
+// shareCreation is one CreateCameraShares call in flight. removed (guarded by
+// cameraShares.mu) is set by a RemoveCameraShares of the same container, after
+// which the call stores nothing more.
+type shareCreation struct{ removed bool }
+
+// Why a share made in time is not stored.
+const (
+	shareRefusedStopping = "the video service is shutting down"
+	shareRefusedRemoved  = "the container was removed while its shares were being made"
+)
+
+// beginShareCreation registers a CreateCameraShares call, or reports false
+// once Shutdown has begun.
+func (s *VideoService) beginShareCreation(containerID string) (*shareCreation, bool) {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	if s.shares.stopped {
+		return nil, false
+	}
+	if s.shares.creating == nil {
+		s.shares.creating = make(map[string][]*shareCreation)
+	}
+	c := &shareCreation{}
+	s.shares.creating[containerID] = append(s.shares.creating[containerID], c)
+	return c, true
+}
+
+func (s *VideoService) endShareCreation(containerID string, c *shareCreation) {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	list := s.shares.creating[containerID]
+	for i, x := range list {
+		if x == c {
+			list = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	if len(list) == 0 {
+		delete(s.shares.creating, containerID)
+	} else {
+		s.shares.creating[containerID] = list
 	}
 }
 
 // createCameraShare shares one camera with a container, or logs why not.
-func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice) {
-	id, err := s.identityOf(filepath.Base(dev.GetPath()))
-	if err != nil {
-		s.logRealCamera(true, containerID, dev, "its sysfs identity could not be read: "+err.Error())
-		return
-	}
-	if s.containerSharesCamera(containerID, id) {
-		return
-	}
-	// shareDecisionFor can block well past the budget (its GStreamer element
-	// listing is not context-aware), so it runs on its own goroutine.
+func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, creation *shareCreation) {
+	// The policy goes first, so a camera it refuses (CSI, thermal, depth) is
+	// logged with that reason. shareDecisionFor can block well past the
+	// budget (its GStreamer element listing is not context-aware), so it runs
+	// on its own goroutine.
 	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) })
 	if !ok {
 		s.logRealCamera(true, containerID, dev, shareSetupStopped(ctx.Err()))
@@ -188,6 +236,19 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	}
 	if !decision.Shared {
 		s.logRealCamera(false, containerID, dev, decision.Reason)
+		return
+	}
+	// A decision that arrives at the deadline makes nothing.
+	if err := ctx.Err(); err != nil {
+		s.logRealCamera(true, containerID, dev, shareSetupStopped(err))
+		return
+	}
+	id, err := s.identityOf(filepath.Base(dev.GetPath()))
+	if err != nil {
+		s.logRealCamera(true, containerID, dev, "its sysfs identity could not be read: "+err.Error())
+		return
+	}
+	if s.containerSharesCamera(containerID, id) {
 		return
 	}
 
@@ -211,8 +272,15 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		return
 	}
 
-	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, node: nr, camera: id, nodeMade: made}
-	start := s.storeShare(containerID, appID, r, node)
+	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, node: nr, camera: id, nodeMade: made,
+		siblings: sameModelPorts(id, s.presentCameraIdentities())}
+	start, refused := s.storeShare(containerID, appID, r, node, creation)
+	if refused != "" {
+		s.closeShareWriter(path, node)
+		s.unmakeShareNode(nr, dev.GetName(), made)
+		s.logRealCamera(true, containerID, dev, refused)
+		return
+	}
 	s.persistCameraShares()
 	start()
 	s.shareLogger().Info(fmt.Sprintf("camera share: %s shares %s (%s) through %s at %s",
@@ -225,10 +293,16 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 // same one. On success the number is pending until storeShare or
 // unmakeShareNode, and made is when the node was made. A non-empty reason
 // means no node is left behind, or one is queued for removal.
+//
+// Every number a share holds is passed over, whether or not its node exists
+// now: a record keeps its number across a reboot (which removes every node)
+// for the container's next start, and two records of one camera on one number
+// cannot be told apart by the node's name.
 func (s *VideoService) makeShareNode(ctx context.Context, label string) (nr int, made time.Time, reason string) {
 	s.twoPlaneStartMu.Lock()
 	defer s.twoPlaneStartMu.Unlock()
-	nr, err := s.loopback.AllocateAuxNodeNumber()
+	held := s.heldShareNumbers()
+	nr, err := s.loopback.AllocateAuxNodeNumberSkipping(func(nr int) bool { return held[nr] })
 	if errors.Is(err, ipcam.ErrBandExhausted) {
 		return 0, time.Time{}, fmt.Sprintf("no free v4l2loopback node number (%d-%d are in use)", ipcam.IDBandStart, ipcam.IDBandEnd)
 	}
@@ -252,6 +326,27 @@ func (s *VideoService) makeShareNode(ctx context.Context, label string) (nr int,
 		return 0, time.Time{}, fmt.Sprintf("creating v4l2loopback node %d failed: %v", nr, err)
 	}
 	return nr, made, ""
+}
+
+// heldShareNumbers is every node number a share holds: each record's (live,
+// loaded, or kept across a reboot without its node), each node being made, and
+// each node waiting to be removed.
+func (s *VideoService) heldShareNumbers() map[int]bool {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	held := make(map[int]bool)
+	for _, c := range s.shares.containers {
+		for _, r := range c.shares {
+			held[r.node] = true
+		}
+	}
+	for nr := range s.shares.pending {
+		held[nr] = true
+	}
+	for nr := range s.shares.removing {
+		held[nr] = true
+	}
+	return held
 }
 
 // unmakeShareNode queues the removal of a node makeShareNode made whose share
@@ -335,7 +430,7 @@ func (s *VideoService) waitShareNodeSettled(ctx context.Context, rm *shareRemova
 			return true
 		}
 		if !now.Before(deadline) {
-			s.shareLogger().Info(fmt.Sprintf("camera share: %s is not settled after %s (udev's add event, %s of age); removing it once nothing holds it",
+			s.noteShareRemoval(rm, false, fmt.Sprintf("camera share: %s is not settled after %s (udev's add event, %s of age); removing it once nothing holds it",
 				shareNodePath(rm.nr), shareNodeSettleBound, shareNodeSettleAge))
 			return true
 		}
@@ -348,13 +443,30 @@ func (s *VideoService) waitShareNodeSettled(ctx context.Context, rm *shareRemova
 }
 
 // attemptShareNodeRemoval removes a queued node unless another process holds
-// it open; then the node stays, still a share node and its number not reused,
-// and the next SyncCameraShares tries again. A node already gone, or (for one
-// this agent never made or opened) now another node, just leaves the queue.
+// it open, or who does cannot be told; then the node stays, still a share node
+// and its number not reused, and the next SyncCameraShares tries again. A node
+// already gone, a node that is now another node (its sysfs name is not the
+// camera's), or a number a share's record holds just leaves the queue.
+//
+// It holds twoPlaneStartMu throughout, as node allocation does, so no node can
+// be made at this number between its checks and the removal: one that was
+// would be removed by mistake, possibly while udev or the agent opens it.
 func (s *VideoService) attemptShareNodeRemoval(rm *shareRemoval) {
+	s.twoPlaneStartMu.Lock()
+	defer s.twoPlaneStartMu.Unlock()
 	path := shareNodePath(rm.nr)
-	log := s.shareLogger()
+	keep := func(warn bool, msg string) {
+		s.shares.mu.Lock()
+		rm.running = false
+		s.shares.mu.Unlock()
+		s.noteShareRemoval(rm, warn, msg)
+	}
 	if s.loopback == nil {
+		s.finishShareRemoval(rm)
+		return
+	}
+	if s.recordHoldsShareNumber(rm.nr) {
+		s.noteShareRemoval(rm, true, fmt.Sprintf("camera share: not removing %s: a share's record holds it", path))
 		s.finishShareRemoval(rm)
 		return
 	}
@@ -362,36 +474,68 @@ func (s *VideoService) attemptShareNodeRemoval(rm *shareRemoval) {
 		s.finishShareRemoval(rm)
 		return
 	}
-	if rm.checkName && !s.nodeNamed(rm.nr, rm.name) {
-		log.Warn(fmt.Sprintf("camera share: %s is no longer the share node of %s; it is left alone", path, rm.name))
+	if !s.nodeNamed(rm.nr, rm.name) {
+		s.noteShareRemoval(rm, true, fmt.Sprintf("camera share: %s is no longer the share node of %s; it is left alone", path, rm.name))
 		s.finishShareRemoval(rm)
 		return
 	}
 	// Immediately before the removal: the writer is already closed, and the
 	// agent's own pid is not counted.
-	if holders := deviceHolders(path); len(holders) > 0 {
+	holders, err := shareNodeHolders(rm.nr)
+	if err != nil {
+		keep(true, fmt.Sprintf("camera share: left %s in place: what has it open could not be read (%v); it is removed later", path, err))
+		return
+	}
+	if len(holders) > 0 {
 		h := holders[0]
-		s.shares.mu.Lock()
-		rm.running = false
-		repeated := rm.holder == h.PID
-		rm.holder = h.PID
-		s.shares.mu.Unlock()
-		if !repeated {
-			log.Warn(fmt.Sprintf("camera share: left %s in place: it is open in pid %d (%s); it is removed later", path, h.PID, h.Comm))
-		}
+		keep(true, fmt.Sprintf("camera share: left %s in place: it is open in pid %d (%s); it is removed later", path, h.PID, h.Comm))
 		return
 	}
 	s.removeShareNode(rm.nr)
 	if _, exists := s.loopback.NodePath(uint32(rm.nr)); exists {
 		// The driver refused (EBUSY: something opened it after the check).
-		s.shares.mu.Lock()
-		rm.running = false
-		s.shares.mu.Unlock()
-		log.Warn(fmt.Sprintf("camera share: left %s in place: removing it did not take; it is removed later", path))
+		keep(true, fmt.Sprintf("camera share: left %s in place: removing it did not take; it is removed later", path))
 		return
 	}
 	s.finishShareRemoval(rm)
-	log.Info(fmt.Sprintf("camera share: removed %s, the share node of %s", path, rm.name))
+	s.shareLogger().Info(fmt.Sprintf("camera share: removed %s, the share node of %s", path, rm.name))
+}
+
+// noteShareRemoval logs msg about rm unless it was logged about it before, so
+// a removal retried every sync says each thing once.
+func (s *VideoService) noteShareRemoval(rm *shareRemoval, warn bool, msg string) {
+	s.shares.mu.Lock()
+	repeated := rm.noted[msg]
+	if rm.noted == nil {
+		rm.noted = make(map[string]bool)
+	}
+	rm.noted[msg] = true
+	s.shares.mu.Unlock()
+	switch {
+	case repeated:
+	case warn:
+		s.shareLogger().Warn(msg)
+	default:
+		s.shareLogger().Info(msg)
+	}
+}
+
+// recordHoldsShareNumber reports whether any share's record names nr.
+func (s *VideoService) recordHoldsShareNumber(nr int) bool {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	return s.recordHoldsShareNumberLocked(nr)
+}
+
+func (s *VideoService) recordHoldsShareNumberLocked(nr int) bool {
+	for _, c := range s.shares.containers {
+		for _, r := range c.shares {
+			if r.node == nr {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // finishShareRemoval takes rm out of the queue and saves the state file.
@@ -406,8 +550,9 @@ func (s *VideoService) finishShareRemoval(rm *shareRemoval) {
 }
 
 // removeShareNode deletes share node nr. It is called only by
-// attemptShareNodeRemoval, after the node has settled and nothing else holds
-// it, so a change to how a node is removed has one place to land.
+// attemptShareNodeRemoval, under twoPlaneStartMu, after the node has settled
+// and nothing else holds it, so a change to how a node is removed has one
+// place to land.
 func (s *VideoService) removeShareNode(nr int) {
 	if s.loopback != nil {
 		s.loopback.RemoveAuxNode(nr)
@@ -416,10 +561,21 @@ func (s *VideoService) removeShareNode(nr int) {
 
 // storeShare adds r to the container's shares with its writer and a pump, and
 // returns the function that starts the pump. The record is stored with its
-// pump already set, so a sync never takes it for one to adopt.
-func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, node shareNodeIO) (start func()) {
+// pump already set, so a sync never takes it for one to adopt. Nothing is
+// stored, and refused says why, once Shutdown has begun or when a
+// RemoveCameraShares of the container ran while this creation was in flight:
+// the check and the store share one lock with Remove's snapshot of the
+// container's records, so a racing Remove either takes this record or makes
+// the creation refuse it.
+func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, node shareNodeIO, creation *shareCreation) (start func(), refused string) {
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
+	switch {
+	case s.shares.stopped:
+		return nil, shareRefusedStopping
+	case creation != nil && creation.removed:
+		return nil, shareRefusedRemoved
+	}
 	if s.shares.containers == nil {
 		s.shares.containers = make(map[string]*shareContainer)
 	}
@@ -431,7 +587,7 @@ func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, nod
 	c.created = time.Now()
 	c.shares = append(c.shares, r)
 	delete(s.shares.pending, r.node)
-	return s.attachSharePumpLocked(containerID, r, node, false)
+	return s.attachSharePumpLocked(containerID, r, node, false), ""
 }
 
 // attachSharePumpLocked gives r its writer and a pump, and returns the function
@@ -469,8 +625,11 @@ func (s *VideoService) joinShare(ctx context.Context, r *shareRecord) (shareSubs
 // the camera has moved, the record takes the new path, so the shared-mode rules
 // follow the camera, and the state file is saved.
 func (s *VideoService) currentSharePath(r *shareRecord) (string, bool) {
-	base, ok := s.resolveShareCamera(r.camera)
+	base, ok, learned := s.resolveShareCamera(r)
 	if !ok {
+		if learned {
+			s.persistCameraShares()
+		}
 		return "", false
 	}
 	path := "/dev/" + base
@@ -478,31 +637,75 @@ func (s *VideoService) currentSharePath(r *shareRecord) (string, bool) {
 	moved := r.cameraPath != path
 	r.cameraPath = path
 	s.shares.mu.Unlock()
-	if moved {
+	if moved || learned {
 		s.persistCameraShares()
 	}
 	return path, true
 }
 
-// resolveShareCamera finds the present node of a stored camera identity with
-// camera.Resolve. Share nodes are never candidates. A present camera is
-// claimed when another record names it exactly, or when another record's
-// camera of the same name and index is absent too, because then which of the
-// two it is cannot be told: two same-model cameras never cross.
-func (s *VideoService) resolveShareCamera(want camera.Identity) (string, bool) {
+// presentCameraIdentities is presentIdentities without share nodes: a share
+// node is labelled with its camera's name, and must never pass for it.
+func (s *VideoService) presentCameraIdentities() map[string]camera.Identity {
 	present := s.presentIdentities()
 	for base, id := range present {
 		if nr, ok := videoNodeNumber(base); ok && s.isShareNodeNumber(nr, func() (string, bool) { return id.Name, true }) {
 			delete(present, base)
 		}
 	}
+	return present
+}
+
+// sameModelPorts lists the ports of the present cameras with want's name and
+// index other than want's own port, sorted.
+func sameModelPorts(want camera.Identity, present map[string]camera.Identity) []string {
+	var ports []string
+	for _, id := range present {
+		if id.Name == want.Name && id.Index == want.Index && id.Device != want.Device && !slices.Contains(ports, id.Device) {
+			ports = append(ports, id.Device)
+		}
+	}
+	sort.Strings(ports)
+	return ports
+}
+
+// resolveShareCamera finds the present node of a record's camera with
+// camera.Resolve. Share nodes are never candidates.
+//
+// When the record's own camera is present, every other present camera of the
+// same name and index is learned as a sibling (learned reports a change, for
+// the caller to save). When it is absent, a moved camera is followed only if
+// it is the one candidate that is not:
+//   - on a sibling's port: a camera seen beside this one is another camera;
+//   - another record's camera, named exactly;
+//   - possibly another record's absent camera of the same name and index,
+//     because then which of the two it is cannot be told.
+//
+// So two same-model cameras never cross.
+func (s *VideoService) resolveShareCamera(r *shareRecord) (base string, ok, learned bool) {
+	want := r.camera
+	present := s.presentCameraIdentities()
+	for b, id := range present {
+		if id == want {
+			ports := sameModelPorts(want, present)
+			s.shares.mu.Lock()
+			learned = mergeSiblingsLocked(r, ports)
+			s.shares.mu.Unlock()
+			return b, true, learned
+		}
+	}
+	s.shares.mu.Lock()
+	siblings := make(map[string]bool, len(r.siblings))
+	for _, port := range r.siblings {
+		siblings[port] = true
+	}
+	s.shares.mu.Unlock()
 	stored := s.storedShareIdentities()
 	isPresent := make(map[camera.Identity]bool, len(present))
 	for _, id := range present {
 		isPresent[id] = true
 	}
 	claimed := func(id camera.Identity) bool {
-		if stored[id] {
+		if siblings[id.Device] || stored[id] {
 			return true
 		}
 		for other := range stored {
@@ -512,7 +715,24 @@ func (s *VideoService) resolveShareCamera(want camera.Identity) (string, bool) {
 		}
 		return false
 	}
-	return camera.Resolve(want, present, claimed)
+	base, ok = camera.Resolve(want, present, claimed)
+	return base, ok, false
+}
+
+// mergeSiblingsLocked adds ports to r's siblings and reports whether any was
+// new. Callers hold s.shares.mu.
+func mergeSiblingsLocked(r *shareRecord, ports []string) bool {
+	changed := false
+	for _, port := range ports {
+		if !slices.Contains(r.siblings, port) {
+			r.siblings = append(r.siblings, port)
+			changed = true
+		}
+	}
+	if changed {
+		sort.Strings(r.siblings)
+	}
+	return changed
 }
 
 func (s *VideoService) storedShareIdentities() map[camera.Identity]bool {
@@ -551,6 +771,11 @@ func (s *VideoService) RemoveCameraShares(containerID string) {
 	s.shares.ops.Lock()
 	defer s.shares.ops.Unlock()
 	s.shares.mu.Lock()
+	// A CreateCameraShares of this container still in flight stores nothing
+	// more (storeShare): what it stored already is in this snapshot.
+	for _, creation := range s.shares.creating[containerID] {
+		creation.removed = true
+	}
 	c := s.shares.containers[containerID]
 	var recs []*shareRecord
 	if c != nil {
@@ -592,7 +817,7 @@ func (s *VideoService) retireShares(containerID string, recs []*shareRecord) {
 // Callers hold s.shares.ops.
 func (s *VideoService) stopShare(r *shareRecord) *shareRemoval {
 	s.shares.mu.Lock()
-	cancel, done, node := r.cancel, r.done, r.io
+	cancel, done, node, made := r.cancel, r.done, r.io, r.nodeMade
 	s.shares.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -602,12 +827,12 @@ func (s *VideoService) stopShare(r *shareRecord) *shareRemoval {
 	}
 	if node != nil {
 		s.closeShareWriter(shareNodePath(r.node), node)
-		return &shareRemoval{nr: r.node, name: r.cameraName, made: r.nodeMade}
+		return &shareRemoval{nr: r.node, name: r.cameraName, made: made}
 	}
 	if !s.nodeIsShareFor(r) {
 		return nil
 	}
-	return &shareRemoval{nr: r.node, name: r.cameraName, checkName: true}
+	return &shareRemoval{nr: r.node, name: r.cameraName}
 }
 
 func (s *VideoService) closeShareWriter(path string, node shareNodeIO) {
@@ -694,14 +919,32 @@ func (s *VideoService) SyncCameraShares(ctx context.Context, containers []Camera
 		}
 	}
 
+	// Retry every queued removal, except one whose number a record also names
+	// (a state file can hold both): the record wins, and the removal is
+	// dropped rather than ever removing a share's node.
 	s.shares.mu.Lock()
 	var retries []func()
-	for _, rm := range s.shares.removing {
+	var overruled []int
+	for nr, rm := range s.shares.removing {
+		if s.recordHoldsShareNumberLocked(nr) {
+			if !rm.running {
+				delete(s.shares.removing, nr)
+				overruled = append(overruled, nr)
+			}
+			continue
+		}
 		if start := s.startShareRemovalLocked(rm); start != nil {
 			retries = append(retries, start)
 		}
 	}
 	s.shares.mu.Unlock()
+	if len(overruled) > 0 {
+		sort.Ints(overruled)
+		for _, nr := range overruled {
+			s.shareLogger().Warn(fmt.Sprintf("camera share: dropped the queued removal of %s: a share's record holds it", shareNodePath(nr)))
+		}
+		s.persistCameraShares()
+	}
 	for _, start := range retries {
 		start()
 	}
@@ -721,7 +964,7 @@ func (s *VideoService) SyncCameraShares(ctx context.Context, containers []Camera
 // other mode would be refused. Opening sets keep_format again. Callers hold
 // s.shares.ops.
 func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
-	if s.loopback == nil {
+	if s.loopback == nil || s.sharesStopped() {
 		return
 	}
 	if _, exists := s.loopback.NodePath(uint32(r.node)); !exists {
@@ -738,6 +981,11 @@ func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 		return
 	}
 	s.shares.mu.Lock()
+	if s.shares.stopped {
+		s.shares.mu.Unlock()
+		s.closeShareWriter(path, node)
+		return
+	}
 	r.adoptErr = ""
 	start := s.attachSharePumpLocked(containerID, r, node, true)
 	s.shares.mu.Unlock()
@@ -756,17 +1004,44 @@ func (s *VideoService) noteAdoptFailure(containerID string, r *shareRecord, reas
 	}
 }
 
+func (s *VideoService) sharesStopped() bool {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	return s.shares.stopped
+}
+
 // nodeIsShareFor reports whether the node a record names exists and is still
-// the share node made for it, by its sysfs name: after a reboot the number may
-// have gone to another node, which must be neither opened nor removed.
+// the share node made for it: after a reboot the number may have gone to
+// another node, which must be neither opened nor removed. The node's sysfs
+// name must be the camera's, and no other record with a live writer, and no
+// queued removal, may name the number: every share of one camera has the same
+// name, so the name alone cannot tell two records' nodes apart.
 func (s *VideoService) nodeIsShareFor(r *shareRecord) bool {
-	if s.loopback == nil {
+	if s.loopback == nil || s.shareNumberClaimedElsewhere(r) {
 		return false
 	}
 	if _, exists := s.loopback.NodePath(uint32(r.node)); !exists {
 		return false
 	}
 	return s.nodeNamed(r.node, r.cameraName)
+}
+
+// shareNumberClaimedElsewhere reports whether r's node number belongs to
+// another record with a live writer, or to a queued removal.
+func (s *VideoService) shareNumberClaimedElsewhere(r *shareRecord) bool {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	if s.shares.removing[r.node] != nil {
+		return true
+	}
+	for _, c := range s.shares.containers {
+		for _, other := range c.shares {
+			if other != r && other.node == r.node && other.io != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // nodeNamed reports whether node nr's sysfs name is the one a node labelled
@@ -784,6 +1059,10 @@ func (s *VideoService) nodeNamed(nr int, label string) bool {
 // goroutines. Nodes, records and queued removals stay (the state file holds
 // them): the next agent adopts the nodes and retries the removals.
 func (s *VideoService) stopCameraSharePumps() {
+	// From here on nothing is stored or adopted, so nothing outlives this.
+	s.shares.mu.Lock()
+	s.shares.stopped = true
+	s.shares.mu.Unlock()
 	defer s.stopShareRemovals()
 	s.shares.ops.Lock()
 	defer s.shares.ops.Unlock()
@@ -820,7 +1099,9 @@ func (s *VideoService) stopCameraSharePumps() {
 
 // stopShareRemovals starts no more removal attempts, cancels the waiting ones
 // and waits for every attempt's goroutine. One already past its wait finishes
-// its holder check and removal first, which takes milliseconds.
+// its holder check and removal first, which takes milliseconds; the wait is
+// bounded by shareRemovalShutdownWait all the same, so a scan stuck on the
+// system cannot hold Shutdown.
 func (s *VideoService) stopShareRemovals() {
 	s.shares.mu.Lock()
 	s.shares.closed = true
@@ -829,7 +1110,16 @@ func (s *VideoService) stopShareRemovals() {
 	if cancel != nil {
 		cancel()
 	}
-	s.shares.removalWG.Wait()
+	done := make(chan struct{})
+	go func() {
+		s.shares.removalWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(shareRemovalShutdownWait):
+		s.shareLogger().Warn(fmt.Sprintf("camera share: a share node removal is still running after %s; shutting down without it", shareRemovalShutdownWait))
+	}
 }
 
 // IsShareNode reports whether path is an app's share node, so the agent's own
@@ -999,6 +1289,9 @@ type cameraShareStateShare struct {
 	Path   string                 `json:"path"`
 	Mode   cameraShareStateMode   `json:"mode"`
 	Node   int                    `json:"node"`
+	// SameModelPorts is the record's siblings; omitted when it has none, and
+	// absent from files written before it existed.
+	SameModelPorts []string `json:"sameModelPorts,omitempty"`
 }
 
 type cameraShareStateCamera struct {
@@ -1041,7 +1334,8 @@ func (s *VideoService) persistCameraShares() {
 				Path:   r.cameraPath,
 				Mode: cameraShareStateMode{Width: r.mode.Width, Height: r.mode.Height, Fourcc: r.mode.Fourcc,
 					BytesPerLine: r.mode.BytesPerLine, FPS: r.mode.FPS},
-				Node: r.node,
+				Node:           r.node,
+				SameModelPorts: append([]string(nil), r.siblings...),
 			})
 		}
 		state.Containers[id] = sc
@@ -1107,8 +1401,9 @@ func (s *VideoService) loadCameraShares() {
 				cameraPath: sh.Path,
 				mode: sharedMode{Width: sh.Mode.Width, Height: sh.Mode.Height, Fourcc: sh.Mode.Fourcc,
 					BytesPerLine: sh.Mode.BytesPerLine, FPS: sh.Mode.FPS},
-				node:   sh.Node,
-				camera: camera.Identity{Device: sh.Camera.Device, Index: sh.Camera.Index, Name: sh.Camera.Name},
+				node:     sh.Node,
+				camera:   camera.Identity{Device: sh.Camera.Device, Index: sh.Camera.Index, Name: sh.Camera.Name},
+				siblings: append([]string(nil), sh.SameModelPorts...),
 			}
 			if r.node < ipcam.IDBandStart || r.node > ipcam.IDBandEnd || r.mode.pixelFormat() == 0 || r.mode.frameBytes() <= 0 {
 				log.Warn(fmt.Sprintf("camera share: %s: dropping %s's share of %q at node %d with mode %s; this agent could not have made it",
@@ -1121,16 +1416,16 @@ func (s *VideoService) loadCameraShares() {
 			containers[id] = sc
 		}
 	}
-	// A queued removal from an earlier agent: its node is old, and its name is
-	// checked before it is removed, since after a reboot the number may be
-	// another node's.
+	// A queued removal from an earlier agent: its node is old. Like every
+	// removal, its node's name is checked before it is removed, since after a
+	// reboot the number may be another node's.
 	removing := make(map[int]*shareRemoval, len(state.Removing))
 	for _, rm := range state.Removing {
 		if rm.Node < ipcam.IDBandStart || rm.Node > ipcam.IDBandEnd {
 			log.Warn(fmt.Sprintf("camera share: %s: dropping the removal of node %d; this agent could not have made it", path, rm.Node))
 			continue
 		}
-		removing[rm.Node] = &shareRemoval{nr: rm.Node, name: rm.Name, checkName: true}
+		removing[rm.Node] = &shareRemoval{nr: rm.Node, name: rm.Name}
 	}
 	s.shares.mu.Lock()
 	s.shares.containers = containers
@@ -1147,7 +1442,7 @@ func (s *VideoService) loadCameraShares() {
 // node that is gone has nothing to wait for, and neither does a system without
 // a udev database.
 func udevProcessedVideoNode(nr int) bool {
-	devNum, err := os.ReadFile(fmt.Sprintf("/sys/class/video4linux/video%d/dev", nr))
+	devNum, err := sysfsVideoDevNum(nr)
 	if errors.Is(err, fs.ErrNotExist) {
 		return true
 	}
@@ -1157,8 +1452,21 @@ func udevProcessedVideoNode(nr int) bool {
 	if _, err := os.Stat("/run/udev/data"); err != nil {
 		return true
 	}
-	_, err = os.Stat("/run/udev/data/c" + strings.TrimSpace(string(devNum)))
+	_, err = os.Stat("/run/udev/data/c" + devNum)
 	return err == nil
+}
+
+// videoSysfsRoot is /sys/class/video4linux; a variable so tests can use a
+// fixture tree.
+var videoSysfsRoot = "/sys/class/video4linux"
+
+// sysfsVideoDevNum is video<nr>'s "<major>:<minor>" from sysfs.
+func sysfsVideoDevNum(nr int) (string, error) {
+	b, err := os.ReadFile(filepath.Join(videoSysfsRoot, fmt.Sprintf("video%d", nr), "dev"))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // deviceHolder is a process that holds a device node open.
@@ -1172,16 +1480,43 @@ type deviceHolder struct {
 var procRoot = "/proc"
 
 // procDeviceHolders lists the processes other than the agent that hold the
-// character device at path open, by comparing each /proc/<pid>/fd/* entry's
-// rdev with the device's.
+// character device at path open. A path that is not a character device, or a
+// scan that cannot be done, lists none.
 func procDeviceHolders(path string) []deviceHolder {
 	want, ok := charDeviceRdev(path)
 	if !ok {
 		return nil
 	}
+	holders, _ := procHolders(want)
+	return holders
+}
+
+// sysfsShareNodeHolders lists the processes other than the agent that hold
+// /dev/video<nr> open. The device number comes from sysfs, not from the /dev
+// entry, so a missing or replaced /dev entry cannot hide a holder; an error
+// means who holds the node could not be told.
+func sysfsShareNodeHolders(nr int) ([]deviceHolder, error) {
+	devNum, err := sysfsVideoDevNum(nr)
+	if err != nil {
+		return nil, err
+	}
+	var major, minor uint32
+	if _, err := fmt.Sscanf(devNum, "%d:%d", &major, &minor); err != nil {
+		return nil, fmt.Errorf("video%d's device number %q: %w", nr, devNum, err)
+	}
+	return procHolders(unix.Mkdev(major, minor))
+}
+
+// procHolders lists the processes other than the agent with an open file on
+// the character device rdev, from /proc/<pid>/fd/*. Each link is read before
+// anything is stat'ed, and only targets under /dev/ are stat'ed, so a file on
+// a hung network or FUSE mount cannot stall the scan (a covered node inside a
+// container shows its in-container /dev path). A process that went away is
+// skipped; /proc or a process's fd directory that cannot be read is an error.
+func procHolders(rdev uint64) ([]deviceHolder, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	self := os.Getpid()
 	var out []deviceHolder
@@ -1192,11 +1527,19 @@ func procDeviceHolders(path string) []deviceHolder {
 		}
 		dir := filepath.Join(procRoot, e.Name())
 		fds, err := os.ReadDir(filepath.Join(dir, "fd"))
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
+		if err != nil {
+			return nil, err
+		}
 		for _, fd := range fds {
-			if rdev, ok := charDeviceRdev(filepath.Join(dir, "fd", fd.Name())); ok && rdev == want {
+			link := filepath.Join(dir, "fd", fd.Name())
+			target, err := os.Readlink(link)
+			if err != nil || !strings.HasPrefix(target, "/dev/") {
+				continue
+			}
+			if got, ok := charDeviceRdev(link); ok && got == rdev {
 				h := deviceHolder{PID: pid}
 				if comm, err := os.ReadFile(filepath.Join(dir, "comm")); err == nil {
 					h.Comm = strings.TrimSpace(string(comm))
@@ -1211,7 +1554,7 @@ func procDeviceHolders(path string) []deviceHolder {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // charDeviceRdev is the device number of the character device at path, after

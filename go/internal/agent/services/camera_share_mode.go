@@ -26,9 +26,12 @@ import (
 )
 
 // cameraShares holds the share records of every container that shares a
-// camera. Its zero value shares nothing; containers and pending are made on
-// first use. Lock order: ops, then fileMu, then mu; mu is never held with the
-// service's mu.
+// camera. Its zero value shares nothing; its maps are made on first use.
+//
+// Lock order: ops or the service's twoPlaneStartMu (never both: node
+// allocation and removal hold twoPlaneStartMu, removal, adoption and shutdown
+// of shares hold ops), then fileMu, then mu. mu is never held with the
+// service's mu, and never across I/O or a wait.
 type cameraShares struct {
 	mu         sync.Mutex
 	containers map[string]*shareContainer // by container ID
@@ -36,13 +39,20 @@ type cameraShares struct {
 	// knows them before their record exists.
 	pending map[int]bool
 	// removing holds the share nodes waiting to be removed, by number
-	// (camera_share.go, retireShareNode). removalWG tracks their goroutines,
-	// which run on removalCtx; closed (set by Shutdown) starts no more.
+	// (camera_share.go, queueShareRemovalsLocked). removalWG tracks their
+	// goroutines, which run on removalCtx; closed (set by Shutdown) starts no
+	// more.
 	removing      map[int]*shareRemoval
 	removalWG     sync.WaitGroup
 	removalCtx    context.Context
 	removalCancel context.CancelFunc
 	closed        bool
+	// stopped is set when Shutdown begins: from then on no share is stored
+	// and no record is adopted.
+	stopped bool
+	// creating holds the CreateCameraShares calls in flight, by container;
+	// RemoveCameraShares marks them removed, so they store nothing more.
+	creating map[string][]*shareCreation
 
 	// ops serialises removal, adoption and shutdown (camera_share.go), so a
 	// record is never stopped twice or adopted while it is being removed.
@@ -63,14 +73,21 @@ type shareContainer struct {
 }
 
 // shareRecord is one camera shared with one container through one node.
-// cameraName, camera, mode and node never change once the record is stored;
-// cameraPath follows the camera and is guarded by cameraShares.mu, as are io,
-// pump, cancel, done and adoptErr.
+// cameraName, camera and mode never change once the record is stored.
+// cameraPath follows the camera and is guarded by cameraShares.mu, as are
+// siblings, io, pump, cancel, done and adoptErr. node and nodeMade are set
+// when the record is made; making a node lost in a reboot again (Task 9) sets
+// them under cameraShares.mu, and every reader must then take it too.
 type shareRecord struct {
 	cameraName, cameraPath string
 	mode                   sharedMode
 	node                   int
 	camera                 camera.Identity
+	// siblings are the ports (Identity.Device) of cameras of the same name and
+	// index seen present while this record's camera was present too, sorted.
+	// A camera on one of them is another camera, so the record never follows
+	// it when its own camera is gone.
+	siblings []string
 	// nodeMade is when this agent made the node (shareRemovalClock); zero for
 	// a node an earlier agent made.
 	nodeMade time.Time
