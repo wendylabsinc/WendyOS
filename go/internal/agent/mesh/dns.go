@@ -36,9 +36,9 @@ var meshNameRE = regexp.MustCompile(`^device-(` + canonicalUUIDRE + `)\.` + mesh
 // friendlyNameRE matches <devicename>.<org-slug>.mesh.wendy.internal. and its
 // legacy alias. It never overlaps meshNameRE: the device form has one label
 // before the suffix, while this form has two.
-var friendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.([a-z0-9-]+)\.(?:` + regexp.QuoteMeta(meshname.PreviousSuffix) + `|` + regexp.QuoteMeta(meshname.LegacySuffix) + `)\.$`)
+var friendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.([a-z0-9-]+)\.(?:` + regexp.QuoteMeta(meshname.Suffix) + `|` + regexp.QuoteMeta(meshname.LegacySuffix) + `)\.$`)
 
-var shortFriendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.` + regexp.QuoteMeta(meshname.Suffix) + `\.$`)
+var shortFriendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.` + regexp.QuoteMeta(meshname.ShortSuffix) + `\.$`)
 
 // ExactResolver resolves short names without collapsing valid repeated hyphens.
 // Legacy org-qualified aliases continue to use Resolver.Resolve.
@@ -239,7 +239,7 @@ func (s *DNSServer) handle(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	// The private namespace is owned locally. Invalid shapes must not leak to
 	// an upstream resolver or acquire an unrelated public answer.
-	if lower == meshname.Suffix+"." || strings.HasSuffix(lower, "."+meshname.Suffix+".") {
+	if lower == meshname.ShortSuffix+"." || strings.HasSuffix(lower, "."+meshname.ShortSuffix+".") {
 		s.reply(w, r, dns.RcodeNameError)
 		return
 	}

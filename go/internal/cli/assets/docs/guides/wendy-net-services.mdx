@@ -139,7 +139,9 @@ check: verify an actual request to the discovered server.
 ## Connect to a known device
 
 An app can also connect to a specific enrolled device without browsing or
-publishing a DNS-SD service. Keep the client in network mode `mesh`, and publish
+publishing a DNS-SD service. Enroll both devices in the same Wendy Cloud
+organization and run an agent version with short hostname support on the client.
+Keep the client in network mode `mesh`, and publish
 the server's incoming ports as above. Use either name with the **published**
 port:
 
@@ -168,8 +170,15 @@ Existing UUID names under `mesh.wendy.internal` and `cloud.wendy.dev`, and the
 older org-qualified friendly aliases, remain accepted. The new short friendly
 form does not require knowing or fetching an organization slug.
 
-If the signed directory and Cloud roster identify different devices with the
-same name, use the UUID form to select one explicitly.
+An unenrolled client receives NXDOMAIN for short names. A friendly name also
+returns NXDOMAIN when two devices share it in the signed directory, the Cloud
+roster, or across both sources. Use `device-<uuid>.wendy.internal` to select one
+device explicitly.
+
+From the client container, check that the hostname resolves to a `10.99.x.x`
+address, then send a request to the published port. If the request fails,
+check `wendy net status` and confirm that the destination app is running and
+publishes the requested port.
 
 ## Try the complete Python example
 
