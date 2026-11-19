@@ -1151,6 +1151,10 @@ type VideoService struct {
 	// a producer restart does not reissue sample identities the harness has
 	// already handed out for that source.
 	sampleSeqs map[string]*atomic.Uint64
+
+	// shares holds the cameras containers share (camera_share_mode.go). Its
+	// zero value shares nothing. Its lock is never held with mu.
+	shares cameraShares
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -2015,10 +2019,11 @@ var errCameraReleaseTimeout = errors.New("camera did not release in time for a c
 
 // isCameraCaptureRefusal reports whether err is one of the named camera
 // refusals a campaign records in its manifest instead of failing the whole
-// episode. Both mean "this one source was not captured, and here is exactly
-// why"; neither means the episode is broken.
+// episode. Each means "this one source was not captured, and here is exactly
+// why"; none means the episode is broken.
 func isCameraCaptureRefusal(err error) bool {
-	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout)
+	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout) ||
+		errors.Is(err, errCameraShared)
 }
 
 // joinHubForCapture is the episode-capture join. It implements the parameter
@@ -2035,9 +2040,21 @@ func isCameraCaptureRefusal(err error) bool {
 //   - A capture with explicit parameters that conflict with a hub held at
 //     parameters ANOTHER consumer asserted explicitly is refused with
 //     errCameraHeldExplicitly, never silently downgraded.
+//   - On a camera apps share, explicit parameters other than the shared mode
+//     are refused with errCameraShared, and the shared mode itself joins as a
+//     parameter-less capture (applySharedModeToCapture).
 func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
+	req, admitted, err := s.applySharedModeToCapture(key, req)
+	if err != nil {
+		return nil, 0, nil, 0, 0, 0, false, err
+	}
 	if !streamRequestAssertsParams(req) {
 		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req)
+		if err == nil && admitted != nil && width == 0 && height == 0 && framerate == 0 {
+			// A shared camera's defaults are its shared mode, which is what this
+			// capture asked for; reporting 0x0@0 would note a mismatch that is not.
+			width, height, framerate = admitted.Width, admitted.Height, admitted.FPS
+		}
 		return hub, id, ch, width, height, framerate, false, err
 	}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
@@ -2127,6 +2144,18 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		zap.Uint32("width", req.GetWidth()), zap.Uint32("height", req.GetHeight()),
 		zap.Uint32("framerate", req.GetFramerate()))
 
+	if err := s.startReplacementHub(ctx, key, old, h, req, "capture takeover"); err != nil {
+		return nil, 0, nil, false, err
+	}
+	return h, id, ch, false, nil
+}
+
+// startReplacementHub is the second half of a takeover (takeOverDefaultedHub,
+// takeOverHubForShare): with h already installed in s.hubs and old cancelled,
+// it waits for old's producer to release the device and then starts h's. When
+// the wait is cut short, h is dismantled and the error returned; what names
+// the takeover in the log.
+func (s *VideoService) startReplacementHub(ctx context.Context, key string, old, h *deviceHub, req *agentpb.StreamVideoRequest, what string) error {
 	// abort dismantles the replacement hub when the caller's context ends
 	// before its producer was started. No runProducer exists for it yet, so
 	// the cleanup runProducer would normally perform (evict from the map,
@@ -2139,7 +2168,7 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 			delete(s.hubs, key)
 		}
 		s.mu.Unlock()
-		cancel()
+		h.cancel()
 		h.mu.Lock()
 		for _, sub := range h.subs {
 			// Guarded exactly as runProducer's teardown is: a raw subscriber
@@ -2163,12 +2192,12 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 	case <-ctx.Done():
 		waitCancel()
 		abort()
-		return nil, 0, nil, false, ctx.Err()
+		return ctx.Err()
 	case <-waitCtx.Done():
 		if ctx.Err() != nil {
 			waitCancel()
 			abort()
-			return nil, 0, nil, false, ctx.Err()
+			return ctx.Err()
 		}
 		// The old producer still holds the device. Starting the replacement now
 		// would bind nothing (EBUSY on VIDIOC_S_FMT) and take the camera away
@@ -2176,19 +2205,19 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		// installed above, so the takeover is abandoned instead: abort() puts
 		// the subscribers back on the "producer stopped" path rather than
 		// leaving them on a hub whose producer will never start, and the
-		// campaign gets a named refusal for its manifest.
+		// caller gets a named refusal.
 		waitCancel()
 		abort()
-		s.logger.Warn("abandoning capture takeover: camera did not release in time",
+		s.logger.Warn("abandoning "+what+": camera did not release in time",
 			zap.String("device", key), zap.Duration("waited", hubTeardownTimeout))
-		return nil, 0, nil, false, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: %s was still held by the previous producer after %s; refusing to start a replacement that cannot bind the device",
 			errCameraReleaseTimeout, key, hubTeardownTimeout)
 	}
 	waitCancel()
 
-	s.startProducer(hctx, h, key, req)
-	return h, id, ch, false, nil
+	s.startProducer(h.ctx, h, key, req)
+	return nil
 }
 
 // sampleSeqLocked returns the sample counter for a device key, creating it on
@@ -2723,6 +2752,12 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	// use for streaming, so capability verification and streaming happen atomically
 	// on a single fd rather than across separate opens.
 
+	if src.kind == sourceV4L2 {
+		// A camera apps share runs only at its shared mode (camera_share_mode.go).
+		if req, err = s.applySharedMode(path, req); err != nil {
+			return err
+		}
+	}
 	h, id, ch, err := s.getOrCreateHub(ctx, path, req, hubHolderStreamClient)
 	if err != nil {
 		return err
