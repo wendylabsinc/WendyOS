@@ -7,7 +7,10 @@ the ROS 2 graph reports for the topic. Exits 0 after --count messages and 1
 if they do not arrive within --timeout seconds.
 """
 import argparse
+import fcntl
 import json
+import socket
+import struct
 import sys
 import time
 
@@ -17,6 +20,13 @@ from sensor_msgs.msg import Temperature
 from std_msgs.msg import UInt8MultiArray
 
 
+def bring_up_loopback():
+    """Set IFF_UP on lo, as `ip link set lo up` does, without needing iproute2."""
+    siocsifflags, iff_up = 0x8914, 0x1
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        fcntl.ioctl(s, siocsifflags, struct.pack('16sH', b'lo', iff_up))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--topic', required=True)
@@ -24,7 +34,11 @@ def main():
     parser.add_argument('--reliability', choices=['reliable', 'best_effort'], required=True)
     parser.add_argument('--count', type=int, required=True)
     parser.add_argument('--timeout', type=float, required=True)
+    parser.add_argument('--bring-up-loopback', action='store_true',
+                        help='started in a new network namespace, whose loopback is down')
     args = parser.parse_args()
+    if args.bring_up_loopback:
+        bring_up_loopback()
 
     rclpy.init()
     node = rclpy.create_node('wendy_interop_subscriber')
