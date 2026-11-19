@@ -149,6 +149,7 @@ type ProvisioningService struct {
 	chainPEM            string
 	principalURI        string
 	acmeDirectoryURL    string
+	liteCA              liteCAChains
 	CloudDialer         CloudDialer
 	OnProvisioned       OnProvisionedFunc
 	OnUnprovisioned     OnUnprovisionedFunc
@@ -559,6 +560,9 @@ func (s *ProvisioningService) clearCredentialFiles() error {
 	}
 	if err := os.RemoveAll(filepath.Join(s.configPath, "cloud-relay")); err != nil {
 		return err
+	}
+	if err := os.RemoveAll(filepath.Join(s.configPath, liteDeviceCAChainDir)); err != nil {
+		return fmt.Errorf("removing stored Lite device CA chains: %w", err)
 	}
 	if err := os.RemoveAll(filepath.Join(s.configPath, "acme-account-key.pem.d")); err != nil {
 		return fmt.Errorf("removing scoped ACME account keys: %w", err)

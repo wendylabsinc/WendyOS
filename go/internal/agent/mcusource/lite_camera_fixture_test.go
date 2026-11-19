@@ -203,7 +203,7 @@ func newLiteSensorFixture(t *testing.T, ctx context.Context, microphone bool) *l
 }
 
 func (f *liteCameraFixture) transport(p SensorPairing, address string) (SensorTransport, error) {
-	return NewWendyComTransport(zap.NewNop(), f.certPEM, f.chainPEM, f.keyPEM, p, address)
+	return NewWendyComTransport(zap.NewNop(), f.certPEM, f.chainPEM, f.keyPEM, p, address, nil)
 }
 
 func readLiteCameraMessage(reader io.Reader) (*litepb.WendyComMessage, error) {

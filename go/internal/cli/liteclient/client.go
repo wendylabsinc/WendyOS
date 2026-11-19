@@ -1286,11 +1286,13 @@ const SensorSourceSetupTimeout = sensorSourceTCPDialTimeout + sensorSourceTLSSet
 
 // ConnectSensorSource authenticates a pinned SensorLink source using this
 // consumer's device identity. The source limits device callers to SensorLink.
-func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address string, cert tls.Certificate, chain, principal string) error {
-	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
+// A non-nil lite starts loading before dialing; only a source issued by its
+// tenant's Lite Device CA waits for it (see literelay.AddLiteDeviceTrust).
+func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address string, cert tls.Certificate, chain, principal string, lite LiteDeviceCAChain) error {
+	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, lite, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
 }
 
-func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, tcpBudget, tlsBudget time.Duration) error {
+func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, lite LiteDeviceCAChain, tcpBudget, tlsBudget time.Duration) error {
 	if len(cert.Certificate) == 0 {
 		return fmt.Errorf("missing consumer certificate")
 	}
@@ -1313,6 +1315,9 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert},
 		InsecureSkipVerify: true, // VerifyConnection authenticates the full chain and exact device principal.
 		VerifyConnection:   verify}
+	if lite != nil {
+		literelay.AddLiteDeviceTrust(cfg, cert, chain, principal, literelay.LoadLiteDeviceCAChain(ctx, lite))
+	}
 	known, err := certs.ParseCertsFromPEM([]byte(chain))
 	if err != nil {
 		return err

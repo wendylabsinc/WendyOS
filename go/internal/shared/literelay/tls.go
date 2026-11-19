@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -51,19 +50,7 @@ func DeviceTLSConfig(ctx context.Context, cert tls.Certificate, chain, deviceID 
 		VerifyConnection:   verify,
 	}
 	if lite != nil {
-		type loaded struct {
-			chain string
-			err   error
-		}
-		result := make(chan loaded, 1)
-		go func() {
-			chainPEM, err := lite(ctx)
-			result <- loaded{chainPEM, err}
-		}()
-		addLiteDeviceTrust(cfg, cert, chain, deviceID, sync.OnceValues(func() (string, error) {
-			r := <-result
-			return r.chain, r.err
-		}))
+		AddLiteDeviceTrust(cfg, cert, chain, opts.ExpectedIdentity.Principal, LoadLiteDeviceCAChain(ctx, lite))
 	}
 	known, err := certs.ParseCertsFromPEM([]byte(chain))
 	if err != nil {

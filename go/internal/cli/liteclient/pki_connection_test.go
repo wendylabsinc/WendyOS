@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/url"
@@ -164,26 +165,45 @@ func TestSensorSourceTLSRequiresExactSameTenantDevice(t *testing.T) {
 	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
 	for _, role := range []string{"operator/user", "service/user"} {
 		leaf, k := issueRelayCertificate(t, 103, "not device", base+role, false, ca, caKey)
-		err := NewWendyLiteClient().ConnectSensorSource(context.Background(), "invalid:0", tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: k}, chain, base+"device/source")
+		err := NewWendyLiteClient().ConnectSensorSource(context.Background(), "invalid:0", tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: k}, chain, base+"device/source", nil)
 		if err == nil || !strings.Contains(err.Error(), "consumer device identity") {
 			t.Fatalf("accepted %s: %v", role, err)
 		}
 	}
+	// A Lite board's issuer is its tenant's Lite Device CA: a sibling under the
+	// consumer's root that the consumer's own chain does not carry.
+	liteCA, liteKey := issueRelayCertificate(t, 106, "Lite Device CA", "", true, root, rootKey)
+	twin, twinKey := issueRelayCertificate(t, 107, "Lite Device CA", "", true, nil, nil)
+	liteChain := func(chain string, err error) func(context.Context) (string, error) {
+		return func(context.Context) (string, error) { return chain, err }
+	}
 	for _, tc := range []struct {
 		name, principal    string
 		untrusted, expired bool
+		issuer             *x509.Certificate
+		issuerKey          *ecdsa.PrivateKey
+		lite               func(context.Context) (string, error)
 		wantTLS            bool
+		wantErr            string
 	}{
-		{"matching", base + "device/source", false, false, true},
-		{"other device", base + "device/other", false, false, false},
-		{"other tenant", "spiffe://wendy.sh/tenant/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/device/source", false, false, false},
-		{"untrusted", base + "device/source", true, false, false},
-		{"expired", base + "device/source", false, true, false},
+		{name: "matching", principal: base + "device/source", wantTLS: true},
+		{name: "other device", principal: base + "device/other"},
+		{name: "other tenant", principal: "spiffe://wendy.sh/tenant/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/device/source"},
+		{name: "untrusted", principal: base + "device/source", untrusted: true},
+		{name: "expired", principal: base + "device/source", expired: true},
+		{name: "Lite CA without discovery", principal: base + "device/source", issuer: liteCA, issuerKey: liteKey},
+		{name: "Lite CA under consumer trust", principal: base + "device/source", issuer: liteCA, issuerKey: liteKey, lite: liteChain(pemCerts(liteCA), nil), wantTLS: true},
+		{name: "Lite CA, other device", principal: base + "device/other", issuer: liteCA, issuerKey: liteKey, lite: liteChain(pemCerts(liteCA), nil)},
+		{name: "Lite CA, discovery failed", principal: base + "device/source", issuer: liteCA, issuerKey: liteKey, lite: liteChain("", errors.New("offline")), wantErr: "discovering Lite device CA chain"},
+		{name: "self-signed twin only", principal: base + "device/source", issuer: twin, issuerKey: twinKey, lite: liteChain(pemCerts(twin), nil)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			issuer, issuerKey := root, rootKey
 			if tc.untrusted {
 				issuer, issuerKey = issueRelayCertificate(t, 104, "other root", "", true, nil, nil)
+			}
+			if tc.issuer != nil {
+				issuer, issuerKey = tc.issuer, tc.issuerKey
 			}
 			server, serverKey := issueRelayCertificate(t, 105, "source", tc.principal, false, issuer, issuerKey)
 			if tc.expired {
@@ -219,7 +239,7 @@ func TestSensorSourceTLSRequiresExactSameTenantDevice(t *testing.T) {
 				completed <- conn.Handshake()
 			}()
 			c := NewWendyLiteClient()
-			err = c.ConnectSensorSource(context.Background(), listener.Addr().String(), client, chain, base+"device/source")
+			err = c.ConnectSensorSource(context.Background(), listener.Addr().String(), client, chain, base+"device/source", tc.lite)
 			serverErr := <-completed
 			if tc.wantTLS {
 				if serverErr != nil || err == nil || !strings.HasPrefix(err.Error(), "SensorLink handshake:") {
@@ -227,6 +247,8 @@ func TestSensorSourceTLSRequiresExactSameTenantDevice(t *testing.T) {
 				}
 			} else if err == nil || !strings.HasPrefix(err.Error(), "connect SensorLink (mTLS):") {
 				t.Fatalf("wrong peer accepted: %v", err)
+			} else if tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want it to name %q", err, tc.wantErr)
 			}
 		})
 	}

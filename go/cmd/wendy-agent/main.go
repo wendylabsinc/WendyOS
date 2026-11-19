@@ -621,7 +621,7 @@ func main() {
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
 		if p.Transport == "wendycom" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
-			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr, provisioningSvc.LiteDeviceCAChain)
 		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
