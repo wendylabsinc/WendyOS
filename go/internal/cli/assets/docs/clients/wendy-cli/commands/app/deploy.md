@@ -1,4 +1,4 @@
-# `wendy app deploy`, `deployment`, `assign`, `unassign`, `rotate`
+# `wendy app deploy`, `deployment`, `rotate`
 
 Deploys a release published with [`wendy app publish`](publish.md) to devices
 through Wendy Cloud. It asks the same questions, in the same order, as the
@@ -14,8 +14,11 @@ wendy app deploy                     # asks each question
 wendy app deploy --app <id> --release <version> --tag <tag> --device <name> \
   --name <deployment> --config NAME=VALUE --run --yes
 wendy app deployment show <app>/<deployment>
-wendy app assign --deployment <deployment-id> --device <device-uuid>
-wendy app unassign --deployment <deployment-id> --device <device-uuid>
+wendy app deployment update <app>/<deployment> --release <version> --config NAME=VALUE \
+  --start|--stop --add-device <name> --remove-device <name> --add-tag <tag> --remove-tag <tag>
+wendy app deployment rollback <app>/<deployment> --to <revision>
+wendy app deployment remove <app>/<deployment>
+wendy app deployment resume <app>/<deployment>
 wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device ...]
 ```
 
@@ -26,15 +29,22 @@ wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device .
   each device as running, installed, downloading, waiting or failed, with the
   reason; `--wait` stays until every device is done.
 - **deployment show** shows a deployment and each device's state.
-- **assign** adds devices to an existing deployment, as one new revision.
-- **unassign** removes devices, as one new revision; Cloud stops serving them
-  the release.
+- **deployment update** changes the release, configuration, run state or
+  devices as one new revision. It shows what changes and asks before it
+  sends anything (`--yes` skips the question).
+- **deployment rollback** restores an earlier revision's release,
+  configuration, run state and devices as a new revision. It shows the
+  release and configuration it restores before you confirm.
+- **deployment remove** removes the app from every device of the deployment.
+  A device that is offline removes it when it next comes online.
+- **deployment resume** sends the instructions devices are still waiting
+  for, for example after an interrupted change.
 - **rotate** replaces the deployment key and re-sends each `--device` its
   instruction at it, at the current revision. Name every device that should keep the deployment; devices not named
   stay on the old key. Only the deployment's creator can rotate.
 
-Assign and rotate need a deployment key wrapped to this machine: run them
-from the machine that created the deployment.
+Changing a deployment needs its key wrapped to this machine: run it from
+the machine that created the deployment.
 
 | Flag | Question |
 |------|----------|
@@ -50,5 +60,5 @@ from the machine that created the deployment.
 | `--yes` | 6 Deploy without asking for confirmation |
 | `--wait` | 7 Stay until every device is done |
 | `--digest` | Refuse a release whose manifest digest is not this one |
-| `--deployment` | Deployment id (assign, unassign, rotate) |
+| `--deployment` | Deployment id (rotate) |
 | `--cloud-grpc` | Cloud gRPC endpoint of the session to use |
