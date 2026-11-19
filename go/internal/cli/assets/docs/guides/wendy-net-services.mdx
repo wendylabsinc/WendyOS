@@ -214,10 +214,11 @@ local mesh route. A backend without `wendy-app` support returns this relay error
 Cloud does not offer device-originated application relays; the Cloud backend must support the wendy-app service
 ```
 
-Grant the source device `tunnel:request` for the destination device. If Cloud
-reports a permission error, check that this device grant is active and covers
-the destination UUID. If the destination agent version is correct and the
-connection still fails, check its logs for `Cloud application admission unavailable`.
+Grant the source device `tunnel:request` for the destination device. Cloud can
+report `target device not found` when it denies that grant. Check the enrollment
+and active grant for the destination UUID. If the destination agent version is
+correct and the connection still fails, check its logs for
+`Cloud application admission unavailable`.
 That message means the destination's app listener failed to start. Correct the
 reported error and restart the destination agent.
 
