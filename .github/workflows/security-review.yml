@@ -33,8 +33,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       !contains(github.event.pull_request.labels.*.name, 'ai-suggestion') &&
       ((github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action != 'ready_for_review') ||
-      (!github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]' &&
-      (github.event.action == 'opened' || github.event.action == 'ready_for_review')))
+      (!github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]'))
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read

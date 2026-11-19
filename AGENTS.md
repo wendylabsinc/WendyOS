@@ -77,9 +77,10 @@ performing tests or other required checks.
 
 ## AI reviews
 
-AI reviews run when a non-draft PR is opened or marked ready for review. Keep PRs
-draft while working, then mark them ready when done and self-reviewed.
-To rerun, use GitHub's Re-run jobs button or mark the PR draft and ready again.
+AI reviews run in parallel when a non-draft PR is opened, updated, reopened or
+marked ready for review. Keep PRs draft while working, then mark them ready
+when done and self-reviewed. Use GitHub's Re-run jobs button or mark the PR
+draft and ready again to rerun.
 Dependabot keeps its secretless dependency policy on PR updates, including drafts.
 API manual validation remains nonpublishing; API review does not change risk labels.
 

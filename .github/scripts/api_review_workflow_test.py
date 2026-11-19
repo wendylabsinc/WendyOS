@@ -102,7 +102,7 @@ class TrustedSourceTests(unittest.TestCase):
                                     event = {"action": action, "label": {"name": label if matching else "unrelated"},
                                              "pull_request": {"draft": draft, "number": 42, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
                                                               "user": {"login": author}}}
-                                    requested = action in ("opened", "ready_for_review") and not draft and author != "dependabot[bot]"
+                                    requested = action in ("opened", "synchronize", "reopened", "ready_for_review") and not draft and author != "dependabot[bot]"
                                     automatic = author == "dependabot[bot]" and action in ("opened", "synchronize", "reopened")
                                     expected = (not fork and (requested or automatic)
                                                 if label else not fork and not draft)
@@ -125,10 +125,9 @@ for (const c of input.cases) {
   }
 }
 '''], input=json.dumps({"expression": expression, "cases": cases, "group": group, "label": label,
-                                   "events": ["opened", "ready_for_review"] + (["synchronize", "reopened"] if name == "security-review" else [])}), text=True, capture_output=True)
+                                   "events": ["opened", "synchronize", "reopened", "ready_for_review"]}), text=True, capture_output=True)
             self.assertEqual(execution.returncode, 0, execution.stderr)
-            self.assertIn("types: " + ("[opened, synchronize, reopened, ready_for_review]"
-                                      if name == "security-review" else "[opened, ready_for_review]"), text)
+            self.assertIn("types: [opened, synchronize, reopened, ready_for_review]", text)
 
     def test_retained_pr_base_cannot_pin_obsolete_automation(self):
         result = self.run_resolver({"object": {"type": "commit", "sha": CURRENT_MAIN}})
