@@ -82,12 +82,19 @@ func newFakeLoopback() *fakeLoopback {
 }
 
 func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
+	return f.AllocateAuxNodeNumberSkipping(nil)
+}
+
+func (f *fakeLoopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.auxErr != nil {
 		return 0, f.auxErr
 	}
 	for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+		if skip != nil && skip(nr) {
+			continue
+		}
 		if _, ok := f.aux[nr]; ok {
 			continue
 		}

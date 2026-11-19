@@ -1059,6 +1059,9 @@ type cameraLoopback interface {
 	// EnsureShareNode makes an app's camera share node (camera_share.go): an
 	// auxiliary node that announces CAPTURE even while no writer streams.
 	EnsureShareNode(ctx context.Context, nr int, label string) error
+	// AllocateAuxNodeNumberSkipping also passes over the numbers skip
+	// reports: share records hold numbers whose nodes a reboot removed.
+	AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error)
 }
 
 // VideoService implements agentpb.WendyVideoServiceServer.
