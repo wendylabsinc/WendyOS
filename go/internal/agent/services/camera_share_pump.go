@@ -56,6 +56,10 @@ type shareState struct {
 // failure; the last value repeats. A variable so tests can shorten it.
 var shareRetryBackoff = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
 
+// shareQuickRejoins is how many consecutive rejoins without a written frame
+// happen at once (a restart, a wait that ends) before the pump backs off.
+const shareQuickRejoins = 3
+
 // sharePump turns one share node's reader count into capture on demand: it
 // joins the camera's hub while an app reads the node and leaves when none does.
 // All of its state is owned by Run's goroutine; mu guards only what State reads.
@@ -80,8 +84,15 @@ type sharePump struct {
 	sub     shareSubscription
 	frames  <-chan *videoFrame
 	wrote   bool // this session wrote a camera frame
-	dropped bool // the size-mismatch line was logged this session
+	dropped bool // the size-mismatch line was logged for this subscription
 	attempt int  // consecutive failures, indexes the backoff
+	first   bool // no count has been seen yet
+	// writeLogged: a node write failure was logged for this subscription.
+	// writeFailed: the latest write failed (state is "no frames").
+	writeLogged, writeFailed bool
+	// quick counts rejoins since the last written frame that did not wait for
+	// a backoff; past shareQuickRejoins the pump backs off instead.
+	quick   int
 	retry   <-chan time.Time
 	waiting <-chan struct{}
 }
@@ -95,6 +106,7 @@ func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode
 		nowMono: monotonicNs,
 		nowWall: func() int64 { return time.Now().UnixNano() },
 		state:   shareState{Phase: shareIdle},
+		first:   true,
 	}
 }
 
@@ -123,7 +135,6 @@ func (p *sharePump) setState(phase sharePhase, detail string) {
 func (p *sharePump) Run(ctx context.Context) {
 	defer p.leave()
 	counts := p.node.Counts()
-	first := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -132,22 +143,7 @@ func (p *sharePump) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			want := n > 0
-			if first {
-				first = false
-				if !want && p.adopted {
-					p.blank()
-				}
-			}
-			if want == p.reading {
-				continue
-			}
-			p.reading = want
-			if want {
-				p.start(ctx)
-			} else {
-				p.stop()
-			}
+			p.handleCount(ctx, n)
 		case f, ok := <-p.frames:
 			if !ok {
 				p.captureEnded(ctx)
@@ -156,11 +152,61 @@ func (p *sharePump) Run(ctx context.Context) {
 			p.write(f)
 		case <-p.retry:
 			p.retry = nil
+			if p.leftMeanwhile(ctx, counts) {
+				continue
+			}
 			p.start(ctx)
 		case <-p.waiting:
 			p.waiting = nil
+			if p.leftMeanwhile(ctx, counts) {
+				continue
+			}
+			if p.quick >= shareQuickRejoins {
+				p.retry = time.After(p.nextDelay())
+				continue
+			}
+			p.quick++
 			p.start(ctx)
 		}
+	}
+}
+
+// leftMeanwhile reports whether a 0 was already pending when a timer fired, in
+// which case it has been handled and the camera must not start. A pending 1
+// changes nothing: the caller starts.
+func (p *sharePump) leftMeanwhile(ctx context.Context, counts <-chan uint32) bool {
+	select {
+	case n, ok := <-counts:
+		if !ok {
+			p.leave()
+			// Run's next receive on the closed channel ends it.
+			return true
+		}
+		if n == 0 {
+			p.handleCount(ctx, n)
+			return true
+		}
+	default:
+	}
+	return false
+}
+
+func (p *sharePump) handleCount(ctx context.Context, n uint32) {
+	want := n > 0
+	if p.first {
+		p.first = false
+		if !want && p.adopted {
+			p.blank()
+		}
+	}
+	if want == p.reading {
+		return
+	}
+	p.reading = want
+	if want {
+		p.start(ctx)
+	} else {
+		p.stop()
 	}
 }
 
@@ -172,15 +218,18 @@ func (p *sharePump) start(ctx context.Context) {
 	}
 	sub, err := p.join(ctx)
 	if err != nil {
-		p.joinFailed(err)
+		p.joinFailed(ctx, err)
 		return
 	}
 	p.sub, p.frames = sub, sub.Frames()
-	p.dropped = false
+	p.dropped, p.writeLogged, p.writeFailed = false, false, false
 	p.setState(shareReading, "")
 }
 
-func (p *sharePump) joinFailed(err error) {
+func (p *sharePump) joinFailed(ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		return
+	}
 	var wait *shareWaitError
 	switch {
 	case errors.As(err, &wait):
@@ -222,7 +271,8 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 	}
 	restarted, cerr := sub.Restarted(), sub.Err()
 	sub.Leave()
-	if restarted {
+	if restarted && p.quick < shareQuickRejoins {
+		p.quick++
 		p.start(ctx)
 		return
 	}
@@ -231,8 +281,8 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 	if cerr != nil {
 		detail = cerr.Error()
 	}
+	p.logger.Warn(fmt.Sprintf("camera share: %s: capture of %s stopped while the app reads: %s; retrying in %s", p.app, p.camera, detail, d))
 	p.setState(shareNoFrames, detail)
-	p.logger.Warn(fmt.Sprintf("camera share: %s: capture of %s stopped while the app reads: %v; retrying in %s", p.app, p.camera, cerr, d))
 	p.retry = time.After(d)
 }
 
@@ -255,12 +305,22 @@ func (p *sharePump) write(f *videoFrame) {
 	mono := p.nowMono() - (p.nowWall() - int64(f.tsNs))
 	if err := p.node.WriteFrame(f.data, mono); err != nil {
 		if !errors.Is(err, errShareNodeClosed) {
-			p.logger.Debug(fmt.Sprintf("camera share: %s: write to the node failed: %v", p.app, err))
+			if !p.writeLogged {
+				p.writeLogged = true
+				p.logger.Warn(fmt.Sprintf("camera share: %s: writing %s frames to its node failed: %v; frames are not reaching the app", p.app, p.camera, err))
+			}
+			p.writeFailed = true
+			p.setState(shareNoFrames, err.Error())
 		}
 		return
 	}
+	if p.writeFailed {
+		p.writeFailed = false
+		p.setState(shareReading, "")
+	}
 	p.wrote = true
 	p.attempt = 0
+	p.quick = 0
 }
 
 // stop is the count going to 0: leave, discard what is queued, and replace a
@@ -272,6 +332,8 @@ func (p *sharePump) stop() {
 	}
 	p.wrote = false
 	p.attempt = 0
+	p.quick = 0
+	p.writeFailed = false
 	p.setState(shareIdle, "")
 }
 

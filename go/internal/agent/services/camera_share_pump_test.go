@@ -11,6 +11,8 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -27,8 +29,15 @@ type spFakeNode struct {
 	counts chan uint32
 	events chan spNodeEvent
 
-	mu  sync.Mutex
-	log []spNodeEvent
+	mu       sync.Mutex
+	log      []spNodeEvent
+	writeErr error
+}
+
+func (n *spFakeNode) setWriteErr(err error) {
+	n.mu.Lock()
+	n.writeErr = err
+	n.mu.Unlock()
 }
 
 func newSpFakeNode() *spFakeNode {
@@ -44,6 +53,12 @@ func (n *spFakeNode) record(e spNodeEvent) {
 	n.events <- e
 }
 func (n *spFakeNode) WriteFrame(data []byte, monoNs int64) error {
+	n.mu.Lock()
+	err := n.writeErr
+	n.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	n.record(spNodeEvent{"frame", monoNs, len(data)})
 	return nil
 }
@@ -81,6 +96,9 @@ type spFakeSub struct {
 	err       error
 	left      chan struct{}
 	once      sync.Once
+	// onLeave runs inside Leave, before it reports: it lets a test put frames
+	// in flight at the instant the pump leaves.
+	onLeave func()
 }
 
 func newSpFakeSub() *spFakeSub {
@@ -89,7 +107,14 @@ func newSpFakeSub() *spFakeSub {
 func (s *spFakeSub) Frames() <-chan *videoFrame { return s.frames }
 func (s *spFakeSub) Restarted() bool            { return s.restarted }
 func (s *spFakeSub) Err() error                 { return s.err }
-func (s *spFakeSub) Leave()                     { s.once.Do(func() { close(s.left) }) }
+func (s *spFakeSub) Leave() {
+	s.once.Do(func() {
+		if s.onLeave != nil {
+			s.onLeave()
+		}
+		close(s.left)
+	})
+}
 
 // spJoiner hands out the scripted results of join in order and reports each
 // call on joined.
@@ -169,14 +194,22 @@ type sharePumpHarness struct {
 	done   chan struct{}
 }
 
-func startSharePump(t *testing.T, j *spJoiner, adopted bool) *sharePumpHarness {
+func startSharePump(t *testing.T, j *spJoiner, adopted bool, opts ...func(*sharePump)) *sharePumpHarness {
+	t.Helper()
+	return startSharePumpBackoff(t, j, adopted, []time.Duration{2 * time.Millisecond, 4 * time.Millisecond}, opts...)
+}
+
+func startSharePumpBackoff(t *testing.T, j *spJoiner, adopted bool, backoff []time.Duration, opts ...func(*sharePump)) *sharePumpHarness {
 	t.Helper()
 	old := shareRetryBackoff
-	shareRetryBackoff = []time.Duration{2 * time.Millisecond, 4 * time.Millisecond}
+	shareRetryBackoff = backoff
 	t.Cleanup(func() { shareRetryBackoff = old })
 	core, logs := observer.New(zap.DebugLevel)
 	node := newSpFakeNode()
 	p := newSharePump(zap.New(core), "app1", "cam0", node, spMode, j.join, adopted)
+	for _, o := range opts {
+		o(p)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &sharePumpHarness{pump: p, node: node, logs: logs, cancel: cancel, done: make(chan struct{})}
 	go func() { defer close(h.done); p.Run(ctx) }()
@@ -187,6 +220,29 @@ func startSharePump(t *testing.T, j *spJoiner, adopted bool) *sharePumpHarness {
 func (h *sharePumpHarness) stop() {
 	h.cancel()
 	<-h.done
+}
+
+// spWithin fails unless ch closes within d.
+func spWithin(t *testing.T, ch <-chan struct{}, d time.Duration, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(d):
+		t.Fatalf("%s did not happen within %s", what, d)
+	}
+}
+
+// spStateWithin fails unless the pump is in phase within d.
+func (h *sharePumpHarness) stateWithin(t *testing.T, want sharePhase, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if h.pump.State().Phase == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("state is %+v, want %q within %s", h.pump.State(), want, d)
 }
 
 func (h *sharePumpHarness) waitState(t *testing.T, want sharePhase) shareState {
@@ -255,6 +311,12 @@ func TestSharePump_WritesOneBlankAfterASessionThatWroteFrames(t *testing.T) {
 	sub1, sub2 := newSpFakeSub(), newSpFakeSub()
 	j := newSpJoiner(spSubResult(sub1), spSubResult(sub2))
 	h := startSharePump(t, j, false)
+	// Two frames are in flight at the instant the pump leaves; they must be
+	// discarded, never written (the blank is the last write).
+	sub1.onLeave = func() {
+		sub1.frames <- spModeFrame(uint64(time.Now().UnixNano()))
+		sub1.frames <- spModeFrame(uint64(time.Now().UnixNano()))
+	}
 
 	// A session that wrote a frame ends in exactly one blank.
 	h.node.send(t, 1)
@@ -263,9 +325,6 @@ func TestSharePump_WritesOneBlankAfterASessionThatWroteFrames(t *testing.T) {
 	if e := h.node.next(t); e.kind != "frame" {
 		t.Fatalf("first write = %s, want frame", e.kind)
 	}
-	// Frames still queued when the count drops must never reach the node.
-	sub1.frames <- spModeFrame(uint64(time.Now().UnixNano()))
-	sub1.frames <- spModeFrame(uint64(time.Now().UnixNano()))
 	h.node.send(t, 0)
 	spWaitClosed(t, sub1.left, "Leave")
 
@@ -289,7 +348,7 @@ func TestSharePump_WritesOneBlankAfterASessionThatWroteFrames(t *testing.T) {
 	if blanks != 1 {
 		t.Fatalf("blanks = %d in %v, want 1", blanks, evs)
 	}
-	if blankAt != len(evs)-1 {
+	if len(evs) != 2 || blankAt != 1 {
 		t.Fatalf("a write followed the blank: %v", evs)
 	}
 }
@@ -323,13 +382,22 @@ func TestSharePump_DropsFramesOfAnotherSize(t *testing.T) {
 
 func TestSharePump_RetriesCaptureWhileAReaderWaits(t *testing.T) {
 	sub := newSpFakeSub()
-	j := newSpJoiner(spErrResult(errors.New("boom")), spErrResult(errors.New("boom again")), spSubResult(sub))
+	gate := make(chan struct{})
+	j := newSpJoiner(
+		spErrResult(errors.New("boom")),
+		func() (shareSubscription, error) { <-gate; return nil, errors.New("boom again") },
+		spSubResult(sub),
+	)
 	h := startSharePump(t, j, false)
 
 	h.node.send(t, 1)
-	for i := 0; i < 3; i++ {
-		j.waitJoin(t)
+	j.waitJoin(t)
+	j.waitJoin(t) // the second join is held at the gate
+	if s := h.pump.State(); s.Phase != shareNoFrames || s.Detail != "boom" {
+		t.Fatalf("State between retries = %+v, want no frames: boom", s)
 	}
+	close(gate)
+	j.waitJoin(t)
 	h.waitState(t, shareReading)
 	if got := j.count(); got != 3 {
 		t.Fatalf("joins = %d, want 3", got)
@@ -341,12 +409,15 @@ func TestSharePump_RetriesCaptureWhileAReaderWaits(t *testing.T) {
 
 func TestSharePump_RetryStatesByError(t *testing.T) {
 	cases := []struct {
-		name  string
-		err   error
-		phase sharePhase
+		name   string
+		err    error
+		phase  sharePhase
+		detail string
 	}{
-		{"unplugged", fs.ErrNotExist, shareUnplugged},
-		{"other", errors.New("boom"), shareNoFrames},
+		{"unplugged", fs.ErrNotExist, shareUnplugged, ""},
+		{"not found", status.Error(codes.NotFound, "gone"), shareUnplugged, ""},
+		{"in use", errCameraInUse("/dev/video0"), shareNoFrames, "the real camera is held outside the agent"},
+		{"other", errors.New("boom"), shareNoFrames, "boom"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -354,7 +425,9 @@ func TestSharePump_RetryStatesByError(t *testing.T) {
 			h := startSharePump(t, j, false)
 			h.node.send(t, 1)
 			j.waitJoin(t)
-			h.waitState(t, c.phase)
+			if s := h.waitState(t, c.phase); s.Detail != c.detail {
+				t.Fatalf("Detail = %q, want %q", s.Detail, c.detail)
+			}
 		})
 	}
 }
@@ -414,10 +487,11 @@ func TestSharePump_WaitsForARecordingAtOtherParameters(t *testing.T) {
 func TestSharePump_StampsCaptureTimeOnTheMonotonicClock(t *testing.T) {
 	sub := newSpFakeSub()
 	j := newSpJoiner(spSubResult(sub))
-	h := startSharePump(t, j, false)
 	const nowMono, nowWall = int64(5_000_000_000), int64(1_700_000_000_000_000_000)
-	h.pump.nowMono = func() int64 { return nowMono }
-	h.pump.nowWall = func() int64 { return nowWall }
+	h := startSharePump(t, j, false, func(p *sharePump) {
+		p.nowMono = func() int64 { return nowMono }
+		p.nowWall = func() int64 { return nowWall }
+	})
 
 	h.node.send(t, 1)
 	j.waitJoin(t)
@@ -457,4 +531,175 @@ func TestSharePump_RunReturnsWhenCountsClose(t *testing.T) {
 	h := startSharePump(t, newSpJoiner(), false)
 	close(h.node.counts)
 	spWaitClosed(t, h.done, "Run to return")
+}
+
+func TestSharePump_ZeroDuringBackoffStartsNoFurtherJoin(t *testing.T) {
+	j := newSpJoiner(spErrResult(errors.New("boom")))
+	h := startSharePumpBackoff(t, j, false, []time.Duration{150 * time.Millisecond})
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.waitState(t, shareNoFrames)
+	h.node.send(t, 0)
+	h.stateWithin(t, shareIdle, 100*time.Millisecond)
+	time.Sleep(300 * time.Millisecond) // two backoff periods
+	if got := j.count(); got != 1 {
+		t.Fatalf("joins = %d, want 1: the camera started for an app that left", got)
+	}
+}
+
+func TestSharePump_ZeroDuringARecordingWaitStartsNoFurtherJoin(t *testing.T) {
+	done := make(chan struct{})
+	j := newSpJoiner(spErrResult(&shareWaitError{"episode capture", "1920x1080 at 30 fps", done}))
+	h := startSharePump(t, j, false)
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.waitState(t, shareWaiting)
+	h.node.send(t, 0)
+	h.stateWithin(t, shareIdle, 100*time.Millisecond)
+	close(done)
+	time.Sleep(50 * time.Millisecond)
+	if got := j.count(); got != 1 {
+		t.Fatalf("joins = %d, want 1: the camera started for an app that left", got)
+	}
+}
+
+func TestSharePump_ZeroDuringASubscriptionLeavesWithin100ms(t *testing.T) {
+	sub := newSpFakeSub()
+	j := newSpJoiner(spSubResult(sub))
+	h := startSharePump(t, j, false)
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.waitState(t, shareReading)
+	h.node.send(t, 0)
+	spWithin(t, sub.left, 100*time.Millisecond, "Leave")
+}
+
+func TestSharePump_APendingZeroBeatsAFiredTimer(t *testing.T) {
+	j := newSpJoiner()
+	node := newSpFakeNode()
+	node.counts = make(chan uint32, 1)
+	p := newSharePump(zap.NewNop(), "app1", "cam0", node, spMode, j.join, false)
+	p.reading = true
+	p.first = false
+	node.counts <- 0
+	if !p.leftMeanwhile(context.Background(), node.counts) {
+		t.Fatal("a pending 0 did not stop the timer's start")
+	}
+	if p.reading || j.count() != 0 {
+		t.Fatalf("reading = %v, joins = %d", p.reading, j.count())
+	}
+	node.counts <- 1
+	if p.leftMeanwhile(context.Background(), node.counts) {
+		t.Fatal("a pending 1 must not stop the start")
+	}
+}
+
+func TestSharePump_ARepeatedlyClosedWaitFallsBackToBackoff(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	werr := &shareWaitError{"episode capture", "1920x1080 at 30 fps", done}
+	var results []func() (shareSubscription, error)
+	for i := 0; i < 20; i++ {
+		results = append(results, spErrResult(werr))
+	}
+	j := newSpJoiner(results...)
+	h := startSharePumpBackoff(t, j, false, []time.Duration{400 * time.Millisecond})
+	h.node.send(t, 1)
+	for i := 0; i < 1+shareQuickRejoins; i++ {
+		j.waitJoin(t)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := j.count(); got != 1+shareQuickRejoins {
+		t.Fatalf("joins = %d, want %d before the backoff", got, 1+shareQuickRejoins)
+	}
+}
+
+func TestSharePump_ARestartThatNeverDeliversFallsBackToBackoff(t *testing.T) {
+	var results []func() (shareSubscription, error)
+	for i := 0; i < 20; i++ {
+		results = append(results, func() (shareSubscription, error) {
+			s := newSpFakeSub()
+			s.restarted = true
+			close(s.frames)
+			return s, nil
+		})
+	}
+	j := newSpJoiner(results...)
+	h := startSharePumpBackoff(t, j, false, []time.Duration{400 * time.Millisecond})
+	h.node.send(t, 1)
+	for i := 0; i < 1+shareQuickRejoins; i++ {
+		j.waitJoin(t)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := j.count(); got != 1+shareQuickRejoins {
+		t.Fatalf("joins = %d, want %d before the backoff", got, 1+shareQuickRejoins)
+	}
+	if n := h.logged("retrying in"); n != 1 {
+		t.Fatalf("retry lines = %d, want 1", n)
+	}
+}
+
+func TestSharePump_ACancelledJoinIsQuiet(t *testing.T) {
+	started := make(chan struct{})
+	j := newSpJoiner(func() (shareSubscription, error) {
+		close(started)
+		time.Sleep(20 * time.Millisecond)
+		return nil, context.Canceled
+	})
+	h := startSharePump(t, j, false)
+	h.node.send(t, 1)
+	spWaitClosed(t, started, "join to start")
+	h.cancel()
+	<-h.done
+	if n := len(h.logs.FilterLevelExact(zap.WarnLevel).All()); n != 0 {
+		t.Fatalf("warnings = %d, want none", n)
+	}
+	if s := h.pump.State(); s.Phase == shareNoFrames {
+		t.Fatalf("state = %+v after cancel", s)
+	}
+}
+
+func TestSharePump_NodeWriteFailuresAreLoggedOnceAndShownInState(t *testing.T) {
+	sub := newSpFakeSub()
+	j := newSpJoiner(spSubResult(sub))
+	h := startSharePump(t, j, false)
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.node.setWriteErr(errors.New("QBUF: no buffers"))
+	for i := 0; i < 3; i++ {
+		sub.frames <- spModeFrame(uint64(time.Now().UnixNano()))
+	}
+	s := h.waitState(t, shareNoFrames)
+	if s.Detail != "QBUF: no buffers" {
+		t.Fatalf("Detail = %q", s.Detail)
+	}
+	h.node.setWriteErr(nil)
+	sub.frames <- spModeFrame(uint64(time.Now().UnixNano()))
+	h.node.next(t) // frames are handled in order: every failure came before this write
+	h.waitState(t, shareReading)
+	n := 0
+	for _, e := range h.logs.FilterLevelExact(zap.WarnLevel).All() {
+		if strings.Contains(e.Message, "writing cam0 frames to its node failed: QBUF: no buffers") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("write-failure warnings = %d, want 1", n)
+	}
+}
+
+func TestSharePump_CaptureStoppedWithoutAnErrorSaysSo(t *testing.T) {
+	sub := newSpFakeSub()
+	j := newSpJoiner(spSubResult(sub))
+	h := startSharePumpBackoff(t, j, false, []time.Duration{time.Hour})
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	close(sub.frames)
+	s := h.waitState(t, shareNoFrames)
+	if s.Detail != "capture stopped" {
+		t.Fatalf("Detail = %q", s.Detail)
+	}
+	if n := h.logged("while the app reads: capture stopped; retrying in"); n != 1 {
+		t.Fatalf("log lines = %d, want 1", n)
+	}
 }
