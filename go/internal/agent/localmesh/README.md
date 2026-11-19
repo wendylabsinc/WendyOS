@@ -558,12 +558,15 @@ short friendly names. The UUID form uses the enrolled identity and VIP table.
 All UUID hostname spellings for a device share one VIP allocation.
 
 The device-originated Cloud relay uses the symbolic `wendy-app` service. Cloud
-restricts that lane to live same-tenant device identities, and the destination
-agent dispatches the signed descriptor only to its in-memory application TLS
-listener. It never falls back to an arbitrary loopback TCP socket. An operator's
-management relay permissions do not come from this device-only service. This
-path requires the coordinated Cloud backend and agent updates; older Cloud
-backends report the missing capability rather than downgrade admission.
+checks the current same-tenant enrollment, binds the request signature to the
+device certificate, and checks live destination-scoped `tunnel:request`
+access. The destination validates the signed instruction against the service
+catalog and dispatches it to its in-memory application TLS listener.
+The listener verifies the peer and looks up a live published app port.
+The existing operator relay has separate authorization and dispatch.
+See [Cloud admission](https://github.com/wendylabsinc/cloud/pull/973) and the
+[receiver-first rollout contract](https://github.com/wendylabsinc/service-protos/pull/175)
+for version and deployment requirements.
 
 ## Cloud relay presence
 
