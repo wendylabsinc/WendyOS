@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -112,7 +114,7 @@ func newCountLoopFixture(t *testing.T, dequeue func() (uint32, uint32, error)) *
 	})
 	go func() {
 		defer close(f.done)
-		pumpShareEvents(f.nodeR, f.wakeR, unix.POLLIN, func(int) (uint32, uint32, error) {
+		pumpShareEvents(zap.NewNop(), "fixture", f.nodeR, f.wakeR, unix.POLLIN, func(int) (uint32, uint32, error) {
 			// Consume what made the pipe readable so poll does not spin.
 			var b [64]byte
 			_, _ = unix.Read(f.nodeR, b[:])
@@ -165,20 +167,39 @@ func TestPumpShareEvents_NewestCountWinsAndWakeExits(t *testing.T) {
 }
 
 func TestPumpShareEvents_UnreadCountIsOverwritten(t *testing.T) {
-	n := uint32(0)
-	delivered := make(chan struct{}, 4)
+	// Dequeue call n starts only after the loop has finished delivering event
+	// n-1, so when call 4 begins, counts 1..3 have all been sent and out holds
+	// the newest unread one. Call 4 reports nothing queued (EAGAIN) and sends
+	// nothing itself.
+	var n atomic.Uint32
+	reached4 := make(chan struct{})
 	f := newCountLoopFixture(t, func() (uint32, uint32, error) {
-		n++
-		delivered <- struct{}{}
-		return n, 0, nil
+		c := n.Add(1)
+		if c == 4 {
+			close(reached4)
+			return 0, 0, unix.EAGAIN
+		}
+		return c, 0, nil
 	})
-	for k := 0; k < 3; k++ {
+	for k := 0; k < 4; k++ {
 		if _, err := unix.Write(f.nodeW, []byte{1}); err != nil {
 			t.Fatal(err)
 		}
-		<-delivered
+		// Wait for the loop to take this wake so each write is its own event.
+		deadline := time.After(2 * time.Second)
+		for int(n.Load()) < k+1 {
+			select {
+			case <-deadline:
+				t.Fatal("event loop did not dequeue")
+			case <-time.After(time.Millisecond):
+			}
+		}
 	}
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-reached4:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fourth dequeue never ran")
+	}
 	if got := <-f.out; got != 3 {
 		t.Fatalf("got %d, want 3 (newest overwrites unread)", got)
 	}

@@ -13,8 +13,8 @@ import (
 // The writer side of an app's camera share node.
 //
 // Each camera app gets its own v4l2loopback node (the "share node"), and the
-// agent keeps it open as the node's writer. The sequence below is what Proof 1
-// in docs/superpowers/specs/2026-11-18-camera-sharing-proofs.md measured:
+// agent keeps it open as the node's writer. The sequence below follows what was
+// measured against the real module:
 //
 //   - A reader's STREAMON fails with EIO until a writer has run STREAMON on the
 //     OUTPUT side, and STREAMON with no buffer queued is enough. That is what
@@ -32,7 +32,7 @@ const (
 	// vidiocDqevent is _IOR('V', 89, struct v4l2_event), 136 bytes.
 	vidiocDqevent = 0x80885659
 
-	// v4l2EventClientUsage is V4L2_EVENT_PRIVATE_START + 0x00E00001: the
+	// v4l2EventClientUsage is V4L2_EVENT_PRIVATE_START + 0x08E00000 + 1: the
 	// v4l2loopback event that carries the number of streaming clients.
 	v4l2EventClientUsage = 0x10E00001
 	// v4l2EventSubFlSendInitial is V4L2_EVENT_SUB_FL_SEND_INITIAL.
@@ -117,9 +117,10 @@ func blankFrame(mode sharedMode) []byte {
 
 // shareNodeWriter is the V4L2 implementation of shareNodeIO.
 type shareNodeWriter struct {
-	path string
-	mode sharedMode
-	fd   int
+	logger *zap.Logger
+	path   string
+	mode   sharedMode
+	fd     int
 
 	// mu guards everything below and serialises writes against Close.
 	mu        sync.Mutex
@@ -134,7 +135,12 @@ type shareNodeWriter struct {
 	done         chan struct{} // closed when the event goroutine has exited
 }
 
-func openShareNodeV4L2(path string, mode sharedMode) (shareNodeIO, error) {
+// openShareNodeV4L2 opens path as a share node writer in mode. A nil logger is
+// treated as zap.NewNop().
+func openShareNodeV4L2(logger *zap.Logger, path string, mode sharedMode) (shareNodeIO, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if mode.pixelFormat() == 0 {
 		return nil, fmt.Errorf("share node %s: unknown pixel format %q", path, mode.Fourcc)
 	}
@@ -142,7 +148,7 @@ func openShareNodeV4L2(path string, mode sharedMode) (shareNodeIO, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening share node %s: %w", path, err)
 	}
-	w := &shareNodeWriter{path: path, mode: mode, fd: fd, wakeR: -1, wakeW: -1}
+	w := &shareNodeWriter{logger: logger, path: path, mode: mode, fd: fd, wakeR: -1, wakeW: -1}
 	if err := w.configure(); err != nil {
 		_ = w.Close()
 		return nil, err
@@ -182,13 +188,12 @@ func (w *shareNodeWriter) configure() error {
 	if mode.FPS > 0 {
 		parm := v4l2StreamParm{Type: v4l2BufTypeVideoOutput, TpfNumerator: 1, TpfDenominator: mode.FPS}
 		if err := w.ioctl(vidiocSParm, unsafe.Pointer(&parm)); err != nil {
-			zap.L().Warn("VIDIOC_S_PARM refused on share node; it keeps the driver default interval",
-				zap.String("device", w.path), zap.Uint32("fps", mode.FPS), zap.Error(err))
+			w.logger.Warn("VIDIOC_S_PARM refused on share node; it keeps the driver default interval",
+				zap.String("device", w.path), zap.Stringer("mode", mode), zap.Error(err))
 		}
 	}
-	// A best-effort per-node control that keeps the node a capture device while
-	// no writer streams (Task 2 check 8) would be set here, right after the
-	// format. None is known, so there is nothing to set.
+	// A per-node control that keeps the node a capture device while no writer
+	// streams would be set here, right after the format.
 
 	var req v4l2ReqBuffers
 	req.Count = shareNodeBuffers
@@ -243,16 +248,17 @@ func (w *shareNodeWriter) configure() error {
 	w.done = make(chan struct{})
 	go func() {
 		defer close(w.done)
-		pumpShareEvents(w.fd, w.wakeR, unix.POLLPRI, w.dequeueEvent, w.counts)
+		pumpShareEvents(w.logger, w.path, w.fd, w.wakeR, unix.POLLPRI, w.dequeueEvent, w.counts)
 	}()
 	return nil
 }
 
 // dequeueEvent runs one VIDIOC_DQEVENT: the client count and how many events
 // are still queued.
-func (w *shareNodeWriter) dequeueEvent(int) (count, pending uint32, err error) {
+func (w *shareNodeWriter) dequeueEvent(fd int) (count, pending uint32, err error) {
 	var ev v4l2Event
-	if err := w.ioctl(vidiocDqevent, unsafe.Pointer(&ev)); err != nil {
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocDqevent, uintptr(unsafe.Pointer(&ev))); errno != 0 {
+		err = errno
 		return 0, 0, err
 	}
 	return ev.count(), ev.pending(), nil
@@ -263,8 +269,9 @@ func (w *shareNodeWriter) dequeueEvent(int) (count, pending uint32, err error) {
 // and hands only the newest count to out, a channel of capacity 1 in which the
 // newest value replaces an unread one. It is the only sender on out and closes
 // it on every exit: a wake byte, POLLERR/POLLHUP/POLLNVAL, or a dequeue error
-// (ENODEV when the node is removed).
-func pumpShareEvents(nodeFd, wakeFd int, wantEvents int16, dequeue func(fd int) (count, pending uint32, err error), out chan uint32) {
+// (ENODEV when the node is removed). The reason for an exit that was not asked
+// for is logged once before out closes.
+func pumpShareEvents(logger *zap.Logger, path string, nodeFd, wakeFd int, wantEvents int16, dequeue func(fd int) (count, pending uint32, err error), out chan uint32) {
 	defer close(out)
 	fds := []unix.PollFd{
 		{Fd: int32(nodeFd), Events: wantEvents},
@@ -277,12 +284,15 @@ func pumpShareEvents(nodeFd, wakeFd int, wantEvents int16, dequeue func(fd int) 
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
+			logger.Warn("share node event poll failed; no more reader counts", zap.String("device", path), zap.Error(err))
 			return
 		}
 		if fds[1].Revents != 0 {
 			return
 		}
 		if fds[0].Revents&dead != 0 {
+			logger.Info("share node went away; no more reader counts",
+				zap.String("device", path), zap.Int16("revents", fds[0].Revents))
 			return
 		}
 		if fds[0].Revents&wantEvents == 0 {
@@ -296,7 +306,12 @@ func pumpShareEvents(nodeFd, wakeFd int, wantEvents int16, dequeue func(fd int) 
 				if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EINTR) {
 					break // nothing (more) queued
 				}
-				return // ENODEV or anything else: the node is unusable
+				if errors.Is(err, unix.ENODEV) {
+					logger.Info("share node removed; no more reader counts", zap.String("device", path))
+				} else {
+					logger.Warn("share node event dequeue failed; no more reader counts", zap.String("device", path), zap.Error(err))
+				}
+				return
 			}
 			newest, got = count, true
 			if pending == 0 {
