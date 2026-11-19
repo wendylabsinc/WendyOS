@@ -1056,6 +1056,9 @@ type cameraLoopback interface {
 	AllocateAuxNodeNumber() (int, error)
 	EnsureAuxNode(ctx context.Context, nr int, label string) error
 	RemoveAuxNode(nr int)
+	// EnsureShareNode makes an app's camera share node (camera_share.go): an
+	// auxiliary node that announces CAPTURE even while no writer streams.
+	EnsureShareNode(ctx context.Context, nr int, label string) error
 }
 
 // VideoService implements agentpb.WendyVideoServiceServer.
@@ -1172,6 +1175,11 @@ type VideoService struct {
 	// shares holds the cameras containers share (camera_share_mode.go). Its
 	// zero value shares nothing. Its lock is never held with mu.
 	shares cameraShares
+	// cameraIdentity and presentCameras read camera identities from sysfs
+	// (camera.IdentityOf, camera.PresentIdentities) for the share manager.
+	// Seams so tests describe cameras without sysfs; nil means the defaults.
+	cameraIdentity func(base string) (camera.Identity, error)
+	presentCameras func() map[string]camera.Identity
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -1210,6 +1218,8 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 			return readStableNames(v4lByIDDir, v4lByPathDir)
 		},
 		classifyTransport:  camera.Classify,
+		cameraIdentity:     camera.IdentityOf,
+		presentCameras:     camera.PresentIdentities,
 		enumerateLibcamera: camera.EnumerateLibcamera,
 		findCameraSource:   audio.FindCameraSource,
 		isJetson:           func() bool { return board.Detect().IsJetson() },
@@ -1232,6 +1242,9 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	if err := svc.controls.Load(); err != nil {
 		logger.Warn("loading camera controls failed", zap.Error(err))
 	}
+	// Share nodes made before an agent restart: known as share nodes from
+	// here on, and adopted by the first SyncCameraShares.
+	svc.loadCameraShares()
 	svc.discoverer = ipcam.NewDiscoverer(svc.registry, logger)
 	// ONVIF stream-path lookups use the same login `camera login` stored, so a
 	// camera that protects ONVIF still tells us its paths once it has one.
@@ -1379,6 +1392,9 @@ func (s *VideoService) Shutdown() {
 	// stop them eventually but would not wait, so a pump could still be
 	// releasing its node after Shutdown returned.
 	s.stopAllTwoPlane()
+	// Share pumps hold hub subscriptions too. Their nodes and records stay
+	// for the next agent to adopt.
+	s.stopCameraSharePumps()
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Shutdown()
 	}
@@ -1424,6 +1440,12 @@ func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpai
 		csiDeviceIdxs []int
 	)
 	for _, path := range paths {
+		// An app's share node announces CAPTURE (announce_all_caps), so it is
+		// told apart by identity before anything opens or probes it: it is
+		// never one of the agent's own cameras.
+		if s.IsShareNode(path) {
+			continue
+		}
 		base := filepath.Base(path)
 		numStr := strings.TrimPrefix(base, "video")
 		id, err := strconv.ParseUint(numStr, 10, 32)

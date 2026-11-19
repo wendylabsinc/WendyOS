@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -45,13 +46,27 @@ type fakeLoopback struct {
 	removed            []uint32
 	shutdownCalled     bool
 
-	// Auxiliary-node state backs the two-plane camera data path. auxNext is the
-	// number the next allocation hands out; auxErr forces the band-exhausted
-	// path; auxCreated and auxRemoved record the calls.
-	auxNext    int
+	// Auxiliary-node state backs the two-plane camera data path and camera
+	// share nodes. aux holds the nodes that exist, by number, with their label:
+	// allocation hands out the highest free number in 200-255, as the real
+	// module does, so a removed number is reused. auxErr forces the
+	// band-exhausted path; shareErr fails EnsureShareNode. auxCreated,
+	// shareMade, auxRemoved and allocated record the calls; onRemove, when set,
+	// runs inside RemoveAuxNode.
+	aux        map[int]string
 	auxErr     error
+	shareErr   error
 	auxCreated []int
+	shareMade  []auxCall
 	auxRemoved []int
+	allocated  []int
+	onRemove   func(nr int)
+}
+
+// auxCall is one node creation: its number and label.
+type auxCall struct {
+	nr    int
+	label string
 }
 
 func newFakeLoopback() *fakeLoopback {
@@ -59,6 +74,7 @@ func newFakeLoopback() *fakeLoopback {
 		nodePaths:    make(map[uint32]string),
 		acquireCount: make(map[uint32]int),
 		releaseCount: make(map[uint32]int),
+		aux:          make(map[int]string),
 	}
 }
 
@@ -68,18 +84,39 @@ func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
 	if f.auxErr != nil {
 		return 0, f.auxErr
 	}
-	if f.auxNext == 0 {
-		f.auxNext = 255
+	for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+		if _, ok := f.aux[nr]; ok {
+			continue
+		}
+		if _, ok := f.nodePaths[uint32(nr)]; ok {
+			continue
+		}
+		f.allocated = append(f.allocated, nr)
+		return nr, nil
 	}
-	nr := f.auxNext
-	f.auxNext--
-	return nr, nil
+	return 0, ipcam.ErrBandExhausted
 }
 
-func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, _ string) error {
+func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, label string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxCreated = append(f.auxCreated, nr)
+	if _, ok := f.aux[nr]; !ok {
+		f.aux[nr] = label
+	}
+	return nil
+}
+
+func (f *fakeLoopback) EnsureShareNode(_ context.Context, nr int, label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareMade = append(f.shareMade, auxCall{nr, label})
+	if f.shareErr != nil {
+		return f.shareErr
+	}
+	if _, ok := f.aux[nr]; !ok {
+		f.aux[nr] = label
+	}
 	return nil
 }
 
@@ -87,6 +124,54 @@ func (f *fakeLoopback) RemoveAuxNode(nr int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxRemoved = append(f.auxRemoved, nr)
+	delete(f.aux, nr)
+	if f.onRemove != nil {
+		f.onRemove(nr)
+	}
+}
+
+// addLiveAux puts a node in place, as one left by an earlier agent.
+func (f *fakeLoopback) addLiveAux(nr int, label string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.aux[nr] = label
+}
+
+// liveAux lists the auxiliary and share nodes that exist, in order.
+func (f *fakeLoopback) liveAux() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]int, 0, len(f.aux))
+	for nr := range f.aux {
+		out = append(out, nr)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func (f *fakeLoopback) auxLabel(nr int) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	label, ok := f.aux[nr]
+	return label, ok
+}
+
+func (f *fakeLoopback) shareCalls() []auxCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]auxCall(nil), f.shareMade...)
+}
+
+func (f *fakeLoopback) removedAux() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.auxRemoved...)
+}
+
+func (f *fakeLoopback) allocations() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.allocated...)
 }
 
 func (f *fakeLoopback) Available() error {
@@ -114,8 +199,13 @@ func (f *fakeLoopback) EnsureNode(_ context.Context, id uint32, _ string) error 
 func (f *fakeLoopback) NodePath(camID uint32) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	path, ok := f.nodePaths[camID]
-	return path, ok
+	if path, ok := f.nodePaths[camID]; ok {
+		return path, true
+	}
+	if _, ok := f.aux[int(camID)]; ok {
+		return fmt.Sprintf("/dev/video%d", camID), true
+	}
+	return "", false
 }
 
 func (f *fakeLoopback) AcquireView(camID uint32) func() {

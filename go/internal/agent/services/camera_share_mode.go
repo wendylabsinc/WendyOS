@@ -14,33 +14,64 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // cameraShares holds the share records of every container that shares a
-// camera. Its zero value shares nothing; containers is made on first use.
+// camera. Its zero value shares nothing; containers and pending are made on
+// first use. Lock order: ops, then fileMu, then mu; mu is never held with the
+// service's mu.
 type cameraShares struct {
 	mu         sync.Mutex
 	containers map[string]*shareContainer // by container ID
+	// pending holds the numbers of share nodes being made, so IsShareNode
+	// knows them before their record exists.
+	pending map[int]bool
+
+	// ops serialises removal, adoption and shutdown (camera_share.go), so a
+	// record is never stopped twice or adopted while it is being removed.
+	ops sync.Mutex
+	// fileMu orders state file writes; statePath is cameraSharesPath, read
+	// once under it.
+	fileMu    sync.Mutex
+	statePath string
 }
 
 // shareContainer is one container's shares.
 type shareContainer struct {
 	app    string
 	shares []*shareRecord
+	// created is when this agent last made a share for the container; zero
+	// for shares loaded from the state file. See SyncCameraShares.
+	created time.Time
 }
 
 // shareRecord is one camera shared with one container through one node.
+// cameraName, camera, mode and node never change once the record is stored;
+// cameraPath follows the camera and is guarded by cameraShares.mu, as are io,
+// pump, cancel, done and adoptErr.
 type shareRecord struct {
 	cameraName, cameraPath string
 	mode                   sharedMode
 	node                   int
+	camera                 camera.Identity
+
+	// The node's writer and the pump feeding it; nil for a record loaded from
+	// the state file until it is adopted, and after Shutdown.
+	io     shareNodeIO
+	pump   *sharePump
+	cancel context.CancelFunc
+	done   chan struct{} // closed when the pump's Run has returned
+	// adoptErr is the last reason adoption failed, so it is logged once.
+	adoptErr string
 }
 
 // errCameraShared is the named refusal for a recording whose explicit
