@@ -88,17 +88,13 @@ func newDeviceUnpinCmd() *cobra.Command {
 				// identity is.
 				if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
 					cleared = clearPinsForIdentity(cfg, identity)
-				} else if alias, matched, err := parsePrivateDeviceAlias(target); matched && err == nil {
-					auth, err := config.ResolveAuth(cfg, "", nil)
+				} else if alias, matched, err := parsePrivateDeviceAlias(target); matched {
 					if err != nil {
 						return false, err
 					}
-					if len(auth.Certificates) == 0 {
-						return false, errors.New("select an enrolled organization to unpin a private device alias")
-					}
-					tenant, err := meshid.ParseTenant(auth.Certificates[0].TenantUUID())
+					_, tenant, err := alias.authScope(cfg)
 					if err != nil {
-						return false, fmt.Errorf("select an enrolled organization to unpin a private device alias: %w", err)
+						return false, err
 					}
 					cleared = clearPrivateAliasPins(cfg, alias, tenant)
 				} else {

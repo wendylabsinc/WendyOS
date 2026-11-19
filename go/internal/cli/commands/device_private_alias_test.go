@@ -215,7 +215,7 @@ func stubPrivateAliasNetwork(t *testing.T, sources privateAliasSources) {
 func privateAliasConfig(t *testing.T, pins map[string]config.DevicePin) {
 	t.Helper()
 	auth := privateAliasTestAuth()
-	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{auth}, CurrentContext: "default", DefaultDevice: "preserve.local", DevicePins: pins})
+	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{auth}, CurrentContext: "default", DevicePins: pins})
 }
 
 func TestPrivateDeviceAliasFrontDoorLANUsesExplicitIdentity(t *testing.T) {
@@ -237,11 +237,14 @@ func TestPrivateDeviceAliasFrontDoorLANUsesExplicitIdentity(t *testing.T) {
 	host := "device-" + privateAliasDevice + ".wendy.internal"
 	selected, matched, err := connectNamedDeviceSelector(context.Background(), host, true)
 	wantPin := "private-alias/" + privateAliasTenant + "/" + host
-	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != wantPin {
+	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != wantPin || selected.Selector != wantPin {
 		t.Fatalf("selection=%+v matched=%v err=%v calls=%d", selected, matched, err, calls)
 	}
-	cfg, _ := config.Load()
-	if cfg.DefaultDevice != "preserve.local" || len(cfg.DevicePins) != 0 {
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DevicePins) != 0 {
 		t.Fatal("alias discovery changed configuration")
 	}
 }
@@ -264,7 +267,7 @@ func TestPrivateDeviceAliasFrontDoorMeshAndCloud(t *testing.T) {
 					if selector != "mesh://"+privateAliasTenant+"/"+privateAliasDevice || !suppress {
 						t.Fatal("wrong canonical mesh target", selector)
 					}
-					return &SelectedDevice{Agent: &grpcclient.AgentConnection{IsMTLS: true}, DefaultSelector: selector}, true, nil
+					return &SelectedDevice{Agent: &grpcclient.AgentConnection{IsMTLS: true}, Selector: selector}, true, nil
 				}
 			} else {
 				old := connectDefaultCloudAssetV2Fn
@@ -467,6 +470,28 @@ func TestPrivateDeviceAliasUnpinKeepsOtherTenant(t *testing.T) {
 		if pin, found := cfg.DevicePinFor(key); !found || pin != foreign {
 			t.Errorf("foreign pin at %q changed", key)
 		}
+	}
+}
+
+func TestPrivateDeviceAliasScopedSelectorRetainsOrganization(t *testing.T) {
+	const host = "jetson.wendy.internal"
+	privateAliasConfig(t, nil)
+	stubPrivateAliasNetwork(t, privateAliasSources{})
+	saved := "private-alias/" + privateAliasTenant + "/" + host
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cert := &cfg.Auth[0].Certificates[0]
+		cert.PrincipalURI = strings.Replace(cert.PrincipalURI, privateAliasTenant, privateAliasOtherTenant, 1)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	privateAliasLANBrowse = func(context.Context) ([]models.LANDevice, error) {
+		t.Error("saved selector searched the newly selected organization")
+		return nil, nil
+	}
+	_, matched, err := connectNamedDeviceSelector(context.Background(), saved, true)
+	if !matched || !errors.Is(err, errDeviceIdentityRefused) {
+		t.Fatalf("foreign saved default matched=%v err=%v", matched, err)
 	}
 }
 
