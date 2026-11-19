@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sort"
 	"strings"
@@ -25,6 +26,22 @@ type StopPairingFunc func(mcusource.SensorPairing)
 
 // IsConnectedFunc reports whether a pairing is delivering sensor frames.
 type IsConnectedFunc func(mcusource.SensorPairing) bool
+
+// PairingProbeFunc opens and closes one authenticated connection to a source,
+// resolving it by identity when addr is empty.
+type PairingProbeFunc func(ctx context.Context, p mcusource.SensorPairing, addr string) error
+
+const (
+	// pairingProbeBudget bounds the connection AddSensorPairing tries before
+	// saving; pairingProbeMargin is kept back from the caller's deadline so a
+	// slow source still gets saved.
+	pairingProbeBudget = 20 * time.Second
+	pairingProbeMargin = 3 * time.Second
+)
+
+// pairingProbeRetryPause lets a board that ran short of memory free its last
+// session before the probe confirms a refusal.
+var pairingProbeRetryPause = time.Second
 
 // SensorSourceBrowseFunc browses this device's network for at most timeout
 // and returns the sensor sources it saw, leaving out the sightings exclude
@@ -124,6 +141,7 @@ type SensorPairingService struct {
 	browse      SensorSourceBrowseFunc
 	self        func() SensorSourceSelf
 	scans       chan struct{}
+	probe       PairingProbeFunc
 }
 
 // agentScope reads this agent's current identity on every Add so pairing
@@ -155,7 +173,47 @@ func (s *SensorPairingService) SetSourceDiscovery(browse SensorSourceBrowseFunc,
 	}
 }
 
-func (s *SensorPairingService) AddSensorPairing(_ context.Context, req *agentpbv2.AddSensorPairingRequest) (*agentpbv2.AddSensorPairingResponse, error) {
+// SetPairingProbe makes AddSensorPairing connect to a source before saving
+// it. addr is empty when the caller left the source to be found by identity.
+// Call it before the service starts serving.
+func (s *SensorPairingService) SetPairingProbe(probe PairingProbeFunc) { s.probe = probe }
+
+// refusedBySource tries the new pairing. Only a source that refuses this
+// device's certificate twice in a row stops the save: a board short of memory
+// can end one handshake the same way. An unreachable or slow source is saved
+// as before and retried by its supervisor.
+func (s *SensorPairingService) refusedBySource(ctx context.Context, p mcusource.SensorPairing, addr string) error {
+	if s.probe == nil || p.SourcePrincipalURI == "" || (s.isConnected != nil && s.isConnected(p)) {
+		return nil
+	}
+	budget := pairingProbeBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)-pairingProbeMargin)
+	}
+	if budget <= 0 {
+		return nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	err := s.probe(probeCtx, p, addr)
+	if errors.Is(err, mcusource.ErrSourceRejectedCertificate) {
+		select {
+		case <-probeCtx.Done():
+			err = probeCtx.Err()
+		case <-time.After(pairingProbeRetryPause):
+			err = s.probe(probeCtx, p, addr)
+		}
+	}
+	if errors.Is(err, mcusource.ErrSourceRejectedCertificate) {
+		return status.Errorf(codes.FailedPrecondition, "sensor source %s refused this device twice, so the pairing was not saved: %v", p.SourcePrincipalURI, err)
+	}
+	if err != nil {
+		s.logger.Info("sensor source not reached before pairing; saving it anyway", zap.String("source", p.SourcePrincipalURI), zap.Error(err))
+	}
+	return nil
+}
+
+func (s *SensorPairingService) AddSensorPairing(ctx context.Context, req *agentpbv2.AddSensorPairingRequest) (*agentpbv2.AddSensorPairingResponse, error) {
 	scope := s.agentScope()
 	p := mcusource.SensorPairing{
 		SourceAssetID:      req.SourceAssetId,
@@ -173,6 +231,9 @@ func (s *SensorPairingService) AddSensorPairing(_ context.Context, req *agentpbv
 		if !identity.Scope().Matches(scope) {
 			return nil, status.Error(codes.PermissionDenied, "sensor source must belong to this device's tenant")
 		}
+	}
+	if err := s.refusedBySource(ctx, p, req.SourceAddress); err != nil {
+		return nil, err
 	}
 	if err := s.store.Add(p); err != nil {
 		return nil, err
