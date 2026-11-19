@@ -470,12 +470,23 @@ func TestSharePump_RetryStatesByError(t *testing.T) {
 	}{
 		{"unplugged", fs.ErrNotExist, shareUnplugged, ""},
 		{"not found", status.Error(codes.NotFound, "gone"), shareUnplugged, ""},
-		{"in use", errCameraInUse("/dev/video0"), shareNoFrames, "the real camera is held outside the agent"},
+		{"in use", errCameraInUse("/dev/video0"), shareNoFrames, shareCameraHeldDetail},
+		// A held camera that the agent read through PipeWire instead: the
+		// refusal's own wording blames PipeWire, but the cause is the holder.
+		{"held, read through PipeWire", pixelRefusal(fixedReason(pipeWireRawWhy), true), shareNoFrames, shareCameraHeldDetail},
+		{"no tap for another reason", pixelRefusal(fixedReason("camera streams H.264 natively; raw frames are not offered"), false), shareNoFrames,
+			"camera offers no uncompressed frames: camera streams H.264 natively; raw frames are not offered"},
 		{"other", errors.New("boom"), shareNoFrames, "boom"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			j := newSpJoiner(spErrResult(c.err))
+			// The same failure every time, so whichever retry the state is
+			// read after, it says the same.
+			results := make([]func() (shareSubscription, error), 16)
+			for i := range results {
+				results[i] = spErrResult(c.err)
+			}
+			j := newSpJoiner(results...)
 			h := startSharePump(t, j, false)
 			h.node.send(t, 1)
 			j.waitJoin(t)
@@ -509,6 +520,31 @@ func TestSharePump_CaptureStoppingRetriesOrRejoinsOnRestart(t *testing.T) {
 		t.Fatalf("retry lines = %d, want 1", n)
 	}
 	h.waitState(t, shareReading)
+}
+
+// A capture that ends because the camera is held (the hub fell back to
+// PipeWire, which has no frames for the node) says the camera is held, while
+// the log keeps the refusal as the hub gave it.
+func TestSharePump_CaptureEndingOnAHeldCameraSaysItIsHeld(t *testing.T) {
+	sub := newSpFakeSub()
+	sub.err = pixelRefusal(fixedReason(pipeWireRawWhy), true)
+	results := []func() (shareSubscription, error){spSubResult(sub)}
+	for range 16 {
+		results = append(results, spErrResult(sub.err))
+	}
+	j := newSpJoiner(results...)
+	h := startSharePump(t, j, false)
+
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.waitState(t, shareReading)
+	close(sub.frames)
+	if s := h.waitState(t, shareNoFrames); s.Detail != shareCameraHeldDetail {
+		t.Fatalf("Detail = %q, want %q", s.Detail, shareCameraHeldDetail)
+	}
+	if n := h.logged("capture of cam0 stopped while the app reads: " + sub.err.Error()); n != 1 {
+		t.Fatalf("stop log lines with the hub's refusal = %d, want 1", n)
+	}
 }
 
 func TestSharePump_WaitsForARecordingAtOtherParameters(t *testing.T) {

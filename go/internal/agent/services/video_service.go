@@ -649,8 +649,9 @@ func (h *deviceHub) subscribeAsKind(explicitHolder string, raw, pixels bool) (in
 		return 0, nil, errRawUnavailable(reason())
 	}
 	if refused := h.demand.refused; pixels && refused != nil {
+		held := h.demand.refusedHeld
 		h.mu.Unlock()
-		return 0, nil, pixelRefusal(refused)
+		return 0, nil, pixelRefusal(refused, held)
 	}
 	if len(h.subs) >= maxSubscribersPerHub {
 		h.mu.Unlock()
@@ -948,6 +949,7 @@ func (h *deviceHub) rawOffered(format *agentpb.RawFormat) {
 	h.rawState = rawAvailable
 	h.rawFormat = format
 	h.demand.tap = false
+	h.demand.held = false
 }
 
 // rawNotOffered records that this producer has no raw frames to give, and turns
@@ -2428,6 +2430,14 @@ type tapDeliveries struct {
 	delivered *atomic.Bool
 }
 
+// pixelsFromHeldCamera passes the held-camera mark on to the hub; the embedded
+// interface does not carry it.
+func (t tapDeliveries) pixelsFromHeldCamera() {
+	if h, ok := t.hubSink.(heldCameraSink); ok {
+		h.pixelsFromHeldCamera()
+	}
+}
+
 func (t tapDeliveries) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
 	ok := t.hubSink.publishRaw(data, tsNs, format)
 	if ok {
@@ -2494,6 +2504,11 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	}
 	s.logger.Info("camera held by another client, capturing through PipeWire",
 		zap.String("device", path), zap.Uint64("node_serial", serial))
+	// That start has no tap, and its pixel refusal is because of the holder:
+	// a share pump then says the camera is held, not that PipeWire is in use.
+	if held, ok := sink.(heldCameraSink); ok {
+		held.pixelsFromHeldCamera()
+	}
 
 	// Contention stays the answer when sharing fails outright: it is the cause an operator
 	// can act on, and a graph error names a pipeline they did not ask for. Once the shared
@@ -3995,6 +4010,10 @@ func (p gstPipelinePlan) rawRefusalReason() func() string {
 // function to the hub instead.
 func (p gstPipelinePlan) rawReason() string { return p.rawRefusalReason()() }
 
+// pipeWireRawWhy is the raw refusal of a camera read through PipeWire, which the
+// agent does only when another client holds it (captureLocalCamera).
+const pipeWireRawWhy = "camera is shared through PipeWire; raw frames are not offered"
+
 // fixedReason wraps a reason already in hand for rawSink.rawNotOffered.
 func fixedReason(reason string) func() string { return func() string { return reason } }
 
@@ -4151,7 +4170,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 	case strings.HasPrefix(src, "libcamerasrc"):
 		plan.rawWhy = "CSI cameras are captured through the ISP pipeline; raw frames are not offered"
 	case usingPipeWire:
-		plan.rawWhy = "camera is shared through PipeWire; raw frames are not offered"
+		plan.rawWhy = pipeWireRawWhy
 	case useMJPEG:
 		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
 		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.

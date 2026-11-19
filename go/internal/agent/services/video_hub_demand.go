@@ -31,6 +31,21 @@ import (
 // gives up can say why.
 var errPixelsUnavailable = errors.New("camera offers no uncompressed frames")
 
+// errPixelsCameraHeld is wrapped into a pixel refusal when the camera had no
+// tap because another client held it: the agent could not open it and read it
+// through PipeWire instead (captureLocalCamera), which gives no uncompressed
+// frames. The refusal's reason then names PipeWire, but the cause is the
+// holder, so a share pump says that instead. Raw subscribers' refusals do not
+// carry it.
+var errPixelsCameraHeld = errors.New("another client holds the camera")
+
+// heldCameraSink is the part of a hub a producer tells, before the start that
+// reads a held camera through PipeWire, that the start's refusal is because of
+// the holder. Reached by type assertion on the sink, like pixelSink.
+type heldCameraSink interface {
+	pixelsFromHeldCamera()
+}
+
 // pixelSink is the part of a hub a producer tells that its tap carries frames
 // in-agent consumers may read. rawSink stays as it is, so producers and fakes
 // that know nothing of pixels keep compiling; a producer reaches this by type
@@ -51,9 +66,10 @@ type encodeDemand interface {
 }
 
 var (
-	_ rawSink      = (*deviceHub)(nil)
-	_ pixelSink    = (*deviceHub)(nil)
-	_ encodeDemand = (*deviceHub)(nil)
+	_ rawSink        = (*deviceHub)(nil)
+	_ pixelSink      = (*deviceHub)(nil)
+	_ heldCameraSink = (*deviceHub)(nil)
+	_ encodeDemand   = (*deviceHub)(nil)
 )
 
 // hubDemand is the hub state behind pixel subscribers and encoder demand.
@@ -74,6 +90,10 @@ type hubDemand struct {
 	// refused is non-nil once the producer turned pixel subscribers away: it is
 	// the raw refusal's reason, evaluated only if a pixel consumer asks.
 	refused func() string
+	// held is set by pixelsFromHeldCamera and consumed, like tap, by the raw
+	// decision that follows it; refusedHeld keeps it with refused, so the pixel
+	// refusal wraps errPixelsCameraHeld.
+	held, refusedHeld bool
 	// encoderOff mirrors setPipelineEncodes, inverted so that the zero value
 	// matches every producer that never calls it: they all encode.
 	encoderOff bool
@@ -87,9 +107,22 @@ func (h *deviceHub) subscribePixels() (int, chan *videoFrame, error) {
 	return h.subscribeAsKind("", false, true)
 }
 
-// pixelRefusal builds the error a refused pixel subscriber is given.
-func pixelRefusal(reason func() string) error {
+// pixelRefusal builds the error a refused pixel subscriber is given. held says
+// the refusal is because another client holds the camera (pixelsFromHeldCamera).
+func pixelRefusal(reason func() string, held bool) error {
+	if held {
+		return fmt.Errorf("%w: %s (%w)", errPixelsUnavailable, reason(), errPixelsCameraHeld)
+	}
 	return fmt.Errorf("%w: %s", errPixelsUnavailable, reason())
+}
+
+// pixelsFromHeldCamera records that the start about to run reads a camera
+// another client holds, through PipeWire. Call it before that start; its raw
+// decision consumes it.
+func (h *deviceHub) pixelsFromHeldCamera() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.demand.held = true
 }
 
 // wantEncoded reports whether any live subscriber wants encoded video: one that
@@ -142,6 +175,7 @@ func (h *deviceHub) pixelsOffered(format *agentpb.RawFormat) {
 	h.demand.tap = true
 	h.demand.format = format
 	h.demand.refused = nil
+	h.demand.refusedHeld = false
 }
 
 // pixelsNotOfferedLocked is rawNotOffered's pixel rule. Unless pixelsOffered
@@ -150,15 +184,18 @@ func (h *deviceHub) pixelsOffered(format *agentpb.RawFormat) {
 // later pixel joins are refused up front. Callers hold h.mu. Reports whether it
 // closed any subscriber.
 func (h *deviceHub) pixelsNotOfferedLocked(reason func() string) bool {
+	held := h.demand.held
+	h.demand.held = false
 	if h.demand.tap {
 		h.demand.tap = false
 		return false
 	}
 	h.demand.refused = reason
+	h.demand.refusedHeld = held
 	closed := false
 	for _, sub := range h.subs {
 		if sub.pixels && !sub.closed {
-			sub.err = pixelRefusal(reason)
+			sub.err = pixelRefusal(reason, held)
 			sub.closed = true
 			close(sub.ch)
 			closed = true
