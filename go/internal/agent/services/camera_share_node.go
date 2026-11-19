@@ -38,6 +38,11 @@ const (
 	// v4l2EventSubFlSendInitial is V4L2_EVENT_SUB_FL_SEND_INITIAL.
 	v4l2EventSubFlSendInitial = 1
 
+	// vidiocSCtrl is _IOWR('V', 28, struct v4l2_control), 8 bytes.
+	vidiocSCtrl = 0xC008561C
+	// v4l2LoopbackCidKeepFormat is V4L2LOOPBACK_CID_BASE+0 ("keep_format").
+	v4l2LoopbackCidKeepFormat = 0x0098f900
+
 	// shareNodeBuffers is how many OUTPUT buffers the writer round-robins.
 	shareNodeBuffers = 2
 
@@ -54,6 +59,12 @@ type v4l2EventSubscription struct {
 	ID    uint32
 	Flags uint32
 	_     [5]uint32
+}
+
+// v4l2Control matches struct v4l2_control (8 bytes).
+type v4l2Control struct {
+	ID    uint32
+	Value int32
 }
 
 // v4l2Event is a struct v4l2_event (136 bytes), read through offsets like
@@ -192,8 +203,15 @@ func (w *shareNodeWriter) configure() error {
 				zap.String("device", w.path), zap.Stringer("mode", mode), zap.Error(err))
 		}
 	}
-	// A per-node control that keeps the node a capture device while no writer
-	// streams would be set here, right after the format.
+	// keep_format=1 (with the node's announce_all_caps=1 from EnsureShareNode)
+	// keeps the node a capture device with this format while no writer streams,
+	// so an app can open it during an agent restart. It is required, not best
+	// effort: without it an app that opens the node in that window can
+	// reformat it and force its format on the returning writer.
+	keep := v4l2Control{ID: v4l2LoopbackCidKeepFormat, Value: 1}
+	if err := w.ioctl(vidiocSCtrl, unsafe.Pointer(&keep)); err != nil {
+		return fmt.Errorf("setting keep_format on %s: %w", w.path, err)
+	}
 
 	var req v4l2ReqBuffers
 	req.Count = shareNodeBuffers

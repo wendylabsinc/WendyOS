@@ -272,6 +272,18 @@ func TestMJPEGCameraPixelsAndEncoderOnDemand(t *testing.T) {
 // Nothing at 96 or above is touched: those are the agent's camera bands.
 func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logger) string {
 	t.Helper()
+	return createFixtureNode(t, ctx, logger, false)
+}
+
+// createShareFixtureNode is createPixelsFixtureNode with the production share
+// node shape: announce_all_caps=1, as Loopback.EnsureShareNode creates it.
+func createShareFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logger) string {
+	t.Helper()
+	return createFixtureNode(t, ctx, logger, true)
+}
+
+func createFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logger, share bool) string {
+	t.Helper()
 	nr := -1
 	for candidate := 90; candidate >= 64; candidate-- {
 		_, devErr := os.Lstat(fmt.Sprintf("/dev/video%d", candidate))
@@ -292,7 +304,11 @@ func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logg
 		return err == nil && strings.TrimSpace(string(name)) == label
 	}
 	loopback := ipcam.NewLoopback(ctx, logger, nil, nil, nil)
-	if err := loopback.EnsureAuxNode(ctx, nr, label); err != nil {
+	ensure := loopback.EnsureAuxNode
+	if share {
+		ensure = loopback.EnsureShareNode
+	}
+	if err := ensure(ctx, nr, label); err != nil {
 		t.Fatalf("creating %s: %v", path, err)
 	}
 	// EnsureAuxNode accepts a node someone else created meanwhile; the label
