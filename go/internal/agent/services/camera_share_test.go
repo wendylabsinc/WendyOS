@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -70,19 +72,56 @@ func (n *csNode) Close() error {
 	return nil
 }
 
-type csHarness struct {
-	t    *testing.T
-	s    *VideoService
-	loop *fakeLoopback
-	logs *observer.ObservedLogs
+// csClock is a fake removal clock: After moves it forward by d at once, so a
+// removal's settle wait runs in no real time and its fake time is exact. With
+// frozen set, After never fires.
+type csClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	frozen bool
+}
 
-	mu       sync.Mutex
-	cams     map[string]csCamera // by base
-	opened   []*csNode
-	openErr  map[string]error
-	openHook func(path string)
-	events   []string
-	probed   []string // paths hasVideoCapture or capturePixelFormats saw
+func (c *csClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *csClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.frozen {
+		return nil
+	}
+	c.now = c.now.Add(d)
+	ch := make(chan time.Time, 1)
+	ch <- c.now
+	return ch
+}
+
+func (c *csClock) setFrozen(frozen bool) {
+	c.mu.Lock()
+	c.frozen = frozen
+	c.mu.Unlock()
+}
+
+type csHarness struct {
+	t     *testing.T
+	s     *VideoService
+	loop  *fakeLoopback
+	logs  *observer.ObservedLogs
+	clock *csClock
+
+	mu        sync.Mutex
+	cams      map[string]csCamera // by base
+	opened    []*csNode
+	openErr   map[string]error
+	openHook  func(path string)
+	events    []string
+	probed    []string // paths hasVideoCapture or capturePixelFormats saw
+	udev      func(nr int) bool
+	held      map[string][]deviceHolder // by path
+	removedAt map[int]time.Time         // fake time of each node's RemoveAuxNode
 }
 
 // newCSHarness builds a service whose /dev holds cams, whose loopback is the
@@ -91,16 +130,38 @@ type csHarness struct {
 func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	t.Helper()
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
-	h := &csHarness{t: t, s: s, loop: s.loopback.(*fakeLoopback), cams: map[string]csCamera{}, openErr: map[string]error{}}
+	h := &csHarness{t: t, s: s, loop: s.loopback.(*fakeLoopback), cams: map[string]csCamera{}, openErr: map[string]error{},
+		clock: &csClock{now: time.Unix(1_000_000, 0)}, held: map[string][]deviceHolder{}, removedAt: map[int]time.Time{}}
 	for _, c := range cams {
 		h.cams[c.base] = c
 	}
-	h.loop.onRemove = func(nr int) { h.event(fmt.Sprintf("remove %d", nr)) }
+	h.loop.onRemove = func(nr int) {
+		h.event(fmt.Sprintf("remove %d", nr))
+		h.mu.Lock()
+		h.removedAt[nr] = h.clock.Now()
+		h.mu.Unlock()
+	}
 
 	prevPath, prevOpen := cameraSharesPath, openShareNode
+	prevClock, prevUdev, prevHolders := shareRemovalClock, shareNodeUdevDone, deviceHolders
 	cameraSharesPath = filepath.Join(t.TempDir(), "camera-shares.json")
 	openShareNode = h.open
-	t.Cleanup(func() { cameraSharesPath, openShareNode = prevPath, prevOpen })
+	shareRemovalClock = h.clock
+	shareNodeUdevDone = func(nr int) bool {
+		h.mu.Lock()
+		udev := h.udev
+		h.mu.Unlock()
+		return udev == nil || udev(nr)
+	}
+	deviceHolders = func(path string) []deviceHolder {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return append([]deviceHolder(nil), h.held[path]...)
+	}
+	t.Cleanup(func() {
+		cameraSharesPath, openShareNode = prevPath, prevOpen
+		shareRemovalClock, shareNodeUdevDone, deviceHolders = prevClock, prevUdev, prevHolders
+	})
 
 	core, logs := observer.New(zap.DebugLevel)
 	h.logs = logs
@@ -185,6 +246,57 @@ func (h *csHarness) open(_ *zap.Logger, path string, mode sharedMode) (shareNode
 	h.opened = append(h.opened, n)
 	h.mu.Unlock()
 	return n, nil
+}
+
+// drainRemovals waits for every removal attempt in flight to end: done, or
+// left in place because a holder has the node open.
+func (h *csHarness) drainRemovals() {
+	h.t.Helper()
+	drainShareRemovals(h.t, h.s)
+}
+
+func drainShareRemovals(t *testing.T, s *VideoService) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		s.shares.removalWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("share node removals did not finish")
+	}
+}
+
+func (h *csHarness) setHeld(path string, holders ...deviceHolder) {
+	h.mu.Lock()
+	h.held[path] = holders
+	h.mu.Unlock()
+}
+
+func (h *csHarness) setUdev(udev func(nr int) bool) {
+	h.mu.Lock()
+	h.udev = udev
+	h.mu.Unlock()
+}
+
+func (h *csHarness) removalTime(nr int) (time.Time, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	at, ok := h.removedAt[nr]
+	return at, ok
+}
+
+func (h *csHarness) pendingRemovals() []int {
+	h.s.shares.mu.Lock()
+	defer h.s.shares.mu.Unlock()
+	var out []int
+	for nr := range h.s.shares.removing {
+		out = append(out, nr)
+	}
+	sort.Ints(out)
+	return out
 }
 
 func (h *csHarness) event(e string) {
@@ -352,6 +464,7 @@ func TestCreateCameraShares_NodeThatWillNotOpenIsRemoved(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	h.openErr["/dev/video255"] = errors.New("VIDIOC_S_FMT on /dev/video255: device or resource busy")
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.drainRemovals()
 
 	if got, want := h.eventLog(), []string{"open /dev/video255", "remove 255"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("events = %v, want %v", got, want)
@@ -425,6 +538,7 @@ func TestCreateCameraShares_StaysWithinItsBudget(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > 2200*time.Millisecond {
 			t.Errorf("CreateCameraShares took %s, want at most 2.2s", elapsed)
 		}
+		h.drainRemovals()
 		if got := h.loop.liveAux(); !reflect.DeepEqual(got, []int{255}) {
 			t.Errorf("live nodes = %v, want only 255: the half-made node is removed", got)
 		}
@@ -467,8 +581,18 @@ func TestRemoveCameraShares_StopsPumpsRemovesNodesAndForgets(t *testing.T) {
 			t.Errorf("the pump of node %d is still running", r.node)
 		}
 	}
-	if got, want := h.eventLog(), []string{"close /dev/video255", "remove 255", "close /dev/video254", "remove 254"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("events = %v, want %v", got, want)
+	// The writers close before RemoveCameraShares returns; the nodes go in
+	// the background, each once.
+	h.drainRemovals()
+	events := h.eventLog()
+	if len(events) != 4 || !reflect.DeepEqual(events[:2], []string{"close /dev/video255", "close /dev/video254"}) {
+		t.Fatalf("events = %v, want both closes, then both removals", events)
+	}
+	if removes := append([]string(nil), events[2:]...); !reflect.DeepEqual(sortedStrings(removes), []string{"remove 254", "remove 255"}) {
+		t.Errorf("removals = %v, want 254 and 255 once each", removes)
+	}
+	if got := h.loop.liveAux(); len(got) != 0 || len(h.pendingRemovals()) != 0 {
+		t.Errorf("live nodes %v, pending removals %v; want none", got, h.pendingRemovals())
 	}
 	for _, n := range h.openedNodes() {
 		if n.closes.Load() != 1 {
@@ -481,48 +605,86 @@ func TestRemoveCameraShares_StopsPumpsRemovesNodesAndForgets(t *testing.T) {
 	if _, _, ok := h.s.sharedModeOf("/dev/video0"); ok {
 		t.Error("/dev/video0 is still shared")
 	}
-	if containers := h.stateFile()["containers"].(map[string]any); len(containers) != 0 {
-		t.Errorf("state file still holds %v", containers)
+	if state := h.stateFile(); len(state["containers"].(map[string]any)) != 0 || state["removing"] != nil {
+		t.Errorf("state file still holds %v", state)
 	}
 
 	h.s.RemoveCameraShares("cv-a")
 	h.s.RemoveCameraShares("never-made")
+	h.drainRemovals()
 	if got := h.eventLog(); len(got) != 4 {
 		t.Errorf("removing unknown containers did something: %v", got)
 	}
 }
 
+func sortedStrings(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+// Removals run in the background, so a redeploy's Create can come before the
+// old node is gone; then the new share takes another number until it is.
+// Drained between redeploys, every one reuses 255; back to back, they still
+// leave nothing once the removals drain.
 func TestCameraShares_RedeployCyclesLeakNothing(t *testing.T) {
-	h := newCSHarness(t, csBrio())
-	for i := 0; i < 60; i++ {
-		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
-		if n := len(h.records("cv-a")); n != 1 {
-			t.Fatalf("cycle %d: %d records, want 1", i, n)
+	check := func(t *testing.T, h *csHarness) {
+		t.Helper()
+		if got := h.loop.liveAux(); len(got) != 0 {
+			t.Errorf("nodes left after 60 redeploys: %v", got)
 		}
-		h.s.RemoveCameraShares("cv-a")
-	}
-	if got := h.loop.liveAux(); len(got) != 0 {
-		t.Errorf("nodes left after 60 redeploys: %v", got)
-	}
-	for _, c := range h.loop.shareCalls() {
-		if c.nr != 255 {
-			t.Fatalf("a redeploy used node %d; every one should reuse 255", c.nr)
+		if got := h.pendingRemovals(); len(got) != 0 {
+			t.Errorf("removals left after 60 redeploys: %v", got)
 		}
-	}
-	if n := len(h.loop.shareCalls()); n != 60 {
-		t.Errorf("%d nodes made, want 60", n)
-	}
-	if ids := h.containerIDs(); len(ids) != 0 {
-		t.Errorf("records left: %v", ids)
-	}
-	if containers := h.stateFile()["containers"].(map[string]any); len(containers) != 0 {
-		t.Errorf("state file still holds %v", containers)
-	}
-	for _, n := range h.openedNodes() {
-		if n.closes.Load() != 1 {
-			t.Fatalf("%s closed %d times, want 1", n.path, n.closes.Load())
+		if n := len(h.loop.shareCalls()); n != 60 {
+			t.Errorf("%d nodes made, want 60", n)
+		}
+		if n := len(h.loop.removedAux()); n != 60 {
+			t.Errorf("%d nodes removed, want 60", n)
+		}
+		if ids := h.containerIDs(); len(ids) != 0 {
+			t.Errorf("records left: %v", ids)
+		}
+		if state := h.stateFile(); len(state["containers"].(map[string]any)) != 0 || state["removing"] != nil {
+			t.Errorf("state file still holds %v", state)
+		}
+		for _, n := range h.openedNodes() {
+			if n.closes.Load() != 1 {
+				t.Fatalf("%s closed %d times, want 1", n.path, n.closes.Load())
+			}
 		}
 	}
+
+	t.Run("drained between redeploys", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		for i := 0; i < 60; i++ {
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+			if n := len(h.records("cv-a")); n != 1 {
+				t.Fatalf("cycle %d: %d records, want 1", i, n)
+			}
+			h.s.RemoveCameraShares("cv-a")
+			h.drainRemovals()
+		}
+		for _, c := range h.loop.shareCalls() {
+			if c.nr != 255 {
+				t.Fatalf("a redeploy used node %d; every one should reuse 255", c.nr)
+			}
+		}
+		check(t, h)
+	})
+
+	t.Run("back to back", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		for i := 0; i < 60; i++ {
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+			if n := len(h.records("cv-a")); n != 1 {
+				t.Fatalf("cycle %d: %d records, want 1", i, n)
+			}
+			h.s.RemoveCameraShares("cv-a")
+		}
+		h.drainRemovals()
+		check(t, h)
+	})
 }
 
 func TestSyncCameraShares_AdoptsNodesAfterAgentRestart(t *testing.T) {
@@ -597,6 +759,7 @@ func TestSyncCameraShares_DropsContainersDeletedWhileAgentWasDown(t *testing.T) 
 	}
 
 	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true, PID: 7}})
+	h.drainRemovals()
 
 	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{254}) {
 		t.Errorf("removed nodes = %v, want [254] (250 no longer exists)", got)
@@ -819,4 +982,273 @@ func TestResolveShareCamera_NeverPicksAShareNodeOrAnAmbiguousCamera(t *testing.T
 			t.Errorf("resolved to %s, the share node itself", path)
 		}
 	})
+}
+
+func TestRemoveShareNode_WaitsForUdevAndOneSecond(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		udevAt time.Duration // after the node was made
+		want   time.Duration // when it is removed
+	}{
+		{"udev first: the node's age decides", 300 * time.Millisecond, shareNodeSettleAge},
+		{"udev last: udev decides", 1500 * time.Millisecond, 1500 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			t0 := h.clock.Now()
+			h.setUdev(func(int) bool { return !h.clock.Now().Before(t0.Add(tc.udevAt)) })
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+			h.s.RemoveCameraShares("cv-a")
+			h.drainRemovals()
+			at, ok := h.removalTime(255)
+			if !ok {
+				t.Fatal("the node was never removed")
+			}
+			if got := at.Sub(t0); got < tc.want || got > tc.want+shareNodeSettlePoll {
+				t.Errorf("removed %s after it was made, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRemoveShareNode_ProceedsAfterTheBound(t *testing.T) {
+	t.Run("udev never finishes", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		t0 := h.clock.Now()
+		h.setUdev(func(int) bool { return false })
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		h.s.RemoveCameraShares("cv-a")
+		h.drainRemovals()
+		at, ok := h.removalTime(255)
+		if !ok {
+			t.Fatal("the node was never removed")
+		}
+		if got := at.Sub(t0); got < shareNodeSettleBound || got > shareNodeSettleBound+shareNodeSettlePoll {
+			t.Errorf("removed %s after the wait began, want the %s bound", got, shareNodeSettleBound)
+		}
+		if n := h.logged("camera share: /dev/video255 is not settled after 2s"); n != 1 {
+			t.Errorf("the give-up line logged %d times, want 1; logs: %v", n, h.logs.All())
+		}
+	})
+
+	t.Run("an earlier agent's node counts as old", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.writeState(`{"version":1,"containers":{"cv-gone":{"app":"a","shares":[` +
+			csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
+		h.loop.addLiveAux(254, "Brio 101")
+		h.s.loadCameraShares()
+		t0 := h.clock.Now()
+		h.s.SyncCameraShares(context.Background(), nil)
+		h.drainRemovals()
+		if at, ok := h.removalTime(254); !ok || !at.Equal(t0) {
+			t.Errorf("removed at %v (%v), want at once, with no wait for its age", at.Sub(t0), ok)
+		}
+	})
+}
+
+func TestRemoveShareNode_HeldNodeIsLeftAndRetriedOnTheNextSync(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.setHeld("/dev/video255", deviceHolder{PID: 4321, Comm: "wireplumber"})
+	h.s.RemoveCameraShares("cv-a")
+	h.drainRemovals()
+
+	line := "camera share: left /dev/video255 in place: it is open in pid 4321 (wireplumber); it is removed later"
+	if n := h.logged(line); n != 1 {
+		t.Errorf("held line logged %d times, want 1; logs: %v", n, h.logs.All())
+	}
+	if got := h.loop.removedAux(); len(got) != 0 {
+		t.Fatalf("a held node was removed: %v", got)
+	}
+	if !h.s.IsShareNode("/dev/video255") || !reflect.DeepEqual(h.pendingRemovals(), []int{255}) {
+		t.Errorf("the held node is not a share node waiting to be removed (pending %v)", h.pendingRemovals())
+	}
+	state := h.stateFile()
+	if len(state["containers"].(map[string]any)) != 0 {
+		t.Errorf("the held node is still a container's share in the state file: %v", state)
+	}
+	if want := []any{map[string]any{"node": float64(255), "name": "Brio 101"}}; !reflect.DeepEqual(state["removing"], want) {
+		t.Errorf("state file removing = %v, want %v", state["removing"], want)
+	}
+
+	// Its number is not reused while it waits.
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+	if recs := h.records("cv-b"); len(recs) != 1 || recs[0].node != 254 {
+		t.Errorf("cv-b's records = %+v, want node 254", recs)
+	}
+
+	// Still held at the next sync: still there, and said once.
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-b", Running: true}})
+	h.drainRemovals()
+	if got := h.loop.removedAux(); len(got) != 0 || h.logged(line) != 1 {
+		t.Errorf("after a sync while held: removed %v, held line %d times", got, h.logged(line))
+	}
+
+	// The holder lets go; the next sync removes it.
+	h.setHeld("/dev/video255")
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-b", Running: true}})
+	h.drainRemovals()
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{255}) {
+		t.Errorf("removed %v, want [255]", got)
+	}
+	if h.s.IsShareNode("/dev/video255") || len(h.pendingRemovals()) != 0 {
+		t.Errorf("after removal: IsShareNode %v, pending %v", h.s.IsShareNode("/dev/video255"), h.pendingRemovals())
+	}
+	if state := h.stateFile(); state["removing"] != nil {
+		t.Errorf("state file still lists removals: %v", state["removing"])
+	}
+	if recs := h.records("cv-b"); len(recs) != 1 {
+		t.Errorf("cv-b lost its share: %+v", recs)
+	}
+}
+
+func TestRemoveShareNode_ARemovalTheDriverRefusesIsRetried(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.loop.mu.Lock()
+	h.loop.refuseRemove = true // opened after the holder check
+	h.loop.mu.Unlock()
+	h.s.RemoveCameraShares("cv-a")
+	h.drainRemovals()
+	if n := h.logged("camera share: left /dev/video255 in place: removing it did not take; it is removed later"); n != 1 {
+		t.Errorf("refusal line logged %d times, want 1; logs: %v", n, h.logs.All())
+	}
+	if !reflect.DeepEqual(h.pendingRemovals(), []int{255}) || !h.s.IsShareNode("/dev/video255") {
+		t.Errorf("pending %v; want 255 still waiting and a share node", h.pendingRemovals())
+	}
+
+	h.loop.mu.Lock()
+	h.loop.refuseRemove = false
+	h.loop.mu.Unlock()
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	if got := h.loop.liveAux(); len(got) != 0 || len(h.pendingRemovals()) != 0 {
+		t.Errorf("live %v, pending %v; want the node gone", got, h.pendingRemovals())
+	}
+}
+
+func TestRemoveShareNode_NeverRemovedTwice(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	// An earlier agent's file holds node 254 both as cv-gone's share and as a
+	// removal: both lead to the one node.
+	h.writeState(`{"version":1,"containers":{"cv-gone":{"app":"a","shares":[` +
+		csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}},"removing":[{"node":254,"name":"Brio 101"}]}`)
+	h.loop.addLiveAux(254, "Brio 101")
+	h.s.loadCameraShares()
+	h.setHeld("/dev/video254", deviceHolder{PID: 99, Comm: "v4l_id"})
+
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	h.setHeld("/dev/video254")
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.s.SyncCameraShares(context.Background(), nil)
+			h.s.RemoveCameraShares("cv-gone")
+		}()
+	}
+	wg.Wait()
+	h.drainRemovals()
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{254}) {
+		t.Errorf("RemoveAuxNode calls = %v, want 254 once", got)
+	}
+}
+
+func TestShutdown_DoesNotHangOnARemovalWaitingToSettle(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.setUdev(func(int) bool { return false })
+	h.clock.setFrozen(true) // the settle wait never ends on its own
+
+	start := time.Now()
+	h.s.RemoveCameraShares("cv-a")
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Errorf("RemoveCameraShares took %s: it waited for the node to settle", took)
+	}
+	if got := h.loop.liveAux(); !reflect.DeepEqual(got, []int{255}) || !h.s.IsShareNode("/dev/video255") {
+		t.Errorf("live nodes %v, IsShareNode %v; want 255 still there and a share node", got, h.s.IsShareNode("/dev/video255"))
+	}
+
+	done := make(chan struct{})
+	go func() {
+		h.s.Shutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown hung on a removal waiting to settle")
+	}
+	if got := h.loop.removedAux(); len(got) != 0 {
+		t.Errorf("Shutdown removed %v", got)
+	}
+	if want := []any{map[string]any{"node": float64(255), "name": "Brio 101"}}; !reflect.DeepEqual(h.stateFile()["removing"], want) {
+		t.Errorf("state file removing = %v, want %v", h.stateFile()["removing"], want)
+	}
+
+	// The next agent knows the node and removes it at its first sync.
+	h.clock.setFrozen(false)
+	h.setUdev(nil)
+	next := &VideoService{logger: zap.NewNop(), loopback: h.loop, readDeviceName: h.s.readDeviceName}
+	next.loadCameraShares()
+	if !next.IsShareNode("/dev/video255") {
+		t.Error("the next agent does not know /dev/video255 is a share node")
+	}
+	next.SyncCameraShares(context.Background(), nil)
+	drainShareRemovals(t, next)
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{255}) {
+		t.Errorf("the next agent removed %v, want [255]", got)
+	}
+}
+
+func TestProcDeviceHolders_FindsOtherProcessesHoldingTheDevice(t *testing.T) {
+	root := t.TempDir()
+	prev := procRoot
+	procRoot = root
+	t.Cleanup(func() { procRoot = prev })
+	regular := filepath.Join(root, "regular")
+	if err := os.WriteFile(regular, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	proc := func(pid, comm string, fds map[string]string) {
+		t.Helper()
+		dir := filepath.Join(root, pid)
+		for _, sub := range []string{"fd", "ns"} {
+			if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "comm"), []byte(comm+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "ns", "mnt"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for fd, target := range fds {
+			if err := os.Symlink(target, filepath.Join(dir, "fd", fd)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	proc("100", "wireplumber", map[string]string{"3": regular, "4": "/dev/null"})
+	proc("200", "bash", map[string]string{"0": regular, "1": "/dev/zero"})
+	proc(strconv.Itoa(os.Getpid()), "wendy-agent", map[string]string{"5": "/dev/null"}) // the agent itself
+	proc("self", "wendy-agent", map[string]string{"5": "/dev/null"})
+
+	fi, err := os.Stat(filepath.Join(root, "100", "ns", "mnt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []deviceHolder{{PID: 100, Comm: "wireplumber", MountNS: uint64(fi.Sys().(*syscall.Stat_t).Ino)}}
+	if got := procDeviceHolders("/dev/null"); !reflect.DeepEqual(got, want) {
+		t.Errorf("procDeviceHolders(/dev/null) = %+v, want %+v", got, want)
+	}
+	if got := procDeviceHolders(regular); got != nil {
+		t.Errorf("a regular file has holders: %+v", got)
+	}
+	if got := procDeviceHolders(filepath.Join(root, "missing")); got != nil {
+		t.Errorf("a missing device has holders: %+v", got)
+	}
 }
