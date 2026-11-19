@@ -614,8 +614,9 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 const cameraRejoinDelay = 500 * time.Millisecond
 
 // cameraRejoinAttempts bounds the rejoins one `camera view` will make. A
-// takeover is a rare event driven by a campaign trigger; a stream that keeps
-// being restarted is a device busy recording, and saying so beats reconnecting
+// takeover is a rare event (a campaign trigger, or an app starting to share
+// the camera); a stream that keeps being restarted means something on the
+// device keeps taking the camera over, and saying so beats reconnecting
 // forever in a loop the operator has to notice and break.
 const cameraRejoinAttempts = 5
 
@@ -647,7 +648,8 @@ func streamCameraRejoiningRestarts(ctx context.Context, open func() (videoStream
 			return ctx.Err()
 		}
 		if attempt+1 >= cameraRejoinAttempts {
-			return fmt.Errorf("camera producer was restarted %d times in a row; the device is busy recording: %w",
+			return fmt.Errorf("camera producer was restarted %d times in a row; something on the device keeps taking the camera over "+
+				"(a recording, or an app starting to share it), so try again later: %w",
 				cameraRejoinAttempts, err)
 		}
 		cliLogln("The agent restarted the camera producer; rejoining the new stream...")

@@ -1119,8 +1119,9 @@ func TestCameraViewDoesNotRejoinOnOtherErrors(t *testing.T) {
 	}
 }
 
-// A device that keeps restarting its producer is busy recording. Say so rather
-// than reconnecting forever.
+// A device that keeps restarting its producer keeps taking the camera over (a
+// recording, or an app starting to share it). Say so rather than reconnecting
+// forever, without claiming which.
 func TestCameraViewGivesUpAfterRepeatedRestarts(t *testing.T) {
 	opens := 0
 	open := func() (videoStream, error) {
@@ -1135,8 +1136,11 @@ func TestCameraViewGivesUpAfterRepeatedRestarts(t *testing.T) {
 	if err == nil {
 		t.Fatal("the viewer rejoined forever instead of reporting a busy device")
 	}
-	if !strings.Contains(err.Error(), "busy recording") {
-		t.Fatalf("error does not say the device is busy recording: %v", err)
+	if !strings.Contains(err.Error(), "something on the device keeps taking the camera over (a recording, or an app starting to share it)") {
+		t.Fatalf("error does not say the camera keeps being taken over: %v", err)
+	}
+	if strings.Contains(err.Error(), "busy recording") {
+		t.Fatalf("error claims a recording is the cause: %v", err)
 	}
 	if opens != cameraRejoinAttempts {
 		t.Fatalf("streams opened = %d, want %d", opens, cameraRejoinAttempts)
