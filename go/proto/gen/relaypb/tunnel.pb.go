@@ -173,6 +173,72 @@ func (SessionState) EnumDescriptor() ([]byte, []int) {
 	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{2}
 }
 
+// Why an agent will not serve a session. A value names a condition of the
+// agent and nothing else: it identifies no user, organization, asset, service,
+// host or port, so it may cross the broker boundary. Receivers treat a value
+// they do not know as SESSION_REFUSAL_REASON_UNSPECIFIED.
+type SessionRefusalReason int32
+
+const (
+	// The agent gives no reason.
+	SessionRefusalReason_SESSION_REFUSAL_REASON_UNSPECIFIED SessionRefusalReason = 0
+	// The grant's signature and bindings hold, but its iat/exp window does not
+	// hold on the agent's clock. The usual cause is a wrong agent clock.
+	SessionRefusalReason_SESSION_REFUSAL_REASON_CLOCK SessionRefusalReason = 1
+	// The agent is at its limit of retained offers or live sessions.
+	SessionRefusalReason_SESSION_REFUSAL_REASON_BUSY SessionRefusalReason = 2
+	// Nothing accepted the agent's connection to the dial target.
+	SessionRefusalReason_SESSION_REFUSAL_REASON_SERVICE_UNREACHABLE SessionRefusalReason = 3
+	// The agent does not serve the decrypted dial instruction's service or
+	// transport.
+	SessionRefusalReason_SESSION_REFUSAL_REASON_UNSUPPORTED SessionRefusalReason = 4
+)
+
+// Enum value maps for SessionRefusalReason.
+var (
+	SessionRefusalReason_name = map[int32]string{
+		0: "SESSION_REFUSAL_REASON_UNSPECIFIED",
+		1: "SESSION_REFUSAL_REASON_CLOCK",
+		2: "SESSION_REFUSAL_REASON_BUSY",
+		3: "SESSION_REFUSAL_REASON_SERVICE_UNREACHABLE",
+		4: "SESSION_REFUSAL_REASON_UNSUPPORTED",
+	}
+	SessionRefusalReason_value = map[string]int32{
+		"SESSION_REFUSAL_REASON_UNSPECIFIED":         0,
+		"SESSION_REFUSAL_REASON_CLOCK":               1,
+		"SESSION_REFUSAL_REASON_BUSY":                2,
+		"SESSION_REFUSAL_REASON_SERVICE_UNREACHABLE": 3,
+		"SESSION_REFUSAL_REASON_UNSUPPORTED":         4,
+	}
+)
+
+func (x SessionRefusalReason) Enum() *SessionRefusalReason {
+	p := new(SessionRefusalReason)
+	*p = x
+	return p
+}
+
+func (x SessionRefusalReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SessionRefusalReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendycloud_tunnel_v2_tunnel_proto_enumTypes[3].Descriptor()
+}
+
+func (SessionRefusalReason) Type() protoreflect.EnumType {
+	return &file_wendycloud_tunnel_v2_tunnel_proto_enumTypes[3]
+}
+
+func (x SessionRefusalReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SessionRefusalReason.Descriptor instead.
+func (SessionRefusalReason) EnumDescriptor() ([]byte, []int) {
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{3}
+}
+
 type JoinRole int32
 
 const (
@@ -206,11 +272,11 @@ func (x JoinRole) String() string {
 }
 
 func (JoinRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendycloud_tunnel_v2_tunnel_proto_enumTypes[3].Descriptor()
+	return file_wendycloud_tunnel_v2_tunnel_proto_enumTypes[4].Descriptor()
 }
 
 func (JoinRole) Type() protoreflect.EnumType {
-	return &file_wendycloud_tunnel_v2_tunnel_proto_enumTypes[3]
+	return &file_wendycloud_tunnel_v2_tunnel_proto_enumTypes[4]
 }
 
 func (x JoinRole) Number() protoreflect.EnumNumber {
@@ -219,7 +285,7 @@ func (x JoinRole) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use JoinRole.Descriptor instead.
 func (JoinRole) EnumDescriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{3}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{4}
 }
 
 // Exact address and audience of one live broker boot incarnation chosen by
@@ -1178,14 +1244,18 @@ type EncryptedDialInstructionEnvelope struct {
 	EncapsulatedKey []byte `protobuf:"bytes,2,opt,name=encapsulated_key,json=encapsulatedKey,proto3" json:"encapsulated_key,omitempty"`
 	// Exact HPKE info bytes. CanonicalEncode is defined below:
 	// CanonicalEncode("wendycloud.tunnel.v1/hpke-info/1", session_id,
-	//                 routing_handle,
-	//                 SHA-256(agent_key_agreement_spki_der)).
+	//
+	//	routing_handle,
+	//	SHA-256(agent_key_agreement_spki_der)).
+	//
 	// This is exactly TunnelHPKEContext.info. The final component is 32 raw
 	// digest bytes, not base64url text.
 	Info []byte `protobuf:"bytes,3,opt,name=info,proto3" json:"info,omitempty"`
 	// Exact AEAD associated data bytes:
 	// CanonicalEncode("wendycloud.tunnel.v1/hpke-aad/1", session_id,
-	//                 SHA-256(exact decoded §4.1 request-descriptor payload)).
+	//
+	//	SHA-256(exact decoded §4.1 request-descriptor payload)).
+	//
 	// This is exactly TunnelHPKEContext.aad. The request digest is 32 raw bytes.
 	Aad []byte `protobuf:"bytes,4,opt,name=aad,proto3" json:"aad,omitempty"`
 	// HPKE Seal output over exactly 4096 plaintext bytes: ciphertext followed by
@@ -1611,11 +1681,77 @@ func (x *PresenceOfferAcknowledgement) GetSessionId() string {
 	return ""
 }
 
+// The agent will not serve an offer it received on this stream. It replaces the
+// acknowledgement, or follows it when the agent finds the reason only after
+// acknowledging (a failed dial, a full session limit). The agent has not joined
+// the session and will not.
+type PresenceOfferRefusal struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OfferId       string                 `protobuf:"bytes,1,opt,name=offer_id,json=offerId,proto3" json:"offer_id,omitempty"`       // Exact opaque offer_id received from broker, 1..128 bytes.
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // Exact opaque session_id in that offer, 1..128 bytes.
+	Reason        SessionRefusalReason   `protobuf:"varint,3,opt,name=reason,proto3,enum=wendycloud.tunnel.v2.SessionRefusalReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PresenceOfferRefusal) Reset() {
+	*x = PresenceOfferRefusal{}
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PresenceOfferRefusal) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PresenceOfferRefusal) ProtoMessage() {}
+
+func (x *PresenceOfferRefusal) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PresenceOfferRefusal.ProtoReflect.Descriptor instead.
+func (*PresenceOfferRefusal) Descriptor() ([]byte, []int) {
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PresenceOfferRefusal) GetOfferId() string {
+	if x != nil {
+		return x.OfferId
+	}
+	return ""
+}
+
+func (x *PresenceOfferRefusal) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *PresenceOfferRefusal) GetReason() SessionRefusalReason {
+	if x != nil {
+		return x.Reason
+	}
+	return SessionRefusalReason_SESSION_REFUSAL_REASON_UNSPECIFIED
+}
+
 type RegisterPresenceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// State machine: first open, then exactly one proof, then zero or more
-	// renewals and offer acknowledgements. Traffic in any other order closes the
-	// stream. Acknowledgements are valid only after PresenceAccepted.
+	// renewals, offer acknowledgements and offer refusals. Traffic in any other
+	// order closes the stream. Acknowledgements are valid only after
+	// PresenceAccepted; refusals only after a PresenceAccepted that sets
+	// offer_refusal_supported.
 	//
 	// Types that are valid to be assigned to Message:
 	//
@@ -1623,6 +1759,7 @@ type RegisterPresenceRequest struct {
 	//	*RegisterPresenceRequest_Proof
 	//	*RegisterPresenceRequest_Renewal
 	//	*RegisterPresenceRequest_OfferAcknowledgement
+	//	*RegisterPresenceRequest_OfferRefusal
 	Message       isRegisterPresenceRequest_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1630,7 +1767,7 @@ type RegisterPresenceRequest struct {
 
 func (x *RegisterPresenceRequest) Reset() {
 	*x = RegisterPresenceRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1642,7 +1779,7 @@ func (x *RegisterPresenceRequest) String() string {
 func (*RegisterPresenceRequest) ProtoMessage() {}
 
 func (x *RegisterPresenceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1655,7 +1792,7 @@ func (x *RegisterPresenceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPresenceRequest.ProtoReflect.Descriptor instead.
 func (*RegisterPresenceRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{19}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RegisterPresenceRequest) GetMessage() isRegisterPresenceRequest_Message {
@@ -1701,6 +1838,15 @@ func (x *RegisterPresenceRequest) GetOfferAcknowledgement() *PresenceOfferAcknow
 	return nil
 }
 
+func (x *RegisterPresenceRequest) GetOfferRefusal() *PresenceOfferRefusal {
+	if x != nil {
+		if x, ok := x.Message.(*RegisterPresenceRequest_OfferRefusal); ok {
+			return x.OfferRefusal
+		}
+	}
+	return nil
+}
+
 type isRegisterPresenceRequest_Message interface {
 	isRegisterPresenceRequest_Message()
 }
@@ -1721,6 +1867,11 @@ type RegisterPresenceRequest_OfferAcknowledgement struct {
 	OfferAcknowledgement *PresenceOfferAcknowledgement `protobuf:"bytes,4,opt,name=offer_acknowledgement,json=offerAcknowledgement,proto3,oneof"`
 }
 
+type RegisterPresenceRequest_OfferRefusal struct {
+	// Field 16: 5..15 stay reserved (buf breaking forbids un-reserving them).
+	OfferRefusal *PresenceOfferRefusal `protobuf:"bytes,16,opt,name=offer_refusal,json=offerRefusal,proto3,oneof"`
+}
+
 func (*RegisterPresenceRequest_Open) isRegisterPresenceRequest_Message() {}
 
 func (*RegisterPresenceRequest_Proof) isRegisterPresenceRequest_Message() {}
@@ -1728,6 +1879,8 @@ func (*RegisterPresenceRequest_Proof) isRegisterPresenceRequest_Message() {}
 func (*RegisterPresenceRequest_Renewal) isRegisterPresenceRequest_Message() {}
 
 func (*RegisterPresenceRequest_OfferAcknowledgement) isRegisterPresenceRequest_Message() {}
+
+func (*RegisterPresenceRequest_OfferRefusal) isRegisterPresenceRequest_Message() {}
 
 type BrokerChallenge struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1740,7 +1893,7 @@ type BrokerChallenge struct {
 
 func (x *BrokerChallenge) Reset() {
 	*x = BrokerChallenge{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1752,7 +1905,7 @@ func (x *BrokerChallenge) String() string {
 func (*BrokerChallenge) ProtoMessage() {}
 
 func (x *BrokerChallenge) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1765,7 +1918,7 @@ func (x *BrokerChallenge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrokerChallenge.ProtoReflect.Descriptor instead.
 func (*BrokerChallenge) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{20}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BrokerChallenge) GetChallengeId() []byte {
@@ -1793,13 +1946,18 @@ type PresenceAccepted struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	LeaseExpiresAt *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"` // Signed lease exp.
 	RenewBy        *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=renew_by,json=renewBy,proto3" json:"renew_by,omitempty"`                        // Advisory; never extends exp.
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// True when this broker accepts PresenceOfferRefusal on this stream. A broker
+	// that predates the message closes the stream on it as invalid message
+	// order, so an agent MUST NOT send a refusal unless this is true.
+	// Field 16: 3..15 stay reserved (buf breaking forbids un-reserving them).
+	OfferRefusalSupported bool `protobuf:"varint,16,opt,name=offer_refusal_supported,json=offerRefusalSupported,proto3" json:"offer_refusal_supported,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *PresenceAccepted) Reset() {
 	*x = PresenceAccepted{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1811,7 +1969,7 @@ func (x *PresenceAccepted) String() string {
 func (*PresenceAccepted) ProtoMessage() {}
 
 func (x *PresenceAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1824,7 +1982,7 @@ func (x *PresenceAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceAccepted.ProtoReflect.Descriptor instead.
 func (*PresenceAccepted) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{21}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PresenceAccepted) GetLeaseExpiresAt() *timestamppb.Timestamp {
@@ -1841,6 +1999,13 @@ func (x *PresenceAccepted) GetRenewBy() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *PresenceAccepted) GetOfferRefusalSupported() bool {
+	if x != nil {
+		return x.OfferRefusalSupported
+	}
+	return false
+}
+
 type PresenceRenewed struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	LeaseExpiresAt *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"`
@@ -1851,7 +2016,7 @@ type PresenceRenewed struct {
 
 func (x *PresenceRenewed) Reset() {
 	*x = PresenceRenewed{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1863,7 +2028,7 @@ func (x *PresenceRenewed) String() string {
 func (*PresenceRenewed) ProtoMessage() {}
 
 func (x *PresenceRenewed) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1876,7 +2041,7 @@ func (x *PresenceRenewed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceRenewed.ProtoReflect.Descriptor instead.
 func (*PresenceRenewed) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{22}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *PresenceRenewed) GetLeaseExpiresAt() *timestamppb.Timestamp {
@@ -1910,7 +2075,7 @@ type SessionOffer struct {
 
 func (x *SessionOffer) Reset() {
 	*x = SessionOffer{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1922,7 +2087,7 @@ func (x *SessionOffer) String() string {
 func (*SessionOffer) ProtoMessage() {}
 
 func (x *SessionOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1935,7 +2100,7 @@ func (x *SessionOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionOffer.ProtoReflect.Descriptor instead.
 func (*SessionOffer) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{23}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SessionOffer) GetSessionGrantJws() string {
@@ -1976,7 +2141,7 @@ type PresenceOfferAcknowledged struct {
 
 func (x *PresenceOfferAcknowledged) Reset() {
 	*x = PresenceOfferAcknowledged{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1988,7 +2153,7 @@ func (x *PresenceOfferAcknowledged) String() string {
 func (*PresenceOfferAcknowledged) ProtoMessage() {}
 
 func (x *PresenceOfferAcknowledged) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2001,7 +2166,7 @@ func (x *PresenceOfferAcknowledged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceOfferAcknowledged.ProtoReflect.Descriptor instead.
 func (*PresenceOfferAcknowledged) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{24}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *PresenceOfferAcknowledged) GetOfferId() string {
@@ -2037,7 +2202,7 @@ type RegisterPresenceResponse struct {
 
 func (x *RegisterPresenceResponse) Reset() {
 	*x = RegisterPresenceResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2049,7 +2214,7 @@ func (x *RegisterPresenceResponse) String() string {
 func (*RegisterPresenceResponse) ProtoMessage() {}
 
 func (x *RegisterPresenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2062,7 +2227,7 @@ func (x *RegisterPresenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPresenceResponse.ProtoReflect.Descriptor instead.
 func (*RegisterPresenceResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{25}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RegisterPresenceResponse) GetMessage() isRegisterPresenceResponse_Message {
@@ -2161,7 +2326,7 @@ type JoinOpen struct {
 
 func (x *JoinOpen) Reset() {
 	*x = JoinOpen{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2173,7 +2338,7 @@ func (x *JoinOpen) String() string {
 func (*JoinOpen) ProtoMessage() {}
 
 func (x *JoinOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2186,7 +2351,7 @@ func (x *JoinOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinOpen.ProtoReflect.Descriptor instead.
 func (*JoinOpen) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{26}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *JoinOpen) GetSessionGrantJws() string {
@@ -2213,7 +2378,7 @@ type JoinProof struct {
 
 func (x *JoinProof) Reset() {
 	*x = JoinProof{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2225,7 +2390,7 @@ func (x *JoinProof) String() string {
 func (*JoinProof) ProtoMessage() {}
 
 func (x *JoinProof) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2238,7 +2403,7 @@ func (x *JoinProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinProof.ProtoReflect.Descriptor instead.
 func (*JoinProof) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{27}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *JoinProof) GetChallengeId() []byte {
@@ -2271,7 +2436,7 @@ type TunnelFrame struct {
 
 func (x *TunnelFrame) Reset() {
 	*x = TunnelFrame{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2283,7 +2448,7 @@ func (x *TunnelFrame) String() string {
 func (*TunnelFrame) ProtoMessage() {}
 
 func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2296,7 +2461,7 @@ func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelFrame.ProtoReflect.Descriptor instead.
 func (*TunnelFrame) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{28}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TunnelFrame) GetFrame() isTunnelFrame_Frame {
@@ -2410,7 +2575,7 @@ type TunnelDatagram struct {
 
 func (x *TunnelDatagram) Reset() {
 	*x = TunnelDatagram{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2422,7 +2587,7 @@ func (x *TunnelDatagram) String() string {
 func (*TunnelDatagram) ProtoMessage() {}
 
 func (x *TunnelDatagram) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2435,7 +2600,7 @@ func (x *TunnelDatagram) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelDatagram.ProtoReflect.Descriptor instead.
 func (*TunnelDatagram) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{29}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *TunnelDatagram) GetFlowId() uint32 {
@@ -2471,7 +2636,7 @@ type IcmpEchoRequest struct {
 
 func (x *IcmpEchoRequest) Reset() {
 	*x = IcmpEchoRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2483,7 +2648,7 @@ func (x *IcmpEchoRequest) String() string {
 func (*IcmpEchoRequest) ProtoMessage() {}
 
 func (x *IcmpEchoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2496,7 +2661,7 @@ func (x *IcmpEchoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IcmpEchoRequest.ProtoReflect.Descriptor instead.
 func (*IcmpEchoRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{30}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *IcmpEchoRequest) GetIdentifier() uint32 {
@@ -2540,7 +2705,7 @@ type IcmpEchoReply struct {
 
 func (x *IcmpEchoReply) Reset() {
 	*x = IcmpEchoReply{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2552,7 +2717,7 @@ func (x *IcmpEchoReply) String() string {
 func (*IcmpEchoReply) ProtoMessage() {}
 
 func (x *IcmpEchoReply) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2565,7 +2730,7 @@ func (x *IcmpEchoReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IcmpEchoReply.ProtoReflect.Descriptor instead.
 func (*IcmpEchoReply) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{31}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *IcmpEchoReply) GetIdentifier() uint32 {
@@ -2620,7 +2785,7 @@ type JoinSessionRequest struct {
 
 func (x *JoinSessionRequest) Reset() {
 	*x = JoinSessionRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2632,7 +2797,7 @@ func (x *JoinSessionRequest) String() string {
 func (*JoinSessionRequest) ProtoMessage() {}
 
 func (x *JoinSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2645,7 +2810,7 @@ func (x *JoinSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinSessionRequest.ProtoReflect.Descriptor instead.
 func (*JoinSessionRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{32}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *JoinSessionRequest) GetMessage() isJoinSessionRequest_Message {
@@ -2714,7 +2879,7 @@ type JoinAccepted struct {
 
 func (x *JoinAccepted) Reset() {
 	*x = JoinAccepted{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2726,7 +2891,7 @@ func (x *JoinAccepted) String() string {
 func (*JoinAccepted) ProtoMessage() {}
 
 func (x *JoinAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2739,7 +2904,7 @@ func (x *JoinAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinAccepted.ProtoReflect.Descriptor instead.
 func (*JoinAccepted) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{33}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *JoinAccepted) GetRole() JoinRole {
@@ -2756,6 +2921,56 @@ func (x *JoinAccepted) GetRelayExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// Sent to the caller in place of JoinAccepted when the agent refused the
+// session's offer (PresenceOfferRefusal). Broker sends it only after it has
+// verified that stream's caller JoinProof, whether the refusal arrived before
+// or after the caller joined, and then ends the stream with
+// FAILED_PRECONDITION. It is the last message on the stream. A caller that
+// predates this message fails the join on an unknown response.
+type SessionRefused struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        SessionRefusalReason   `protobuf:"varint,1,opt,name=reason,proto3,enum=wendycloud.tunnel.v2.SessionRefusalReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionRefused) Reset() {
+	*x = SessionRefused{}
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionRefused) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionRefused) ProtoMessage() {}
+
+func (x *SessionRefused) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionRefused.ProtoReflect.Descriptor instead.
+func (*SessionRefused) Descriptor() ([]byte, []int) {
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *SessionRefused) GetReason() SessionRefusalReason {
+	if x != nil {
+		return x.Reason
+	}
+	return SessionRefusalReason_SESSION_REFUSAL_REASON_UNSPECIFIED
+}
+
 type JoinSessionResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Message:
@@ -2763,6 +2978,7 @@ type JoinSessionResponse struct {
 	//	*JoinSessionResponse_Challenge
 	//	*JoinSessionResponse_Accepted
 	//	*JoinSessionResponse_Frame
+	//	*JoinSessionResponse_Refused
 	Message       isJoinSessionResponse_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2770,7 +2986,7 @@ type JoinSessionResponse struct {
 
 func (x *JoinSessionResponse) Reset() {
 	*x = JoinSessionResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2782,7 +2998,7 @@ func (x *JoinSessionResponse) String() string {
 func (*JoinSessionResponse) ProtoMessage() {}
 
 func (x *JoinSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2795,7 +3011,7 @@ func (x *JoinSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinSessionResponse.ProtoReflect.Descriptor instead.
 func (*JoinSessionResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{34}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *JoinSessionResponse) GetMessage() isJoinSessionResponse_Message {
@@ -2832,6 +3048,15 @@ func (x *JoinSessionResponse) GetFrame() *TunnelFrame {
 	return nil
 }
 
+func (x *JoinSessionResponse) GetRefused() *SessionRefused {
+	if x != nil {
+		if x, ok := x.Message.(*JoinSessionResponse_Refused); ok {
+			return x.Refused
+		}
+	}
+	return nil
+}
+
 type isJoinSessionResponse_Message interface {
 	isJoinSessionResponse_Message()
 }
@@ -2848,11 +3073,18 @@ type JoinSessionResponse_Frame struct {
 	Frame *TunnelFrame `protobuf:"bytes,3,opt,name=frame,proto3,oneof"`
 }
 
+type JoinSessionResponse_Refused struct {
+	// Field 16: 4..15 stay reserved (buf breaking forbids un-reserving them).
+	Refused *SessionRefused `protobuf:"bytes,16,opt,name=refused,proto3,oneof"`
+}
+
 func (*JoinSessionResponse_Challenge) isJoinSessionResponse_Message() {}
 
 func (*JoinSessionResponse_Accepted) isJoinSessionResponse_Message() {}
 
 func (*JoinSessionResponse_Frame) isJoinSessionResponse_Message() {}
+
+func (*JoinSessionResponse_Refused) isJoinSessionResponse_Message() {}
 
 var File_wendycloud_tunnel_v2_tunnel_proto protoreflect.FileDescriptor
 
@@ -2969,21 +3201,28 @@ const file_wendycloud_tunnel_v2_tunnel_proto_rawDesc = "" +
 	"\x1cPresenceOfferAcknowledgement\x12\x19\n" +
 	"\boffer_id\x18\x01 \x01(\tR\aofferId\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x02 \x01(\tR\tsessionIdJ\x04\b\x03\x10\x10\"\xcf\x02\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionIdJ\x04\b\x03\x10\x10\"\x9a\x01\n" +
+	"\x14PresenceOfferRefusal\x12\x19\n" +
+	"\boffer_id\x18\x01 \x01(\tR\aofferId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12B\n" +
+	"\x06reason\x18\x03 \x01(\x0e2*.wendycloud.tunnel.v2.SessionRefusalReasonR\x06reasonJ\x04\b\x04\x10\x10\"\xa2\x03\n" +
 	"\x17RegisterPresenceRequest\x128\n" +
 	"\x04open\x18\x01 \x01(\v2\".wendycloud.tunnel.v2.PresenceOpenH\x00R\x04open\x12;\n" +
 	"\x05proof\x18\x02 \x01(\v2#.wendycloud.tunnel.v2.PresenceProofH\x00R\x05proof\x12A\n" +
 	"\arenewal\x18\x03 \x01(\v2%.wendycloud.tunnel.v2.PresenceRenewalH\x00R\arenewal\x12i\n" +
-	"\x15offer_acknowledgement\x18\x04 \x01(\v22.wendycloud.tunnel.v2.PresenceOfferAcknowledgementH\x00R\x14offerAcknowledgementB\t\n" +
+	"\x15offer_acknowledgement\x18\x04 \x01(\v22.wendycloud.tunnel.v2.PresenceOfferAcknowledgementH\x00R\x14offerAcknowledgement\x12Q\n" +
+	"\roffer_refusal\x18\x10 \x01(\v2*.wendycloud.tunnel.v2.PresenceOfferRefusalH\x00R\fofferRefusalB\t\n" +
 	"\amessageJ\x04\b\x05\x10\x10\"\x8b\x01\n" +
 	"\x0fBrokerChallenge\x12!\n" +
 	"\fchallenge_id\x18\x01 \x01(\fR\vchallengeId\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x129\n" +
 	"\n" +
-	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAtJ\x04\b\x04\x10\x10\"\x95\x01\n" +
+	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAtJ\x04\b\x04\x10\x10\"\xcd\x01\n" +
 	"\x10PresenceAccepted\x12D\n" +
 	"\x10lease_expires_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x0eleaseExpiresAt\x125\n" +
-	"\brenew_by\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\arenewByJ\x04\b\x03\x10\x10\"\x94\x01\n" +
+	"\brenew_by\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\arenewBy\x126\n" +
+	"\x17offer_refusal_supported\x18\x10 \x01(\bR\x15offerRefusalSupportedJ\x04\b\x03\x10\x10\"\x94\x01\n" +
 	"\x0fPresenceRenewed\x12D\n" +
 	"\x10lease_expires_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x0eleaseExpiresAt\x125\n" +
 	"\brenew_by\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\arenewByJ\x04\b\x03\x10\x10\"\xf0\x01\n" +
@@ -3045,11 +3284,14 @@ const file_wendycloud_tunnel_v2_tunnel_proto_rawDesc = "" +
 	"\amessageJ\x04\b\x04\x10\x10\"\x8e\x01\n" +
 	"\fJoinAccepted\x122\n" +
 	"\x04role\x18\x01 \x01(\x0e2\x1e.wendycloud.tunnel.v2.JoinRoleR\x04role\x12D\n" +
-	"\x10relay_expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x0erelayExpiresAtJ\x04\b\x03\x10\x10\"\xea\x01\n" +
+	"\x10relay_expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x0erelayExpiresAtJ\x04\b\x03\x10\x10\"Z\n" +
+	"\x0eSessionRefused\x12B\n" +
+	"\x06reason\x18\x01 \x01(\x0e2*.wendycloud.tunnel.v2.SessionRefusalReasonR\x06reasonJ\x04\b\x02\x10\x10\"\xac\x02\n" +
 	"\x13JoinSessionResponse\x12E\n" +
 	"\tchallenge\x18\x01 \x01(\v2%.wendycloud.tunnel.v2.BrokerChallengeH\x00R\tchallenge\x12@\n" +
 	"\baccepted\x18\x02 \x01(\v2\".wendycloud.tunnel.v2.JoinAcceptedH\x00R\baccepted\x129\n" +
-	"\x05frame\x18\x03 \x01(\v2!.wendycloud.tunnel.v2.TunnelFrameH\x00R\x05frameB\t\n" +
+	"\x05frame\x18\x03 \x01(\v2!.wendycloud.tunnel.v2.TunnelFrameH\x00R\x05frame\x12@\n" +
+	"\arefused\x18\x10 \x01(\v2$.wendycloud.tunnel.v2.SessionRefusedH\x00R\arefusedB\t\n" +
 	"\amessageJ\x04\b\x04\x10\x10*f\n" +
 	"\tHpkeSuite\x12\x1a\n" +
 	"\x16HPKE_SUITE_UNSPECIFIED\x10\x00\x12=\n" +
@@ -3062,7 +3304,13 @@ const file_wendycloud_tunnel_v2_tunnel_proto_rawDesc = "" +
 	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12'\n" +
 	"#SESSION_STATE_WAITING_FOR_ENDPOINTS\x10\x01\x12\x18\n" +
 	"\x14SESSION_STATE_ACTIVE\x10\x02\x12\x1a\n" +
-	"\x16SESSION_STATE_TERMINAL\x10\x03*P\n" +
+	"\x16SESSION_STATE_TERMINAL\x10\x03*\xd9\x01\n" +
+	"\x14SessionRefusalReason\x12&\n" +
+	"\"SESSION_REFUSAL_REASON_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cSESSION_REFUSAL_REASON_CLOCK\x10\x01\x12\x1f\n" +
+	"\x1bSESSION_REFUSAL_REASON_BUSY\x10\x02\x12.\n" +
+	"*SESSION_REFUSAL_REASON_SERVICE_UNREACHABLE\x10\x03\x12&\n" +
+	"\"SESSION_REFUSAL_REASON_UNSUPPORTED\x10\x04*P\n" +
 	"\bJoinRole\x12\x19\n" +
 	"\x15JOIN_ROLE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10JOIN_ROLE_CALLER\x10\x01\x12\x13\n" +
@@ -3090,110 +3338,117 @@ func file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP() []byte {
 	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescData
 }
 
-var file_wendycloud_tunnel_v2_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_wendycloud_tunnel_v2_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_wendycloud_tunnel_v2_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_wendycloud_tunnel_v2_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_wendycloud_tunnel_v2_tunnel_proto_goTypes = []any{
 	(HpkeSuite)(0),                           // 0: wendycloud.tunnel.v2.HpkeSuite
 	(DialTransport)(0),                       // 1: wendycloud.tunnel.v2.DialTransport
 	(SessionState)(0),                        // 2: wendycloud.tunnel.v2.SessionState
-	(JoinRole)(0),                            // 3: wendycloud.tunnel.v2.JoinRole
-	(*BrokerInstance)(nil),                   // 4: wendycloud.tunnel.v2.BrokerInstance
-	(*IssuePresenceLeaseRequest)(nil),        // 5: wendycloud.tunnel.v2.IssuePresenceLeaseRequest
-	(*DeviceHardware)(nil),                   // 6: wendycloud.tunnel.v2.DeviceHardware
-	(*IssuePresenceLeaseResponse)(nil),       // 7: wendycloud.tunnel.v2.IssuePresenceLeaseResponse
-	(*TunnelPrincipalRequestBody)(nil),       // 8: wendycloud.tunnel.v2.TunnelPrincipalRequestBody
-	(*RequestTunnelRequest)(nil),             // 9: wendycloud.tunnel.v2.RequestTunnelRequest
-	(*AttestTunnelPrincipalRequest)(nil),     // 10: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest
-	(*AttestTunnelPrincipalResponse)(nil),    // 11: wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
-	(*RequestTunnelResponse)(nil),            // 12: wendycloud.tunnel.v2.RequestTunnelResponse
-	(*CallerDatagramDestination)(nil),        // 13: wendycloud.tunnel.v2.CallerDatagramDestination
-	(*DialInstruction)(nil),                  // 14: wendycloud.tunnel.v2.DialInstruction
-	(*AuthorizedDatagramDestination)(nil),    // 15: wendycloud.tunnel.v2.AuthorizedDatagramDestination
-	(*EncryptedDialInstructionEnvelope)(nil), // 16: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
-	(*CreateSessionRequest)(nil),             // 17: wendycloud.tunnel.v2.CreateSessionRequest
-	(*CreateSessionResponse)(nil),            // 18: wendycloud.tunnel.v2.CreateSessionResponse
-	(*PresenceOpen)(nil),                     // 19: wendycloud.tunnel.v2.PresenceOpen
-	(*PresenceRenewal)(nil),                  // 20: wendycloud.tunnel.v2.PresenceRenewal
-	(*PresenceProof)(nil),                    // 21: wendycloud.tunnel.v2.PresenceProof
-	(*PresenceOfferAcknowledgement)(nil),     // 22: wendycloud.tunnel.v2.PresenceOfferAcknowledgement
-	(*RegisterPresenceRequest)(nil),          // 23: wendycloud.tunnel.v2.RegisterPresenceRequest
-	(*BrokerChallenge)(nil),                  // 24: wendycloud.tunnel.v2.BrokerChallenge
-	(*PresenceAccepted)(nil),                 // 25: wendycloud.tunnel.v2.PresenceAccepted
-	(*PresenceRenewed)(nil),                  // 26: wendycloud.tunnel.v2.PresenceRenewed
-	(*SessionOffer)(nil),                     // 27: wendycloud.tunnel.v2.SessionOffer
-	(*PresenceOfferAcknowledged)(nil),        // 28: wendycloud.tunnel.v2.PresenceOfferAcknowledged
-	(*RegisterPresenceResponse)(nil),         // 29: wendycloud.tunnel.v2.RegisterPresenceResponse
-	(*JoinOpen)(nil),                         // 30: wendycloud.tunnel.v2.JoinOpen
-	(*JoinProof)(nil),                        // 31: wendycloud.tunnel.v2.JoinProof
-	(*TunnelFrame)(nil),                      // 32: wendycloud.tunnel.v2.TunnelFrame
-	(*TunnelDatagram)(nil),                   // 33: wendycloud.tunnel.v2.TunnelDatagram
-	(*IcmpEchoRequest)(nil),                  // 34: wendycloud.tunnel.v2.IcmpEchoRequest
-	(*IcmpEchoReply)(nil),                    // 35: wendycloud.tunnel.v2.IcmpEchoReply
-	(*JoinSessionRequest)(nil),               // 36: wendycloud.tunnel.v2.JoinSessionRequest
-	(*JoinAccepted)(nil),                     // 37: wendycloud.tunnel.v2.JoinAccepted
-	(*JoinSessionResponse)(nil),              // 38: wendycloud.tunnel.v2.JoinSessionResponse
-	(*timestamppb.Timestamp)(nil),            // 39: google.protobuf.Timestamp
-	(*wendyauthpb.SignedArtifact)(nil),       // 40: wendyauth.v1.SignedArtifact
-	(*wendyauthpb.Envelope)(nil),             // 41: wendyauth.v1.Envelope
+	(SessionRefusalReason)(0),                // 3: wendycloud.tunnel.v2.SessionRefusalReason
+	(JoinRole)(0),                            // 4: wendycloud.tunnel.v2.JoinRole
+	(*BrokerInstance)(nil),                   // 5: wendycloud.tunnel.v2.BrokerInstance
+	(*IssuePresenceLeaseRequest)(nil),        // 6: wendycloud.tunnel.v2.IssuePresenceLeaseRequest
+	(*DeviceHardware)(nil),                   // 7: wendycloud.tunnel.v2.DeviceHardware
+	(*IssuePresenceLeaseResponse)(nil),       // 8: wendycloud.tunnel.v2.IssuePresenceLeaseResponse
+	(*TunnelPrincipalRequestBody)(nil),       // 9: wendycloud.tunnel.v2.TunnelPrincipalRequestBody
+	(*RequestTunnelRequest)(nil),             // 10: wendycloud.tunnel.v2.RequestTunnelRequest
+	(*AttestTunnelPrincipalRequest)(nil),     // 11: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest
+	(*AttestTunnelPrincipalResponse)(nil),    // 12: wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
+	(*RequestTunnelResponse)(nil),            // 13: wendycloud.tunnel.v2.RequestTunnelResponse
+	(*CallerDatagramDestination)(nil),        // 14: wendycloud.tunnel.v2.CallerDatagramDestination
+	(*DialInstruction)(nil),                  // 15: wendycloud.tunnel.v2.DialInstruction
+	(*AuthorizedDatagramDestination)(nil),    // 16: wendycloud.tunnel.v2.AuthorizedDatagramDestination
+	(*EncryptedDialInstructionEnvelope)(nil), // 17: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
+	(*CreateSessionRequest)(nil),             // 18: wendycloud.tunnel.v2.CreateSessionRequest
+	(*CreateSessionResponse)(nil),            // 19: wendycloud.tunnel.v2.CreateSessionResponse
+	(*PresenceOpen)(nil),                     // 20: wendycloud.tunnel.v2.PresenceOpen
+	(*PresenceRenewal)(nil),                  // 21: wendycloud.tunnel.v2.PresenceRenewal
+	(*PresenceProof)(nil),                    // 22: wendycloud.tunnel.v2.PresenceProof
+	(*PresenceOfferAcknowledgement)(nil),     // 23: wendycloud.tunnel.v2.PresenceOfferAcknowledgement
+	(*PresenceOfferRefusal)(nil),             // 24: wendycloud.tunnel.v2.PresenceOfferRefusal
+	(*RegisterPresenceRequest)(nil),          // 25: wendycloud.tunnel.v2.RegisterPresenceRequest
+	(*BrokerChallenge)(nil),                  // 26: wendycloud.tunnel.v2.BrokerChallenge
+	(*PresenceAccepted)(nil),                 // 27: wendycloud.tunnel.v2.PresenceAccepted
+	(*PresenceRenewed)(nil),                  // 28: wendycloud.tunnel.v2.PresenceRenewed
+	(*SessionOffer)(nil),                     // 29: wendycloud.tunnel.v2.SessionOffer
+	(*PresenceOfferAcknowledged)(nil),        // 30: wendycloud.tunnel.v2.PresenceOfferAcknowledged
+	(*RegisterPresenceResponse)(nil),         // 31: wendycloud.tunnel.v2.RegisterPresenceResponse
+	(*JoinOpen)(nil),                         // 32: wendycloud.tunnel.v2.JoinOpen
+	(*JoinProof)(nil),                        // 33: wendycloud.tunnel.v2.JoinProof
+	(*TunnelFrame)(nil),                      // 34: wendycloud.tunnel.v2.TunnelFrame
+	(*TunnelDatagram)(nil),                   // 35: wendycloud.tunnel.v2.TunnelDatagram
+	(*IcmpEchoRequest)(nil),                  // 36: wendycloud.tunnel.v2.IcmpEchoRequest
+	(*IcmpEchoReply)(nil),                    // 37: wendycloud.tunnel.v2.IcmpEchoReply
+	(*JoinSessionRequest)(nil),               // 38: wendycloud.tunnel.v2.JoinSessionRequest
+	(*JoinAccepted)(nil),                     // 39: wendycloud.tunnel.v2.JoinAccepted
+	(*SessionRefused)(nil),                   // 40: wendycloud.tunnel.v2.SessionRefused
+	(*JoinSessionResponse)(nil),              // 41: wendycloud.tunnel.v2.JoinSessionResponse
+	(*timestamppb.Timestamp)(nil),            // 42: google.protobuf.Timestamp
+	(*wendyauthpb.SignedArtifact)(nil),       // 43: wendyauth.v1.SignedArtifact
+	(*wendyauthpb.Envelope)(nil),             // 44: wendyauth.v1.Envelope
 }
 var file_wendycloud_tunnel_v2_tunnel_proto_depIdxs = []int32{
-	6,  // 0: wendycloud.tunnel.v2.IssuePresenceLeaseRequest.hardware:type_name -> wendycloud.tunnel.v2.DeviceHardware
-	4,  // 1: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
-	39, // 2: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.renew_after:type_name -> google.protobuf.Timestamp
-	8,  // 3: wendycloud.tunnel.v2.RequestTunnelRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
-	40, // 4: wendycloud.tunnel.v2.RequestTunnelRequest.principal_request:type_name -> wendyauth.v1.SignedArtifact
-	8,  // 5: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
-	4,  // 6: wendycloud.tunnel.v2.RequestTunnelResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
-	13, // 7: wendycloud.tunnel.v2.RequestTunnelResponse.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.CallerDatagramDestination
+	7,  // 0: wendycloud.tunnel.v2.IssuePresenceLeaseRequest.hardware:type_name -> wendycloud.tunnel.v2.DeviceHardware
+	5,  // 1: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
+	42, // 2: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.renew_after:type_name -> google.protobuf.Timestamp
+	9,  // 3: wendycloud.tunnel.v2.RequestTunnelRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
+	43, // 4: wendycloud.tunnel.v2.RequestTunnelRequest.principal_request:type_name -> wendyauth.v1.SignedArtifact
+	9,  // 5: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
+	5,  // 6: wendycloud.tunnel.v2.RequestTunnelResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
+	14, // 7: wendycloud.tunnel.v2.RequestTunnelResponse.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.CallerDatagramDestination
 	1,  // 8: wendycloud.tunnel.v2.DialInstruction.transport:type_name -> wendycloud.tunnel.v2.DialTransport
-	15, // 9: wendycloud.tunnel.v2.DialInstruction.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.AuthorizedDatagramDestination
+	16, // 9: wendycloud.tunnel.v2.DialInstruction.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.AuthorizedDatagramDestination
 	0,  // 10: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope.suite:type_name -> wendycloud.tunnel.v2.HpkeSuite
-	16, // 11: wendycloud.tunnel.v2.CreateSessionRequest.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
+	17, // 11: wendycloud.tunnel.v2.CreateSessionRequest.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
 	2,  // 12: wendycloud.tunnel.v2.CreateSessionResponse.state:type_name -> wendycloud.tunnel.v2.SessionState
-	19, // 13: wendycloud.tunnel.v2.RegisterPresenceRequest.open:type_name -> wendycloud.tunnel.v2.PresenceOpen
-	21, // 14: wendycloud.tunnel.v2.RegisterPresenceRequest.proof:type_name -> wendycloud.tunnel.v2.PresenceProof
-	20, // 15: wendycloud.tunnel.v2.RegisterPresenceRequest.renewal:type_name -> wendycloud.tunnel.v2.PresenceRenewal
-	22, // 16: wendycloud.tunnel.v2.RegisterPresenceRequest.offer_acknowledgement:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledgement
-	39, // 17: wendycloud.tunnel.v2.BrokerChallenge.expires_at:type_name -> google.protobuf.Timestamp
-	39, // 18: wendycloud.tunnel.v2.PresenceAccepted.lease_expires_at:type_name -> google.protobuf.Timestamp
-	39, // 19: wendycloud.tunnel.v2.PresenceAccepted.renew_by:type_name -> google.protobuf.Timestamp
-	39, // 20: wendycloud.tunnel.v2.PresenceRenewed.lease_expires_at:type_name -> google.protobuf.Timestamp
-	39, // 21: wendycloud.tunnel.v2.PresenceRenewed.renew_by:type_name -> google.protobuf.Timestamp
-	16, // 22: wendycloud.tunnel.v2.SessionOffer.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
-	24, // 23: wendycloud.tunnel.v2.RegisterPresenceResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
-	25, // 24: wendycloud.tunnel.v2.RegisterPresenceResponse.accepted:type_name -> wendycloud.tunnel.v2.PresenceAccepted
-	26, // 25: wendycloud.tunnel.v2.RegisterPresenceResponse.renewed:type_name -> wendycloud.tunnel.v2.PresenceRenewed
-	27, // 26: wendycloud.tunnel.v2.RegisterPresenceResponse.session_offer:type_name -> wendycloud.tunnel.v2.SessionOffer
-	28, // 27: wendycloud.tunnel.v2.RegisterPresenceResponse.offer_acknowledged:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledged
-	3,  // 28: wendycloud.tunnel.v2.JoinOpen.role:type_name -> wendycloud.tunnel.v2.JoinRole
-	33, // 29: wendycloud.tunnel.v2.TunnelFrame.datagram:type_name -> wendycloud.tunnel.v2.TunnelDatagram
-	34, // 30: wendycloud.tunnel.v2.TunnelFrame.icmp_request:type_name -> wendycloud.tunnel.v2.IcmpEchoRequest
-	35, // 31: wendycloud.tunnel.v2.TunnelFrame.icmp_reply:type_name -> wendycloud.tunnel.v2.IcmpEchoReply
-	30, // 32: wendycloud.tunnel.v2.JoinSessionRequest.open:type_name -> wendycloud.tunnel.v2.JoinOpen
-	31, // 33: wendycloud.tunnel.v2.JoinSessionRequest.proof:type_name -> wendycloud.tunnel.v2.JoinProof
-	32, // 34: wendycloud.tunnel.v2.JoinSessionRequest.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
-	3,  // 35: wendycloud.tunnel.v2.JoinAccepted.role:type_name -> wendycloud.tunnel.v2.JoinRole
-	39, // 36: wendycloud.tunnel.v2.JoinAccepted.relay_expires_at:type_name -> google.protobuf.Timestamp
-	24, // 37: wendycloud.tunnel.v2.JoinSessionResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
-	37, // 38: wendycloud.tunnel.v2.JoinSessionResponse.accepted:type_name -> wendycloud.tunnel.v2.JoinAccepted
-	32, // 39: wendycloud.tunnel.v2.JoinSessionResponse.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
-	5,  // 40: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:input_type -> wendycloud.tunnel.v2.IssuePresenceLeaseRequest
-	9,  // 41: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:input_type -> wendycloud.tunnel.v2.RequestTunnelRequest
-	41, // 42: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:input_type -> wendyauth.v1.Envelope
-	17, // 43: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:input_type -> wendycloud.tunnel.v2.CreateSessionRequest
-	23, // 44: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:input_type -> wendycloud.tunnel.v2.RegisterPresenceRequest
-	36, // 45: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:input_type -> wendycloud.tunnel.v2.JoinSessionRequest
-	7,  // 46: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:output_type -> wendycloud.tunnel.v2.IssuePresenceLeaseResponse
-	12, // 47: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:output_type -> wendycloud.tunnel.v2.RequestTunnelResponse
-	11, // 48: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:output_type -> wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
-	18, // 49: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:output_type -> wendycloud.tunnel.v2.CreateSessionResponse
-	29, // 50: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:output_type -> wendycloud.tunnel.v2.RegisterPresenceResponse
-	38, // 51: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:output_type -> wendycloud.tunnel.v2.JoinSessionResponse
-	46, // [46:52] is the sub-list for method output_type
-	40, // [40:46] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	3,  // 13: wendycloud.tunnel.v2.PresenceOfferRefusal.reason:type_name -> wendycloud.tunnel.v2.SessionRefusalReason
+	20, // 14: wendycloud.tunnel.v2.RegisterPresenceRequest.open:type_name -> wendycloud.tunnel.v2.PresenceOpen
+	22, // 15: wendycloud.tunnel.v2.RegisterPresenceRequest.proof:type_name -> wendycloud.tunnel.v2.PresenceProof
+	21, // 16: wendycloud.tunnel.v2.RegisterPresenceRequest.renewal:type_name -> wendycloud.tunnel.v2.PresenceRenewal
+	23, // 17: wendycloud.tunnel.v2.RegisterPresenceRequest.offer_acknowledgement:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledgement
+	24, // 18: wendycloud.tunnel.v2.RegisterPresenceRequest.offer_refusal:type_name -> wendycloud.tunnel.v2.PresenceOfferRefusal
+	42, // 19: wendycloud.tunnel.v2.BrokerChallenge.expires_at:type_name -> google.protobuf.Timestamp
+	42, // 20: wendycloud.tunnel.v2.PresenceAccepted.lease_expires_at:type_name -> google.protobuf.Timestamp
+	42, // 21: wendycloud.tunnel.v2.PresenceAccepted.renew_by:type_name -> google.protobuf.Timestamp
+	42, // 22: wendycloud.tunnel.v2.PresenceRenewed.lease_expires_at:type_name -> google.protobuf.Timestamp
+	42, // 23: wendycloud.tunnel.v2.PresenceRenewed.renew_by:type_name -> google.protobuf.Timestamp
+	17, // 24: wendycloud.tunnel.v2.SessionOffer.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
+	26, // 25: wendycloud.tunnel.v2.RegisterPresenceResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
+	27, // 26: wendycloud.tunnel.v2.RegisterPresenceResponse.accepted:type_name -> wendycloud.tunnel.v2.PresenceAccepted
+	28, // 27: wendycloud.tunnel.v2.RegisterPresenceResponse.renewed:type_name -> wendycloud.tunnel.v2.PresenceRenewed
+	29, // 28: wendycloud.tunnel.v2.RegisterPresenceResponse.session_offer:type_name -> wendycloud.tunnel.v2.SessionOffer
+	30, // 29: wendycloud.tunnel.v2.RegisterPresenceResponse.offer_acknowledged:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledged
+	4,  // 30: wendycloud.tunnel.v2.JoinOpen.role:type_name -> wendycloud.tunnel.v2.JoinRole
+	35, // 31: wendycloud.tunnel.v2.TunnelFrame.datagram:type_name -> wendycloud.tunnel.v2.TunnelDatagram
+	36, // 32: wendycloud.tunnel.v2.TunnelFrame.icmp_request:type_name -> wendycloud.tunnel.v2.IcmpEchoRequest
+	37, // 33: wendycloud.tunnel.v2.TunnelFrame.icmp_reply:type_name -> wendycloud.tunnel.v2.IcmpEchoReply
+	32, // 34: wendycloud.tunnel.v2.JoinSessionRequest.open:type_name -> wendycloud.tunnel.v2.JoinOpen
+	33, // 35: wendycloud.tunnel.v2.JoinSessionRequest.proof:type_name -> wendycloud.tunnel.v2.JoinProof
+	34, // 36: wendycloud.tunnel.v2.JoinSessionRequest.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
+	4,  // 37: wendycloud.tunnel.v2.JoinAccepted.role:type_name -> wendycloud.tunnel.v2.JoinRole
+	42, // 38: wendycloud.tunnel.v2.JoinAccepted.relay_expires_at:type_name -> google.protobuf.Timestamp
+	3,  // 39: wendycloud.tunnel.v2.SessionRefused.reason:type_name -> wendycloud.tunnel.v2.SessionRefusalReason
+	26, // 40: wendycloud.tunnel.v2.JoinSessionResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
+	39, // 41: wendycloud.tunnel.v2.JoinSessionResponse.accepted:type_name -> wendycloud.tunnel.v2.JoinAccepted
+	34, // 42: wendycloud.tunnel.v2.JoinSessionResponse.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
+	40, // 43: wendycloud.tunnel.v2.JoinSessionResponse.refused:type_name -> wendycloud.tunnel.v2.SessionRefused
+	6,  // 44: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:input_type -> wendycloud.tunnel.v2.IssuePresenceLeaseRequest
+	10, // 45: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:input_type -> wendycloud.tunnel.v2.RequestTunnelRequest
+	44, // 46: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:input_type -> wendyauth.v1.Envelope
+	18, // 47: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:input_type -> wendycloud.tunnel.v2.CreateSessionRequest
+	25, // 48: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:input_type -> wendycloud.tunnel.v2.RegisterPresenceRequest
+	38, // 49: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:input_type -> wendycloud.tunnel.v2.JoinSessionRequest
+	8,  // 50: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:output_type -> wendycloud.tunnel.v2.IssuePresenceLeaseResponse
+	13, // 51: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:output_type -> wendycloud.tunnel.v2.RequestTunnelResponse
+	12, // 52: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:output_type -> wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
+	19, // 53: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:output_type -> wendycloud.tunnel.v2.CreateSessionResponse
+	31, // 54: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:output_type -> wendycloud.tunnel.v2.RegisterPresenceResponse
+	41, // 55: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:output_type -> wendycloud.tunnel.v2.JoinSessionResponse
+	50, // [50:56] is the sub-list for method output_type
+	44, // [44:50] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_tunnel_v2_tunnel_proto_init() }
@@ -3202,43 +3457,45 @@ func file_wendycloud_tunnel_v2_tunnel_proto_init() {
 		return
 	}
 	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[2].OneofWrappers = []any{}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20].OneofWrappers = []any{
 		(*RegisterPresenceRequest_Open)(nil),
 		(*RegisterPresenceRequest_Proof)(nil),
 		(*RegisterPresenceRequest_Renewal)(nil),
 		(*RegisterPresenceRequest_OfferAcknowledgement)(nil),
+		(*RegisterPresenceRequest_OfferRefusal)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26].OneofWrappers = []any{
 		(*RegisterPresenceResponse_Challenge)(nil),
 		(*RegisterPresenceResponse_Accepted)(nil),
 		(*RegisterPresenceResponse_Renewed)(nil),
 		(*RegisterPresenceResponse_SessionOffer)(nil),
 		(*RegisterPresenceResponse_OfferAcknowledged)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29].OneofWrappers = []any{
 		(*TunnelFrame_Data)(nil),
 		(*TunnelFrame_HalfClose)(nil),
 		(*TunnelFrame_Datagram)(nil),
 		(*TunnelFrame_IcmpRequest)(nil),
 		(*TunnelFrame_IcmpReply)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33].OneofWrappers = []any{
 		(*JoinSessionRequest_Open)(nil),
 		(*JoinSessionRequest_Proof)(nil),
 		(*JoinSessionRequest_Frame)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[36].OneofWrappers = []any{
 		(*JoinSessionResponse_Challenge)(nil),
 		(*JoinSessionResponse_Accepted)(nil),
 		(*JoinSessionResponse_Frame)(nil),
+		(*JoinSessionResponse_Refused)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_tunnel_v2_tunnel_proto_rawDesc), len(file_wendycloud_tunnel_v2_tunnel_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   35,
+			NumEnums:      5,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   4,
 		},
