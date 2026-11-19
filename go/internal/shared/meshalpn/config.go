@@ -69,7 +69,10 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		}
 		if previous != nil {
 			if err := previous(augmented); err != nil {
-				c.recoveryState().failed(err, hinted)
+				// An ordinary protocol requests full presentations, so only an
+				// acknowledged prefix can have caused a missing issuer.
+				_, acknowledged := Decode(state.NegotiatedProtocol)
+				c.recoveryState().failed(err, hinted && len(acknowledged) > 0)
 				return err
 			}
 		}
