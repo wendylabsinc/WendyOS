@@ -37,8 +37,10 @@ import (
 // not stop the other; that the camera stops with its last reader; and that a
 // new reader is handed black, never the previous session's last picture.
 //
-// The camera identity is the one seam it fakes: the fixture node has no sysfs
-// device link, so camera.IdentityOf finds no identity for it.
+// What it fakes is the camera listing's view of the fixture: the device list
+// holds only the fixture node, which is listed as a USB camera, and its camera
+// identity is made up, because the node has no sysfs device link and so
+// camera.IdentityOf finds none for it.
 //
 // The CI media job runs it after merge; on a device it runs as root beside the
 // agent. Its share nodes come from the agent's band (as production's do), from

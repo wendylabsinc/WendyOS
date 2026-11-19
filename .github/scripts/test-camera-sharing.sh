@@ -23,7 +23,10 @@ fi
 for element in v4l2src jpegdec videoconvert queue fdsink; do
   gst-inspect-1.0 "$element" > /dev/null
 done
-command -v unshare > /dev/null
+if ! command -v unshare > /dev/null; then
+  echo 'The devcover tests need unshare (util-linux).' >&2
+  exit 2
+fi
 output="$(mktemp -d "${RUNNER_TEMP:?}/wendy-camera-sharing.XXXXXX")"
 trap 'rm -f "$output/"*.test' EXIT
 services=./go/internal/agent/services
