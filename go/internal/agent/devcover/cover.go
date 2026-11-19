@@ -3,7 +3,13 @@
 // touching the container image or the agent's own namespace.
 package devcover
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrClosed is returned when a Namespace is used after Close, or is nil.
+var ErrClosed = errors.New("mount namespace is closed")
 
 // ErrTimeout is returned by Cover when the cover was not applied before the
 // deadline. A timed-out cover is never applied later.
@@ -16,6 +22,7 @@ var ErrUnsupported = errors.New("covering a path inside a container needs Linux"
 // held the namespace stays pinned, so a later Cover can never land in an
 // unrelated process that reused the pid.
 type Namespace struct {
+	mu  sync.Mutex // guards fd; fd is -1 once closed
 	fd  int
 	pid uint32
 }

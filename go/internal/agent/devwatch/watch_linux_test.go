@@ -17,7 +17,31 @@ func TestWatch_ReportsVideoNodesOnly(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- Watch(ctx, dir, func(e Event) { events <- e }) }()
-	time.Sleep(100 * time.Millisecond) // let the watch be established
+
+	// Wait for the watch to be live: poke a sentinel node until its create
+	// event arrives, then remove it and drain its delete event.
+	sentinel := filepath.Join(dir, "video999")
+	for ready := false; !ready; {
+		if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case e := <-events:
+			ready = e == Event{Name: "video999", Created: true}
+		case <-time.After(50 * time.Millisecond):
+		}
+		if err := os.Remove(sentinel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Drain the sentinel's remaining events (stale creates and deletes).
+	for quiet := false; !quiet; {
+		select {
+		case <-events:
+		case <-time.After(200 * time.Millisecond):
+			quiet = true
+		}
+	}
 
 	expect := func(want Event) {
 		t.Helper()

@@ -154,6 +154,48 @@ func TestCover_TimesOutAndNeverAppliesLate(t *testing.T) {
 	}
 }
 
+func TestNamespace_CloseIsIdempotentAndClosedIsRefused(t *testing.T) {
+	pid := startNamespace(t)
+	dir := t.TempDir()
+	src := writeFile(t, dir, "src", "share")
+	dst := writeFile(t, dir, "dst", "real")
+	ns, err := Open(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ns.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := ns.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if err := Cover(ns, src, dst, time.Second); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Cover on closed = %v, want ErrClosed", err)
+	}
+	if got := readIn(t, pid, dst); got != "real" {
+		t.Fatalf("Cover on a closed namespace mounted: %s reads %q", dst, got)
+	}
+	if _, err := Covered(ns, "/dev/null", dst); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Covered on closed = %v, want ErrClosed", err)
+	}
+	if _, err := ns.Inode(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Inode on closed = %v, want ErrClosed", err)
+	}
+}
+
+func TestCover_NilNamespaceIsRefused(t *testing.T) {
+	src := writeFile(t, t.TempDir(), "src", "share")
+	if err := Cover(nil, src, src, time.Second); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Cover(nil) = %v, want ErrClosed", err)
+	}
+	if _, err := Covered(nil, src, src); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Covered(nil) = %v, want ErrClosed", err)
+	}
+	if _, err := (*Namespace)(nil).Inode(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Inode(nil) = %v, want ErrClosed", err)
+	}
+}
+
 func TestCovered_ReportsWhetherDstIsSrc(t *testing.T) {
 	pid := startNamespace(t)
 	ns := openNS(t, pid)
