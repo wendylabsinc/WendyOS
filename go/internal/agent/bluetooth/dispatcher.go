@@ -18,6 +18,10 @@ type networkOps interface {
 	ConnectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error
 	GetWiFiStatus(ctx context.Context) (connected bool, ssid string, err error)
 	DisconnectWiFi(ctx context.Context) error
+	ListKnownWiFiNetworks(ctx context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error)
+	SetWiFiNetworkPriority(ctx context.Context, ssid string, priority int32) error
+	ReorderKnownWiFiNetworks(ctx context.Context, orderedSSIDs []string) error
+	ForgetWiFiNetwork(ctx context.Context, ssid string) error
 }
 
 type containerOps interface {
@@ -70,6 +74,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, cmd *agentpb.BluetoothCommand
 		return d.wifiStatus(ctx, c.WifiStatus)
 	case *agentpb.BluetoothCommand_WifiDisconnect:
 		return d.wifiDisconnect(ctx, c.WifiDisconnect)
+	case *agentpb.BluetoothCommand_WifiKnownList:
+		return d.wifiKnownList(ctx, c.WifiKnownList)
+	case *agentpb.BluetoothCommand_WifiSetPriority:
+		return d.wifiSetPriority(ctx, c.WifiSetPriority)
+	case *agentpb.BluetoothCommand_WifiReorder:
+		return d.wifiReorder(ctx, c.WifiReorder)
+	case *agentpb.BluetoothCommand_WifiForget:
+		return d.wifiForget(ctx, c.WifiForget)
 
 	// ── Apps ──────────────────────────────────────────────────────────────────
 
@@ -188,6 +200,72 @@ func (d *Dispatcher) wifiDisconnect(ctx context.Context, _ *agentpb.WifiDisconne
 	return &agentpb.BluetoothResponse{
 		Response: &agentpb.BluetoothResponse_WifiDisconnect{
 			WifiDisconnect: &agentpb.WifiDisconnectResponse{Success: true},
+		},
+	}
+}
+
+func (d *Dispatcher) wifiKnownList(ctx context.Context, _ *agentpb.WifiKnownListCommand) *agentpb.BluetoothResponse {
+	if isNil(d.network) {
+		return errResp("network manager unavailable")
+	}
+	known, err := d.network.ListKnownWiFiNetworks(ctx)
+	if err != nil {
+		return errResp(err.Error())
+	}
+	infos := make([]*agentpb.KnownWifiNetworkInfo, 0, len(known))
+	for _, k := range known {
+		infos = append(infos, &agentpb.KnownWifiNetworkInfo{
+			Ssid:     k.GetSsid(),
+			Uuid:     k.GetUuid(),
+			Priority: k.GetPriority(),
+			Security: k.GetSecurity(),
+		})
+	}
+	return &agentpb.BluetoothResponse{
+		Response: &agentpb.BluetoothResponse_WifiKnownList{
+			WifiKnownList: &agentpb.WifiKnownListResponse{Networks: infos},
+		},
+	}
+}
+
+func (d *Dispatcher) wifiSetPriority(ctx context.Context, cmd *agentpb.WifiSetPriorityCommand) *agentpb.BluetoothResponse {
+	if isNil(d.network) {
+		return errResp("network manager unavailable")
+	}
+	if err := d.network.SetWiFiNetworkPriority(ctx, cmd.GetSsid(), cmd.GetPriority()); err != nil {
+		return errResp(err.Error())
+	}
+	return &agentpb.BluetoothResponse{
+		Response: &agentpb.BluetoothResponse_WifiSetPriority{
+			WifiSetPriority: &agentpb.WifiSetPriorityResponse{Success: true},
+		},
+	}
+}
+
+func (d *Dispatcher) wifiReorder(ctx context.Context, cmd *agentpb.WifiReorderCommand) *agentpb.BluetoothResponse {
+	if isNil(d.network) {
+		return errResp("network manager unavailable")
+	}
+	if err := d.network.ReorderKnownWiFiNetworks(ctx, cmd.GetOrderSsids()); err != nil {
+		return errResp(err.Error())
+	}
+	return &agentpb.BluetoothResponse{
+		Response: &agentpb.BluetoothResponse_WifiReorder{
+			WifiReorder: &agentpb.WifiReorderResponse{Success: true},
+		},
+	}
+}
+
+func (d *Dispatcher) wifiForget(ctx context.Context, cmd *agentpb.WifiForgetCommand) *agentpb.BluetoothResponse {
+	if isNil(d.network) {
+		return errResp("network manager unavailable")
+	}
+	if err := d.network.ForgetWiFiNetwork(ctx, cmd.GetSsid()); err != nil {
+		return errResp(err.Error())
+	}
+	return &agentpb.BluetoothResponse{
+		Response: &agentpb.BluetoothResponse_WifiForget{
+			WifiForget: &agentpb.WifiForgetResponse{Success: true},
 		},
 	}
 }

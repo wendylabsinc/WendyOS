@@ -3,6 +3,8 @@ package bluetooth_test
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/bluetooth"
@@ -18,6 +20,11 @@ type mockNet struct {
 	ssid      string
 	err       error
 	request   *agentpb.ConnectToWiFiRequest
+	known     []*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork
+	prioSSID  string
+	priority  int32
+	order     []string
+	forgot    string
 }
 
 func (m *mockNet) ListWiFiNetworks(_ context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
@@ -31,6 +38,21 @@ func (m *mockNet) GetWiFiStatus(_ context.Context) (bool, string, error) {
 	return m.connected, m.ssid, m.err
 }
 func (m *mockNet) DisconnectWiFi(_ context.Context) error { return m.err }
+func (m *mockNet) ListKnownWiFiNetworks(_ context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error) {
+	return m.known, m.err
+}
+func (m *mockNet) SetWiFiNetworkPriority(_ context.Context, ssid string, priority int32) error {
+	m.prioSSID, m.priority = ssid, priority
+	return m.err
+}
+func (m *mockNet) ReorderKnownWiFiNetworks(_ context.Context, order []string) error {
+	m.order = order
+	return m.err
+}
+func (m *mockNet) ForgetWiFiNetwork(_ context.Context, ssid string) error {
+	m.forgot = ssid
+	return m.err
+}
 
 type mockContainer struct {
 	containers []*agentpb.AppContainer
@@ -251,6 +273,120 @@ func TestDispatch_WifiDisconnect(t *testing.T) {
 	}
 	if !resp.GetWifiDisconnect().GetSuccess() {
 		t.Error("expected success=true")
+	}
+}
+
+func TestDispatch_WifiKnownList(t *testing.T) {
+	net := &mockNet{known: []*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork{
+		{Ssid: "Office", Uuid: "11111111-2222-3333-4444-555555555555", Priority: 7, Security: agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE},
+		{Ssid: "Cafe", Uuid: "66666666-7777-8888-9999-000000000000"},
+	}}
+	d := newTestDispatcher(net, nil, nil, nil)
+	resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiKnownList{WifiKnownList: &agentpb.WifiKnownListCommand{}},
+	})
+	if resp.GetWifiKnownList() == nil {
+		t.Fatalf("expected WifiKnownListResponse, got %v", resp)
+	}
+	want := []*agentpb.KnownWifiNetworkInfo{
+		{Ssid: "Office", Uuid: "11111111-2222-3333-4444-555555555555", Priority: 7, Security: agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE},
+		{Ssid: "Cafe", Uuid: "66666666-7777-8888-9999-000000000000"},
+	}
+	got := resp.GetWifiKnownList().GetNetworks()
+	if len(got) != len(want) {
+		t.Fatalf("got %d networks, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if !proto.Equal(got[i], want[i]) {
+			t.Errorf("network %d: got {%v}, want {%v}", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDispatch_WifiSetPriority(t *testing.T) {
+	net := &mockNet{}
+	d := newTestDispatcher(net, nil, nil, nil)
+	resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiSetPriority{
+			WifiSetPriority: &agentpb.WifiSetPriorityCommand{Ssid: "Office", Priority: 7},
+		},
+	})
+	if !resp.GetWifiSetPriority().GetSuccess() {
+		t.Fatalf("expected success, got %v", resp)
+	}
+	if net.prioSSID != "Office" || net.priority != 7 {
+		t.Errorf("set %q to priority %d, want Office to 7", net.prioSSID, net.priority)
+	}
+}
+
+func TestDispatch_WifiReorder(t *testing.T) {
+	net := &mockNet{}
+	d := newTestDispatcher(net, nil, nil, nil)
+	resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiReorder{
+			WifiReorder: &agentpb.WifiReorderCommand{OrderSsids: []string{"Office", "Cafe"}},
+		},
+	})
+	if !resp.GetWifiReorder().GetSuccess() {
+		t.Fatalf("expected success, got %v", resp)
+	}
+	if want := []string{"Office", "Cafe"}; !slices.Equal(net.order, want) {
+		t.Errorf("reordered to %v, want %v", net.order, want)
+	}
+}
+
+func TestDispatch_WifiForget(t *testing.T) {
+	net := &mockNet{}
+	d := newTestDispatcher(net, nil, nil, nil)
+	resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiForget{WifiForget: &agentpb.WifiForgetCommand{Ssid: "Office"}},
+	})
+	if !resp.GetWifiForget().GetSuccess() {
+		t.Fatalf("expected success, got %v", resp)
+	}
+	if net.forgot != "Office" {
+		t.Errorf("forgot %q, want Office", net.forgot)
+	}
+}
+
+// savedWifiCommands are the commands that read or change saved networks.
+func savedWifiCommands() []struct {
+	name string
+	cmd  *agentpb.BluetoothCommand
+} {
+	return []struct {
+		name string
+		cmd  *agentpb.BluetoothCommand
+	}{
+		{"known list", &agentpb.BluetoothCommand{Command: &agentpb.BluetoothCommand_WifiKnownList{WifiKnownList: &agentpb.WifiKnownListCommand{}}}},
+		{"set priority", &agentpb.BluetoothCommand{Command: &agentpb.BluetoothCommand_WifiSetPriority{WifiSetPriority: &agentpb.WifiSetPriorityCommand{Ssid: "Office", Priority: 7}}}},
+		{"reorder", &agentpb.BluetoothCommand{Command: &agentpb.BluetoothCommand_WifiReorder{WifiReorder: &agentpb.WifiReorderCommand{OrderSsids: []string{"Office", "Cafe"}}}}},
+		{"forget", &agentpb.BluetoothCommand{Command: &agentpb.BluetoothCommand_WifiForget{WifiForget: &agentpb.WifiForgetCommand{Ssid: "Office"}}}},
+	}
+}
+
+func TestDispatch_SavedWifiCommands_ManagerError(t *testing.T) {
+	for _, tc := range savedWifiCommands() {
+		t.Run(tc.name, func(t *testing.T) {
+			net := &mockNet{err: errors.New("no saved profile")}
+			d := newTestDispatcher(net, nil, nil, nil)
+			resp := d.Dispatch(context.Background(), tc.cmd)
+			if got := resp.GetError().GetMessage(); got != "no saved profile" {
+				t.Errorf("error = %q, want the network manager's error; response {%v}", got, resp)
+			}
+		})
+	}
+}
+
+func TestDispatch_SavedWifiCommands_NilManager(t *testing.T) {
+	for _, tc := range savedWifiCommands() {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestDispatcher(nil, nil, nil, nil)
+			resp := d.Dispatch(context.Background(), tc.cmd)
+			if got := resp.GetError().GetMessage(); got != "network manager unavailable" {
+				t.Errorf("error = %q, want \"network manager unavailable\"; response {%v}", got, resp)
+			}
+		})
 	}
 }
 

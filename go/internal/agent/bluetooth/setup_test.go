@@ -156,7 +156,10 @@ func TestSetupCipherWireVector(t *testing.T) {
 	}
 }
 
-type setupNetworkFake struct{ request *agentpb.ConnectToWiFiRequest }
+type setupNetworkFake struct {
+	request *agentpb.ConnectToWiFiRequest
+	saved   int // calls that read or change saved networks
+}
 
 func (n *setupNetworkFake) ListWiFiNetworks(context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
 	return []*agentpb.ListWiFiNetworksResponse_WiFiNetwork{{Ssid: "lab"}}, nil
@@ -170,6 +173,46 @@ func (n *setupNetworkFake) GetWiFiStatus(context.Context) (bool, string, error) 
 }
 func (n *setupNetworkFake) DisconnectWiFi(context.Context) error {
 	return errors.New("must not be called")
+}
+func (n *setupNetworkFake) ListKnownWiFiNetworks(context.Context) ([]*agentpb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork, error) {
+	n.saved++
+	return nil, nil
+}
+func (n *setupNetworkFake) SetWiFiNetworkPriority(context.Context, string, int32) error {
+	n.saved++
+	return nil
+}
+func (n *setupNetworkFake) ReorderKnownWiFiNetworks(context.Context, []string) error {
+	n.saved++
+	return nil
+}
+func (n *setupNetworkFake) ForgetWiFiNetwork(context.Context, string) error {
+	n.saved++
+	return nil
+}
+
+// Setup accepts anyone nearby before enrollment. Reading, reordering or
+// removing saved networks stays with the authenticated management channel.
+func TestSetupRefusesSavedNetworkCommands(t *testing.T) {
+	n := &setupNetworkFake{}
+	d := NewSetupDispatcher(&setupProvisionerFake{}, n)
+	ctx := context.Background()
+	if !d.Available(ctx) {
+		t.Fatal("unenrolled agent unavailable")
+	}
+	for name, cmd := range map[string]*agentpb.BluetoothCommand{
+		"known list":   {Command: &agentpb.BluetoothCommand_WifiKnownList{WifiKnownList: &agentpb.WifiKnownListCommand{}}},
+		"set priority": {Command: &agentpb.BluetoothCommand_WifiSetPriority{WifiSetPriority: &agentpb.WifiSetPriorityCommand{Ssid: "lab", Priority: 7}}},
+		"reorder":      {Command: &agentpb.BluetoothCommand_WifiReorder{WifiReorder: &agentpb.WifiReorderCommand{OrderSsids: []string{"lab"}}}},
+		"forget":       {Command: &agentpb.BluetoothCommand_WifiForget{WifiForget: &agentpb.WifiForgetCommand{Ssid: "lab"}}},
+	} {
+		if d.Dispatch(ctx, cmd).GetError() == nil {
+			t.Errorf("setup accepted %s", name)
+		}
+	}
+	if n.saved != 0 {
+		t.Errorf("setup reached the saved networks %d times", n.saved)
+	}
 }
 
 func TestSetupWiFiUsesDeviceNetworkManager(t *testing.T) {
