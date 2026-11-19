@@ -54,6 +54,7 @@ var relayedSignatures = map[string]bool{
 	cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName: true,
 	cloudpbv2.DeploymentService_AssignDevice_FullMethodName:         true,
 	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName:       true,
+	cloudpbv2.DeploymentService_DetachDevice_FullMethodName:         true,
 }
 
 // Signer creates the JWS request descriptors required by Wendy Cloud for
@@ -146,6 +147,33 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	return nil
 }
 
+// Sign returns the SignedRequest Invoke would send for method, without
+// sending it: a statement carried inside another request (DeleteApp's
+// device_removals and device_detachments). Only x5c-only methods, which need
+// no leaf registration.
+func Sign(ctx context.Context, auth *config.AuthConfig, method string, req proto.Message) (*cloudpbv2.SignedRequest, error) {
+	if !x5cOnly[method] {
+		return nil, fmt.Errorf("%s is signed only by Invoke", method)
+	}
+	s, err := newSigner(auth)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("%s requires an operator certificate; run 'wendy auth login'", method)
+	}
+	correlationID, err := CorrelationID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	signed, err := s.signRequest(method, req, false, correlationID)
+	if err != nil {
+		return nil, err
+	}
+	markContextChannel(ctx, signed)
+	return signed, nil
+}
+
 // x5cOnly lists the methods always signed with x5c, never kid: the leaf
 // registration itself, the registry key registration (Cloud serves the stored
 // request back to other clients as the binding), and the four whose JWS Cloud
@@ -160,6 +188,7 @@ var x5cOnly = map[string]bool{
 	cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName:        true,
 	cloudpbv2.DeploymentService_AssignDevice_FullMethodName:                true,
 	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName:              true,
+	cloudpbv2.DeploymentService_DetachDevice_FullMethodName:                true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -482,6 +511,13 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		}
 		return "org/" + tenant + "/app/" + in.GetId(), true
 	},
+	cloudpbv2.AppService_DeleteApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeleteAppRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
+	},
 	cloudpbv2.AppService_UpsertApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.UpsertAppRequest)
 		if !ok || in.GetOrganizationId() != tenant || in.GetId() == "" {
@@ -571,6 +607,12 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	},
 	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.UnassignDeviceRequest)
+		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
+	},
+	// registry.proto DetachDeviceRequest: "Its JWS target.resource is the
+	// deployment's, as for UnassignDevice". Not yet in cloud's RequestSigning.md.
+	cloudpbv2.DeploymentService_DetachDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DetachDeviceRequest)
 		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
 	},
 	// Cloud RequestSigning.md: the encrypted registry (registry.proto).

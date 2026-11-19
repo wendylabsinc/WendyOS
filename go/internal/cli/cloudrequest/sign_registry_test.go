@@ -34,6 +34,10 @@ func TestRegistryResources(t *testing.T) {
 		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
 		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: "", Device: uri}, ""},
 		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, ""},
+		{cloudpbv2.DeploymentService_DetachDevice_FullMethodName, &cloudpbv2.DetachDeviceRequest{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
+		{cloudpbv2.DeploymentService_DetachDevice_FullMethodName, &cloudpbv2.DetachDeviceRequest{OrganizationId: release, DeploymentId: deploy, Device: uri}, ""},
+		{cloudpbv2.AppService_DeleteApp_FullMethodName, &cloudpbv2.DeleteAppRequest{OrganizationId: tenant, Id: "sh.wendy.example"}, "org/" + tenant + "/app/sh.wendy.example"},
+		{cloudpbv2.AppService_DeleteApp_FullMethodName, &cloudpbv2.DeleteAppRequest{OrganizationId: release, Id: "sh.wendy.example"}, ""},
 		{cloudpbv2.AccessService_CreateBinding_FullMethodName, &cloudpbv2.CreateBindingRequest{OrganizationId: tenant}, "org/" + tenant + "/access-binding"},
 		{cloudpbv2.AccessService_CreateBinding_FullMethodName, &cloudpbv2.CreateBindingRequest{OrganizationId: release}, ""},
 	}
@@ -43,7 +47,7 @@ func TestRegistryResources(t *testing.T) {
 			t.Errorf("%s %v: got %q %t, want %q", c.method, c.req, got, ok, c.want)
 		}
 	}
-	for _, m := range []string{cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName} {
+	for _, m := range []string{cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, cloudpbv2.DeploymentService_DetachDevice_FullMethodName} {
 		if !x5cOnly[m] || !relayedSignatures[m] {
 			t.Errorf("%s must be x5c-only and postbox-relayed", m)
 		}
