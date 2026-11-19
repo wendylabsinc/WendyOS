@@ -25,6 +25,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/devcover"
+	"github.com/wendylabsinc/wendy/go/internal/agent/devwatch"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -125,6 +127,39 @@ type csHarness struct {
 	held      map[string][]deviceHolder // by path
 	holderErr error                     // the holder scan fails with it
 	removedAt map[int]time.Time         // fake time of each node's RemoveAuxNode
+
+	// Covering (Task 9). Each fake namespace stands for one pid, with the
+	// inode 1000+pid; the agent's own is csAgentNS.
+	namespaces map[*devcover.Namespace]uint32 // the pid each was opened for
+	nsOpenErr  error
+	nsClosed   []uint32 // the pids of the namespaces closed, in order
+	closeHook  func(pid uint32)
+	covers     []csCover
+	coverErr   map[string]error // by the covered path
+	coverHook  func(src, dst string)
+	covered    bool // what Covered reports
+	watcher    *csWatcher
+}
+
+// csAgentNS is the inode of the agent's own mount namespace in the harness.
+const csAgentNS = 1
+
+func csNSInode(pid uint32) uint64 { return 1000 + uint64(pid) }
+
+// csCover is one cover the fake coverPath applied.
+type csCover struct {
+	pid      uint32
+	src, dst string
+	timeout  time.Duration
+}
+
+// csWatcher is the injected /dev watcher: the test feeds it events.
+type csWatcher struct {
+	mu      sync.Mutex
+	onEvent func(devwatch.Event)
+	dir     string
+	ready   chan struct{}
+	once    sync.Once
 }
 
 func (h *csHarness) setHolderErr(err error) {
@@ -147,7 +182,9 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	t.Helper()
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
 	h := &csHarness{t: t, s: s, loop: s.loopback.(*fakeLoopback), cams: map[string]csCamera{}, openErr: map[string]error{},
-		clock: &csClock{now: time.Unix(1_000_000, 0)}, held: map[string][]deviceHolder{}, removedAt: map[int]time.Time{}}
+		clock: &csClock{now: time.Unix(1_000_000, 0)}, held: map[string][]deviceHolder{}, removedAt: map[int]time.Time{},
+		namespaces: map[*devcover.Namespace]uint32{}, coverErr: map[string]error{}, covered: true,
+		watcher: &csWatcher{ready: make(chan struct{})}}
 	for _, c := range cams {
 		h.cams[c.base] = c
 	}
@@ -177,9 +214,22 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		}
 		return append([]deviceHolder(nil), h.held[shareNodePath(nr)]...), nil
 	}
+	prevCover, prevOpenNS, prevCovered, prevInode, prevCloseNS := coverPath, openNamespace, coveredPath, namespaceInode, closeNamespace
+	prevDevHolders, prevWatch, prevAgentNS := deviceHolders, watchDevices, agentMountNSInode
+	coverPath, openNamespace, coveredPath = h.cover, h.openNS, h.isCovered
+	namespaceInode, closeNamespace = h.nsInode, h.closeNS
+	deviceHolders = func(path string) []deviceHolder {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return append([]deviceHolder(nil), h.held[path]...)
+	}
+	watchDevices = h.watcher.watch
+	agentMountNSInode = func() (uint64, error) { return csAgentNS, nil }
 	t.Cleanup(func() {
 		cameraSharesPath, openShareNode = prevPath, prevOpen
 		shareRemovalClock, shareNodeUdevDone, shareNodeHolders = prevClock, prevUdev, prevHolders
+		coverPath, openNamespace, coveredPath, namespaceInode, closeNamespace = prevCover, prevOpenNS, prevCovered, prevInode, prevCloseNS
+		deviceHolders, watchDevices, agentMountNSInode = prevDevHolders, prevWatch, prevAgentNS
 	})
 
 	core, logs := observer.New(zap.DebugLevel)
@@ -1720,5 +1770,993 @@ func TestSysfsShareNodeHolders_ReadsTheDeviceNumberFromSysfs(t *testing.T) {
 	procRoot = filepath.Join(proc, "missing")
 	if _, err := sysfsShareNodeHolders(255); err == nil {
 		t.Error("an unreadable /proc gave no error")
+	}
+}
+
+// ---- Covers at start and after a replug (Task 9) ----
+
+// csAgentPID is a pid the harness puts in the agent's own mount namespace.
+const csAgentPID = 1
+
+func (h *csHarness) openNS(pid uint32) (*devcover.Namespace, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.nsOpenErr != nil {
+		return nil, h.nsOpenErr
+	}
+	// Only seams ever touch it, so its zero descriptor is never used.
+	n := new(devcover.Namespace)
+	h.namespaces[n] = pid
+	return n, nil
+}
+
+func (h *csHarness) nsPID(n *devcover.Namespace) uint32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.namespaces[n]
+}
+
+func (h *csHarness) nsInode(n *devcover.Namespace) (uint64, error) {
+	if pid := h.nsPID(n); pid != csAgentPID {
+		return csNSInode(pid), nil
+	}
+	return csAgentNS, nil
+}
+
+func (h *csHarness) closeNS(n *devcover.Namespace) error {
+	pid := h.nsPID(n)
+	h.mu.Lock()
+	hook := h.closeHook
+	h.mu.Unlock()
+	if hook != nil {
+		hook(pid)
+	}
+	h.mu.Lock()
+	h.nsClosed = append(h.nsClosed, pid)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *csHarness) cover(n *devcover.Namespace, src, dst string, timeout time.Duration) error {
+	h.mu.Lock()
+	hook, err, pid := h.coverHook, h.coverErr[dst], h.namespaces[n]
+	h.mu.Unlock()
+	if hook != nil {
+		hook(src, dst)
+	}
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	h.covers = append(h.covers, csCover{pid, src, dst, timeout})
+	h.mu.Unlock()
+	h.event(fmt.Sprintf("cover %s %s", src, dst))
+	return nil
+}
+
+func (h *csHarness) isCovered(_ *devcover.Namespace, _, _ string) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.covered, nil
+}
+
+func (h *csHarness) setCovered(covered bool) {
+	h.mu.Lock()
+	h.covered = covered
+	h.mu.Unlock()
+}
+
+func (h *csHarness) setCoverHook(hook func(src, dst string)) {
+	h.mu.Lock()
+	h.coverHook = hook
+	h.mu.Unlock()
+}
+
+func (h *csHarness) setCoverErr(dst string, err error) {
+	h.mu.Lock()
+	h.coverErr[dst] = err
+	h.mu.Unlock()
+}
+
+func (h *csHarness) coverList() []csCover {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]csCover(nil), h.covers...)
+}
+
+// nsOpens counts the namespaces opened for pid.
+func (h *csHarness) nsOpens(pid uint32) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, p := range h.namespaces {
+		if p == pid {
+			n++
+		}
+	}
+	return n
+}
+
+func (h *csHarness) nsCloses() []uint32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]uint32(nil), h.nsClosed...)
+}
+
+// waitFor polls cond every millisecond for at most within.
+func csWaitFor(within time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(within)
+	for {
+		if cond() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// drainCovers waits for every start's cover goroutine, which saves the state
+// file after its call returned.
+func (h *csHarness) drainCovers() {
+	h.t.Helper()
+	done := make(chan struct{})
+	go func() {
+		h.s.shares.coverWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		h.t.Fatal("start covers did not finish")
+	}
+}
+
+// waitCovers waits for n covers in all, and returns them.
+func (h *csHarness) waitCovers(n int, within time.Duration) []csCover {
+	h.t.Helper()
+	if !csWaitFor(within, func() bool { return len(h.coverList()) >= n }) {
+		h.t.Fatalf("%d covers after %s, want %d: %+v", len(h.coverList()), within, n, h.coverList())
+	}
+	return h.coverList()
+}
+
+// waitLogged waits until substr has been logged n times.
+func (h *csHarness) waitLogged(substr string, n int) {
+	h.t.Helper()
+	if !csWaitFor(2*time.Second, func() bool { return h.logged(substr) >= n }) {
+		h.t.Fatalf("%q logged %d times, want %d; logs: %v", substr, h.logged(substr), n, h.logs.All())
+	}
+}
+
+func (w *csWatcher) watch(ctx context.Context, dir string, onEvent func(devwatch.Event)) error {
+	w.mu.Lock()
+	w.onEvent, w.dir = onEvent, dir
+	w.mu.Unlock()
+	w.once.Do(func() { close(w.ready) })
+	<-ctx.Done()
+	return nil
+}
+
+// watch starts the service's discovery, which runs the replug watcher, and
+// waits for the watcher to be on /dev.
+func (h *csHarness) watch() {
+	h.t.Helper()
+	h.s.StartDiscovery()
+	select {
+	case <-h.watcher.ready:
+	case <-time.After(2 * time.Second):
+		h.t.Fatal("the replug watcher never started")
+	}
+	h.watcher.mu.Lock()
+	dir := h.watcher.dir
+	h.watcher.mu.Unlock()
+	if dir != "/dev" {
+		h.t.Fatalf("the watcher watches %q, want /dev", dir)
+	}
+}
+
+func (h *csHarness) feed(base string, created bool) {
+	h.watcher.mu.Lock()
+	onEvent := h.watcher.onEvent
+	h.watcher.mu.Unlock()
+	onEvent(devwatch.Event{Name: base, Created: created})
+}
+
+// plug puts c in /dev and tells the watcher; unplug takes it out.
+func (h *csHarness) plug(c csCamera) {
+	h.mu.Lock()
+	h.cams[c.base] = c
+	h.mu.Unlock()
+	h.feed(c.base, true)
+}
+
+func (h *csHarness) unplug(base string) {
+	h.mu.Lock()
+	delete(h.cams, base)
+	h.mu.Unlock()
+	h.feed(base, false)
+}
+
+// takeOut removes a camera without telling the watcher.
+func (h *csHarness) takeOut(base string) {
+	h.mu.Lock()
+	delete(h.cams, base)
+	h.mu.Unlock()
+}
+
+// csRecordView is a record's fields read under the share lock.
+type csRecordView struct {
+	node     int
+	made     time.Time
+	path     string
+	camera   camera.Identity
+	siblings []string
+	tookReal string
+	pump     bool
+}
+
+func (h *csHarness) view(containerID string) []csRecordView {
+	h.s.shares.mu.Lock()
+	defer h.s.shares.mu.Unlock()
+	c := h.s.shares.containers[containerID]
+	if c == nil {
+		return nil
+	}
+	var out []csRecordView
+	for _, r := range c.shares {
+		out = append(out, csRecordView{r.node, r.nodeMade, r.cameraPath, r.camera,
+			append([]string(nil), r.siblings...), r.tookRealCamera, r.pump != nil})
+	}
+	return out
+}
+
+// ageNamespaces makes every held namespace d older.
+func (h *csHarness) ageNamespaces(d time.Duration) {
+	h.s.shares.mu.Lock()
+	defer h.s.shares.mu.Unlock()
+	for _, c := range h.s.shares.containers {
+		c.nsAt = c.nsAt.Add(-d)
+	}
+}
+
+func (h *csHarness) stateShares(containerID string) []map[string]any {
+	h.t.Helper()
+	c, ok := h.stateFile()["containers"].(map[string]any)[containerID].(map[string]any)
+	if !ok {
+		h.t.Fatalf("the state file has no %s", containerID)
+	}
+	var out []map[string]any
+	for _, sh := range c["shares"].([]any) {
+		out = append(out, sh.(map[string]any))
+	}
+	return out
+}
+
+// coversWithout drops the timeouts, for comparing where covers went.
+func coversWithout(covers []csCover) []csCover {
+	out := make([]csCover, len(covers))
+	for i, c := range covers {
+		out[i] = csCover{pid: c.pid, src: c.src, dst: c.dst}
+	}
+	return out
+}
+
+func csC922() csCamera {
+	return csCamera{"video2", "C922", []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG},
+		camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "C922"}}
+}
+
+func TestCoverCameraShares_CoversEachSharedCameraAtItsCurrentPath(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csC922())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242); len(errs) != 0 {
+		t.Fatalf("CoverCameraShares errors: %v", errs)
+	}
+	got := h.coverList()
+	want := []csCover{{pid: 4242, src: "/dev/video255", dst: "/dev/video0"}, {pid: 4242, src: "/dev/video254", dst: "/dev/video2"}}
+	if !reflect.DeepEqual(coversWithout(got), want) {
+		t.Fatalf("covers = %+v, want %+v", got, want)
+	}
+	for _, c := range got {
+		if c.timeout <= 0 || c.timeout > cameraShareCoverBudget {
+			t.Errorf("cover of %s had %s, want at most the start's %s", c.dst, c.timeout, cameraShareCoverBudget)
+		}
+	}
+	if n := h.nsOpens(4242); n != 1 {
+		t.Errorf("namespace of 4242 opened %d times, want 1", n)
+	}
+	for _, line := range []string{
+		"camera share: cv-a starts with its node /dev/video255 at /dev/video0 (Brio 101)",
+		"camera share: cv-a starts with its node /dev/video254 at /dev/video2 (C922)",
+	} {
+		if n := h.logged(line); n != 1 {
+			t.Errorf("%q logged %d times, want 1; logs: %v", line, n, h.logs.All())
+		}
+	}
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-none", 77); len(errs) != 0 || h.nsOpens(77) != 0 {
+		t.Errorf("a container that shares nothing: errors %v, %d namespaces opened", errs, h.nsOpens(77))
+	}
+}
+
+func TestCoverCameraShares_StaysWithinTheStartBudget(t *testing.T) {
+	t.Run("a cover that blocks", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		h.setCoverHook(func(string, string) {
+			select {
+			case <-release:
+			case <-time.After(2 * time.Second):
+			}
+		})
+
+		start := time.Now()
+		errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242)
+		if took := time.Since(start); took > 300*time.Millisecond {
+			t.Errorf("CoverCameraShares took %s, want at most 300ms", took)
+		}
+		if len(errs) != 1 || !errors.Is(errs[0], devcover.ErrTimeout) || !strings.Contains(errs[0].Error(), "in time") {
+			t.Fatalf("errors = %v, want one that names the timeout", errs)
+		}
+		if n := h.logged("camera share: cv-a starts with the real camera Brio 101 (/dev/video0): cover did not finish in time"); n != 1 {
+			t.Errorf("timeout line logged %d times, want 1; logs: %v", n, h.logs.All())
+		}
+		if got := h.coverList(); len(got) != 0 {
+			t.Errorf("covers applied: %+v", got)
+		}
+	})
+
+	t.Run("making a node again", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+			csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
+		h.s.loadCameraShares()
+		h.mu.Lock()
+		h.openHook = func(path string) {
+			if path == "/dev/video254" {
+				time.Sleep(400 * time.Millisecond)
+			}
+		}
+		h.mu.Unlock()
+
+		start := time.Now()
+		errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242)
+		if took := time.Since(start); took > 300*time.Millisecond {
+			t.Errorf("CoverCameraShares took %s, want at most 300ms", took)
+		}
+		if len(errs) != 1 || !errors.Is(errs[0], devcover.ErrTimeout) {
+			t.Fatalf("errors = %v, want the timeout", errs)
+		}
+		// The node made late is kept, with its writer, for the next start; no
+		// cover lands after the start went ahead.
+		if !csWaitFor(2*time.Second, func() bool { v := h.view("cv-a"); return len(v) == 1 && v[0].pump }) {
+			t.Fatalf("the node made late has no pump: %+v", h.view("cv-a"))
+		}
+		time.Sleep(20 * time.Millisecond)
+		if got := h.coverList(); len(got) != 0 {
+			t.Errorf("a cover landed after the budget: %+v", got)
+		}
+	})
+}
+
+func TestCoverCameraShares_FailureLeavesTheRealCameraAndSaysWhy(t *testing.T) {
+	t.Run("the cover fails", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		h.setCoverErr("/dev/video0", fmt.Errorf("move_mount(-> /dev/video0): %w", unix.EINVAL))
+
+		errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242)
+		if len(errs) != 1 || !errors.Is(errs[0], unix.EINVAL) {
+			t.Fatalf("errors = %v, want one EINVAL", errs)
+		}
+		if n := h.logged("camera share: cv-a starts with the real camera Brio 101 (/dev/video0): move_mount(-> /dev/video0): invalid argument"); n != 1 {
+			t.Errorf("failure line logged %d times, want 1; logs: %v", n, h.logs.All())
+		}
+		if n := h.logged("starts with the real camera"); n != 1 {
+			t.Errorf("%d real-camera lines, want 1", n)
+		}
+	})
+
+	t.Run("the namespace cannot be opened", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		h.mu.Lock()
+		h.nsOpenErr = fmt.Errorf("open /proc/4242/ns/mnt: %w", syscall.ENOENT)
+		h.mu.Unlock()
+
+		errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242)
+		if len(errs) != 1 || !errors.Is(errs[0], syscall.ENOENT) {
+			t.Fatalf("errors = %v, want one ENOENT", errs)
+		}
+		if n := h.logged("camera share: cv-a starts with the real camera Brio 101 (/dev/video0): opening its mount namespace: open /proc/4242/ns/mnt: no such file or directory"); n != 1 {
+			t.Errorf("namespace line logged %d times, want 1; logs: %v", n, h.logs.All())
+		}
+		if got := h.coverList(); len(got) != 0 {
+			t.Errorf("covers = %+v, want none", got)
+		}
+	})
+
+	t.Run("a pid in the agent's own namespace", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		errs := h.s.CoverCameraShares(context.Background(), "cv-a", csAgentPID)
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "the agent's own mount namespace") {
+			t.Fatalf("errors = %v, want the agent's-namespace refusal", errs)
+		}
+		if got := h.coverList(); len(got) != 0 {
+			t.Errorf("covered the agent's own /dev: %+v", got)
+		}
+		if !csWaitFor(time.Second, func() bool { return slices.Contains(h.nsCloses(), csAgentPID) }) {
+			t.Error("the refused namespace was not closed")
+		}
+	})
+}
+
+func TestCoverCameraShares_RecreatesNodesLostInAReboot(t *testing.T) {
+	stored := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 15}
+	rebooted := func(t *testing.T, containers, top string) *csHarness {
+		h := newCSHarness(t, csBrio())
+		h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+			csStateRecord(csBrio(), "/dev/video0", stored, 254) + `]}` + containers + `}` + top + `}`)
+		h.s.loadCameraShares()
+		return h
+	}
+
+	t.Run("its own number is free", func(t *testing.T) {
+		h := rebooted(t, "", "")
+		made := h.clock.Now()
+		if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if got, want := h.loop.shareCalls(), []auxCall{{254, "Brio 101"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("EnsureShareNode calls = %+v, want %+v", got, want)
+		}
+		if n := h.loop.auxCreatedCount(); n != 0 {
+			t.Errorf("EnsureAuxNode called %d times; share nodes come from EnsureShareNode", n)
+		}
+		nodes := h.openedNodes()
+		if len(nodes) != 1 || nodes[0].path != "/dev/video254" || nodes[0].mode != stored {
+			t.Fatalf("opened %+v, want /dev/video254 at the stored mode", nodes)
+		}
+		if got, want := coversWithout(h.coverList()), []csCover{{pid: 11, src: "/dev/video254", dst: "/dev/video0"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("covers = %+v, want %+v", got, want)
+		}
+		events := h.eventLog()
+		if i, j := slices.Index(events, "open /dev/video254"), slices.Index(events, "cover /dev/video254 /dev/video0"); i < 0 || j < i {
+			t.Errorf("events = %v, want the node opened before it is put over the camera", events)
+		}
+		if v := h.view("cv-a"); len(v) != 1 || v[0].node != 254 || !v[0].pump || !v[0].made.Equal(made) {
+			t.Errorf("record = %+v, want node 254 with a pump, made at %v", v, made)
+		}
+		if n := h.logged("camera share: made /dev/video254 again for cv-a's share of Brio 101"); n != 1 {
+			t.Errorf("made-again line logged %d times; logs: %v", n, h.logs.All())
+		}
+		h.drainCovers()
+		if node := h.stateShares("cv-a")[0]["node"]; node != float64(254) {
+			t.Errorf("state file node = %v, want 254", node)
+		}
+		// The node is new: removing it waits for its age.
+		h.s.RemoveCameraShares("cv-a")
+		h.drainRemovals()
+		if at, ok := h.removalTime(254); !ok || at.Sub(made) < shareNodeSettleAge {
+			t.Errorf("removed %v after it was made (%v), want at least %s", at.Sub(made), ok, shareNodeSettleAge)
+		}
+	})
+
+	t.Run("a node of another kind has its number", func(t *testing.T) {
+		h := rebooted(t, "", "")
+		h.loop.addLiveAux(254, "Wendy sensor 0") // as the two-plane path could
+		if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if got, want := h.loop.shareCalls(), []auxCall{{255, "Brio 101"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("EnsureShareNode calls = %+v, want %+v", got, want)
+		}
+		if got, want := coversWithout(h.coverList()), []csCover{{pid: 11, src: "/dev/video255", dst: "/dev/video0"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("covers = %+v, want %+v", got, want)
+		}
+		if v := h.view("cv-a"); len(v) != 1 || v[0].node != 255 {
+			t.Errorf("record = %+v, want node 255", v)
+		}
+		h.drainCovers() // the state file is saved off the start path
+		if node := h.stateShares("cv-a")[0]["node"]; node != float64(255) {
+			t.Errorf("state file node = %v, want 255", node)
+		}
+		if label, _ := h.loop.auxLabel(254); label != "Wendy sensor 0" || len(h.loop.removedAux()) != 0 || h.opensOf("/dev/video254") != 0 {
+			t.Errorf("the other node was touched: label %q, removed %v, opened %d times", label, h.loop.removedAux(), h.opensOf("/dev/video254"))
+		}
+		if n := h.logged("camera share: made /dev/video255 again for cv-a's share of Brio 101 (its number 254 is taken)"); n != 1 {
+			t.Errorf("made-again line logged %d times; logs: %v", n, h.logs.All())
+		}
+	})
+
+	t.Run("another share holds its number", func(t *testing.T) {
+		h := rebooted(t, `,"cv-b":{"app":"sh.wendy.cv-b","shares":[`+csStateRecord(csBrio(), "/dev/video0", stored, 254)+`]}`, "")
+		if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+			t.Fatalf("cv-a errors: %v", errs)
+		}
+		if errs := h.s.CoverCameraShares(context.Background(), "cv-b", 12); len(errs) != 0 {
+			t.Fatalf("cv-b errors: %v", errs)
+		}
+		if got, want := h.loop.shareCalls(), []auxCall{{255, "Brio 101"}, {254, "Brio 101"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("EnsureShareNode calls = %+v, want %+v: the second share keeps 254", got, want)
+		}
+		if a, b := h.view("cv-a"), h.view("cv-b"); a[0].node != 255 || b[0].node != 254 {
+			t.Errorf("nodes: cv-a %d, cv-b %d; want 255 and 254", a[0].node, b[0].node)
+		}
+		want := []csCover{{pid: 11, src: "/dev/video255", dst: "/dev/video0"}, {pid: 12, src: "/dev/video254", dst: "/dev/video0"}}
+		if got := coversWithout(h.coverList()); !reflect.DeepEqual(got, want) {
+			t.Errorf("covers = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a removal holds its number", func(t *testing.T) {
+		h := rebooted(t, "", `,"removing":[{"node":254,"name":"Brio 101"}]`)
+		if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if got, want := h.loop.shareCalls(), []auxCall{{255, "Brio 101"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("EnsureShareNode calls = %+v, want %+v", got, want)
+		}
+	})
+}
+
+// blockOpenOf makes the first open of path wait for release, and says when it
+// is waiting; later opens go through at once.
+func (h *csHarness) blockOpenOf(path string) (entered, release chan struct{}) {
+	entered, release = make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	h.mu.Lock()
+	h.openHook = func(p string) {
+		if p == path && first.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	}
+	h.mu.Unlock()
+	return entered, release
+}
+
+// A start making a node again never waits for ops, so a removal or a sync can
+// land in the middle; neither may leave the node to the kernel race or give
+// it two writers.
+func TestCoverCameraShares_RecreationMeetsARemovalOrASync(t *testing.T) {
+	rebooted := func(t *testing.T) *csHarness {
+		h := newCSHarness(t, csBrio())
+		h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+			csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
+		h.s.loadCameraShares()
+		return h
+	}
+
+	t.Run("a removal takes the new node away once it has settled", func(t *testing.T) {
+		h := rebooted(t)
+		entered, release := h.blockOpenOf("/dev/video254")
+		made := h.clock.Now()
+		returned := make(chan []error, 1)
+		go func() { returned <- h.s.CoverCameraShares(context.Background(), "cv-a", 11) }()
+		<-entered
+		h.s.RemoveCameraShares("cv-a") // does not wait for the start
+		close(release)
+		if errs := <-returned; len(errs) != 1 {
+			t.Errorf("errors = %v, want one", errs)
+		}
+		h.drainCovers()
+		h.drainRemovals()
+		if at, ok := h.removalTime(254); !ok || at.Sub(made) < shareNodeSettleAge {
+			t.Errorf("removed %v after it was made (%v), want at least %s", at.Sub(made), ok, shareNodeSettleAge)
+		}
+		if live, ids := h.loop.liveAux(), h.containerIDs(); len(live) != 0 || len(ids) != 0 {
+			t.Errorf("live nodes %v, containers %v; want none", live, ids)
+		}
+		for _, n := range h.openedNodes() {
+			if n.closes.Load() != 1 {
+				t.Errorf("%s's writer closed %d times, want 1", n.path, n.closes.Load())
+			}
+		}
+		if got := h.coverList(); len(got) != 0 {
+			t.Errorf("covers = %+v, want none", got)
+		}
+	})
+
+	t.Run("a sync leaves the node to the start", func(t *testing.T) {
+		h := rebooted(t)
+		entered, release := h.blockOpenOf("/dev/video254")
+		returned := make(chan []error, 1)
+		go func() { returned <- h.s.CoverCameraShares(context.Background(), "cv-a", 11) }()
+		<-entered
+		// The node is there now, a share node of the camera, without a writer.
+		h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true, PID: 11}})
+		close(release)
+		if errs := <-returned; len(errs) != 0 {
+			t.Fatalf("errors = %v", errs)
+		}
+		if n := h.opensOf("/dev/video254"); n != 1 {
+			t.Errorf("/dev/video254 opened %d times, want once", n)
+		}
+		if v := h.view("cv-a"); len(v) != 1 || !v[0].pump {
+			t.Errorf("record = %+v, want one with a pump", v)
+		}
+	})
+}
+
+func TestCoverCameraShares_AbsentCameraIsCoveredWhenPluggedIn(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.takeOut("video0")
+	h.watch()
+
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if got := h.coverList(); len(got) != 0 {
+		t.Fatalf("covers at start = %+v, want none", got)
+	}
+	if n := h.logged("camera share: Brio 101 is not plugged in; cv-a's node covers it when it is"); n != 1 {
+		t.Errorf("not-plugged-in line logged %d times; logs: %v", n, h.logs.All())
+	}
+
+	h.plug(csBrio())
+	got := h.waitCovers(1, 50*time.Millisecond)
+	if want := (csCover{11, "/dev/video255", "/dev/video0", cameraShareRecoverTimeout}); len(got) != 1 || got[0] != want {
+		t.Errorf("covers = %+v, want %+v", got, want)
+	}
+	h.waitLogged("camera share: covered /dev/video0 for cv-a again in ", 1)
+	if n := h.logged("ms after the camera came back"); n != 1 {
+		t.Errorf("re-cover line logged %d times; logs: %v", n, h.logs.All())
+	}
+}
+
+func TestRecover_CoversEveryRunningSharingContainer(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	for i, id := range []string{"cv-a", "cv-b", "cv-c"} {
+		h.s.CreateCameraShares(context.Background(), id, "sh.wendy."+id)
+		if errs := h.s.CoverCameraShares(context.Background(), id, uint32(11+i)); len(errs) != 0 {
+			t.Fatalf("%s: %v", id, errs)
+		}
+	}
+	h.s.ReleaseCameraShares("cv-c") // stopped
+	h.watch()
+
+	for round := 1; round <= 2; round++ {
+		h.unplug("video0")
+		h.plug(csBrio())
+		// The lines come after every cover of the event.
+		h.waitLogged("ms after the camera came back", 2*round)
+		covers := h.coverList()
+		if len(covers) != 3+2*round {
+			t.Fatalf("round %d: %d covers in all, want %d: %+v", round, len(covers), 3+2*round, covers)
+		}
+		got := map[uint32]int{}
+		for _, c := range covers[3+2*(round-1):] {
+			got[c.pid]++
+			if c.timeout != cameraShareRecoverTimeout {
+				t.Errorf("a re-cover had %s, want %s", c.timeout, cameraShareRecoverTimeout)
+			}
+		}
+		if !reflect.DeepEqual(got, map[uint32]int{11: 1, 12: 1}) {
+			t.Errorf("round %d: covers by pid = %v, want cv-a's and cv-b's once each", round, got)
+		}
+	}
+}
+
+func TestRecover_SameModelCamerasStayApart(t *testing.T) {
+	p1 := csBrio()
+	p2 := csCamera{"video2", "Brio 101", p1.formats, camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "Brio 101"}}
+	h := newCSHarness(t, p1, p2)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if got := coversWithout(h.coverList()); !reflect.DeepEqual(got, []csCover{{11, "/dev/video255", "/dev/video0", 0}, {11, "/dev/video254", "/dev/video2", 0}}) {
+		t.Fatalf("covers at start = %+v", got)
+	}
+	h.watch()
+
+	// Both go; p2's camera comes back at another node: only p2's record covers it.
+	h.unplug("video0")
+	h.unplug("video2")
+	h.plug(csCamera{"video4", "Brio 101", p1.formats, p2.id})
+	h.waitLogged("camera share: covered /dev/video4 for cv-a again in ", 1)
+	if got := coversWithout(h.coverList()[2:]); !reflect.DeepEqual(got, []csCover{{11, "/dev/video254", "/dev/video4", 0}}) {
+		t.Errorf("covers after p2's camera came back = %+v, want only p2's node", got)
+	}
+
+	h.plug(csCamera{"video6", "Brio 101", p1.formats, p1.id})
+	h.waitLogged("camera share: covered /dev/video6 for cv-a again in ", 1)
+	if got := coversWithout(h.coverList()[3:]); !reflect.DeepEqual(got, []csCover{{11, "/dev/video255", "/dev/video6", 0}}) {
+		t.Errorf("covers after p1's camera came back = %+v, want only p1's node", got)
+	}
+}
+
+func TestRecover_CameraMovedToAnotherPortIsFollowed(t *testing.T) {
+	brio := csBrio()
+	moved := csCamera{"video2", "Brio 101", brio.formats, camera.Identity{Device: csPort("1-3"), Index: "0", Name: "Brio 101"}}
+	h := newCSHarness(t, brio)
+	for i, id := range []string{"cv-a", "cv-b"} {
+		h.s.CreateCameraShares(context.Background(), id, "sh.wendy."+id)
+		if errs := h.s.CoverCameraShares(context.Background(), id, uint32(11+i)); len(errs) != 0 {
+			t.Fatalf("%s: %v", id, errs)
+		}
+	}
+	h.watch()
+
+	h.unplug("video0")
+	h.plug(moved)
+	h.waitLogged("camera share: covered /dev/video2 for ", 2)
+	want := []csCover{{11, "/dev/video255", "/dev/video2", 0}, {12, "/dev/video254", "/dev/video2", 0}}
+	if got := coversWithout(h.coverList()[2:]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("covers after the move = %+v, want %+v: every share of the camera follows it", got, want)
+	}
+	// The records now name the camera's new port, in memory and on disk.
+	for _, id := range []string{"cv-a", "cv-b"} {
+		if v := h.view(id); v[0].camera != moved.id || v[0].path != "/dev/video2" {
+			t.Errorf("%s's record = %+v, want the camera at %s on /dev/video2", id, v[0], moved.id.Device)
+		}
+		sh := h.stateShares(id)[0]
+		if dev := sh["camera"].(map[string]any)["device"]; dev != moved.id.Device || sh["path"] != "/dev/video2" {
+			t.Errorf("%s in the state file: device %v, path %v; want %s, /dev/video2", id, dev, sh["path"], moved.id.Device)
+		}
+	}
+
+	// A camera of the same model in the old port is another camera.
+	h.plug(csCamera{"video4", "Brio 101", brio.formats, brio.id})
+	h.waitLogged("camera share: /dev/video4 appeared; no running app shares it", 1)
+	if n := len(h.coverList()); n != 4 {
+		t.Errorf("%d covers, want 4: the camera in the old port was covered", n)
+	}
+	if v := h.view("cv-a"); v[0].path != "/dev/video2" || !reflect.DeepEqual(v[0].siblings, []string{brio.id.Device}) {
+		t.Errorf("cv-a's record = %+v, want it on /dev/video2 with %s as a sibling", v[0], brio.id.Device)
+	}
+}
+
+func TestRecover_LearnsASameModelCameraPluggedInBesideAnyShare(t *testing.T) {
+	brio := csBrio()
+	twin := csCamera{"video2", "Brio 101", brio.formats, camera.Identity{Device: csPort("1-3"), Index: "0", Name: "Brio 101"}}
+	h := newCSHarness(t, brio)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a") // never started
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-b", 12); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	h.watch()
+
+	h.plug(twin)
+	h.waitLogged("camera share: /dev/video2 appeared; no running app shares it", 1)
+	for _, id := range []string{"cv-a", "cv-b"} {
+		if v := h.view(id); !reflect.DeepEqual(v[0].siblings, []string{twin.id.Device}) {
+			t.Errorf("%s's siblings = %v, want [%s]", id, v[0].siblings, twin.id.Device)
+		}
+		if got := h.stateShares(id)[0]["sameModelPorts"]; !reflect.DeepEqual(got, []any{twin.id.Device}) {
+			t.Errorf("%s's sameModelPorts in the state file = %v", id, got)
+		}
+	}
+	// The shared camera goes: no share takes the twin for it.
+	h.takeOut("video0")
+	for _, id := range []string{"cv-a", "cv-b"} {
+		if path, ok := h.s.currentSharePath(h.records(id)[0]); ok {
+			t.Errorf("%s's share resolved to %s, the other camera", id, path)
+		}
+	}
+	if n := len(h.coverList()); n != 1 {
+		t.Errorf("%d covers, want only cv-b's start", n)
+	}
+}
+
+func TestRecover_IgnoresShareNodesAndUnknownNodes(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	h.watch()
+	h.unplug("video0")
+	// A virtual node in the band named like the camera, as if it had a device
+	// link; and a node with no identity at all.
+	h.loop.addLiveAux(254, "Brio 101")
+	h.plug(csCamera{"video254", "Brio 101", csBrio().formats,
+		camera.Identity{Device: "/sys/devices/virtual/video4linux/video254", Index: "0", Name: "Brio 101"}})
+	h.feed("video255", true)
+	h.feed("video7", true)
+
+	h.waitLogged("camera share: /dev/video254 appeared; it is a share node", 1)
+	h.waitLogged("camera share: /dev/video255 appeared; it is a share node", 1)
+	h.waitLogged("camera share: /dev/video7 appeared; it has no camera identity", 1)
+	if got := h.coverList(); len(got) != 1 {
+		t.Errorf("covers = %+v, want only the start's", got)
+	}
+}
+
+func TestRecover_NamesAnAppThatTookTheRealCamera(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	installFakeProducers(h.s)
+	for i, id := range []string{"cv-a", "cv-b"} {
+		h.s.CreateCameraShares(context.Background(), id, "sh.wendy."+id)
+		if errs := h.s.CoverCameraShares(context.Background(), id, uint32(11+i)); len(errs) != 0 {
+			t.Fatalf("%s: %v", id, errs)
+		}
+	}
+	h.watch()
+
+	h.unplug("video0")
+	// In the window: an app of cv-b's, and a host process, hold the real camera.
+	h.setHeld("/dev/video0", deviceHolder{PID: 4321, Comm: "python3", MountNS: csNSInode(12)},
+		deviceHolder{PID: 77, Comm: "wireplumber", MountNS: csAgentNS})
+	plugged := time.Now()
+	h.plug(csBrio())
+	line := "camera share: cv-b took the real camera /dev/video0 while it was being covered after a replug, " +
+		"and does not share it until it reopens the camera (pid 4321, python3)"
+	h.waitLogged(line, 1)
+	if took := time.Since(plugged); took < cameraShareLoserCheckDelay {
+		t.Errorf("the check ran %s after the replug, want at least %s", took, cameraShareLoserCheckDelay)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := h.logged("took the real camera"); n != 1 {
+		t.Errorf("%d took-the-real-camera lines, want 1; logs: %v", n, h.logs.All())
+	}
+	// A status read shows it for cv-b alone.
+	b := h.view("cv-b")[0]
+	if b.tookReal == "" || h.view("cv-a")[0].tookReal != "" {
+		t.Fatalf("tookRealCamera: cv-b %q, cv-a %q; want only cv-b's set", b.tookReal, h.view("cv-a")[0].tookReal)
+	}
+
+	// cv-b reopens the camera, now its node: the next reading clears it.
+	var node *csNode
+	for _, n := range h.openedNodes() {
+		if n.path == shareNodePath(b.node) {
+			node = n
+		}
+	}
+	node.send(t, 1)
+	if !csWaitFor(2*time.Second, func() bool { return h.view("cv-b")[0].tookReal == "" }) {
+		t.Errorf("tookRealCamera still %q after cv-b read its node", h.view("cv-b")[0].tookReal)
+	}
+}
+
+func TestSyncCameraShares_RecoversAReplugMissedWhileTheAgentWasDown(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		covered bool
+		want    []csCover
+	}{
+		{"the cover went with a replug", false, []csCover{{4242, "/dev/video254", "/dev/video0", cameraShareRecoverTimeout}}},
+		{"the cover is still in place", true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+				csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
+			h.loop.addLiveAux(254, "Brio 101")
+			h.s.loadCameraShares()
+			h.setCovered(tc.covered)
+
+			listed := []CameraShareContainer{{ID: "cv-a", Running: true, PID: 4242}}
+			h.s.SyncCameraShares(context.Background(), listed)
+			if got := h.coverList(); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("covers = %+v, want %+v", got, tc.want)
+			}
+			if tc.want != nil {
+				if n := h.logged("camera share: covered /dev/video0 for cv-a again; the camera was replugged while the agent was down"); n != 1 {
+					t.Errorf("missed-replug line logged %d times; logs: %v", n, h.logs.All())
+				}
+			}
+			h.s.SyncCameraShares(context.Background(), listed)
+			if n := h.nsOpens(4242); n != 1 || !reflect.DeepEqual(h.coverList(), tc.want) {
+				t.Errorf("a second sync: %d namespaces opened, covers %+v", n, h.coverList())
+			}
+			// The namespace is held: a replug now is covered at once.
+			h.watch()
+			h.unplug("video0")
+			h.plug(csBrio())
+			h.waitLogged("camera share: covered /dev/video0 for cv-a again in ", 1)
+		})
+	}
+}
+
+func TestSyncCameraShares_ReleasesTheNamespaceOfAStoppedContainer(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	stopped := []CameraShareContainer{{ID: "cv-a"}}
+	// A listing taken before this start says it is stopped: the namespace stays.
+	h.s.SyncCameraShares(context.Background(), stopped)
+	if got := h.nsCloses(); len(got) != 0 {
+		t.Fatalf("a sync closed a namespace opened just now: %v", got)
+	}
+	h.ageNamespaces(cameraShareSyncGrace)
+	h.s.SyncCameraShares(context.Background(), stopped)
+	if got := h.nsCloses(); !reflect.DeepEqual(got, []uint32{11}) {
+		t.Fatalf("closed = %v, want 11's", got)
+	}
+	h.watch()
+	h.unplug("video0")
+	h.plug(csBrio())
+	h.waitLogged("camera share: /dev/video0 appeared; no running app shares it", 1)
+	if n := len(h.coverList()); n != 1 {
+		t.Errorf("%d covers, want only the start's", n)
+	}
+}
+
+func TestReleaseCameraShares_EndsRecoversForTheContainer(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	for i, id := range []string{"cv-a", "cv-b"} {
+		h.s.CreateCameraShares(context.Background(), id, "sh.wendy."+id)
+		if errs := h.s.CoverCameraShares(context.Background(), id, uint32(11+i)); len(errs) != 0 {
+			t.Fatalf("%s: %v", id, errs)
+		}
+	}
+	h.s.ReleaseCameraShares("cv-a")
+	if got := h.nsCloses(); !reflect.DeepEqual(got, []uint32{11}) {
+		t.Fatalf("closed = %v, want 11's", got)
+	}
+	h.watch()
+	h.unplug("video0")
+	h.plug(csBrio())
+	h.waitLogged("camera share: covered /dev/video0 for cv-b again in ", 1)
+	if covers := h.coverList(); len(covers) != 3 || covers[2].pid != 12 {
+		t.Errorf("covers = %+v, want cv-b's alone after the replug", covers)
+	}
+
+	h.s.RemoveCameraShares("cv-b")
+	if got := h.nsCloses(); !reflect.DeepEqual(got, []uint32{11, 12}) {
+		t.Errorf("closed = %v, want 11's and 12's", got)
+	}
+	h.unplug("video0")
+	h.plug(csBrio())
+	h.waitLogged("camera share: /dev/video0 appeared; no running app shares it", 1)
+	if n := len(h.coverList()); n != 3 {
+		t.Errorf("%d covers, want no more", n)
+	}
+}
+
+func TestCoverCameraShares_ClosesTheEarlierNamespaceOffTheStartPath(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	closing, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	h.mu.Lock()
+	h.closeHook = func(pid uint32) {
+		if pid == 11 {
+			close(closing)
+			<-release // tearing down a dead container's mounts takes milliseconds
+		}
+	}
+	h.mu.Unlock()
+
+	returned := make(chan []error, 1)
+	go func() { returned <- h.s.CoverCameraShares(context.Background(), "cv-a", 12) }()
+	select {
+	case errs := <-returned:
+		if len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the restart's cover waited for the old namespace to close")
+	}
+	select {
+	case <-closing:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the earlier namespace was never closed")
+	}
+	releaseOnce.Do(func() { close(release) })
+	if !csWaitFor(time.Second, func() bool { return reflect.DeepEqual(h.nsCloses(), []uint32{11}) }) {
+		t.Errorf("closed = %v, want 11's", h.nsCloses())
+	}
+	h.watch()
+	h.unplug("video0")
+	h.plug(csBrio())
+	h.waitLogged("camera share: covered /dev/video0 for cv-a again in ", 1)
+	if covers := h.coverList(); covers[len(covers)-1].pid != 12 {
+		t.Errorf("the re-cover went into %d's namespace, want 12's", covers[len(covers)-1].pid)
 	}
 }
