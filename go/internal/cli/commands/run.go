@@ -129,7 +129,7 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 			AppName: appName,
 		})
 		if startErr != nil {
-			return nil, false, fmt.Errorf("starting container: %w", startErr)
+			return nil, false, deviceRefusalOr(startErr, "starting container")
 		}
 		return startStream, false, nil
 	}
@@ -300,7 +300,7 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 			break
 		}
 		if recvErr != nil {
-			return fmt.Errorf("creating container: %w", recvErr)
+			return deviceRefusalOr(recvErr, "creating container")
 		}
 
 		switch r := resp.GetResponseType().(type) {
@@ -343,7 +343,7 @@ func isUnimplementedRPCError(err error) bool {
 func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
 	resp, err := svc.CreateContainer(ctx, req)
 	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+		return deviceRefusalOr(err, "creating container")
 	}
 	noteImageDigest(ctx, resp.GetImageDigest())
 	return nil
@@ -388,7 +388,7 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 				return
 			}
 			if recvErr != nil {
-				createErr = fmt.Errorf("creating container: %w", recvErr)
+				createErr = deviceRefusalOr(recvErr, "creating container")
 				if !progressDone {
 					prog.Send(tui.ProgressDoneMsg{Err: createErr})
 				}
@@ -470,7 +470,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 			if isUnimplementedRPCError(err) {
 				return fallbackCreateContainerWithoutProgress(ctx, svc, req)
 			}
-			return fmt.Errorf("creating container: %w", err)
+			return deviceRefusalOr(err, "creating container")
 		}
 		err = createContainerWithProgressPlain(stream)
 		if isUnimplementedRPCError(err) {
@@ -487,7 +487,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		if isUnimplementedRPCError(err) {
 			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
 		}
-		return fmt.Errorf("creating container: %w", err)
+		return deviceRefusalOr(err, "creating container")
 	}
 	if err := createContainerWithProgressTUI(cancel, stream, !progressHintsOff(ctx)); err != nil {
 		if isUnimplementedRPCError(err) {
@@ -1007,6 +1007,7 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 		ctx, finish = startActivationOperation(ctx, "run", "wendy run")
 		defer func() { finish(retErr) }()
 	}
+	defer func() { retErr = runPhaseFailure(ctx, retErr) }()
 	ctx = withDevicePickerPurpose(ctx, mainDevicePicker)
 	mark := phaseTimer()
 	activationStep(ctx, "project", nil)
@@ -1189,7 +1190,7 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	noteWaitReadyApp(ctx, appCfg.AppID)
 
 	if err := appCfg.Validate(); err != nil {
-		return commandErrorf(errConfigInvalid, "invalid wendy.json: %w", err)
+		return invalidAppConfigError(err)
 	}
 	activationStep(ctx, "connect", map[string]string{"project_recognized": "true"})
 	if err := warnAppConfigFile(cfgPath); err != nil {
@@ -1269,6 +1270,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	// Provider-based run path.
 	if target.External != nil && target.Provider != nil {
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "provider targets"); err != nil {
+			return err
+		}
+		if err := rejectMCUForProvider(appCfg); err != nil {
 			return err
 		}
 		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, appCfg.Entitlements, opts)
@@ -1412,7 +1416,7 @@ func resolveRunWorkingDir(opts runOptions) (string, error) {
 // runMacOSNativeContainer creates, optionally starts, and optionally streams
 // from a container that was deployed via file sync (not an OCI image pull).
 // It is shared by both the SwiftPM and Xcode macOS run paths.
-func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
+func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) (retErr error) {
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
 		return fmt.Errorf("marshaling app config: %w", err)
@@ -1454,10 +1458,10 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return deviceRefusalOr(err, "starting container")
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return deviceRefusalOr(err, "waiting for container start")
 		}
 		opts.reportDeployStarted()
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
@@ -1473,10 +1477,10 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return deviceRefusalOr(err, "starting container")
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return deviceRefusalOr(err, "waiting for container start")
 		}
 		opts.reportDeployStarted()
 		startCancel()
@@ -1485,6 +1489,9 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		opts.watchState.reapCommand(cmd)
 		return nil
 	}
+
+	var recent recentRunOutput
+	defer func() { retErr = recent.failure(retErr) }()
 
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
@@ -1495,7 +1502,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		AppName: appCfg.ContainerName(),
 	})
 	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
+		return deviceRefusalOr(err, "starting container")
 	}
 
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
@@ -1528,7 +1535,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if runCtx.Err() != nil {
 				break
 			}
-			return fmt.Errorf("receiving container output: %w", recvErr)
+			return diagnoseRunStreamFailure(ctx, conn, appCfg, hookFired, recvErr)
 		}
 		if resp.GetStarted() != nil && !hookFired {
 			hookFired = true
@@ -1536,9 +1543,11 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			runner.startAsync(runCtx, appCfg)
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
+			recent.stdout = appendRunTail(recent.stdout, out.GetData())
 			_, _ = os.Stdout.Write(out.GetData())
 		}
 		if out := resp.GetStderrOutput(); out != nil {
+			recent.stderr = appendRunTail(recent.stderr, out.GetData())
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}
@@ -1551,7 +1560,7 @@ func macOSNativeCreateContainerError(err error, appCfg *appconfig.AppConfig) err
 	if appCfg != nil && appCfg.Brewfile != "" {
 		return fmt.Errorf("creating container (including brew bundle): %w", err)
 	}
-	return fmt.Errorf("creating container: %w", err)
+	return deviceRefusalOr(err, "creating container")
 }
 
 // runSwiftWithAgent builds a Swift package using swift-container-plugin, which
@@ -1578,10 +1587,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	regPort := registryPort(agentOS)
 
-	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkToolchainBuildPrerequisites(ctx, cwd, versionResp); err != nil {
 		return err
 	}
 	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
@@ -1688,10 +1694,7 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
 	}
-	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkToolchainBuildPrerequisites(ctx, cwd, versionResp); err != nil {
 		return err
 	}
 
@@ -2251,7 +2254,14 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			return err
 		}
 	}
-	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
+	if err := preflightHostPorts(ctx, conn, appCfg); err != nil {
+		return err
+	}
+	mcu, err := preflightMCU(ctx, conn, cwd, appCfg, opts)
+	if err != nil {
+		return err
+	}
+	if err := registerCloudAppsFn(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
 	}
 	if opts.release != nil {
@@ -2262,7 +2272,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	metrics := newDeployMetrics(opts)
 	metrics.ctx = ctx
-	err := runWithAgentRecorded(ctx, conn, cwd, appCfg, opts, metrics)
+	err = deployMCU(ctx, conn, mcu, appCfg, opts)
+	if err == nil {
+		err = runWithAgentRecordedFn(ctx, conn, cwd, appCfg, opts, metrics)
+	}
 	metrics.emit(err)
 	if opts.release != nil {
 		if recErr := opts.release.outcome(err); recErr != nil {
@@ -2271,6 +2284,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	return err
 }
+
+// runWithAgentRecordedFn lets tests see whether the container deploy ran.
+var runWithAgentRecordedFn = runWithAgentRecorded
 
 func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions, metrics *deployMetrics) error {
 	// The start sites that receive the agent's Started acknowledgement report
@@ -2520,10 +2536,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	// A build will run below (the no-build fast path returned above). Refuse it
 	// now if this computer's disk, or the device's, is too full to hold it.
-	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkRunBuildPrerequisites(ctx, opts.builder, true, versionResp, defaultDoctorDeps()); err != nil {
 		return err
 	}
 	ctx = withDeviceStorage(ctx, versionResp)
@@ -2912,16 +2925,16 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 
 // startExistingContainer starts a previously created container without building
 // or recreating it, preserving the usual readiness, hook, and output lifecycle.
-func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
+func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) (retErr error) {
 	if opts.detach {
 		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return inRunPhase("app start", deviceRefusalOr(err, "starting container"))
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return inRunPhase("app start", deviceRefusalOr(err, "waiting for container start"))
 		}
 		opts.reportDeployStarted()
 		if !isRobotTour(ctx) {
@@ -2947,10 +2960,10 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return inRunPhase("app start", deviceRefusalOr(err, "starting container"))
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return inRunPhase("app start", deviceRefusalOr(err, "waiting for container start"))
 		}
 		opts.reportDeployStarted()
 		startCancel()
@@ -2960,6 +2973,9 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		return nil
 	}
 
+	var recent recentRunOutput
+	defer func() { retErr = recent.failure(retErr) }()
+
 	// Start and stream output using AttachContainer so stdin is forwarded.
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
@@ -2968,7 +2984,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 
 	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.ContainerName(), appCfg)
 	if err != nil {
-		return err
+		return inRunPhase("app start", err)
 	}
 
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
@@ -3006,7 +3022,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 					AppName: appCfg.ContainerName(),
 				})
 				if startErr != nil {
-					return fmt.Errorf("starting container: %w", startErr)
+					return inRunPhase("app start", deviceRefusalOr(startErr, "starting container"))
 				}
 				outStream = startStream
 				stdinAttempted = false
@@ -3018,9 +3034,9 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			// drop, auth). A clean container exit arrives as io.EOF above, so
 			// reaching here always means the run did not succeed. Record it, run
 			// the normal cleanup, then return it so `wendy run` exits non-zero
-			// instead of reporting a false success. Use the status message so the
-			// output reads as a container failure, not a CLI crash.
-			runErr = fmt.Errorf("container run failed: %s", status.Convert(recvErr).Message())
+			// instead of reporting a false success. Inspect the app before
+			// attributing a broken output connection to an application failure.
+			runErr = diagnoseRunStreamFailure(ctx, conn, appCfg, hookFired, recvErr)
 			break
 		}
 		gotFirstResponse = true
@@ -3034,9 +3050,11 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			}
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
+			recent.stdout = appendRunTail(recent.stdout, out.GetData())
 			_, _ = os.Stdout.Write(out.GetData())
 		}
 		if out := resp.GetStderrOutput(); out != nil {
+			recent.stderr = appendRunTail(recent.stderr, out.GetData())
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}
@@ -3771,7 +3789,9 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 
 // onStarted commits deployment state before readiness or long-lived logs. It
 // runs once, only after the agent confirms that the container has started.
-func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentConnection, stream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], appCfg *appconfig.AppConfig, opts runOptions, onStarted func()) error {
+func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentConnection, stream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], appCfg *appconfig.AppConfig, opts runOptions, onStarted func()) (retErr error) {
+	var recent recentRunOutput
+	defer func() { retErr = recent.failure(retErr) }()
 	// The attached-mode postStart hook is tied to hookCtx so it is terminated
 	// when the stream ends (matching startAndStreamContainer's runCtx handling).
 	// Cleanup runs in a defer so the hook is killed and reaped on every exit
@@ -3803,7 +3823,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 				stopInterruptedApp(ctx, conn, appCfg)
 				return ErrUserCancelled
 			}
-			return fmt.Errorf("receiving container output: %w", err)
+			return diagnoseRunStreamFailure(ctx, conn, appCfg, started, err)
 		}
 		if resp.GetStarted() != nil {
 			if !started {
@@ -3854,6 +3874,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			continue
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
+			recent.stdout = appendRunTail(recent.stdout, out.GetData())
 			if opts.detach && opts.detachedOutput && jsonOutput {
 				// Keep pre-start application logs out of the JSON result.
 				_, _ = os.Stderr.Write(out.GetData())
@@ -3862,6 +3883,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			}
 		}
 		if out := resp.GetStderrOutput(); out != nil {
+			recent.stderr = appendRunTail(recent.stderr, out.GetData())
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}

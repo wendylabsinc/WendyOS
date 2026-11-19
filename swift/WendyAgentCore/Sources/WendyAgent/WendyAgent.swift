@@ -37,22 +37,43 @@ public actor WendyAgent {
     private let runningExecutableSHA256: String
     private let reportedVersion: @Sendable () -> String
     private let probesLinuxContainerRuntime: Bool
+    private let stateDirectoryOverride: URL?
+    private let makeVideoService: @Sendable () -> VideoService
+    private let makeProvisioningService: @Sendable (URL) -> ProvisioningService
+
+    private var stateDirectory: URL {
+        self.stateDirectoryOverride ?? WendyAgentPaths.stateDirectory
+    }
 
     public init(configuration: WendyAgentConfiguration = .init()) {
         self.init(configuration: configuration, probesLinuxContainerRuntime: true)
     }
 
     /// Test-only seams for listener fixtures outside the signed app bundle.
-    /// They can supply a version and avoid starting container runtimes/registries.
+    /// They isolate state and capture while retaining production service registration.
     init(
         configuration: WendyAgentConfiguration,
         probesLinuxContainerRuntime: Bool,
-        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version }
+        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version },
+        stateDirectory: URL? = nil,
+        makeVideoService: @escaping @Sendable () -> VideoService = { VideoService() },
+        makeProvisioningService: @escaping @Sendable (URL) -> ProvisioningService = {
+            ProvisioningService(configPath: $0)
+        }
     ) {
         self.configuration = configuration
         self.reportedVersion = reportedVersion
         self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
         self.probesLinuxContainerRuntime = probesLinuxContainerRuntime
+        self.stateDirectoryOverride = stateDirectory
+        self.makeVideoService = makeVideoService
+        let registryRoot = stateDirectory ?? WendyAgentPaths.stateDirectory
+        let registryStore = BlobStore(root: registryRoot)
+        self.deliveryAuthority = BuildDeliveryAuthority(
+            directory: registryRoot.appendingPathComponent("build-delivery"),
+            images: registryStore
+        )
+        self.makeProvisioningService = makeProvisioningService
     }
 
     public func start() async throws {
@@ -253,6 +274,7 @@ public actor WendyAgent {
     /// Rebuilt (with callbacks re-wired) every time the main server starts so the
     /// next provision/unprovision transition still fires.
     private var provisioningService: ProvisioningService?
+    private let deliveryAuthority: BuildDeliveryAuthority
     /// Whether the main server is currently running in mTLS mode (provisioned) as
     /// opposed to plaintext (unprovisioned).
     private var mainServerIsMTLS = false
@@ -342,7 +364,7 @@ public actor WendyAgent {
         linuxBackend: (any LinuxContainerBackend)?,
         broadcaster: TelemetryBroadcaster
     ) async throws {
-        let stateDirectory = WendyAgentPaths.stateDirectory
+        let stateDirectory = self.stateDirectory
         let appsBase = stateDirectory.appendingPathComponent("apps")
 
         let containerService = ContainerService(
@@ -367,7 +389,7 @@ public actor WendyAgent {
         // handler *before* it returns; they MUST NOT await the server switch or
         // graceful shutdown would deadlock on the in-flight RPC. Each callback
         // therefore kicks off the switch in a detached task and returns at once.
-        let provisioningService = ProvisioningService(configPath: stateDirectory)
+        let provisioningService = self.makeProvisioningService(stateDirectory)
         self.provisioningService = provisioningService
         await provisioningService.setCallbacks(
             onProvisioned: { [weak self] _ in
@@ -379,18 +401,36 @@ public actor WendyAgent {
             },
             onUnprovisioned: { [weak self] in
                 Task { await self?.handleUnprovisioned() }
+            },
+            onBeforeUnprovisioned: { [authority = self.deliveryAuthority] in
+                try await authority.closeAndRemove()
             }
         )
         let info = await provisioningService.provisioningInfo()
         // When enrolled, run mTLS on `port + 1`; otherwise plaintext on `port`.
         let certs = info.enrolled ? await provisioningService.provisioningCerts() : nil
+        let (deliveryOrgMode, _) = ClientCertAuthorizer.OrgEnforcementMode.parse(
+            ProcessInfo.processInfo.environment["WENDY_MTLS_ORG_ENFORCEMENT"]
+        )
+        do {
+            try await deliveryAuthority.configure(
+                certPEM: certs?.certPEM,
+                chainPEM: certs?.chainPEM,
+                orgMode: deliveryOrgMode
+            )
+        } catch {
+            logger.error(
+                "Operator delivery disabled: durable authorization recovery failed",
+                metadata: ["error": "\(error)"]
+            )
+        }
 
         // SECURITY: accepted risk, matching the Linux agent. Before enrollment
         // the camera, like the other services here, is reachable without
         // authentication by anyone who can reach the plaintext setup listener.
         // A way to provision devices locally, so unenrolled devices can
         // require a credential, is planned to replace this.
-        let videoService = VideoService()
+        let videoService = self.makeVideoService()
         let services: [any RegistrableRPCService] = [
             AgentService(
                 reportedVersion: self.reportedVersion,
@@ -406,6 +446,13 @@ public actor WendyAgent {
             RobotArmService(path: stateDirectory.appendingPathComponent("robot-arm-bindings.json")),
             provisioningService,
             ProvisioningServiceV2(v1: provisioningService),
+            BuildDeliveryService(
+                authority: deliveryAuthority,
+                expectedScope: certs.flatMap {
+                    ClientCertAuthorizer.scope(fromLeafPEM: $0.certPEM)
+                },
+                orgMode: deliveryOrgMode
+            ),
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
             videoService,
@@ -736,7 +783,8 @@ public actor WendyAgent {
             tls: enrolled,
             assetID: enrolled ? info?.assetID : nil,
             orgID: enrolled ? info?.orgID : nil,
-            caps: enrolled ? ["sensors"] : []
+            caps: enrolled ? ["sensors"] : [],
+            principalURI: enrolled ? info?.principalURI : nil
         )
 
         let runtime = try await advertiser.start()
@@ -909,7 +957,7 @@ public actor WendyAgent {
     private func startPullRegistryIfNeeded() {
         guard self.pullRegistryTask == nil else { return }
         let registry = AgentImageRegistry(
-            store: BlobStore(root: WendyAgentPaths.stateDirectory),
+            store: BlobStore(root: self.stateDirectory),
             configuration: .init(
                 host: LocalRegistryRef.pullHost,
                 port: LocalRegistryRef.pullPort,
@@ -951,14 +999,15 @@ public actor WendyAgent {
             tls = RegistryTLS.makeConfiguration(certs: certs, logger: self.logger)
         }
         let registry = AgentImageRegistry(
-            store: BlobStore(root: WendyAgentPaths.stateDirectory),
+            store: BlobStore(root: self.stateDirectory),
             configuration: .init(
                 host: self.configuration.host,
                 port: LocalRegistryRef.pushPort,
                 tls: tls,
                 routes: .pushAndPull,
                 label: "push"
-            )
+            ),
+            authority: self.deliveryAuthority
         )
         let logger = self.logger
         self.pushRegistryTask = Task {

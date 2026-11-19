@@ -1580,3 +1580,19 @@ func TestPickerModel_NoMatchesShowsHint(t *testing.T) {
 		t.Errorf("expected a no-matches hint, got %q", view)
 	}
 }
+
+func TestPickerMarksTheCursorRowWithoutColour(t *testing.T) {
+	withColor(t, termenv.Ascii)
+	pm := sectionedPicker(t)
+	cursor := pm.visibleItems()[pm.itemIndexForRow(pm.table.Cursor())].Name
+	view := pm.View()
+	var marked []string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, ">") {
+			marked = append(marked, strings.TrimSpace(line))
+		}
+	}
+	if len(marked) != 1 || !strings.HasPrefix(marked[0], ">"+cursor) {
+		t.Fatalf("marked lines %q; want only the cursor row, %s, in:\n%s", marked, cursor, view)
+	}
+}

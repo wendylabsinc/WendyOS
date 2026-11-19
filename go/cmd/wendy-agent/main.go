@@ -25,8 +25,11 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
 	"github.com/wendylabsinc/wendy/go/internal/agent/bluetooth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
@@ -35,6 +38,7 @@ import (
 	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
 	agentdata "github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/framesource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostexec"
@@ -52,6 +56,7 @@ import (
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
 	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
+	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/go/internal/agent/robotarm"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
@@ -67,8 +72,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -123,6 +130,9 @@ func (a *containerMonitorAdapter) RestartStatuses() map[string]services.RestartS
 	return a.m.RestartStatuses()
 }
 
+// protectProcess is a var so tests can stub it.
+var protectProcess = oomscore.Protect
+
 func main() {
 	if handled, code := handleUtilityCommand(os.Args[1:]); handled {
 		os.Exit(code)
@@ -151,15 +161,18 @@ func main() {
 	telemetryCore := services.NewTelemetryCore(telemetryBuf, zapcore.DebugLevel)
 	logger = zap.New(zapcore.NewTee(logger.Core(), telemetryCore))
 
-	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
+	// Logging the contract also keeps it in the binary, where the supervisor
+	// looks for it before it runs a new agent.
+	logger.Info("Starting wendy-agent", zap.String("version", version.Version), zap.String("contract", supervisor.AgentContract))
+	// Workloads are reset to 0 at their spawn sites; helpers inherit this score.
+	if err := protectProcess(); err != nil {
+		logger.Warn("agent OOM protection unavailable", zap.Error(err))
+	}
 	if err := hoststats.EnableAgentNetworkAccounting(context.Background()); err != nil {
 		logger.Info("Agent network accounting unavailable", zap.Error(err))
 	}
 
-	configPath := "/etc/wendy-agent"
-	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
+	configPath := agentConfigPath()
 	accessPolicy, err := networkaccess.Load(configPath)
 	if err != nil {
 		logger.Fatal("Invalid network access configuration", zap.Error(err))
@@ -201,7 +214,9 @@ func main() {
 
 	// Run the OS-update gate after the time floor is applied so the marker
 	// staleness check and the persisted result timestamps use a sane clock.
-	services.RunOSUpdateGate(logger)
+	if !osGateDoneBySupervisor() {
+		services.RunOSUpdateGate(logger)
+	}
 
 	services.CleanupOldBackups(logger)
 	cdi.EnsureNVIDIACDISpec(logger)
@@ -266,6 +281,12 @@ func main() {
 		// can resolve peer-device names for containers on the mesh network mode.
 		meshDNS = mesh.NewDNSServer(logger, "127.0.0.53:53")
 		ctrdClient.SetMeshDNS(meshDNS)
+
+		if runtime.GOOS == "linux" {
+			ctrdClient.SetAppMemoryBudget(func() appcgroup.Status { return appcgroup.Ensure(configPath) })
+			// Logging the state now keeps the first app start quiet.
+			ctrdClient.EnsureAppMemoryBudget()
+		}
 	}
 
 	// Ensure the host-side WENDY-MESH iptables chain exists so the wendy-mesh
@@ -337,8 +358,27 @@ func main() {
 		}
 	}
 
+	// mTLS organization-equality enforcement mode. Read once here so the
+	// startMTLSServer closure can capture it. The default (empty value) is strict,
+	// which rejects client certs that carry no org identity. Set to grace for
+	// migration mode, which allows legacy certs without org identity.
+	orgMode, ok := interceptor.ParseOrgMode(os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT"))
+	if !ok {
+		logger.Warn("WENDY_MTLS_ORG_ENFORCEMENT has unrecognised value; defaulting to strict",
+			zap.String("value", os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT")))
+	}
+	logger.Info("mTLS org enforcement mode", zap.String("mode", orgMode.String()))
+
+	var deliveryManager *delivery.Manager
+	deliverySource := func() (delivery.Snapshot, error) {
+		if deliveryManager == nil {
+			return delivery.Snapshot{}, nil
+		}
+		return deliveryManager.Get()
+	}
 	containerSvcOpts := []services.ContainerServiceOption{
 		services.WithLogManager(logManager),
+		services.WithDeliverySource(deliverySource, orgMode),
 	}
 	if monitor != nil {
 		containerSvcOpts = append(containerSvcOpts, services.WithMonitor(&containerMonitorAdapter{m: monitor}))
@@ -350,6 +390,27 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath, timesyncMgr)
+	deliveryRegistryAddress, err := accessPolicy.RegistryAddress(os.Getenv("WENDY_REGISTRY_ADDR"))
+	var deliveryPrefix string
+	if err != nil {
+		logger.Warn("Delegated delivery unavailable without a valid registry address", zap.Error(err))
+	} else {
+		deliveryPrefix, err = registry.LocalImagePrefix(deliveryRegistryAddress)
+		if err != nil {
+			logger.Warn("Delegated delivery registry prefix unavailable", zap.Error(err))
+		}
+	}
+	deliveryManager = delivery.NewManager(filepath.Join(configPath, "build-delivery"), deliveryPrefix, provisioningSvc.ProvisioningPublicCertificates)
+	defer deliveryManager.Close()
+	if ctrdClient != nil {
+		ctrdClient.SetDeliverySource(deliverySource)
+	}
+	var deliveryImages services.DeliveryImageResolver
+	if resolver, ok := containerdClient.(services.DeliveryImageResolver); ok {
+		deliveryImages = resolver
+	}
+	deliverySvc := services.NewBuildDeliveryService(deliverySource, deliveryImages)
+
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster, telemetryBuf)
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
@@ -363,6 +424,18 @@ func main() {
 	// Before anything reads the store: devices updated from an older agent still
 	// have add-ons in the pre-keyed flat layout.
 	driverSvc.MigrateStore()
+	mcuSvc := services.NewMcuService(logger)
+	mcuSvc.SetAppStopper(func(ctx context.Context, appID string) error {
+		_, err := containerSvc.StopContainer(ctx, &agentpb.StopContainerRequest{AppName: appID})
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		return err
+	})
+	if ctrdClient != nil {
+		ctrdClient.SetSketchOwnership(mcuSvc)
+	}
+	containerSvc.SetSketchOwner(mcuSvc)
 	containerSvcV2 := services.NewContainerServiceV2(containerSvc)
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
@@ -401,6 +474,7 @@ func main() {
 		envBytes(logger, "WENDY_DATA_RESERVE_BYTES", agentdata.DefaultReserveBytes, 0),
 	)
 	dataSvc := services.NewDataService(dataManager)
+	dataSvc.SetTelemetryPublisher(telemetryBuf)
 	dataSvc.SetAudioService(audioSvc)
 	// ROS 2 inspection requires the containerd-backed sidecar runtime; the
 	// service is only registered when containerd connected (WDY-1332).
@@ -418,6 +492,9 @@ func main() {
 	// Optional startup work can block after resource-owning workers begin.
 	// Handle termination now so those workers can drain during startup too.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	cleanupResetOwnedState := func(resetCtx context.Context) error {
+		return errors.Join(deliveryManager.Reset(), cleanupResetMesh(resetCtx))
+	}
 	// A verified completed reset, including a recovered pending reset, has
 	// already erased its credentials. Reclaim owned kernel policy before
 	// exposing its receipt. A local-only reset has no receipt but leaves a
@@ -426,7 +503,7 @@ func main() {
 	if resetStatus, err := provisioningSvcV2.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}); err == nil {
 		completed := len(resetStatus.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 || provisioningSvc.LocalResetCompleted()
 		recoverCompletedResetMesh(ctx, completed, 5*time.Second,
-			cleanupResetMesh, provisioningSvc.SetResetCleanupError, func(err error) {
+			cleanupResetOwnedState, provisioningSvc.SetResetCleanupError, func(err error) {
 				logger.Error("Reset net cleanup incomplete; completion and enrollment remain unavailable", zap.Error(err))
 			})
 	}
@@ -635,7 +712,7 @@ func main() {
 			return
 		}
 
-		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig)
+		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig, registry.WithDeliveryAuthorization(deliverySource, orgMode))
 		if err != nil {
 			logger.Warn("Failed to start embedded dev registry (image push will be unavailable)", zap.Error(err))
 			return
@@ -720,17 +797,6 @@ func main() {
 		logger.Info("kernel dmesg collection disabled (set WENDY_COLLECT_DMESG=true to enable)")
 	}
 
-	// mTLS organization-equality enforcement mode. Read once here so the
-	// startMTLSServer closure can capture it. The default (empty value) is strict,
-	// which rejects client certs that carry no org identity. Set to grace for
-	// migration mode, which allows legacy certs without org identity.
-	orgMode, ok := interceptor.ParseOrgMode(os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT"))
-	if !ok {
-		logger.Warn("WENDY_MTLS_ORG_ENFORCEMENT has unrecognised value; defaulting to strict",
-			zap.String("value", os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT")))
-	}
-	logger.Info("mTLS org enforcement mode", zap.String("mode", orgMode.String()))
-
 	// Main agent gRPC server port.
 	agentPort := defaultAgentPort
 	if p := os.Getenv("WENDY_AGENT_PORT"); p != "" {
@@ -769,9 +835,10 @@ func main() {
 					logger.Error("invalid Cloud grant issuer", zap.Error(err))
 					return
 				}
+				markCloudEnrolled(logger)
 				client := &cloudrelay.Agent{Endpoint: endpoint, Verifier: &cloudrelay.Verifier{Issuer: issuer},
 					StateDir: filepath.Join(configPath, "cloud-relay"), Credentials: provisioningSvc.ProvisioningCerts,
-					Logger: logger, MTLSPort: mtlsPortNum}
+					Logger: logger, MTLSPort: mtlsPortNum, OnRegistered: cloudReachedMark(logger), OnLost: cloudLostMark(logger)}
 				client.Run(ctx)
 				return
 			}
@@ -822,10 +889,11 @@ func main() {
 		meshSvc := services.NewMeshService(logger, configPath, deviceScope(provisioningSvc))
 		meshSvc.SetIngressAuthorizer(meshIngress)
 		buildSvc := services.NewBuildService(logger, services.BuildServiceOptions{
-			ConfigPath:   configPath,
-			Chunks:       buildChunkSource,
-			Peers:        meshDialer,
-			ContextLocks: buildContextLocks,
+			DeliverySource: deliverySource,
+			ConfigPath:     configPath,
+			Chunks:         buildChunkSource,
+			Peers:          meshDialer,
+			ContextLocks:   buildContextLocks,
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
 			TargetAgentPort: uint16(mtlsPortNum),
@@ -881,6 +949,7 @@ func main() {
 		// local admin socket. The store and apply path require Linux.
 		if runtime.GOOS == "linux" {
 			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
+			agentpbv2.RegisterWendyArduinoMcuServiceServer(srv, mcuSvc)
 		}
 		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
 		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)
@@ -890,6 +959,7 @@ func main() {
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyLocalMeshAdminServiceServer(srv, localMeshAdmin)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
+		agentpbv2.RegisterWendyBuildDeliveryServiceServer(srv, deliverySvc)
 		agentpbv2.RegisterWendySensorPairingServiceServer(srv, sensorSvc)
 		agentpbv2.RegisterWendyCalibratedFrameServiceServer(srv, calibratedFrameSvc)
 		agentpbv2.RegisterWendyRobotArmServiceServer(srv, robotArmSvc)
@@ -1000,8 +1070,10 @@ func main() {
 		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedScope, effectiveMode,
 			// mTLS authentication and the exact-method device RPC allowlist are
 			// embedded inside mtls.NewServer before these error interceptors.
-			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
-			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+			append([]grpc.ServerOption{
+				grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
+				grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+			}, remoteSeenOptions()...)...,
 		)
 		if err != nil {
 			logger.Error("Failed to create mTLS server", zap.Error(err))
@@ -1068,7 +1140,27 @@ func main() {
 	wg.Add(1)
 	go func() { defer wg.Done(); logUDPMessageState(ctx, logger, appUDPMessages) }()
 	var localMeshLife meshLifetime
+	// An update restarts the agent without the shutdown at the end of main, so
+	// its restart stops Wendy Net itself. Set before any server is serving.
+	agentRestart := newAgentRestart(logger, &localMeshLife)
+	agentSvc.SetRestartFunc(agentRestart.Schedule)
+	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
 	var localMeshAppClient *meshsession.Client
+	// currentAppRoutes reads the live node view at call time, never a view
+	// saved at dial start. It reports no routes once appClient's runtime has
+	// been replaced or stopped, so a late recheck fails closed.
+	currentAppRoutes := func(appClient *meshsession.Client) func() localmesh.NodeSnapshot {
+		return func() localmesh.NodeSnapshot {
+			localMeshMu.RLock()
+			snapshot := localMeshSnapshot
+			sameClient := localMeshAppClient == appClient
+			localMeshMu.RUnlock()
+			if snapshot == nil || !sameClient {
+				return localmesh.NodeSnapshot{}
+			}
+			return snapshot()
+		}
+	}
 	// Persistent VIP table shared by DNS answers, the proxy's reverse
 	// lookup, and every allocation: (tenant UUID, device UUID) ↔ VIP. A
 	// corrupt table file refuses to open rather than silently re-allocating
@@ -1158,6 +1250,9 @@ func main() {
 				stopSessions()
 				return
 			}
+			// Sessions from a current direct LAN neighbour get the same startup
+			// profile the dialing side would choose.
+			sessionServer.SetRouteSnapshot(currentAppRoutes(appClient))
 			// Publish app capabilities only after both sockets have bound. A
 			// listener failure ends the carriers and their signed advertisement.
 			ready := make(chan struct{}, 2)
@@ -1254,22 +1349,7 @@ func main() {
 		if address.Transport == localmesh.AppTLS {
 			return appClient.DialTLS(dialCtx, peer, address.Address, port)
 		}
-		return appClient.DialWithRetryCheck(dialCtx, peer, address.Address, port, func() error {
-			localMeshMu.RLock()
-			currentSnapshot := localMeshSnapshot
-			localMeshMu.RUnlock()
-			if currentSnapshot == nil {
-				return meshsession.ErrNoRoute
-			}
-			currentAddress, err := meshsession.ResolveApp(currentSnapshot(), peer)
-			if err != nil {
-				return err
-			}
-			if currentAddress != address {
-				return meshsession.ErrNoRoute
-			}
-			return nil
-		})
+		return appClient.DialWithRouteSnapshot(dialCtx, peer, address.Address, port, currentAppRoutes(appClient))
 	})
 	meshDialer.SetLocalServiceDialer(func(dialCtx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
 		localMeshMu.RLock()
@@ -1322,7 +1402,7 @@ func main() {
 		if address.Transport != localmesh.AppQUIC {
 			return nil, meshsession.ErrUDPUnsupported
 		}
-		return appClient.DialUDP(dialCtx, peer, address.Address, port, options)
+		return appClient.DialUDPWithRouteSnapshot(dialCtx, peer, address.Address, port, currentAppRoutes(appClient), options)
 	}), meshIngress, meshVIPs, appUDPMessages)
 	if udpErr == nil {
 		udpErr = udpProxy.Start(fmt.Sprintf(":%d", mesh.UDPProxyPort))
@@ -1420,7 +1500,7 @@ func main() {
 	// remains active for on-device containers with the admin entitlement.
 	var agentServer *grpc.Server
 	if !alreadyProvisioned {
-		agentServer = grpc.NewServer(
+		agentServer = grpc.NewServer(append(remoteSeenOptions(),
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 			grpc.InitialWindowSize(8*1024*1024),
@@ -1434,7 +1514,7 @@ func main() {
 				MinTime:             10 * time.Second,
 				PermitWithoutStream: true,
 			}),
-		)
+		)...)
 		registerAllServices(agentServer)
 
 		agentLis, err := listenForAccess(accessPolicy, agentPort)
@@ -1582,6 +1662,7 @@ func main() {
 	// Revoke Unitree sessions and keys before Unprovision reports success.
 	// A failed clear is retried when the agent restarts unenrolled.
 	provisioningSvc.BeforeUnprovisioned = func() error {
+		deliveryErr := deliveryManager.Reset()
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
@@ -1604,11 +1685,11 @@ func main() {
 		if stopErr != nil {
 			// Do not reclaim kernel objects while an undrained worker may still
 			// use them. Reset stays unconfirmed; the scheduled restart retries.
-			return fmt.Errorf("waiting for net shutdown: %w", stopErr)
+			return errors.Join(deliveryErr, fmt.Errorf("waiting for net shutdown: %w", stopErr))
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
+		return errors.Join(deliveryErr, meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
 	}
 	provisioningSvc.OnUnprovisioned = func() {
 		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)
@@ -1617,12 +1698,13 @@ func main() {
 	}
 
 	// Renew the device certificate before it expires, with a fresh ML-DSA-65
-	// key. The renewed identity loads through the same clean restart.
+	// key. The renewed identity loads through the restart an update uses,
+	// which stops Wendy Net before the agent exits.
 	// ponytail: restart per renewal (once per lifetime/3); swap in place if
 	// restarts start to hurt.
 	go provisioningSvc.RunRenewal(ctx, func() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
-		os.Exit(0)
+		agentRestart.Schedule()
 	})
 
 	if accessPolicy.AllowsNetwork {
@@ -1635,7 +1717,14 @@ func main() {
 	go func() {
 		const bakedACMEPath = "/config/acme-enrollment.json"
 		if _, err := os.Stat(bakedACMEPath); err == nil {
+			pending := configpartition.EnrollmentPending(configPath)
 			provisioningSvcV2.ApplyACMEEnrollmentFile(ctx, bakedACMEPath)
+			// Once, after this attempt: hand the held /config seed over now.
+			if pending && configpartition.SeedWaiting(configPath) {
+				logger.Info("Restarting to hand the config partition agent to the supervisor")
+				// Stops Wendy Net first, as every agent restart does.
+				agentRestart.Schedule()
+			}
 		} else if os.IsNotExist(err) {
 			provisioningSvc.ApplyEnrollmentFile(ctx)
 		} else {
@@ -1987,8 +2076,13 @@ func handleUtilityCommand(args []string) (bool, int) {
 		}
 		return true, 0
 	}
+	if args[1] == "os-gate" {
+		return true, runOSGateUtility()
+	}
 	if args[1] != "open-browser" {
-		return false, 0
+		// Falling through would start a second agent next to the running one.
+		fmt.Fprintf(os.Stderr, "unknown utils command %q\n", args[1])
+		return true, 2
 	}
 
 	if len(args) != 3 {
@@ -2045,4 +2139,89 @@ func envBytes(logger *zap.Logger, name string, fallback, minimum int64) int64 {
 		return fallback
 	}
 	return v
+}
+
+func agentConfigPath() string {
+	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
+		return envPath
+	}
+	return "/etc/wendy-agent"
+}
+
+// runOSGateUtility commits or rolls back a pending OS update, then exits. The
+// supervisor runs it with the image's agent before it starts any agent, so a
+// bad agent on /data can never decide the OS update.
+var runOSGateUtility = func() int {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
+		return 1
+	}
+	defer logger.Sync()
+	timesync.NewManager(logger, agentConfigPath()).ApplyFloor()
+	services.RunOSUpdateGate(logger)
+	return osGateExitCode(oshealth.DefaultStateDir)
+}
+
+// osGateExitCode is 1 while a booted OS update still waits for its commit, so
+// the supervisor has the image agent retry the gate before handing over.
+func osGateExitCode(stateDir string) int {
+	marker, found, err := oshealth.ReadPendingMarker(stateDir)
+	if err == nil && found && marker.BootID != oshealth.CurrentBootID() {
+		return 1
+	}
+	return 0
+}
+
+func osGateDoneBySupervisor() bool {
+	return os.Getenv("WENDY_OS_GATE") == "done"
+}
+
+// markCloudEnrolled tells the agent supervisor this agent connects to the
+// cloud relay, so an automatic update waits while it is not connected.
+func markCloudEnrolled(logger *zap.Logger) {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return
+	}
+	if err := supervisor.MarkCloudEnrolled(supervisor.RemoteSeenDir); err != nil {
+		logger.Warn("cannot tell the agent supervisor this agent uses the cloud relay", zap.Error(err))
+	}
+}
+
+// cloudReachedMark tells the agent supervisor this agent is reachable through
+// the cloud relay, which is what approves an automatic agent update.
+func cloudReachedMark(logger *zap.Logger) func() {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return nil
+	}
+	return func() {
+		if err := interceptor.MarkRemoteSeen(supervisor.RemoteSeenDir, supervisor.ViaCloud); err != nil {
+			logger.Warn("cannot tell the agent supervisor the cloud relay was reached", zap.Error(err))
+		}
+	}
+}
+
+// cloudLostMark takes the mark back while the relay is down, so the supervisor
+// does not ask a new agent to reach a cloud this one could not reach either.
+func cloudLostMark(logger *zap.Logger) func() {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return nil
+	}
+	return func() {
+		if err := interceptor.ClearRemoteSeen(supervisor.RemoteSeenDir, supervisor.ViaCloud); err != nil {
+			logger.Warn("cannot tell the agent supervisor the cloud relay was lost", zap.Error(err))
+		}
+	}
+}
+
+// remoteSeenOptions let the agent supervisor see that a remote client reached
+// this agent over the network servers; the local socket never counts.
+func remoteSeenOptions() []grpc.ServerOption {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return nil
+	}
+	return []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(interceptor.UnaryRemoteSeen(supervisor.RemoteSeenDir)),
+		grpc.ChainStreamInterceptor(interceptor.StreamRemoteSeen(supervisor.RemoteSeenDir)),
+	}
 }

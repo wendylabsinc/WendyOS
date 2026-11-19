@@ -1,0 +1,81 @@
+Actual macOS VM lifecycle — audits2270,1875 and the VM subset of2060
+
+Existing runner only
+--------------------
+Not registered in hosted CI. Its only hosted execution (macos-15-intel, TCG,
+https://github.com/wendylabsinc/WendyOS/actions/runs/43593970058/job/132444620222)
+passed cancellation, then the guest was still starting its container runtime
+when the production 5-minute simulator wait expired. Run it on the reserved
+ARM64/HVF Mac, after an actual CLI Make build and commands install.test compilation. Inspect command -v qemu-system-aarch64 and its --version first; install
+Homebrew qemu only if absent in this disposable job. Its native binary and
+64MiB edk2-aarch64-code.fd are recorded by SHA256 and version at execution.
+No host networking, hypervisor, service, or kernel configuration is changed.
+
+python3 .github/scripts/test-macos-vm-lifecycle.py \
+  --cli "$ACTUAL_MAKE_CLI" --test-binary "$EXISTING_COMMANDS_TEST" \
+  --output "$RUNNER_TEMP/macos-vm-lifecycle"
+
+Use the job's actual paths, not another compile of the normal commands suite.
+The binary must include TestVMOwnedLifecycle from this source; missing/skipped
+selection cannot pass. The wrapper builds one static Linux/ARM64 guest app and
+one source-overlay forwarding control using the existing Go cache. Set the
+existing step timeout to35min and existing job timeout to45min (no added row).
+The wrapper's total32min deadline includes both phases; normal14min/control8min
+are upper bounds, not measured runtime. The outer job budget includes dependency
+setup and its other tests. Reduce bounds only after actual hosted measurements.
+It requires12GiB free before staging one pinned606MB compressed released guest
+and sequential16GiB sparse VM disks. The exact release bmap reports
+7,383,041,024 expanded bytes (metadata SHA256
+cc80175c46ef843763ca76bf02a936af34a4521a7e616c6c6e24d2af2a164dcb,
+https://storage.googleapis.com/wendyos-images-public/images/vm-arm64/0.21.0/wendyos-image-vm-arm64-wendyos.rootfs.wic.bmap).
+The remainder covers the compressed archive, small app/build outputs and guest
+writes; the control begins only after the normal disk is removed. No cold VM/image download was run locally.
+Always retain output/*.log and output/*.json; no disk/binary/media artifacts.
+Register macos_vm_lifecycle_test.py in existing portable automation tests.
+
+Actual assertions
+-----------------
+The published vm-arm64 0.21.0 bytes/size/SHA are shared with the Windows fixture.
+Actual CLI vm create writes a fresh private configuration/disk. Production
+ensureSimulatorRunning starts detached QEMU; the fixture's private QMP socket
+pauses its CPU before readiness, verifies the actual Agent cannot answer, and
+cancels discover's exact startSimulatorFn wait. The same QEMU/runstate must remain
+alive. QMP resume plus the same production callback must reach the real Agent.
+No launcher, transport, QMP, Agent, or forwarding fake is installed.
+
+A source-built static ARM64 ELF is packaged as a scratch OCI image and sent
+through production chunk upload/PrepareImage/RunContainer. Host port must be
+closed before forwarding. Actual prepareVMAppPorts and readiness/hook address
+resolution are called twice, then HTTP must return this run's nonce, a live
+guest boot_id, and increasing counters. Production QMP powerdown must release
+the inherited run lock and refuse further HTTP. Starting the same VM disk/alias
+must preserve the owned regular disk inode, Agent hostname and agent port, produce a new guest boot_id,
+start the persisted restart=no app without reupload, and restore actual forwarded HTTP.
+
+The historical forwarding control removes only prepareVMAppPorts' call to
+forwardVMPorts (the missing behavior fixed by0a3c57ff89c6c8e). It must fail at the
+named actual application readiness boundary after real boot/upload/start; a
+compile/setup/boot failure, timeout, skip, or unknown cleanup cannot pass.
+
+Ownership and result scope
+--------------------------
+Every phase has a fresh short /tmp/wv-* private root, nonce-bound VM name and
+configuration, file-only credentials, and no Cloud enrollment/registration.
+No existing user VM or user Keychain is read. The guardian bounds ordinary
+subprocesses. Detached QEMU owns a new process session, so cleanup separately
+uses only that private QMP socket and waits for its actual inherited flock to
+release. It never signals a saved PID. Unknown QMP/drain retains the owned work
+and fails; logs report its exact path for the owner. No recursive work deletion
+occurs while QEMU may still write the disk. A job cancellation should still allow
+the35min step's cleanup margin; if a forced runner termination interrupts it,
+only the disposable runner is discarded, never claim observed clean drain.
+
+This closes no UI/picker rendering, Cloud enrollment, Windows unsupported
+background/QMP behavior, nested ARM64 host, or physical Mac claim.2060 is a
+mixed audit: its other mapped protocol/runtime evidence remains separate.
+Hosted execution is pending until all normal/control markers and evidence pass.
+
+GetAgentVersion on the shipped Go Agent does not populate PublicKey. This
+fixture therefore makes no cryptographic guest-identity claim: it verifies the
+actual hostname, owned disk inode/runstate/port, QMP ownership and fresh
+nonce-bound application bytes across a changed guest boot_id.

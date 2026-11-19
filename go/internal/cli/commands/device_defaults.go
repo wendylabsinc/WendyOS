@@ -219,6 +219,14 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 	if !selector.matches(auth) {
 		return nil, selector.missingAuth()
 	}
+	if conn, err := desktopExistingCloudConnection(ctx, auth, selector.String()); conn != nil || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
+	}
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	if selector.TenantUUID != "" {
 		assets, err := fetchDefaultCloudAssetsV2Fn(ctx, auth, true)
 		if err != nil {
@@ -237,6 +245,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 			}
 			return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
 		}
+		if err := explainCloudSelectorMissV2(ctx, auth, selector, assets); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("cloud asset %s in tenant %s is offline or unavailable; choose another device with --device or 'wendy device set-default'", selector.AssetUUID, config.OrganizationLabel(selector.Endpoint, selector.TenantUUID))
 	}
 	assets, err := fetchDefaultCloudAssetsFn(ctx, auth)
@@ -252,6 +263,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 			return nil, err
 		}
 		return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
+	}
+	if err := explainCloudSelectorMissLegacy(ctx, auth, selector, assets); err != nil {
+		return nil, err
 	}
 	return nil, fmt.Errorf("cloud asset %d in organization %s is offline or unavailable; choose another device with --device or 'wendy device set-default'", selector.AssetID, orgLabel(selector.Endpoint, selector.OrgID))
 }

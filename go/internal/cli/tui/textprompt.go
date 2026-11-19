@@ -149,7 +149,7 @@ func PromptPassword(prompt, hint string, validate ValidateFunc, programOpts ...t
 // runTextPrompt runs a prepared model to completion and returns its validated
 // value, ErrCancelled if the user quit, or a wrapped Bubble Tea error.
 func runTextPrompt(m TextPromptModel, programOpts ...tea.ProgramOption) (string, error) {
-	p := tea.NewProgram(m, programOpts...)
+	p := NewProgram(m, programOpts...)
 	result, err := RunProgram(p)
 	if err != nil {
 		return "", fmt.Errorf("text prompt: %w", err)

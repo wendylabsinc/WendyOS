@@ -121,7 +121,7 @@ func (b *Backend) startLiteCamera(camera uint32, streamID uint64) error {
 			frame, err := stream.Recv()
 			if err != nil {
 				if ctx.Err() == nil {
-					b.emitText(ctx, EventCameraError, session, streamID, err.Error())
+					b.emitError(ctx, EventCameraError, session, streamID, err)
 				}
 				return
 			}
@@ -135,12 +135,6 @@ func (b *Backend) startLiteCamera(camera uint32, streamID uint64) error {
 func (b *Backend) startLiteLogs(app string, streamID uint64) error {
 	if app != "" {
 		return errors.New("Wendy Lite exposes one device console; clear the app filter")
-	}
-	if b.logsStop != nil {
-		b.logsStop()
-	}
-	if b.logsDone != nil {
-		<-b.logsDone
 	}
 	chunks, detach, err := b.lite.ConsoleAttach(true, false)
 	if err != nil {

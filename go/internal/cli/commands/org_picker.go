@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -285,7 +284,7 @@ func newOrgPicker(orgs []*cloudpb.Organization, cfg *config.Config, copyOnEnter 
 func pickOrgInteractive(orgs []*cloudpb.Organization, cfg *config.Config, copyOnEnter bool) (int32, string, error) {
 	picker, items := newOrgPicker(orgs, cfg, copyOnEnter)
 
-	p := tea.NewProgram(picker)
+	p := tui.NewProgram(picker)
 	go func() {
 		p.Send(tui.PickerAddMsg{Items: items})
 		p.Send(tui.PickerDoneMsg{})

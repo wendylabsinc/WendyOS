@@ -44,6 +44,34 @@ func TestAgentEntitlementsRefusesATypeTheAgentDoesNotKnow(t *testing.T) {
 	}
 }
 
+func TestAgentEntitlementsArduinoBridgeNamesTheBoardNotTheAgent(t *testing.T) {
+	for _, tc := range []struct{ deviceType, reason, fix string }{
+		{"raspberrypi5", "needs an Arduino UNO Q", "Run it on an Arduino UNO Q"},
+		{arduinoUnoQDeviceType, "needs a WendyOS with Arduino's router", "wendy os update"},
+	} {
+		resp := agentKnowing("network")
+		resp.DeviceType = &tc.deviceType
+		err := checkAgentEntitlements(resp, appUsing(appconfig.EntitlementArduinoBridge))
+		if err == nil || !strings.HasPrefix(err.Error(), "the device's agent does not support") || !strings.Contains(err.Error(), tc.reason) {
+			t.Fatalf("%s: err = %v, want the MCP-matched refusal saying %q", tc.deviceType, err, tc.reason)
+		}
+		steps := strings.Join(NextSteps(err), "\n")
+		if !strings.Contains(steps, tc.fix) || strings.Contains(steps, "wendy device update") {
+			t.Fatalf("%s: next steps = %q, want %q and no agent update", tc.deviceType, steps, tc.fix)
+		}
+	}
+}
+
+func TestAgentEntitlementsArduinoBridgeWithAnotherUnknownTypeSuggestsTheUpdate(t *testing.T) {
+	resp := agentKnowing("network")
+	pi := "raspberrypi5"
+	resp.DeviceType = &pi
+	err := checkAgentEntitlements(resp, appUsing(appconfig.EntitlementArduinoBridge, "episode-write"))
+	if steps := strings.Join(NextSteps(err), "\n"); !strings.Contains(steps, "wendy device update") {
+		t.Fatalf("next steps = %q, want the device update for episode-write", steps)
+	}
+}
+
 func TestAgentEntitlementsNamesEachUnknownTypeOnce(t *testing.T) {
 	err := checkAgentEntitlements(agentKnowing("network"),
 		appUsing("episode-write", "network"), appUsing("data-read", "episode-write"))

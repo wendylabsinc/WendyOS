@@ -219,7 +219,7 @@ func RunChecklist(title string, items []ChecklistItem, programOpts ...tea.Progra
 // RunChecklistModel runs an interactive checklist from an already-configured
 // ChecklistModel and returns the selected items.
 func RunChecklistModel(m ChecklistModel, programOpts ...tea.ProgramOption) ([]ChecklistItem, error) {
-	p := tea.NewProgram(m, programOpts...)
+	p := NewProgram(m, programOpts...)
 	result, err := RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("checklist: %w", err)

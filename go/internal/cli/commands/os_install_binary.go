@@ -19,6 +19,28 @@ type localInstallAgent struct {
 	arch string
 }
 
+// agentSeed is the agent os install leaves on /config for the first boot: a
+// local --binary, or the latest release for the image's channel and CPU, so a
+// nightly image is not handed an older stable agent.
+type agentSeed struct {
+	local   *localInstallAgent
+	nightly bool
+	arch    string
+}
+
+// seedArtifactFn is a variable so tests can stub the download.
+var seedArtifactFn = resolveAgentArtifact
+
+// seedAgent downloads the release seed; without a known CPU it is arm64, as before.
+func seedAgent(seed agentSeed) (binary []byte, version string, err error) {
+	arch := seed.arch
+	if arch == "" {
+		arch = "arm64"
+	}
+	binary, version, _, err = seedArtifactFn("linux", arch, seed.nightly)
+	return binary, version, err
+}
+
 func readInstallAgent(path string) (*localInstallAgent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

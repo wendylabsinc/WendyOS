@@ -117,6 +117,8 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 // connectToCloudAgentWithAuthExpecting checks a saved identity before treating
 // a Cloud name match as the same device (see connectToPinnedCloudName).
 func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err
@@ -124,8 +126,6 @@ func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.Auth
 	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
 		return nil, err
 	}
-	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
-
 	return asset.connect(ctx, auth, brokerURL)
 }
 
@@ -161,6 +161,23 @@ func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cl
 }
 
 func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
+	// Cloud selects the identity, not the transport. CLI commands also prefer
+	// authenticated LAN; only native sessions retain and share the connection.
+	if cloudTunnelOnly(ctx) {
+		cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
+		return cloudTunnelDial()(ctx, auth, asset, brokerURL)
+	}
+	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); native {
+		expected := cloudDiscoveryIdentity(auth, asset)
+		desktopRememberCloudTarget(ctx, auth, asset, expected.IdentityKey())
+		return desktopSessionConnection(ctx, auth, expected.IdentityKey(), func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return desktopReconnectableCloudConnection(ctx, auth, asset, brokerURL)
+		})
+	}
+	return connectCloudDevicePreferLAN(ctx, auth, asset, brokerURL)
+}
+
+func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -557,7 +574,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if clouddefaults.FindAssetByNameOrID(allAssets, deviceName) == nil {
 			return resolveErr
 		}
-		return commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
+		return cloudDeviceOfflineError(deviceName)
 	case errors.Is(resolveErr, errNoCloudDevicesEnrolled):
 		allAssets, err := fetchAll()
 		if err != nil {
@@ -566,10 +583,28 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if len(allAssets) == 0 {
 			return resolveErr
 		}
-		return commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
+		return cloudAllDevicesOfflineError(len(allAssets))
 	default:
 		return resolveErr
 	}
+}
+
+// cloudOfflineListStep names the command that also lists offline devices.
+const cloudOfflineListStep = "List all enrolled devices with 'wendy cloud discover --all --json'."
+
+// cloudDeviceOfflineError says a device named in Cloud is enrolled but
+// reported offline. Both Cloud generations report it with these words. What
+// to do about it is attached as next steps, which JSON mode lists separately.
+func cloudDeviceOfflineError(name string) error {
+	return withNextSteps(commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline", name),
+		"Check the device's power and network connection, then retry.", cloudOfflineListStep)
+}
+
+// cloudAllDevicesOfflineError is cloudDeviceOfflineError for a command given
+// no device, when every one of the count enrolled devices is reported offline.
+func cloudAllDevicesOfflineError(count int) error {
+	return withNextSteps(commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline", count),
+		"Check their power and network connections, then retry.", cloudOfflineListStep)
 }
 
 func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string) (*cloudpb.Asset, error) {

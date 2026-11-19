@@ -82,8 +82,10 @@
             // the interactive CLI. Never add --force or choose the first host disk.
             return args
         }
-        var edlPole: String { board == .iq8275 ? "S2-8" : "SW2-3" }
-        var edlSwitchNumber: String { board == .iq8275 ? "8" : "3" }
+        // IQ-8275 EDL uses SW2-3 in Qualcomm's current flashing guide:
+        // https://dragonwingdocs.qualcomm.com/Linux/devices/iq8275-evk/update-software/flash-using-qualcomm-launcher
+        var edlPole: String { "DIP switch 3" }
+        var edlSwitchNumber: String { "3" }
         var eraseScope: String {
             if method.isMedia {
                 return
@@ -141,7 +143,7 @@
             case .iq8275, .iq9075:
                 return [
                     "Power off the EVK. Connect its USB0 USB-C port to your Mac using a data cable.",
-                    "Find \(edlPole) and move only that pole toward the switch bank's printed ON marking. Leave the other switches unchanged.",
+                    "Find the four DIP switches numbered 1–4 in the MODE bank. Move only switch 3 toward the printed ON marking. Leave switches 1, 2 and 4 unchanged.",
                     "Power on the board. A blank display in EDL is expected. The switch stays on until you move it back.",
                 ]
             case .unoQ:

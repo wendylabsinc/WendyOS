@@ -175,6 +175,13 @@ The rollback regression uses fixed pre-operator main commit
 restart and unenrolled reset cleanup, then verifies that WN5 can clean the
 remaining policy.
 
+The required **Mesh operator policy and rollback** CI job builds that revision
+and `ceef5cfa15f6739b04559a365a617e1dd287ae47`, main immediately before WN5,
+without changing either checkout. It runs both rollback versions through
+`.github/scripts/test-operator-policy.sh` in separate mount, network and PID
+namespaces on a disposable Linux VM. The job also requires operator policy
+migration/withdrawal and DNS cleanup to pass, and rejects skipped cases.
+
 These tests qualify kernel-state cleanup only. Full mesh-service rollback to a
 pre-operator agent remains unqualified; read the
 [version compatibility limits](../../cli/assets/docs/development/local-mesh-radio.md#version-compatibility)
@@ -391,6 +398,12 @@ Replacement or timeout discards it,
 and successful chain completion still requires normal signature, lease and
 replay verification. Invalid signatures and overlong certificate lifetimes
 outside that transition, or after replacement verification, remain fatal.
+The one other exception is a signature mismatch, or an issue date before the
+current leaf's validity, at a revision below the origin's admitted replay floor,
+as a neighbour relays after a fresh-key renewal. It would be refused as stale
+even if it passed both checks, so it is dropped without closing the carrier; it
+stays unverified, changes no state and gets no receipt. At the current or a
+newer revision both failures remain fatal.
 
 ## Control and payload flow
 

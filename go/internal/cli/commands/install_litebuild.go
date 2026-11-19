@@ -179,8 +179,11 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	}
 	fmt.Printf("\nBuilt Wendy Lite %s (%s) for the %s.\n", ref, commit, chipModelName(chip))
 
-	port, autoDiscover, err := detectLiteInstallPort(discovery.SerialPortInfo{}, prov, true)
+	port, autoDiscover, err := detectLiteInstallPort(discovery.SerialPortInfo{}, true)
 	if err != nil {
+		return err
+	}
+	if err := checkLiteInstallPort(port, prov); err != nil {
 		return err
 	}
 	// No version: the device reports the version it was built with.

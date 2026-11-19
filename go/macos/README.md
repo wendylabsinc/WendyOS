@@ -267,7 +267,7 @@ left in the board. It includes the docs' bundled videos, an Orin Nano J14 pin di
 and board-specific Dragonwing switch instructions for both entering EDL and returning to normal boot.
 Offline 3D guides reuse the existing Orin Nano, Raspberry Pi 5, and IQ-9075 assets with
 camera presets, connector highlights, a J14 jumper overlay, and the modeled SW2-3 actuator.
-IQ-8275 retains its own S2-8 diagram; the IQ-9075 model is not presented as an IQ-8275.
+IQ-8275 retains its own DIP switch 3 diagram; the IQ-9075 model is not presented as an IQ-8275.
 The pin diagram follows NVIDIA's Orin Nano carrier specification SP-11324-001 v1.3,
 figure 1-4 and table 3-4. Custom carriers need their vendor's instructions.
 
@@ -1192,3 +1192,42 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+### Asking chat about recorded activity
+
+Native iOS and macOS chat can query data on the device where the conversation
+started. These read-only queries work with either local or Cloud inference.
+Cloud inference sends the requested evidence to the selected model provider.
+
+| Ask | Evidence used |
+| --- | --- |
+| What happened recently? When was a person last detected? | Retained events, model attributes, event IDs and observation times |
+| Show the recording around that event | Recording index, trigger and timeline, with an Open recording card |
+| Was there more activity than yesterday? Which source was busiest? | Counts from one retained event snapshot, with explicit comparison windows |
+| Did CPU, memory or temperature spike? | Recorded numeric channels and bounded summaries, if captured |
+| Did the app crash? What did it log? | Recorded application streams and events; current app/log tools are identified separately |
+| What was the robot doing? | Supported recorded ROS messages and ROS logs; unsupported payloads remain unknown |
+| Was the camera offline? Are samples missing? | Current source health and the selected episode's counts, losses and clock evidence |
+| Was the campaign armed all night? | Current state and recording evidence; a complete arming history is not available |
+| Where is the recording? Has it uploaded? When will it be deleted? | Local episode and upload workflow, retention policy and warnings; no invented expiry |
+| Why didn't I get an alert? | Notification intents, current inference errors and optional Cloud permission lookup |
+
+Event and notification journals retain at most 512 entries. Empty results do not
+prove nothing happened; comparisons describe retained occurrences rather than
+unique people or all activity. Recording searches page through the local index;
+failed manifest reads and missing Cloud-only/deleted episodes remain explicit.
+Sample queries verify downloaded hashes, read at most 8 MiB per file and 16 MiB
+total, and decode at most 20,000 samples. They do not interpret video or audio.
+Notification intent and permission are not proof of recipient delivery.
+
+Backend regression tests:
+
+```sh
+go test ./go/macos/backend -run 'TestChatData|TestVisualROSLog' -count=1
+```
+
+For device QA, ask the questions above against a known campaign with a detection,
+a completed recording, and a failed upload or unavailable sensor. Check cited
+IDs/times against Data, open the recording card, and repeat after disconnecting.
+Queries must report unavailable evidence rather than reuse another device's data.
+Paid model inference and device QA are separate from deterministic backend tests.

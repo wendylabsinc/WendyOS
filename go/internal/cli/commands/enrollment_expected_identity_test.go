@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type setupIdentityProbe struct {
@@ -31,10 +35,18 @@ func (s *setupIdentityProbe) IsProvisioned(context.Context, *pb.IsProvisionedReq
 		return &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_NotProvisioned{NotProvisioned: &pb.NotProvisionedResponse{}}}, nil
 	case "enrolled":
 		return &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_Provisioned{Provisioned: &pb.ProvisionedResponse{}}}, nil
+	case "reset-cleanup":
+		// What an agent answers after a reset while it cannot finish removing
+		// what the previous enrollment left on the host.
+		return nil, resetcleanup.Refusal(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying", errors.New(setupProbeCleanupCause))
+	case "probe-error":
+		return nil, status.Error(codes.Unavailable, "reset recovery blocked; explicit local recovery required")
 	default:
 		return &pb.IsProvisionedResponse{}, nil
 	}
 }
+
+const setupProbeCleanupCause = `interface "wendy0" is not owned by wendy-net`
 
 func TestExplicitEnrollmentSetupIsSeparateFromManagement(t *testing.T) {
 	for _, tc := range []struct {
@@ -43,9 +55,17 @@ func TestExplicitEnrollmentSetupIsSeparateFromManagement(t *testing.T) {
 		want        bool
 	}{
 		{"explicit unprovisioned setup", "unprovisioned", true, true},
-		{"ordinary management refuses missing identity", "unprovisioned", false, false},
+		{"ordinary management reaches an unprovisioned device", "unprovisioned", false, true},
+		{"ordinary management refuses an enrolled plaintext answer", "enrolled", false, false},
 		{"enrolled device is not a setup endpoint", "enrolled", true, false},
 		{"unknown provisioning state is refused", "unknown", true, false},
+		// A reset device that cannot finish its cleanup is unenrolled and
+		// serves only the setup port. Refusing it there leaves no way to read
+		// its logs, update its agent or reboot it, which is how it recovers.
+		{"ordinary management reaches a device still cleaning up after a reset", "reset-cleanup", false, true},
+		// It cannot be enrolled until the cleanup is done.
+		{"enrollment setup waits for reset cleanup", "reset-cleanup", true, false},
+		{"ordinary management refuses a status probe that fails for another reason", "probe-error", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			restoreDeviceGlobals(t)
@@ -76,8 +96,8 @@ func TestExplicitEnrollmentSetupIsSeparateFromManagement(t *testing.T) {
 			if (err == nil) != tc.want {
 				t.Fatalf("setup connection error=%v, want allowed=%v", err, tc.want)
 			}
-			if !tc.explicit && !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
-				t.Fatalf("ordinary management did not require its expected identity: %v", err)
+			if tc.state == "reset-cleanup" && err != nil && !strings.Contains(err.Error(), setupProbeCleanupCause) {
+				t.Fatalf("refusal %q does not say what the cleanup is failing on", err)
 			}
 		})
 	}

@@ -428,8 +428,9 @@ func reconcileSimulatorRobotWithAgentUpdate(ctx context.Context, conn *grpcclien
 	if err := ctx.Err(); err != nil {
 		return conn, err
 	}
-	if err := robotAgentUpdateFn(ctx, conn, info.GetOs(), info.GetCpuArchitecture(), false); err != nil && !errors.Is(err, errAgentUpdateUnconfirmed) {
-		return conn, fmt.Errorf("updating simulator agent: %w", err)
+	sha, updateErr := robotAgentUpdateFn(ctx, conn, info.GetOs(), info.GetCpuArchitecture(), false)
+	if updateErr != nil && !errors.Is(updateErr, errAgentUpdateUnconfirmed) {
+		return conn, fmt.Errorf("updating simulator agent: %w", updateErr)
 	}
 	conn.Close()
 	cliLogln("Waiting for simulator agent to restart...")
@@ -437,9 +438,12 @@ func reconcileSimulatorRobotWithAgentUpdate(ctx context.Context, conn *grpcclien
 	if err := sleepContext(ctx, defaultAgentRestartInitialDelay); err != nil {
 		return nil, err
 	}
-	conn, err = reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		return conn, fmt.Errorf("agent did not come back after update: %w", err)
+	prior := conn
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, prior)
+	}
+	if conn, err = confirmAgentAfterRestart(ctx, info.GetSupervision() != nil, reconnect, sha, os.Stderr); err != nil {
+		return conn, err
 	}
 	// Retry once, including the live capability check. A release may still lack
 	// support for a robot introduced by a development CLI.

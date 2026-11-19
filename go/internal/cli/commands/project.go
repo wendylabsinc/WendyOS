@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -38,6 +37,7 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementNotifications: "Send app notifications",
 	appconfig.EntitlementAdmin:         "Full local control of the device agent",
 	appconfig.EntitlementBuild:         "Grant privileges for nested container builds",
+	appconfig.EntitlementArduinoBridge: "Talk to the Arduino UNO Q microcontroller's sketch",
 }
 
 // frameworkDescriptions mirrors entitlementDescriptions for the "frameworks"
@@ -395,7 +395,7 @@ func pickFromItemsWithColumns(title string, items []tui.PickerItem, columns []tu
 	if len(columns) > 0 {
 		picker = tui.NewPickerWithTitleAndColumns(title, columns)
 	}
-	p := tea.NewProgram(picker)
+	p := tui.NewProgram(picker)
 
 	go func() {
 		p.Send(tui.PickerAddMsg{Items: items})
