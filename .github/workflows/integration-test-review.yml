@@ -2,49 +2,18 @@ name: Integration Test Review
 
 on:
   pull_request:
-    types: [ready_for_review]
+    types: [opened, ready_for_review]
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      run_id: {description: "Existing ready-for-review run to rerun", required: true, type: string}
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.run_id }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}"
   cancel-in-progress: true
 
 jobs:
-  rerun-review:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_id != ''
-    runs-on: ubuntu-latest
-    permissions: {actions: write, pull-requests: read}
-    steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          RUN_ID: ${{ inputs.run_id }}
-        with:
-          script: |
-            const run_id = Number(process.env.RUN_ID);
-            const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id});
-            if (run.event !== "pull_request" || run.path !== ".github/workflows/integration-test-review.yml" ||
-                run.pull_requests.length !== 1) {
-              throw new Error("Select an existing ready-for-review run of this workflow");
-            }
-            const {data: {jobs}} = await github.rest.actions.listJobsForWorkflowRun({...context.repo, run_id});
-            if (!jobs.some(job => job.name === "Review integration test coverage" && job.conclusion !== "skipped")) {
-              throw new Error("Select a run that executed the model review; mark the PR ready first");
-            }
-            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: run.pull_requests[0].number});
-            if (pr.state !== "open" || pr.draft || pr.user.login === "dependabot[bot]" ||
-                pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
-                pr.head.sha !== run.head_sha || pr.base.sha !== run.pull_requests[0].base.sha) {
-              throw new Error("The PR must still be open, non-draft, internal and at the original reviewed revision");
-            }
-            await github.rest.actions.reRunWorkflow({...context.repo, run_id});
-
   integration-test-review:
     name: Review integration test coverage
     if: >-
-      github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+      !github.event.pull_request.draft &&
       github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: runs-on,runner=2cpu-linux-x64

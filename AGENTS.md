@@ -75,14 +75,13 @@ performing tests or other required checks.
      ecosystem component or changing responsibilities between components.
    - Include this section only when the PR changes the architecture.
 
-## Optional AI reviews
+## AI reviews
 
-AI reviews run when a PR is marked ready for review and skip drafts. Keep a PR
-in draft while working, then mark it ready when done and self-reviewed.
-Use `workflow_dispatch` with an existing ready-for-review `run_id` to rerun its
-original PR revision while the PR remains ready. API dispatch without `run_id`
-keeps the existing nonpublishing validation mode. Dependabot's secretless policy
-continues on PR updates, including drafts. API review does not change risk labels.
+AI reviews run when a non-draft PR is opened or marked ready for review. Keep PRs
+draft while working, then mark them ready when done and self-reviewed.
+To rerun, use GitHub's Re-run jobs button or mark the PR draft and ready again.
+Dependabot keeps its secretless dependency policy on PR updates, including drafts.
+API manual validation remains nonpublishing; API review does not change risk labels.
 
 ## Setup
 

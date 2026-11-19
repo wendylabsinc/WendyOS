@@ -75,7 +75,7 @@ class TrustedSourceTests(unittest.TestCase):
                 continue
             text = path.read_text()
             lines = text.splitlines()
-            start = next(i for i, line in enumerate(lines) if line.startswith("    if: >-"))
+            start = next(i for i, line in enumerate(lines) if line.startswith("    if:"))
             expression = lines[start].split("if:", 1)[1].strip()
             if expression == ">-":
                 parts = []
@@ -102,7 +102,7 @@ class TrustedSourceTests(unittest.TestCase):
                                     event = {"action": action, "label": {"name": label if matching else "unrelated"},
                                              "pull_request": {"draft": draft, "number": 42, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
                                                               "user": {"login": author}}}
-                                    requested = action == "ready_for_review" and not draft and author != "dependabot[bot]"
+                                    requested = action in ("opened", "ready_for_review") and not draft and author != "dependabot[bot]"
                                     automatic = author == "dependabot[bot]" and action in ("opened", "synchronize", "reopened")
                                     expected = (not fork and (requested or automatic)
                                                 if label else not fork and not draft)
@@ -119,15 +119,16 @@ for (const c of input.cases) {
   if (input.label) {
     const group = input.group.replace(/\$\{\{(.*?)\}\}/g, (_, expr) =>
       new Function("github", "inputs", "return " + expr)(c.github, {}));
-    const suffix = input.label === "review: security" ? "-" + (c.github.event.action === "ready_for_review") : "";
-    if (!group.endsWith("-42" + suffix)) throw new Error(group);
+    const botReady = c.github.event.pull_request.user.login === "dependabot[bot]" && c.github.event.action === "ready_for_review";
+    const suffix = input.label === "review: security" ? (botReady ? "-123" : "-review") : "-42";
+    if (!group.endsWith(suffix)) throw new Error(group);
   }
 }
 '''], input=json.dumps({"expression": expression, "cases": cases, "group": group, "label": label,
-                                   "events": ["ready_for_review"] + (["opened", "synchronize", "reopened"] if name == "security-review" else [])}), text=True, capture_output=True)
+                                   "events": ["opened", "ready_for_review"] + (["synchronize", "reopened"] if name == "security-review" else [])}), text=True, capture_output=True)
             self.assertEqual(execution.returncode, 0, execution.stderr)
             self.assertIn("types: " + ("[opened, synchronize, reopened, ready_for_review]"
-                                      if name == "security-review" else "[ready_for_review]"), text)
+                                      if name == "security-review" else "[opened, ready_for_review]"), text)
 
     def test_retained_pr_base_cannot_pin_obsolete_automation(self):
         result = self.run_resolver({"object": {"type": "commit", "sha": CURRENT_MAIN}})
