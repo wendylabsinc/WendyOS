@@ -144,7 +144,7 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 	path := createPixelsFixtureNode(t, ctx, zap.NewNop())
 
 	mode := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30}
-	w, err := openShareNode(path, mode)
+	w, err := openShareNode(zap.NewNop(), path, mode)
 	if err != nil {
 		t.Fatalf("openShareNode: %v", err)
 	}
@@ -216,6 +216,13 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	for range counts { // drains, then must end: Close closes Counts()
+	// Close closes Counts(): drain what is buffered, then expect the close.
+	deadline := time.After(2 * time.Second)
+	for open := true; open; {
+		select {
+		case _, open = <-counts:
+		case <-deadline:
+			t.Fatal("Counts() not closed after Close")
+		}
 	}
 }
