@@ -181,26 +181,12 @@ ambiguous Cloud label leaves the local advertisement unchanged.
 One unambiguous binding from either source is enough. If both sources bind the
 name, they must identify the same device.
 
-Wendy Net uses a local mesh route when available. It tries Cloud only when
-the local route is missing. An identity or published-port refusal ends the
-connection attempt.
-
-Cloud app connections require `wendy-app` on the Cloud backend and on both the
-source and destination agents. Check the installed versions with
-`wendy device info` on each device and look for Cloud app connection support in
-the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
-An unsupported-service error means the Cloud backend needs `wendy-app` support.
-An administrator assigns the source device a role with
-`tunnel:request` covering the destination device. If Cloud reports a permission
-error, check that this device grant is active and covers the destination UUID.
-Operator tunnel permissions govern a separate connection path.
-
 The calling host allocates virtual IPs from the app's `serviceCIDR`, the
 `10.99.0.0/16` range configured in [step 1](#1-give-the-publishing-app-wendy-net-access).
-The connection still needs a route, must authenticate the exact tenant/device
-principal, and must pass the destination's running-app port authorization.
-Keep the hostname in configuration because the virtual IP belongs to the
-calling host.
+The connection still needs a usable local mesh or Cloud route, must authenticate
+the exact tenant/device principal, and must pass the destination's running-app
+port authorization. Keep the hostname in configuration because the virtual IP
+belongs to the calling host.
 
 `device-<uuid>.mesh.wendy.internal` and `device-<uuid>.cloud.wendy.dev` are
 existing UUID aliases. Short DNS support adds `device-<uuid>.wendy.internal`.
