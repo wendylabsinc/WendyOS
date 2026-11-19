@@ -153,6 +153,11 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		for _, id := range containers {
 			svc.RemoveCameraShares(id)
 		}
+		// A drain that times out here (a node another process keeps open, say)
+		// is reported, and Shutdown then gives up on the removal, which leaves
+		// that share node behind. That is acceptable only because the CI runner
+		// is disposable: this test's records are in a state file of its own, so
+		// run on a device such a node stays until the device reboots.
 		if problem := waitShareNodesRemoved(svc, made, statePath, 15*time.Second); problem != "" {
 			t.Errorf("cleanup: %s", problem)
 		}
@@ -263,10 +268,13 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		t.Fatal("pipeline is encoding with only app readers")
 	}
 
-	// Step 7: app A stops reading; app B keeps its frames.
+	// Step 7: app A stops reading; app B keeps its frames. 10 frames at 15 fps
+	// take under a second; the 5 s allow for a hosted runner under -race. A
+	// reader that stalled when A left still yields at most the 2 frames its
+	// buffers held, so this still catches it.
 	stoppedA := monotonicNs()
 	readerA.close()
-	got, problem = readPictures(ctx, []*shareAppReader{readerB}, wantFrames, 3*time.Second, frameBytes)
+	got, problem = readPictures(ctx, []*shareAppReader{readerB}, wantFrames, 5*time.Second, frameBytes)
 	if problem != "" {
 		t.Fatalf("one app leaving stopped another app's frames: %s; hub error: %v", problem, hub.terminalErr())
 	}
