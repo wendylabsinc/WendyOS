@@ -118,8 +118,15 @@ func (d *Dispatcher) wifiList(ctx context.Context, _ *agentpb.WifiListCommand) *
 	}
 	infos := make([]*agentpb.WifiNetworkInfo, 0, len(nets))
 	for _, n := range nets {
+		// Optional readings are copied as pointers so an unset one stays unset.
 		infos = append(infos, &agentpb.WifiNetworkInfo{
-			Ssid: n.GetSsid(),
+			Ssid:           n.GetSsid(),
+			SignalStrength: n.SignalStrength,
+			Security:       n.GetSecurity(),
+			IsKnown:        n.GetIsKnown(),
+			IsConnected:    n.GetIsConnected(),
+			Priority:       n.Priority,
+			RssiDbm:        n.RssiDbm,
 		})
 	}
 	return &agentpb.BluetoothResponse{
@@ -133,7 +140,16 @@ func (d *Dispatcher) wifiConnect(ctx context.Context, cmd *agentpb.WifiConnectCo
 	if isNil(d.network) {
 		return errResp("network manager unavailable")
 	}
-	if err := d.network.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{Ssid: cmd.GetSsid(), Password: cmd.GetPassword()}); err != nil {
+	req := &agentpb.ConnectToWiFiRequest{Ssid: cmd.GetSsid(), Password: cmd.GetPassword()}
+	// Without a hint the network manager picks the security from its own scan,
+	// so only a real choice is passed on.
+	if cmd.GetSecurity() != agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED {
+		req.Security = cmd.Security
+	}
+	if cmd.GetHidden() {
+		req.Hidden = cmd.Hidden
+	}
+	if err := d.network.ConnectToWiFi(ctx, req); err != nil {
 		return errResp(err.Error())
 	}
 	return &agentpb.BluetoothResponse{

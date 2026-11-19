@@ -7,6 +7,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/bluetooth"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -16,12 +17,14 @@ type mockNet struct {
 	connected bool
 	ssid      string
 	err       error
+	request   *agentpb.ConnectToWiFiRequest
 }
 
 func (m *mockNet) ListWiFiNetworks(_ context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
 	return m.networks, m.err
 }
-func (m *mockNet) ConnectToWiFi(_ context.Context, _ *agentpb.ConnectToWiFiRequest) error {
+func (m *mockNet) ConnectToWiFi(_ context.Context, req *agentpb.ConnectToWiFiRequest) error {
+	m.request = req
 	return m.err
 }
 func (m *mockNet) GetWiFiStatus(_ context.Context) (bool, string, error) {
@@ -112,6 +115,52 @@ func TestDispatch_WifiList(t *testing.T) {
 	}
 }
 
+func TestDispatch_WifiList_CarriesEveryField(t *testing.T) {
+	signal, zero, priority, rssi := int32(87), int32(0), int32(-3), int32(-52)
+	net := &mockNet{networks: []*agentpb.ListWiFiNetworksResponse_WiFiNetwork{
+		{
+			Ssid:           "Office",
+			SignalStrength: &signal,
+			Security:       agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE,
+			IsKnown:        true,
+			IsConnected:    true,
+			Priority:       &priority,
+			RssiDbm:        &rssi,
+		},
+		// A reading of zero is still a reading and must not become "absent".
+		{Ssid: "Faint", SignalStrength: &zero, IsKnown: true, Priority: &zero, RssiDbm: &zero},
+		// A row without the optional readings must not gain them.
+		{Ssid: "Bare", Security: agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN},
+	}}
+	d := newTestDispatcher(net, nil, nil, nil)
+	resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
+		Command: &agentpb.BluetoothCommand_WifiList{WifiList: &agentpb.WifiListCommand{}},
+	})
+	want := []*agentpb.WifiNetworkInfo{
+		{
+			Ssid:           "Office",
+			SignalStrength: &signal,
+			Security:       agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE,
+			IsKnown:        true,
+			IsConnected:    true,
+			Priority:       &priority,
+			RssiDbm:        &rssi,
+		},
+		{Ssid: "Faint", SignalStrength: &zero, IsKnown: true, Priority: &zero, RssiDbm: &zero},
+		{Ssid: "Bare", Security: agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN},
+	}
+	got := resp.GetWifiList().GetNetworks()
+	if len(got) != len(want) {
+		t.Fatalf("got %d networks, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		// proto.Equal tells an unset optional field from one set to zero.
+		if !proto.Equal(got[i], want[i]) {
+			t.Errorf("network %d: got {%v}, want {%v}", i, got[i], want[i])
+		}
+	}
+}
+
 func TestDispatch_WifiList_NilManager(t *testing.T) {
 	d := newTestDispatcher(nil, nil, nil, nil)
 	resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
@@ -135,6 +184,44 @@ func TestDispatch_WifiConnect(t *testing.T) {
 	}
 	if !resp.GetWifiConnect().GetSuccess() {
 		t.Error("expected success=true")
+	}
+}
+
+func TestDispatch_WifiConnect_SecurityAndHidden(t *testing.T) {
+	sae := agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE
+	unspecified := agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED
+	yes, no := true, false
+	for _, tc := range []struct {
+		name         string
+		security     *agentpb.WiFiSecurityType
+		hidden       *bool
+		wantSecurity *agentpb.WiFiSecurityType
+		wantHidden   *bool
+	}{
+		{name: "security and hidden given", security: &sae, hidden: &yes, wantSecurity: &sae, wantHidden: &yes},
+		{name: "security only", security: &sae, wantSecurity: &sae},
+		{name: "hidden only", hidden: &yes, wantHidden: &yes},
+		// With neither set, the network manager picks the security from its scan.
+		{name: "neither given"},
+		{name: "unspecified security and not hidden", security: &unspecified, hidden: &no},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			net := &mockNet{}
+			d := newTestDispatcher(net, nil, nil, nil)
+			resp := d.Dispatch(context.Background(), &agentpb.BluetoothCommand{
+				Command: &agentpb.BluetoothCommand_WifiConnect{
+					WifiConnect: &agentpb.WifiConnectCommand{Ssid: "net", Password: "pass", Security: tc.security, Hidden: tc.hidden},
+				},
+			})
+			if !resp.GetWifiConnect().GetSuccess() {
+				t.Fatalf("expected success, got %v", resp)
+			}
+			want := &agentpb.ConnectToWiFiRequest{Ssid: "net", Password: "pass", Security: tc.wantSecurity, Hidden: tc.wantHidden}
+			// proto.Equal tells an unset optional field from one set to its zero value.
+			if !proto.Equal(net.request, want) {
+				t.Errorf("request = {%v}, want {%v}", net.request, want)
+			}
+		})
 	}
 }
 
