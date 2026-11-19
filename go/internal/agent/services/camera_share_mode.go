@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/devcover"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -53,9 +54,17 @@ type cameraShares struct {
 	// creating holds the CreateCameraShares calls in flight, by container;
 	// RemoveCameraShares marks them removed, so they store nothing more.
 	creating map[string][]*shareCreation
+	// coverWG tracks the goroutines of CoverCameraShares calls, which can
+	// outlive the call, and nsWG the closes of namespaces handed off the start
+	// path; both are added to only before stopped is set, and Shutdown waits
+	// for them.
+	coverWG sync.WaitGroup
+	nsWG    sync.WaitGroup
 
 	// ops serialises removal, adoption and shutdown (camera_share.go), so a
-	// record is never stopped twice or adopted while it is being removed.
+	// record is never stopped twice or adopted while it is being removed. A
+	// start's cover never takes it, because it must not wait: it claims a
+	// record it makes a node for with shareRecord.opening instead.
 	ops sync.Mutex
 	// fileMu orders state file writes; statePath is cameraSharesPath, read
 	// once under it.
@@ -70,14 +79,27 @@ type shareContainer struct {
 	// created is when this agent last made a share for the container; zero
 	// for shares loaded from the state file. See SyncCameraShares.
 	created time.Time
+
+	// ns pins the mount namespace of the container's running task, opened at
+	// its start (CoverCameraShares) or by a sync after an agent restart; nil
+	// while the container is not running, so a replug is covered again only
+	// for running containers. nsInode identifies it, nsPID is the pid it was
+	// opened through and nsAt when. nsGen counts every change, so a start's
+	// cover still running from before never stores its namespace over a newer
+	// one or a release. All guarded by cameraShares.mu.
+	ns      *devcover.Namespace
+	nsInode uint64
+	nsPID   uint32
+	nsAt    time.Time
+	nsGen   uint64
 }
 
 // shareRecord is one camera shared with one container through one node.
-// cameraName, camera and mode never change once the record is stored.
-// cameraPath follows the camera and is guarded by cameraShares.mu, as are
-// siblings, io, pump, cancel, done and adoptErr. node and nodeMade are set
-// when the record is made; making a node lost in a reboot again (Task 9) sets
-// them under cameraShares.mu, and every reader must then take it too.
+// cameraName and mode never change once the record is stored. Everything else
+// is guarded by cameraShares.mu: cameraPath follows the camera; camera moves
+// to the camera's new port when it is followed there; node and nodeMade change
+// when a start makes a node lost in a reboot again; and siblings, io, pump,
+// cancel, done, adoptErr, tookRealCamera, opening and retired.
 type shareRecord struct {
 	cameraName, cameraPath string
 	mode                   sharedMode
@@ -100,6 +122,15 @@ type shareRecord struct {
 	done   chan struct{} // closed when the pump's Run has returned
 	// adoptErr is the last reason adoption failed, so it is logged once.
 	adoptErr string
+	// tookRealCamera is set when the container's app opened the real camera in
+	// the moment between a replug and its cover (checkWindowLosers): it holds
+	// the real camera, not its node, until it reopens the camera. It says
+	// which process; the pump clears it when it next reads for the app.
+	tookRealCamera string
+	// opening is set while a writer is being opened for the record (a start
+	// making its node again, or a sync adopting it), so only one ever is.
+	// retired is set when stopShare has run: nothing attaches to it after.
+	opening, retired bool
 }
 
 // errCameraShared is the named refusal for a recording whose explicit

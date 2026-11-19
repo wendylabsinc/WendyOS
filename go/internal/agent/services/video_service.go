@@ -1346,6 +1346,12 @@ func (s *VideoService) StartDiscovery() {
 			s.links.Run(s.ctx)
 		}()
 	}
+	// A replugged camera shared with apps gets their nodes over it again.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.watchCameraReplugs(s.serviceContext())
+	}()
 	if s.discoverer == nil {
 		return
 	}
@@ -1406,6 +1412,8 @@ func (s *VideoService) Shutdown() {
 	}
 	s.cancel()
 	s.wg.Wait()
+	// The replug watch has stopped: the share namespaces can go.
+	s.closeCameraShareNamespaces()
 }
 
 // listCameras enumerates every camera the device can offer: local V4L2 nodes

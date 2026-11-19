@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/devcover"
+	"github.com/wendylabsinc/wendy/go/internal/agent/devwatch"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -83,8 +86,8 @@ func (realShareClock) After(d time.Duration) <-chan time.Time { return time.Afte
 
 // Seams for the removal of share nodes: its clock, whether udev has processed
 // a node's add event, and which other processes hold a node open (an error
-// means that could not be told). deviceHolders is the path-based scan Task 9's
-// replug check uses.
+// means that could not be told). deviceHolders is the path-based scan the
+// replug check uses (checkWindowLosers).
 var (
 	shareRemovalClock shareClock = realShareClock{}
 	shareNodeUdevDone            = udevProcessedVideoNode
@@ -299,15 +302,26 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 // for the container's next start, and two records of one camera on one number
 // cannot be told apart by the node's name.
 func (s *VideoService) makeShareNode(ctx context.Context, label string) (nr int, made time.Time, reason string) {
+	return s.makeShareNodeFor(ctx, label, nil)
+}
+
+// makeShareNodeFor is makeShareNode for owner's node lost in a reboot, when
+// owner is not nil: owner's own number is used again when it is free
+// (reusableShareNumber), and another is allocated when it is not.
+func (s *VideoService) makeShareNodeFor(ctx context.Context, label string, owner *shareRecord) (nr int, made time.Time, reason string) {
 	s.twoPlaneStartMu.Lock()
 	defer s.twoPlaneStartMu.Unlock()
-	held := s.heldShareNumbers()
-	nr, err := s.loopback.AllocateAuxNodeNumberSkipping(func(nr int) bool { return held[nr] })
-	if errors.Is(err, ipcam.ErrBandExhausted) {
-		return 0, time.Time{}, fmt.Sprintf("no free v4l2loopback node number (%d-%d are in use)", ipcam.IDBandStart, ipcam.IDBandEnd)
-	}
-	if err != nil {
-		return 0, time.Time{}, "allocating a v4l2loopback node failed: " + err.Error()
+	nr, reuse := s.reusableShareNumber(owner)
+	if !reuse {
+		held := s.heldShareNumbers()
+		var err error
+		nr, err = s.loopback.AllocateAuxNodeNumberSkipping(func(nr int) bool { return held[nr] })
+		if errors.Is(err, ipcam.ErrBandExhausted) {
+			return 0, time.Time{}, fmt.Sprintf("no free v4l2loopback node number (%d-%d are in use)", ipcam.IDBandStart, ipcam.IDBandEnd)
+		}
+		if err != nil {
+			return 0, time.Time{}, "allocating a v4l2loopback node failed: " + err.Error()
+		}
 	}
 	s.shares.mu.Lock()
 	if s.shares.pending == nil {
@@ -315,7 +329,7 @@ func (s *VideoService) makeShareNode(ctx context.Context, label string) (nr int,
 	}
 	s.shares.pending[nr] = true
 	s.shares.mu.Unlock()
-	err = s.loopback.EnsureShareNode(ctx, nr, label)
+	err := s.loopback.EnsureShareNode(ctx, nr, label)
 	made = shareRemovalClock.Now()
 	if err != nil {
 		if _, exists := s.loopback.NodePath(uint32(nr)); !exists {
@@ -326,6 +340,34 @@ func (s *VideoService) makeShareNode(ctx context.Context, label string) (nr int,
 		return 0, time.Time{}, fmt.Sprintf("creating v4l2loopback node %d failed: %v", nr, err)
 	}
 	return nr, made, ""
+}
+
+// reusableShareNumber reports owner's own node number when its node can be
+// made there again: no other record names it, no node is being made or waits
+// to be removed at it, and the allocator, asked about that number alone,
+// would hand it out (it is in the band, no registered camera has it, and no
+// node is there now). heldShareNumbers counts owner's own number, so it is no
+// use here. A nil owner has no number. Callers hold twoPlaneStartMu.
+func (s *VideoService) reusableShareNumber(owner *shareRecord) (int, bool) {
+	if owner == nil {
+		return 0, false
+	}
+	s.shares.mu.Lock()
+	nr := owner.node
+	held := s.shares.pending[nr] || s.shares.removing[nr] != nil
+	for _, c := range s.shares.containers {
+		for _, r := range c.shares {
+			if r != owner && r.node == nr {
+				held = true
+			}
+		}
+	}
+	s.shares.mu.Unlock()
+	if held {
+		return 0, false
+	}
+	got, err := s.loopback.AllocateAuxNodeNumberSkipping(func(n int) bool { return n != nr })
+	return nr, err == nil && got == nr
 }
 
 // heldShareNumbers is every node number a share holds: each record's (live,
@@ -597,6 +639,13 @@ func (s *VideoService) attachSharePumpLocked(containerID string, r *shareRecord,
 	ctx, cancel := context.WithCancel(s.serviceContext())
 	pump := newSharePump(s.logger, containerID, r.cameraName, node, r.mode,
 		func(ctx context.Context) (shareSubscription, error) { return s.joinShare(ctx, r) }, adopted)
+	// Reading for the app again means it reopened the camera: it shares it
+	// now, whatever it took after a replug.
+	pump.onReading = func() {
+		s.shares.mu.Lock()
+		r.tookRealCamera = ""
+		s.shares.mu.Unlock()
+	}
 	done := make(chan struct{})
 	r.io, r.pump, r.cancel, r.done = node, pump, cancel, done
 	return func() {
@@ -625,22 +674,32 @@ func (s *VideoService) joinShare(ctx context.Context, r *shareRecord) (shareSubs
 // the camera has moved, the record takes the new path, so the shared-mode rules
 // follow the camera, and the state file is saved.
 func (s *VideoService) currentSharePath(r *shareRecord) (string, bool) {
-	base, ok, learned := s.resolveShareCamera(r)
-	if !ok {
-		if learned {
-			s.persistCameraShares()
-		}
-		return "", false
+	path, ok, changed := s.resolveSharePath(r)
+	if changed {
+		s.persistCameraShares()
 	}
-	path := "/dev/" + base
+	return path, ok
+}
+
+// resolveSharePath is currentSharePath without the save: changed reports that
+// the record changed and the state file needs saving, which a caller on the
+// start or replug path does once its covers are done.
+func (s *VideoService) resolveSharePath(r *shareRecord) (path string, ok, changed bool) {
+	return s.resolveSharePathIn(r, s.presentCameraIdentities())
+}
+
+// resolveSharePathIn is resolveSharePath among the present cameras given.
+func (s *VideoService) resolveSharePathIn(r *shareRecord, present map[string]camera.Identity) (path string, ok, changed bool) {
+	base, ok, learned := s.resolveShareCamera(r, present)
+	if !ok {
+		return "", false, learned
+	}
+	path = "/dev/" + base
 	s.shares.mu.Lock()
 	moved := r.cameraPath != path
 	r.cameraPath = path
 	s.shares.mu.Unlock()
-	if moved || learned {
-		s.persistCameraShares()
-	}
-	return path, true
+	return path, true, moved || learned
 }
 
 // presentCameraIdentities is presentIdentities without share nodes: a share
@@ -668,8 +727,9 @@ func sameModelPorts(want camera.Identity, present map[string]camera.Identity) []
 	return ports
 }
 
-// resolveShareCamera finds the present node of a record's camera with
-// camera.Resolve. Share nodes are never candidates.
+// resolveShareCamera finds the present node of a record's camera among present
+// (presentCameraIdentities, so share nodes are never candidates) with
+// camera.Resolve.
 //
 // When the record's own camera is present, every other present camera of the
 // same name and index is learned as a sibling (learned reports a change, for
@@ -680,10 +740,16 @@ func sameModelPorts(want camera.Identity, present map[string]camera.Identity) []
 //   - possibly another record's absent camera of the same name and index,
 //     because then which of the two it is cannot be told.
 //
-// So two same-model cameras never cross.
-func (s *VideoService) resolveShareCamera(r *shareRecord) (base string, ok, learned bool) {
+// So two same-model cameras never cross. Every record of one camera (the same
+// identity: one per sharing container) is one camera, so their siblings count
+// together, and a camera followed to another port is the new identity of all
+// of them (learned, for the caller to save): a camera of the same model
+// plugged into the old port later is then never taken for it by an exact
+// match.
+func (s *VideoService) resolveShareCamera(r *shareRecord, present map[string]camera.Identity) (base string, ok, learned bool) {
+	s.shares.mu.Lock()
 	want := r.camera
-	present := s.presentCameraIdentities()
+	s.shares.mu.Unlock()
 	for b, id := range present {
 		if id == want {
 			ports := sameModelPorts(want, present)
@@ -693,13 +759,23 @@ func (s *VideoService) resolveShareCamera(r *shareRecord) (base string, ok, lear
 			return b, true, learned
 		}
 	}
+	siblings := map[string]bool{}
+	stored := map[camera.Identity]bool{}
 	s.shares.mu.Lock()
-	siblings := make(map[string]bool, len(r.siblings))
 	for _, port := range r.siblings {
 		siblings[port] = true
 	}
+	for _, c := range s.shares.containers {
+		for _, other := range c.shares {
+			stored[other.camera] = true
+			if other.camera == want {
+				for _, port := range other.siblings {
+					siblings[port] = true
+				}
+			}
+		}
+	}
 	s.shares.mu.Unlock()
-	stored := s.storedShareIdentities()
 	isPresent := make(map[camera.Identity]bool, len(present))
 	for _, id := range present {
 		isPresent[id] = true
@@ -716,7 +792,45 @@ func (s *VideoService) resolveShareCamera(r *shareRecord) (base string, ok, lear
 		return false
 	}
 	base, ok = camera.Resolve(want, present, claimed)
-	return base, ok, false
+	if !ok {
+		return "", false, false
+	}
+	moved := present[base]
+	s.shares.mu.Lock()
+	r.camera = moved
+	for _, c := range s.shares.containers {
+		for _, other := range c.shares {
+			if other.camera == want {
+				other.camera = moved
+			}
+		}
+	}
+	s.shares.mu.Unlock()
+	return base, true, true
+}
+
+// learnSameModelPorts is the sibling half of resolveShareCamera for every
+// record at once: each record whose camera is present learns the ports of the
+// other present cameras of its model. It runs on every camera node that
+// appears, so a camera plugged in beside a shared one is known to be another
+// camera even when no app reads its share. It reports whether any record
+// learned a port, for the caller to save.
+func (s *VideoService) learnSameModelPorts(present map[string]camera.Identity) bool {
+	here := make(map[camera.Identity]bool, len(present))
+	for _, id := range present {
+		here[id] = true
+	}
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	learned := false
+	for _, c := range s.shares.containers {
+		for _, r := range c.shares {
+			if here[r.camera] && mergeSiblingsLocked(r, sameModelPorts(r.camera, present)) {
+				learned = true
+			}
+		}
+	}
+	return learned
 }
 
 // mergeSiblingsLocked adds ports to r's siblings and reports whether any was
@@ -733,18 +847,6 @@ func mergeSiblingsLocked(r *shareRecord, ports []string) bool {
 		sort.Strings(r.siblings)
 	}
 	return changed
-}
-
-func (s *VideoService) storedShareIdentities() map[camera.Identity]bool {
-	s.shares.mu.Lock()
-	defer s.shares.mu.Unlock()
-	out := map[camera.Identity]bool{}
-	for _, c := range s.shares.containers {
-		for _, r := range c.shares {
-			out[r.camera] = true
-		}
-	}
-	return out
 }
 
 func (s *VideoService) containerSharesCamera(containerID string, id camera.Identity) bool {
@@ -792,7 +894,8 @@ func (s *VideoService) RemoveCameraShares(containerID string) {
 // retireShares stops recs, then takes them out of the container's shares and
 // queues their nodes for removal in one step, so the state file never holds a
 // node both as a share and as a removal; it then saves the file and starts the
-// removals. Callers hold s.shares.ops.
+// removals. A container left with no shares lets go of its mount namespace.
+// Callers hold s.shares.ops.
 func (s *VideoService) retireShares(containerID string, recs []*shareRecord) {
 	var removals []*shareRemoval
 	for _, r := range recs {
@@ -801,9 +904,15 @@ func (s *VideoService) retireShares(containerID string, recs []*shareRecord) {
 		}
 	}
 	s.shares.mu.Lock()
+	c := s.shares.containers[containerID]
 	s.forgetSharesLocked(containerID, recs)
+	var ns *devcover.Namespace
+	if c != nil && s.shares.containers[containerID] == nil {
+		ns = releaseNamespaceLocked(c)
+	}
 	starts := s.queueShareRemovalsLocked(removals)
 	s.shares.mu.Unlock()
+	s.closeNamespaceNow(ns)
 	s.persistCameraShares()
 	for _, start := range starts {
 		start()
@@ -813,11 +922,13 @@ func (s *VideoService) retireShares(containerID string, recs []*shareRecord) {
 // stopShare stops one share: it cancels the pump, waits for it and closes the
 // writer. It returns the removal of the record's node, or nil when there is no
 // node of this record's to remove: a record never opened in this agent's life
-// (loaded, not adopted) whose node is gone (a reboot) or is now another node.
-// Callers hold s.shares.ops.
+// (loaded, not adopted) whose node is gone (a reboot) or is now another node,
+// or one whose node a start is making again, which removes that node itself
+// once it sees the record retired. Callers hold s.shares.ops.
 func (s *VideoService) stopShare(r *shareRecord) *shareRemoval {
 	s.shares.mu.Lock()
-	cancel, done, node, made := r.cancel, r.done, r.io, r.nodeMade
+	r.retired = true
+	cancel, done, node, made, nr, opening := r.cancel, r.done, r.io, r.nodeMade, r.node, r.opening
 	s.shares.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -826,13 +937,13 @@ func (s *VideoService) stopShare(r *shareRecord) *shareRemoval {
 		<-done
 	}
 	if node != nil {
-		s.closeShareWriter(shareNodePath(r.node), node)
-		return &shareRemoval{nr: r.node, name: r.cameraName, made: made}
+		s.closeShareWriter(shareNodePath(nr), node)
+		return &shareRemoval{nr: nr, name: r.cameraName, made: made}
 	}
-	if !s.nodeIsShareFor(r) {
+	if opening || !s.nodeIsShareFor(r) {
 		return nil
 	}
-	return &shareRemoval{nr: r.node, name: r.cameraName}
+	return &shareRemoval{nr: nr, name: r.cameraName}
 }
 
 func (s *VideoService) closeShareWriter(path string, node shareNodeIO) {
@@ -872,7 +983,11 @@ func (s *VideoService) forgetSharesLocked(containerID string, recs []*shareRecor
 // exists: the node is reopened at the record's own mode with a pump that
 // blanks it if idle, and nothing is removed or recreated. A record whose node
 // is gone (a reboot) is left for the container's next start. Every node still
-// waiting to be removed (another process held it open) is tried again.
+// waiting to be removed (another process held it open) is tried again. Then
+// each running listed container's mount namespace is held, and its cameras
+// covered again if a replug uncovered them while the agent was down; a
+// container listed as not running lets go of its namespace
+// (syncShareNamespaces).
 func (s *VideoService) SyncCameraShares(ctx context.Context, containers []CameraShareContainer) {
 	s.shares.ops.Lock()
 	defer s.shares.ops.Unlock()
@@ -956,31 +1071,44 @@ func (s *VideoService) SyncCameraShares(ctx context.Context, containers []Camera
 		}
 		s.adoptShare(a.containerID, a.r)
 	}
+	s.syncShareNamespaces(ctx, containers)
 }
 
 // adoptShare reopens the node of a record loaded from the state file and
 // starts its pump. The node is opened at the record's stored mode: the earlier
 // writer's keep_format locked the node's format for the node's life, so any
-// other mode would be refused. Opening sets keep_format again. Callers hold
-// s.shares.ops.
+// other mode would be refused. Opening sets keep_format again. A record a
+// start is making a node for is left to it. Callers hold s.shares.ops.
 func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 	if s.loopback == nil || s.sharesStopped() {
 		return
 	}
-	if _, exists := s.loopback.NodePath(uint32(r.node)); !exists {
+	s.shares.mu.Lock()
+	nr := r.node
+	s.shares.mu.Unlock()
+	if _, exists := s.loopback.NodePath(uint32(nr)); !exists {
 		return // a reboot: the container's next start makes the node again
 	}
-	path := shareNodePath(r.node)
+	path := shareNodePath(nr)
 	if !s.nodeIsShareFor(r) {
 		s.noteAdoptFailure(containerID, r, fmt.Sprintf("%s is no longer its share node of %s; it is left alone", path, r.cameraName))
 		return
 	}
+	s.shares.mu.Lock()
+	if r.opening || r.pump != nil || r.retired || r.node != nr {
+		s.shares.mu.Unlock()
+		return
+	}
+	r.opening = true
+	s.shares.mu.Unlock()
 	node, err := openShareNode(s.logger, path, r.mode)
 	if err != nil {
+		s.endShareOpening(r)
 		s.noteAdoptFailure(containerID, r, fmt.Sprintf("adopting %s for %s failed: %v; the app's node gets no frames", path, r.cameraName, err))
 		return
 	}
 	s.shares.mu.Lock()
+	r.opening = false
 	if s.shares.stopped {
 		s.shares.mu.Unlock()
 		s.closeShareWriter(path, node)
@@ -1010,6 +1138,13 @@ func (s *VideoService) sharesStopped() bool {
 	return s.shares.stopped
 }
 
+// endShareOpening gives up a record's opening claim.
+func (s *VideoService) endShareOpening(r *shareRecord) {
+	s.shares.mu.Lock()
+	r.opening = false
+	s.shares.mu.Unlock()
+}
+
 // nodeIsShareFor reports whether the node a record names exists and is still
 // the share node made for it: after a reboot the number may have gone to
 // another node, which must be neither opened nor removed. The node's sysfs
@@ -1017,31 +1152,36 @@ func (s *VideoService) sharesStopped() bool {
 // queued removal, may name the number: every share of one camera has the same
 // name, so the name alone cannot tell two records' nodes apart.
 func (s *VideoService) nodeIsShareFor(r *shareRecord) bool {
-	if s.loopback == nil || s.shareNumberClaimedElsewhere(r) {
+	if s.loopback == nil {
 		return false
 	}
-	if _, exists := s.loopback.NodePath(uint32(r.node)); !exists {
+	nr, claimed := s.shareNumberClaimedElsewhere(r)
+	if claimed {
 		return false
 	}
-	return s.nodeNamed(r.node, r.cameraName)
+	if _, exists := s.loopback.NodePath(uint32(nr)); !exists {
+		return false
+	}
+	return s.nodeNamed(nr, r.cameraName)
 }
 
-// shareNumberClaimedElsewhere reports whether r's node number belongs to
-// another record with a live writer, or to a queued removal.
-func (s *VideoService) shareNumberClaimedElsewhere(r *shareRecord) bool {
+// shareNumberClaimedElsewhere returns r's node number, and whether it belongs
+// to another record with a live writer, or to a queued removal.
+func (s *VideoService) shareNumberClaimedElsewhere(r *shareRecord) (nr int, claimed bool) {
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
-	if s.shares.removing[r.node] != nil {
-		return true
+	nr = r.node
+	if s.shares.removing[nr] != nil {
+		return nr, true
 	}
 	for _, c := range s.shares.containers {
 		for _, other := range c.shares {
-			if other != r && other.node == r.node && other.io != nil {
-				return true
+			if other != r && other.node == nr && other.io != nil {
+				return nr, true
 			}
 		}
 	}
-	return false
+	return nr, false
 }
 
 // nodeNamed reports whether node nr's sysfs name is the one a node labelled
@@ -1071,13 +1211,14 @@ func (s *VideoService) stopCameraSharePumps() {
 		cancel context.CancelFunc
 		done   chan struct{}
 		io     shareNodeIO
+		nr     int
 	}
 	var pumps []running
 	s.shares.mu.Lock()
 	for _, c := range s.shares.containers {
 		for _, r := range c.shares {
 			if r.cancel != nil {
-				pumps = append(pumps, running{r, r.cancel, r.done, r.io})
+				pumps = append(pumps, running{r, r.cancel, r.done, r.io, r.node})
 			}
 		}
 	}
@@ -1087,7 +1228,7 @@ func (s *VideoService) stopCameraSharePumps() {
 	}
 	for _, p := range pumps {
 		<-p.done
-		s.closeShareWriter(shareNodePath(p.r.node), p.io)
+		s.closeShareWriter(shareNodePath(p.nr), p.io)
 	}
 	// The records are as a restarted agent finds them: no writer, no pump.
 	s.shares.mu.Lock()
@@ -1569,4 +1710,784 @@ func charDeviceRdev(path string) (uint64, bool) {
 		return 0, false
 	}
 	return uint64(st.Rdev), true
+}
+
+// Covers. At every start of a sharing container, between containerd's NewTask
+// and Start, each of its share nodes is put over its camera's path inside the
+// container (devcover), so the app sees its node at /dev/video0 from its first
+// instruction. A replug drops a cover with the old device node, so the agent
+// watches /dev and covers the camera's new node again, for every running
+// container that shares it, as soon as the node appears.
+
+// cameraShareCoverBudget bounds CoverCameraShares: a container start never
+// waits longer than this for its covers.
+const cameraShareCoverBudget = 250 * time.Millisecond
+
+// cameraShareRecoverTimeout bounds each cover after a replug.
+const cameraShareRecoverTimeout = 50 * time.Millisecond
+
+// cameraShareLoserCheckDelay is how long after covering a replugged camera
+// again the agent looks for an app that took the real camera just before.
+const cameraShareLoserCheckDelay = 100 * time.Millisecond
+
+// cameraShareWatchRetry is how long the /dev watch waits to start again after
+// it failed.
+const cameraShareWatchRetry = time.Second
+
+// Seams for covering, so tests run without Linux or containers: putting a node
+// over a path in a namespace and checking one is there; pinning a namespace,
+// reading its inode and closing it; watching /dev; and the inode of the
+// agent's own mount namespace.
+var (
+	coverPath         = devcover.Cover
+	coveredPath       = devcover.Covered
+	openNamespace     = devcover.Open
+	namespaceInode    = (*devcover.Namespace).Inode
+	closeNamespace    = (*devcover.Namespace).Close
+	watchDevices      = devwatch.Watch
+	agentMountNSInode = selfMountNSInode
+)
+
+func selfMountNSInode() (uint64, error) {
+	fi, err := os.Stat("/proc/self/ns/mnt")
+	if err != nil {
+		return 0, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, errors.New("/proc/self/ns/mnt has no inode")
+	}
+	return uint64(st.Ino), nil
+}
+
+// CoverCameraShares puts each of the container's share nodes over its camera's
+// path inside the container whose new task is pid; it is called between
+// containerd's NewTask and Start, at every start. Everything shares one
+// deadline, cameraShareCoverBudget, and it never returns later: a cover still
+// running then is devcover.ErrTimeout, and is never applied afterwards. A node
+// lost in a reboot is made again first, within the same deadline. Each camera
+// not covered is logged and its error returned for the caller's log; the app
+// then starts with the real camera, and the start always goes ahead. A camera
+// not plugged in is covered when it appears: the container's mount namespace
+// stays held for that until ReleaseCameraShares. One held from an earlier
+// start is closed off the start path, since closing a dead container's last
+// reference tears its mounts down, which takes milliseconds.
+func (s *VideoService) CoverCameraShares(ctx context.Context, containerID string, pid uint32) []error {
+	deadline := time.Now().Add(cameraShareCoverBudget)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	run, refused := s.beginStartCover(containerID)
+	if refused != nil {
+		s.shareLogger().Info(refused.Error())
+		return []error{refused}
+	}
+	if run == nil {
+		return nil
+	}
+	go func() {
+		defer s.shares.coverWG.Done()
+		s.runStartCover(ctx, run, pid, deadline)
+	}()
+	select {
+	case <-run.finished:
+	case <-ctx.Done():
+	}
+	return s.reportStartCover(ctx, run)
+}
+
+// startCoverRun is one CoverCameraShares call. Its goroutine reports each
+// record's outcome; once the call has returned (closed), an outcome is late
+// and only noted.
+type startCoverRun struct {
+	containerID string
+	c           *shareContainer
+	gen         uint64 // c.nsGen when the call began
+	recs        []*shareRecord
+
+	mu       sync.Mutex
+	outcomes []*startCover
+	closed   bool
+	// finished is closed once every record has an outcome, or the goroutine
+	// stopped early.
+	finished chan struct{}
+	finish   sync.Once
+}
+
+func (run *startCoverRun) done() { run.finish.Do(func() { close(run.finished) }) }
+
+// startCover is what became of one record at a start.
+type startCover struct {
+	node, path string // the share node, and the camera's path
+	absent     bool   // the camera is not plugged in
+	err        error
+}
+
+// beginStartCover registers a start's cover of the container's shares: it
+// takes the namespace held before (closed in the background) and counts the
+// call in coverWG. It returns no run for a container that shares nothing, and
+// refused once Shutdown has begun.
+func (s *VideoService) beginStartCover(containerID string) (*startCoverRun, error) {
+	s.shares.mu.Lock()
+	c := s.shares.containers[containerID]
+	if c == nil || len(c.shares) == 0 {
+		s.shares.mu.Unlock()
+		return nil, nil
+	}
+	if s.shares.stopped {
+		s.shares.mu.Unlock()
+		return nil, fmt.Errorf("camera share: %s starts with the real cameras: %s", containerID, shareRefusedStopping)
+	}
+	old := releaseNamespaceLocked(c)
+	run := &startCoverRun{containerID: containerID, c: c, gen: c.nsGen,
+		recs: append([]*shareRecord(nil), c.shares...), finished: make(chan struct{})}
+	run.outcomes = make([]*startCover, len(run.recs))
+	s.shares.coverWG.Add(1)
+	s.shares.mu.Unlock()
+	s.closeNamespaceLater(old)
+	return run, nil
+}
+
+// runStartCover is a start's cover, on its own goroutine: the namespace, then
+// each record in turn. It stops at ctx's end; a node it is making then is
+// finished and kept for the next start, and the state file is saved last, off
+// the start path.
+func (s *VideoService) runStartCover(ctx context.Context, run *startCoverRun, pid uint32, deadline time.Time) {
+	defer run.done()
+	ns, held, nsErr := s.holdStartNamespace(run, pid)
+	if ns != nil && !held {
+		defer s.closeNamespaceLater(ns)
+	}
+	changed := false
+	for i, r := range run.recs {
+		if ctx.Err() != nil {
+			break
+		}
+		out, ch := s.coverAtStart(ctx, run.containerID, r, ns, nsErr, deadline)
+		changed = changed || ch
+		s.reportCover(run, i, out)
+	}
+	run.done()
+	if changed {
+		s.persistCameraShares()
+	}
+}
+
+// holdStartNamespace pins pid's mount namespace and makes it the container's,
+// unless a release or a later start came first: then held is false, and the
+// caller closes it once its covers are done.
+func (s *VideoService) holdStartNamespace(run *startCoverRun, pid uint32) (ns *devcover.Namespace, held bool, err error) {
+	ns, inode, err := s.openContainerNamespace(pid)
+	if err != nil {
+		return nil, false, fmt.Errorf("opening its mount namespace: %w", err)
+	}
+	s.shares.mu.Lock()
+	held = s.holdNamespaceLocked(run.containerID, run.c, run.gen, ns, inode, pid)
+	s.shares.mu.Unlock()
+	return ns, held, nil
+}
+
+// holdNamespaceLocked makes ns the container's when c is still the container's
+// entry and nothing changed its namespace since gen. Callers hold
+// s.shares.mu.
+func (s *VideoService) holdNamespaceLocked(containerID string, c *shareContainer, gen uint64, ns *devcover.Namespace, inode uint64, pid uint32) bool {
+	if s.shares.stopped || s.shares.containers[containerID] != c || c.nsGen != gen {
+		return false
+	}
+	c.ns, c.nsInode, c.nsPID, c.nsAt = ns, inode, pid, time.Now()
+	c.nsGen++
+	return true
+}
+
+// openContainerNamespace pins pid's mount namespace and reads its inode. A pid
+// in the agent's own mount namespace is refused, and its namespace closed: a
+// cover there would put a share node over the host's camera.
+func (s *VideoService) openContainerNamespace(pid uint32) (*devcover.Namespace, uint64, error) {
+	ns, err := openNamespace(pid)
+	if err != nil {
+		return nil, 0, err
+	}
+	inode, err := namespaceInode(ns)
+	if err == nil {
+		if own, ownErr := agentMountNSInode(); ownErr == nil && own == inode {
+			err = fmt.Errorf("pid %d is in the agent's own mount namespace", pid)
+		}
+	}
+	if err != nil {
+		s.closeNamespaceLater(ns)
+		return nil, 0, err
+	}
+	return ns, inode, nil
+}
+
+// coverAtStart makes sure r's node is there, finds r's camera and covers it
+// before deadline. changed reports a record change for the state file.
+func (s *VideoService) coverAtStart(ctx context.Context, containerID string, r *shareRecord, ns *devcover.Namespace, nsErr error, deadline time.Time) (out startCover, changed bool) {
+	lastPath := func() string {
+		s.shares.mu.Lock()
+		defer s.shares.mu.Unlock()
+		return r.cameraPath
+	}
+	nr, made, err := s.startShareNode(ctx, containerID, r)
+	if err != nil {
+		return startCover{path: lastPath(), err: fmt.Errorf("its node could not be made again: %w", err)}, false
+	}
+	out.node = shareNodePath(nr)
+	if nsErr != nil {
+		out.path, out.err = lastPath(), nsErr
+		return out, made
+	}
+	path, ok, ch := s.resolveSharePath(r)
+	changed = made || ch
+	if !ok {
+		out.path, out.absent = lastPath(), true
+		return out, changed
+	}
+	out.path = path
+	timeout := time.Until(deadline)
+	if timeout <= 0 || ctx.Err() != nil {
+		out.err = coverStopped(ctx)
+		return out, changed
+	}
+	out.err = coverPath(ns, out.node, path, timeout)
+	return out, changed
+}
+
+// coverStopped is the error of a cover the start's deadline (or its
+// cancellation) cut off.
+func coverStopped(ctx context.Context) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return fmt.Errorf("the start's covers were cancelled: %w", ctx.Err())
+	}
+	return fmt.Errorf("%w (the start's %s budget ran out)", devcover.ErrTimeout, cameraShareCoverBudget)
+}
+
+// reportCover hands one record's outcome to the call, or, once it has
+// returned, notes a cover that landed after all: devcover lets a cover that
+// committed before its deadline finish its one move_mount.
+func (s *VideoService) reportCover(run *startCoverRun, i int, out startCover) {
+	run.mu.Lock()
+	late := run.closed
+	if !late {
+		run.outcomes[i] = &out
+	}
+	run.mu.Unlock()
+	if late && out.err == nil && !out.absent {
+		s.shareLogger().Info(fmt.Sprintf("camera share: %s has its node %s at %s after all: the cover finished just after its start's budget",
+			run.containerID, out.node, out.path))
+	}
+}
+
+// reportStartCover closes the call, logs each record's outcome and returns
+// the errors. A record without an outcome was cut off by the deadline.
+func (s *VideoService) reportStartCover(ctx context.Context, run *startCoverRun) []error {
+	run.mu.Lock()
+	run.closed = true
+	outcomes := append([]*startCover(nil), run.outcomes...)
+	run.mu.Unlock()
+	log := s.shareLogger()
+	var errs []error
+	for i, r := range run.recs {
+		out := outcomes[i]
+		if out == nil {
+			s.shares.mu.Lock()
+			path := r.cameraPath
+			s.shares.mu.Unlock()
+			out = &startCover{path: path, err: coverStopped(ctx)}
+		}
+		switch {
+		case out.absent:
+			log.Info(fmt.Sprintf("camera share: %s is not plugged in; %s's node covers it when it is", r.cameraName, run.containerID))
+		case out.err != nil:
+			msg := fmt.Sprintf("camera share: %s starts with the real camera %s (%s)", run.containerID, r.cameraName, out.path)
+			log.Warn(fmt.Sprintf("%s: %v", msg, out.err))
+			errs = append(errs, fmt.Errorf("%s: %w", msg, out.err))
+		default:
+			log.Info(fmt.Sprintf("camera share: %s starts with its node %s at %s (%s)", run.containerID, out.node, out.path, r.cameraName))
+		}
+	}
+	return errs
+}
+
+// startShareNode makes sure r's node is there for a start's cover and returns
+// its number; made reports a node made now (the record changed). A record with
+// a writer has its node. A node that is there and still r's share node, with
+// no writer (an agent restart), is covered as it is; the next sync adopts it.
+// Otherwise (a reboot removed it, or its number now holds another node) the
+// node is made again, at r's own number when that is free and at a new one
+// otherwise, then opened at r's stored mode with a pump, as a share's node is
+// at its create. r is claimed meanwhile (opening), since the start must not
+// wait for ops: an adoption leaves it alone, and a removal leaves the node to
+// this, which removes it once it sees r retired.
+func (s *VideoService) startShareNode(ctx context.Context, containerID string, r *shareRecord) (nr int, made bool, err error) {
+	s.shares.mu.Lock()
+	nr, writer, retired := r.node, r.io != nil, r.retired
+	s.shares.mu.Unlock()
+	switch {
+	case retired:
+		return 0, false, errors.New(shareRefusedRemoved)
+	case writer || s.loopback == nil:
+		return nr, false, nil
+	case s.nodeIsShareFor(r):
+		return nr, false, nil
+	}
+
+	s.shares.mu.Lock()
+	switch {
+	case r.retired:
+		s.shares.mu.Unlock()
+		return 0, false, errors.New(shareRefusedRemoved)
+	case r.io != nil || r.opening:
+		nr = r.node
+		s.shares.mu.Unlock()
+		return nr, false, nil
+	}
+	r.opening = true
+	was := r.node
+	s.shares.mu.Unlock()
+
+	// EnsureShareNode makes nothing, and says nothing, without the module.
+	if err := s.loopback.Available(); err != nil {
+		s.endShareOpening(r)
+		return 0, false, errors.New("no compatible v4l2loopback module on this device")
+	}
+	nr, at, reason := s.makeShareNodeFor(ctx, r.cameraName, r)
+	if reason != "" {
+		s.endShareOpening(r)
+		return 0, false, errors.New(reason)
+	}
+	path := shareNodePath(nr)
+	node, err := openShareNode(s.logger, path, r.mode)
+	if err != nil {
+		s.endShareOpening(r)
+		s.unmakeShareNode(nr, r.cameraName, at)
+		return 0, false, err
+	}
+	s.shares.mu.Lock()
+	r.opening = false
+	if r.retired {
+		s.shares.mu.Unlock()
+		s.closeShareWriter(path, node)
+		s.unmakeShareNode(nr, r.cameraName, at)
+		return 0, false, errors.New(shareRefusedRemoved)
+	}
+	r.node, r.nodeMade = nr, at
+	delete(s.shares.pending, nr)
+	var start func()
+	if !s.shares.stopped {
+		start = s.attachSharePumpLocked(containerID, r, node, false)
+	}
+	s.shares.mu.Unlock()
+	if start == nil {
+		// Shutting down: the node and its record stay for the next agent.
+		s.closeShareWriter(path, node)
+		return nr, true, nil
+	}
+	start()
+	msg := fmt.Sprintf("camera share: made %s again for %s's share of %s", path, containerID, r.cameraName)
+	if nr != was {
+		msg += fmt.Sprintf(" (its number %d is taken)", was)
+	}
+	s.shareLogger().Info(msg)
+	return nr, true, nil
+}
+
+// ReleaseCameraShares lets go of the container's mount namespace, for a task
+// that exited or stopped: no replug is covered for it until its next start.
+// The namespace is closed here, which takes milliseconds when the agent holds
+// its last reference, so this is never for the start path.
+func (s *VideoService) ReleaseCameraShares(containerID string) {
+	s.shares.mu.Lock()
+	var ns *devcover.Namespace
+	if c := s.shares.containers[containerID]; c != nil {
+		ns = releaseNamespaceLocked(c)
+	}
+	s.shares.mu.Unlock()
+	s.closeNamespaceNow(ns)
+}
+
+// releaseNamespaceLocked takes the container's namespace away, for the caller
+// to close. Callers hold s.shares.mu.
+func releaseNamespaceLocked(c *shareContainer) *devcover.Namespace {
+	ns := c.ns
+	c.ns, c.nsInode, c.nsPID, c.nsAt = nil, 0, 0, time.Time{}
+	c.nsGen++
+	return ns
+}
+
+func (s *VideoService) closeNamespaceNow(ns *devcover.Namespace) {
+	if ns == nil {
+		return
+	}
+	if err := closeNamespace(ns); err != nil {
+		s.shareLogger().Debug(fmt.Sprintf("camera share: closing a container's mount namespace failed: %v", err))
+	}
+}
+
+// closeNamespaceLater closes ns on a goroutine Shutdown waits for, or at once
+// when Shutdown has begun.
+func (s *VideoService) closeNamespaceLater(ns *devcover.Namespace) {
+	if ns == nil {
+		return
+	}
+	s.shares.mu.Lock()
+	if s.shares.stopped {
+		s.shares.mu.Unlock()
+		s.closeNamespaceNow(ns)
+		return
+	}
+	s.shares.nsWG.Add(1)
+	s.shares.mu.Unlock()
+	go func() {
+		defer s.shares.nsWG.Done()
+		s.closeNamespaceNow(ns)
+	}()
+}
+
+// syncShareNamespaces is the namespace half of SyncCameraShares. A running
+// listed container whose namespace is not held (an agent restart), or was
+// held through another pid, gets it opened; and each of its cameras present
+// but not covered (a replug while the agent was down) is covered again. A
+// container listed as not running lets go of its namespace, unless it was
+// opened less than cameraShareSyncGrace ago: the listing may predate that
+// start. Callers hold s.shares.ops.
+func (s *VideoService) syncShareNamespaces(ctx context.Context, containers []CameraShareContainer) {
+	listed := append([]CameraShareContainer(nil), containers...)
+	sort.SliceStable(listed, func(i, j int) bool { return listed[i].ID < listed[j].ID })
+	now := time.Now()
+	for _, lc := range listed {
+		if ctx.Err() != nil {
+			return
+		}
+		if !lc.Running {
+			s.shares.mu.Lock()
+			var ns *devcover.Namespace
+			if c := s.shares.containers[lc.ID]; c != nil && c.ns != nil && now.Sub(c.nsAt) >= cameraShareSyncGrace {
+				ns = releaseNamespaceLocked(c)
+			}
+			s.shares.mu.Unlock()
+			s.closeNamespaceNow(ns)
+			continue
+		}
+		if lc.PID != 0 {
+			s.recoverMissedReplugs(lc.ID, lc.PID)
+		}
+	}
+}
+
+// recoverMissedReplugs holds the running container's namespace through pid
+// when it is not held, and covers again each camera a replug uncovered.
+func (s *VideoService) recoverMissedReplugs(containerID string, pid uint32) {
+	s.shares.mu.Lock()
+	c := s.shares.containers[containerID]
+	if c == nil || len(c.shares) == 0 || s.shares.stopped || (c.ns != nil && c.nsPID == pid) {
+		s.shares.mu.Unlock()
+		return
+	}
+	gen := c.nsGen
+	recs := append([]*shareRecord(nil), c.shares...)
+	s.shares.mu.Unlock()
+
+	ns, inode, err := s.openContainerNamespace(pid)
+	if err != nil {
+		s.shareLogger().Debug(fmt.Sprintf("camera share: %s: opening the mount namespace of pid %d failed: %v; its cameras are covered again at its next start", containerID, pid, err))
+		return
+	}
+	s.shares.mu.Lock()
+	var old *devcover.Namespace
+	if s.shares.containers[containerID] == c && c.nsGen == gen {
+		old = c.ns
+	}
+	held := s.holdNamespaceLocked(containerID, c, gen, ns, inode, pid)
+	s.shares.mu.Unlock()
+	if !held {
+		s.closeNamespaceLater(ns)
+		return
+	}
+	s.closeNamespaceLater(old)
+
+	changed := false
+	for _, r := range recs {
+		s.shares.mu.Lock()
+		node := shareNodePath(r.node)
+		s.shares.mu.Unlock()
+		path, ok, ch := s.resolveSharePath(r)
+		changed = changed || ch
+		if !ok {
+			continue
+		}
+		covered, err := coveredPath(ns, node, path)
+		if err != nil {
+			s.shareLogger().Debug(fmt.Sprintf("camera share: %s: checking %s's cover of %s failed: %v", containerID, node, path, err))
+			continue
+		}
+		if covered {
+			continue
+		}
+		if err := coverPath(ns, node, path, cameraShareRecoverTimeout); err != nil {
+			s.shareLogger().Warn(fmt.Sprintf("camera share: %s has the real camera %s (%s): covering it again after an agent restart failed: %v",
+				containerID, r.cameraName, path, err))
+			continue
+		}
+		s.shareLogger().Info(fmt.Sprintf("camera share: covered %s for %s again; the camera was replugged while the agent was down", path, containerID))
+	}
+	if changed {
+		s.persistCameraShares()
+	}
+}
+
+// watchCameraReplugs covers a camera's new node again for every running
+// container that shares it, as soon as the node appears in /dev: a replug
+// takes the cover away with the old node. It acts on the node's creation
+// (inotify), never on udev's event, which comes about 90 ms later, and
+// attribute changes are not watched. The watch starts again
+// cameraShareWatchRetry after it fails. It runs until ctx ends.
+func (s *VideoService) watchCameraReplugs(ctx context.Context) {
+	q := &replugQueue{wake: make(chan struct{}, 1)}
+	handled := make(chan struct{})
+	go func() {
+		defer close(handled)
+		s.handleReplugs(ctx, q)
+	}()
+	defer func() { <-handled }()
+	for {
+		err := watchDevices(ctx, "/dev", q.push)
+		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, devwatch.ErrUnsupported) {
+			s.shareLogger().Debug("camera share: not watching /dev for replugs: " + err.Error())
+			return
+		}
+		if err == nil {
+			err = errors.New("the watch ended")
+		}
+		s.shareLogger().Warn(fmt.Sprintf("camera share: watching /dev for cameras failed: %v; trying again in %s", err, cameraShareWatchRetry))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(cameraShareWatchRetry):
+		}
+	}
+}
+
+// replugQueue hands the watch's events to the handler without blocking the
+// watch: each node that appeared waits once, with the time it appeared, and
+// none is dropped. A node removed needs nothing: its cover goes with it.
+type replugQueue struct {
+	mu      sync.Mutex
+	pending []replugEvent
+	wake    chan struct{}
+}
+
+type replugEvent struct {
+	base string
+	at   time.Time
+}
+
+func (q *replugQueue) push(ev devwatch.Event) {
+	if !ev.Created {
+		return
+	}
+	at := time.Now()
+	q.mu.Lock()
+	if !slices.ContainsFunc(q.pending, func(p replugEvent) bool { return p.base == ev.Name }) {
+		q.pending = append(q.pending, replugEvent{ev.Name, at})
+	}
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (q *replugQueue) take() []replugEvent {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := q.pending
+	q.pending = nil
+	return out
+}
+
+func (s *VideoService) handleReplugs(ctx context.Context, q *replugQueue) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-q.wake:
+		}
+		for _, ev := range q.take() {
+			if ctx.Err() != nil {
+				return
+			}
+			s.recoverAfterReplug(ctx, ev.base, ev.at)
+		}
+	}
+}
+
+// replugTarget is one running container's record whose camera is a node that
+// just appeared.
+type replugTarget struct {
+	containerID string
+	r           *shareRecord
+	ns          *devcover.Namespace
+	inode       uint64
+	node        string
+	err         error
+	took        time.Duration
+}
+
+// recoverAfterReplug handles /dev/<base> appearing at at. A share node, or a
+// node without a camera identity, is not a camera. For a camera, first every
+// record learns it as a sibling where it is of their model (whether or not
+// its container runs), then every record is resolved, and each running
+// container whose record resolves to it gets its node over it again, each
+// within cameraShareRecoverTimeout: all covers first, then the log lines,
+// since a line between two covers delays the second. A check for an app that
+// took the real camera just before its cover follows
+// cameraShareLoserCheckDelay later. The state file is saved after the covers
+// and before the lines.
+func (s *VideoService) recoverAfterReplug(ctx context.Context, base string, at time.Time) {
+	path := "/dev/" + base
+	log := s.shareLogger()
+	if s.IsShareNode(path) {
+		log.Debug(fmt.Sprintf("camera share: %s appeared; it is a share node", path))
+		return
+	}
+	if _, err := s.identityOf(base); err != nil {
+		log.Debug(fmt.Sprintf("camera share: %s appeared; it has no camera identity (%v)", path, err))
+		return
+	}
+	present := s.presentCameraIdentities()
+	changed := s.learnSameModelPorts(present)
+	targets, ch := s.replugTargets(path, present)
+	changed = changed || ch
+	for i := range targets {
+		t := &targets[i]
+		t.err = coverPath(t.ns, t.node, path, cameraShareRecoverTimeout)
+		t.took = time.Since(at)
+	}
+	if changed {
+		s.persistCameraShares()
+	}
+	var covered []replugTarget
+	for _, t := range targets {
+		if t.err != nil {
+			log.Warn(fmt.Sprintf("camera share: %s has the real camera %s (%s) after it came back: covering it again failed: %v",
+				t.containerID, t.r.cameraName, path, t.err))
+			continue
+		}
+		log.Info(fmt.Sprintf("camera share: covered %s for %s again in %.2f ms after the camera came back",
+			path, t.containerID, float64(t.took.Microseconds())/1000))
+		covered = append(covered, t)
+	}
+	if len(targets) == 0 {
+		log.Debug(fmt.Sprintf("camera share: %s appeared; no running app shares it", path))
+	}
+	if len(covered) == 0 {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(cameraShareLoserCheckDelay):
+		}
+		s.checkWindowLosers(path, covered)
+	}()
+}
+
+// replugTargets resolves every record among present, so each follows its
+// camera, and returns those of running containers whose camera is at path, in
+// container order. changed reports a record change for the state file.
+func (s *VideoService) replugTargets(path string, present map[string]camera.Identity) (targets []replugTarget, changed bool) {
+	type share struct {
+		id string
+		c  *shareContainer
+		r  *shareRecord
+	}
+	var all []share
+	s.shares.mu.Lock()
+	for id, c := range s.shares.containers {
+		for _, r := range c.shares {
+			all = append(all, share{id, c, r})
+		}
+	}
+	s.shares.mu.Unlock()
+	sort.SliceStable(all, func(i, j int) bool { return all[i].id < all[j].id })
+	for _, a := range all {
+		at, ok, ch := s.resolveSharePathIn(a.r, present)
+		changed = changed || ch
+		if !ok || at != path {
+			continue
+		}
+		s.shares.mu.Lock()
+		ns, inode, nr := a.c.ns, a.c.nsInode, a.r.node
+		s.shares.mu.Unlock()
+		if ns != nil {
+			targets = append(targets, replugTarget{containerID: a.id, r: a.r, ns: ns, inode: inode, node: shareNodePath(nr)})
+		}
+	}
+	return targets, changed
+}
+
+// checkWindowLosers names each container whose app opened the real camera at
+// path in the moment between the node appearing and its cover: a holder of
+// the camera in the container's mount namespace. That app holds the real
+// camera, not its node, so it does not share it until it reopens the camera,
+// and the record says so until its pump next reads for the app.
+func (s *VideoService) checkWindowLosers(path string, covered []replugTarget) {
+	holders := deviceHolders(path)
+	for _, t := range covered {
+		for _, h := range holders {
+			if h.MountNS == 0 || h.MountNS != t.inode {
+				continue
+			}
+			who := fmt.Sprintf("pid %d, %s", h.PID, h.Comm)
+			s.shares.mu.Lock()
+			t.r.tookRealCamera = who
+			s.shares.mu.Unlock()
+			s.shareLogger().Warn(fmt.Sprintf("camera share: %s took the real camera %s while it was being covered after a replug, "+
+				"and does not share it until it reopens the camera (%s)", t.containerID, path, who))
+			break
+		}
+	}
+}
+
+// closeCameraShareNamespaces is Shutdown's end, once the replug watch has
+// stopped: it waits for start covers still running, closes every namespace
+// held and waits for the closes handed off earlier, each wait bounded. Covers
+// already made stay; a mount in a container outlives the agent.
+func (s *VideoService) closeCameraShareNamespaces() {
+	s.waitShareGroup(&s.shares.coverWG, "a container start's cover")
+	s.shares.mu.Lock()
+	var held []*devcover.Namespace
+	for _, c := range s.shares.containers {
+		if ns := releaseNamespaceLocked(c); ns != nil {
+			held = append(held, ns)
+		}
+	}
+	s.shares.mu.Unlock()
+	for _, ns := range held {
+		s.closeNamespaceNow(ns)
+	}
+	s.waitShareGroup(&s.shares.nsWG, "closing a container's mount namespace")
+}
+
+// waitShareGroup waits for wg for at most shareRemovalShutdownWait.
+func (s *VideoService) waitShareGroup(wg *sync.WaitGroup, what string) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(shareRemovalShutdownWait):
+		s.shareLogger().Warn(fmt.Sprintf("camera share: %s is still running after %s; shutting down without it", what, shareRemovalShutdownWait))
+	}
 }

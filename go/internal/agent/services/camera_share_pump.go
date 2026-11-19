@@ -71,6 +71,10 @@ type sharePump struct {
 	mode    sharedMode
 	join    func(ctx context.Context) (shareSubscription, error)
 	adopted bool
+	// onReading, when set, runs each time the pump starts reading for the app
+	// (camera_share.go clears a "took the real camera" note then). It is set
+	// before Run starts and called without mu.
+	onReading func()
 
 	// Clocks, replaceable in tests.
 	nowMono func() int64
@@ -224,6 +228,9 @@ func (p *sharePump) start(ctx context.Context) {
 	p.sub, p.frames = sub, sub.Frames()
 	p.dropped, p.writeLogged, p.writeFailed = false, false, false
 	p.setState(shareReading, "")
+	if p.onReading != nil {
+		p.onReading()
+	}
 }
 
 func (p *sharePump) joinFailed(ctx context.Context, err error) {
