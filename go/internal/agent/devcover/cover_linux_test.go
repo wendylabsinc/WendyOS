@@ -94,6 +94,47 @@ func TestCover_BindsSourceInsideTargetNamespaceOnly(t *testing.T) {
 	}
 }
 
+// mountinfoLine returns the child's mountinfo line whose mount point is path.
+func mountinfoLine(t *testing.T, pid uint32, path string) string {
+	t.Helper()
+	b, err := os.ReadFile("/proc/" + strconv.FormatUint(uint64(pid), 10) + "/mountinfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) > 4 && f[4] == path {
+			return l
+		}
+	}
+	t.Fatalf("no mountinfo line for %s", path)
+	return ""
+}
+
+func TestCover_CloneIsPrivateNotInSourcesPeerGroup(t *testing.T) {
+	requireRoot(t)
+	// Source on an explicitly shared mount, like the host's /dev.
+	srcDir := t.TempDir()
+	if err := unix.Mount("tmpfs", srcDir, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mount tmpfs: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(srcDir, unix.MNT_DETACH) })
+	if err := unix.Mount("", srcDir, "", unix.MS_SHARED, ""); err != nil {
+		t.Fatalf("make shared: %v", err)
+	}
+	src := writeFile(t, srcDir, "src", "share")
+
+	pid := startNamespace(t)
+	dst := writeFile(t, t.TempDir(), "dst", "real")
+	if err := Cover(openNS(t, pid), src, dst, time.Second); err != nil {
+		t.Fatalf("Cover: %v", err)
+	}
+	line := mountinfoLine(t, pid, dst)
+	pre, _, _ := strings.Cut(line, " - ")
+	if strings.Contains(pre, "shared:") || strings.Contains(pre, "master:") {
+		t.Fatalf("cover mount is in a propagation group: %s", line)
+	}
+}
+
 func TestCover_MissingTargetFailsWithNotExist(t *testing.T) {
 	pid := startNamespace(t)
 	src := writeFile(t, t.TempDir(), "src", "share")
