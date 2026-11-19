@@ -46,3 +46,28 @@ func TestApplicationServiceUnsupportedExplainsBackendRollout(t *testing.T) {
 		t.Fatalf("unclear app-only capability error: %s", message)
 	}
 }
+
+func TestApplicationDispatchKeepsOperatorTargetValidation(t *testing.T) {
+	for _, tt := range []struct {
+		service string
+		host    string
+		port    uint32
+		message string
+	}{
+		{"ssh", "127.0.0.2", 22, "cloud dial target is not 127.0.0.1"},
+		{"ssh", "127.0.0.1", 50052, "cloud TCP service port mismatch"},
+		{"wendy-agent", "127.0.0.1", applicationServicePort, "cloud TCP service port mismatch"},
+	} {
+		t.Run(tt.service+"/"+tt.host, func(t *testing.T) {
+			instruction := &pb.DialInstruction{
+				ServiceDescriptor: []byte(tt.service),
+				Transport:         pb.DialTransport_DIAL_TRANSPORT_TCP,
+				Host:              tt.host,
+				Port:              tt.port,
+			}
+			if _, err := (&Agent{}).dialInstruction(context.Background(), instruction); err == nil || err.Error() != tt.message {
+				t.Fatalf("dispatch error = %v, want %q", err, tt.message)
+			}
+		})
+	}
+}

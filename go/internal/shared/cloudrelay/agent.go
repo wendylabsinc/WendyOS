@@ -887,6 +887,9 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 }
 
 func (a *Agent) dialInstruction(ctx context.Context, instruction *pb.DialInstruction) (net.Conn, error) {
+	// The sealed descriptor selects the TCP port or UDP destination rule.
+	// validateService requires the exact loopback host for every TCP service.
+	// The wendy-app descriptor uses the in-memory listener after validation.
 	if err := validateService(instruction); err != nil {
 		return nil, err
 	}
