@@ -17,6 +17,7 @@ import (
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/protobuf/proto"
 )
 
 type setupProvisionerFake struct {
@@ -157,11 +158,15 @@ func TestSetupCipherWireVector(t *testing.T) {
 }
 
 type setupNetworkFake struct {
-	request *agentpb.ConnectToWiFiRequest
-	saved   int // calls that read or change saved networks
+	request  *agentpb.ConnectToWiFiRequest
+	saved    int                                             // calls that read or change saved networks
+	networks []*agentpb.ListWiFiNetworksResponse_WiFiNetwork // the scan; "lab" alone when nil
 }
 
 func (n *setupNetworkFake) ListWiFiNetworks(context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
+	if n.networks != nil {
+		return n.networks, nil
+	}
 	return []*agentpb.ListWiFiNetworksResponse_WiFiNetwork{{Ssid: "lab"}}, nil
 }
 func (n *setupNetworkFake) ConnectToWiFi(_ context.Context, r *agentpb.ConnectToWiFiRequest) error {
@@ -212,6 +217,68 @@ func TestSetupRefusesSavedNetworkCommands(t *testing.T) {
 	}
 	if n.saved != 0 {
 		t.Errorf("setup reached the saved networks %d times", n.saved)
+	}
+}
+
+// Setup answers anyone nearby before enrollment, so its list gives network
+// names only: any other field lets a peer tell a saved network from a scanned
+// one. The authenticated management channel returns every field.
+func TestSetupWiFiListHidesSavedState(t *testing.T) {
+	signal, weak, priority, rssi := int32(64), int32(31), int32(7), int32(-58)
+	psk := agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK
+	scan := []*agentpb.ListWiFiNetworksResponse_WiFiNetwork{
+		{Ssid: "home", SignalStrength: &signal, Security: psk, IsKnown: true, IsConnected: true, Priority: &priority, RssiDbm: &rssi},
+		{Ssid: "cafe", SignalStrength: &weak, Security: agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN},
+		// Saved but out of range: the scan has no reading for it.
+		{Ssid: "office", Security: psk, IsKnown: true, Priority: &priority},
+	}
+	n := &setupNetworkFake{networks: scan}
+	ctx := context.Background()
+	list := &agentpb.BluetoothCommand{Command: &agentpb.BluetoothCommand_WifiList{WifiList: &agentpb.WifiListCommand{}}}
+
+	setup := NewSetupDispatcher(&setupProvisionerFake{}, n).Dispatch(ctx, list).GetWifiList().GetNetworks()
+	if len(setup) != len(scan) {
+		t.Fatalf("setup list has %d rows, want %d: %v", len(setup), len(scan), setup)
+	}
+	for i, row := range scan {
+		// The saved, out-of-range row must look like any visible one.
+		if want := (&agentpb.WifiNetworkInfo{Ssid: row.GetSsid()}); !proto.Equal(setup[i], want) {
+			t.Errorf("setup row %d = {%v}, want {%v}", i, setup[i], want)
+		}
+	}
+
+	managed := NewDispatcher(n, nil, nil, nil).Dispatch(ctx, list).GetWifiList().GetNetworks()
+	if len(managed) != len(scan) {
+		t.Fatalf("management list has %d rows, want %d: %v", len(managed), len(scan), managed)
+	}
+	for i, row := range scan {
+		want := &agentpb.WifiNetworkInfo{
+			Ssid:           row.Ssid,
+			SignalStrength: row.SignalStrength,
+			Security:       row.Security,
+			IsKnown:        row.IsKnown,
+			IsConnected:    row.IsConnected,
+			Priority:       row.Priority,
+			RssiDbm:        row.RssiDbm,
+		}
+		if !proto.Equal(managed[i], want) {
+			t.Errorf("management row %d = {%v}, want {%v}", i, managed[i], want)
+		}
+	}
+}
+
+// Joining a hidden network is part of first setup, so the security choice and
+// the hidden flag pass through here as they do on the management channel.
+func TestSetupWiFiConnectKeepsSecurityAndHidden(t *testing.T) {
+	n := &setupNetworkFake{}
+	d := NewSetupDispatcher(&setupProvisionerFake{}, n)
+	sae, hidden := agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE, true
+	connect := &agentpb.BluetoothCommand{Command: &agentpb.BluetoothCommand_WifiConnect{WifiConnect: &agentpb.WifiConnectCommand{Ssid: "lab", Password: "fixture-password", Security: &sae, Hidden: &hidden}}}
+	if !d.Dispatch(context.Background(), connect).GetWifiConnect().GetSuccess() {
+		t.Fatal("Wi-Fi request refused")
+	}
+	if n.request.GetSecurity() != sae || !n.request.GetHidden() {
+		t.Errorf("security = %v, hidden = %v, want %v and true", n.request.GetSecurity(), n.request.GetHidden(), sae)
 	}
 }
 
