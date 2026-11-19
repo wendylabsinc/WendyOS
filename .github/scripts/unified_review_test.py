@@ -78,6 +78,8 @@ class UnifiedTests(unittest.TestCase):
             self.assertIn("non-empty single-line", fields[name]["description"])
             self.assertIn(str(maximum), fields[name]["description"])
         self.assertIn("who notices what", fields["plain_terms"]["description"])
+        self.assertIn("correct invalid impact", fields["impact"]["description"])
+        self.assertIn("without changing an independently valid concern", fields["impact"]["description"])
         concern = fields["concern"]["anyOf"][1]
         for name in compat.FINDING_TEXT_FIELDS:
             self.assertIn(str(compat.MAX_FINDING_TEXT), concern["properties"][name]["description"])
@@ -266,6 +268,33 @@ diff --git a/export.py b/export.py
         removed["decisions"][0].update(impact="additive", concern=None)
         with self.assertRaises(api.ReviewError):
             unified.preserve(previous, removed, self.parsed, self.assessment)
+
+    def test_migration_concern_repair_changes_impact_without_escalating_valid_assessment(self):
+        original = self.payload()
+        original["risk"] = "high"
+        original["decisions"][0]["concern"]["assessment"] = "migration_needed"
+        original["compatibility_verdict"] = "migration_needed"
+        untouched = copy.deepcopy(original)
+        with self.assertRaises(api.ReviewError) as caught:
+            unified.validate(original, self.parsed, self.assessment)
+        self.assertIn("decisions[0].impact", str(caught.exception))
+        self.assertIn("Preserve any independently valid concern exactly", str(caught.exception))
+        self.assertIn("correct only impact", str(caught.exception))
+        self.assertIn("do not change its assessment or lower testing risk", str(caught.exception))
+        control = copy.deepcopy(original)
+        control["decisions"][0]["impact"] = "behavioral"
+        fixed = unified.validate(control, self.parsed, self.assessment)
+        unified.preserve(original, fixed, self.parsed, self.assessment)
+        self.assertEqual(fixed["decisions"][0]["concern"]["assessment"], "migration_needed")
+        self.assertEqual(fixed["risk"], "high")
+        bad_repair = copy.deepcopy(original)
+        bad_repair["decisions"][0]["concern"]["assessment"] = "breaking"
+        bad_repair["compatibility_verdict"] = "breaking"
+        with self.assertRaisesRegex(api.ReviewError, "already-valid compatibility finding"):
+            unified.preserve(original, unified.validate(bad_repair, self.parsed, self.assessment), self.parsed, self.assessment)
+        with self.assertRaisesRegex(api.ReviewError, "lowered.*risk"):
+            unified.preserve(original, dict(fixed, risk="low"), self.parsed, self.assessment)
+        self.assertEqual(original, untouched)
 
     def test_malformed_first_item_cannot_change_valid_neighbor_or_lower_risk(self):
         complete = self.payload(False)

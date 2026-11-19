@@ -32,6 +32,10 @@ one or two concrete sentences about who notices what. Do not use paragraphs,
 bullets or code fences inside strings. Use inline backticks for code names.
 Follow each field's stated character bound. During repair, preserve already-valid
 items exactly; correct invalid strings without introducing control characters.
+If impact contradicts an independently valid attached concern, repair IMPACT,
+not the concern: preserve its assessment, text and evidence exactly. A valid
+migration_needed concern permits additive or behavioral impact, never breaking;
+a valid breaking concern requires breaking impact. Do not lower testing risk.
 Category is network
 (ports/discovery/endpoints/wire identifiers), protobuf (RPC/message contracts),
 storage (durable paths/formats/readers/writers), config (keys/defaults/precedence),
@@ -105,6 +109,10 @@ def schema(base, evidence, assessment):
             "No newline, carriage return, tab or other control characters, even JSON-escaped. "
             "Use inline backticks for code names; no paragraphs, bullets or code fences."
             + (" Always write one or two concrete sentences saying who notices what." if name == "plain_terms" else ""))
+    item["properties"]["impact"]["description"] = (
+        "Must agree with the attached concern: assessment breaking requires impact breaking; "
+        "migration_needed or no concern permits only additive or behavioral. During repair, "
+        "correct invalid impact without changing an independently valid concern or lowering testing risk.")
     concern = item["properties"]["concern"]["anyOf"][1]
     for name in compat.FINDING_TEXT_FIELDS:
         concern["properties"][name]["description"] += " Single-line prose only: no newline, carriage return, tab or other control characters."
@@ -148,9 +156,12 @@ def validate_item(item, *, resolved=False, path="decision"):
     if concern is not None and resolved:
         compat.validate_finding(concern, has_prior=True)
     if item["impact"] == "breaking" and (not concern or concern.get("assessment") != "breaking"):
-        raise ReviewError("Breaking change requires a source-backed breaking concern")
+        raise ReviewError(f"{path}.impact='breaking' contradicts the attached concern (or lacks a breaking concern). "
+                          "Preserve any independently valid concern exactly. For assessment='migration_needed', "
+                          "correct only impact to 'additive' or 'behavioral'; do not change its assessment or lower testing risk.")
     if concern and concern.get("assessment") == "breaking" and item["impact"] != "breaking":
-        raise ReviewError("Breaking concern must be reflected in its change impact")
+        raise ReviewError(f"{path}.impact contradicts concern.assessment='breaking'. Preserve the independently valid "
+                          "concern exactly; correct only impact to 'breaking' and keep testing risk unchanged.")
 
 
 def validate(payload, parsed, assessment, *, resolved=False):
