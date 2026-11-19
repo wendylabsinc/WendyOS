@@ -187,6 +187,62 @@ func TestAnsweringTargetIsReachedBeforeJoining(t *testing.T) {
 	}
 }
 
+// A device whose clock is behind Cloud's used to drop out of presence at its
+// next lease, leaving no way to say why it refuses sessions. It now stays
+// registered, says so in its log, and refuses each session for its clock.
+func TestClockBehindCloudKeepsPresenceAndRefusesSessions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, _, done, logs := startOfferRelay(t, ctx, nil, takesRefusals, func(r *offerRelay) { r.cloudAhead = 2 * time.Minute })
+
+	offer := r.sessionOffer("issued-ahead", nil, nil)
+	r.queue(t, ctx, done, offerMessage(offer))
+	wantRefusal(t, r.nextRefusal(t, ctx, done), offer, pb.SessionRefusalReason_SESSION_REFUSAL_REASON_CLOCK)
+	// The agent logs on registering, which it had done before it refused.
+	if n := logs.FilterMessageSnippet("clock is behind Wendy Cloud's").Len(); n != 1 {
+		t.Fatalf("%d log entries about the clock, want 1", n)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("presence ended: %v", err)
+	default:
+	}
+}
+
+// Only the issue time is waived for a lease. One that has expired on this
+// clock, or is otherwise invalid, is still refused.
+func TestLeaseIssuedAheadMustStillBeValid(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, a, _, _ := startOfferRelay(t, ctx, nil)
+	lease := func(edit func(*claims)) *pb.IssuePresenceLeaseResponse {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		c := r.lease
+		c.JTI = "another-lease"
+		edit(&c)
+		return &pb.IssuePresenceLeaseResponse{PresenceLeaseJws: r.artifact(c, leaseType), Broker: r.broker()}
+	}
+	now := time.Now().Unix()
+	if _, err := a.validateLease(ctx, lease(func(c *claims) { c.Iat, c.Exp = now+120, now+420 })); err != nil {
+		t.Fatalf("lease issued ahead of the clock: %v", err)
+	}
+	for name, edit := range map[string]func(*claims){
+		"expired":           func(c *claims) { c.Iat, c.Exp = now-600, now-300 },
+		"too long a life":   func(c *claims) { c.Iat, c.Exp = now+120, now+120+901 },
+		"other agent's key": func(c *claims) { c.Iat, c.Exp, c.Signing = now+120, now+420, binding([]byte("another key")) },
+	} {
+		if _, err := a.validateLease(ctx, lease(edit)); err == nil {
+			t.Errorf("%s: lease accepted", name)
+		}
+	}
+	bad := lease(func(c *claims) { c.Iat, c.Exp = now+120, now+420 })
+	bad.PresenceLeaseJws = bad.PresenceLeaseJws[:len(bad.PresenceLeaseJws)-8] + "AAAAAAAA"
+	if _, err := a.validateLease(ctx, bad); err == nil {
+		t.Error("bad signature: lease accepted")
+	}
+}
+
 // The caller reads the broker's refusal and reports the device's reason.
 func TestCallerLearnsWhyTheDeviceRefused(t *testing.T) {
 	for _, tc := range []struct {

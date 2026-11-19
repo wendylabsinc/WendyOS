@@ -212,7 +212,17 @@ func (a *Agent) validateLease(ctx context.Context, l *pb.IssuePresenceLeaseRespo
 	if _, err := target(l.Broker.Endpoint); err != nil {
 		return claims{}, err
 	}
-	c, err := a.Verifier.verify(ctx, l.PresenceLeaseJws, leaseType, l.Broker.Audience, time.Now())
+	now := time.Now()
+	c, err := a.Verifier.verify(ctx, l.PresenceLeaseJws, leaseType, l.Broker.Audience, now)
+	if errors.Is(err, errArtifactValidity) && c.Iat > now.Unix() {
+		// Issued ahead of this clock, so this clock is behind Cloud's. The
+		// lease authorizes nothing here: the agent only presents it to the
+		// broker, which checks it against its own clock. Refusing it took the
+		// device out of presence altogether, with no way left to say why it
+		// refuses sessions. Everything else about it must still hold, as of
+		// its own issue time. Grants stay strict.
+		c, err = a.Verifier.verify(ctx, l.PresenceLeaseJws, leaseType, l.Broker.Audience, time.Unix(c.Iat, 0))
+	}
 	if err != nil {
 		return c, err
 	}
@@ -446,6 +456,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 	// A broker that predates offer refusals closes the stream on one.
 	refusable := accepted.GetOfferRefusalSupported()
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
+	if behind := time.Until(time.Unix(c.Iat, 0)); behind > cloudClockSkew {
+		a.Logger.Warn("this device's clock is behind Wendy Cloud's; it refuses every Cloud session until the clock is right", zap.Duration("behind", behind.Round(time.Second)))
+	}
 	a.registeredAt = time.Now()
 	if a.OnRegistered != nil {
 		a.OnRegistered()
