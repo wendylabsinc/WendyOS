@@ -203,7 +203,11 @@ func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool, sha
 // cameraShareRows asks the agent for its camera capability rows and returns
 // their properties by device path. Sharing is extra detail, so a failed call
 // or an agent without the call returns nil and the list shows today's status.
+// JSON output carries no status column, so it makes no call.
 func cameraShareRows(ctx context.Context, conn *grpcclient.AgentConnection) map[string]map[string]string {
+	if jsonOutput {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	category := "camera"
