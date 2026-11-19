@@ -27,6 +27,26 @@ public let V4L2_PIX_FMT_YUYV: UInt32 = 0x5659_5559  // 'YUYV'
 // public let VIDIOC_STREAMON: UInt = 0x4004_5614  // _IOW('V', 20, int)
 // public let VIDIOC_STREAMOFF: UInt = 0x4004_5615  // _IOW('V', 21, int)
 
+/// One captured YUYV frame and the size the camera actually gave.
+///
+/// A shared camera ignores the requested size and gives its own, so the
+/// buffer must be read with these values, not the ones asked for.
+public struct CapturedFrame {
+    public let data: Data
+    public let width: UInt32
+    public let height: UInt32
+    public let bytesPerLine: UInt32
+}
+
+/// Orders video node names (`video0`, `video2`, `video10`) by their number,
+/// so the camera's own path comes before the extra nodes next to it.
+public func videoNodesInNumberOrder(_ names: [String]) -> [String] {
+    func number(_ name: String) -> Int {
+        Int(name.drop(while: { !$0.isNumber })) ?? Int.max
+    }
+    return names.sorted { (number($0), $0) < (number($1), $1) }
+}
+
 /// A structure representing a V4L2 video device
 public struct VideoDevice {
     /// The device path (e.g., "/dev/video0")
@@ -58,8 +78,9 @@ public struct VideoDevice {
     /// - Parameters:
     ///   - width: The desired frame width
     ///   - height: The desired frame height
-    /// - Returns: The captured frame data
-    public func captureFrame(width: UInt32 = 640, height: UInt32 = 480) throws -> Data {
+    /// - Returns: The frame and the width, height and bytes per line the
+    ///   camera gave, which can differ from the ones asked for
+    public func captureFrame(width: UInt32 = 640, height: UInt32 = 480) throws -> CapturedFrame {
         // Open the device
         let fd = open(path, O_RDWR)
         if fd < 0 {
@@ -86,7 +107,18 @@ public struct VideoDevice {
             throw VideoError.ioctlFailed(command: "VIDIOC_S_FMT", errno: errno)
         }
 
-        print("Set format")
+        guard format.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV else {
+            throw VideoError.unsupportedOperation(
+                message: "Camera gave pixel format 0x\(String(format.fmt.pix.pixelformat, radix: 16)), not YUYV"
+            )
+        }
+        // The driver may change the size; use what it gave.
+        let width = format.fmt.pix.width
+        let height = format.fmt.pix.height
+        let bytesPerLine =
+            format.fmt.pix.bytesperline >= width * 2 ? format.fmt.pix.bytesperline : width * 2
+        let frameSize = max(format.fmt.pix.sizeimage, bytesPerLine * height)
+        print("Set format \(width)x\(height), \(bytesPerLine) bytes per line")
 
         // Request buffers
         var reqbuf = v4l2_requestbuffers()
@@ -106,7 +138,7 @@ public struct VideoDevice {
         buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
         buffer.memory = V4L2_MEMORY_MMAP
         buffer.index = 0
-        buffer.length = width * height * 2
+        buffer.length = frameSize
         result = ioctl(fd, UInt(WENDY_VIDIOC_QUERYBUF), &buffer)
         if result < 0 {
             throw VideoError.ioctlFailed(command: "VIDIOC_QUERYBUF", errno: errno)
@@ -163,7 +195,7 @@ public struct VideoDevice {
         }
 
         print("Grabbing data")
-        let imageData = Data(bytes: data, count: Int(buffer.length))
+        let imageData = Data(bytes: data, count: min(Int(buffer.length), Int(frameSize)))
 
         print("Stop streaming")
 
@@ -176,7 +208,12 @@ public struct VideoDevice {
 
         // Copy the frame data
         print("Returning frame data")
-        return imageData
+        return CapturedFrame(
+            data: imageData,
+            width: width,
+            height: height,
+            bytesPerLine: bytesPerLine
+        )
     }
 
     /// Capture a frame and convert it to RGB format
@@ -190,11 +227,14 @@ public struct VideoDevice {
         compression: Double = 0.0,
         writer: inout some JPEG.Bytestream.Destination
     ) async throws {
-        let yuyvSRGBData = try captureFrame(width: width, height: height)
+        let frame = try captureFrame(width: width, height: height)
+        let width = frame.width
+        let height = frame.height
         let rgbData = try yuyvSRGBToRGB(
-            yuyvSRGBData: yuyvSRGBData,
+            yuyvSRGBData: frame.data,
             width: Int(width),
-            height: Int(height)
+            height: Int(height),
+            bytesPerLine: Int(frame.bytesPerLine)
         )
 
         let layout = JPEG.Layout<JPEG.Common>(
@@ -254,12 +294,13 @@ public class VideoDeviceManager {
             let contents = try fileManager.contentsOfDirectory(atPath: devDir)
 
             // Filter for video device nodes (video0, video1, etc.)
-            let videoDevices = contents.filter {
-                $0.hasPrefix("video")
-                    && CharacterSet.decimalDigits.contains(
-                        $0.last?.unicodeScalars.first ?? Unicode.Scalar(0)
-                    )
-            }
+            let videoDevices = videoNodesInNumberOrder(
+                contents.filter {
+                    $0.hasPrefix("video")
+                        && CharacterSet.decimalDigits.contains(
+                            $0.last?.unicodeScalars.first ?? Unicode.Scalar(0)
+                        )
+                })
 
             // Try to open each device and query its capabilities
             for deviceName in videoDevices {
@@ -398,8 +439,15 @@ private func yuvToRGB(y: UInt8, u: UInt8, v: UInt8) -> (r: UInt8, g: UInt8, b: U
 ///   - yuyvSRGBData: Raw YUYV SRGB frame data
 ///   - width: Frame width
 ///   - height: Frame height
+///   - bytesPerLine: Bytes per row in the buffer; defaults to `width * 2`
 /// - Returns: RGB data (3 bytes per pixel)
-public func yuyvSRGBToRGB(yuyvSRGBData: Data, width: Int, height: Int) throws -> [JPEG.RGB] {
+public func yuyvSRGBToRGB(
+    yuyvSRGBData: Data,
+    width: Int,
+    height: Int,
+    bytesPerLine: Int? = nil
+) throws -> [JPEG.RGB] {
+    let bytesPerLine = bytesPerLine ?? width * 2
     guard yuyvSRGBData.count % 4 == 0 else {
         throw VideoError.invalidData(message: "Width must be even")
     }
@@ -412,7 +460,7 @@ public func yuyvSRGBToRGB(yuyvSRGBData: Data, width: Int, height: Int) throws ->
     // Process two pixels at a time (4 bytes YUYV -> 6 bytes RGB)
     for y in 0..<height {
         for x in stride(from: 0, to: width, by: 2) {
-            let index = (y * width + x) * 2
+            let index = y * bytesPerLine + x * 2
             guard index + 3 < yuyvSRGBData.count else { break }
 
             // Extract YUYV values for two pixels

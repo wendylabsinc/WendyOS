@@ -76,8 +76,13 @@ private let V4L2_CAP_VIDEO_CAPTURE: UInt32 = 0x0000_0001
 private let V4L2_BUF_TYPE_VIDEO_CAPTURE: UInt32 = 1
 private let V4L2_MEMORY_MMAP: UInt32 = 1
 private let V4L2_PIX_FMT_MJPEG: UInt32 = 0x4750_4A4D  // 'MJPG'
+private let V4L2_PIX_FMT_YUYV: UInt32 = 0x5659_5559  // 'YUYV'
 
-/// Captures MJPG frames from a V4L2 device on a dedicated thread.
+/// Captures frames from a V4L2 device on a dedicated thread.
+///
+/// The app asks for MJPG. A shared camera (the agent's virtual camera) gives
+/// YUYV at its own size instead, which `S_FMT` reports back; the app then
+/// reads the size from the result and encodes only the frames it samples.
 ///
 /// The device is kept streaming continuously so exposure/white balance can
 /// settle (one-shot captures return green/garbage frames on many UVC
@@ -159,8 +164,19 @@ final class LinuxCamera: @unchecked Sendable {
         guard ioctl(fd, UInt(WENDY_VIDIOC_S_FMT), &format) >= 0 else {
             throw CameraError(description: "VIDIOC_S_FMT failed: errno \(errno)")
         }
-        guard format.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG else {
-            throw CameraError(description: "Camera does not support MJPG frames.")
+        let pixelFormat = format.fmt.pix.pixelformat
+        guard pixelFormat == V4L2_PIX_FMT_MJPEG || pixelFormat == V4L2_PIX_FMT_YUYV else {
+            throw CameraError(
+                description:
+                    "Camera gave pixel format \(fourCC(pixelFormat)); only MJPG and YUYV are supported."
+            )
+        }
+        // The camera may not give the size we asked for; use what it gave.
+        let frameWidth = Int(format.fmt.pix.width)
+        let frameHeight = Int(format.fmt.pix.height)
+        let bytesPerLine = Int(format.fmt.pix.bytesperline)
+        if pixelFormat == V4L2_PIX_FMT_YUYV {
+            print("Camera delivers YUYV \(frameWidth)x\(frameHeight); encoding sampled frames to JPEG")
         }
 
         var reqbuf = v4l2_requestbuffers()
@@ -230,9 +246,20 @@ final class LinuxCamera: @unchecked Sendable {
 
             if shouldSample {
                 lastSampledAt = now
-                let jpeg = withStandardHuffmanTables(
-                    Data(bytes: mapped[Int(buffer.index)].pointer, count: Int(buffer.bytesused))
-                )
+                let source = mapped[Int(buffer.index)]
+                let jpeg: Data
+                if pixelFormat == V4L2_PIX_FMT_YUYV {
+                    jpeg = try jpegFromYUYV(
+                        UnsafeRawBufferPointer(start: source.pointer, count: Int(buffer.bytesused)),
+                        width: frameWidth,
+                        height: frameHeight,
+                        bytesPerLine: bytesPerLine
+                    )
+                } else {
+                    jpeg = withStandardHuffmanTables(
+                        Data(bytes: source.pointer, count: Int(buffer.bytesused))
+                    )
+                }
                 let frame = FrameCapture(capturedAt: now, jpeg: jpeg)
                 buffer.bytesused = 0
                 self.buffer.append(frame)
@@ -245,6 +272,12 @@ final class LinuxCamera: @unchecked Sendable {
                 throw CameraError(description: "VIDIOC_QBUF failed: errno \(errno)")
             }
         }
+    }
+
+    private func fourCC(_ value: UInt32) -> String {
+        let bytes = (0..<4).map { UInt8((value >> (8 * UInt32($0))) & 0xFF) }
+        let text = String(bytes: bytes, encoding: .ascii) ?? ""
+        return text.isEmpty ? String(format: "0x%08X", value) : "'\(text)'"
     }
 
     private func listCaptureDevices() -> [(path: String, name: String)] {
