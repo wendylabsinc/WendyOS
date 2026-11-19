@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
@@ -40,6 +41,9 @@ func TestBlankFrame_IsBlackInEveryFormat(t *testing.T) {
 }
 
 func TestShareNodeIoctlNumbers(t *testing.T) {
+	if vidiocSCtrl != 0xC008561C || v4l2LoopbackCidKeepFormat != 0x0098f900 || unsafe.Sizeof(v4l2Control{}) != 8 {
+		t.Fatal("keep_format ioctl constants drifted")
+	}
 	if vidiocSubscribeEvent != 0x4020565A || vidiocDqevent != 0x80885659 ||
 		v4l2EventClientUsage != 0x10E00001 || v4l2EventSubFlSendInitial != 1 || shareNodeBuffers != 2 {
 		t.Fatal("share node constants drifted from the values Proof 1 measured")

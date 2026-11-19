@@ -122,26 +122,11 @@ func expectCount(t *testing.T, counts <-chan uint32, want uint32, what string) {
 }
 
 func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
-	unavailable := func(format string, args ...any) {
-		t.Helper()
-		if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
-			t.Fatalf("required "+format, args...)
-		}
-		t.Skipf(format+" (set WENDY_GSTREAMER_REQUIRED=1 to fail instead of skipping)", args...)
-	}
-	if os.Geteuid() != 0 {
-		unavailable("root, to create a v4l2loopback node")
-	}
-	if info, err := os.Stat("/dev/v4l2loopback"); err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		unavailable("loaded v4l2loopback module (/dev/v4l2loopback): %v", err)
-	}
-	if version, err := os.ReadFile("/sys/module/v4l2loopback/version"); err != nil || !strings.HasPrefix(strings.TrimSpace(string(version)), "0.15.") {
-		unavailable("v4l2loopback 0.15.x: version=%q err=%v", bytes.TrimSpace(version), err)
-	}
+	requireShareModule(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-	path := createPixelsFixtureNode(t, ctx, zap.NewNop())
+	path := createShareFixtureNode(t, ctx, zap.NewNop())
 
 	mode := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30}
 	w, err := openShareNode(zap.NewNop(), path, mode)
@@ -223,6 +208,109 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 		case _, open = <-counts:
 		case <-deadline:
 			t.Fatal("Counts() not closed after Close")
+		}
+	}
+}
+
+// requireShareModule skips, or fails under WENDY_GSTREAMER_REQUIRED=1, unless
+// the real v4l2loopback module and root are available.
+func requireShareModule(t *testing.T) {
+	t.Helper()
+	unavailable := func(format string, args ...any) {
+		t.Helper()
+		if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
+			t.Fatalf("required "+format, args...)
+		}
+		t.Skipf(format+" (set WENDY_GSTREAMER_REQUIRED=1 to fail instead of skipping)", args...)
+	}
+	if os.Geteuid() != 0 {
+		unavailable("root, to create a v4l2loopback node")
+	}
+	if info, err := os.Stat("/dev/v4l2loopback"); err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		unavailable("loaded v4l2loopback module (/dev/v4l2loopback): %v", err)
+	}
+	if version, err := os.ReadFile("/sys/module/v4l2loopback/version"); err != nil || !strings.HasPrefix(strings.TrimSpace(string(version)), "0.15.") {
+		unavailable("v4l2loopback 0.15.x: version=%q err=%v", bytes.TrimSpace(version), err)
+	}
+}
+
+func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
+	requireShareModule(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	path := createShareFixtureNode(t, ctx, zap.NewNop())
+
+	mode := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30}
+	fill := func(seed byte) []byte {
+		f := make([]byte, mode.frameBytes())
+		for i := range f {
+			f[i] = byte(i*3) + seed
+		}
+		return f
+	}
+	w, err := openShareNode(zap.NewNop(), path, mode)
+	if err != nil {
+		t.Fatalf("openShareNode: %v", err)
+	}
+	if err := w.WriteFrame(fill(1), 1_000_000_000); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The writer is away. The node must still look like a camera.
+	reader := openShareTestReader(t, path)
+	var caps v4l2Capability
+	if err := reader.ioctl(vidiocQueryCap, unsafe.Pointer(&caps)); err != nil {
+		t.Fatalf("QUERYCAP: %v", err)
+	}
+	if !caps.hasVideoCapture() {
+		t.Fatalf("node is not a capture device while the writer is away: caps %#x device caps %#x", caps.Capabilities, caps.DeviceCaps)
+	}
+	var got v4l2Format
+	got.Type = v4l2BufTypeVideoCapture
+	if err := reader.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
+		t.Fatalf("G_FMT while the writer is away: %v", err)
+	}
+	if got.Width != 640 || got.Height != 480 || got.PixelFormat != v4l2PixFmtYUYV {
+		t.Fatalf("G_FMT = %dx%d %s, want 640x480 YUYV", got.Width, got.Height, fourccName(got.PixelFormat))
+	}
+	// An app asking for another size is told the locked mode.
+	other := v4l2Format{Type: v4l2BufTypeVideoCapture, Width: 320, Height: 240, PixelFormat: v4l2PixFmtYUYV, Field: v4l2FieldNone}
+	if err := reader.ioctl(vidiocSFmt, unsafe.Pointer(&other)); err != nil {
+		t.Fatalf("S_FMT while the writer is away: %v", err)
+	}
+	if other.Width != 640 || other.Height != 480 || other.PixelFormat != v4l2PixFmtYUYV {
+		t.Fatalf("S_FMT to 320x240 gave %dx%d %s, want the locked 640x480 YUYV", other.Width, other.Height, fourccName(other.PixelFormat))
+	}
+	if err := reader.start(); err != nil {
+		t.Fatalf("reader STREAMON while the writer is away: %v", err)
+	}
+
+	// The writer returns (an agent restart) and the same reader gets its frame.
+	w2, err := openShareNode(zap.NewNop(), path, mode)
+	if err != nil {
+		t.Fatalf("re-opening the writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w2.Close() })
+	want := fill(9)
+	if err := w2.WriteFrame(want, 2_000_000_000); err != nil {
+		t.Fatalf("WriteFrame after re-attach: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatal("the new frame did not reach the reader within 2s")
+		}
+		frame, _ := reader.next(remaining)
+		if bytes.Equal(frame, want) {
+			return
+		}
+		// Anything else must be the stale last frame from before the restart.
+		if !bytes.Equal(frame, fill(1)) {
+			t.Fatal("reader received a frame that is neither the stale one nor the new one")
 		}
 	}
 }

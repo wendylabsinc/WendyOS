@@ -29,6 +29,7 @@ type loopbackHarness struct {
 	nodes        map[int]bool // nr -> exists
 	addNodeCalls []addNodeCall
 	addNodeErr   error
+	shareCalls   []addNodeCall
 	removeCalls  []int
 
 	// removeSignal, if set by a test, receives the removed nr each time
@@ -73,6 +74,16 @@ func (h *loopbackHarness) deps() loopbackDeps {
 				return h.addNodeErr
 			}
 			h.addNodeCalls = append(h.addNodeCalls, addNodeCall{nr: nr, label: label})
+			h.nodes[nr] = true
+			return nil
+		},
+		addShareNode: func(nr int, label string) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.addNodeErr != nil {
+				return h.addNodeErr
+			}
+			h.shareCalls = append(h.shareCalls, addNodeCall{nr: nr, label: label})
 			h.nodes[nr] = true
 			return nil
 		},
@@ -1523,5 +1534,32 @@ func TestAllocateAuxNodeNumber_BandExhausted(t *testing.T) {
 	}
 	if _, err := l.AllocateAuxNodeNumber(); !errors.Is(err, ErrBandExhausted) {
 		t.Errorf("AllocateAuxNodeNumber() error = %v, want ErrBandExhausted", err)
+	}
+}
+
+// A share node goes through the announce_all_caps=1 add; every other node
+// keeps the exclusive-caps add. (The flag itself is set in
+// newLoopbackConfig, covered by the Linux test.)
+func TestLoopback_EnsureShareNodeUsesTheShareAdd(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, _ := newTestLoopback(t, h)
+	ctx := context.Background()
+
+	if err := l.EnsureAuxNode(ctx, 90, "aux"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.EnsureShareNode(ctx, 91, "share"); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotent.
+	if err := l.EnsureShareNode(ctx, 91, "share"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.addNodeCalls) != 1 || h.addNodeCalls[0].nr != 90 {
+		t.Fatalf("aux adds = %+v, want only node 90", h.addNodeCalls)
+	}
+	if len(h.shareCalls) != 1 || h.shareCalls[0].nr != 91 || h.shareCalls[0].label != "share" {
+		t.Fatalf("share adds = %+v, want exactly node 91", h.shareCalls)
 	}
 }

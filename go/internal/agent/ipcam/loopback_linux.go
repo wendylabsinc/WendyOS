@@ -105,11 +105,12 @@ const (
 
 func defaultLoopbackDeps() loopbackDeps {
 	return loopbackDeps{
-		statControl: statLoopbackControl,
-		modprobe:    modprobeLoopback,
-		addNode:     addLoopbackNode,
-		removeNode:  removeLoopbackNode,
-		nodeExists:  loopbackNodeExists,
+		statControl:  statLoopbackControl,
+		modprobe:     modprobeLoopback,
+		addNode:      addLoopbackNode,
+		addShareNode: addLoopbackShareNode,
+		removeNode:   removeLoopbackNode,
+		nodeExists:   loopbackNodeExists,
 	}
 }
 
@@ -167,19 +168,23 @@ func openLoopbackControl() (*os.File, error) {
 // same doc comment, but a stray node is expensive to leave behind, so it is
 // removed defensively rather than assumed away.
 func addLoopbackNode(nr int, label string) error {
+	return addLoopbackNodeWith(nr, label, 0)
+}
+
+// addLoopbackShareNode adds a node with announce_all_caps=1, so it advertises
+// CAPTURE even while no writer streams.
+func addLoopbackShareNode(nr int, label string) error {
+	return addLoopbackNodeWith(nr, label, 1)
+}
+
+func addLoopbackNodeWith(nr int, label string, announceAllCaps int32) error {
 	f, err := openLoopbackControl()
 	if err != nil {
 		return err
 	}
 	defer f.Close() //nolint:errcheck
 
-	cfg := v4l2LoopbackConfig{
-		outputNr:   int32(nr),
-		maxOpeners: 8,
-		// announceAllCaps left 0: exclusive-caps semantics, matching the
-		// exclusive_caps=1 module parameter modprobeLoopback requests.
-	}
-	setCardLabel(&cfg, label)
+	cfg := newLoopbackConfig(nr, label, announceAllCaps)
 
 	ret, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), uintptr(v4l2LoopbackCtlAdd), uintptr(unsafe.Pointer(&cfg)))
 	if errno != 0 {
@@ -193,6 +198,19 @@ func addLoopbackNode(nr int, label string) error {
 		return fmt.Errorf("V4L2LOOPBACK_CTL_ADD nr=%d: kernel created nr=%d instead; removed it", nr, int(ret))
 	}
 	return nil
+}
+
+// newLoopbackConfig builds the CTL_ADD request. announceAllCaps is 0 for camera
+// nodes: exclusive-caps semantics, matching the exclusive_caps=1 module
+// parameter modprobeLoopback requests. Share nodes pass 1.
+func newLoopbackConfig(nr int, label string, announceAllCaps int32) v4l2LoopbackConfig {
+	cfg := v4l2LoopbackConfig{
+		outputNr:        int32(nr),
+		maxOpeners:      8,
+		announceAllCaps: announceAllCaps,
+	}
+	setCardLabel(&cfg, label)
+	return cfg
 }
 
 // removeLoopbackNode issues V4L2LOOPBACK_CTL_REMOVE. Unlike ADD, it takes the

@@ -147,9 +147,12 @@ type loopbackDeps struct {
 	// call here, so callers (and their tests) only ever see one attempt.
 	modprobe func(ctx context.Context) error
 
-	addNode    func(nr int, label string) error
-	removeNode func(nr int) error
-	nodeExists func(nr int) bool // stat /dev/video<nr>
+	addNode func(nr int, label string) error
+	// addShareNode is addNode with announce_all_caps=1, for per-app share
+	// nodes that must stay a capture device while their writer is away.
+	addShareNode func(nr int, label string) error
+	removeNode   func(nr int) error
+	nodeExists   func(nr int) bool // stat /dev/video<nr>
 }
 
 // Loopback manages the v4l2loopback nodes that back container-visible camera
@@ -868,6 +871,21 @@ func (l *Loopback) EnsureAuxNode(_ context.Context, nr int, label string) error 
 		return nil
 	}
 	return l.deps.addNode(nr, label)
+}
+
+// EnsureShareNode creates the node at nr for an app's camera share if it does
+// not already exist. It is EnsureAuxNode with one difference: the node is
+// created with announce_all_caps=1, so it stays a capture device (with the
+// format its writer locked in) while no writer is attached, e.g. during an
+// agent restart. A missing module is "nothing to do", as for EnsureAuxNode.
+func (l *Loopback) EnsureShareNode(_ context.Context, nr int, label string) error {
+	if err := l.Available(); err != nil {
+		return nil
+	}
+	if l.deps.nodeExists(nr) {
+		return nil
+	}
+	return l.deps.addShareNode(nr, label)
 }
 
 // RemoveAuxNode deletes the node at nr. Unlike RemoveCamera there is no pump
