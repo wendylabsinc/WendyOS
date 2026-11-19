@@ -73,6 +73,11 @@ run_share() {
 }
 # In a private mount namespace of its own: a cover that misses the target
 # namespace (the no-setns control) mounts there, never on the runner's host.
+# --propagation private matters as much as --mount: the runner's / is a shared
+# mount (systemd makes it one), and a new namespace's mounts start as peers of
+# it, so a mount there would propagate back to the host's /dev. It is
+# unshare's default for --mount since util-linux 2.27; it is spelled out so the
+# control's safety does not rest on that default.
 run_cover() {
   sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted WENDY_DEVCOVER_REQUIRED=1 \
     python3 .github/scripts/run-owned-media-test.py --timeout 120 -- \
@@ -87,7 +92,8 @@ require_passed() {
       exit 1
     fi
   done
-  if grep -q '^--- SKIP:' "$log"; then
+  # Subtests report their skips indented.
+  if grep -Eq '^[[:space:]]*--- SKIP:' "$log"; then
     echo 'A required camera sharing regression was skipped' >&2
     exit 1
   fi
