@@ -22,6 +22,7 @@ from api_review import RISKS, illustrative_excerpt, prior_state_digest, validate
 from review_diff import diff_lines
 import compatibility_review as compat
 import compatibility_state
+import unified_review as unified
 
 COMMENT_MARKER = "<!-- ai-api-review:v1 -->"
 PART_MARKER_RE = re.compile(r"<!-- ai-api-review:part=(\d+)/(\d+) -->")
@@ -95,10 +96,14 @@ def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
         raise ValueError("API review result has invalid decisions or testing risk")
     matched_prior_ids: dict[str, bool] = {}
     for decision in result["decisions"]:
-        if not isinstance(decision, dict) or set(decision) != {
+        if not isinstance(decision, dict) or set(decision) not in ({
             *DECISION_FIELDS, "prior_ids", "relationship", "reason",
-        }:
+        }, { *DECISION_FIELDS, *unified.EXTRA_FIELDS, "prior_ids", "relationship", "reason" }):
             raise ValueError("API decision has unexpected fields")
+        if unified.EXTRA_FIELDS <= decision.keys():
+            unified.validate_item({k: decision[k] for k in unified.BASE_FIELDS | unified.EXTRA_FIELDS}, resolved=True)
+        elif result.get("unified_review"):
+            raise ValueError("Unified result contains a legacy item")
         if decision["category"] not in CATEGORIES or decision["impact"] not in IMPACTS:
             raise ValueError("API decision has an invalid category or impact")
         relationship, candidates, reason = (decision["relationship"], decision["prior_ids"], decision["reason"])
@@ -150,7 +155,7 @@ def revision_marker(result: dict) -> str:
 
 
 def semantic_decision(decision: dict) -> dict:
-    return {field: decision[field] for field in DECISION_FIELDS}
+    return {field: decision[field] for field in (*DECISION_FIELDS, *sorted(unified.EXTRA_FIELDS)) if field in decision}
 
 
 def decision_id(decision: dict) -> str:
@@ -159,18 +164,20 @@ def decision_id(decision: dict) -> str:
 
 def state_marker(record: dict) -> str:
     payload = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    if unified.EXTRA_FIELDS <= record["decision"].keys() and len(payload) > 32_000:
+        raise ValueError("API decision state exceeds its marker limit; prior review was preserved")
     encoded = base64.urlsafe_b64encode(zlib.compress(payload, level=9)).decode().rstrip("=")
     return f"<!-- api-decision:v2:{encoded} -->"
 
 
 def decode_state_marker(encoded: str) -> dict:
-    if len(encoded) > 20_000:
+    if len(encoded) > 48_000:
         raise ValueError("API decision state marker is too large")
     try:
         compressed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
         decompressor = zlib.decompressobj()
-        raw = decompressor.decompress(compressed, 12_001)
-        if decompressor.unconsumed_tail or decompressor.unused_data or not decompressor.eof or len(raw) > 12_000:
+        raw = decompressor.decompress(compressed, 32_001)
+        if decompressor.unconsumed_tail or decompressor.unused_data or not decompressor.eof or len(raw) > 32_000:
             raise ValueError("API decision state marker expands beyond its limit")
         value = json.loads(raw)
     except (ValueError, TypeError, zlib.error) as error:
@@ -185,7 +192,7 @@ def decode_state_marker(encoded: str) -> dict:
             or type(value["rendered_checked"]) is not bool
             or value["state"] not in {"pending", "accepted", "needs_re_review", "withdrawn"}
             or not isinstance(value["decision"], dict)
-            or set(value["decision"]) != set(DECISION_FIELDS)):
+            or set(value["decision"]) not in (set(DECISION_FIELDS), set(DECISION_FIELDS) | unified.EXTRA_FIELDS)):
         raise ValueError("API decision state marker has invalid state")
     # Reuse publication validation for all semantic decision fields.
     fake = {
@@ -338,7 +345,8 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
         prior = by_id.get(candidates[0]) if len(candidates) == 1 and relationship != "ambiguous" else None
         reason = decision["reason"]
         if (prior is not None and relationship == "unchanged"
-                and prior["decision"]["impact"] != semantic["impact"]):
+                and (prior["decision"]["impact"] != semantic["impact"]
+                     or unified.concern_changed(prior["decision"], semantic))):
             relationship = "changed"
             reason = "Compatibility impact changed; fresh human review is required."
         if prior is None:
@@ -385,8 +393,11 @@ def compatibility_coverage_blocks(result):
     blocks = []
     for row in result.get("compatibility_coverage", []):
         for direction, coverage in row["directions"].items():
-            blocks.append([f"#### Coverage — batch {row['batch']}, `{direction}`", "",
-                           f"**{coverage['status']}**. {inline(coverage['reason'])}", "",
+            label = {"old_caller_new_peer": "Existing consumer with changed peer", "new_caller_old_peer": "Changed consumer with older peer",
+                     "state_reader_writer": "Saved-state readers and writers"}[direction] if result.get("unified_review") else f"`{direction}`"
+            status = {"partial": "Partially assessed", "not_assessed": "Not assessed"}[coverage["status"]] if result.get("unified_review") else coverage["status"]
+            blocks.append([f"#### Coverage — batch {row['batch']}, {label}", "",
+                           f"**{status}**. {inline(coverage['reason'])}", "",
                            *(["Evidence: " + ", ".join(compatibility_code_link(ref) for ref in coverage["evidence"]), ""] if coverage["evidence"] else [])])
     return blocks
 
@@ -459,7 +470,7 @@ def compatibility_lines(result, *, include_findings=True, include_coverage=True)
 def review_intro(result: dict, repo: str) -> list[str]:
     head = result["head_sha"]
     return [
-        "# API decisions", "",
+        "# API and compatibility changes" if result.get("unified_review") else "# API decisions", "",
         f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
         + (f"Input coverage: {result['source_coverage']['source_files']}/{result['changed_files']} source files, "
          f"{result['source_coverage']['source_bytes']:,}/{result['diff_bytes']:,} diff bytes reviewed; "
@@ -534,6 +545,8 @@ def withdrawn_lines(withdrawn: list[dict]) -> list[str]:
 
 
 def render_comment(result: dict, repo: str, previous: list[dict] | None = None, diff: str = "") -> str:
+    if result.get("unified_review"):
+        return unified.render(result, repo, previous or [])[0]
     current, withdrawn = reconcile_records(result, previous or [])
     lines = review_intro(result, repo)
     if not result["decisions"]:
@@ -570,6 +583,8 @@ def part_index(body: str) -> int:
 
 def render_continuations(result: dict, repo: str, previous: list[dict] | None = None, diff: str = "") -> list[str]:
     """Pack whole decision blocks; never truncate prose, evidence, or checkboxes."""
+    if result.get("unified_review"):
+        return unified.render(result, repo, previous or [], multipart=True)
     current_records, withdrawn = reconcile_records(result, previous or [])
     limit = MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES
     compat_records = compatibility_state.current(result) if "compatibility_findings" in result else []
@@ -648,7 +663,7 @@ def render_primary(result: dict, repo: str, pr_number: int, comment_ids: list[in
         f"**Complete checklist:** {len(result['decisions'])} decisions across {len(comment_ids)} comments.", "",
         *[f"- [Checklist part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
           for index, identifier in enumerate(comment_ids, start=1)],
-        "", *compatibility_lines(result, include_findings=False, include_coverage=False),
+        "", *(unified.overview(result) if result.get("unified_review") else compatibility_lines(result, include_findings=False, include_coverage=False)),
         revision_marker(result),
         f"<!-- ai-api-review:part=0/{len(comment_ids)} -->", COMMENT_MARKER, "",
     ]
@@ -806,7 +821,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
             diff = diff_bytes.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError("API review diff is not valid UTF-8") from error
-    if result["status"] == "complete" and "compatibility_findings" in result:
+    if result["status"] == "complete" and ("compatibility_findings" in result or result.get("unified_review")):
         from api_review import evidence_catalog, parse_diff, finding_catalog
         from review_sources import source_diff
         source, _ = source_diff(diff)
@@ -816,7 +831,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         if (not isinstance(supplemental, dict) or any(not isinstance(ref, dict) or ref.get("visibility") != "public" for ref in supplemental.values())
                 or any(ref.get("repository") != repo or ref.get("revision") not in {head_sha, result["diff_base_sha"]} for ref in supplemental.values())):
             raise ValueError("Publication requires public same-repository immutable evidence")
-        compat.validate_aggregate(result, changed, supplemental)
+        compat.validate_aggregate(unified.projection(result) if result.get("unified_review") else result, changed, supplemental)
     root = f"/repos/{repo}"
     issue = f"{root}/issues/{pr_number}"
     pull_path = f"{root}/pulls/{pr_number}"
@@ -931,7 +946,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
 
     labels = []
     open_compatibility = any(record["status"] in {"open", "not_assessed"}
-                             for record in compatibility_state.current(result)) if "compatibility_findings" in result else False
+                             for record in compatibility_state.current(unified.projection(result) if result.get("unified_review") else result)) if "compatibility_findings" in result or result.get("unified_review") else False
     if result["decisions"] or open_compatibility:
         ensure_label(API_LABEL)
         labels.append(API_LABEL["name"])
@@ -967,7 +982,10 @@ def main() -> int:
         publish_parser.add_argument("--" + option, required=True)
     publish_parser.add_argument("--pr-number", required=True, type=int)
     publish_parser.add_argument("--dry-run", action="store_true")
+    publish_parser.add_argument("--rendered-output", help="Marker-free example Markdown; requires --dry-run")
     args = parser.parse_args()
+    if args.command == "publish" and args.rendered_output and not args.dry_run:
+        raise ValueError("Rendered example export requires dry-run publication")
     token = os.environ.get("GH_TOKEN")
     if not token:
         raise ValueError("GH_TOKEN is required for API review state")
@@ -988,6 +1006,8 @@ def main() -> int:
                        args.expected_base_sha, diff_bytes, github)
     if args.dry_run:
         print(github.summary())
+        if args.rendered_output:
+            Path(args.rendered_output).write_text(unified.preview(github.bodies), encoding="utf-8")
     return 0 if complete else 1
 
 

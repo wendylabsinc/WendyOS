@@ -77,7 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          for filename in api_review.py api_review_comment.py compatibility_review.py compatibility_state.py review_diff.py review_sources.py; do
+          for filename in api_review.py api_review_comment.py compatibility_review.py compatibility_state.py unified_review.py review_diff.py review_sources.py; do
             if [[ ! -s "$scripts_dir/$filename" ]]; then
               echo "::error::AI Compatibility Review is not activated on trusted main; no PR-head automation fallback is permitted."
               exit 1
@@ -165,6 +165,7 @@ jobs:
             # rejected at job entry; this step receives no GH_TOKEN/model key.
             # Offline SDK transport and GitHub fixtures; no keys or model calls.
             python3 "$run_test"
+            python3 review-automation/.github/scripts/unified_review_test.py
           else
             echo "::notice::Full-run regression tests activate when trusted automation reaches the base branch."
           fi
@@ -260,6 +261,7 @@ jobs:
           python3 .github/scripts/api_review_workflow_test.py
           python3 .github/scripts/compatibility_review_test.py
           python3 .github/scripts/compatibility_state_test.py
+          python3 .github/scripts/unified_review_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
@@ -346,7 +348,8 @@ jobs:
             --result "$RUNNER_TEMP/api-review-result.json" \
             --repo "$REPO" --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            --rendered-output "$RUNNER_TEMP/api-review-preview.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/api-review-preview.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Guard candidate privacy before artifact upload
         if: always() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
@@ -358,6 +361,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: api-review-validation-${{ github.run_id }}
-          path: ${{ runner.temp }}/api-review-result.json
+          path: |
+            ${{ runner.temp }}/api-review-result.json
+            ${{ runner.temp }}/api-review-preview.md
           if-no-files-found: error
           retention-days: 14

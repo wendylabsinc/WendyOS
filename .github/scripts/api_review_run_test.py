@@ -19,13 +19,14 @@ import api_review
 import api_review_comment as comments
 from api_review_test import metadata, diff, decision, model_decision, HEAD_SHA, BASE_SHA, REPO, unassessed_fixture
 from api_review_comment_test import result, large_result, bot_comment, MultipartGitHub, pull
+from unified_review_test import fixture as unified_fixture, singleton_groups
 
 
 class FullRunTests(unittest.TestCase):
     def previous(self, legacy=False):
         data = result()
         data.update(head_sha="e" * 40, diff_sha256=hashlib.sha256(diff()).hexdigest(), diff_bytes=len(diff()),
-                    decisions=[dict(decision(title=f"Contract {index}"), prior_ids=[],
+                    decisions=[dict(decision(title=f"Contract {index}", impact="behavioral"), prior_ids=[],
                                     relationship="new", reason="") for index in range(11)])
         body = comments.render_comment(data, REPO, diff=diff().decode())
         if legacy:
@@ -66,7 +67,7 @@ class FullRunTests(unittest.TestCase):
             self.assertEqual(schema, transform_schema(copy.deepcopy(schema)))
             if len(requests) == 1:
                 response = {"risk": "mid", "decisions": [
-                    model_decision(title=f"Contract {index}", impact="additive" if impact_change else "breaking")
+                    model_decision(title=f"Contract {index}", impact="additive" if impact_change else "behavioral")
                     for index in range(11)]}
             else:
                 prompt = json.loads(payload["messages"][0]["content"])
@@ -103,6 +104,16 @@ class FullRunTests(unittest.TestCase):
                     current = dict(fixture.finding, prior_id=compatibility_prior_id,
                                    caller=[next(iter(fixture.changed))])
                     response.update({k:v for k,v in finding_response(current).items() if k.startswith("compatibility_")})
+            if len(requests) == 1:
+                if compatibility:
+                    # One source-backed concern belongs to the first item only.
+                    finding = response.pop("compatibility_findings")[0]
+                    response = unified_fixture(response)
+                    response["decisions"][0].update(concern=finding, impact="breaking")
+                else:
+                    response = unified_fixture(response)
+            else:
+                response = singleton_groups(response["matches"])
             return self.message(response)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -125,7 +136,7 @@ class FullRunTests(unittest.TestCase):
             output = json.loads((directory / "result.json").read_text())
             if compatibility and code == 0:
                 import compatibility_state as finding_state
-                carried = finding_state.current(output)
+                carried = finding_state.current(api_review.unified.projection(output))
                 self.assertEqual(len(carried), 1)
                 self.assertEqual(carried[0]["id"], compatibility_prior_id)
                 self.assertEqual(carried[0]["status"], "open")
@@ -152,7 +163,7 @@ class FullRunTests(unittest.TestCase):
             body = github.bodies[-1] if dry_run else github.posted_body()
             if dry_run:
                 self.assertEqual(source.mutations(), [])
-                expected_accepted = 9 if competing_claims else 10 if withdraw_prior else 11
+                expected_accepted = 9 if competing_claims else 10 if withdraw_prior or compatibility else 11
                 self.assertIn(f'"accepted": {expected_accepted}', github.summary())
             self.assertEqual(len(requests), 1 if failure == "initialization" else
                              3 if failure in {"invalid", "malformed_json"} else 2)
@@ -215,7 +226,7 @@ class FullRunTests(unittest.TestCase):
                     self.assertEqual(len(withdrawn), 1)
                     self.assertIsNotNone(withdrawn[0]["accepted_version"])
                 elif relationship == "unchanged" and not impact_change:
-                    self.assertEqual(body.count("- [x]"), 10 if late_checkbox else 11)
+                    self.assertEqual(body.count("- [x]"), 10 if late_checkbox or compatibility else 11)
                     self.assertEqual({r["id"] for r in current}, set(ids))
                     self.assertEqual({r["decision"]["title"]: r["id"] for r in current}, ids_by_title)
                 else:
@@ -247,7 +258,7 @@ class FullRunTests(unittest.TestCase):
                             "relationship": "changed", "reason": "Combined contract changed."}]}
         fixed = copy.deepcopy(bad)
         fixed["matches"][0].update(relationship="ambiguous", reason="Multiple plausible predecessors.")
-        responses = [unassessed_fixture({"risk": "high", "decisions": [model_decision(title="Combined contract")]}), bad, fixed]
+        responses = [unified_fixture(unassessed_fixture({"risk": "high", "decisions": [model_decision(title="Combined contract")]})), singleton_groups(bad["matches"]), singleton_groups(fixed["matches"])]
         requests = []
 
         def transport(request):

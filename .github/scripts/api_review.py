@@ -16,6 +16,7 @@ from typing import Any
 from review_diff import DiffBatch, DiffBatchError, diff_lines, split_diff
 import compatibility_review as compat
 import compatibility_state
+import unified_review as unified
 
 # Each batch includes every source byte and any repeated fragment context.
 MAX_DIFF_BYTES = 200_000
@@ -222,6 +223,8 @@ def model_schema(evidence: dict[int, dict[str, Any]], assessment=None) -> dict[s
         "properties": {"evidence_id": {"type": "integer", **({"enum": list(evidence)} if evidence else {})}},
     }
     if assessment is not None:
+        if assessment.get("unified"):
+            return unified.schema(schema, evidence, assessment)
         fields = compat.schema(evidence, assessment["catalog"], assessment.get("previous"))
         schema["properties"].update(fields)
         schema["required"].extend(fields)
@@ -266,7 +269,10 @@ def user_prompt(metadata: dict[str, Any], diff: str, repo: str) -> str:
     if assessment is not None:
         data.update(prior_compatibility_findings=assessment.get("previous", []), source_evidence=assessment["supplied"], context_limits=assessment["limits"],
                     review_revisions=assessment["revisions"], test_evidence=assessment["tests"],
-                    response_schema=model_schema(evidence, assessment), response_limits=compat.RESPONSE_LIMITS)
+                    response_schema=model_schema(evidence, assessment), response_limits=(
+                        {"decisions": 100, "concerns": compat.MAX_FINDINGS, "references_per_list": compat.MAX_REFERENCES,
+                         "item_text_characters": 1600, "concern_text_characters": compat.MAX_FINDING_TEXT,
+                         "coverage_reason_characters": compat.MAX_COVERAGE_REASON} if assessment.get("unified") else compat.RESPONSE_LIMITS))
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -377,6 +383,8 @@ def provider_text(message, *, reconciliation=False):
 def validate_model_response(payload, parsed, assessment=None):
     """Common response path for SDK execution and private one-call calibration."""
     evidence = evidence_catalog(parsed)
+    if assessment is not None and assessment.get("unified"):
+        return unified.validate(payload, parsed, assessment)
     if assessment is not None:
         payload = compat.validate(payload, finding_catalog(evidence, assessment), assessment["catalog"], previous=assessment.get("previous"))
     return validate_payload(resolve_evidence(payload, evidence), parsed)
@@ -520,7 +528,7 @@ def review_model(metadata: dict[str, Any], diff: str, repo: str, model: str) -> 
                 model=model,
                 max_tokens=16000,
                 output_config={"effort": MODEL_EFFORT, "format": {"type": "json_schema", "schema": schema}},
-                system=[{"type": "text", "text": system_prompt(metadata.get("_private_policy")), "cache_control": {"type": "ephemeral"}}],
+                system=[{"type": "text", "text": unified.PROMPT if assessment and assessment.get("unified") else system_prompt(metadata.get("_private_policy")), "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as error:
@@ -529,12 +537,18 @@ def review_model(metadata: dict[str, Any], diff: str, repo: str, model: str) -> 
             raise ReviewError("Claude API request failed; no complete API review was produced") from error
         # A truncated response can omit decisions. Do not treat it as a complete
         # result that can be repaired merely by completing its JSON syntax.
+        if "_model_responses" in metadata:
+            metadata["_model_responses"].append({"stage": "evidence", "batch": metadata.get("review_batch", {}).get("number", 1),
+                "attempt": attempt + 1, "stop_reason": message.stop_reason,
+                "text": "".join(block.text for block in message.content if block.type == "text" and isinstance(block.text, str))})
         response = provider_text(message)
         payload: Any = None
         try:
             payload = decode_model_json(response)
             payload = validate_model_response(payload, parsed, assessment)
-            if attempt:
+            if attempt and assessment and assessment.get("unified"):
+                unified.preserve(previous_payload, payload, parsed, assessment)
+            elif attempt:
                 validate_repair(resolve_evidence(previous_payload, evidence, strict=False), payload, parsed)
                 if assessment is not None:
                     preserve_findings(previous_payload, payload, finding_catalog(evidence, assessment), assessment["catalog"], assessment.get("previous"))
@@ -587,7 +601,11 @@ def review_batches(metadata: dict[str, Any], batches: list[DiffBatch], repo: str
             batch_metadata["review_batch"]["fragment_context"] = batch.context
         batch_metadata["_batch_evidence"] = parsed_batches[index]
         batch_metadata["_batch_continues_line"] = bool(batch.start_column)
-        payload = validate_payload(review_model(batch_metadata, batch.text, repo, model), parsed_batches[index])
+        payload = review_model(batch_metadata, batch.text, repo, model)
+        if metadata.get("_compatibility", {}).get("unified"):
+            payload = unified.validate(payload, parsed_batches[index], metadata["_compatibility"], resolved=True)
+            return unified.projection(payload)
+        payload = validate_payload(payload, parsed_batches[index])
         if "_compatibility" in metadata:
             payload = compat.validate(payload, finding_catalog(evidence_catalog(parsed_batches[index]), metadata["_compatibility"]), metadata["_compatibility"]["catalog"], resolved=True, previous=metadata["_compatibility"].get("previous"))
         return payload
@@ -634,12 +652,14 @@ def review_batches(metadata: dict[str, Any], batches: list[DiffBatch], repo: str
         unique = {}
         for finding in combined["compatibility_findings"]:
             key = finding.get("prior_id") or json.dumps(finding, sort_keys=True)
-            if key in unique and unique[key] != finding:
+            if key in unique and unique[key] != finding and not metadata["_compatibility"].get("unified"):
                 raise ReviewError("Conflicting compatibility identity across batches; prior review preserved")
             unique[key] = finding
         combined["compatibility_findings"] = list(unique.values())
         if len(combined["compatibility_findings"]) > compat.MAX_FINDINGS:
             raise ReviewError("Combined compatibility findings exceed limit; nothing was truncated")
+    if metadata.get("_compatibility", {}).get("unified"):
+        combined.pop("compatibility_findings")
     return combined
 
 
@@ -876,7 +896,7 @@ def command_review(args: argparse.Namespace) -> int:
         "status": "incomplete", "head_sha": args.expected_head_sha.lower(),
         "base_sha": args.expected_base_sha.lower(), "diff_base_sha": "", "diff_sha256": "",
         "prior_state_sha256": "", "changed_files": 0, "diff_bytes": 0, "review_batches": 0,
-        "error": "", "risk": "high", "decisions": [],
+        "error": "", "risk": "high", "decisions": [], "model": args.model,
     }
     try:
         metadata = json.loads(pathlib.Path(args.metadata).read_text(encoding="utf-8"))
@@ -907,14 +927,20 @@ def command_review(args: argparse.Namespace) -> int:
         entries, limits = compat.collect_context(getattr(args, "source_repository", None), args.repo,
                                                  metadata["diff_base_sha"], metadata["head"]["sha"], parsed)
         metadata = prepare_review(metadata, diff, args.repo, entries, limits, previous=prior.get("compatibility_findings", []))
+        metadata["_compatibility"]["unified"] = True
+        result["model_responses"] = []
+        metadata["_model_responses"] = result["model_responses"]
+        result["unified_review"] = True
         result["compatibility_previous"] = prior.get("compatibility_findings", [])
         result["input_visibility"] = metadata["_compatibility"]["visibility"]
         result["context_limits"] = metadata["_compatibility"]["limits"]
         result["evidence_catalog"] = metadata["_compatibility"]["catalog"]
-        result["model_call_policy"] = "One evidence call per batch; at most one semantic shape repair per batch and one reconciliation plus at most one shape repair if prior decisions exist. SDK retries disabled."
+        result["model_call_policy"] = "One evidence call per batch and one consolidation/identity call when items exist; at most one shape repair each. SDK retries disabled."
         payload = review_batches(metadata, batches, args.repo, args.model, parsed)
-        payload["decisions"] = reconcile_decisions(payload["decisions"], prior, args.model)
+        payload["model_responses"] = result["model_responses"]
+        payload = unified.reconcile(payload, prior, args.model)
         result.update(payload)
+        compat.validate_aggregate(unified.projection(result), finding_catalog(evidence_catalog(parsed), metadata["_compatibility"]), metadata["_compatibility"]["catalog"])
         result["status"] = "complete"
     except (ReviewError, DiffBatchError) as error:
         result["error"] = str(error)
