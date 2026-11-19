@@ -313,10 +313,15 @@ func profileGone(err error) bool {
 	return errors.As(err, &exitErr) && exitErr.ExitCode() == nmcliNoSuchConnection
 }
 
+// classifyKeyMgmt maps a saved profile's key-mgmt to a security type. A profile
+// for an open network has no security setting and so no key-mgmt; "none" is
+// NetworkManager's value for static WEP.
 func classifyKeyMgmt(k string) agentpb.WiFiSecurityType {
 	switch strings.ToLower(strings.TrimSpace(k)) {
-	case "none", "":
+	case "":
 		return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN
+	case "none":
+		return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WEP
 	case "wpa-psk":
 		return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK
 	case "sae":
