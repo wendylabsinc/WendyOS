@@ -572,6 +572,7 @@ func TestCameraShareChoice(t *testing.T) {
 		{"camera direct", []Entitlement{cam("camera", "direct")}, CameraShareDirect},
 		{"video direct", []Entitlement{cam("video", "direct")}, CameraShareDirect},
 		{"legacy mode", []Entitlement{cam("camera", "legacy")}, CameraShareShared},
+		{"leading space", []Entitlement{cam("camera", " direct")}, CameraShareShared},
 		{"case variant", []Entitlement{cam("camera", "Direct")}, CameraShareShared},
 		{"two entries one direct", []Entitlement{cam("camera", ""), cam("camera", "direct")}, CameraShareDirect},
 		{"non-camera direct mode", []Entitlement{cam("network", "direct")}, ""},

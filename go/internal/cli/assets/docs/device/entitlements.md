@@ -344,7 +344,7 @@ spi.close()
 
 ## Camera
 
-Omit `mode` and the app shares the camera with other apps at its shared mode: one size up to 1280x720, one rate, and YUYV for MJPEG cameras. `{ "type": "camera", "mode": "direct" }` gives this app the real device, with its own formats, sizes and controls. Only `"direct"`, written exactly, gives the real device; any other value shares the camera.
+Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
 
 ```json
 { "type": "camera", "mode": "direct" }
