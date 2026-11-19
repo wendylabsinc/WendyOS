@@ -1142,3 +1142,49 @@ func TestCameraViewGivesUpAfterRepeatedRestarts(t *testing.T) {
 		t.Fatalf("streams opened = %d, want %d", opens, cameraRejoinAttempts)
 	}
 }
+
+func TestRenderCameraList_ShowsSharedApps(t *testing.T) {
+	prev := jsonOutput
+	jsonOutput = false
+	t.Cleanup(func() { jsonOutput = prev })
+	devices := []*agentpb.VideoDevice{
+		{Id: 0, Name: "Logitech Brio 100", Path: "/dev/video0", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB},
+		{Id: 2, Name: "Other", Path: "/dev/video2", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB},
+	}
+	shares := map[string]map[string]string{"/dev/video0": {
+		"shared_with": "cv-a, cv-b",
+		"share_state": "cv-a (reading), cv-b (idle)",
+	}}
+	var out bytes.Buffer
+	if err := renderCameraList(&out, devices, false, shares); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "shared: cv-a (reading), cv-b (idle)") {
+		t.Errorf("missing shared status:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "ready") {
+		t.Errorf("unshared camera should stay ready:\n%s", out.String())
+	}
+}
+
+func TestRenderCameraList_AgentWithoutShareKeysShowsReady(t *testing.T) {
+	prev := jsonOutput
+	jsonOutput = false
+	t.Cleanup(func() { jsonOutput = prev })
+	devices := []*agentpb.VideoDevice{
+		{Id: 0, Name: "Logitech Brio 100", Path: "/dev/video0", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB},
+	}
+	// An older agent returns rows with no share keys; a failed call returns nil.
+	for _, shares := range []map[string]map[string]string{
+		nil,
+		{"/dev/video0": {"transport": "usb"}},
+	} {
+		var out bytes.Buffer
+		if err := renderCameraList(&out, devices, false, shares); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.String(), "shared:") || !strings.Contains(out.String(), "ready") {
+			t.Errorf("want plain ready status:\n%s", out.String())
+		}
+	}
+}

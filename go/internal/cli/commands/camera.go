@@ -146,7 +146,7 @@ func newCameraListCmd() *cobra.Command {
 				devices = resp.GetDevices()
 			}
 
-			return renderCameraList(cmd.OutOrStdout(), devices, all)
+			return renderCameraList(cmd.OutOrStdout(), devices, all, cameraShareRows(ctx, conn))
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Run a discovery round on the device before listing")
@@ -161,7 +161,10 @@ func newCameraListCmd() *cobra.Command {
 // Network cameras without a login are left out unless all is set: discovery
 // finds every ONVIF camera on the networks the device is on, and on a shared
 // LAN most belong to someone else. The table says how many it hid.
-func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool) error {
+//
+// shares maps a device path to the agent's camera-sharing properties; nil, or
+// rows without the share keys (an older agent), leave every status as it was.
+func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool, shares map[string]map[string]string) error {
 	hidden := 0
 	if !all {
 		devices, hidden = withoutUnpairedCameras(devices)
@@ -189,12 +192,32 @@ func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool) err
 			transportLabel(d.GetTransport()),
 			d.GetName(),
 			cameraWhere(d),
-			cameraStatus(d),
+			cameraStatus(d, shares),
 		})
 	}
 	fmt.Fprint(w, tui.RenderTable(headers, rows))
 	printHiddenCamerasHint(w, hidden)
 	return nil
+}
+
+// cameraShareRows asks the agent for its camera capability rows and returns
+// their properties by device path. Sharing is extra detail, so a failed call
+// or an agent without the call returns nil and the list shows today's status.
+func cameraShareRows(ctx context.Context, conn *grpcclient.AgentConnection) map[string]map[string]string {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	category := "camera"
+	resp, err := conn.AgentService.ListHardwareCapabilities(ctx, &agentpb.ListHardwareCapabilitiesRequest{CategoryFilter: &category})
+	if err != nil {
+		return nil
+	}
+	rows := make(map[string]map[string]string)
+	for _, c := range resp.GetCapabilities() {
+		if c.GetDevicePath() != "" {
+			rows[c.GetDevicePath()] = c.GetProperties()
+		}
+	}
+	return rows
 }
 
 // withoutUnpairedCameras drops network cameras that have no stored login and
