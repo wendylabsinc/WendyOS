@@ -252,6 +252,7 @@ func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openShareNode: %v", err)
 	}
+	t.Cleanup(func() { _ = w.Close() }) // runs before the node's removal
 	if err := w.WriteFrame(fill(1), 1_000_000_000); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}
@@ -273,8 +274,8 @@ func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
 	if err := reader.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
 		t.Fatalf("G_FMT while the writer is away: %v", err)
 	}
-	if got.Width != 640 || got.Height != 480 || got.PixelFormat != v4l2PixFmtYUYV {
-		t.Fatalf("G_FMT = %dx%d %s, want 640x480 YUYV", got.Width, got.Height, fourccName(got.PixelFormat))
+	if got.Width != 640 || got.Height != 480 || got.PixelFormat != v4l2PixFmtYUYV || got.BytesPerLine != 1280 {
+		t.Fatalf("G_FMT = %dx%d %s, %d bytes per line, want 640x480 YUYV, 1280", got.Width, got.Height, fourccName(got.PixelFormat), got.BytesPerLine)
 	}
 	// An app asking for another size is told the locked mode.
 	other := v4l2Format{Type: v4l2BufTypeVideoCapture, Width: 320, Height: 240, PixelFormat: v4l2PixFmtYUYV, Field: v4l2FieldNone}
