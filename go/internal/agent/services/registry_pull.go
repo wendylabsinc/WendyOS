@@ -56,9 +56,11 @@ import (
 //	release kind other than CONTAINER, unreadable OCI
 //	manifest, local staging or containerd import fails       APPLY_FAILED
 //	assignment expired before the pull (re)started           PULL_REFUSED
-//	imported, desired state RUNNING: nothing starts the app
-//	until starting it with its configuration exists          outcomeNotStarted
-//	imported, desired state STOPPED (install only)           APPLIED
+//	release definition missing, invalid, for another app or
+//	with several services; configuration not applicable      APPLY_FAILED
+//	create or start failed (the last applied statement's app
+//	is put back when this attempt replaced it)               APPLY_FAILED
+//	started (RUNNING) or created and stopped (STOPPED)       APPLIED
 //
 // The pull runs beside the postbox's command queue (pullJob): the
 // assignment's entry is decided at once as outcomePulling, and the pull's
@@ -189,6 +191,11 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	// A resumed pull starts without a failure, where pullRetry checks the
 	// expiry: nothing is fetched under a statement that has expired.
 	if !p.trustedNow().Before(a.GetExpiresAt().AsTime()) {
+		// Not applied; but a crash may have cut a swap short, or come after
+		// this statement's app had started (expiredResume).
+		if p.expiredResume(ctx, a) {
+			return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+		}
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED, "expired", errors.New("the assignment expired before its pull started")
 	}
 	// Named by a hash: the deployment id is cloud's string, not a path.
@@ -202,11 +209,20 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "stage", err
 	}
-	img, err := p.fetchRelease(ctx, id, a, dir, report)
-	if err == nil {
-		if err = p.control.ImportRelease(ctx, img); err != nil {
-			err = pullFailed("import", err)
+	// A release already on the device (a configuration-only revision, or an
+	// import a restart interrupted after it finished) is not fetched again.
+	var err error
+	if !p.control.HasRelease(ctx, a.GetAppId(), a.GetAppReleaseId(), a.GetManifestDigest()) {
+		var img ReleaseImage
+		img, err = p.fetchRelease(ctx, id, a, dir, report)
+		if err == nil {
+			if err = p.control.ImportRelease(ctx, img); err != nil {
+				err = pullFailed("import", err)
+			}
 		}
+	}
+	if err == nil {
+		err = p.startRelease(ctx, a)
 	}
 	if err != nil {
 		var f *pullFailure
@@ -215,11 +231,9 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 		}
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "pull", err
 	}
-	// The superseded releases go; a failure is retried (Removals).
+	// Only now, with the new release running (or installed), do the
+	// superseded releases go; a failure is retried (Removals).
 	p.removeReleases(ctx, a.GetAppId())
-	if a.GetDesiredState() == cloudpbv2.Running_RUNNING {
-		return outcomeNotStarted, "not_started", nil
-	}
 	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 }
 
@@ -333,6 +347,7 @@ func (p *Postbox) finishPull(ctx context.Context, a *cloudpbv2.DeviceAssignment,
 		}
 		done := *held
 		done.Pulled = true
+		done.Applied = outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED
 		st.Assignments = maps.Clone(st.Assignments)
 		st.Assignments[a.GetDeploymentId()] = &done
 		if o := st.Outcomes[a.GetAppId()]; o == nil || o.EntryID <= entryID {
@@ -378,9 +393,12 @@ func (p *Postbox) resumePulls(ctx context.Context, id *postboxIdentity) {
 	}
 }
 
-// removeReleases deletes app's releases that no held assignment uses, with
-// any container running one. A failure is kept in Removals and retried each
-// cycle, so no decrypted release stays on the device.
+// removeReleases deletes app's releases that no held assignment uses. While
+// the app has a live held deployment it only prunes: a release a container
+// still uses stays, so the running app is never removed by an update. With
+// none, the app's containers running a release go too. A failure is kept in
+// Removals and retried each cycle, so no decrypted release stays on the
+// device.
 func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 	// "" means every app's releases to RemoveReleases: only reset asks that.
 	if err := appconfig.ValidateAppID(app); err != nil {
@@ -396,7 +414,11 @@ func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 	}
 	p.mu.Unlock()
 	slices.Sort(keep)
-	err := p.control.RemoveReleases(ctx, app, keep)
+	remove := p.control.RemoveReleases
+	if len(keep) > 0 {
+		remove = p.control.PruneReleases
+	}
+	err := remove(ctx, app, keep)
 	if err != nil {
 		p.logger.Warn("removing an app's registry releases failed; retrying next cycle", zap.String("audit", "postbox"), zap.String("app_id", app), zap.Error(err))
 	}

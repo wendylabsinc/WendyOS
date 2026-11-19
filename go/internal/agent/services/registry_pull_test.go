@@ -231,18 +231,79 @@ type importRecorder struct {
 	err       error
 	removed   []removal
 	removeErr error
+	// The start step: releases already on the device, the app definition
+	// every release carries (default {"appId":"web"}), and each start.
+	present   map[string]bool
+	appConfig []byte
+	starts    []ReleaseStart
+	startErr  func(ReleaseStart) error
+	// beforeReplace: startErr failures happen before the container is
+	// replaced (a refused validation). app is the app's container as the
+	// fake runtime holds it.
+	beforeReplace bool
+	app           *fakeApp
+	arts          *fakeArtifacts // the registry this recorder's postbox pulls from
+	digests       []string       // the manifest digests the definition was read for
 }
 
-// removal is one RemoveReleases call.
+func (r *importRecorder) HasRelease(_ context.Context, _, release, _ string) bool {
+	return r.present[release]
+}
+
+func (r *importRecorder) ReleaseAppConfig(_ context.Context, app, _, digest string) ([]byte, error) {
+	r.digests = append(r.digests, digest)
+	if r.appConfig != nil {
+		return r.appConfig, nil
+	}
+	return []byte(`{"appId":"` + app + `"}`), nil
+}
+
+// fakeApp is the app's container in the fake runtime.
+type fakeApp struct {
+	image         string
+	env           []string
+	running       bool
+	stoppedByUser bool
+}
+
+func (r *importRecorder) StartRelease(_ context.Context, s ReleaseStart) (bool, error) {
+	r.starts = append(r.starts, s)
+	var err error
+	if r.startErr != nil {
+		err = r.startErr(s)
+	}
+	if err != nil && r.beforeReplace {
+		return false, err
+	}
+	r.app = &fakeApp{image: ReleaseImageName(s.AppID, s.ReleaseID), env: s.Env, running: err == nil && s.Run, stoppedByUser: err == nil && !s.Run}
+	return true, err
+}
+
+func (r *importRecorder) AppState(context.Context, string) AppContainerState {
+	if r.app == nil {
+		return AppContainerState{}
+	}
+	return AppContainerState{Image: r.app.image, Env: r.app.env, Present: true, Running: r.app.running, StoppedByUser: r.app.stoppedByUser}
+}
+
+// removal is one RemoveReleases call, or a PruneReleases call (prune).
 type removal struct {
-	app  string
-	keep []string
+	app   string
+	keep  []string
+	prune bool
 }
 
-func (r removal) equal(o removal) bool { return r.app == o.app && slices.Equal(r.keep, o.keep) }
+func (r removal) equal(o removal) bool {
+	return r.app == o.app && slices.Equal(r.keep, o.keep) && r.prune == o.prune
+}
 
 func (r *importRecorder) RemoveReleases(_ context.Context, app string, keep []string) error {
-	r.removed = append(r.removed, removal{app, keep})
+	r.removed = append(r.removed, removal{app: app, keep: keep})
+	return r.removeErr
+}
+
+func (r *importRecorder) PruneReleases(_ context.Context, app string, keep []string) error {
+	r.removed = append(r.removed, removal{app, keep, true})
 	return r.removeErr
 }
 
@@ -273,7 +334,7 @@ func refuseArtifacts(string, string, string, string) (cloudpbv2.DeviceArtifactSe
 }
 
 func (f *pbFixture) withArtifacts(a *fakeArtifacts) *importRecorder {
-	rec := &importRecorder{postboxControl: f.p.control}
+	rec := &importRecorder{postboxControl: f.p.control, arts: a}
 	f.p.control = rec
 	f.p.retry = time.Millisecond
 	f.p.dialArtifacts = func(string, string, string, string) (cloudpbv2.DeviceArtifactServiceClient, io.Closer, error) {
