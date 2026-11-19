@@ -234,6 +234,15 @@ func TestDataDeleteJSONPrintsOneResponsePerEpisode(t *testing.T) {
 	if _, err := runDataDeleteCmd(t, "--all"); err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("--json without --force must refuse rather than prompt: %v", err)
 	}
+	// What the agent answers for each episode, in the shared --json dialect.
+	var responses []string
+	for _, episode := range agent.episodes {
+		var encoded bytes.Buffer
+		if err := encodeProtoJSON(&encoded, &agentpbv2.DataDeleteEpisodeResponse{Episode: episode, UploadState: "pending"}); err != nil {
+			t.Fatal(err)
+		}
+		responses = append(responses, strings.TrimSuffix(encoded.String(), "\n"))
+	}
 	out, err := runDataDeleteCmd(t, "--all", "--force")
 	if err != nil {
 		t.Fatal(err)
@@ -242,8 +251,9 @@ func TestDataDeleteJSONPrintsOneResponsePerEpisode(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("want one JSON line per deleted episode, got:\n%s", out)
 	}
-	for _, line := range lines {
+	for i, line := range lines {
 		var response struct {
+			Deleted bool `json:"deleted"`
 			Episode struct {
 				ID string `json:"id"`
 			} `json:"episode"`
@@ -252,6 +262,39 @@ func TestDataDeleteJSONPrintsOneResponsePerEpisode(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &response); err != nil || response.Episode.ID == "" || response.UploadState != "pending" {
 			t.Fatalf("line %q is not a DeleteEpisode response: %v", line, err)
 		}
+		// Without "deleted" the line is an episode and an upload state, which
+		// reads as a listing of an episode that still exists.
+		if !response.Deleted {
+			t.Fatalf("line %q does not say the episode was deleted", line)
+		}
+		// The agent's response is carried unchanged after it.
+		if want := `{"deleted":true,` + strings.TrimPrefix(responses[i], "{"); line != want {
+			t.Fatalf("line %d:\n got %s\nwant %s", i, line, want)
+		}
+	}
+}
+
+// TestDataDeleteJSONWithNothingToDeleteKeepsStdoutEmpty: under --json stdout
+// carries one line per deleted episode and nothing else, so no lines means
+// nothing was deleted. The sentence that says why goes to stderr.
+func TestDataDeleteJSONWithNothingToDeleteKeepsStdoutEmpty(t *testing.T) {
+	agent := &deleteAgent{inProgress: []*agentpbv2.DataEpisode{{Id: "20261106T160000Z-rec", State: "recording"}}}
+	serveDataOnSocket(t, agent)
+	original := jsonOutput
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = original })
+	var notices strings.Builder
+	swapNoticeOut(t, &notices)
+
+	out, err := runDataDeleteCmd(t, "--all", "--force")
+	if err != nil {
+		t.Fatalf("--all with nothing to delete must still succeed: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("--json --all with nothing to delete wrote to stdout: %q", out)
+	}
+	if got, want := notices.String(), "No finalized episodes on this device; nothing to delete.\n"; got != want {
+		t.Fatalf("stderr notice = %q, want %q", got, want)
 	}
 }
 
