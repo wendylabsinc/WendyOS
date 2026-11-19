@@ -559,6 +559,64 @@ func TestValidateJSON_CameraLegacyKeysNoWarnings(t *testing.T) {
 	}
 }
 
+func TestCameraShareChoice(t *testing.T) {
+	cam := func(typ, mode string) Entitlement { return Entitlement{Type: typ, Mode: mode} }
+	tests := []struct {
+		name string
+		in   []Entitlement
+		want string
+	}{
+		{"none", []Entitlement{{Type: "gpu"}}, ""},
+		{"nil", nil, ""},
+		{"camera", []Entitlement{cam("camera", "")}, CameraShareShared},
+		{"camera direct", []Entitlement{cam("camera", "direct")}, CameraShareDirect},
+		{"video direct", []Entitlement{cam("video", "direct")}, CameraShareDirect},
+		{"legacy mode", []Entitlement{cam("camera", "legacy")}, CameraShareShared},
+		{"case variant", []Entitlement{cam("camera", "Direct")}, CameraShareShared},
+		{"two entries one direct", []Entitlement{cam("camera", ""), cam("camera", "direct")}, CameraShareDirect},
+		{"non-camera direct mode", []Entitlement{cam("network", "direct")}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CameraShareChoice(tt.in); got != tt.want {
+				t.Fatalf("CameraShareChoice() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateJSON_CameraModeDirectNoWarnings(t *testing.T) {
+	for _, typ := range []string{"camera", "video"} {
+		data := []byte(`{"appId": "com.example.app", "entitlements": [{"type": "` + typ + `", "mode": "direct"}]}`)
+		if warnings := ValidateJSON(data); len(warnings) != typeWarnings(typ) {
+			t.Fatalf("%s: ValidateJSON() = %v", typ, warnings)
+		}
+	}
+}
+
+// typeWarnings is the number of warnings the entitlement type itself causes
+// (the video type is deprecated).
+func typeWarnings(typ string) int {
+	if typ == "video" {
+		return 1
+	}
+	return 0
+}
+
+func TestValidateJSON_CameraModeCaseVariantWarns(t *testing.T) {
+	for _, mode := range []string{"Direct", " direct"} {
+		data := []byte(`{"appId": "com.example.app", "entitlements": [{"type": "camera", "mode": "` + mode + `"}]}`)
+		warnings := ValidateJSON(data)
+		if len(warnings) != 1 || !strings.Contains(warnings[0], `is not "direct"`) {
+			t.Fatalf("mode %q: ValidateJSON() = %v, want one warning containing `is not \"direct\"`", mode, warnings)
+		}
+	}
+	data := []byte(`{"appId": "com.example.app", "entitlements": [{"type": "camera", "mode": "legacy"}]}`)
+	if warnings := ValidateJSON(data); len(warnings) != 0 {
+		t.Fatalf("legacy: ValidateJSON() = %v, want none", warnings)
+	}
+}
+
 func TestLoadFromFile_WithHooksPostStart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wendy.json")

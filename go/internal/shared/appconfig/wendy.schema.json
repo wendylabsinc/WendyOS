@@ -278,7 +278,8 @@
             },
             "mode": {
               "type": "string",
-              "description": "Video access mode."
+              "examples": ["direct"],
+              "description": "Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). \"direct\" gives this app the real device, with its own formats, sizes and controls."
             },
             "allowlist": {
               "type": "array",
@@ -336,7 +337,8 @@
             "type": { "const": "camera" },
             "mode": {
               "type": "string",
-              "description": "Camera access mode. Accepted for compatibility with the deprecated video entitlement."
+              "examples": ["direct"],
+              "description": "Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). \"direct\" gives this app the real device, with its own formats, sizes and controls."
             },
             "allowlist": {
               "type": "array",
