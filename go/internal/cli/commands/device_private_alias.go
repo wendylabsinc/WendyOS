@@ -28,6 +28,43 @@ type privateDeviceAlias struct {
 	uuid  string
 }
 
+func (a privateDeviceAlias) pinKey(tenant meshid.Tenant) string {
+	return "private-alias/" + tenant.String() + "/" + a.host
+}
+
+func (a privateDeviceAlias) legacyPinKeys() [2]string { return [2]string{a.host, a.label} }
+
+func privateAliasPinIdentity(cfg *config.Config, key string) (*certs.WendyIdentity, bool) {
+	pin, ok := cfg.DevicePinFor(key)
+	if !ok {
+		return nil, false
+	}
+	return expectedIdentityForPin(pin), true
+}
+
+func (a privateDeviceAlias) expectedIdentity(cfg *config.Config, tenant meshid.Tenant) (*certs.WendyIdentity, error) {
+	if identity, found := privateAliasPinIdentity(cfg, a.pinKey(tenant)); found {
+		if identity == nil || identity.EntityType != certs.EntityAsset || identity.TenantUUID != tenant.String() {
+			return nil, refuseIdentity("private device alias %q has an invalid saved binding for the selected organization", a.host)
+		}
+		return identity, nil
+	}
+	// Older aliases and verified enrollment used global name keys. Only a
+	// same-tenant binding can seed a new scoped pin.
+	var expected *certs.WendyIdentity
+	for _, key := range a.legacyPinKeys() {
+		identity, _ := privateAliasPinIdentity(cfg, key)
+		if identity == nil || identity.EntityType != certs.EntityAsset || identity.TenantUUID != tenant.String() {
+			continue
+		}
+		if expected != nil && !expected.SameEntity(*identity) {
+			return nil, refuseIdentity("private device alias %q has conflicting saved bindings", a.host)
+		}
+		expected = identity
+	}
+	return expected, nil
+}
+
 // Private device aliases select an enrolled identity, rather than asking the
 // operating system to resolve the private suffix. In particular, no desktop VPN
 // is necessary for CLI selection. The previous private namespace keeps its
@@ -245,19 +282,10 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 	if err != nil {
 		return nil, true, fmt.Errorf("private device aliases require a selected enrolled organization: %w", err)
 	}
-	// Only deterministic selected-name keys are consulted, never discovery aliases.
-	var expected *certs.WendyIdentity
-	for _, key := range []string{alias.host, alias.label} {
-		if pin, ok := cfg.DevicePinFor(key); ok {
-			identity := expectedIdentityForPin(pin)
-			if identity == nil || identity.EntityType != certs.EntityAsset || identity.TenantUUID != tenant.String() {
-				return nil, true, refuseIdentity("private device alias %q has a saved binding outside the selected organization", alias.host)
-			}
-			if expected != nil && !expected.SameEntity(*identity) {
-				return nil, true, refuseIdentity("private device alias %q has conflicting saved bindings", alias.host)
-			}
-			expected = identity
-		}
+	pinKey := alias.pinKey(tenant)
+	expected, err := alias.expectedIdentity(cfg, tenant)
+	if err != nil {
+		return nil, true, err
 	}
 	if alias.uuid != "" && expected != nil && expected.EntityID != alias.uuid {
 		return nil, true, refuseIdentity("private device alias %q does not match its saved device binding", alias.host)
@@ -274,10 +302,11 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		selected, _, err := privateAliasConnectMesh(ctx, candidate.mesh, suppress)
 		if err == nil {
 			if selected.Agent != nil {
-				if err := privateAliasEnforcePin(alias.host, selected.Agent.Addr, selected.Agent); err != nil {
+				if err := privateAliasEnforcePin(pinKey, selected.Agent.Addr, selected.Agent); err != nil {
 					selected.Close()
 					return nil, true, err
 				}
+				selected.PinKey, selected.Agent.DevicePinKey = pinKey, pinKey
 			}
 			return selected, true, nil
 		}
@@ -304,7 +333,7 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		if err := privateAliasPrepareAuth(ctx, auth); err != nil {
 			return nil, true, err
 		}
-		if auth.Certificates[0].TenantUUID() != tenant.String() {
+		if len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() != tenant.String() {
 			return nil, true, fmt.Errorf("selected organization changed during private alias connection")
 		}
 		selector := cloudDeviceSelector{Endpoint: auth.CloudGRPC, TenantUUID: tenant.String(), AssetUUID: candidate.cloud.GetId()}.String()
@@ -316,11 +345,12 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		if err != nil {
 			return nil, true, err
 		}
-		if err := privateAliasEnforcePin(alias.host, conn.Addr, conn); err != nil {
+		if err := privateAliasEnforcePin(pinKey, conn.Addr, conn); err != nil {
 			conn.Close()
 			return nil, true, err
 		}
-		return &SelectedDevice{Agent: conn, DefaultSelector: selector, PinKey: alias.host}, true, nil
+		conn.DevicePinKey = pinKey
+		return &SelectedDevice{Agent: conn, DefaultSelector: selector, PinKey: pinKey}, true, nil
 	}
 	return nil, true, fmt.Errorf("private device alias %q identifies %s but no reachable LAN, mesh or Cloud endpoint was found", alias.host, candidate.device.Principal())
 }
@@ -343,9 +373,10 @@ func connectPrivateAliasLAN(ctx context.Context, alias privateDeviceAlias, auth 
 		}
 	}
 	if len(addresses) == 0 {
-		return nil, errors.New("private alias has no LAN agent address")
+		return nil, &noAuthenticatedEndpointError{msg: "private alias has no LAN agent address"}
 	}
-	target := newDialTargetCandidates(alias.host, addresses)
+	pinKey := alias.pinKey(candidate.device.Tenant())
+	target := newDialTargetCandidates(pinKey, addresses)
 	identity := certs.WendyIdentity{TenantUUID: candidate.device.Tenant().String(), EntityType: certs.EntityAsset, EntityID: candidate.device.UUID().String(), Principal: candidate.device.Principal()}
 	if target.Expected != nil && !target.Expected.SameEntity(identity) {
 		return nil, refuseIdentity("private device alias %q changed identity", alias.host)
@@ -361,12 +392,12 @@ func connectPrivateAliasLAN(ctx context.Context, alias privateDeviceAlias, auth 
 		}
 		return nil, certs.ErrExpectedDeviceIdentity
 	}
-	if err := privateAliasEnforcePin(alias.host, addresses[0], conn); err != nil {
+	if err := privateAliasEnforcePin(pinKey, addresses[0], conn); err != nil {
 		conn.Close()
 		return nil, err
 	}
-	conn.Host, conn.DevicePinKey = alias.host, alias.host
-	return &SelectedDevice{Agent: conn, DefaultSelector: alias.host, PinKey: alias.host}, nil
+	conn.Host, conn.DevicePinKey = alias.host, pinKey
+	return &SelectedDevice{Agent: conn, DefaultSelector: alias.host, PinKey: pinKey}, nil
 }
 
 // A transport that answered and refused authentication must never be hidden by

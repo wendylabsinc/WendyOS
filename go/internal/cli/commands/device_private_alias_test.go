@@ -236,7 +236,8 @@ func TestPrivateDeviceAliasFrontDoorLANUsesExplicitIdentity(t *testing.T) {
 	}
 	host := "device-" + privateAliasDevice + ".wendy.internal"
 	selected, matched, err := connectNamedDeviceSelector(context.Background(), host, true)
-	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != host {
+	wantPin := "private-alias/" + privateAliasTenant + "/" + host
+	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != wantPin {
 		t.Fatalf("selection=%+v matched=%v err=%v calls=%d", selected, matched, err, calls)
 	}
 	cfg, _ := config.Load()
@@ -374,13 +375,98 @@ func TestPrivateDeviceAliasRejectsTruncatedFriendlyMeshDirectory(t *testing.T) {
 	}
 }
 
-func TestPrivateDeviceAliasSavedBindingRefusalPrecedesDiscovery(t *testing.T) {
-	privateAliasConfig(t, map[string]config.DevicePin{"jetson.wendy.internal": {Principal: certs.DeviceSPIFFEURI(privateAliasOtherTenant, privateAliasDevice)}})
+func TestPrivateDeviceAliasRejectsForeignIdentityInScopedPin(t *testing.T) {
+	key := "private-alias/" + privateAliasTenant + "/jetson.wendy.internal"
+	privateAliasConfig(t, map[string]config.DevicePin{key: {Principal: certs.DeviceSPIFFEURI(privateAliasOtherTenant, privateAliasDevice)}})
 	stubPrivateAliasNetwork(t, privateAliasSources{})
 	var called atomic.Bool
 	privateAliasLANBrowse = func(context.Context) ([]models.LANDevice, error) { called.Store(true); return nil, nil }
 	if _, matched, err := connectNamedDeviceSelector(context.Background(), "jetson.wendy.internal", true); !matched || !errors.Is(err, errDeviceIdentityRefused) || called.Load() {
 		t.Fatalf("foreign saved binding used discovery: matched=%v err=%v called=%v", matched, err, called.Load())
+	}
+}
+
+func TestPrivateDeviceAliasUsesSelectedTenantDespiteForeignLegacyPin(t *testing.T) {
+	const host = "jetson.wendy.internal"
+	currentPin := "private-alias/" + privateAliasTenant + "/" + host
+	foreignPin := "private-alias/" + privateAliasOtherTenant + "/" + host
+	foreign := config.DevicePin{Principal: certs.DeviceSPIFFEURI(privateAliasOtherTenant, privateAliasOtherDevice)}
+	privateAliasConfig(t, map[string]config.DevicePin{host: foreign, "jetson": foreign, foreignPin: foreign})
+	stubPrivateAliasNetwork(t, privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson")}})
+	oldConnect := connectDefaultCloudAssetV2Fn
+	t.Cleanup(func() { connectDefaultCloudAssetV2Fn = oldConnect })
+	connectDefaultCloudAssetV2Fn = func(_ context.Context, _ *config.AuthConfig, asset *cloudpbv2.Asset, _ string) (*grpcclient.AgentConnection, error) {
+		if asset.GetId() != privateAliasDevice {
+			t.Fatalf("selected an asset outside the current alias binding")
+		}
+		return &grpcclient.AgentConnection{IsMTLS: true}, nil
+	}
+	privateAliasEnforcePin = func(key, _ string, _ *grpcclient.AgentConnection) error {
+		if key != currentPin {
+			t.Errorf("pin enforcement used %q, want %q", key, currentPin)
+		}
+		return nil
+	}
+	selected, matched, err := connectNamedDeviceSelector(context.Background(), host, true)
+	if err != nil || !matched || selected == nil || selected.PinKey != currentPin {
+		t.Fatalf("selection=%+v matched=%v err=%v", selected, matched, err)
+	}
+}
+
+func TestPrivateDeviceAliasAddresslessLANFallsBackToCloud(t *testing.T) {
+	privateAliasConfig(t, nil)
+	lan := privateAliasTestLAN(privateAliasDevice, "jetson")
+	lan.IPAddress = ""
+	stubPrivateAliasNetwork(t, privateAliasSources{
+		lan:   []models.LANDevice{lan},
+		cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson")},
+	})
+	oldConnect := connectDefaultCloudAssetV2Fn
+	t.Cleanup(func() { connectDefaultCloudAssetV2Fn = oldConnect })
+	cloudCalled := false
+	connectDefaultCloudAssetV2Fn = func(context.Context, *config.AuthConfig, *cloudpbv2.Asset, string) (*grpcclient.AgentConnection, error) {
+		cloudCalled = true
+		return &grpcclient.AgentConnection{IsMTLS: true}, nil
+	}
+	_, matched, err := connectNamedDeviceSelector(context.Background(), "jetson.wendy.internal", true)
+	if err != nil || !matched || !cloudCalled {
+		t.Fatalf("selection matched=%v Cloud called=%v err=%v", matched, cloudCalled, err)
+	}
+}
+
+func TestPrivateDeviceAliasUnpinKeepsOtherTenant(t *testing.T) {
+	const host = "jetson.wendy.internal"
+	alias, _, err := parsePrivateDeviceAlias(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := meshid.ParseTenant(privateAliasTenant)
+	otherTenant, _ := meshid.ParseTenant(privateAliasOtherTenant)
+	current := config.DevicePin{Principal: certs.DeviceSPIFFEURI(privateAliasTenant, privateAliasDevice)}
+	foreign := config.DevicePin{Principal: certs.DeviceSPIFFEURI(privateAliasOtherTenant, privateAliasOtherDevice)}
+	privateAliasConfig(t, map[string]config.DevicePin{
+		alias.pinKey(tenant): current, alias.pinKey(otherTenant): foreign,
+		host: current, "jetson": foreign,
+	})
+	cmd := newDeviceUnpinCmd()
+	cmd.SetArgs([]string{host})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := cfg.DevicePinFor(alias.pinKey(tenant)); found {
+		t.Fatal("current organization pin survived unpin")
+	}
+	if _, found := cfg.DevicePinFor(host); found {
+		t.Fatal("current organization's legacy alias pin survived unpin")
+	}
+	for _, key := range []string{alias.pinKey(otherTenant), "jetson"} {
+		if pin, found := cfg.DevicePinFor(key); !found || pin != foreign {
+			t.Errorf("foreign pin at %q changed", key)
+		}
 	}
 }
 
