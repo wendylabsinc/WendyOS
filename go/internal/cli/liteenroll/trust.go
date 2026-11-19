@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
-const maxTrustBundle = 16384
+const maxTrustBundle = literelay.MaxCABundle
 
 // ProvisionTrust explicitly installs operator-supplied CA bundles in the device
 // configuration. No certificates received from an endpoint become trust roots.
@@ -76,45 +76,7 @@ func trustHTTPClient(httpsRoots []byte) (*http.Client, error) {
 	return &http.Client{Transport: transport, Timeout: 15 * time.Second}, nil
 }
 
-func validateTrustBundle(data []byte) error {
-	if len(data) == 0 || len(data) > maxTrustBundle {
-		return fmt.Errorf("must contain 1–%d bytes of PEM CA certificates", maxTrustBundle)
-	}
-	count := 0
-	for rest := bytes.TrimSpace(data); len(rest) > 0; {
-		if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
-			return fmt.Errorf("unexpected data outside a PEM certificate")
-		}
-		end := bytes.Index(rest, []byte("-----END CERTIFICATE-----"))
-		if end < 0 {
-			return fmt.Errorf("unterminated PEM certificate")
-		}
-		end += len("-----END CERTIFICATE-----")
-		block, tail := pem.Decode(rest[:end])
-		if block == nil || len(bytes.TrimSpace(tail)) != 0 || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-			return fmt.Errorf("invalid PEM certificate")
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return fmt.Errorf("invalid certificate: %w", err)
-		}
-		if !cert.BasicConstraintsValid || !cert.IsCA {
-			return fmt.Errorf("trust entries must be CA certificates")
-		}
-		if now := time.Now(); now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
-			return fmt.Errorf("CA certificate is not currently valid")
-		}
-		count++
-		if count > 8 {
-			return fmt.Errorf("at most eight CA certificates are supported per bundle")
-		}
-		rest = bytes.TrimSpace(rest[end:])
-	}
-	if count == 0 {
-		return fmt.Errorf("no CA certificates")
-	}
-	return nil
-}
+func validateTrustBundle(data []byte) error { return literelay.ValidateCABundle(data) }
 
 // CheckTrustSupport runs before minting a credential so older firmware cannot
 // silently ignore the new configuration fields.
