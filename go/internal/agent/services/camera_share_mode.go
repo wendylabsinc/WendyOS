@@ -48,6 +48,10 @@ type shareRecord struct {
 // records it in the manifest (isCameraCaptureRefusal) instead of failing.
 var errCameraShared = errors.New("camera is shared with apps and runs only at its shared mode")
 
+// shareRestartCause is what a stream ended by a share takeover is told
+// restarted its camera, in place of the episode capture's wording.
+const shareRestartCause = "an app started sharing the camera, so its producer restarted at the camera's shared mode"
+
 // sharedModeOf reports whether any container shares the camera at path, its
 // shared mode, and the sorted IDs of the containers that share it. It reads the
 // live records on every call, so the rules lift as soon as the last record for
@@ -124,13 +128,12 @@ func (s *VideoService) applySharedModeToCapture(path string, req *agentpb.Stream
 	return withoutStreamParams(req), &mode, nil
 }
 
-// runsAtSharedMode reports whether a hub's producer runs at mode: at defaults,
-// which is what the shared mode is, or at the mode's size with its rate or none.
+// runsAtSharedMode reports whether a hub's producer runs at mode: whatever the
+// hub's request named, the mode admits, exactly as applySharedMode admits a
+// viewer's. A hub at defaults runs at the shared mode, which is the camera's
+// default mode; so does one a viewer started with only --fps 30.
 func runsAtSharedMode(h *deviceHub, mode sharedMode) bool {
-	if h.width == 0 && h.height == 0 && h.framerate == 0 {
-		return true
-	}
-	return h.width == mode.Width && h.height == mode.Height && (h.framerate == 0 || h.framerate == mode.FPS)
+	return mode.admits(&agentpb.StreamVideoRequest{Width: h.width, Height: h.height, Framerate: h.framerate})
 }
 
 // heldByCaptureLocked reports whether any current subscriber is an episode
@@ -146,24 +149,71 @@ func (h *deviceHub) heldByCaptureLocked() bool {
 	return false
 }
 
+// captureFreeLocked returns a channel closed once no episode capture holds h's
+// parameters (releaseCaptureHoldLocked). Callers hold h.mu and have seen
+// heldByCaptureLocked report true.
+func (h *deviceHub) captureFreeLocked() <-chan struct{} {
+	if h.captureFree == nil {
+		h.captureFree = make(chan struct{})
+	}
+	return h.captureFree
+}
+
+// releaseCaptureHoldLocked closes captureFree when the last explicit episode
+// capture has left. unsubscribe calls it after every removal. Callers hold h.mu.
+func (h *deviceHub) releaseCaptureHoldLocked() {
+	if h.captureFree != nil && !h.heldByCaptureLocked() {
+		close(h.captureFree)
+		h.captureFree = nil
+	}
+}
+
+// firstClosed returns a channel closed as soon as either a or b is. Its
+// goroutine ends then too; for a share wait that is when the recording leaves
+// or the hub ends, whichever is first.
+func firstClosed(a, b <-chan struct{}) <-chan struct{} {
+	out := make(chan struct{})
+	go func() {
+		select {
+		case <-a:
+		case <-b:
+		}
+		close(out)
+	}()
+	return out
+}
+
 // joinHubForShare is a share node's join. It subscribes for pixels at
 // defaults; a hub that already runs at the shared mode is joined as it is. A
 // hub that runs at another mode is waited for when a recording holds it
 // (*shareWaitError, at once) and otherwise taken over: its explicit viewers'
 // streams end with a message that names the shared mode, its parameter-less
-// subscribers rejoin, and the camera restarts at defaults. It never blocks for
-// longer than one hubTeardownTimeout.
+// subscribers rejoin, and the camera restarts at defaults.
+//
+// It never waits on a recording, but it is not instant: each of its
+// maxHubRetries attempts can wait on a dying hub inside getOrCreateHubKind (up
+// to maxHubRetries × hubTeardownTimeout), and a takeover waits up to one more
+// hubTeardownTimeout for the old producer to let go. With today's constants
+// the worst case is about 6 s; the usual case is no wait, or one takeover.
 func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode) (shareSubscription, error) {
 	req := &agentpb.StreamVideoRequest{DeviceId: devID}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
 		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, true)
-		if err != nil {
+		switch {
+		case err == nil && runsAtSharedMode(h, mode):
+			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil
+		case err == nil:
+			h.unsubscribe(id)
+		case errors.Is(err, errPixelsUnavailable) && s.liveHubAtOtherMode(path, mode):
+			// The producer has no decoded tap at the mode a viewer chose: a
+			// size MJPEG does not cover and whose raw frame is too large, say.
+			// The shared mode has one (shareDecisionFor chose it from the tap),
+			// so the camera is taken over exactly as for any other mode.
+		default:
+			// Any other failure, or a pixel refusal at the shared mode itself:
+			// a takeover would change nothing, so the pump is told why.
 			return nil, err
 		}
-		if runsAtSharedMode(h, mode) {
-			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil
-		}
-		h.unsubscribe(id)
 		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode)
 		if err != nil {
 			return nil, err
@@ -174,6 +224,15 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 		// The hub went, or now runs at the shared mode; join from the top.
 	}
 	return nil, status.Error(codes.Unavailable, "video device hub churned during subscription")
+}
+
+// liveHubAtOtherMode reports whether a live hub for path runs at a mode the
+// shared mode does not admit.
+func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, ok := s.hubs[path]
+	return ok && h.ctx.Err() == nil && !runsAtSharedMode(h, mode)
 }
 
 // takeOverHubForShare is takeOverDefaultedHub with the roles swapped: the
@@ -196,10 +255,13 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 	}
 	old.mu.Lock()
 	if old.heldByCaptureLocked() {
+		// The camera is free to switch once the recording leaves, even when
+		// a parameter-less consumer keeps the hub running at its mode; the
+		// pump then joins again and takes the camera over.
 		wait := &shareWaitError{
 			Holder: hubHolderEpisodeCapture,
 			Params: describeStreamParams(old.width, old.height, old.framerate),
-			Done:   old.done,
+			Done:   firstClosed(old.captureFreeLocked(), old.done),
 		}
 		old.mu.Unlock()
 		s.mu.Unlock()
@@ -230,6 +292,7 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 		}
 	}
 	old.restarted = true
+	old.restartedForShare = true
 	old.mu.Unlock()
 	old.cancel()
 	s.mu.Unlock()

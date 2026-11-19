@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -506,5 +507,183 @@ func TestJoinHubForShare_AbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
 	}
 	if h := currentHub(svc, "/dev/video0"); h != nil && h != oldHub {
 		t.Fatal("the abandoned replacement hub was left registered")
+	}
+}
+
+// Review fix: a share waiting on a recording starts when the recording leaves,
+// even though a parameter-less viewer keeps the hub running at the recording's
+// mode. The viewer is restarted, not refused.
+func TestJoinHubForShare_StartsWhenTheRecordingLeavesAndAViewerStays(t *testing.T) {
+	svc := newTestVideoService(nil, nil)
+	fp := installFakeProducers(svc)
+	ctx := context.Background()
+
+	recReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
+	recHub, recID, _, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerHub, viewerID, viewerCh, err := svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0}, hubHolderStreamClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viewerHub != recHub {
+		t.Fatal("the parameter-less viewer did not join the recording's hub")
+	}
+	viewerDone := make(chan error, 1)
+	go func() {
+		defer viewerHub.unsubscribe(viewerID)
+		viewerDone <- svc.pumpFrames(newFakeVideoStream(ctx), viewerHub, viewerID, viewerCh)
+	}()
+	shareForTest(svc, "/dev/video0", "cv-a")
+
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	var wait *shareWaitError
+	if !errors.As(err, &wait) {
+		recHub.unsubscribe(recID)
+		t.Fatalf("err = %v, want *shareWaitError", err)
+	}
+	select {
+	case <-wait.Done:
+		t.Fatal("Done closed while the recording still runs")
+	default:
+	}
+
+	recHub.unsubscribe(recID)
+	select {
+	case <-wait.Done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Done did not close within 100 ms of the recording leaving")
+	}
+	if hubSubscriberCount(recHub) != 1 || recHub.ctx.Err() != nil {
+		t.Fatal("the test needs the viewer still on the recording's hub")
+	}
+
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	if err != nil {
+		t.Fatalf("join after the recording left: %v", err)
+	}
+	defer share.Leave()
+	if got := hubParams(currentHub(svc, "/dev/video0")); got != [3]uint32{} || fp.count() != 2 {
+		t.Fatalf("share hub at %v with %d producers, want a takeover at defaults", got, fp.count())
+	}
+
+	select {
+	case err := <-viewerDone:
+		if !streamreason.Has(err, streamreason.CameraProducerRestarted) {
+			t.Fatalf("parameter-less viewer ended with %v, want a producer restart", err)
+		}
+		if msg := status.Convert(err).Message(); !strings.Contains(msg, shareRestartCause) {
+			t.Fatalf("restart message %q does not say an app started sharing the camera", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the parameter-less viewer's stream was not restarted")
+	}
+	if viewerHub.subscriberErr(viewerID) != nil || viewerHub.terminalErr() != nil {
+		t.Fatal("the parameter-less viewer was given an error instead of a restart")
+	}
+}
+
+// Review fix: a hub a viewer started with only some parameters runs at the
+// shared mode when the mode admits them, so the share joins it as it is.
+func TestJoinHubForShare_JoinsAViewerHubTheModeAdmits(t *testing.T) {
+	for _, viewerReq := range []*agentpb.StreamVideoRequest{
+		{Framerate: 30},              // hub at (0,0,30)
+		{Width: 1280},                // hub at (1280,0,0)
+		{Width: 1280, Height: 720},   // hub at (1280,720,0)
+		{Width: 1280, Framerate: 30}, // hub at (1280,0,30)
+	} {
+		svc := newTestVideoService(nil, nil)
+		fp := installFakeProducers(svc)
+		ctx := context.Background()
+		hub, id, ch, err := svc.getOrCreateHub(ctx, "/dev/video0", viewerReq, hubHolderStreamClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shareForTest(svc, "/dev/video0", "cv-a")
+		share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+		if err != nil {
+			t.Fatalf("hub at %v: %v", hubParams(hub), err)
+		}
+		if currentHub(svc, "/dev/video0") != hub || fp.count() != 1 || !channelStillOpen(ch) || hub.wasRestarted() {
+			t.Errorf("hub at %v: the viewer was taken over although the mode admits it", hubParams(hub))
+		}
+		share.Leave()
+		hub.unsubscribe(id)
+	}
+}
+
+// refusePixelsAt makes fake producers whose capture has no decoded tap when
+// refuse says so, as a v4l2src plan has none at a size MJPEG does not cover
+// and whose raw frame is too large.
+func refusePixelsAt(svc *VideoService, refuse func(*agentpb.StreamVideoRequest) bool) {
+	start := svc.startProducer
+	svc.startProducer = func(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
+		if refuse(req) {
+			h.rawNotOffered(fixedReason("a 3840x2160 YUYV frame exceeds the raw frame limit"))
+		}
+		start(ctx, h, path, req)
+	}
+}
+
+// A viewer at a mode with no tap is still a viewer at another mode: the share
+// takes the camera over, since the shared mode has a tap.
+func TestJoinHubForShare_TakesOverAViewerModeWithNoTap(t *testing.T) {
+	svc := newTestVideoService(nil, nil)
+	fp := installFakeProducers(svc)
+	refusePixelsAt(svc, streamRequestAssertsParams)
+	ctx := context.Background()
+
+	viewerReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 3840, Height: 2160}
+	oldHub, viewerID, viewerCh, err := svc.getOrCreateHub(ctx, "/dev/video0", viewerReq, hubHolderStreamClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerDone := make(chan error, 1)
+	go func() {
+		defer oldHub.unsubscribe(viewerID)
+		viewerDone <- svc.pumpFrames(newFakeVideoStream(ctx), oldHub, viewerID, viewerCh)
+	}()
+	shareForTest(svc, "/dev/video0", "cv-a")
+
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	if err != nil {
+		t.Fatalf("share join: %v", err)
+	}
+	defer share.Leave()
+	select {
+	case err := <-viewerDone:
+		if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "now shared with cv-a") {
+			t.Fatalf("viewer ended with %v, want the shared-mode message", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the viewer's stream was not ended")
+	}
+	if got := hubParams(currentHub(svc, "/dev/video0")); got != [3]uint32{} || fp.count() != 2 {
+		t.Fatalf("share hub at %v with %d producers, want a takeover at defaults", got, fp.count())
+	}
+}
+
+// A camera with no tap even at the shared mode is not taken over; the pump is
+// told why instead of being handed a churn error.
+func TestJoinHubForShare_NoTapAtTheSharedModeIsReported(t *testing.T) {
+	svc := newTestVideoService(nil, nil)
+	fp := installFakeProducers(svc)
+	refusePixelsAt(svc, func(*agentpb.StreamVideoRequest) bool { return true })
+	ctx := context.Background()
+
+	hub, id, _, err := svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0}, hubHolderStreamClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.unsubscribe(id)
+	shareForTest(svc, "/dev/video0", "cv-a")
+
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	if !errors.Is(err, errPixelsUnavailable) {
+		t.Fatalf("err = %v, want errPixelsUnavailable", err)
+	}
+	if fp.count() != 1 || hub.wasRestarted() {
+		t.Fatal("a camera with no tap at the shared mode was taken over")
 	}
 }

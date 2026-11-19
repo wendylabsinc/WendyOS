@@ -579,7 +579,8 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 }
 
 // cameraRejoinDelay is how long the viewer waits before rejoining a camera
-// whose producer an episode capture restarted. It is a pause, not a backoff:
+// whose producer the agent restarted (for an episode capture, or for an app
+// that started sharing the camera). It is a pause, not a backoff:
 // the replacement producer is started by the agent as part of the same
 // takeover, so the camera is normally back within one pipeline start. The wait
 // only keeps the client from arriving before the new hub exists.
@@ -592,7 +593,8 @@ const cameraRejoinDelay = 500 * time.Millisecond
 const cameraRejoinAttempts = 5
 
 // streamCameraRejoiningRestarts plays a camera stream, rejoining when the
-// agent ends it because an episode capture restarted the producer.
+// agent ends it because it restarted the producer: an episode capture took the
+// camera over, or an app started sharing it. The agent's message names which.
 //
 // The agent's capture policy takes a camera over only from viewers that
 // asserted no stream parameters, and `wendy camera view` with no --width,
@@ -618,10 +620,10 @@ func streamCameraRejoiningRestarts(ctx context.Context, open func() (videoStream
 			return ctx.Err()
 		}
 		if attempt+1 >= cameraRejoinAttempts {
-			return fmt.Errorf("camera producer was restarted by episode capture %d times; the device is busy recording: %w",
+			return fmt.Errorf("camera producer was restarted %d times in a row; the device is busy recording: %w",
 				cameraRejoinAttempts, err)
 		}
-		cliLogln("Camera producer restarted by an episode capture; rejoining the new stream...")
+		cliLogln("The agent restarted the camera producer; rejoining the new stream...")
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
