@@ -157,21 +157,43 @@ public struct VideoDevice {
         }
 
         var type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+        let streamStart = calls.monotonicNanoseconds()
         try calls.control(fd, WENDY_VIDIOC_STREAMON, "VIDIOC_STREAMON", &type)
         // The frame is copied out before this runs, so a failure here costs
         // nothing worth reporting.
         defer { _ = try? calls.control(fd, WENDY_VIDIOC_STREAMOFF, "VIDIOC_STREAMOFF", &type) }
 
         // Dequeue a filled buffer and read the one it names, not buffer 0:
-        // v4l2loopback hands its buffers out in turn.
+        // v4l2loopback hands its buffers out in turn. A shared camera's node
+        // hands a new reader first the newest frame it holds, which was written
+        // before this capture began: the black frame the agent writes when the
+        // last reading session ended. Such a frame is queued again and the next
+        // one taken, at most once per buffer, so a driver whose timestamps say
+        // something else still gives a frame.
         var dqbuf = v4l2_buffer()
-        dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-        dqbuf.memory = V4L2_MEMORY_MMAP
-        try calls.control(fd, WENDY_VIDIOC_DQBUF, "VIDIOC_DQBUF", &dqbuf)
-        guard Int(dqbuf.index) < mapped.count else {
-            throw VideoError.invalidData(
-                message: "VIDIOC_DQBUF on \(path) returned buffer \(dqbuf.index); \(mapped.count) were mapped"
-            )
+        var skipped = 0
+        while true {
+            guard try calls.waitForFrame(fd, milliseconds: frameTimeoutMilliseconds) else {
+                throw VideoError.noFrame(path: path, milliseconds: frameTimeoutMilliseconds)
+            }
+            dqbuf = v4l2_buffer()
+            dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+            dqbuf.memory = V4L2_MEMORY_MMAP
+            try calls.control(fd, WENDY_VIDIOC_DQBUF, "VIDIOC_DQBUF", &dqbuf)
+            guard Int(dqbuf.index) < mapped.count else {
+                throw VideoError.invalidData(
+                    message: "VIDIOC_DQBUF on \(path) returned buffer \(dqbuf.index); \(mapped.count) were mapped"
+                )
+            }
+            guard skipped < mapped.count, capturedBefore(dqbuf, streamStart) else {
+                break
+            }
+            skipped += 1
+            var again = v4l2_buffer()
+            again.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+            again.memory = V4L2_MEMORY_MMAP
+            again.index = dqbuf.index
+            try calls.control(fd, WENDY_VIDIOC_QBUF, "VIDIOC_QBUF", &again)
         }
         let buffer = mapped[Int(dqbuf.index)]
 
@@ -246,11 +268,35 @@ public struct VideoDevice {
     }
 }
 
+/// How long a capture waits for a frame. A shared camera starts when an app
+/// begins reading, which takes about a second.
+let frameTimeoutMilliseconds: Int32 = 10_000
+
+/// The V4L2_BUF_FLAG_TIMESTAMP_* type bits of a buffer's flags, and the two
+/// types whose timestamps are CLOCK_MONOTONIC times: the driver's own
+/// (uvcvideo), and the writer's, copied (v4l2loopback; the agent writes
+/// CLOCK_MONOTONIC times).
+let timestampTypeMask: UInt32 = 0xE000
+let timestampMonotonic: UInt32 = 0x2000
+let timestampCopy: UInt32 = 0x4000
+
+/// Whether a dequeued buffer holds a frame from before `start` (CLOCK_MONOTONIC
+/// nanoseconds). A buffer whose timestamps are of another kind never is.
+func capturedBefore(_ buffer: v4l2_buffer, _ start: Int64) -> Bool {
+    let kind = buffer.flags & timestampTypeMask
+    guard kind == timestampMonotonic || kind == timestampCopy else {
+        return false
+    }
+    let nanoseconds = Int64(buffer.timestamp.tv_sec) * 1_000_000_000 + Int64(buffer.timestamp.tv_usec) * 1_000
+    return nanoseconds < start
+}
+
 /// Errors that can occur when working with V4L2 devices
 public enum VideoError: Error {
     case deviceOpenFailed(path: String, errno: Int32)
     case ioctlFailed(command: String, errno: Int32)
     case mapFailed(index: UInt32, length: Int, offset: Int, errno: Int32)
+    case noFrame(path: String, milliseconds: Int32)
     case unsupportedOperation(message: String)
     case invalidData(message: String)
 }
@@ -264,6 +310,8 @@ extension VideoError: CustomStringConvertible {
             return "\(command) failed: \(errnoDescription(errno))"
         case .mapFailed(let index, let length, let offset, let errno):
             return "mapping buffer \(index) (\(length) bytes at offset \(offset)) failed: \(errnoDescription(errno))"
+        case .noFrame(let path, let milliseconds):
+            return "no frame from \(path) within \(Double(milliseconds) / 1000) s"
         case .unsupportedOperation(let message), .invalidData(let message):
             return message
         }
@@ -285,6 +333,10 @@ protocol V4L2Calls {
     /// Maps buffer `index`, `length` bytes at `offset`, shared and read-write.
     func map(_ fd: Int32, index: UInt32, length: Int, offset: Int) throws -> UnsafeMutableRawPointer
     func unmap(_ address: UnsafeMutableRawPointer, length: Int)
+    /// Waits up to `milliseconds` for a filled buffer; false when none came.
+    func waitForFrame(_ fd: Int32, milliseconds: Int32) throws -> Bool
+    /// CLOCK_MONOTONIC, in nanoseconds.
+    func monotonicNanoseconds() -> Int64
     func closeDevice(_ fd: Int32)
 }
 
@@ -314,6 +366,25 @@ struct SystemV4L2Calls: V4L2Calls {
 
     func unmap(_ address: UnsafeMutableRawPointer, length: Int) {
         munmap(address, length)
+    }
+
+    func waitForFrame(_ fd: Int32, milliseconds: Int32) throws -> Bool {
+        var request = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        while true {
+            let ready = poll(&request, 1, milliseconds)
+            if ready >= 0 {
+                return ready > 0
+            }
+            if errno != EINTR {
+                throw VideoError.ioctlFailed(command: "poll", errno: errno)
+            }
+        }
+    }
+
+    func monotonicNanoseconds() -> Int64 {
+        var now = timespec()
+        clock_gettime(CLOCK_MONOTONIC, &now)
+        return Int64(now.tv_sec) * 1_000_000_000 + Int64(now.tv_nsec)
     }
 
     func closeDevice(_ fd: Int32) {

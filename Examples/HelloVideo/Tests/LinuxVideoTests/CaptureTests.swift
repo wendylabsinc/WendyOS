@@ -4,16 +4,25 @@ import Testing
 
 @testable import LinuxVideo
 
-/// A capture driver in memory, with the two behaviours that differ between
-/// the drivers HelloVideo meets:
+/// One buffer VIDIOC_DQBUF hands back: which, and whether its frame is from
+/// before the capture's VIDIOC_STREAMON.
+struct Dequeue {
+    let index: UInt32
+    let stale: Bool
+}
+
+/// A capture driver in memory, with the behaviours that differ between the
+/// drivers HelloVideo meets:
 ///
 /// - uvcvideo (videobuf2) fills in a struct passed to VIDIOC_QBUF, length and
-///   offset included, and hands back the buffer that was queued first.
-/// - v4l2loopback 0.15.4, the node a shared camera gives an app, does not:
-///   its vidioc_qbuf for CAPTURE sets only the struct's flags, so its length
-///   and m.offset stay as the caller passed them. A reader gets as many
-///   buffers as the writer uses (2 for the agent's share writer), and VIDIOC_DQBUF
-///   returns them in turn, starting with buffer 1.
+///   offset included, hands back the buffer that was queued first, and never a
+///   frame from before VIDIOC_STREAMON.
+/// - v4l2loopback 0.15.4, the node a shared camera gives an app, does not fill
+///   it in: its vidioc_qbuf for CAPTURE sets only the struct's flags, so its
+///   length and m.offset stay as the caller passed them. A reader gets as many
+///   buffers as the writer uses (2 for the agent's share writer), and
+///   VIDIOC_DQBUF hands them out in turn, the first being the newest frame the
+///   node held when the reader opened it (the agent's black frame).
 ///
 /// mmap fails as the kernel does: EINVAL for 0 bytes, or for an offset or
 /// length that is not a buffer's.
@@ -23,19 +32,26 @@ final class FakeDriver: V4L2Calls {
     var frameBytes: Int { Int(width * height * 2) }
     let fillsQueuedBuffer: Bool
     let buffersGiven: UInt32
-    let dequeueOrder: [UInt32]
+    let dequeues: [Dequeue]
+    let framesCome: Bool
+
+    /// CLOCK_MONOTONIC as the fake reports it, in nanoseconds.
+    let now: Int64 = 5_000_000_000
 
     private var storage: [UnsafeMutableRawPointer] = []
-    private var dequeues = 0
+    private var next = 0
     private(set) var mapped: [(length: Int, offset: Int)] = []
+    private(set) var requeued: [UInt32] = []
     private(set) var unmapped = 0
     private(set) var closed = false
     private(set) var streaming = false
+    private var queuedSinceStreamOn = false
 
-    init(fillsQueuedBuffer: Bool, buffersGiven: UInt32, dequeueOrder: [UInt32]) {
+    init(fillsQueuedBuffer: Bool, buffersGiven: UInt32, dequeues: [Dequeue], framesCome: Bool = true) {
         self.fillsQueuedBuffer = fillsQueuedBuffer
         self.buffersGiven = buffersGiven
-        self.dequeueOrder = dequeueOrder
+        self.dequeues = dequeues
+        self.framesCome = framesCome
     }
 
     deinit {
@@ -48,6 +64,10 @@ final class FakeDriver: V4L2Calls {
     func openDevice(_ path: String) throws -> Int32 { 7 }
 
     func closeDevice(_ fd: Int32) { closed = true }
+
+    func monotonicNanoseconds() -> Int64 { now }
+
+    func waitForFrame(_ fd: Int32, milliseconds: Int32) throws -> Bool { framesCome }
 
     func control(_ fd: Int32, _ request: UInt32, _ name: String, _ argument: UnsafeMutableRawPointer) throws {
         switch request {
@@ -74,6 +94,9 @@ final class FakeDriver: V4L2Calls {
         case WENDY_VIDIOC_QBUF:
             let buffer = argument.assumingMemoryBound(to: v4l2_buffer.self)
             guard buffer.pointee.index < buffersGiven else { throw VideoError.ioctlFailed(command: name, errno: EINVAL) }
+            if streaming {
+                requeued.append(buffer.pointee.index)
+            }
             if fillsQueuedBuffer {
                 describe(buffer, index: buffer.pointee.index)
             }
@@ -85,10 +108,16 @@ final class FakeDriver: V4L2Calls {
         case WENDY_VIDIOC_DQBUF:
             guard streaming else { throw VideoError.ioctlFailed(command: name, errno: EINVAL) }
             let buffer = argument.assumingMemoryBound(to: v4l2_buffer.self)
-            let index = dequeueOrder[dequeues % dequeueOrder.count]
-            dequeues += 1
-            describe(buffer, index: index)
+            let dequeue = dequeues[next % dequeues.count]
+            next += 1
+            describe(buffer, index: dequeue.index)
             buffer.pointee.bytesused = UInt32(frameBytes)
+            // V4L2_BUF_FLAG_TIMESTAMP_COPY | V4L2_BUF_FLAG_MAPPED, as v4l2loopback
+            // reports; the agent's frames carry CLOCK_MONOTONIC times.
+            buffer.pointee.flags = 0x4001
+            let at = dequeue.stale ? now - 2_000_000_000 : now + 40_000_000
+            buffer.pointee.timestamp.tv_sec = Int(at / 1_000_000_000)
+            buffer.pointee.timestamp.tv_usec = Int(at % 1_000_000_000 / 1_000)
         default:
             throw VideoError.ioctlFailed(command: name, errno: ENOTTY)
         }
@@ -113,18 +142,23 @@ final class FakeDriver: V4L2Calls {
 
 @Suite struct CaptureTests {
     let device = VideoDevice(
-        path: "/dev/video0", name: "Brio 101", driver: "v4l2 loopback", busInfo: "", capabilities: LinuxVideo.V4L2_CAP_VIDEO_CAPTURE)
+        path: "/dev/video0", name: "Brio 101", driver: "v4l2 loopback", busInfo: "",
+        capabilities: LinuxVideo.V4L2_CAP_VIDEO_CAPTURE)
 
     @Test func capturesFromAShareNode() throws {
-        // The share node leaves the QBUF struct's length and offset at 0 and
-        // returns buffer 1 first.
-        let driver = FakeDriver(fillsQueuedBuffer: false, buffersGiven: 2, dequeueOrder: [1, 0])
+        // The node leaves the QBUF struct's length and offset at 0, hands out
+        // the old black frame first (in buffer 0) and the camera's in buffer 1.
+        let driver = FakeDriver(
+            fillsQueuedBuffer: false, buffersGiven: 2,
+            dequeues: [Dequeue(index: 0, stale: true), Dequeue(index: 1, stale: false)])
         let frame = try device.captureFrame(width: 640, height: 480, calls: driver)
 
         #expect(frame.width == 1280 && frame.height == 720 && frame.bytesPerLine == 2560)
         #expect(frame.data.count == driver.frameBytes)
-        // The bytes are buffer 1's, the one VIDIOC_DQBUF named.
+        // The bytes are buffer 1's: the fresh frame, read from the buffer
+        // VIDIOC_DQBUF named. The stale one was queued again.
         #expect(frame.data.allSatisfy { $0 == driver.contents(of: 1) })
+        #expect(driver.requeued == [0])
         // Every buffer was mapped at the length and offset QUERYBUF gave.
         #expect(driver.mapped.map(\.length) == [driver.frameBytes, driver.frameBytes])
         #expect(driver.mapped.map(\.offset) == [0, driver.frameBytes])
@@ -132,11 +166,34 @@ final class FakeDriver: V4L2Calls {
     }
 
     @Test func capturesFromACamera() throws {
-        let driver = FakeDriver(fillsQueuedBuffer: true, buffersGiven: 2, dequeueOrder: [0])
+        let driver = FakeDriver(fillsQueuedBuffer: true, buffersGiven: 2, dequeues: [Dequeue(index: 0, stale: false)])
         let frame = try device.captureFrame(width: 1280, height: 720, calls: driver)
 
         #expect(frame.data.count == driver.frameBytes)
         #expect(frame.data.allSatisfy { $0 == driver.contents(of: 0) })
+        #expect(driver.requeued.isEmpty)
+        #expect(driver.unmapped == 2 && driver.closed && !driver.streaming)
+    }
+
+    @Test func skipsAtMostOneStaleFramePerBuffer() throws {
+        // Timestamps that always look old (a writer with another clock) still
+        // give a frame: after one skip per buffer, the next is taken.
+        let driver = FakeDriver(
+            fillsQueuedBuffer: false, buffersGiven: 2,
+            dequeues: [Dequeue(index: 0, stale: true), Dequeue(index: 1, stale: true)])
+        let frame = try device.captureFrame(calls: driver)
+
+        #expect(driver.requeued == [0, 1])
+        #expect(frame.data.allSatisfy { $0 == driver.contents(of: 0) })
+    }
+
+    @Test func noFrameIsAnErrorNotAHang() {
+        let driver = FakeDriver(
+            fillsQueuedBuffer: false, buffersGiven: 2, dequeues: [Dequeue(index: 0, stale: false)], framesCome: false)
+        let error = #expect(throws: VideoError.self) {
+            try device.captureFrame(calls: driver)
+        }
+        #expect(error?.description == "no frame from /dev/video0 within 10.0 s")
         #expect(driver.unmapped == 2 && driver.closed && !driver.streaming)
     }
 
@@ -149,5 +206,12 @@ final class FakeDriver: V4L2Calls {
             VideoError.ioctlFailed(command: "VIDIOC_DQBUF", errno: EIO).description
                 == "VIDIOC_DQBUF failed: Input/output error (errno 5)"
         )
+    }
+}
+
+extension VideoDevice {
+    /// `captureFrame` at its default size, through a fake driver.
+    func captureFrame(calls: some V4L2Calls) throws -> CapturedFrame {
+        try captureFrame(width: 640, height: 480, calls: calls)
     }
 }
