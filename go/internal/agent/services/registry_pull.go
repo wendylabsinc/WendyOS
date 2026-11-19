@@ -72,14 +72,25 @@ import (
 // APPLY_OUTCOME_PULL_RETRYING = 12). Each is reported from one place:
 // pulling by apply when the pull starts and by pullRetry when an attempt
 // succeeds after a retry, retrying by pullRetry, not started by
-// pullAssignment's result. Cloud refuses an outcome it does not know, so all three
-// send no outcome (UNSPECIFIED) until cloud on prod accepts them; switching
-// is these three lines plus a re-vendor.
-const (
-	outcomePulling      = cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED // APPLY_OUTCOME_PULLING
-	outcomeNotStarted   = cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED // APPLY_OUTCOME_NOT_STARTED
-	outcomePullRetrying = cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED // APPLY_OUTCOME_PULL_RETRYING
+// pullAssignment's result.
+//
+// sendTransientOutcomes is the switch: cloud refuses an outcome it does not
+// know, so until cloud on prod accepts the three values all of them are
+// sent as no outcome (UNSPECIFIED). Turn it on only once that is confirmed.
+const sendTransientOutcomes = false
+
+var (
+	outcomePulling      = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULLING)
+	outcomeNotStarted   = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_NOT_STARTED)
+	outcomePullRetrying = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_RETRYING)
 )
+
+func transientOutcome(o cloudpbv2.ApplyOutcome) cloudpbv2.ApplyOutcome {
+	if sendTransientOutcomes {
+		return o
+	}
+	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED
+}
 
 // pullReport records a transient state of the pull it is given to.
 type pullReport func(cloudpbv2.ApplyOutcome)

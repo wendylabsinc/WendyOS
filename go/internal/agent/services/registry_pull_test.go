@@ -108,6 +108,7 @@ func (f *pbFixture) releaseOf(t *testing.T, layers ...[]byte) *testRelease {
 		// Install only: applied once imported. Running is not applied until
 		// the start step exists (TestRegistryPullRunningReleaseIsNotApplied).
 		DesiredState: cloudpbv2.Running_STOPPED, ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
+		Revision: 1, ConfigJson: "{}",
 	}
 	pub := priv.PublicKey().Bytes()
 	wrap := registrycrypto.Wrap{

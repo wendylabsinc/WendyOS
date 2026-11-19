@@ -135,12 +135,18 @@ type postboxState struct {
 	OrgCAs [][]byte `json:"orgCAs,omitempty"`
 	// Removals are apps whose release removal failed, retried each cycle.
 	Removals []string `json:"removals,omitempty"`
+	// Marks are the deployment revision marks (deployment_contract.go), by
+	// deployment id.
+	Marks map[string]*postboxMark `json:"marks,omitempty"`
 }
 
 type postboxPending struct {
 	EntryID       int64  `json:"entryId"`
 	CorrelationID string `json:"correlationId"`
 	AppID         string `json:"appId,omitempty"`
+	// Committed: the entry's state change is on disk (deployment_contract.go),
+	// so after a crash it is finished and reported, not failed.
+	Committed bool `json:"committed,omitempty"`
 }
 
 // postboxAssignment is a verified DeviceAssignment held as desired state.
@@ -188,6 +194,12 @@ var postboxOperations = map[string]string{
 	strings.TrimPrefix(cloudpbv2.DeploymentService_ControlContainer_FullMethodName, "/"):     "wendycloud.v2.ControlContainerRequest",
 	strings.TrimPrefix(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, "/"):   "wendycloud.v2.DeviceAssignment",
 	strings.TrimPrefix(cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, "/"): "wendycloud.v2.UnassignDeviceRequest",
+	// The same statements under their DeploymentService names (ruling D2):
+	// both names are accepted, each only for its payload type. The
+	// deployment-level changes (CreateDeploymentV2, Update, Rollback,
+	// RemoveDeployment) are never relayed and never listed here.
+	strings.TrimPrefix(cloudpbv2.DeploymentService_AssignDevice_FullMethodName, "/"):   "wendycloud.v2.DeviceAssignment",
+	strings.TrimPrefix(cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, "/"): "wendycloud.v2.UnassignDeviceRequest",
 }
 
 // NewPostbox builds the client; it pulls nothing until UpdateIdentity supplies
@@ -493,6 +505,14 @@ func (p *Postbox) process(ctx context.Context, client cloudpbv2.DevicePostboxSer
 		return err
 	}
 	if verr != nil {
+		// A deployment statement refused in verification (stale, expired,
+		// replayed, signature, target) is not news: audit only, so it never
+		// overwrites the outcome of the deployment the device holds. The app
+		// named above serves only to report an interrupted entry.
+		switch req.(type) {
+		case *cloudpbv2.UnassignDeviceRequest, *cloudpbv2.DeviceAssignment:
+			app = ""
+		}
 		return p.decide(ctx, e, desc.Correlation, app, outcome, reason, verr)
 	}
 	app, outcome, reason, aerr := p.apply(ctx, id, e.GetEntryId(), desc.Correlation, req)
@@ -874,60 +894,9 @@ func (p *Postbox) apply(ctx context.Context, id *postboxIdentity, entryID int64,
 		}
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 	case *cloudpbv2.DeviceAssignment:
-		// A newer entry for the deployment replaces its pull.
-		p.stopPull(r.GetDeploymentId())
-		raw, err := proto.Marshal(r)
-		if err != nil {
-			return r.GetAppId(), cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", err
-		}
-		absent := r.GetDesiredState() == cloudpbv2.Running_ABSENT
-		outcome, reason := cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, ""
-		if !absent {
-			outcome, reason, err = checkAssignment(r)
-		}
-		p.saveMu.Lock() // a pull's commit must not swap this away; decide saves it
-		p.mu.Lock()
-		p.state.Assignments = maps.Clone(p.state.Assignments) // copy on write: a pull's commit reads it
-		p.state.Assignments[r.GetDeploymentId()] = &postboxAssignment{
-			AppID: r.GetAppId(), AppReleaseID: r.GetAppReleaseId(), ManifestDigest: r.GetManifestDigest(),
-			DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
-			Assignment: raw, EntryID: entryID, CorrelationID: correlation, Pulled: err != nil || absent,
-		}
-		p.mu.Unlock()
-		p.saveMu.Unlock()
-		if err != nil {
-			return r.GetAppId(), outcome, reason, err
-		}
-		if absent {
-			// Held with nothing to fetch: the app's releases go, as on removal.
-			if err := p.removeReleases(ctx, r.GetAppId()); err != nil {
-				return r.GetAppId(), cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
-			}
-			return r.GetAppId(), outcome, reason, nil
-		}
-		// The pull runs beside the queue; its outcome replaces this one.
-		p.startPull(ctx, id, r, entryID, correlation)
-		return r.GetAppId(), outcomePulling, "", nil
+		return p.applyAssignment(ctx, id, entryID, correlation, r)
 	case *cloudpbv2.UnassignDeviceRequest:
-		// The pull stops before anything is removed, so nothing it imports
-		// outlives the deployment.
-		p.stopPull(r.GetDeploymentId())
-		p.saveMu.Lock()
-		p.mu.Lock()
-		app := ""
-		if a := p.state.Assignments[r.GetDeploymentId()]; a != nil {
-			app = a.AppID
-		}
-		p.state.Assignments = maps.Clone(p.state.Assignments)
-		delete(p.state.Assignments, r.GetDeploymentId())
-		p.mu.Unlock()
-		p.saveMu.Unlock()
-		if app != "" {
-			if err := p.removeReleases(ctx, app); err != nil {
-				return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
-			}
-		}
-		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+		return p.applyUnassign(ctx, entryID, r)
 	case *cloudpbv2.CreateDeploymentRequest:
 		// Registry material is pulled per DeviceAssignment, which carries this
 		// device's wrap; a deployment names a release, not an app, and no key.
@@ -1079,8 +1048,10 @@ func (p *Postbox) ack(ctx context.Context, client cloudpbv2.DevicePostboxService
 }
 
 // settleInterrupted reports the entry a crash left between advance and
-// decide: claimed past the mark, never decided. It is not retried. A decided
-// entry never reaches it: decide holds until its record is on disk.
+// decide: claimed past the mark, never decided. One whose state change was
+// not yet on disk is reported failed and not retried. One whose change was
+// committed is finished (settleCommitted) and its true outcome reported. A
+// decided entry never reaches it: decide holds until its record is on disk.
 func (p *Postbox) settleInterrupted(ctx context.Context) error {
 	p.mu.Lock()
 	pend := p.state.Pending
@@ -1088,9 +1059,43 @@ func (p *Postbox) settleInterrupted(ctx context.Context) error {
 	if pend == nil {
 		return nil
 	}
-	return p.decide(ctx, &cloudpbv2.PostboxEntry{EntryId: pend.EntryID}, pend.CorrelationID, pend.AppID,
-		cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "interrupted",
-		errors.New("agent stopped after claiming this entry and before deciding it; not retried"))
+	outcome, reason, err := cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "interrupted",
+		errors.New("agent stopped after claiming this entry and before deciding it; not retried")
+	if pend.Committed {
+		outcome, reason, err = p.settleCommitted(ctx, pend)
+	}
+	return p.decide(ctx, &cloudpbv2.PostboxEntry{EntryId: pend.EntryID}, pend.CorrelationID, pend.AppID, outcome, reason, err)
+}
+
+// settleCommitted finishes an interrupted entry whose change is on disk: a
+// queued removal runs now, and an assignment whose pull resumes reports
+// pulling.
+func (p *Postbox) settleCommitted(ctx context.Context, pend *postboxPending) (cloudpbv2.ApplyOutcome, string, error) {
+	st := p.snapshot()
+	if pend.AppID != "" && slices.Contains(st.Removals, pend.AppID) {
+		if err := p.removeReleases(ctx, pend.AppID); err != nil {
+			return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
+		}
+		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+	}
+	for _, a := range st.Assignments {
+		switch {
+		case a.EntryID != pend.EntryID:
+		case !a.Pulled:
+			return outcomePulling, "", nil // resumed by resumePulls
+		case a.DesiredState == cloudpbv2.Running_ABSENT.String():
+			return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil // its removal already ran
+		default:
+			// A rotation copy of a pull that ended: the outcome that pull
+			// recorded, never "applied" for an app that was not started.
+			if o := st.Outcomes[a.AppID]; o != nil {
+				return o.Outcome, "", nil
+			}
+			return outcomeNotStarted, "", nil
+		}
+	}
+	// Nothing held for the entry: a removal that already ran.
+	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 }
 
 // advance moves the mark past a chain-verified entry, claims its nonce and
@@ -1168,6 +1173,23 @@ func (p *Postbox) load(principal string) error {
 	if st.Principal != principal {
 		st = &postboxState{Principal: principal}
 	}
+	// A null entry (a damaged or hand-edited file) holds the postbox, as an
+	// undecodable file does: nothing is applied on state it cannot read.
+	for dep, a := range st.Assignments {
+		if a == nil {
+			return fmt.Errorf("postbox state: deployment %q has no held statement", dep)
+		}
+	}
+	for dep, m := range st.Marks {
+		if m == nil {
+			return fmt.Errorf("postbox state: deployment %q has no revision mark", dep)
+		}
+	}
+	for app, o := range st.Outcomes {
+		if o == nil {
+			return fmt.Errorf("postbox state: app %q has no outcome", app)
+		}
+	}
 	if st.Nonces == nil {
 		st.Nonces = map[string]int64{}
 	}
@@ -1176,6 +1198,9 @@ func (p *Postbox) load(principal string) error {
 	}
 	if st.Outcomes == nil {
 		st.Outcomes = map[string]*postboxOutcome{}
+	}
+	if st.Marks == nil {
+		st.Marks = map[string]*postboxMark{}
 	}
 	p.state = st
 	return nil
@@ -1235,6 +1260,14 @@ func (p *Postbox) postboxApp(ctx context.Context, req proto.Message) string {
 		return p.control.AppOf(ctx, r.GetContainerName())
 	case *cloudpbv2.DeviceAssignment:
 		return r.GetAppId()
+	case *cloudpbv2.UnassignDeviceRequest:
+		// The held deployment's app, so an interrupted removal is reported
+		// against it.
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if a := p.state.Assignments[r.GetDeploymentId()]; a != nil {
+			return a.AppID
+		}
 	}
 	return ""
 }
