@@ -74,6 +74,7 @@ SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
     "wendycloud/v2/apns.proto"
     "wendycloud/v2/device_access.proto"
     "wendycloud/v2/roles.proto"
+    "wendycloud/v2/access.proto"
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
     "wendycloud/v2/tunnel.proto"

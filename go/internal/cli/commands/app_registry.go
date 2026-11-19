@@ -7,19 +7,25 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -43,24 +49,56 @@ import (
 const putBlobChunk = 1 << 20
 
 func newAppPublishCmd() *cobra.Command {
-	var tag, layoutDir, platform, dockerfile, cloudGRPC string
+	var tag, appID, layoutDir, platform, dockerfile, cloudGRPC string
+	var untagged bool
 	cmd := &cobra.Command{
 		Use:   "publish",
 		Short: "Publish an encrypted release of this project's app to the Wendy Cloud registry",
 		Long: "Builds the project's container image (or takes --oci-layout), encrypts every blob on this\n" +
 			"machine and uploads only ciphertext as a new release tagged --tag. The release key is\n" +
-			"wrapped to this machine's registry key and to the Wendy custodian key.",
+			"wrapped to this machine's registry key and to the Wendy custodian key. An app that does\n" +
+			"not exist yet is created first.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := validateReleaseTag(tag); err != nil {
-				return usageErrorf("%v", err)
+			if tag != "" && untagged {
+				return usageErrorf("Give --tag or --untagged, not both.")
 			}
-			appCfg, err := appconfig.LoadFromFile("wendy.json")
+			raw, err := os.ReadFile("wendy.json")
+			if err != nil {
+				return fmt.Errorf("reading wendy.json: %w", err)
+			}
+			appCfg, def, err := appDefinition(raw, appID)
 			if err != nil {
 				return err
 			}
-			auth, err := pickAuthEntry(cloudGRPC)
+			cwd, err := os.Getwd()
 			if err != nil {
+				return err
+			}
+			var branch string
+			switch {
+			case untagged:
+				if branch, err = gitBranch(cwd); err != nil {
+					return err
+				}
+			case tag == "" && !isInteractiveTerminal():
+				return usageErrorf("No tag given. Add --tag <version>, or run in a terminal to answer.")
+			case tag == "":
+				if tag, err = askText("Tag", "The version you want to give this release, for example 1.0.0.", "", func(s string) error { return validateReleaseTag(s) }); err != nil {
+					return err
+				}
+			}
+			defaults := []byte("{}")
+			if appCfg.Env != nil {
+				defaults, _ = json.Marshal(appCfg.Env)
+			}
+			auth, err := pickAppAuth(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			if err := withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+				return ensureApp(ctx, cmd.OutOrStdout(), conn, auth, appCfg.AppID)
+			}); err != nil {
 				return err
 			}
 			work, err := os.MkdirTemp("", "wendy-publish-")
@@ -69,10 +107,6 @@ func newAppPublishCmd() *cobra.Command {
 			}
 			defer func() { _ = os.RemoveAll(work) }()
 			if layoutDir == "" {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
 				resolved, err := resolveDockerfile(cwd, dockerfile, false, "")
 				if err != nil {
 					return err
@@ -86,12 +120,22 @@ func newAppPublishCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+			if img, err = withAppDefinition(img, def); err != nil {
+				return err
+			}
+			if untagged {
+				digest, err := img.Digest()
+				if err != nil {
+					return err
+				}
+				tag = branch + "@" + digest.String()
+			}
+			return withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
 				op, err := newRegistryOp(ctx, conn, auth)
 				if err != nil {
 					return err
 				}
-				releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, tag)
+				releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, tag, string(defaults))
 				if err != nil {
 					return err
 				}
@@ -104,12 +148,100 @@ func newAppPublishCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&tag, "tag", "", "Release tag, e.g. v1.4.0 (required)")
+	cmd.Flags().StringVar(&tag, "tag", "", "Release tag, the version you give this release, e.g. 1.0.0")
+	cmd.Flags().BoolVar(&untagged, "untagged", false, "Name the release <git branch>@<manifest digest> instead of a tag")
+	cmd.Flags().StringVar(&appID, "app", "", "App id (default: appId in wendy.json, which it must match)")
 	cmd.Flags().StringVar(&layoutDir, "oci-layout", "", "Publish this OCI image layout directory instead of building")
 	cmd.Flags().StringVar(&platform, "platform", "linux/arm64", "Image platform to build or pick from the layout")
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "", "Dockerfile to build (default: detected)")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
 	return cmd
+}
+
+// appConfigLabel carries the release's app definition to the device
+// (agent services.AppConfigLabel), at most maxAppDefinition bytes.
+const (
+	appConfigLabel   = "sh.wendy/app-config"
+	maxAppDefinition = 64 << 10
+)
+
+// appDefinition is wendy.json as a release carries it: compact JSON holding
+// only the fields AppConfig knows. What the device would refuse is refused
+// here, in its words, before anything is built or uploaded.
+func appDefinition(raw []byte, app string) (*appconfig.AppConfig, []byte, error) {
+	cfg, err := appconfig.LoadFromBytes(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	if app != "" && app != cfg.AppID {
+		return nil, nil, usageErrorf("--app must match appId in wendy.json (%s).", cfg.AppID)
+	}
+	if len(cfg.Services) > 0 || cfg.ServiceName != "" {
+		return nil, nil, errors.New("apps with several services cannot be deployed yet; deploy each service as its own app")
+	}
+	if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
+		return nil, nil, fmt.Errorf("wendy.json: %w", err)
+	}
+	def, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if warnings := append(appconfig.ValidateJSON(raw), appconfig.ValidateJSON(def)...); len(warnings) > 0 {
+		return nil, nil, fmt.Errorf("%s. A device refuses an app with warnings; fix wendy.json first", strings.Join(warnings, "; "))
+	}
+	if len(def) > maxAppDefinition {
+		return nil, nil, fmt.Errorf("wendy.json is %d bytes as published, over the %d a device accepts", len(def), maxAppDefinition)
+	}
+	return cfg, def, nil
+}
+
+// withAppDefinition labels img's config with def; the manifest digest the
+// operator signs covers it.
+func withAppDefinition(img v1.Image, def []byte) (v1.Image, error) {
+	cf, err := img.ConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	cfg := cf.Config
+	cfg.Labels = maps.Clone(cfg.Labels)
+	if cfg.Labels == nil {
+		cfg.Labels = map[string]string{}
+	}
+	cfg.Labels[appConfigLabel] = string(def)
+	return mutate.Config(img, cfg)
+}
+
+// gitBranch is the branch checked out in dir.
+func gitBranch(dir string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	if branch := strings.TrimSpace(string(out)); err == nil && branch != "" {
+		return branch, nil
+	}
+	return "", usageErrorf("--untagged names the release after the current git branch, and this folder has none checked out.")
+}
+
+// ensureApp creates appID first, asking the create questions, when Cloud
+// does not have it.
+func ensureApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface, auth *config.AuthConfig, appID string) error {
+	org, err := operatorOrg(auth)
+	if err != nil {
+		return err
+	}
+	_, err = cloudpb.NewAppServiceClient(conn).GetApp(ctx, &cloudpb.GetAppRequest{Id: appID, OrganizationId: org})
+	if status.Code(err) != codes.NotFound {
+		if err != nil {
+			return fmt.Errorf("reading app %s: %w", appID, err)
+		}
+		return nil
+	}
+	if !isInteractiveTerminal() {
+		return fmt.Errorf("%s doesn't exist yet. Run wendy app create --app %s first, or run this in a terminal.", appID, appID)
+	}
+	a := &appAnswers{id: appID, name: appID}
+	if err := a.ask(func(f string) bool { return f == "app" }); err != nil {
+		return err
+	}
+	return createApp(ctx, out, conn, auth, a, false)
 }
 
 // registryFlags are the flags deploy, assign, unassign and rotate share.

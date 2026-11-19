@@ -34,6 +34,8 @@ func TestRegistryResources(t *testing.T) {
 		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
 		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: "", Device: uri}, ""},
 		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, ""},
+		{cloudpbv2.AccessService_CreateBinding_FullMethodName, &cloudpbv2.CreateBindingRequest{OrganizationId: tenant}, "org/" + tenant + "/access-binding"},
+		{cloudpbv2.AccessService_CreateBinding_FullMethodName, &cloudpbv2.CreateBindingRequest{OrganizationId: release}, ""},
 	}
 	for _, c := range cases {
 		got, ok := signedResources[c.method](tenant, c.req)

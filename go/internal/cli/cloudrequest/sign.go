@@ -453,6 +453,13 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		}
 		return "org/" + tenant + "/device-access/" + in.GetEntryId(), true
 	},
+	cloudpbv2.AccessService_CreateBinding_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateBindingRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant {
+			return "", false
+		}
+		return "org/" + tenant + "/access-binding", true
+	},
 	invite.OrganizationInviteService_CreateOrganizationInvite_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*invite.CreateOrganizationInviteRequest)
 		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(true) {
