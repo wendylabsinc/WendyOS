@@ -721,7 +721,7 @@ type DataEpisode struct {
 	StartedUnixNanos int64                  `protobuf:"varint,4,opt,name=started_unix_nanos,json=startedUnixNanos,proto3" json:"started_unix_nanos,omitempty"`
 	SizeBytes        int64                  `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	BootId           string                 `protobuf:"bytes,6,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
-	// The fields below are set only on an episode listed in in_progress (see
+	// Fields 7–10 are set only on an episode listed in in_progress (see
 	// DataStatusResponse). There, state is "recording", "draining" (capture has
 	// stopped and the episode still accepts late application records) or
 	// "sealing" (its files are being remuxed and checksummed), and size_bytes is
