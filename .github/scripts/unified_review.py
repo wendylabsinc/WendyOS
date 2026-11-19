@@ -118,9 +118,22 @@ def schema(base, evidence, assessment):
     return result
 
 
-def projection(payload):
-    """Use the proven concern validator/state machine without another inventory."""
-    return {**payload, "compatibility_findings": [d["concern"] for d in payload["decisions"] if d["concern"] is not None]}
+def projection(payload, *, unique=True):
+    """Adapt validated items to concern history; never remove change items.
+
+    Shared byte-identical attachments use one history record. Raw response
+    validation/repair explicitly keeps every attachment before this adaptation.
+    """
+    findings, seen = [], set()
+    for item in payload["decisions"]:
+        finding = item["concern"]
+        if finding is None:
+            continue
+        key = json.dumps(finding, sort_keys=True)
+        if not unique or key not in seen:
+            findings.append(finding)
+            seen.add(key)
+    return {**payload, "compatibility_findings": findings}
 
 
 def validate_item(item, *, resolved=False, path="decision"):
@@ -153,7 +166,7 @@ def validate(payload, parsed, assessment, *, resolved=False):
     if not resolved:
         legacy = resolve_evidence(legacy, evidence_catalog(parsed))
     validate_payload(legacy, parsed)
-    checked = compat.validate(projection(result), finding_catalog(evidence_catalog(parsed), assessment),
+    checked = compat.validate(projection(result, unique=False), finding_catalog(evidence_catalog(parsed), assessment),
                               assessment["catalog"], resolved=resolved, previous=assessment.get("previous"))
     findings = iter(checked["compatibility_findings"])
     for item, decision in zip(result["decisions"], legacy["decisions"]):
@@ -196,7 +209,7 @@ def preserve(previous, repaired, parsed, assessment):
     prior_findings = {**previous, "compatibility_findings": [
         item["concern"] for item in previous["decisions"]
         if isinstance(item, dict) and isinstance(item.get("concern"), dict)]}
-    preserve_findings(prior_findings, projection(repaired), finding_catalog(evidence_catalog(parsed), assessment),
+    preserve_findings(prior_findings, projection(repaired, unique=False), finding_catalog(evidence_catalog(parsed), assessment),
                       assessment["catalog"], assessment.get("previous"))
 
 
@@ -223,7 +236,7 @@ def concern_changed(before, after):
 
 
 def overview(result):
-    count = sum(d["concern"] is not None for d in result["decisions"])
+    count = len(projection(result)["compatibility_findings"])
     return [f"**Compatibility:** {dict(breaking='Breaking behavior found', migration_needed='Migration needed', compatible_in_supplied_evidence='Compatible within the supplied evidence', not_assessed='Not fully assessed')[result['compatibility_verdict']]}. {count} current concern(s) attached to change items.", "",
             "Human acceptance records a contract choice. It does not fix or resolve a concern. Missing evidence and untested versions remain unassessed.", ""]
 
@@ -233,9 +246,7 @@ def render(result, repo, previous, *, multipart=False):
     import compatibility_state
     current, withdrawn = c.reconcile_records(result, previous)
     concerns = compatibility_state.current(projection(result))
-    finding_ids = {}
-    for record in concerns:
-        finding_ids[json.dumps(record["finding"], sort_keys=True)] = record
+    finding_ids = {record["id"]: record for record in concerns}
     blocks, attached = [], set()
     for record in current:
         item = record["decision"]
@@ -247,10 +258,10 @@ def render(result, repo, previous, *, multipart=False):
         if explanation:
             lines += ["  " + c.inline(explanation), ""]
         finding = item["concern"]
-        concern = None
+        concern, emit_marker = None, False
         if finding is not None:
-            stored = {k: finding[k] for k in compat.FINDING_FIELDS}
-            concern = finding_ids[json.dumps(stored, sort_keys=True)]
+            concern = finding_ids[finding["prior_id"]]
+            emit_marker = concern["id"] not in attached
             attached.add(concern["id"])
             lines += ["  " + c.inline(finding["consider"]), ""]
         if record.get("reason"):
@@ -261,7 +272,7 @@ def render(result, repo, previous, *, multipart=False):
             for role, label in (("changed", "Changed behavior"), ("caller", "Consumer source"), ("receiver", "Receiving behavior")):
                 lines += [f"  **{label}:** " + ", ".join(c.compatibility_code_link(ref) for ref in finding[role]), ""]
         lines += ["  **Limits:** " + c.inline(item["coverage"]), "", "  </details>", ""]
-        if concern is not None:
+        if emit_marker:
             lines += [compatibility_state.marker(concern)]
         blocks.append([*lines, ""])
     if not current:

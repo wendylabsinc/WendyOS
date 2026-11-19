@@ -333,8 +333,15 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
     used = set(by_id)
     consumed: set[str] = set()
     current: list[dict] = []
+    bindings = {}
+    if result.get("unified_review"):
+        compatibility_state.current(unified.projection(result), bindings=bindings)
     for decision in result["decisions"]:
         semantic = semantic_decision(decision)
+        if result.get("unified_review") and semantic.get("concern") is not None:
+            # Persist the actual concern identity with the API item, so an
+            # unbound/conflicting claim cannot carry acceptance or thrash later.
+            semantic["concern"] = dict(semantic["concern"], prior_id=bindings[json.dumps(semantic["concern"], sort_keys=True)])
         version = decision_id(semantic)
         candidates = decision["prior_ids"]
         relationship = decision["relationship"]

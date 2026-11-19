@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -642,6 +643,21 @@ def review_batches(metadata: dict[str, Any], batches: list[DiffBatch], repo: str
         verdicts = [p["compatibility_verdict"] for p in payloads]
         combined["compatibility_verdict"] = ("breaking" if "breaking" in verdicts else "migration_needed" if "migration_needed" in verdicts
                                               else verdicts[0] if len(payloads) == 1 else "not_assessed")
+        if metadata["_compatibility"].get("unified"):
+            # Independent batches can claim the same history identity without
+            # agreeing on the observation. Preserve every distinct item and
+            # citation; no claimant inherits that identity or its acceptance.
+            claims = Counter(f["prior_id"] for f in unified.projection(combined)["compatibility_findings"] if f["prior_id"])
+            ambiguous = {identifier for identifier, count in claims.items() if count > 1}
+            for decision in combined["decisions"]:
+                finding = decision["concern"]
+                if finding is not None and finding["prior_id"] in ambiguous:
+                    decision["concern"] = dict(finding, prior_id="")
+            combined["compatibility_findings"] = unified.projection(combined)["compatibility_findings"]
+            combined["compatibility_updates"] = [u for u in combined["compatibility_updates"] if u["prior_id"] not in ambiguous]
+            combined["compatibility_updates"].extend({"prior_id": identifier, "status": "not_assessed",
+                "reason": "Several current observations claimed this historical identity. All observations and citations are retained separately; this prior concern has not been cleared.",
+                "evidence": []} for identifier in sorted(ambiguous))
         # Batches can only retire a prior concern when they agree. A current
         # concern takes precedence over a partial-view resolution elsewhere.
         current_ids = {f.get("prior_id") for f in combined["compatibility_findings"] if f.get("prior_id")}

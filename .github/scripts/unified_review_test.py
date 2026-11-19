@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unified evidence contract, grouping, acceptance/history and dry-run examples."""
 import copy
+import hashlib
 import json
 import re
 import unittest
@@ -12,7 +13,7 @@ import compatibility_review as compat
 import compatibility_state
 import unified_review as unified
 from api_review_test import metadata, model_decision, REPO
-from api_review_comment_test import result
+from api_review_comment_test import result, bot_comment, MultipartGitHub
 import compatibility_review_test as evidence_fixtures
 
 
@@ -316,6 +317,98 @@ diff --git a/export.py b/export.py
         self.assertEqual(records[0]["state"], "accepted")
         self.assertEqual(records[0]["accepted_version"], prior[0]["accepted_version"])
         self.assertFalse(unified.concern_changed(prior[0]["decision"], records[0]["decision"]))
+
+    def publication_report(self, report, previous=""):
+        report = copy.deepcopy(report)
+        raw = self.evidence.patch.encode()
+        report.update(diff_sha256=hashlib.sha256(raw).hexdigest(), diff_bytes=len(raw), changed_files=1,
+            diff_base_sha=self.meta["diff_base_sha"], review_batches=len(report["compatibility_coverage"]),
+            evidence_catalog=self.assessment["catalog"],
+            prior_state_sha256=api.prior_state_digest(comments.model_prior_state(
+                comments.parse_comment_state([previous]) if previous else [], compatibility_state.parse([previous]) if previous else [])))
+        return report
+
+    def publish_offline(self, report, previous=""):
+        source = MultipartGitHub([bot_comment(previous)] if previous else [])
+        dry = comments.DryRunGitHub(source)
+        before = copy.deepcopy(report)
+        self.assertTrue(comments.publish(report, REPO, 1911, report["head_sha"], report["base_sha"], self.evidence.patch.encode(), dry))
+        self.assertEqual(source.mutations(), [])
+        self.assertEqual(report, before)
+        return dry.bodies
+
+    def test_byte_identical_concerns_share_state_without_losing_distinct_items(self):
+        payload = self.payload()
+        second = copy.deepcopy(payload["decisions"][0])
+        second.update(title="Another contract using the same concern", plain_terms="Another consumer notices this change.",
+                      locations=[{"evidence_id": list(api.evidence_catalog(self.parsed))[-1]}])
+        payload["decisions"].append(second)
+        # Raw response validation still resolves one attachment per item.
+        checked = unified.validate(payload, self.parsed, self.assessment)
+        self.assertEqual(len(checked["decisions"]), 2)
+        meta = copy.deepcopy(self.meta)
+        meta["_compatibility"]["unified"] = True
+        with patch.object(api, "review_model", return_value=checked):
+            combined = api.review_batches(meta, api.split_diff(self.evidence.patch, api.MAX_DIFF_BYTES), REPO, "offline", self.parsed)
+        self.assertEqual(len(combined["decisions"]), 2)
+        report = {**self.report(), **combined}
+        report["decisions"] = [dict(d, prior_ids=[], relationship="new", reason="") for d in combined["decisions"]]
+        report = self.publication_report(report)
+        self.assertEqual(len(unified.projection(report)["compatibility_findings"]), 1)
+        bodies = self.publish_offline(report)
+        api_records = comments.parse_comment_state(bodies)
+        finding_records = compatibility_state.parse(bodies)
+        self.assertEqual(len(api_records), 2)
+        self.assertEqual(len(finding_records), 1)
+        self.assertEqual({r["decision"]["concern"]["prior_id"] for r in api_records}, {finding_records[0]["id"]})
+        self.assertEqual([r["decision"]["locations"] for r in api_records], [d["locations"] for d in report["decisions"]])
+        self.assertEqual(sum(body.count("**In plain terms:**") for body in bodies), 2)
+
+    def test_raw_duplicate_prior_claims_remain_invalid(self):
+        previous = compatibility_state.current(unified.projection(self.report()))
+        assessment = dict(self.assessment, previous=previous)
+        payload = self.payload()
+        payload["decisions"][0]["concern"]["prior_id"] = previous[0]["id"]
+        payload["decisions"].append(copy.deepcopy(payload["decisions"][0]))
+        with self.assertRaisesRegex(api.ReviewError, "Duplicate prior"):
+            unified.validate(payload, self.parsed, assessment)
+
+    def test_detached_claim_matching_old_hash_cannot_overwrite_history_or_acceptance(self):
+        old = self.report()
+        old["decisions"].append(copy.deepcopy(old["decisions"][0]))
+        old["decisions"][1]["title"] = "Another accepted contract"
+        old = self.publication_report(old)
+        old_body = comments.render_comment(old, REPO).replace("- [ ] Accept", "- [x] Accept")
+        prior = comments.parse_comment_state([old_body])
+        history = compatibility_state.parse([old_body])
+        current = copy.deepcopy(old)
+        current["decisions"][1]["concern"]["after"] = "A different existing operation fails."
+        for item, record in zip(current["decisions"], prior):
+            item.update(prior_ids=[record["id"]], relationship="unchanged", reason="")
+            item["concern"]["prior_id"] = ""  # every competing claim is detached
+        current.update(compatibility_previous=history, compatibility_updates=[{"prior_id": history[0]["id"],
+            "status": "not_assessed", "reason": "Conflicting batch identity claims; the historical concern is unresolved.", "evidence": []}])
+        current = self.publication_report(current, old_body)
+        bodies = self.publish_offline(current, old_body)
+        records = comments.parse_comment_state(bodies)
+        findings = compatibility_state.parse(bodies)
+        self.assertEqual({r["state"] for r in records}, {"needs_re_review"})
+        self.assertTrue(all(r["accepted_version"] is None for r in records))
+        self.assertEqual(len(findings), 3)
+        self.assertEqual(next(r for r in findings if r["id"] == history[0]["id"])["status"], "not_assessed")
+        fresh = {r["id"] for r in findings if r["status"] == "open"}
+        self.assertEqual(len(fresh), 2)
+        self.assertNotIn(history[0]["id"], fresh)
+        self.assertEqual({r["decision"]["concern"]["prior_id"] for r in records}, fresh)
+        # Once a human accepts these actual identities, explicit continuations
+        # preserve that acceptance without resetting on the next revision.
+        accepted = comments.parse_comment_state([body.replace("- [ ] Re-review", "- [x] Re-review") for body in bodies])
+        again = copy.deepcopy(current)
+        again["compatibility_previous"] = findings
+        for item, record in zip(again["decisions"], records):
+            item["concern"]["prior_id"] = record["decision"]["concern"]["prior_id"]
+        repeated, _ = comments.reconcile_records(again, accepted)
+        self.assertEqual({r["state"] for r in repeated}, {"accepted"})
 
     def test_oversized_unified_state_fails_before_publication(self):
         report = self.report(False)

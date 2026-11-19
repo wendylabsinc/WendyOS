@@ -95,20 +95,30 @@ def finding_id(finding):
     return hashlib.sha256(("compatibility-v1:" + seed).encode()).hexdigest()
 
 
-def current(result):
+def current(result, *, bindings=None):
     """Apply explicit source-backed updates; absence is never resolution."""
     public_only = result.get("input_visibility") != "private"
     previous = validate_records(copy.deepcopy(result.get("compatibility_previous", [])), public_only=public_only)
     by_id = {record["id"]: record for record in previous}
     used = set()
+    reassessed = {update["prior_id"] for update in result.get("compatibility_updates", [])}
     for finding in result.get("compatibility_findings", []):
         identifier = finding_id(finding)
+        # An unbound observation must not overwrite a separately reassessed
+        # historical record, even when its content hashes to that old identity.
+        if not finding.get("prior_id") and identifier in by_id and identifier in reassessed:
+            canonical, counter = identifier, 0
+            while identifier in by_id or identifier in used:
+                identifier = hashlib.sha256(f"compatibility-v1:unbound:{canonical}:{counter}".encode()).hexdigest()
+                counter += 1
         stored = {k: finding[k] for k in FINDING_FIELDS}
         if identifier in used:
             raise ReviewError("Multiple compatibility findings claim one identity")
         if finding.get("prior_id") and identifier not in by_id:
             raise ReviewError("Compatibility finding claims an unknown prior identity")
         used.add(identifier)
+        if bindings is not None:
+            bindings[json.dumps(finding, sort_keys=True)] = identifier
         by_id[identifier] = {"id": identifier, "status": "open", "finding": stored,
                              "resolution": {"reason": "", "evidence": []}}
     for update in result.get("compatibility_updates", []):
