@@ -275,8 +275,8 @@ func (p *sharePump) joinFailed(ctx context.Context, err error) {
 		p.setState(shareWaiting, wait.Error())
 		p.waiting = wait.Done
 		return
-	case isCameraInUse(err):
-		p.setState(shareNoFrames, "the real camera is held outside the agent")
+	case cameraHeldElsewhere(err):
+		p.setState(shareNoFrames, shareCameraHeldDetail)
 	case status.Code(err) == codes.NotFound || errors.Is(err, fs.ErrNotExist):
 		p.setState(shareUnplugged, "")
 	default:
@@ -320,8 +320,23 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 		detail = cerr.Error()
 	}
 	p.logger.Warn(fmt.Sprintf("camera share: %s: capture of %s stopped while the app reads: %s; retrying in %s", p.app, p.camera, detail, d))
+	if cameraHeldElsewhere(cerr) {
+		detail = shareCameraHeldDetail
+	}
 	p.setState(shareNoFrames, detail)
 	p.retry = time.After(d)
+}
+
+// shareCameraHeldDetail is the state detail while something other than the
+// agent holds the real camera, so the agent cannot read it for the node.
+const shareCameraHeldDetail = `the real camera is held by another app ("mode": "direct") or process`
+
+// cameraHeldElsewhere reports whether a join or a capture failed because
+// something else holds the real camera: the agent could not open it at all, or
+// read it through PipeWire, which has no frames for a node. The second reaches
+// the pump as a pixel refusal that names PipeWire, not the holder.
+func cameraHeldElsewhere(err error) bool {
+	return err != nil && (isCameraInUse(err) || errors.Is(err, errPixelsCameraHeld))
 }
 
 // write puts one hub frame on the node. A frame that is not the node's mode is

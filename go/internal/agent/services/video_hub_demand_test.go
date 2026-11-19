@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,6 +212,82 @@ func TestDeviceHub_NoTapTurnsAwayPixelSubscribersToo(t *testing.T) {
 	_, _, err = h.subscribePixels()
 	if !errors.Is(err, errPixelsUnavailable) || err.Error() != refusal.Error() {
 		t.Errorf("a later pixel join got %v, want the same refusal %v", err, refusal)
+	}
+}
+
+// A camera another client holds is read through PipeWire, which has no tap.
+// Pixel subscribers are told the camera is held (errPixelsCameraHeld), so a
+// share pump can say so; raw subscribers keep the producer's own refusal,
+// word for word.
+func TestDeviceHub_HeldCameraRefusalMarksPixelSubscribersOnly(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+
+	// Keeps the hub alive: the last unsubscribe cancels it.
+	idHold, _, _ := h.subscribe()
+	defer h.unsubscribe(idHold)
+	idRaw, chRaw, _ := h.subscribeKind(true)
+	idPix, chPix, err := h.subscribePixels()
+	if err != nil {
+		t.Fatalf("subscribePixels: %v", err)
+	}
+	defer h.unsubscribe(idRaw)
+	defer h.unsubscribe(idPix)
+
+	// What captureLocalCamera does before it falls back to PipeWire, through
+	// the wrapper it hands the producer.
+	var sink rawSink = tapDeliveries{hubSink: h, delivered: new(atomic.Bool)}
+	held, ok := sink.(heldCameraSink)
+	if !ok {
+		t.Fatal("tapDeliveries does not pass the held-camera mark on")
+	}
+	held.pixelsFromHeldCamera()
+	sink.rawNotOffered(fixedReason(pipeWireRawWhy))
+
+	if _, ok := <-chPix; ok {
+		t.Fatal("pixel subscriber channel should be closed")
+	}
+	if _, ok := <-chRaw; ok {
+		t.Fatal("raw subscriber channel should be closed")
+	}
+	pixErr := h.subscriberErr(idPix)
+	if !errors.Is(pixErr, errPixelsUnavailable) || !errors.Is(pixErr, errPixelsCameraHeld) {
+		t.Fatalf("pixel refusal %v: want errPixelsUnavailable and errPixelsCameraHeld", pixErr)
+	}
+	wantRaw := errRawUnavailable(pipeWireRawWhy).Error()
+	if rawErr := h.subscriberErr(idRaw); errors.Is(rawErr, errPixelsCameraHeld) || rawErr.Error() != wantRaw {
+		t.Fatalf("raw refusal = %v, want exactly %q", rawErr, wantRaw)
+	}
+	if _, _, err := h.subscribePixels(); !errors.Is(err, errPixelsCameraHeld) {
+		t.Fatalf("a later pixel join got %v, want the held-camera refusal", err)
+	}
+	if _, _, err := h.subscribeKind(true); errors.Is(err, errPixelsCameraHeld) || err.Error() != wantRaw {
+		t.Fatalf("a later raw join got %v, want exactly %q", err, wantRaw)
+	}
+
+	// The mark belongs to that start. A start that offers a tap lifts it...
+	format := &agentpb.RawFormat{Width: 2, Height: 1, Fourcc: fourccYUYV, BytesPerLine: 4}
+	h.pixelsOffered(format)
+	h.rawOffered(format)
+	id, _, err := h.subscribePixels()
+	if err != nil {
+		t.Fatalf("pixel join after a start with a tap: %v", err)
+	}
+	h.unsubscribe(id)
+	// ...and a later start without a tap that was not marked is a plain refusal.
+	h.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
+	if _, _, err := h.subscribePixels(); !errors.Is(err, errPixelsUnavailable) || errors.Is(err, errPixelsCameraHeld) {
+		t.Fatalf("pixel join after an unmarked refusal got %v, want a plain errPixelsUnavailable", err)
+	}
+
+	// A mark followed by a start that offers pixels (decoded MJPEG) does not
+	// outlive that start either.
+	h.pixelsFromHeldCamera()
+	h.pixelsOffered(format)
+	h.rawNotOffered(fixedReason("camera is captured as MJPEG at 2x1; raw frames are not offered"))
+	h.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
+	if _, _, err := h.subscribePixels(); errors.Is(err, errPixelsCameraHeld) {
+		t.Fatalf("a stale mark reached a later start's refusal: %v", err)
 	}
 }
 
