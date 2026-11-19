@@ -516,7 +516,8 @@ func TestSupervisorWendycomConnectionHasSeparateManifestDeadline(t *testing.T) {
 			}
 		}}
 		sup := NewSupervisor(zap.NewNop(), nil, func(SensorPairing, string) (SensorTransport, error) { return tr, nil }, nil, nil)
-		if _, err := sup.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "board:5054"); err != nil {
+		// The empty manifest is fetched, so the only outcome is nothing to mount.
+		if _, err := sup.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "board:5054"); !errors.Is(err, errNothingToMount) {
 			t.Fatalf("valid slow connection failed before fetching its manifest: %v", err)
 		}
 	})
