@@ -31,8 +31,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/devcover"
 	"github.com/wendylabsinc/wendy/go/internal/agent/devwatch"
+	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
+	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -810,10 +812,17 @@ func (s *VideoService) resolveShareCamera(r *shareRecord, present map[string]cam
 	}
 	moved := present[base]
 	ports := sameModelPorts(moved, present)
+	afterShareResolveRead()
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
+	if r.camera == moved {
+		// Another resolve read the same old camera and followed it here
+		// first, for every record of it: the answer is the same, so this one
+		// is resolved too, with nothing new to learn.
+		return base, true, false
+	}
 	if r.camera != want {
-		// Another resolve moved it meanwhile; this one's view is stale.
+		// It moved somewhere else meanwhile; this one's view is stale.
 		return "", false, false
 	}
 	follow := func(rec *shareRecord) {
@@ -830,6 +839,11 @@ func (s *VideoService) resolveShareCamera(r *shareRecord, present map[string]cam
 	}
 	return base, true, true
 }
+
+// afterShareResolveRead runs in resolveShareCamera between choosing the camera
+// to follow and storing it; a variable so a test can run a second resolve
+// there.
+var afterShareResolveRead = func() {}
 
 // learnSameModelPorts is the sibling half of resolveShareCamera for every
 // record at once: each record whose camera is present learns the ports of the
@@ -2680,4 +2694,105 @@ func (s *VideoService) waitShareGroup(wg *sync.WaitGroup, what string) {
 	case <-time.After(shareRemovalShutdownWait):
 		s.shareLogger().Warn(fmt.Sprintf("camera share: %s is still running after %s; shutting down without it", what, shareRemovalShutdownWait))
 	}
+}
+
+// cameraShareReportBudget bounds one CameraShareReport. The hardware discoverer
+// calls it on every camera listing, and shareDecisionFor can block on a
+// GStreamer element listing that is not context-aware.
+const cameraShareReportBudget = 3 * time.Second
+
+var _ hardware.CameraShareReporter = (*VideoService)(nil)
+
+// CameraShareReport describes how each local camera is shared, by device path,
+// for the hardware listing (internal/shared/camerashare names the keys). A
+// camera that is shared carries its mode; one that is not carries why. When
+// containers share it, it also names them and each one's state.
+//
+// Nothing is cached: every call decides afresh with shareDecisionFor, which
+// only reads (its GStreamer listing is memoised), on its own goroutine and
+// inside cameraShareReportBudget shared with the camera listing, so a slow
+// element listing costs the listing at most that. A camera whose decision does
+// not arrive in time is left out. No share lock is held while deciding or
+// reading a pump: the records are copied out under mu first.
+func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[string]string {
+	ctx, cancel := context.WithTimeout(ctx, cameraShareReportBudget)
+	defer cancel()
+	type listing struct {
+		devices []*agentpb.VideoDevice
+		err     error
+	}
+	listed, ok := withinBudget(ctx, func() listing {
+		devices, err := s.listCameras(ctx)
+		return listing{devices, err}
+	})
+	if !ok || listed.err != nil {
+		return nil
+	}
+
+	report := make(map[string]map[string]string)
+	for _, dev := range listed.devices {
+		switch dev.GetTransport() {
+		case agentpb.VideoTransport_VIDEO_TRANSPORT_ROS2, agentpb.VideoTransport_VIDEO_TRANSPORT_IP:
+			continue
+		}
+		decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) })
+		if !ok {
+			break
+		}
+		props := map[string]string{}
+		if decision.Shared {
+			props[camerashare.KeyMode] = decision.Mode.String()
+		} else {
+			props[camerashare.KeyUnavailable] = decision.Reason
+		}
+		if with, state := s.shareStatesOf(dev.GetPath()); len(with) > 0 {
+			props[camerashare.KeyWith] = strings.Join(with, ", ")
+			props[camerashare.KeyState] = strings.Join(state, ", ")
+		}
+		report[dev.GetPath()] = props
+	}
+	return report
+}
+
+// shareStatesOf returns the sorted IDs of the containers sharing the camera at
+// path and, in the same order, "<id> (<phase>[: <detail>])" for each.
+func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
+	type snap struct {
+		id    string
+		pump  *sharePump
+		tookB string
+	}
+	var snaps []snap
+	s.shares.mu.Lock()
+	for id, c := range s.shares.containers {
+		if c == nil {
+			continue
+		}
+		for _, r := range c.shares {
+			if r != nil && r.cameraPath == path {
+				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera})
+				break
+			}
+		}
+	}
+	s.shares.mu.Unlock()
+	slices.SortFunc(snaps, func(a, b snap) int { return strings.Compare(a.id, b.id) })
+	for _, sn := range snaps {
+		var text string
+		switch {
+		case sn.tookB != "":
+			text = "not sharing: took the real camera after a replug"
+		case sn.pump == nil:
+			text = string(shareIdle)
+		default:
+			st := sn.pump.State()
+			text = string(st.Phase)
+			if st.Detail != "" {
+				text += ": " + st.Detail
+			}
+		}
+		ids = append(ids, sn.id)
+		states = append(states, fmt.Sprintf("%s (%s)", sn.id, text))
+	}
+	return ids, states
 }
