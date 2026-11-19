@@ -66,6 +66,8 @@ const (
 	vidiocSExtCtrls = 0xC0205648 // _IOWR('V', 72, struct v4l2_ext_controls), 32 bytes
 	// _IOWR('V', 74, struct v4l2_frmsizeenum): 4+4+4 + 24 (stepwise union) + 8 = 44 bytes.
 	vidiocEnumFramesizes = 0xC02C564A
+	// _IOWR('V', 2, struct v4l2_fmtdesc), 64 bytes.
+	vidiocEnumFmt = 0xC0405602
 
 	v4l2FrmsizeTypeDiscrete = 1
 
@@ -301,6 +303,43 @@ var deviceSupportsMJPEGSize = func(path string, width, height uint32) bool {
 		}
 	}
 	return false
+}
+
+// v4l2FmtDesc matches struct v4l2_fmtdesc (64 bytes).
+type v4l2FmtDesc struct {
+	Index       uint32
+	Type        uint32
+	Flags       uint32
+	Description [32]byte
+	PixelFormat uint32
+	MbusCode    uint32
+	_           [3]uint32
+}
+
+// v4l2CapturePixelFormats lists the pixel formats a node's capture queue
+// offers, and false when the driver would not say (the node cannot be opened,
+// or it lists nothing for this queue).
+//
+// VIDIOC_ENUM_FMT is a query: it works on a read-only descriptor and while
+// another process is streaming, and it changes nothing. That is the point of
+// asking this way. VIDIOC_S_FMT answers the same question only by taking the
+// device, which fails while an app has it and gets in the app's way otherwise.
+func v4l2CapturePixelFormats(path string) ([]uint32, bool) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, false
+	}
+	defer unix.Close(fd) //nolint:errcheck
+	var formats []uint32
+	for index := uint32(0); index < 64; index++ {
+		desc := v4l2FmtDesc{Index: index, Type: v4l2BufTypeVideoCapture}
+		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocEnumFmt,
+			uintptr(unsafe.Pointer(&desc))); errno != 0 {
+			break // EINVAL marks the end of the list
+		}
+		formats = append(formats, desc.PixelFormat)
+	}
+	return formats, len(formats) > 0
 }
 
 // v4l2ReqBuffers matches struct v4l2_requestbuffers (20 bytes).
@@ -967,6 +1006,10 @@ type VideoService struct {
 	globDevices     func() ([]string, error)
 	readDeviceName  func(base string) (string, error)
 	hasVideoCapture func(path string) bool
+	// capturePixelFormats lists the pixel formats a camera offers without
+	// claiming it; see v4l2CapturePixelFormats. Injectable so tests can
+	// describe a camera without a V4L2 node.
+	capturePixelFormats func(path string) ([]uint32, bool)
 	// readStableNames returns the udev by-id / by-path names keyed by resolved
 	// device path. Injectable so the enumeration can be tested without
 	// /dev/v4l. See video_stable_id.go for why these exist.
@@ -1086,6 +1129,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 			_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQueryCap, uintptr(unsafe.Pointer(&cap)))
 			return errno == 0 && cap.hasVideoCapture()
 		},
+		capturePixelFormats: v4l2CapturePixelFormats,
 		readStableNames: func() map[string]stableNames {
 			return readStableNames(v4lByIDDir, v4lByPathDir)
 		},
