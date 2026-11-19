@@ -13,7 +13,7 @@ import (
 
 // Watch calls onEvent for each videoN node created or deleted in dir until ctx
 // ends, then returns nil. Attribute changes are deliberately not watched: a
-// node being opened or chmodded is not a replug.
+// node being opened or chmodded is not a replug. onEvent runs on the watch loop and must not block.
 func Watch(ctx context.Context, dir string, onEvent func(Event)) error {
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
