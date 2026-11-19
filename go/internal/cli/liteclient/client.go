@@ -1349,6 +1349,8 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 		c.link = nil
 		if setup.Err() != nil {
 			err = setup.Err()
+		} else if peerRejectedCertificate(err) {
+			return fmt.Errorf("SensorLink handshake: %w (%s): %w", ErrSourceRejectedCertificate, describeRejection(leaf, conn.ConnectionState().PeerCertificates), err)
 		}
 		return fmt.Errorf("SensorLink handshake: %w", err)
 	}
