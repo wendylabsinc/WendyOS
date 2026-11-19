@@ -93,7 +93,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Use the repository's maintained compiler; Babel's module keeps its
           # own minimum language version for library consumers.
@@ -910,9 +910,6 @@ jobs:
 
       - uses: ./.github/actions/setup-macos-ci
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
       - name: Require native macOS SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -932,14 +929,14 @@ jobs:
             ${{ runner.temp }}/g1-cache-publication/*.stderr.log
           if-no-files-found: ignore
           retention-days: 7
+      - name: Install CLI native dependencies
+        run: brew install libusb pkg-config
       - name: Test direct and nested USB disk discovery
         shell: bash
         run: |
           go test ./go/internal/cli/tegraflash/t234 -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksNestedHub ' "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksDirect ' "$RUNNER_TEMP/disk-discovery.log"
-      - name: Install CLI native dependencies
-        run: brew install libusb pkg-config
       - name: Verify native Make VERSION in the built CLI
         run: python3 .github/scripts/test-native-make-version.py
       - name: Compile raw-device and target-scoped preparation tests
@@ -975,9 +972,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: '26.5'
       - name: Install native build dependencies
         run: brew install xcodegen pkg-config libusb cmake ninja
       - name: Build and test native app
@@ -1110,6 +1104,14 @@ jobs:
         run: bash .github/scripts/test-gstreamer-no-parser.sh
       - name: Decode native H264 for a late viewer and recording and require regression controls
         run: bash .github/scripts/test-native-h264-parameter-sets.sh
+      - name: Require VP8 decoding after lost reads and oversized elements
+        env:
+          WENDY_GSTREAMER_REQUIRED: '1'
+        run: |
+          set -euo pipefail
+          test_name=TestGStreamerVP8DecodesAcrossLostReadsForViewersAndEpisodes
+          go test -race ./go/internal/agent/services -run "^${test_name}$" -v -count=1 -timeout 180s | tee "$RUNNER_TEMP/vp8-decoding.log"
+          grep -q "^--- PASS: $test_name " "$RUNNER_TEMP/vp8-decoding.log"
       - name: Require camera pairing before ONVIF and RTSP connections
         run: bash .github/scripts/test-camera-pairing-admission.sh
       - name: Preserve 16-bit thermal samples through the real raw tap
@@ -1359,7 +1361,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum

@@ -75,5 +75,8 @@
     "wrangler": "4.160.1"
   },
   "type": "module",
-  "main": "electron/main.mjs"
+  "main": "electron/main.mjs",
+  "overrides": {
+    "picomatch": "npm:@ryotsu/picomatch@4.0.7-a"
+  }
 }

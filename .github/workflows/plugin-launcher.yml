@@ -28,6 +28,10 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-macos-ci
         if: runner.os == 'macOS'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: runner.os == 'Linux'
+        with:
+          python-version: '3.12'
       - name: shellcheck
         if: runner.os == 'Linux'
         run: shellcheck -s sh plugins/wendy/scripts/wendy scripts/pin-cli.sh scripts/test/plugin-launcher/run.sh
