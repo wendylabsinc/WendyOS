@@ -588,6 +588,10 @@ func main() {
 	// client miss (e.g. a container's task crash-exiting on its own).
 	if ctrdClient != nil {
 		ctrdClient.SetCameraLoopbackProvider(videoSvc)
+		// The camera share manager rides the same syncs: the first adopts the
+		// share nodes of apps that kept running through an agent restart, and
+		// drops those of containers deleted while the agent was down.
+		ctrdClient.SetCameraShareProvider(videoSvc)
 		ctrdClient.SyncCameraLoopbacks(ctx)
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
 	}
