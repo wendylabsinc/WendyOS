@@ -380,6 +380,60 @@ func TestSharePump_DropsFramesOfAnotherSize(t *testing.T) {
 	}
 }
 
+// While every hub frame is dropped for being another mode, the app gets
+// nothing, and the state says so with both formats; a matching frame puts it
+// back to reading.
+func TestSharePump_DroppedFramesShowAsNoFrames(t *testing.T) {
+	sub := newSpFakeSub()
+	j := newSpJoiner(spSubResult(sub))
+	h := startSharePump(t, j, false)
+
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.waitState(t, shareReading)
+	sub.frames <- spFrame(640, 480, 1280, 1)
+	got := h.waitState(t, shareNoFrames)
+	if want := "camera frames are 640x480 YUYV (1280 bytes/line, 614400 bytes/frame), the node declares 1280x720 YUYV, 30 fps"; got.Detail != want {
+		t.Fatalf("state detail = %q, want %q", got.Detail, want)
+	}
+	sub.frames <- spFrame(640, 480, 1280, 2)
+	sub.frames <- spModeFrame(uint64(time.Now().UnixNano()))
+	if e := h.node.next(t); e.kind != "frame" {
+		t.Fatalf("first write = %+v, want the matching frame", e)
+	}
+	h.waitState(t, shareReading)
+	sub.frames <- spFrame(640, 480, 1280, 3)
+	h.waitState(t, shareNoFrames)
+	if n := h.logged("not writing them"); n != 1 {
+		t.Fatalf("mismatch lines = %d, want 1 per subscription", n)
+	}
+}
+
+// A nudge (the camera came back) ends a backoff at once; a pump that is
+// reading or idle ignores it.
+func TestSharePump_ANudgeEndsTheBackoffAtOnce(t *testing.T) {
+	sub := newSpFakeSub()
+	j := newSpJoiner(spErrResult(status.Error(codes.NotFound, "camera unplugged")), spSubResult(sub))
+	h := startSharePumpBackoff(t, j, false, []time.Duration{time.Hour})
+
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.waitState(t, shareUnplugged)
+	h.pump.Nudge()
+	j.waitJoin(t)
+	h.waitState(t, shareReading)
+	h.pump.Nudge() // reading: nothing to retry
+	h.pump.Nudge()
+	time.Sleep(20 * time.Millisecond)
+	h.node.send(t, 0)
+	h.waitState(t, shareIdle)
+	h.pump.Nudge() // idle: nothing to retry
+	time.Sleep(20 * time.Millisecond)
+	if got := j.count(); got != 2 {
+		t.Fatalf("joins = %d, want 2: the failure, then the nudged retry", got)
+	}
+}
+
 func TestSharePump_RetriesCaptureWhileAReaderWaits(t *testing.T) {
 	sub := newSpFakeSub()
 	gate := make(chan struct{})

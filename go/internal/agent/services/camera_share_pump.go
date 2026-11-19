@@ -83,14 +83,22 @@ type sharePump struct {
 	mu    sync.Mutex
 	state shareState
 
+	// nudge asks Run to end a backoff at once (Nudge); buffered, so a nudge
+	// never blocks the caller and several in a row count once.
+	nudge chan struct{}
+
 	// Owned by Run.
 	reading bool // the node's latest count is 1
 	sub     shareSubscription
 	frames  <-chan *videoFrame
 	wrote   bool // this session wrote a camera frame
 	dropped bool // the size-mismatch line was logged for this subscription
-	attempt int  // consecutive failures, indexes the backoff
-	first   bool // no count has been seen yet
+	// mismatch is the state detail while the hub's frames are not the node's
+	// mode and are dropped ("" while they match), so the state is set once per
+	// change rather than once per frame.
+	mismatch string
+	attempt  int  // consecutive failures, indexes the backoff
+	first    bool // no count has been seen yet
 	// writeLogged: a node write failure was logged for this subscription.
 	// writeFailed: the latest write failed (state is "no frames").
 	writeLogged, writeFailed bool
@@ -111,6 +119,18 @@ func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode
 		nowWall: func() int64 { return time.Now().UnixNano() },
 		state:   shareState{Phase: shareIdle},
 		first:   true,
+		nudge:   make(chan struct{}, 1),
+	}
+}
+
+// Nudge tells the pump its camera may be back (a replug, or a /dev watch that
+// lost events): a pump waiting out a backoff while an app reads joins at once
+// instead of after up to the last backoff step. It never blocks, and does
+// nothing to a pump that is reading, idle, or waiting for a recording.
+func (p *sharePump) Nudge() {
+	select {
+	case p.nudge <- struct{}{}:
+	default:
 	}
 }
 
@@ -155,6 +175,17 @@ func (p *sharePump) Run(ctx context.Context) {
 			}
 			p.write(f)
 		case <-p.retry:
+			p.retry = nil
+			if p.leftMeanwhile(ctx, counts) {
+				continue
+			}
+			p.start(ctx)
+		case <-p.nudge:
+			// Only a backoff is cut short: a recording's wait ends on its
+			// own, and a pump that is reading or idle has nothing to retry.
+			if p.retry == nil || !p.reading {
+				continue
+			}
 			p.retry = nil
 			if p.leftMeanwhile(ctx, counts) {
 				continue
@@ -226,7 +257,7 @@ func (p *sharePump) start(ctx context.Context) {
 		return
 	}
 	p.sub, p.frames = sub, sub.Frames()
-	p.dropped, p.writeLogged, p.writeFailed = false, false, false
+	p.dropped, p.writeLogged, p.writeFailed, p.mismatch = false, false, false, ""
 	p.setState(shareReading, "")
 	if p.onReading != nil {
 		p.onReading()
@@ -272,7 +303,7 @@ func (p *sharePump) nextDelay() time.Duration {
 // captureEnded handles the frames channel closing while the count is 1.
 func (p *sharePump) captureEnded(ctx context.Context) {
 	sub := p.sub
-	p.sub, p.frames = nil, nil
+	p.sub, p.frames, p.mismatch = nil, nil, ""
 	if sub == nil {
 		return
 	}
@@ -293,7 +324,10 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 	p.retry = time.After(d)
 }
 
-// write puts one hub frame on the node.
+// write puts one hub frame on the node. A frame that is not the node's mode is
+// dropped, and while frames are dropped the state says so ("no frames", with
+// both formats), not "reading": the app gets nothing. A matching frame puts it
+// back to "reading".
 func (p *sharePump) write(f *videoFrame) {
 	if f == nil {
 		return
@@ -302,10 +336,14 @@ func (p *sharePump) write(f *videoFrame) {
 	if rf == nil || rf.GetWidth() != p.mode.Width || rf.GetHeight() != p.mode.Height ||
 		strings.TrimSpace(rf.GetFourcc()) != strings.TrimSpace(p.mode.Fourcc) ||
 		rf.GetBytesPerLine() != p.mode.BytesPerLine {
+		detail := fmt.Sprintf("camera frames are %s, the node declares %s", describeRawFormat(rf), p.mode)
 		if !p.dropped {
 			p.dropped = true
-			p.logger.Warn(fmt.Sprintf("camera share: %s: camera frames are %s, the node declares %s; not writing them",
-				p.app, describeRawFormat(rf), p.mode))
+			p.logger.Warn(fmt.Sprintf("camera share: %s: %s; not writing them", p.app, detail))
+		}
+		if p.mismatch != detail {
+			p.mismatch = detail
+			p.setState(shareNoFrames, detail)
 		}
 		return
 	}
@@ -316,13 +354,13 @@ func (p *sharePump) write(f *videoFrame) {
 				p.writeLogged = true
 				p.logger.Warn(fmt.Sprintf("camera share: %s: writing %s frames to its node failed: %v; frames are not reaching the app", p.app, p.camera, err))
 			}
-			p.writeFailed = true
+			p.writeFailed, p.mismatch = true, ""
 			p.setState(shareNoFrames, err.Error())
 		}
 		return
 	}
-	if p.writeFailed {
-		p.writeFailed = false
+	if p.writeFailed || p.mismatch != "" {
+		p.writeFailed, p.mismatch = false, ""
 		p.setState(shareReading, "")
 	}
 	p.wrote = true
@@ -340,7 +378,7 @@ func (p *sharePump) stop() {
 	p.wrote = false
 	p.attempt = 0
 	p.quick = 0
-	p.writeFailed = false
+	p.writeFailed, p.mismatch = false, ""
 	p.setState(shareIdle, "")
 }
 
