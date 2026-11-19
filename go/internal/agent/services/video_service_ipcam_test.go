@@ -61,6 +61,9 @@ type fakeLoopback struct {
 	auxRemoved []int
 	allocated  []int
 	onRemove   func(nr int)
+	// refuseRemove makes RemoveAuxNode leave the node, as the driver does
+	// (EBUSY) when something opened it.
+	refuseRemove bool
 }
 
 // auxCall is one node creation: its number and label.
@@ -124,7 +127,9 @@ func (f *fakeLoopback) RemoveAuxNode(nr int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxRemoved = append(f.auxRemoved, nr)
-	delete(f.aux, nr)
+	if !f.refuseRemove {
+		delete(f.aux, nr)
+	}
 	if f.onRemove != nil {
 		f.onRemove(nr)
 	}

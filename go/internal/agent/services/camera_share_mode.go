@@ -35,6 +35,14 @@ type cameraShares struct {
 	// pending holds the numbers of share nodes being made, so IsShareNode
 	// knows them before their record exists.
 	pending map[int]bool
+	// removing holds the share nodes waiting to be removed, by number
+	// (camera_share.go, retireShareNode). removalWG tracks their goroutines,
+	// which run on removalCtx; closed (set by Shutdown) starts no more.
+	removing      map[int]*shareRemoval
+	removalWG     sync.WaitGroup
+	removalCtx    context.Context
+	removalCancel context.CancelFunc
+	closed        bool
 
 	// ops serialises removal, adoption and shutdown (camera_share.go), so a
 	// record is never stopped twice or adopted while it is being removed.
@@ -63,6 +71,9 @@ type shareRecord struct {
 	mode                   sharedMode
 	node                   int
 	camera                 camera.Identity
+	// nodeMade is when this agent made the node (shareRemovalClock); zero for
+	// a node an earlier agent made.
+	nodeMade time.Time
 
 	// The node's writer and the pump feeding it; nil for a record loaded from
 	// the state file until it is adopted, and after Shutdown.
