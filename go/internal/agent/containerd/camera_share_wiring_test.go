@@ -3,10 +3,15 @@ package containerd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
 
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/pkg/cio"
+	"github.com/containerd/errdefs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -27,10 +32,11 @@ type shareCall struct {
 // provider, in the order the calls returned. cover, when set, runs inside
 // CoverCameraShares before it returns, and its errors are returned.
 type fakeCameraShares struct {
-	mu    sync.Mutex
-	calls []shareCall
-	syncs [][]services.CameraShareContainer
-	cover func(containerID string, pid uint32) []error
+	mu     sync.Mutex
+	calls  []shareCall
+	syncs  [][]services.CameraShareContainer
+	cover  func(containerID string, pid uint32) []error
+	remove func(containerID string) // runs inside RemoveCameraShares
 }
 
 var _ CameraShareProvider = (*fakeCameraShares)(nil)
@@ -68,7 +74,19 @@ func (f *fakeCameraShares) ReleaseCameraShares(containerID string) {
 }
 
 func (f *fakeCameraShares) RemoveCameraShares(containerID string) {
+	f.mu.Lock()
+	remove := f.remove
+	f.mu.Unlock()
+	if remove != nil {
+		remove(containerID)
+	}
 	f.record(shareCall{op: "remove", containerID: containerID})
+}
+
+func (f *fakeCameraShares) setRemove(remove func(containerID string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remove = remove
 }
 
 func (f *fakeCameraShares) SyncCameraShares(_ context.Context, containers []services.CameraShareContainer) {
@@ -173,7 +191,7 @@ func TestCameraShareContainers(t *testing.T) {
 
 // A listing that missed a container must not reach the sync: the share
 // manager would take the missing container for deleted and remove its nodes.
-func TestSyncCameraSharesSkipsAnIncompleteListing(t *testing.T) {
+func TestCameraShareSyncSkipsAnIncompleteListing(t *testing.T) {
 	fake := &fakeCameraShares{}
 	c := &Client{logger: zap.NewNop()}
 	c.SetCameraShareProvider(fake)
@@ -194,9 +212,58 @@ func TestSyncCameraSharesSkipsAnIncompleteListing(t *testing.T) {
 	}
 }
 
+// cameraInfoContainerForTest is a listed container whose Info returns labels
+// or infoErr, and which has no task.
+type cameraInfoContainerForTest struct {
+	containerd.Container
+	id      string
+	labels  map[string]string
+	infoErr error
+}
+
+func (f cameraInfoContainerForTest) ID() string { return f.id }
+
+func (f cameraInfoContainerForTest) Info(context.Context, ...containerd.InfoOpts) (containers.Container, error) {
+	if f.infoErr != nil {
+		return containers.Container{}, f.infoErr
+	}
+	return containers.Container{ID: f.id, Labels: f.labels}, nil
+}
+
+func (f cameraInfoContainerForTest) Task(context.Context, cio.Attach) (containerd.Task, error) {
+	return nil, errdefs.ErrNotFound
+}
+
+// A container deleted between the listing and its read is gone either way, so
+// the sync still runs without it; one that exists but cannot be read stops the
+// share sync, since the share manager would take it for deleted.
+func TestCameraShareSyncSkipsOnlyUnreadableContainers(t *testing.T) {
+	shared := map[string]string{labelKeyAppID: "a", labelKeyCameraShare: "shared"}
+	deleted := cameraInfoContainerForTest{id: "deleted", infoErr: fmt.Errorf("container %q: %w", "deleted", errdefs.ErrNotFound)}
+	kept := cameraInfoContainerForTest{id: "kept", labels: shared}
+	unreadable := cameraInfoContainerForTest{id: "unreadable", infoErr: errors.New("connection reset")}
+
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	infos, complete := c.cameraInfos(context.Background(), []containerd.Container{deleted, kept})
+	if !complete {
+		t.Fatal("a container deleted since the listing marked the listing incomplete")
+	}
+	c.syncCameraShares(context.Background(), infos, complete)
+	want := [][]services.CameraShareContainer{{{ID: "kept"}}}
+	if syncs := fake.allSyncs(); !reflect.DeepEqual(syncs, want) {
+		t.Fatalf("syncs = %+v, want %+v", syncs, want)
+	}
+
+	if _, complete := c.cameraInfos(context.Background(), []containerd.Container{kept, unreadable, deleted}); complete {
+		t.Fatal("a container that exists but could not be read left the listing complete")
+	}
+}
+
 // Every cover error is logged with the app's name, and none is returned: the
 // start goes ahead with the real camera.
-func TestCoverCameraSharesLogsEachErrorWithTheAppName(t *testing.T) {
+func TestCameraShareCoverLogsEachErrorWithTheAppName(t *testing.T) {
 	core, logs := observer.New(zapcore.DebugLevel)
 	fake := &fakeCameraShares{cover: func(string, uint32) []error {
 		return []error{errors.New("setns failed"), errors.New("timed out")}
@@ -240,7 +307,7 @@ func TestCameraShareCallsWithoutAProviderDoNothing(t *testing.T) {
 // A nil *VideoService (main.go without a video service) is stored as no
 // provider, not as an interface holding a nil pointer that would pass every
 // nil check and then panic (WDY-3835's class of bug).
-func TestSetCameraShareProviderNilVideoService(t *testing.T) {
+func TestCameraShareProviderNilVideoService(t *testing.T) {
 	c := &Client{logger: zap.NewNop()}
 	c.SetCameraShareProvider((*services.VideoService)(nil))
 	if c.cameraShareProvider != nil {

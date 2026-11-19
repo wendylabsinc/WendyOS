@@ -6,6 +6,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/errdefs"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
@@ -160,10 +161,29 @@ func (c *Client) SyncCameraLoopbacks(ctx context.Context) {
 		return
 	}
 
-	infos := make([]containerCameraInfo, 0, len(ctrs))
-	complete := true
+	infos, complete := c.cameraInfos(ctx, ctrs)
+
+	if c.cameraLoopbackProvider != nil {
+		if err := c.cameraLoopbackProvider.EnsureCameraNodes(ctx); err != nil {
+			c.logger.Warn("camera loopback sync: ensuring camera nodes failed", zap.Error(err))
+		}
+		c.cameraLoopbackProvider.SetCameraContainerConsumers(ctx, cameraConsumerNames(infos))
+		c.cameraLoopbackProvider.SetTwoPlaneContainerConsumers(ctx, twoPlaneConsumerNames(infos))
+	}
+	c.syncCameraShares(ctx, infos, complete)
+}
+
+// cameraInfos reads each listed container's labels and task state. complete
+// is false when a container that still exists could not be read; one deleted
+// since the listing is simply left out, since it is gone either way.
+func (c *Client) cameraInfos(ctx context.Context, ctrs []containerd.Container) (infos []containerCameraInfo, complete bool) {
+	infos = make([]containerCameraInfo, 0, len(ctrs))
+	complete = true
 	for _, ctr := range ctrs {
 		info, err := ctr.Info(ctx)
+		if errdefs.IsNotFound(err) {
+			continue
+		}
 		if err != nil {
 			c.logger.Warn("camera loopback sync: reading container failed", zap.String("id", ctr.ID()), zap.Error(err))
 			complete = false
@@ -179,15 +199,7 @@ func (c *Client) SyncCameraLoopbacks(ctx context.Context) {
 		}
 		infos = append(infos, containerCameraInfo{name: ctr.ID(), labels: info.Labels, running: running, pid: pid})
 	}
-
-	if c.cameraLoopbackProvider != nil {
-		if err := c.cameraLoopbackProvider.EnsureCameraNodes(ctx); err != nil {
-			c.logger.Warn("camera loopback sync: ensuring camera nodes failed", zap.Error(err))
-		}
-		c.cameraLoopbackProvider.SetCameraContainerConsumers(ctx, cameraConsumerNames(infos))
-		c.cameraLoopbackProvider.SetTwoPlaneContainerConsumers(ctx, twoPlaneConsumerNames(infos))
-	}
-	c.syncCameraShares(ctx, infos, complete)
+	return infos, complete
 }
 
 // RunCameraLoopbackSync runs SyncCameraLoopbacks on a fixed interval until ctx

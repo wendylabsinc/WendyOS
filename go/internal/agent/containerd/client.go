@@ -1875,8 +1875,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		// The old container's shares go before the new container's are made,
 		// and on this goroutine, so the removal never races the new
 		// container's CreateCameraShares for the same ID (Review Focus 1).
+		// Outside c.mu, like the NAN release below: the share manager may be
+		// busy with a sync, and other apps' lifecycle calls must not wait for
+		// it. The container's lifecycle lock keeps this Remove before the
+		// Create.
 		if oldSharedCamera {
+			c.mu.Unlock()
 			c.removeCameraShares(containerName)
+			c.mu.Lock()
 		}
 		if oldHadSystemAPI && c.systemAPISocketProvider != nil {
 			c.systemAPISocketProvider.Release(appID, serviceName)

@@ -327,6 +327,38 @@ func TestIntegrationCameraShareNodesFollowCreateReplaceAndDelete(t *testing.T) {
 	}
 }
 
+// A redeploy removes the old container's shares without holding the client's
+// global lock, so other apps' lifecycle calls never wait on the share
+// manager; the Remove still comes before the new container's Create.
+func TestIntegrationCameraShareRedeployRemovesWithoutTheClientLock(t *testing.T) {
+	c, ctx, fake, _ := newCameraShareClient(t)
+	const app = "share-unlocked"
+	createShareApp(t, c, ctx, app, "1", sharedCamera, shareAppIdle)
+	_, done := startShareApp(t, c, ctx, app)
+
+	var lockFree []bool
+	fake.setRemove(func(containerID string) {
+		if containerID != app {
+			return
+		}
+		free := c.mu.TryLock()
+		if free {
+			c.mu.Unlock()
+		}
+		lockFree = append(lockFree, free)
+	})
+	createShareApp(t, c, ctx, app, "2", sharedCamera, shareAppIdle)
+	fake.setRemove(nil)
+	<-done
+
+	if !reflect.DeepEqual(lockFree, []bool{true}) {
+		t.Fatalf("c.mu free during the redeploy's Remove: %v, want [true]", lockFree)
+	}
+	if got := fake.ops(app, "create", "remove"); !reflect.DeepEqual(got, []string{"create", "remove", "create"}) {
+		t.Fatalf("after redeploy: %v, want [create remove create]", got)
+	}
+}
+
 // A shared container's namespace is let go of when its task exits on its own,
 // when it is stopped, and when a start fails after the cover.
 func TestIntegrationCameraShareReleasedWhenTheTaskEnds(t *testing.T) {
