@@ -138,7 +138,6 @@ public struct VideoDevice {
         buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
         buffer.memory = V4L2_MEMORY_MMAP
         buffer.index = 0
-        buffer.length = frameSize
         result = ioctl(fd, UInt(WENDY_VIDIOC_QUERYBUF), &buffer)
         if result < 0 {
             throw VideoError.ioctlFailed(command: "VIDIOC_QUERYBUF", errno: errno)
@@ -195,7 +194,14 @@ public struct VideoDevice {
         }
 
         print("Grabbing data")
-        let imageData = Data(bytes: data, count: min(Int(buffer.length), Int(frameSize)))
+        let usedBytes = min(Int(dqbuf.bytesused), Int(buffer.length), Int(frameSize))
+        let neededBytes = Int(bytesPerLine) * Int(height - 1) + Int(width) * 2
+        guard usedBytes >= neededBytes else {
+            throw VideoError.invalidData(
+                message: "Short frame: \(usedBytes) bytes, \(width)x\(height) needs \(neededBytes)"
+            )
+        }
+        let imageData = Data(bytes: data, count: usedBytes)
 
         print("Stop streaming")
 
