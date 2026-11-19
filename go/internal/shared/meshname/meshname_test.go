@@ -24,7 +24,7 @@ func TestDeviceFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "device-00000001-4000-8000-0000-000000000001.wendy.internal"
+	want := "device-00000001-4000-8000-0000-000000000001.mesh.wendy.internal"
 	if got := DeviceFor(device); got != want {
 		t.Fatalf("DeviceFor = %q, want %q", got, want)
 	}

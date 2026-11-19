@@ -12,12 +12,11 @@ import (
 )
 
 const (
-	// Suffix is reserved for Wendy mesh routing. The .internal TLD is reserved
-	// for private-use DNS and, unlike .dev, does not force browsers onto HTTPS.
-	Suffix = "wendy.internal"
+	// Suffix is the original private mesh namespace.
+	Suffix = "mesh.wendy.internal"
 
-	// PreviousSuffix is the original private mesh namespace.
-	PreviousSuffix = "mesh.wendy.internal"
+	// ShortSuffix is the namespace for short, tenant-scoped device hostnames.
+	ShortSuffix = "wendy.internal"
 
 	// LegacySuffix remains resolvable so deployed apps and older CLIs using the
 	// original public/HSTS-preloaded namespace continue to route.
@@ -30,19 +29,17 @@ const (
 // database record ID and not a mesh identity. Only the CLI cloud-tunnel path
 // for pre-v2 assets still needs it; new callers must use DeviceFor.
 func Device(assetID int32) string {
-	return fmt.Sprintf("device-%d.%s", assetID, PreviousSuffix)
+	return fmt.Sprintf("device-%d.%s", assetID, Suffix)
 }
 
-// DeviceFor returns the canonical mesh hostname for a device principal:
-// device-<uuid>.wendy.internal, with the canonical lowercase hyphenated
-// device UUID.
+// DeviceFor returns the mesh hostname for a device principal under Suffix.
+// Older agents also resolve this spelling.
 func DeviceFor(device meshid.Device) string {
 	return fmt.Sprintf("device-%s.%s", device.UUID().String(), Suffix)
 }
 
-// Suffixes lists current and compatibility namespaces. Match the longest suffix
-// first when parsing: PreviousSuffix is itself a child of Suffix.
-func Suffixes() []string { return []string{Suffix, PreviousSuffix, LegacySuffix} }
+// Suffixes lists device hostname namespaces from longest to shortest.
+func Suffixes() []string { return []string{Suffix, LegacySuffix, ShortSuffix} }
 
 var nonLabelRE = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -103,5 +100,5 @@ func Friendly(name string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return label + "." + Suffix, true
+	return label + "." + ShortSuffix, true
 }
