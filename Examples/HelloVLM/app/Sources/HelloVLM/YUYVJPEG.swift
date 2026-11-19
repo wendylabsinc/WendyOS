@@ -5,6 +5,14 @@ struct YUYVJPEGError: Error, CustomStringConvertible {
     let description: String
 }
 
+/// Orders video node names (`video0`, `video2`, `video10`) by their number.
+func videoNodesInNumberOrder(_ names: [String]) -> [String] {
+    func number(_ name: String) -> Int {
+        Int(name.drop(while: { !$0.isNumber })) ?? Int.max
+    }
+    return names.sorted { (number($0), $0) < (number($1), $1) }
+}
+
 /// Collects the bytes swift-jpeg writes.
 private struct DataDestination: JPEG.Bytestream.Destination {
     var data = Data()

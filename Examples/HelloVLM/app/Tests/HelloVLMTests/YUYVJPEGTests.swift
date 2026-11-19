@@ -47,6 +47,22 @@ private struct DataSource: JPEG.Bytestream.Source {
         #expect(Int(green.g) > Int(green.r) + 60)
     }
 
+    @Test func nodesSortByNumber() {
+        #expect(
+            videoNodesInNumberOrder(["video254", "video0", "video10", "video2"])
+                == ["video0", "video2", "video10", "video254"]
+        )
+    }
+
+    @Test func shortFrameThrowsInsteadOfCrashing() {
+        let short = [UInt8](repeating: 0, count: 10)
+        #expect(throws: YUYVJPEGError.self) {
+            try short.withUnsafeBytes {
+                try jpegFromYUYV($0, width: 32, height: 16, bytesPerLine: 64)
+            }
+        }
+    }
+
     @Test func rowPaddingIsSkipped() throws {
         let width = 8
         let height = 4
