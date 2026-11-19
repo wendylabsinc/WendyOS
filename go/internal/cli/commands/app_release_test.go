@@ -105,7 +105,7 @@ func TestRecordedReleaseCarriesTagAndDigest(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	ctx := context.Background()
-	id, err := createAppRelease(ctx, conn, auth, deploymentTenant, "com.example.cam", "v1.4.0", "")
+	id, err := createAppRelease(ctx, conn, auth, deploymentTenant, "com.example.cam", "v1.4.0", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

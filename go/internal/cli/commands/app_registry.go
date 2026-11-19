@@ -184,7 +184,7 @@ func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error
 		if err != nil {
 			return err
 		}
-		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, string(defaults))
+		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, string(defaults), appCfg.RequiredEnv)
 		if err != nil {
 			return err
 		}
@@ -221,6 +221,9 @@ func appDefinition(raw []byte, app string) (*appconfig.AppConfig, []byte, error)
 		return nil, nil, errors.New("apps with several services cannot be deployed yet; deploy each service as its own app")
 	}
 	if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
+		return nil, nil, fmt.Errorf("wendy.json: %w", err)
+	}
+	if err := appconfig.ValidateRequiredEnv(cfg.RequiredEnv, cfg.Env); err != nil {
 		return nil, nil, fmt.Errorf("wendy.json: %w", err)
 	}
 	def, err := json.Marshal(cfg)

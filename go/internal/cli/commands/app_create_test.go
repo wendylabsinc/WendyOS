@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -234,15 +235,15 @@ func published(t *testing.T, op *registryOp, fake *fakeRegistry) (*cloudpb.Creat
 func TestPublishWritesAppDefinitionAndDefaults(t *testing.T) {
 	op, fake := appFixture(t)
 	fake.apps["sh.wendy.example"] = &cloudpb.App{Id: "sh.wendy.example"}
-	dir := writePublishProject(t, `{"$schema": "x", "appId": "sh.wendy.example", "version": "1.0", "env": {"LOG_LEVEL": "info"}}`)
+	dir := writePublishProject(t, `{"$schema": "x", "appId": "sh.wendy.example", "version": "1.0", "env": {"LOG_LEVEL": "info", "CAMERA_URL": ""}, "requiredEnv": ["CAMERA_URL"]}`)
 	if _, err := runApp(newAppPublishCmd(), "--tag", "1.0.0", "--oci-layout", dir); err != nil {
 		t.Fatal(err)
 	}
 	req, _, cf := published(t, op, fake)
-	if req.GetName() != "1.0.0" || req.GetDefaultConfigJson() != `{"LOG_LEVEL":"info"}` {
+	if req.GetName() != "1.0.0" || req.GetDefaultConfigJson() != `{"CAMERA_URL":"","LOG_LEVEL":"info"}` || fmt.Sprint(req.GetRequiredConfigNames()) != "[CAMERA_URL]" {
 		t.Fatalf("release %v", req)
 	}
-	if got := cf.Config.Labels[appConfigLabel]; got != `{"appId":"sh.wendy.example","version":"1.0","env":{"LOG_LEVEL":"info"}}` {
+	if got := cf.Config.Labels[appConfigLabel]; got != `{"appId":"sh.wendy.example","version":"1.0","env":{"CAMERA_URL":"","LOG_LEVEL":"info"},"requiredEnv":["CAMERA_URL"]}` {
 		t.Fatalf("label %q", got)
 	}
 }
@@ -310,4 +311,17 @@ func TestPublishCreatesAnUnknownApp(t *testing.T) {
 		t.Fatalf("app %v", a)
 	}
 	published(t, op, fake)
+}
+
+// Publish refuses a requiredEnv entry that is not a setting of env, or is
+// listed twice, before anything is uploaded.
+func TestPublishRefusesAWrongRequiredEnv(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"appId": "sh.wendy.example", "env": {"CAMERA_URL": ""}, "requiredEnv": ["CAMERA_ULR"]}`:               `requiredEnv: "CAMERA_ULR" is not in env`,
+		`{"appId": "sh.wendy.example", "env": {"CAMERA_URL": ""}, "requiredEnv": ["CAMERA_URL", "CAMERA_URL"]}`: `requiredEnv: "CAMERA_URL" is listed twice`,
+	} {
+		if _, _, err := appDefinition([]byte(raw), ""); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: %v", raw, err)
+		}
+	}
 }

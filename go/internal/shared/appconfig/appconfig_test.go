@@ -2519,3 +2519,18 @@ func TestValidateJSON_KnownKeysProduceNoWarnings(t *testing.T) {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}
 }
+
+// requiredEnv names only settings of env, once each.
+func TestRequiredEnvNamesSettingsOfEnv(t *testing.T) {
+	ok := AppConfig{AppID: "sh.wendy.example", Env: map[string]string{"CAMERA_URL": "", "LOG_LEVEL": "info"}, RequiredEnv: []string{"CAMERA_URL"}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("an empty default may be required: %v", err)
+	}
+	for _, req := range [][]string{{"MISSING"}, {"CAMERA_URL", "CAMERA_URL"}} {
+		c := ok
+		c.RequiredEnv = req
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "requiredEnv") {
+			t.Fatalf("%v: %v", req, err)
+		}
+	}
+}

@@ -147,3 +147,25 @@ func TestResumeSignsOnlyTheCurrentRevision(t *testing.T) {
 		t.Fatalf("a statement for another revision: %v", err)
 	}
 }
+
+// A rollback follows the same rule as deploy and update: the release rolled
+// back to must get every setting it requires.
+func TestRollbackRefusesAnEmptyRequiredSetting(t *testing.T) {
+	op, fake, releaseID, _ := deployedFixture(t)
+	ctx := context.Background()
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL="}, yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL=info"}, yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	fake.required[releaseID] = []string{"LOG_LEVEL"}
+	n := len(fake.assigned)
+	err := runRollback(ctx, op, "sh.wendy.example", "line-3", changeFlags{to: 2, yes: true}, io.Discard, false)
+	if err == nil || !strings.HasPrefix(err.Error(), "Revision 2 leaves LOG_LEVEL empty, which release") || len(fake.assigned) != n {
+		t.Fatalf("rollback to an empty required setting: %v", err)
+	}
+	if err := runRollback(ctx, op, "sh.wendy.example", "line-3", changeFlags{to: 1, yes: true}, io.Discard, false); err != nil {
+		t.Fatalf("rollback to a filled one: %v", err)
+	}
+}
