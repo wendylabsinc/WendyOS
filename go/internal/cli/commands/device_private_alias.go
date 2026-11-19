@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -17,10 +18,12 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 const privateAliasDiscoveryTimeout = 3 * time.Second
+const privateAliasMeshProbeTimeout = 15 * time.Second
 const privateAliasScopePrefix = "private-alias/"
 
 type privateDeviceAlias struct {
@@ -344,6 +347,12 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 	}
 	if candidate.mesh != "" {
 		selected, _, err := privateAliasConnectMesh(ctx, candidate.mesh, suppress)
+		if err == nil && selected.Agent != nil {
+			err = probePrivateAliasAgent(ctx, selected.Agent, privateAliasMeshProbeTimeout)
+			if err != nil {
+				selected.Close()
+			}
+		}
 		if err == nil {
 			if selected.Agent != nil {
 				if err := privateAliasEnforcePin(pinKey, selected.Agent.Addr, selected.Agent); err != nil {
@@ -389,6 +398,10 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		if err != nil {
 			return nil, true, err
 		}
+		if err := probePrivateAliasAgent(ctx, conn, cloudAgentConnectTimeout); err != nil {
+			conn.Close()
+			return nil, true, fmt.Errorf("authenticating the device through Cloud: %w", err)
+		}
 		if err := privateAliasEnforcePin(pinKey, conn.Addr, conn); err != nil {
 			conn.Close()
 			return nil, true, err
@@ -397,6 +410,24 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		return &SelectedDevice{Agent: conn, DefaultSelector: selector, PinKey: pinKey}, true, nil
 	}
 	return nil, true, fmt.Errorf("private device alias %q identifies %s but no reachable LAN, mesh or Cloud endpoint was found", alias.host, candidate.device.Principal())
+}
+
+// Cloud creates a lazy TLS client, while a mesh proxy verifies the selected
+// peer when it first forwards an RPC. Probe before pinning either connection.
+func probePrivateAliasAgent(ctx context.Context, conn *grpcclient.AgentConnection, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, cached := conn.CachedAgentVersion(); cached {
+		return nil
+	}
+	probe, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	version, err := conn.AgentService.GetAgentVersion(probe, &agentpb.GetAgentVersionRequest{})
+	if err == nil {
+		conn.CacheAgentVersion(version)
+	}
+	return err
 }
 
 func connectPrivateAliasLAN(ctx context.Context, alias privateDeviceAlias, auth *config.AuthConfig, candidate privateAliasCandidate) (*SelectedDevice, error) {

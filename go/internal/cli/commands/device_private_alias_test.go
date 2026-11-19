@@ -3,15 +3,14 @@ package commands
 import (
 	"context"
 	"errors"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"net"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -19,13 +18,25 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 const privateAliasTenant = "11111111-1111-4111-8111-111111111111"
 const privateAliasOtherTenant = "99999999-9999-4999-8999-999999999999"
 const privateAliasDevice = "22222222-2222-4222-8222-222222222222"
 const privateAliasOtherDevice = "33333333-3333-4333-8333-333333333333"
+
+func privateAliasTestAgent() *grpcclient.AgentConnection {
+	conn := &grpcclient.AgentConnection{IsMTLS: true}
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Version: "test"})
+	return conn
+}
 
 func privateAliasTestAuth() config.AuthConfig {
 	return config.AuthConfig{Name: "default", CloudGRPC: "cloud.example:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + privateAliasTenant + "/operator/44444444-4444-4444-8444-444444444444"}}}
@@ -232,7 +243,7 @@ func TestPrivateDeviceAliasFrontDoorLANUsesExplicitIdentity(t *testing.T) {
 		if target.Addr != "192.0.2.10:50051" {
 			t.Fatalf("unexpected LAN address %q", target.Addr)
 		}
-		return &grpcclient.AgentConnection{IsMTLS: true}, nil, nil
+		return privateAliasTestAgent(), nil, nil
 	}
 	host := "device-" + privateAliasDevice + ".wendy.internal"
 	selected, matched, err := connectNamedDeviceSelector(context.Background(), host, true)
@@ -264,7 +275,7 @@ func TestPrivateDeviceAliasFrontDoorMeshAndCloud(t *testing.T) {
 					if selector != "mesh://"+privateAliasTenant+"/"+privateAliasDevice || !suppress {
 						t.Fatal("wrong canonical mesh target", selector)
 					}
-					return &SelectedDevice{Agent: &grpcclient.AgentConnection{IsMTLS: true}, DefaultSelector: selector}, true, nil
+					return &SelectedDevice{Agent: privateAliasTestAgent(), DefaultSelector: selector}, true, nil
 				}
 			} else {
 				old := connectDefaultCloudAssetV2Fn
@@ -274,12 +285,74 @@ func TestPrivateDeviceAliasFrontDoorMeshAndCloud(t *testing.T) {
 					if auth.Certificates[0].TenantUUID() != privateAliasTenant || asset.GetId() != privateAliasDevice {
 						t.Fatal("wrong Cloud identity")
 					}
-					return &grpcclient.AgentConnection{IsMTLS: true}, nil
+					return privateAliasTestAgent(), nil
 				}
 			}
 			selected, matched, err := connectNamedDeviceSelector(context.Background(), "jetson.wendy.internal", true)
 			if err != nil || !matched || selected == nil || calls != 1 {
 				t.Fatalf("selection=%+v %v %v calls=%d", selected, matched, err, calls)
+			}
+		})
+	}
+}
+
+func TestPrivateDeviceAliasAuthenticatesLazyCloudConnectionBeforePinning(t *testing.T) {
+	auth, serverTLS := localLiteTestPKI(t)
+	auth.CloudGRPC = "cloud.example:443"
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)))
+	agentpb.RegisterWendyAgentServiceServer(server, &cloudIdentityVersionServer{})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+
+	for _, tc := range []struct {
+		name  string
+		asset string
+	}{
+		{"matching device", liteTestAssetID},
+		{"different device", privateAliasOtherDevice},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}, CurrentContext: auth.Name})
+			stubPrivateAliasNetwork(t, privateAliasSources{})
+			asset := &cloudpbv2.Asset{Id: tc.asset, Name: "jetson", OrganizationId: liteTestTenant}
+			privateAliasCloudFetch = func(context.Context, *config.AuthConfig, bool) ([]*cloudpbv2.Asset, error) {
+				return []*cloudpbv2.Asset{asset}, nil
+			}
+			privateAliasEnforcePin = enforceDevicePinAt
+			previous := connectDefaultCloudAssetV2Fn
+			t.Cleanup(func() { connectDefaultCloudAssetV2Fn = previous })
+			connectDefaultCloudAssetV2Fn = func(ctx context.Context, auth *config.AuthConfig, asset *cloudpbv2.Asset, _ string) (*grpcclient.AgentConnection, error) {
+				expected := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{v2: asset, key: asset.GetId()})
+				return connectCloudAgentTransport(ctx, auth.Certificates[0], expected, clouddefaults.TunnelDialer(func(ctx context.Context) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+				}))
+			}
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			const host = "jetson.wendy.internal"
+			selected, matched, err := connectPrivateDeviceAlias(ctx, host, true)
+			cfg, loadErr := config.Load()
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			pin, pinned := cfg.DevicePinFor(privateAliasScopePrefix + liteTestTenant + "/" + host)
+			if tc.asset != liteTestAssetID {
+				if !matched || err == nil || selected != nil || pinned {
+					t.Fatalf("unexpected result for mismatched certificate: matched=%v selected=%v err=%v pinned=%v", matched, selected, err, pinned)
+				}
+				return
+			}
+			if err != nil || !matched || selected == nil {
+				t.Fatalf("Cloud alias connection failed: matched=%v err=%v", matched, err)
+			}
+			defer selected.Close()
+			if !pinned || pin.Principal != certs.DeviceSPIFFEURI(liteTestTenant, liteTestAssetID) {
+				t.Fatalf("verified identity was not saved: %+v", pin)
 			}
 		})
 	}
@@ -308,7 +381,7 @@ func TestPrivateDeviceAliasRefreshesCloudCredentialsBeforeInventory(t *testing.T
 		if !prepared || auth.Certificates[0].TenantUUID() != privateAliasTenant || asset.GetId() != privateAliasDevice {
 			t.Fatal("Cloud connection did not use prepared selected-organization inventory")
 		}
-		return &grpcclient.AgentConnection{IsMTLS: true}, nil
+		return privateAliasTestAgent(), nil
 	}
 	selected, matched, err := connectNamedDeviceSelector(context.Background(), "jetson.wendy.internal", true)
 	if err != nil || !matched || selected == nil {
@@ -399,7 +472,7 @@ func TestPrivateDeviceAliasUsesSelectedTenantDespiteForeignLegacyPin(t *testing.
 		if asset.GetId() != privateAliasDevice {
 			t.Fatalf("selected an asset outside the current alias binding")
 		}
-		return &grpcclient.AgentConnection{IsMTLS: true}, nil
+		return privateAliasTestAgent(), nil
 	}
 	privateAliasEnforcePin = func(key, _ string, _ *grpcclient.AgentConnection) error {
 		if key != currentPin {
@@ -426,7 +499,7 @@ func TestPrivateDeviceAliasAddresslessLANFallsBackToCloud(t *testing.T) {
 	cloudCalled := false
 	connectDefaultCloudAssetV2Fn = func(context.Context, *config.AuthConfig, *cloudpbv2.Asset, string) (*grpcclient.AgentConnection, error) {
 		cloudCalled = true
-		return &grpcclient.AgentConnection{IsMTLS: true}, nil
+		return privateAliasTestAgent(), nil
 	}
 	_, matched, err := connectNamedDeviceSelector(context.Background(), "jetson.wendy.internal", true)
 	if err != nil || !matched || !cloudCalled {
@@ -561,7 +634,7 @@ func TestPrivateDeviceAliasLANRefusalDoesNotFallbackToCloud(t *testing.T) {
 			cloudCalled := false
 			connectDefaultCloudAssetV2Fn = func(context.Context, *config.AuthConfig, *cloudpbv2.Asset, string) (*grpcclient.AgentConnection, error) {
 				cloudCalled = true
-				return &grpcclient.AgentConnection{IsMTLS: true}, nil
+				return privateAliasTestAgent(), nil
 			}
 			_, _, err := connectNamedDeviceSelector(context.Background(), "jetson.wendy.internal", true)
 			if cloudCalled != tc.wantCloud {
@@ -624,14 +697,14 @@ func TestPrivateDeviceAliasMeshReadinessFallback(t *testing.T) {
 					if target.Expected == nil || target.Expected.Principal != certs.DeviceSPIFFEURI(privateAliasTenant, privateAliasDevice) {
 						t.Fatal("fallback lost selected identity")
 					}
-					return &grpcclient.AgentConnection{IsMTLS: true}, nil, nil
+					return privateAliasTestAgent(), nil, nil
 				}
 				connectDefaultCloudAssetV2Fn = func(_ context.Context, _ *config.AuthConfig, asset *cloudpbv2.Asset, _ string) (*grpcclient.AgentConnection, error) {
 					calls++
 					if asset.GetId() != privateAliasDevice {
 						t.Fatal("fallback changed device")
 					}
-					return &grpcclient.AgentConnection{IsMTLS: true}, nil
+					return privateAliasTestAgent(), nil
 				}
 				_, _, err := connectPrivateDeviceAlias(ctx, "jetson.wendy.internal", true)
 				want := tc.fallback && (path == "LAN" || path == "Cloud")
