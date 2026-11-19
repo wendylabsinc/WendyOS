@@ -11,19 +11,15 @@
 #   - WDY-2174: Dependabot PRs run the deterministic, secretless dependency policy in
 #     this same required job instead of receiving any repository secret. The policy
 #     rejects non-dependency changes and validates Action updates as published releases.
-#   - The model review is opt-in through the `review: security` label, like the other
-#     AI reviews. The Dependabot policy calls no model and still runs on every
-#     Dependabot PR without a label.
 name: AI Security Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 concurrency:
-  # Unrelated label events must not cancel an active requested review.
-  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: security' && github.run_id || 'review' }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action == 'ready_for_review' && github.run_id || 'review' }}"
   cancel-in-progress: true
 
 env:
@@ -36,9 +32,8 @@ jobs:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       !contains(github.event.pull_request.labels.*.name, 'ai-suggestion') &&
-      ((github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action != 'labeled') ||
-      (contains(github.event.pull_request.labels.*.name, 'review: security') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'review: security')))
+      ((github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action != 'ready_for_review') ||
+      (!github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]'))
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
