@@ -225,3 +225,41 @@ func TestPumpShareEvents_ENODEVClosesCounts(t *testing.T) {
 	}
 	f.waitExit(t)
 }
+
+func TestShareNodeWriteBlankFillsTheRing(t *testing.T) {
+	mode := sharedMode{Width: 4, Height: 2, Fourcc: "YUYV", BytesPerLine: 8, FPS: 30}
+	var queued []uint32
+	var stamps []int64
+	w := &shareNodeWriter{
+		mode: mode, fd: -1, wakeR: -1, wakeW: -1, done: closedChan(),
+		buffers: [][]byte{make([]byte, mode.frameBytes()), make([]byte, mode.frameBytes())},
+		ioctlFn: func(req uintptr, arg unsafe.Pointer) error {
+			if req == vidiocQbuf {
+				b := (*v4l2Buf)(arg)
+				queued = append(queued, b.index())
+				stamps = append(stamps, b.timestampNanos())
+			}
+			return nil
+		},
+	}
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()), 5_000_000); err != nil {
+		t.Fatal(err)
+	}
+	queued, stamps = nil, nil
+	if err := w.WriteBlank(7_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 2 || queued[0] != 1 || queued[1] != 0 {
+		t.Fatalf("WriteBlank queued buffers %v, want both ring slots starting at 1", queued)
+	}
+	for _, s := range stamps {
+		if s != 7_000_000 {
+			t.Fatalf("blank timestamps %v, want all 7ms", stamps)
+		}
+	}
+	for i, buf := range w.buffers {
+		if !bytes.Equal(buf, blankFrame(mode)) {
+			t.Fatalf("buffer %d is not black", i)
+		}
+	}
+}

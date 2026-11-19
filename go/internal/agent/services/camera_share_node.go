@@ -25,8 +25,12 @@ import (
 //   - v4l2loopback's client-usage event reports how many readers are
 //     streaming. There is one pending event per subscription (the newest
 //     overwrites), and SEND_INITIAL delivers the current count at subscribe.
-//   - A new reader first receives the node's last written frame, which is why
-//     WriteBlank exists: it replaces a stale last frame with black.
+//   - Every new opener starts reading at position 0 of the module's ring. It
+//     jumps to the newest frame only once more frames than buffers have been
+//     written; until then it receives the ring from its oldest slot. So a new
+//     reader can first get an old frame, which is why WriteBlank queues the
+//     black frame once per buffer: whatever slot a reader starts at, it gets
+//     black.
 
 const (
 	// vidiocSubscribeEvent is _IOW('V', 90, struct v4l2_event_subscription).
@@ -134,6 +138,8 @@ type shareNodeWriter struct {
 	path   string
 	mode   sharedMode
 	fd     int
+	// ioctlFn replaces the ioctl syscall; tests set it.
+	ioctlFn func(req uintptr, arg unsafe.Pointer) error
 
 	// mu guards everything below and serialises writes against Close.
 	mu        sync.Mutex
@@ -170,6 +176,9 @@ func openShareNodeV4L2(logger *zap.Logger, path string, mode sharedMode) (shareN
 }
 
 func (w *shareNodeWriter) ioctl(req uintptr, arg unsafe.Pointer) error {
+	if w.ioctlFn != nil {
+		return w.ioctlFn(req, arg)
+	}
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(w.fd), req, uintptr(arg)); errno != 0 {
 		return errno
 	}
@@ -362,6 +371,11 @@ func (w *shareNodeWriter) WriteFrame(data []byte, monoNs int64) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.queueLocked(data, monoNs)
+}
+
+// queueLocked copies data into the next ring buffer and queues it. w.mu is held.
+func (w *shareNodeWriter) queueLocked(data []byte, monoNs int64) error {
 	if w.closed {
 		return errShareNodeClosed
 	}
@@ -386,8 +400,20 @@ func (w *shareNodeWriter) WriteFrame(data []byte, monoNs int64) error {
 	return nil
 }
 
+// WriteBlank queues the black frame once per ring buffer, all with the same
+// timestamp, under one lock so no real frame can land between them. A new
+// reader may start at any slot of the ring (see the header), so the whole ring
+// must be black.
 func (w *shareNodeWriter) WriteBlank(monoNs int64) error {
-	return w.WriteFrame(blankFrame(w.mode), monoNs)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	blank := blankFrame(w.mode)
+	for range max(len(w.buffers), 1) {
+		if err := w.queueLocked(blank, monoNs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close stops the event goroutine, turns the stream off, unmaps the buffers
