@@ -163,25 +163,11 @@ The agent checks the signed Wendy Net directory and the organization's
 authenticated Cloud roster for short friendly names. A binding from either
 source can supply the address when the available bindings agree.
 
-Wendy Net uses a local mesh route when available. It tries Cloud only when
-the local route is missing. An identity or published-port refusal ends the
-connection attempt.
-
-Cloud app connections require `wendy-app` on the Cloud backend and on both the
-source and destination agents. Check the installed versions with
-`wendy device info` on each device and look for Cloud app connection support in
-the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
-An unsupported-service error means the Cloud backend needs `wendy-app` support.
-An administrator assigns the source device a role with
-`tunnel:request` covering the destination device. If Cloud reports a permission
-error, check that this device grant is active and covers the destination UUID.
-Operator tunnel permissions govern a separate connection path.
-
 These names resolve to addresses in the calling host's own `10.99.0.0/16`
-mapping table. A DNS answer is not proof of reachability: the connection must
-still authenticate the exact tenant/device principal and pass the destination's
-running-app port authorization. Keep the hostname in configuration; do not copy
-a resolved virtual IP between devices.
+mapping table. The connection still needs a usable local mesh or Cloud route.
+The destination authenticates the exact tenant and device and checks the
+requested port against the running app. Keep the hostname in configuration
+because the virtual IP belongs to the calling host.
 
 `device-<uuid>.mesh.wendy.internal` and `device-<uuid>.cloud.wendy.dev` resolve
 to the same VIP as `device-<uuid>.wendy.internal` on an updated client.
@@ -204,9 +190,39 @@ curl --fail http://jetson.wendy.internal:18080/
 
 Expect a `10.99.x.x` address and the app's HTTP response. If the request fails,
 check [Wendy Net status](/docs/guides/wendy-net) on both devices and confirm that
-the destination app is running and publishes the requested port. If the app is
-using Cloud, confirm agent and backend support and check the source device's
-`tunnel:request` grant for the destination UUID.
+the destination app is running and publishes the requested port.
+
+### Connect through Wendy Cloud
+
+Wendy Net tries Cloud for TCP or UDP only when the local mesh route is missing.
+Local connection failures such as an identity or published-port refusal end
+the attempt.
+
+Keep both devices enrolled in the same Wendy Cloud organization. The backend
+and both agents need the `wendy-app` capability. Update the destination agent
+before the source. An older destination rejects Cloud app connections until
+you update it.
+
+Run `wendy device info` on each device and compare its **Agent Version** with
+the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
+for `wendy-app` support on both agents.
+
+To check the deployed backend separately, make a test app connection with no
+local mesh route. A backend without `wendy-app` support returns this relay error.
+
+```text
+Cloud does not offer device-originated application relays; the Cloud backend must support the wendy-app service
+```
+
+Grant the source device `tunnel:request` for the destination device. If Cloud
+reports a permission error, check that this device grant is active and covers
+the destination UUID. If the destination agent version is correct and the
+connection still fails, check its logs for `Cloud application admission unavailable`.
+That message means the destination's app listener failed to start. Correct the
+reported error and restart the destination agent.
+
+The app connects directly through its device's relay grant. The
+`wendy cloud tunnel` command opens an operator session with separate permissions.
 
 ## Try the complete Python example
 
