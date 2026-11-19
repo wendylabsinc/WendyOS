@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -812,7 +813,7 @@ func (s *VideoService) resolveShareCamera(r *shareRecord, present map[string]cam
 	}
 	moved := present[base]
 	ports := sameModelPorts(moved, present)
-	afterShareResolveRead()
+	(*afterShareResolveRead.Load())()
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
 	if r.camera == moved {
@@ -842,8 +843,13 @@ func (s *VideoService) resolveShareCamera(r *shareRecord, present map[string]cam
 
 // afterShareResolveRead runs in resolveShareCamera between choosing the camera
 // to follow and storing it; a variable so a test can run a second resolve
-// there.
-var afterShareResolveRead = func() {}
+// there. Atomic, because a background resolve may read it while a test swaps it.
+var afterShareResolveRead atomic.Pointer[func()]
+
+func init() {
+	f := func() {}
+	afterShareResolveRead.Store(&f)
+}
 
 // learnSameModelPorts is the sibling half of resolveShareCamera for every
 // record at once: each record whose camera is present learns the ports of the
@@ -2696,10 +2702,10 @@ func (s *VideoService) waitShareGroup(wg *sync.WaitGroup, what string) {
 	}
 }
 
-// cameraShareReportBudget bounds one CameraShareReport. The hardware discoverer
+// cameraShareReportBudget (a variable for tests) bounds one CameraShareReport. The hardware discoverer
 // calls it on every camera listing, and shareDecisionFor can block on a
 // GStreamer element listing that is not context-aware.
-const cameraShareReportBudget = 3 * time.Second
+var cameraShareReportBudget = 3 * time.Second
 
 var _ hardware.CameraShareReporter = (*VideoService)(nil)
 
@@ -2712,7 +2718,7 @@ var _ hardware.CameraShareReporter = (*VideoService)(nil)
 // only reads (its GStreamer listing is memoised), on its own goroutine and
 // inside cameraShareReportBudget shared with the camera listing, so a slow
 // element listing costs the listing at most that. A camera whose decision does
-// not arrive in time is left out. No share lock is held while deciding or
+// not arrive in time still reports its sharers, just not its mode or reason. No share lock is held while deciding or
 // reading a pump: the records are copied out under mu first.
 func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[string]string {
 	ctx, cancel := context.WithTimeout(ctx, cameraShareReportBudget)
@@ -2735,21 +2741,25 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 		case agentpb.VideoTransport_VIDEO_TRANSPORT_ROS2, agentpb.VideoTransport_VIDEO_TRANSPORT_IP:
 			continue
 		}
-		decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) })
-		if !ok {
-			break
-		}
 		props := map[string]string{}
-		if decision.Shared {
-			props[camerashare.KeyMode] = decision.Mode.String()
-		} else {
-			props[camerashare.KeyUnavailable] = decision.Reason
-		}
+		// Who shares a camera comes from the records, not from a decision, so
+		// a decision that misses the budget costs only the mode or reason.
 		if with, state := s.shareStatesOf(dev.GetPath()); len(with) > 0 {
 			props[camerashare.KeyWith] = strings.Join(with, ", ")
 			props[camerashare.KeyState] = strings.Join(state, ", ")
 		}
-		report[dev.GetPath()] = props
+		if ctx.Err() == nil {
+			if decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) }); ok {
+				if decision.Shared {
+					props[camerashare.KeyMode] = decision.Mode.String()
+				} else {
+					props[camerashare.KeyUnavailable] = decision.Reason
+				}
+			}
+		}
+		if len(props) > 0 {
+			report[dev.GetPath()] = props
+		}
 	}
 	return report
 }

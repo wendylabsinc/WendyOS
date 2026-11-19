@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -55,14 +57,15 @@ func TestResolveShareCamera_ConcurrentFollowStillResolves(t *testing.T) {
 	r := h.records("cv-a")[0]
 	present := map[string]camera.Identity{"video0": moved}
 
-	prev := afterShareResolveRead
-	t.Cleanup(func() { afterShareResolveRead = prev })
-	afterShareResolveRead = func() {
-		afterShareResolveRead = prev
+	prev := afterShareResolveRead.Load()
+	t.Cleanup(func() { afterShareResolveRead.Store(prev) })
+	hook := func() {
+		afterShareResolveRead.Store(prev)
 		if base, ok, _ := h.s.resolveShareCamera(r, present); !ok || base != "video0" {
 			t.Errorf("inner resolve = %q, %v", base, ok)
 		}
 	}
+	afterShareResolveRead.Store(&hook)
 	base, ok, _ := h.s.resolveShareCamera(r, present)
 	if !ok || base != "video0" {
 		t.Errorf("outer resolve, whose record the inner one moved = %q, %v; want video0, true", base, ok)
@@ -72,5 +75,61 @@ func TestResolveShareCamera_ConcurrentFollowStillResolves(t *testing.T) {
 	h.s.shares.mu.Unlock()
 	if got != moved {
 		t.Errorf("record follows %+v, want %+v", got, moved)
+	}
+}
+
+// A decision that never arrives in time costs the camera its mode, not its
+// sharers: the camera after the slow one still reports who shares it.
+func TestCameraShareReport_SlowDecisionStillNamesSharers(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csC920())
+	h.writeState(`{"version":1,"containers":{` +
+		`"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+		csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `,` +
+		csStateRecord(csC920(), "/dev/video4", testSharedMode, 253) + `]}}}`)
+	h.s.loadCameraShares()
+	h.s.shares.mu.Lock()
+	for _, r := range h.s.shares.containers["cv-a"].shares {
+		r.pump = &sharePump{state: shareState{Phase: shareReading}}
+	}
+	h.s.shares.mu.Unlock()
+
+	// The slow camera's decision blocks until the test ends, then gives up
+	// at once (no formats), so it touches no package state the test's other
+	// cleanups restore; the cleanup waits for it to return.
+	var release sync.Mutex // held by the test until the cleanup
+	release.Lock()
+	var slow sync.WaitGroup
+	slow.Add(1) // the one slow decision
+	t.Cleanup(func() {
+		release.Unlock()
+		slow.Wait()
+	})
+	fast := h.s.capturePixelFormats
+	h.s.capturePixelFormats = func(path string) ([]uint32, bool) {
+		if path == "/dev/video0" {
+			defer slow.Done()
+			release.Lock()
+			release.Unlock()
+			return nil, false
+		}
+		return fast(path)
+	}
+	prev := cameraShareReportBudget
+	cameraShareReportBudget = 300 * time.Millisecond
+	t.Cleanup(func() { cameraShareReportBudget = prev })
+
+	start := time.Now()
+	got := h.s.CameraShareReport(context.Background())
+	if took := time.Since(start); took > cameraShareReportBudget+500*time.Millisecond {
+		t.Errorf("report took %s, budget %s", took, cameraShareReportBudget)
+	}
+	for _, path := range []string{"/dev/video0", "/dev/video4"} {
+		props := got[path]
+		if props["shared_with"] != "cv-a" || props["share_state"] != "cv-a (reading)" {
+			t.Errorf("%s: %#v, want cv-a sharing and reading", path, props)
+		}
+		if _, ok := props["share_mode"]; path == "/dev/video0" && ok {
+			t.Errorf("%s has a mode though its decision never arrived: %#v", path, props)
+		}
 	}
 }
