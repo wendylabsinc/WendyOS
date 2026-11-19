@@ -72,6 +72,15 @@ type v4l2LoopbackConfig struct {
 	announceAllCaps int32
 }
 
+// CTL_ADD takes this struct by pointer and the kernel reads announce_all_caps
+// at byte 68, so the layout is pinned at compile time.
+var (
+	_ [72 - unsafe.Sizeof(v4l2LoopbackConfig{})]byte
+	_ [unsafe.Sizeof(v4l2LoopbackConfig{}) - 72]byte
+	_ [68 - unsafe.Offsetof(v4l2LoopbackConfig{}.announceAllCaps)]byte
+	_ [unsafe.Offsetof(v4l2LoopbackConfig{}.announceAllCaps) - 68]byte
+)
+
 // Control ioctl numbers for v4l2loopback 0.15.x, computed from the module's
 // own macros in v4l2loopback.h:
 //
@@ -163,7 +172,11 @@ func openLoopbackControl() (*os.File, error) {
 // addLoopbackNode issues V4L2LOOPBACK_CTL_ADD for an explicit node number.
 // EEXIST at nr is treated as success — the struct's own doc comment says
 // requesting an nr that already exists returns EEXIST, and an existing node
-// is exactly the state EnsureNodes wants. The driver returning a different nr
+// is exactly the state EnsureNodes wants. (A share add is different: an
+// existing node may have been created without announce_all_caps, and EEXIST
+// hides that. EnsureShareNode only adds when the node is absent, so it does not
+// meet this case; a caller must not assume an EEXIST share node is announcing
+// all caps.) The driver returning a different nr
 // than requested should not be possible for an explicit (>=0) nr per that
 // same doc comment, but a stray node is expensive to leave behind, so it is
 // removed defensively rather than assumed away.

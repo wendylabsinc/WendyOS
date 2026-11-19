@@ -16,9 +16,11 @@ import (
 // agent keeps it open as the node's writer. The sequence below follows what was
 // measured against the real module:
 //
-//   - A reader's STREAMON fails with EIO until a writer has run STREAMON on the
-//     OUTPUT side, and STREAMON with no buffer queued is enough. That is what
-//     turns the node into a capture device that declares the shared mode.
+//   - On a node that has never had a writer, a reader's STREAMON fails with EIO
+//     until a writer has run STREAMON on the OUTPUT side; STREAMON with no
+//     buffer queued is enough. With announce_all_caps=1 the node always
+//     announces CAPTURE, and the writer's format plus keep_format is what makes
+//     the declared mode readable, including while the writer is away.
 //   - The same descriptor serves writing and the event subscription.
 //   - v4l2loopback's client-usage event reports how many readers are
 //     streaming. There is one pending event per subscription (the newest
@@ -242,8 +244,9 @@ func (w *shareNodeWriter) configure() error {
 		}
 	}
 
-	// STREAMON with no buffer queued: this is what makes the node a capture
-	// device with the declared format (Proof 1).
+	// STREAMON with no buffer queued: a reader can then STREAMON, and it sees
+	// the declared format (the node already announces CAPTURE through
+	// announce_all_caps, and keep_format holds the format).
 	bufType := int32(v4l2BufTypeVideoOutput)
 	if err := w.ioctl(vidiocStreamon, unsafe.Pointer(&bufType)); err != nil {
 		return fmt.Errorf("VIDIOC_STREAMON on %s: %w", w.path, err)
