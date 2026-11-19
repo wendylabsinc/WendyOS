@@ -193,6 +193,19 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 	if nodes[containers[0]] == nodes[containers[1]] {
 		t.Fatalf("both containers share through %s, want a node each", nodes[containers[0]])
 	}
+	if data, err := os.ReadFile(statePath); err != nil {
+		t.Fatalf("reading the state file: %v", err)
+	} else {
+		var state cameraShareState
+		if err := json.Unmarshal(data, &state); err != nil {
+			t.Fatalf("the state file does not parse: %v: %s", err, data)
+		}
+		for i, id := range containers {
+			if c := state.Containers[id]; len(c.Shares) != 1 || c.Shares[0].Node != made[i] || c.Shares[0].Path != path {
+				t.Fatalf("the state file does not hold %s's share of %s at node %d: %s", id, path, made[i], data)
+			}
+		}
+	}
 	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
 	if mode.Width != pixelsFixtureWidth || mode.Height != pixelsFixtureHeight || mode.Fourcc != "YUYV" ||
 		mode.BytesPerLine != pixelsFixtureWidth*2 || mode.frameBytes() != frameBytes {
@@ -443,6 +456,9 @@ func shareRemovalProblem(svc *VideoService, nodes []int, statePath string) strin
 		}
 	}
 	data, err := os.ReadFile(statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "" // no share was ever stored
+	}
 	if err != nil {
 		return fmt.Sprintf("reading the state file: %v", err)
 	}
