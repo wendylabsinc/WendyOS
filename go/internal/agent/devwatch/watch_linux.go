@@ -13,7 +13,9 @@ import (
 
 // Watch calls onEvent for each videoN node created or deleted in dir until ctx
 // ends, then returns nil. Attribute changes are deliberately not watched: a
-// node being opened or chmodded is not a replug. onEvent runs on the watch loop and must not block.
+// node being opened or chmodded is not a replug. When the kernel's queue
+// overflows (IN_Q_OVERFLOW) it calls onEvent with Overflow set, since events
+// were lost. onEvent runs on the watch loop and must not block.
 func Watch(ctx context.Context, dir string, onEvent func(Event)) error {
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
@@ -44,24 +46,34 @@ func Watch(ctx context.Context, dir string, onEvent func(Event)) error {
 		if err != nil {
 			return fmt.Errorf("read inotify: %w", err)
 		}
-		for off := 0; off+unix.SizeofInotifyEvent <= got; {
-			ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off]))
-			end := off + unix.SizeofInotifyEvent + int(ev.Len)
-			if end > got {
-				break
-			}
-			name := string(bytes.TrimRight(buf[off+unix.SizeofInotifyEvent:end], "\x00"))
-			off = end
-			if !videoNode.MatchString(name) {
-				continue
-			}
-			switch {
-			case ev.Mask&unix.IN_CREATE != 0:
-				onEvent(Event{Name: name, Created: true})
-			case ev.Mask&unix.IN_DELETE != 0:
-				onEvent(Event{Name: name, Created: false})
-			}
-		}
+		dispatch(buf[:got], onEvent)
 	}
 	return nil
+}
+
+// dispatch reports the events in one read of an inotify descriptor. An
+// overflow is reported before the name filter, since it carries no name.
+func dispatch(buf []byte, onEvent func(Event)) {
+	for off := 0; off+unix.SizeofInotifyEvent <= len(buf); {
+		ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off]))
+		end := off + unix.SizeofInotifyEvent + int(ev.Len)
+		if end > len(buf) {
+			break
+		}
+		name := string(bytes.TrimRight(buf[off+unix.SizeofInotifyEvent:end], "\x00"))
+		off = end
+		if ev.Mask&unix.IN_Q_OVERFLOW != 0 {
+			onEvent(Event{Overflow: true})
+			continue
+		}
+		if !videoNode.MatchString(name) {
+			continue
+		}
+		switch {
+		case ev.Mask&unix.IN_CREATE != 0:
+			onEvent(Event{Name: name, Created: true})
+		case ev.Mask&unix.IN_DELETE != 0:
+			onEvent(Event{Name: name, Created: false})
+		}
+	}
 }
