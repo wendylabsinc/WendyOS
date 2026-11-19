@@ -1352,6 +1352,21 @@ func (s *VideoService) StartDiscovery() {
 		defer s.wg.Done()
 		s.watchCameraReplugs(s.serviceContext())
 	}()
+	// The first camera app's create decides each camera's share with the
+	// GStreamer element listing, which is memoised but can take a second or
+	// more the first time; listed now, at agent start, it is normally ready
+	// before that create's budget (cameraShareCreateBudget) is spent on it. A
+	// create that comes first waits for this listing rather than starting
+	// another. The listing is bounded by gstInspectTimeout.
+	if s.loopback != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if _, _, err := s.gstElements(); err != nil {
+				s.logger.Debug("camera share: listing GStreamer elements ahead of the first camera app failed", zap.Error(err))
+			}
+		}()
+	}
 	if s.discoverer == nil {
 		return
 	}

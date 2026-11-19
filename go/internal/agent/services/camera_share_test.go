@@ -140,6 +140,33 @@ type csHarness struct {
 	coverHook  func(src, dst string)
 	covered    bool // what Covered reports
 	watcher    *csWatcher
+
+	// A node's /dev entry: giving it udev's access, unlinking it before a
+	// removal and making it again fail with these; entryOps records each in
+	// order (apart from events, whose exact sequences other tests check).
+	accessErr, unlinkErr, restoreErr error
+	entryOps                         []string
+}
+
+// csRdev is the fake device number of node nr: major 81, minor nr.
+func csRdev(nr int) uint64 { return unix.Mkdev(81, uint32(nr)) }
+
+func (h *csHarness) entryOp(op string) {
+	h.mu.Lock()
+	h.entryOps = append(h.entryOps, op)
+	h.mu.Unlock()
+}
+
+func (h *csHarness) entryLog() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.entryOps...)
+}
+
+func (h *csHarness) setEntryErrs(access, unlink, restore error) {
+	h.mu.Lock()
+	h.accessErr, h.unlinkErr, h.restoreErr = access, unlink, restore
+	h.mu.Unlock()
 }
 
 // csAgentNS and csInitNS are the inodes of the agent's and init's mount
@@ -198,6 +225,7 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	}
 	h.loop.onRemove = func(nr int) {
 		h.event(fmt.Sprintf("remove %d", nr))
+		h.entryOp(fmt.Sprintf("remove %d", nr))
 		h.mu.Lock()
 		h.removedAt[nr] = h.clock.Now()
 		h.mu.Unlock()
@@ -242,12 +270,50 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		return []uint64{csAgentNS, csInitNS}, nil
 	}
 	cameraShareWatchRetry, cameraShareWatchSettle = 20*time.Millisecond, 10*time.Millisecond
+	// A node's /dev entry: the fake loopback's nodes are the kernel's, each
+	// with device number 81:<nr>; unlinking and making an entry again are
+	// events, and either can be made to fail.
+	prevAccess, prevRdev, prevUnlink, prevRestore := setShareNodeAccess, shareNodeRdev, unlinkShareNodeEntry, restoreShareNodeEntry
+	setShareNodeAccess = func(path string) error {
+		h.mu.Lock()
+		err := h.accessErr
+		h.mu.Unlock()
+		h.entryOp("access " + path)
+		return err
+	}
+	shareNodeRdev = func(nr int) (uint64, error) {
+		if _, ok := h.loop.auxLabel(nr); !ok {
+			return 0, os.ErrNotExist
+		}
+		return csRdev(nr), nil
+	}
+	unlinkShareNodeEntry = func(nr int, rdev uint64) error {
+		h.mu.Lock()
+		err := h.unlinkErr
+		h.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		h.entryOp(fmt.Sprintf("unlink %d %d:%d", nr, unix.Major(rdev), unix.Minor(rdev)))
+		return nil
+	}
+	restoreShareNodeEntry = func(nr int, rdev uint64) error {
+		h.mu.Lock()
+		err := h.restoreErr
+		h.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		h.entryOp(fmt.Sprintf("mknod %d %d:%d", nr, unix.Major(rdev), unix.Minor(rdev)))
+		return nil
+	}
 	t.Cleanup(func() {
 		cameraSharesPath, openShareNode = prevPath, prevOpen
 		shareRemovalClock, shareNodeUdevDone, shareNodeHolders = prevClock, prevUdev, prevHolders
 		coverPath, openNamespace, coveredPath, namespaceInode, closeNamespace = prevCover, prevOpenNS, prevCovered, prevInode, prevCloseNS
 		deviceHolders, watchDevices, hostMountNSInodes = prevDevHolders, prevWatch, prevHostNS
 		cameraShareWatchRetry, cameraShareWatchSettle = prevRetry, prevSettle
+		setShareNodeAccess, shareNodeRdev, unlinkShareNodeEntry, restoreShareNodeEntry = prevAccess, prevRdev, prevUnlink, prevRestore
 	})
 
 	core, logs := observer.New(zap.DebugLevel)

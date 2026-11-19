@@ -67,9 +67,12 @@ type cameraShares struct {
 	// record it makes a node for with shareRecord.opening instead.
 	ops sync.Mutex
 	// fileMu orders state file writes; statePath is cameraSharesPath, read
-	// once under it.
-	fileMu    sync.Mutex
-	statePath string
+	// once under it. stateNewer, also under it, is set when the file was
+	// written by a newer agent in a version this one does not read: it is
+	// left as it is and never written over (loadCameraShares).
+	fileMu     sync.Mutex
+	statePath  string
+	stateNewer bool
 }
 
 // shareContainer is one container's shares.
@@ -96,15 +99,23 @@ type shareContainer struct {
 
 // shareRecord is one camera shared with one container through one node.
 // cameraName and mode never change once the record is stored. Everything else
-// is guarded by cameraShares.mu: cameraPath follows the camera; camera moves
-// to the camera's new port when it is followed there; node and nodeMade change
-// when a start makes a node lost in a reboot again; and siblings, io, pump,
-// cancel, done, adoptErr, tookRealCamera, opening and retired.
+// is guarded by cameraShares.mu: cameraPath follows the camera, and
+// cameraAbsent says its last resolve did not find it; camera moves to the
+// camera's new port when it is followed there; node and nodeMade change when
+// a start makes a node lost in a reboot again; and siblings, io, pump, cancel,
+// done, adoptErr, tookRealCamera, coverFailed, modeNote, opening and retired.
 type shareRecord struct {
 	cameraName, cameraPath string
-	mode                   sharedMode
-	node                   int
-	camera                 camera.Identity
+	// cameraAbsent is set when the record's camera was not among the present
+	// cameras at its last resolve, and cleared when it is found again.
+	// cameraPath then still names where it was last (for logs and the state
+	// file), but nothing at that path is this record's camera: the shared-mode
+	// rules (sharedModeOf) and the camera listing (shareStatesOf) skip it, so a
+	// different camera that takes the path does not inherit them.
+	cameraAbsent bool
+	mode         sharedMode
+	node         int
+	camera       camera.Identity
 	// siblings are the ports (Identity.Device) of cameras of the same name and
 	// index seen present while this record's camera was present too, sorted.
 	// A camera on one of them is another camera, so the record never follows
@@ -127,6 +138,16 @@ type shareRecord struct {
 	// the real camera, not its node, until it reopens the camera. It says
 	// which process; the pump clears it when it next reads for the app.
 	tookRealCamera string
+	// coverFailed is why the cover of the container's last start failed, so
+	// the app holds the real camera for its run: set by reportStartCover, and
+	// cleared by the next cover that is there (a recheck's, a replug's, or the
+	// next start's), when the pump next reads for the app, or when the run
+	// ends (ReleaseCameraShares).
+	coverFailed string
+	// modeNote tells the user to redeploy the app: an adopted record's node
+	// keeps the mode an earlier agent stored (keep_format locks it), and a
+	// share of its camera made today would get another (checkAdoptedMode).
+	modeNote string
 	// opening is set while a writer is being opened for the record (a start
 	// making its node again, or a sync adopting it), so only one ever is.
 	// retired is set when stopShare has run: nothing attaches to it after.
@@ -145,7 +166,11 @@ const shareRestartCause = "an app started sharing the camera, so its producer re
 // sharedModeOf reports whether any container shares the camera at path, its
 // shared mode, and the sorted IDs of the containers that share it. It reads the
 // live records on every call, so the rules lift as soon as the last record for
-// a camera goes.
+// a camera goes. A record whose camera was absent at its last resolve is not
+// the camera at path, whatever its cameraPath says: another camera that took
+// the path is not held to its mode. It does no I/O (it is on the StreamVideo
+// path); the records are resolved on every camera node that appears, on every
+// pump join, by every sync and by the camera listing.
 func (s *VideoService) sharedModeOf(path string) (mode sharedMode, apps []string, ok bool) {
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
@@ -155,7 +180,7 @@ func (s *VideoService) sharedModeOf(path string) (mode sharedMode, apps []string
 			continue
 		}
 		for _, r := range c.shares {
-			if r != nil && r.cameraPath == path {
+			if r != nil && r.cameraPath == path && !r.cameraAbsent {
 				modes[id] = r.mode
 				break
 			}
