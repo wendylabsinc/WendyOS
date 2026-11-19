@@ -52,8 +52,11 @@ type Agent struct {
 	// offer on the next presence stream for the route. An offer can therefore
 	// name a lease this agent has already replaced, by renewal or by
 	// reconnecting.
-	leases              map[string]claims
-	slots               chan struct{}
+	leases map[string]claims
+	slots  chan struct{}
+	// refusals carries offers a session found it cannot serve after it was
+	// acknowledged, to whichever presence stream is live.
+	refusals            chan *pb.PresenceOfferRefusal
 	sourceAddresses     func() ([]net.Addr, error)
 	sourceCheckInterval time.Duration
 	preferredSource     func(*net.TCPAddr) (net.IP, error)
@@ -153,6 +156,9 @@ func writeState(path string, data []byte) error {
 func (a *Agent) keys() error {
 	if a.slots == nil {
 		a.slots = make(chan struct{}, 64)
+	}
+	if a.refusals == nil {
+		a.refusals = make(chan *pb.PresenceOfferRefusal, cap(a.slots))
 	}
 	if a.signing != nil {
 		return nil
@@ -437,6 +443,8 @@ func (a *Agent) runOnce(parent context.Context) error {
 	if accepted == nil || accepted.LeaseExpiresAt == nil || accepted.LeaseExpiresAt.CheckValid() != nil || accepted.LeaseExpiresAt.AsTime().Unix() != c.Exp {
 		return fmt.Errorf("invalid presence acceptance")
 	}
+	// A broker that predates offer refusals closes the stream on one.
+	refusable := accepted.GetOfferRefusalSupported()
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
 	a.registeredAt = time.Now()
 	if a.OnRegistered != nil {
@@ -494,6 +502,18 @@ func (a *Agent) runOnce(parent context.Context) error {
 	results := make(chan renewalResult, 1)
 	var workerDone chan struct{}
 	deferred := map[string]*pb.SessionOffer{}
+	// refuse tells the caller, through the broker, why this agent will not
+	// serve an offer. Without it the caller waits out the grant and learns
+	// nothing.
+	refuse := func(offerID, sessionID string, reason pb.SessionRefusalReason) error {
+		if !refusable || reason == pb.SessionRefusalReason_SESSION_REFUSAL_REASON_UNSPECIFIED {
+			return nil
+		}
+		if e := stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_OfferRefusal{OfferRefusal: &pb.PresenceOfferRefusal{OfferId: offerID, SessionId: sessionID, Reason: reason}}}); e != nil {
+			return brokerError("refusing offer", e)
+		}
+		return nil
+	}
 	handleOffer := func(o *pb.SessionOffer) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -573,7 +593,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 				if len(rejected) < 64 {
 					rejected[o.OfferId] = now.Add(time.Minute + cloudClockSkew).Unix()
 				}
-				return nil
+				return refuse(o.OfferId, o.SessionId, refusalReason(e))
 			}
 			pending[o.OfferId] = s
 		}
@@ -623,6 +643,10 @@ func (a *Agent) runOnce(parent context.Context) error {
 		case <-refresh.C:
 			keepLease = true
 			return errPresenceRefresh
+		case r := <-a.refusals:
+			if e := refuse(r.OfferId, r.SessionId, r.Reason); e != nil {
+				return e
+			}
 		case err := <-pathChanged:
 			// A local network change, not a broker refusal: the lease binds
 			// no source address, so the same broker still admits it over the
@@ -746,18 +770,34 @@ func (a *Agent) runOnce(parent context.Context) error {
 						// Only this session waits out its grant; presence and
 						// the sessions already running are unaffected.
 						a.Logger.Warn("refused cloud relay session", zap.String("offer_id", s.o.OfferId), zap.String("reason", "too many active relay sessions"))
+						if refusable {
+							// Told now, the caller does not wait for a slot
+							// this session will never be given.
+							s.refused = true
+							if e := refuse(s.o.OfferId, s.o.SessionId, pb.SessionRefusalReason_SESSION_REFUSAL_REASON_BUSY); e != nil {
+								return e
+							}
+						}
 						continue
 					}
 					s.started = true
 					broker := lease.Broker
-					go func() {
+					go func(o *pb.SessionOffer, c claims, d *pb.DialInstruction, dialFirst bool) {
 						defer func() { <-a.slots }()
 						// Sessions belong to the agent, so replacing its presence
 						// connection must not cancel their independent relay streams.
-						if e := a.serve(parent, broker, s.o, s.c, s.d); e != nil && parent.Err() == nil {
-							a.Logger.Warn("cloud relay session failed", zap.Error(e))
+						e := a.serve(parent, broker, o, c, d, dialFirst)
+						if e == nil || parent.Err() != nil {
+							return
 						}
-					}()
+						a.Logger.Warn("cloud relay session failed", zap.Error(e))
+						if reason := refusalReason(e); reason != pb.SessionRefusalReason_SESSION_REFUSAL_REASON_UNSPECIFIED {
+							select {
+							case a.refusals <- &pb.PresenceOfferRefusal{OfferId: o.OfferId, SessionId: o.SessionId, Reason: reason}:
+							default:
+							}
+						}
+					}(s.o, s.c, s.d, refusable)
 				}
 			default:
 				return fmt.Errorf("unexpected presence message")
@@ -772,6 +812,7 @@ type offerState struct {
 	c       claims
 	d       *pb.DialInstruction
 	started bool
+	refused bool // told the caller it will never start
 }
 
 var errUnknownPresenceLease = errors.New("relay offer presence lease is not yet known")
@@ -790,7 +831,7 @@ const (
 func offerRoom(pending map[string]*offerState) error {
 	waiting := 0
 	for _, s := range pending {
-		if !s.started {
+		if !s.started && !s.refused {
 			waiting++
 		}
 	}
@@ -858,7 +899,20 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 	return &offerState{o: o, c: g, d: d}, nil
 }
 
-func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.SessionOffer, c claims, d *pb.DialInstruction) error {
+// serve relays one session. With dialFirst it reaches the target before it
+// joins: a broker that takes refusals can then tell the caller that nothing
+// answered, where joining first only closes the caller's stream. Other brokers
+// keep the old order, which at least closes that stream at once.
+func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.SessionOffer, c claims, d *pb.DialInstruction, dialFirst bool) error {
+	var local net.Conn
+	if dialFirst && d.Transport != pb.DialTransport_DIAL_TRANSPORT_DATAGRAM {
+		target, err := a.dialTarget(ctx, d)
+		if err != nil {
+			return &serviceUnreachableError{err}
+		}
+		defer target.Close()
+		local = target
+	}
 	session, err := join(ctx, broker, o.SessionGrantJws, c, a.signing, pb.JoinRole_JOIN_ROLE_AGENT, a.Verifier.dialRelay)
 	if err != nil {
 		return err
@@ -867,16 +921,12 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	if d.Transport == pb.DialTransport_DIAL_TRANSPORT_DATAGRAM {
 		return serveDatagrams(session, d)
 	}
-	port := int(d.Port)
-	agentSession := a.isAgentSession(string(d.ServiceDescriptor), port)
-	if agentSession {
-		port = a.MTLSPort
+	if local == nil {
+		if local, err = a.dialTarget(ctx, d); err != nil {
+			return err
+		}
+		defer local.Close()
 	}
-	local, err := dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
-	if err != nil {
-		return err
-	}
-	defer local.Close()
 	done := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 65536)
@@ -969,6 +1019,16 @@ var RelaySourceIP = net.IPv4(127, 0, 0, 2)
 
 // dialLocalService dials the agent's own sessions from RelaySourceIP so it can
 // tell them apart; app tunnels dial plainly, as their NAT rules match 127.0.0.1.
+// dialTarget connects to the loopback service a TCP instruction names.
+func (a *Agent) dialTarget(ctx context.Context, d *pb.DialInstruction) (net.Conn, error) {
+	port := int(d.Port)
+	agentSession := a.isAgentSession(string(d.ServiceDescriptor), port)
+	if agentSession {
+		port = a.MTLSPort
+	}
+	return dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
+}
+
 func dialLocalService(ctx context.Context, host, port string, agentSession bool) (net.Conn, error) {
 	addr := net.JoinHostPort(host, port)
 	dialer := net.Dialer{Timeout: 5 * time.Second}

@@ -1,6 +1,7 @@
 package cloudrelay
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -33,6 +34,9 @@ func PortService(protocol string, port uint32) (string, error) {
 	return protocol + "-" + strconv.FormatUint(uint64(port), 10), nil
 }
 
+// errUnsupportedService: this build serves no such service or transport.
+var errUnsupportedService = errors.New("unsupported Cloud service descriptor")
+
 func serviceTarget(service string) (pb.DialTransport, uint32, error) {
 	switch service {
 	case "ssh":
@@ -43,7 +47,7 @@ func serviceTarget(service string) (pb.DialTransport, uint32, error) {
 	protocol, text, ok := strings.Cut(service, "-")
 	port, err := strconv.ParseUint(text, 10, 16)
 	if !ok || err != nil || port == 0 || strconv.FormatUint(port, 10) != text {
-		return 0, 0, fmt.Errorf("unsupported Cloud service descriptor")
+		return 0, 0, errUnsupportedService
 	}
 	switch protocol {
 	case "tcp":
@@ -51,6 +55,6 @@ func serviceTarget(service string) (pb.DialTransport, uint32, error) {
 	case "udp":
 		return pb.DialTransport_DIAL_TRANSPORT_DATAGRAM, uint32(port), nil
 	default:
-		return 0, 0, fmt.Errorf("unsupported Cloud service descriptor")
+		return 0, 0, errUnsupportedService
 	}
 }

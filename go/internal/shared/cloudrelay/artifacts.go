@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -329,7 +330,7 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	// iat is Cloud's clock and now is ours, so iat gets cloudClockSkew. exp
 	// stays strict, and exp-iat <= ttl still bounds what the skew can extend.
 	if c.Iat < 0 || c.Exp <= c.Iat || c.Exp-c.Iat > ttl || c.Iat > now.Add(cloudClockSkew).Unix() || c.Exp <= now.Unix() {
-		return c, fmt.Errorf("Cloud artifact outside validity window")
+		return c, errArtifactValidity
 	}
 	if !bounded(c.JTI, 128) || !bounded(c.Route, 128) || !bounded(c.Correlation, 128) {
 		return c, fmt.Errorf("invalid Cloud artifact identifiers")
@@ -349,6 +350,10 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	}
 	return c, nil
 }
+
+// errArtifactValidity: the artifact's signature and issuer hold, but its
+// iat/exp window does not hold on this clock.
+var errArtifactValidity = errors.New("Cloud artifact outside validity window")
 
 // cloudClockSkew is the clock-skew allowance applied to both ends of the
 // challenge-expiry window. The broker mints expires_at at most 30s after issue

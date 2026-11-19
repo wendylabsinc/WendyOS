@@ -66,6 +66,9 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	if err != nil {
 		return nil, err
 	}
+	if refused := msg.GetRefused(); refused != nil {
+		return nil, &RefusedError{Reason: refused.Reason}
+	}
 	a := msg.GetAccepted()
 	if a == nil || a.Role != role || a.RelayExpiresAt == nil || a.RelayExpiresAt.CheckValid() != nil || a.RelayExpiresAt.AsTime().Unix() != c.RelayExp {
 		return nil, fmt.Errorf("invalid relay join acceptance")

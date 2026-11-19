@@ -89,7 +89,7 @@ func decryptInstruction(e *pb.EncryptedDialInstructionEnvelope, c claims, lease 
 			ports[dst.LoopbackPort] = true
 		}
 	default:
-		return nil, fmt.Errorf("unsupported Cloud dial transport")
+		return nil, fmt.Errorf("%w: dial transport", errUnsupportedService)
 	}
 	return &d, nil
 }

@@ -34,6 +34,9 @@ type offerRelay struct {
 	send  chan *pb.RegisterPresenceResponse
 	acks  chan *pb.PresenceOfferAcknowledgement
 	joins chan string
+	// refusals receives each offer refusal. Nil is a broker that predates the
+	// message: it does not advertise it and ends presence on one.
+	refusals chan *pb.PresenceOfferRefusal
 }
 
 func (r *offerRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.RegisterPresenceRequest, pb.RegisterPresenceResponse]) error {
@@ -45,7 +48,7 @@ func (r *offerRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.RegisterPres
 	if o == nil {
 		return fmt.Errorf("expected presence open")
 	}
-	c, e := r.verifier.verify(s.Context(), o.PresenceLeaseJws, leaseType, r.broker().Audience, time.Now())
+	c, e := r.verifier.verify(s.Context(), o.PresenceLeaseJws, leaseType, r.broker().Audience, r.cloudNow())
 	if e != nil {
 		return e
 	}
@@ -63,7 +66,7 @@ func (r *offerRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.RegisterPres
 	if proof := m.GetProof(); proof == nil || !bytes.Equal(proof.ChallengeId, ch.ChallengeId) || !verifyProof(p.(*ecdsa.PublicKey), "presence", c, o.PresenceLeaseJws, "agent-presence", ch, proof.Signature) {
 		return fmt.Errorf("invalid presence holder proof")
 	}
-	if e = s.Send(&pb.RegisterPresenceResponse{Message: &pb.RegisterPresenceResponse_Accepted{Accepted: &pb.PresenceAccepted{LeaseExpiresAt: timestamppb.New(time.Unix(c.Exp, 0))}}}); e != nil {
+	if e = s.Send(&pb.RegisterPresenceResponse{Message: &pb.RegisterPresenceResponse_Accepted{Accepted: &pb.PresenceAccepted{LeaseExpiresAt: timestamppb.New(time.Unix(c.Exp, 0)), OfferRefusalSupported: r.refusals != nil}}}); e != nil {
 		return e
 	}
 	r.mu.Lock()
@@ -81,6 +84,14 @@ func (r *offerRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.RegisterPres
 			if e != nil {
 				failed <- e
 				return
+			}
+			if refusal := m.GetOfferRefusal(); refusal != nil && r.refusals != nil {
+				select {
+				case r.refusals <- refusal:
+				case <-s.Context().Done():
+					return
+				}
+				continue
 			}
 			ack := m.GetOfferAcknowledgement()
 			if ack == nil {
@@ -129,7 +140,7 @@ func (r *testRelay) sessionOffer(offerID string, d *pb.DialInstruction, edit fun
 	r.t.Helper()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	now := time.Now().Unix()
+	now := r.cloudNow().Unix()
 	g := claims{Iss: r.verifier.Issuer, Aud: r.broker().Audience, Iat: now, Exp: now + 60, JTI: uuid.NewString(), Correlation: "opaque-correlation", Route: r.lease.Route, Session: uuid.NewString(), Presence: r.lease.JTI, Request: binding([]byte(offerID)), Attestation: binding([]byte("attestation")), Caller: binding([]byte("caller")), Agent: r.lease.Signing, RelayExp: now + 300}
 	if edit != nil {
 		edit(&g)
@@ -152,7 +163,7 @@ func acknowledgedMessage(a *pb.PresenceOfferAcknowledgement) *pb.RegisterPresenc
 
 // startOfferRelay runs one presence attempt against an offerRelay and returns
 // once presence is registered. done receives runOnce's result.
-func startOfferRelay(t *testing.T, ctx context.Context, prepare func(*Agent)) (*offerRelay, *Agent, <-chan error, *observer.ObservedLogs) {
+func startOfferRelay(t *testing.T, ctx context.Context, prepare func(*Agent), configure ...func(*offerRelay)) (*offerRelay, *Agent, <-chan error, *observer.ObservedLogs) {
 	t.Helper()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	verifier := &Verifier{Issuer: "https://cloud.test", fetched: time.Now(), keys: map[string]jwk{"test": {Kid: "test", Kty: "EC", Alg: "ES256", Crv: "P-256", X: b64.EncodeToString(key.X.FillBytes(make([]byte, 32))), Y: b64.EncodeToString(key.Y.FillBytes(make([]byte, 32)))}}}
@@ -165,6 +176,9 @@ func startOfferRelay(t *testing.T, ctx context.Context, prepare func(*Agent)) (*
 		send:      make(chan *pb.RegisterPresenceResponse),
 		acks:      make(chan *pb.PresenceOfferAcknowledgement, 8),
 		joins:     make(chan string, 8),
+	}
+	for _, c := range configure {
+		c(r)
 	}
 	srv := grpc.NewServer()
 	pb.RegisterTunnelAuthorizationServiceServer(srv, r)
