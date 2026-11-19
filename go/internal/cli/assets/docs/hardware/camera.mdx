@@ -198,6 +198,9 @@ reason.
   them. A camera plugged in after a deploy is shared only from the next deploy.
 - **The first frame may be black.** The agent writes a black frame when a
   session ends, so the next reader never gets the previous session's picture.
+  The node hands that frame to a new reader at once, so an app that opens the
+  camera for each picture gets black every time unless it skips frames
+  timestamped before its `VIDIOC_STREAMON`, as `HelloVideo` does.
 - **The frame rate is the camera's.** The node declares the camera's highest
   advertised rate, but the camera may deliver fewer frames: in low light, auto
   exposure lengthens each frame (a Brio 101 in a dark room gave 15 fps instead
