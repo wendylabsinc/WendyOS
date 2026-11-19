@@ -359,6 +359,14 @@ spi.close()
 
 > **Security note:** unlike `serial` and `i2c` — which are scoped to a single named node's exact `major:minor` — `spi` is a **whole-major** grant. An app that declares it can open **every** SPI bus on the host, not just one. This is deliberate: the entitlement exposes the SPI subsystem rather than an individual bus, and a host can present many `spidev*.*` nodes whose minors are not known ahead of time. Grant it only to apps you trust with all of the device's SPI buses.
 
+## Camera
+
+Omit `mode` and the app shares the camera with other apps at its shared mode: one size up to 1280x720, one rate, and YUYV for MJPEG cameras. `{ "type": "camera", "mode": "direct" }` gives this app the real device, with its own formats, sizes and controls. Only `"direct"`, written exactly, gives the real device; any other value shares the camera.
+
+```json
+{ "type": "camera", "mode": "direct" }
+```
+
 ## Audio
 
 The audio entitlement grants a container playback and capture access, both through the host's PipeWire session and through raw ALSA. One entitlement covers speakers and microphones alike.

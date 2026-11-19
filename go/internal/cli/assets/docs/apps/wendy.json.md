@@ -440,12 +440,14 @@ Camera / V4L2 device access.
 
 ```json
 { "type": "camera" }
+{ "type": "camera", "mode": "direct" }
 { "type": "camera", "allowlist": ["/dev/video0"] }
 { "type": "camera", "user": "admin", "password": "secret" }
 ```
 
 | Field | Description |
 |-------|-------------|
+| `mode` | Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only `"direct"`, exactly, does; any other value shares. |
 | `allowlist` | Restrict access to specific device paths. Omit to allow all cameras. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |
