@@ -20,6 +20,31 @@ Failing to connect to an explicit device results in a failure.
 
 A value made only of digits, such as `283`, is rejected: it is not a hostname or IP address, and the system resolver would turn it into an unrelated address. If it is a Wendy Cloud asset ID, use its cloud selector (`--device cloud://<cloud-grpc-host:port>/org/<org-id>/asset/283`) or `wendy cloud device <command> --device 283`. The error prints the exact selector when you are logged in.
 
+### Private Wendy Net hostnames
+
+With a signed-in organization selected, pass a short device hostname or the
+UUID from the device's certificate. The CLI discovers and authenticates the
+device through mesh, LAN, or Cloud within that organization.
+
+```sh
+wendy --device jetson.wendy.internal device info
+wendy --device device-${DEVICE_UUID}.wendy.internal device info
+```
+
+Allow up to three seconds for discovery. A friendly name needs a signed mesh
+name, authenticated Cloud inventory, or a saved binding. If the CLI reports an
+ambiguous name or an incomplete mesh directory, use the UUID form.
+
+For an offline LAN peer, prepare a trusted binding while Cloud inventory is
+available. Run `wendy cloud discover` to refresh the device's inventory binding
+or connect once using the short hostname. You can also use the UUID directly.
+
+`wendy device set-default jetson.wendy.internal` saves the alias with its
+selected organization. To clear an alias binding after an intentional device
+replacement, select that organization and run
+`wendy device unpin jetson.wendy.internal`. Refresh trusted inventory before
+connecting to the replacement by name.
+
 
 ## 2. `WENDY_DEVICE`
 
