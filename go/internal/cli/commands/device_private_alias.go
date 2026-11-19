@@ -21,15 +21,17 @@ import (
 )
 
 const privateAliasDiscoveryTimeout = 3 * time.Second
+const privateAliasScopePrefix = "private-alias/"
 
 type privateDeviceAlias struct {
-	host  string
-	label string
-	uuid  string
+	host   string
+	label  string
+	uuid   string
+	tenant meshid.Tenant
 }
 
 func (a privateDeviceAlias) pinKey(tenant meshid.Tenant) string {
-	return "private-alias/" + tenant.String() + "/" + a.host
+	return privateAliasScopePrefix + tenant.String() + "/" + a.host
 }
 
 func (a privateDeviceAlias) legacyPinKeys() [2]string { return [2]string{a.host, a.label} }
@@ -70,6 +72,22 @@ func (a privateDeviceAlias) expectedIdentity(cfg *config.Config, tenant meshid.T
 // is necessary for CLI selection. The previous private namespace keeps its
 // existing resolution behavior.
 func parsePrivateDeviceAlias(value string) (privateDeviceAlias, bool, error) {
+	if scoped, found := strings.CutPrefix(value, privateAliasScopePrefix); found {
+		tenantText, host, hasHost := strings.Cut(scoped, "/")
+		tenant, err := meshid.ParseTenant(tenantText)
+		if !hasHost || strings.Contains(host, "/") || err != nil {
+			return privateDeviceAlias{}, true, fmt.Errorf("invalid scoped private device alias %q", value)
+		}
+		alias, matched, err := parsePrivateDeviceAlias(host)
+		if err != nil {
+			return privateDeviceAlias{}, true, err
+		}
+		if !matched {
+			return privateDeviceAlias{}, true, fmt.Errorf("invalid scoped private device alias %q", value)
+		}
+		alias.tenant = tenant
+		return alias, true, nil
+	}
 	host := strings.ToLower(strings.TrimSuffix(value, "."))
 	if bare, _, err := net.SplitHostPort(value); err == nil {
 		parsed, matched, parseErr := parsePrivateDeviceAlias(bare)
@@ -104,6 +122,39 @@ func parsePrivateDeviceAlias(value string) (privateDeviceAlias, bool, error) {
 	}
 	alias.label = label
 	return alias, true, nil
+}
+
+func (a privateDeviceAlias) authScope(cfg *config.Config) (*config.AuthConfig, meshid.Tenant, error) {
+	auth, err := config.ResolveAuth(cfg, "", nil)
+	if err != nil {
+		return nil, meshid.Tenant{}, err
+	}
+	if len(auth.Certificates) == 0 {
+		return nil, meshid.Tenant{}, certs.ErrExpectedDeviceIdentity
+	}
+	tenant, err := meshid.ParseTenant(auth.Certificates[0].TenantUUID())
+	if err != nil {
+		return nil, meshid.Tenant{}, fmt.Errorf("private device aliases require a selected enrolled organization: %w", err)
+	}
+	if a.tenant.IsValid() && a.tenant != tenant {
+		return nil, meshid.Tenant{}, refuseIdentity("private device alias %q was saved for organization %s; select that organization or choose a device explicitly", a.host, a.tenant)
+	}
+	return auth, tenant, nil
+}
+
+func savePrivateAliasDefault(alias privateDeviceAlias) error {
+	var cleared []clearedPin
+	err := config.Update(func(cfg *config.Config) (bool, error) {
+		_, tenant, err := alias.authScope(cfg)
+		if err != nil {
+			return false, err
+		}
+		cfg.DefaultDevice = alias.pinKey(tenant)
+		cleared = clearPrivateAliasPins(cfg, alias, tenant)
+		return true, nil
+	})
+	printClearedPins(os.Stderr, cleared)
+	return err
 }
 
 var privateAliasMeshRead = func(ctx context.Context) (sessionbroker.OperatorDirectory, error) { return meshDirectoryRead(ctx) }
@@ -271,16 +322,9 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 	if err != nil {
 		return nil, true, err
 	}
-	auth, err := config.ResolveAuth(cfg, "", nil)
+	auth, tenant, err := alias.authScope(cfg)
 	if err != nil {
 		return nil, true, err
-	}
-	if len(auth.Certificates) == 0 {
-		return nil, true, certs.ErrExpectedDeviceIdentity
-	}
-	tenant, err := meshid.ParseTenant(auth.Certificates[0].TenantUUID())
-	if err != nil {
-		return nil, true, fmt.Errorf("private device aliases require a selected enrolled organization: %w", err)
 	}
 	pinKey := alias.pinKey(tenant)
 	expected, err := alias.expectedIdentity(cfg, tenant)
@@ -397,7 +441,7 @@ func connectPrivateAliasLAN(ctx context.Context, alias privateDeviceAlias, auth 
 		return nil, err
 	}
 	conn.Host, conn.DevicePinKey = alias.host, pinKey
-	return &SelectedDevice{Agent: conn, DefaultSelector: alias.host, PinKey: pinKey}, nil
+	return &SelectedDevice{Agent: conn, DefaultSelector: pinKey, PinKey: pinKey}, nil
 }
 
 // A transport that answered and refused authentication must never be hidden by

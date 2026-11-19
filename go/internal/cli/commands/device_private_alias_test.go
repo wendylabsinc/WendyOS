@@ -237,7 +237,7 @@ func TestPrivateDeviceAliasFrontDoorLANUsesExplicitIdentity(t *testing.T) {
 	host := "device-" + privateAliasDevice + ".wendy.internal"
 	selected, matched, err := connectNamedDeviceSelector(context.Background(), host, true)
 	wantPin := "private-alias/" + privateAliasTenant + "/" + host
-	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != wantPin {
+	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != wantPin || selected.DefaultSelector != wantPin {
 		t.Fatalf("selection=%+v matched=%v err=%v calls=%d", selected, matched, err, calls)
 	}
 	cfg, _ := config.Load()
@@ -467,6 +467,40 @@ func TestPrivateDeviceAliasUnpinKeepsOtherTenant(t *testing.T) {
 		if pin, found := cfg.DevicePinFor(key); !found || pin != foreign {
 			t.Errorf("foreign pin at %q changed", key)
 		}
+	}
+}
+
+func TestPrivateDeviceAliasSavedDefaultRetainsOrganization(t *testing.T) {
+	const host = "jetson.wendy.internal"
+	privateAliasConfig(t, nil)
+	stubPrivateAliasNetwork(t, privateAliasSources{})
+	cmd := newDeviceSetDefaultCmd()
+	cmd.SetArgs([]string{host})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := cfg.DefaultDevice
+	if saved != "private-alias/"+privateAliasTenant+"/"+host {
+		t.Fatalf("saved private selector = %q", saved)
+	}
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cert := &cfg.Auth[0].Certificates[0]
+		cert.PrincipalURI = strings.Replace(cert.PrincipalURI, privateAliasTenant, privateAliasOtherTenant, 1)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	privateAliasLANBrowse = func(context.Context) ([]models.LANDevice, error) {
+		t.Error("saved selector searched the newly selected organization")
+		return nil, nil
+	}
+	_, matched, err := connectNamedDeviceSelector(context.Background(), saved, true)
+	if !matched || !errors.Is(err, errDeviceIdentityRefused) {
+		t.Fatalf("foreign saved default matched=%v err=%v", matched, err)
 	}
 }
 

@@ -631,7 +631,16 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 				}
 			}
 
-			if err := saveDefaultDevice(device); err != nil {
+			alias, isPrivateAlias, err := parsePrivateDeviceAlias(device)
+			if err != nil {
+				return err
+			}
+			if isPrivateAlias {
+				err = savePrivateAliasDefault(alias)
+			} else {
+				err = saveDefaultDevice(device)
+			}
+			if err != nil {
 				return err
 			}
 
@@ -654,7 +663,9 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 			// 127.0.0.1:50051, which is checked under vm:<name> while a running VM
 			// forwards that port. Clearing any other key would leave the refusal
 			// with no way out.
-			clearDevicePinForRepin(dialPinKeyForDevice(device))
+			if !isPrivateAlias {
+				clearDevicePinForRepin(dialPinKeyForDevice(device))
+			}
 
 			// WDY-1149: pin the device's (organisation, cloud host, asset)
 			// identity now if it is reachable, so later connections detect a
