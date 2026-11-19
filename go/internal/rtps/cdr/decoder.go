@@ -1,6 +1,6 @@
-// Package cdr decodes classic CDR (XCDR1) payloads, the wire format ROS 2
-// uses for user data on DDS. It is decode-only and covers the subset used by
-// Wendy's ROS 2 telemetry and camera messages.
+// Package cdr decodes and encodes classic CDR (XCDR1) payloads, the wire
+// format ROS 2 uses for user data on DDS. It covers the subset used by
+// Wendy's ROS 2 telemetry, camera and sensor messages.
 package cdr
 
 import (
