@@ -270,9 +270,10 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		return []uint64{csAgentNS, csInitNS}, nil
 	}
 	cameraShareWatchRetry, cameraShareWatchSettle = 20*time.Millisecond, 10*time.Millisecond
-	// A node's /dev entry: the fake loopback's nodes are the kernel's, each
-	// with device number 81:<nr>; unlinking and making an entry again are
-	// events, and either can be made to fail.
+	// A node's /dev entry: the fake loopback's nodes are the kernel's (sysfs),
+	// each with device number 81:<nr>, and its noEntry the nodes whose /dev
+	// entry is gone. Unlinking and making an entry again change that and are
+	// recorded, and either can be made to fail.
 	prevAccess, prevRdev, prevUnlink, prevRestore := setShareNodeAccess, shareNodeRdev, unlinkShareNodeEntry, restoreShareNodeEntry
 	setShareNodeAccess = func(path string) error {
 		h.mu.Lock()
@@ -294,6 +295,10 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		if err != nil {
 			return err
 		}
+		if !h.loop.hasEntry(nr) {
+			return os.ErrNotExist
+		}
+		h.loop.setEntry(nr, false)
 		h.entryOp(fmt.Sprintf("unlink %d %d:%d", nr, unix.Major(rdev), unix.Minor(rdev)))
 		return nil
 	}
@@ -304,6 +309,7 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		if err != nil {
 			return err
 		}
+		h.loop.setEntry(nr, true)
 		h.entryOp(fmt.Sprintf("mknod %d %d:%d", nr, unix.Major(rdev), unix.Minor(rdev)))
 		return nil
 	}
@@ -333,7 +339,9 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		}
 		h.mu.Unlock()
 		for _, nr := range h.loop.liveAux() {
-			paths = append(paths, fmt.Sprintf("/dev/video%d", nr))
+			if h.loop.hasEntry(nr) {
+				paths = append(paths, fmt.Sprintf("/dev/video%d", nr))
+			}
 		}
 		sort.Strings(paths)
 		return paths, nil
