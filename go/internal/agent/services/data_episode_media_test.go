@@ -9,7 +9,10 @@ import (
 
 func TestEpisodeMediaPresence(t *testing.T) {
 	for _, files := range [][]data.EpisodeFileMedia{nil, {{Path: "clip.mp4", MediaType: "video/mp4"}, {Path: "telemetry.jsonl", MediaType: "application/x-ndjson"}}} {
-		row := infoEpisode(data.EpisodeInfo{MediaFiles: files})
+		if infoEpisode(data.EpisodeInfo{MediaFiles: files}, false).GetMedia() != nil {
+			t.Fatal("unrequested media must be absent")
+		}
+		row := infoEpisode(data.EpisodeInfo{MediaFiles: files}, true)
 		raw, err := proto.Marshal(row)
 		if err != nil {
 			t.Fatal(err)

@@ -69,7 +69,7 @@ func TestEpisodeMediaLargeRecordingLists(t *testing.T) {
 			defer cancel()
 			start := time.Now()
 			// Match the bundled client's existing recordingEpisodeIndex receive budget.
-			got, err := client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+			got, err := client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: true}, grpc.MaxCallRecvMsgSize(64<<20))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,16 +107,25 @@ func TestEpisodeMediaLargeRecordingLists(t *testing.T) {
 				row.Media = nil
 			}
 			baselineBytes := proto.Size(baseline)
-			// Characterize the unchanged default gRPC limit as well as EMMA's budget.
-			_, defaultErr := client.Episodes(ctx, &pb.DataEpisodesRequest{})
+			// An unchanged CLI request must retain exactly the compact response
+			// and succeed without overriding the default receive limit.
+			compact, err := client.Episodes(ctx, &pb.DataEpisodesRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(compact, baseline) {
+				t.Fatal("default request changed compact episode response")
+			}
+			// Explicit media still requires an appropriate client receive budget.
+			_, defaultErr := client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: true})
 			if len(raw) > 4<<20 {
 				if status.Code(defaultErr) != codes.ResourceExhausted {
-					t.Fatalf("expected default receive limit, got %v", defaultErr)
+					t.Fatalf("expected opt-in receive limit, got %v", defaultErr)
 				}
 			} else if defaultErr != nil {
 				t.Fatal(defaultErr)
 			}
-			t.Logf("episodes=%d files/episode=%d baseline=%d bytes with_media=%d bytes gzip=%d bytes list_and_RPC=%s default_4MiB=%v", tc.episodes, tc.files, baselineBytes, len(raw), compressed.Len(), elapsed, status.Code(defaultErr))
+			t.Logf("episodes=%d files/episode=%d baseline=%d bytes with_media=%d bytes gzip=%d bytes list_and_RPC=%s opt_in_default_4MiB=%v compact_default_4MiB=OK", tc.episodes, tc.files, baselineBytes, len(raw), compressed.Len(), elapsed, status.Code(defaultErr))
 		})
 	}
 }

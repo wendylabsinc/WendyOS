@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,7 +35,10 @@ type legacyRecordingIndexClient struct {
 	calls int
 }
 
-func (c *legacyRecordingIndexClient) Episodes(context.Context, *pb.DataEpisodesRequest, ...grpc.CallOption) (*pb.DataEpisodesResponse, error) {
+func (c *legacyRecordingIndexClient) Episodes(_ context.Context, req *pb.DataEpisodesRequest, _ ...grpc.CallOption) (*pb.DataEpisodesResponse, error) {
+	if !req.GetIncludeMedia() {
+		return nil, fmt.Errorf("recording index did not request media")
+	}
 	c.calls++
 	if c.calls == 1 {
 		return nil, status.Error(codes.Unimplemented, "Decompressor is not installed for grpc-encoding gzip")

@@ -199,9 +199,9 @@ func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (Rec
 // gRPC to compress the response, while retaining compatibility with agents
 // that predate compression support. This is a read-only, idempotent request.
 func recordingEpisodeIndex(ctx context.Context, client pb.DataServiceClient) (*pb.DataEpisodesResponse, error) {
-	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
+	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: true}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
 	if status.Code(err) == codes.Unimplemented {
-		return client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+		return client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: true}, grpc.MaxCallRecvMsgSize(64<<20))
 	}
 	return list, err
 }

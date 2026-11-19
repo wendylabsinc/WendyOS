@@ -717,7 +717,7 @@ func (s *DataService) Status(context.Context, *agentpbv2.DataStatusRequest) (*ag
 	return r, nil
 }
 
-func (s *DataService) Episodes(context.Context, *agentpbv2.DataEpisodesRequest) (*agentpbv2.DataEpisodesResponse, error) {
+func (s *DataService) Episodes(_ context.Context, req *agentpbv2.DataEpisodesRequest) (*agentpbv2.DataEpisodesResponse, error) {
 	// In-progress episodes are read before the store. An episode that finishes
 	// its seal in between is then in both lists, and is dropped from the
 	// in-progress one below; read the other way round, it would be in neither.
@@ -729,7 +729,7 @@ func (s *DataService) Episodes(context.Context, *agentpbv2.DataEpisodesRequest) 
 	r := &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}
 	finalized := make(map[string]bool, len(list))
 	for _, e := range list {
-		r.Episodes = append(r.Episodes, infoEpisode(e))
+		r.Episodes = append(r.Episodes, infoEpisode(e, req.GetIncludeMedia()))
 		finalized[e.ID] = true
 	}
 	for _, e := range open {
@@ -796,10 +796,13 @@ func (s *DataService) Download(req *agentpbv2.DataDownloadRequest, stream agentp
 func manifestEpisode(m data.Manifest) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: m.ID, Name: m.Name, State: m.State, StartedUnixNanos: m.StartedUnixNanos, BootId: m.BootID}
 }
-func infoEpisode(e data.EpisodeInfo) *agentpbv2.DataEpisode {
-	media := &agentpbv2.DataEpisodeMedia{}
-	for _, f := range e.MediaFiles {
-		media.Files = append(media.Files, &agentpbv2.DataEpisodeFileMedia{Path: f.Path, MediaType: f.MediaType})
+func infoEpisode(e data.EpisodeInfo, includeMedia bool) *agentpbv2.DataEpisode {
+	var media *agentpbv2.DataEpisodeMedia
+	if includeMedia {
+		media = &agentpbv2.DataEpisodeMedia{}
+		for _, f := range e.MediaFiles {
+			media.Files = append(media.Files, &agentpbv2.DataEpisodeFileMedia{Path: f.Path, MediaType: f.MediaType})
+		}
 	}
 	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID, Media: media}
 }

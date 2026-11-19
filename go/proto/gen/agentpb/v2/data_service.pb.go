@@ -566,7 +566,11 @@ func (*DataStatusRequest) Descriptor() ([]byte, []int) {
 }
 
 type DataEpisodesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Opt in to saved-file paths and MIME types for finalized episodes. Defaults
+	// to false so existing clients retain the compact list response. Older agents
+	// ignore this field; clients must handle absent media as unknown.
+	IncludeMedia  bool `protobuf:"varint,1,opt,name=include_media,json=includeMedia,proto3" json:"include_media,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -599,6 +603,13 @@ func (x *DataEpisodesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use DataEpisodesRequest.ProtoReflect.Descriptor instead.
 func (*DataEpisodesRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DataEpisodesRequest) GetIncludeMedia() bool {
+	if x != nil {
+		return x.IncludeMedia
+	}
+	return false
 }
 
 type DataInspectRequest struct {
@@ -738,8 +749,9 @@ type DataEpisode struct {
 	// How long it has captured, measured on the device's CLOCK_BOOTTIME so a
 	// wrong wall clock cannot distort it. It stops growing when capture stops.
 	DurationNanos int64 `protobuf:"varint,10,opt,name=duration_nanos,json=durationNanos,proto3" json:"duration_nanos,omitempty"`
-	// Saved-file metadata for finalized episodes. Absent on older agents and
-	// unfinished episodes; a present message with no files means known empty.
+	// Saved-file metadata for finalized episodes when include_media is requested.
+	// Absent when not requested, on older agents, and on unfinished episodes;
+	// a present message with no files means known empty.
 	// This describes recorded files, not requested sources or successful playback.
 	Media         *DataEpisodeMedia `protobuf:"bytes,13,opt,name=media,proto3" json:"media,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2228,8 +2240,9 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x1drequire_utc_uncertainty_nanos\x18\x04 \x01(\x03R\x1arequireUtcUncertaintyNanos\x12L\n" +
 	"\fcalibrations\x18\x05 \x03(\v2(.wendy.agent.services.v2.DataCalibrationR\fcalibrations\"\x11\n" +
 	"\x0fDataStopRequest\"\x13\n" +
-	"\x11DataStatusRequest\"\x15\n" +
-	"\x13DataEpisodesRequest\"F\n" +
+	"\x11DataStatusRequest\":\n" +
+	"\x13DataEpisodesRequest\x12#\n" +
+	"\rinclude_media\x18\x01 \x01(\bR\fincludeMedia\"F\n" +
 	"\x12DataInspectRequest\x12\x18\n" +
 	"\aepisode\x18\x01 \x01(\tR\aepisode\x12\x16\n" +
 	"\x06verify\x18\x02 \x01(\bR\x06verify\"[\n" +
