@@ -148,6 +148,11 @@ Some apps cannot work with the shared mode:
   `v4l2src ! image/jpeg`. `HelloVLM` did, and was changed.
 - Apps that ask for a size and do not read back what they got. `HelloVideo`
   did, and was changed.
+- Apps that take a buffer's length and offset for `mmap` from the struct they
+  passed to `VIDIOC_QBUF`, or map only buffer 0. The node fills in neither
+  field on `VIDIOC_QBUF`, so `mmap` fails, and it hands out its buffers in turn.
+  Map each buffer as `VIDIOC_QUERYBUF` describes it, and read the one
+  `VIDIOC_DQBUF` returns. `HelloVideo` did both, and was changed.
 - Apps that need more than 1280x720, a different frame rate, or camera
   controls.
 
@@ -193,15 +198,25 @@ reason.
   them. A camera plugged in after a deploy is shared only from the next deploy.
 - **The first frame may be black.** The agent writes a black frame when a
   session ends, so the next reader never gets the previous session's picture.
-- **Replugging a camera.** The agent re-places the node within about a
-  millisecond of the camera reappearing. An app that retries `open()` very fast
-  can take the real camera for that moment, and then is not sharing until it
-  reopens it. The agent logs this and shows it in the Status column.
+- **The frame rate is the camera's.** The node declares the camera's highest
+  advertised rate, but the camera may deliver fewer frames: in low light, auto
+  exposure lengthens each frame (a Brio 101 in a dark room gave 15 fps instead
+  of 30). The Status column still says `reading` then.
+- **An app with `"mode": "direct"` that holds the camera stops sharing.** While
+  it has the camera open, sharing apps get no frames, and their Status says
+  `no frames: the real camera is held by another app ("mode": "direct") or
+  process`. The agent tries the camera again every 10 seconds, so frames
+  return within about 10 seconds of the direct app letting go.
+- **Replugging a camera.** The agent re-places each app's node about 2 to 3
+  milliseconds after the camera reappears. An app that retries `open()` very
+  fast can take the real camera for that moment, and then is not sharing until
+  it reopens it. The agent logs this and shows it in the Status column.
 - **Other apps' nodes are visible.** Their nodes appear at `/dev/video200` to
   `/dev/video255` and announce both capture and output. Open the camera's path
   rather than scanning for nodes.
-- **Agent restarts.** An app that is already reading pauses for about a quarter
-  to a third of a second and continues without reopening. An app that opens its
+- **Agent restarts.** An app that is already reading pauses for about a second,
+  while the agent starts again and restarts the camera, and continues without
+  reopening. An app that opens its
   camera while the agent restarts can open it and set its format, and gets
   frames once the agent is back. To make this possible, share nodes always
   announce both capture and output rather than capture only. Some readers, such
