@@ -102,6 +102,16 @@ func Cover(n *Namespace, src, dst string, timeout time.Duration) error {
 		return fmt.Errorf("open_tree(%s): %w", src, err)
 	}
 
+	// open_tree(OPEN_TREE_CLONE) keeps the source's propagation, so a clone of
+	// a node on /dev would join the host /dev's shared peer group and could
+	// propagate back out. Make the clone private before it is moved in. A
+	// clone of a single file has no submounts, so AT_RECURSIVE is not needed.
+	// Fail closed: without a private clone no cover is applied.
+	if err := unix.MountSetattr(tfd, "", unix.AT_EMPTY_PATH, &unix.MountAttr{Propagation: unix.MS_PRIVATE}); err != nil {
+		unix.Close(tfd)
+		return fmt.Errorf("mount_setattr(%s): %w", src, err)
+	}
+
 	hook := inNamespaceHook // read here, not on the goroutine
 	var state atomic.Int32
 	done := make(chan error, 1)
