@@ -15,6 +15,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 // The two stores an unpin can clear, as they are named in its report. They are
@@ -87,6 +88,19 @@ func newDeviceUnpinCmd() *cobra.Command {
 				// identity is.
 				if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
 					cleared = clearPinsForIdentity(cfg, identity)
+				} else if alias, matched, err := parsePrivateDeviceAlias(target); matched && err == nil {
+					auth, err := config.ResolveAuth(cfg, "", nil)
+					if err != nil {
+						return false, err
+					}
+					if len(auth.Certificates) == 0 {
+						return false, errors.New("select an enrolled organization to unpin a private device alias")
+					}
+					tenant, err := meshid.ParseTenant(auth.Certificates[0].TenantUUID())
+					if err != nil {
+						return false, fmt.Errorf("select an enrolled organization to unpin a private device alias: %w", err)
+					}
+					cleared = clearPrivateAliasPins(cfg, alias, tenant)
 				} else {
 					// The pin key, not the raw argument: a pin recorded via
 					// `--device host.local:50051` files under "host.local" (the port
@@ -112,6 +126,33 @@ func newDeviceUnpinCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// clearPrivateAliasPins uses the same deterministic keys as alias selection.
+// Older unscoped entries only govern aliases in their own organization.
+func clearPrivateAliasPins(cfg *config.Config, alias privateDeviceAlias, tenant meshid.Tenant) []clearedPin {
+	var cleared []clearedPin
+	var identityKeys []string
+	scoped := alias.pinKey(tenant)
+	legacy := alias.legacyPinKeys()
+	for _, key := range []string{scoped, legacy[0], legacy[1]} {
+		pin, ok := cfg.DevicePinFor(key)
+		if !ok {
+			continue
+		}
+		identity := expectedIdentityForPin(pin)
+		inTenant := identity != nil && identity.EntityType == certs.EntityAsset && identity.TenantUUID == tenant.String()
+		if key != scoped && !inTenant {
+			continue
+		}
+		cfg.ClearDevicePin(key)
+		identityKey := configPinIdentityKey(pin)
+		cleared = append(cleared, clearedPin{store: clearedConfigPin, key: key, identity: identityKey})
+		if inTenant {
+			identityKeys = append(identityKeys, identityKey)
+		}
+	}
+	return append(cleared, removeSPKIPins(identityKeys)...)
 }
 
 // unpinPinKey is the pin key `wendy device unpin <target>` clears: the key a
