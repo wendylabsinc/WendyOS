@@ -553,8 +553,9 @@ and authenticated Cloud roster entries. Conflicting principals fail closed.
 Valid enrolled names retain repeated hyphens; compatibility org-qualified aliases
 keep their legacy normalization. Signed device manifests publish the installed
 friendly label and republish live renames through the durable revision gate.
-Custom DNS resolvers implement `ExactResolver` to answer short friendly names.
-The UUID form works directly from the enrolled identity and VIP table.
+Custom DNS resolvers implement [`mesh.ExactResolver`](../mesh/dns.go) to answer
+short friendly names. The UUID form uses the enrolled identity and VIP table.
+All UUID hostname spellings for a device share one VIP allocation.
 
 ## Cloud relay presence
 
