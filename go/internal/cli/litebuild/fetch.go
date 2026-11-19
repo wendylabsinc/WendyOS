@@ -57,30 +57,60 @@ func Git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 // FetchFile returns the file at path of the wendy-lite repository at url,
-// at ref: a tag, a branch or a commit SHA (git clone --branch does not take
-// a SHA). It fetches that one commit without the content of the other
-// files, into a temporary repository that it then removes: git show then
-// downloads only the file.
+// at ref: a tag, a branch or a full commit hash (git clone --branch does not
+// take a hash). It fetches that one commit without the content of the
+// files, see fetchTree: git show then downloads only the file.
 func FetchFile(ctx context.Context, url, ref, path string) ([]byte, error) {
+	var data []byte
+	err := fetchTree(ctx, url, ref, func(dir string) error {
+		out, err := Git(ctx, dir, "show", "FETCH_HEAD:"+path)
+		if err != nil {
+			return fmt.Errorf("reading %s of wendy-lite %s: %w", path, ref, err)
+		}
+		data = []byte(out)
+		return nil
+	})
+	return data, err
+}
+
+// HasMasterConf tells whether commit, a full commit hash of the wendy-lite
+// repository at url, has the master configuration MasterConfFile. The
+// Wendy Lite versions without it are older than the configurator: the CLI
+// cannot build them. It fetches the list of the files of the commit, not
+// their content (see fetchTree).
+func HasMasterConf(ctx context.Context, url, commit string) (bool, error) {
+	var found bool
+	err := fetchTree(ctx, url, commit, func(dir string) error {
+		out, err := Git(ctx, dir, "ls-tree", "--name-only", "FETCH_HEAD", MasterConfFile)
+		if err != nil {
+			return fmt.Errorf("reading the files of wendy-lite %s: %w", ShortVersion(commit), err)
+		}
+		found = strings.TrimSpace(out) != ""
+		return nil
+	})
+	return found, err
+}
+
+// fetchTree fetches ref (see FetchFile) of the wendy-lite repository at url,
+// without history and without the content of the files, into a temporary
+// repository. It runs f in that repository, where FETCH_HEAD is the commit,
+// then removes it. A git command that reads a file downloads its content.
+func fetchTree(ctx context.Context, url, ref string, f func(dir string) error) error {
 	dir, err := os.MkdirTemp("", "wendy-lite-fetch-")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer os.RemoveAll(dir)
 	if _, err := Git(ctx, dir, "init", "--quiet"); err != nil {
-		return nil, err
+		return err
 	}
 	if _, err := Git(ctx, dir, "remote", "add", "origin", url); err != nil {
-		return nil, err
+		return err
 	}
 	if _, err := Git(ctx, dir, "fetch", "--quiet", "--depth", "1", "--filter=blob:none", "origin", ref); err != nil {
-		return nil, fmt.Errorf("fetching wendy-lite %q (check the version): %w", ref, err)
+		return fmt.Errorf("fetching wendy-lite %q (check the version): %w", ref, err)
 	}
-	out, err := Git(ctx, dir, "show", "FETCH_HEAD:"+path)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s of wendy-lite %s: %w", path, ref, err)
-	}
-	return []byte(out), nil
+	return f(dir)
 }
 
 var masterConfCache = struct {

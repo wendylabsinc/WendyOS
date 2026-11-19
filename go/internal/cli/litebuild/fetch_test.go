@@ -3,7 +3,9 @@ package litebuild
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -89,5 +91,29 @@ func TestShortVersion(t *testing.T) {
 		if got := ShortVersion(in); got != want {
 			t.Errorf("ShortVersion(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// HasMasterConf reads the file list of a commit, also of a commit that is
+// not the tip of a branch.
+func TestHasMasterConf(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	without := r.commit("no master configuration")
+	if err := os.WriteFile(filepath.Join(r.dir, MasterConfFile), []byte(appModel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.git("add", MasterConfFile)
+	r.git("commit", "--quiet", "-m", "master configuration")
+	with := r.git("rev-parse", "HEAD")
+	r.commit("later")
+
+	for commit, want := range map[string]bool{without: false, with: true} {
+		if got, err := HasMasterConf(ctx, r.url, commit); err != nil || got != want {
+			t.Errorf("HasMasterConf(%s) = %v, %v; want %v", ShortVersion(commit), got, err, want)
+		}
+	}
+	if _, err := HasMasterConf(ctx, r.url, strings.Repeat("f", 40)); err == nil || !strings.Contains(err.Error(), "check the version") {
+		t.Errorf("unknown commit: %v, want an error", err)
 	}
 }

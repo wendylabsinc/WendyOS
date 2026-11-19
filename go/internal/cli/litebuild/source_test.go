@@ -30,12 +30,22 @@ func newTestRepo(t *testing.T) *testRepo {
 	r := &testRepo{t: t, dir: dir, url: "file://" + filepath.ToSlash(dir)}
 	r.git("init", "--quiet")
 	r.git("symbolic-ref", "HEAD", "refs/heads/main")
+	// As GitHub: fetches of a commit hash, and without the file contents.
+	r.git("config", "uploadpack.allowAnySHA1InWant", "true")
+	r.git("config", "uploadpack.allowFilter", "true")
 	return r
 }
 
 func (r *testRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", r.dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+	return r.gitIn(r.dir, args...)
+}
+
+// gitIn runs git in dir, for example a clone of the repository, and
+// returns its output.
+func (r *testRepo) gitIn(dir string, args ...string) string {
+	r.t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		r.t.Fatalf("git %v: %v: %s", args, err, out)
@@ -64,34 +74,106 @@ func TestResolveRef(t *testing.T) {
 	second := r.commit("two")
 	r.git("branch", "same")
 
-	for _, tc := range []struct {
-		ref    string
-		commit string
-		tag    bool
-	}{
-		{"main", first, false},
-		{"feature/x", second, false},
-		{"light", first, true},
+	for _, tc := range []struct{ ref, commit string }{
+		{"main", first},
+		{"feature/x", second},
+		{"light", first},
 		// The commit, not the tag object.
-		{"annotated", first, true},
+		{"annotated", first},
 		// A branch wins over a tag, as with git clone --branch.
-		{"same", second, false},
+		{"same", second},
 	} {
-		commit, tag, err := ResolveRef(context.Background(), r.url, tc.ref)
+		commit, err := resolveRef(context.Background(), r.url, tc.ref)
 		if err != nil {
 			t.Errorf("%s: %v", tc.ref, err)
 			continue
 		}
-		if commit != tc.commit || tag != tc.tag {
-			t.Errorf("%s = %s tag %v, want %s tag %v", tc.ref, commit, tag, tc.commit, tc.tag)
+		if commit != tc.commit {
+			t.Errorf("%s = %s, want %s", tc.ref, commit, tc.commit)
 		}
 	}
 
 	// "x" is only the end of "feature/x".
 	for _, ref := range []string{"does-not-exist", "x"} {
-		if _, _, err := ResolveRef(context.Background(), r.url, ref); err == nil || !strings.Contains(err.Error(), `"`+ref+`"`) {
+		if _, err := resolveRef(context.Background(), r.url, ref); err == nil || !strings.Contains(err.Error(), `"`+ref+`"`) || strings.Contains(err.Error(), "full hash") {
 			t.Errorf("%s: %v, want an error naming the ref", ref, err)
 		}
+	}
+	// What can be an abbreviated commit hash: git cannot fetch it.
+	if _, err := resolveRef(context.Background(), r.url, first[:7]); err == nil || !strings.Contains(err.Error(), "full hash") {
+		t.Errorf("abbreviated hash: %v, want the full hash hint", err)
+	}
+}
+
+func TestResolveSource(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	if _, err := ResolveSource(ctx, r.url, false, ""); err == nil || !strings.Contains(err.Error(), "no release tag") {
+		t.Errorf("without release: %v, want an error", err)
+	}
+
+	v09 := r.commit("0.9")
+	r.git("tag", "v0.9.0")
+	v010 := r.commit("0.10")
+	r.git("tag", "-a", "-m", "annotated", "v0.10.0")
+	night := r.commit("nightly")
+	r.git("tag", "nightly")
+	r.git("tag", "v1.0.0-rc1")
+	r.git("checkout", "--quiet", "-b", "feature/x")
+	branch := r.commit("branch")
+
+	for _, tc := range []struct {
+		name    string
+		nightly bool
+		version string
+		want    Source
+		label   string
+	}{
+		// Numbers, not texts: 10 > 9. Not the pre-release, not nightly. The
+		// annotated tag gives its commit.
+		{name: "latest", want: Source{"0.10.0", "0.10.0", v010}, label: "0.10.0"},
+		{name: "release", version: "0.9.0", want: Source{"0.9.0", "0.9.0", v09}, label: "0.9.0"},
+		{name: "release tag", version: "v0.9.0", want: Source{"0.9.0", "0.9.0", v09}, label: "0.9.0"},
+		{name: "nightly", nightly: true, want: Source{"nightly", night, night}, label: "nightly (" + night[:7] + ")"},
+		{name: "nightly wins", nightly: true, version: "0.9.0", want: Source{"nightly", night, night}},
+		{name: "branch", version: "feature/x", want: Source{"feature/x", branch, branch}, label: "feature/x (" + branch[:7] + ")"},
+		{name: "other tag", version: "v1.0.0-rc1", want: Source{"v1.0.0-rc1", night, night}},
+		{name: "hash", version: v09, want: Source{v09, v09, v09}, label: v09[:7]},
+		{name: "hash in upper case", version: strings.ToUpper(v09), want: Source{v09, v09, v09}},
+	} {
+		got, err := ResolveSource(ctx, r.url, tc.nightly, tc.version)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s = %+v, want %+v", tc.name, got, tc.want)
+		}
+		if tc.label != "" && got.String() != tc.label {
+			t.Errorf("%s: String() = %q, want %q", tc.name, got.String(), tc.label)
+		}
+	}
+	if ref := (Source{"0.9.0", "0.9.0", v09}).Ref(); ref != "v0.9.0" {
+		t.Errorf("Ref of a release = %q, want v0.9.0", ref)
+	}
+	if ref := (Source{"nightly", night, night}).Ref(); ref != night {
+		t.Errorf("Ref of nightly = %q, want %s", ref, night)
+	}
+
+	// A hash is not looked up: git ls-remote lists only branches and tags.
+	unknown := strings.Repeat("ab", 20)
+	if got, err := ResolveSource(ctx, r.url, false, unknown); err != nil || got.Commit != unknown {
+		t.Errorf("unknown hash = %+v, %v; want it as is", got, err)
+	}
+	if _, err := ResolveSource(ctx, r.url, false, "1.2.3"); err == nil || !strings.Contains(err.Error(), "Wendy Lite 1.2.3 does not exist") || !strings.Contains(err.Error(), "v1.2.3") {
+		t.Errorf("unknown release: %v, want an error naming it", err)
+	}
+	if _, err := ResolveSource(ctx, r.url, false, "does-not-exist"); err == nil || !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("unknown branch: %v, want an error naming it", err)
+	}
+	r.git("tag", "-d", "nightly")
+	if _, err := ResolveSource(ctx, r.url, true, ""); err == nil || !strings.Contains(err.Error(), "no nightly tag") {
+		t.Errorf("without nightly tag: %v, want an error", err)
 	}
 }
 
@@ -99,17 +181,25 @@ func TestPrepareSources(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)
 	first := r.commit("one")
+	r.git("tag", "v1.2.3")
+	second := r.commit("two")
 	root := t.TempDir()
 	var logs []string
 	logf := func(format string, args ...any) { logs = append(logs, format) }
-	prepare := func(root, ref, commit string, tag bool) (string, string) {
+	prepare := func(root string, src Source) string {
 		t.Helper()
 		logs = nil
-		dir, head, err := PrepareSources(ctx, root, r.url, ref, commit, tag, logf)
+		dir, err := PrepareSources(ctx, root, r.url, src, logf)
 		if err != nil {
-			t.Fatalf("PrepareSources(%s, %s): %v", ref, ShortVersion(commit), err)
+			t.Fatalf("PrepareSources(%s): %v", src, err)
 		}
-		return dir, head
+		if want := filepath.Join(root, BuildFolderName(src.Commit)); dir != want {
+			t.Fatalf("PrepareSources(%s) = %s, want %s", src, dir, want)
+		}
+		if head := r.gitIn(dir, "rev-parse", "HEAD"); head != src.Commit {
+			t.Fatalf("PrepareSources(%s): HEAD %s, want %s", src, head, src.Commit)
+		}
+		return dir
 	}
 	content := func(dir string) string {
 		t.Helper()
@@ -127,14 +217,25 @@ func TestPrepareSources(t *testing.T) {
 		}
 		return false
 	}
-
-	// A new folder, named after the commit.
-	dir, head := prepare(root, "main", first, false)
-	if want := filepath.Join(root, BuildFolderName(first)); dir != want || head != first {
-		t.Fatalf("folder %s at %s, want %s at %s", dir, head, want, first)
+	version := func(dir string) string {
+		t.Helper()
+		v, err := SourceVersion(ctx, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
+
+	// A commit that is not the tip of a branch: fetched by its hash, into a
+	// new folder named after it.
+	old := Source{Name: first, Version: first, Commit: first}
+	dir := prepare(root, old)
 	if content(dir) != "one" || !logged("Cloning") {
 		t.Errorf("content %q, logs %q", content(dir), logs)
+	}
+	// Only the commit: the tag of a release is not fetched.
+	if v := version(dir); v != first {
+		t.Errorf("version %q, want %s", v, first)
 	}
 
 	// The same commit: the folder and its build stay, and it is marked as
@@ -150,7 +251,7 @@ func TestPrepareSources(t *testing.T) {
 	if err := os.Chtimes(dir, past, past); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := prepare(root, "main", first, false); again != dir || !logged("Reusing") {
+	if again := prepare(root, old); again != dir || !logged("Reusing") {
 		t.Errorf("folder %s, logs %q; want the reuse of %s", again, logs, dir)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -160,9 +261,23 @@ func TestPrepareSources(t *testing.T) {
 		t.Errorf("the modification time of the reused folder is not updated: %v", err)
 	}
 
+	// A release that the reused folder has no tag for: the tag is fetched,
+	// and the version is then that of the tag.
+	release := Source{Name: "1.2.3", Version: "1.2.3", Commit: first}
+	if again := prepare(root, release); again != dir {
+		t.Errorf("folder %s, want the reuse of %s", again, dir)
+	}
+	if v := version(dir); v != "1.2.3" {
+		t.Errorf("reused release: version %q, want 1.2.3", v)
+	}
+	// A new folder of a release has the tag.
+	if dir := prepare(t.TempDir(), release); version(dir) != "1.2.3" {
+		t.Errorf("new release: version %q, want 1.2.3", version(dir))
+	}
+
 	// A new commit: a second folder.
-	second := r.commit("two")
-	dir2, _ := prepare(root, "main", second, false)
+	tip := Source{Name: "main", Version: second, Commit: second}
+	dir2 := prepare(root, tip)
 	if dir2 == dir || content(dir2) != "two" || content(dir) != "one" {
 		t.Errorf("folders %s (%q) and %s (%q)", dir, content(dir), dir2, content(dir2))
 	}
@@ -171,34 +286,15 @@ func TestPrepareSources(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(dir2, ".git")); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := prepare(root, "main", second, false); again != dir2 || !logged("The build folder") || content(dir2) != "two" {
+	if again := prepare(root, tip); again != dir2 || !logged("The build folder") || content(dir2) != "two" {
 		t.Errorf("folder %s, logs %q; want a new clone in %s", again, logs, dir2)
-	}
-
-	// A tag that the reused folder does not have is fetched: the version is
-	// then that of the tag.
-	r.git("tag", "v1.2.3")
-	commit, tag, err := ResolveRef(ctx, r.url, "v1.2.3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again, _ := prepare(root, "v1.2.3", commit, tag); again != dir2 {
-		t.Errorf("folder %s, want the reuse of %s", again, dir2)
-	}
-	if v, err := SourceVersion(ctx, dir2); err != nil || v != "1.2.3" {
-		t.Errorf("SourceVersion = %q, %v; want 1.2.3", v, err)
-	}
-
-	// The ref moved after ResolveRef: the folder of the cloned commit.
-	moved := t.TempDir()
-	if dir, head := prepare(moved, "main", first, false); head != second || dir != filepath.Join(moved, BuildFolderName(second)) || !logged("wendy-lite %s moved") {
-		t.Errorf("folder %s at %s, logs %q; want the folder of %s", dir, head, logs, second)
 	}
 
 	// A failed clone leaves no folder.
 	failed := t.TempDir()
-	if _, _, err := PrepareSources(ctx, failed, r.url, "does-not-exist", strings.Repeat("f", 40), false, logf); err == nil {
-		t.Error("the clone of an unknown ref succeeded")
+	unknown := strings.Repeat("f", 40)
+	if _, err := PrepareSources(ctx, failed, r.url, Source{Name: unknown, Version: unknown, Commit: unknown}, logf); err == nil {
+		t.Error("the clone of an unknown commit succeeded")
 	}
 	if entries, _ := os.ReadDir(failed); len(entries) != 0 {
 		t.Errorf("the failed clone left %d entries", len(entries))

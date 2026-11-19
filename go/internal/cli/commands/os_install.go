@@ -220,7 +220,7 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 	cmd.Flags().StringVar(&storageOverride, "storage", "", "Force image storage variant: nvme or sd (default: auto-detect — real NVMe drives use nvme; a USB-attached drive uses the device's published image, SD for Raspberry Pi / NVMe for Jetson SSD enclosures). For jetson-agx-orin, emmc flashes the onboard eMMC over USB recovery instead of writing a drive")
 	cmd.Flags().BoolVar(&yesOverwriteInternal, "yes-overwrite-internal", false, "Required to wipe an internal (non-removable) drive in non-interactive mode")
 	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
-	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted); for the ESP* configurator entry, the wendy-lite tag or branch")
+	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted); for the ESP* configurator entry, a Wendy Lite version (X.Y.Z), a wendy-lite branch or a commit hash; default: the latest release")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")

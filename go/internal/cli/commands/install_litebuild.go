@@ -63,8 +63,10 @@ var (
 // runLiteBuild builds Wendy Lite from source and flashes it:
 //
 //  1. check EIM, the ESP-IDF Installation Manager
-//  2. check git, then reuse or clone the build folder of the commit of the
-//     wendy-lite tag or branch (see liteBuildRef and openLiteBuildFolder)
+//  2. check git, then resolve the Wendy Lite version (the latest release, the
+//     nightly tag, or --version), check that it has a master configuration,
+//     and reuse or clone the build folder of its commit (see
+//     openLiteBuildFolder)
 //  3. ask the configurator questions of the folder's master configuration;
 //     the answers of the last run are the defaults
 //  4. ask for Wi-Fi, the device name and Cloud enrollment: the content of
@@ -89,19 +91,17 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err := litebuild.CheckGit(); err != nil {
 		return err
 	}
-	ref := liteBuildRef(nightly, version)
-	dir, fullCommit, release, err := openLiteBuildFolder(ctx, espidftoolchain.WendyLiteGitURL, ref)
+	dir, src, release, err := openLiteBuildFolder(ctx, espidftoolchain.WendyLiteGitURL, nightly, version)
 	if err != nil {
 		return err
 	}
 	defer release()
-	commit := litebuild.ShortVersion(fullCommit)
 
 	// Questions, from the master configuration of the folder: the code that
 	// is built.
 	model, err := litebuild.LoadFile(litebuild.MasterConfPath(dir))
 	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("wendy-lite %s (%s) has no master_config.yaml", ref, commit)
+		return liteBuildIncompatible(src)
 	}
 	if err != nil {
 		return err
@@ -198,7 +198,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	// The image is in memory: another build can use the cache during the
 	// flash.
 	release()
-	fmt.Printf("\nBuilt Wendy Lite %s (%s) for the %s.\n", ref, commit, chipModelName(chip))
+	fmt.Printf("\nBuilt Wendy Lite %s for the %s.\n", src, chipModelName(chip))
 
 	port, autoDiscover, err := detectLiteInstallPort(discovery.SerialPortInfo{}, true)
 	if err != nil {
@@ -228,39 +228,31 @@ func ensureLiteBuildEIM(ctx context.Context) error {
 	return nil
 }
 
-// liteBuildRef returns the wendy-lite tag or branch to build: "nightly"
-// with --nightly, the --version value, else litebuild.DefaultRef.
-func liteBuildRef(nightly bool, version string) string {
-	switch {
-	case nightly:
-		return "nightly"
-	case version != "":
-		return version
-	}
-	return litebuild.DefaultRef
-}
-
-// openLiteBuildFolder returns the build folder of the commit of ref, the
-// tag or branch of the wendy-lite repository at url, and the commit. It locks
-// the build cache first: release unlocks it, and calling it more than once is
-// harmless. Then it removes the old build folders (litebuild.PruneBuildFolders),
-// and reuses or clones the folder of the commit (litebuild.PrepareSources).
-func openLiteBuildFolder(ctx context.Context, url, ref string) (dir, commit string, release func(), err error) {
+// openLiteBuildFolder returns the build folder of the Wendy Lite version to
+// build, and that version: the nightly tag with nightly, else version, else
+// the latest release (see litebuild.ResolveSource) of the wendy-lite
+// repository at url. It locks the build cache first: release unlocks it, and calling it
+// more than once is harmless. It checks that the version has a master
+// configuration (checkLiteBuildSource): a version without it changes
+// nothing in the cache. Then it removes the old build folders
+// (litebuild.PruneBuildFolders), and reuses or clones the folder of the
+// commit (litebuild.PrepareSources).
+func openLiteBuildFolder(ctx context.Context, url string, nightly bool, version string) (dir string, src litebuild.Source, release func(), err error) {
 	root, err := liteBuildRoot()
 	if err != nil {
-		return "", "", nil, err
+		return "", litebuild.Source{}, nil, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", "", nil, err
+		return "", litebuild.Source{}, nil, err
 	}
 	// One lock for the cache: the cleanup removes folders that another
 	// build could use.
 	unlock, err := flock.Acquire(filepath.Join(root, ".lock"), 0)
 	if errors.Is(err, flock.ErrTimeout) {
-		return "", "", nil, fmt.Errorf("another Wendy Lite build is running (it uses %s): wait until it ends", root)
+		return "", litebuild.Source{}, nil, fmt.Errorf("another Wendy Lite build is running (it uses %s): wait until it ends", root)
 	}
 	if err != nil {
-		return "", "", nil, fmt.Errorf("locking the Wendy Lite build cache %s: %w", root, err)
+		return "", litebuild.Source{}, nil, fmt.Errorf("locking the Wendy Lite build cache %s: %w", root, err)
 	}
 	defer func() {
 		if err != nil {
@@ -268,21 +260,61 @@ func openLiteBuildFolder(ctx context.Context, url, ref string) (dir, commit stri
 		}
 	}()
 
-	fmt.Printf("Looking up wendy-lite %s at %s...\n", ref, url)
-	commit, tag, err := litebuild.ResolveRef(ctx, url, ref)
+	fmt.Printf("Looking up %s at %s...\n", liteBuildRequest(nightly, version), url)
+	src, err = litebuild.ResolveSource(ctx, url, nightly, version)
 	if err != nil {
-		return "", "", nil, err
+		return "", litebuild.Source{}, nil, err
+	}
+	if err := checkLiteBuildSource(ctx, root, url, src); err != nil {
+		return "", litebuild.Source{}, nil, err
 	}
 	logf := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
 	warnf := func(format string, args ...any) {
 		fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf(format, args...)))
 	}
-	litebuild.PruneBuildFolders(root, commit, logf, warnf)
-	dir, commit, err = litebuild.PrepareSources(ctx, root, url, ref, commit, tag, logf)
+	litebuild.PruneBuildFolders(root, src.Commit, logf, warnf)
+	dir, err = litebuild.PrepareSources(ctx, root, url, src, logf)
 	if err != nil {
-		return "", "", nil, err
+		return "", litebuild.Source{}, nil, err
 	}
-	return dir, commit, unlock, nil
+	return dir, src, unlock, nil
+}
+
+// liteBuildRequest names the Wendy Lite version that nightly and version
+// ask for, before litebuild.ResolveSource resolves it.
+func liteBuildRequest(nightly bool, version string) string {
+	switch {
+	case nightly:
+		return "the wendy-lite " + litebuild.NightlyTag + " tag"
+	case version != "":
+		return "wendy-lite " + version
+	}
+	return "the latest Wendy Lite release"
+}
+
+// checkLiteBuildSource checks that src, a version of the wendy-lite
+// repository at url, has a master configuration: the versions without it
+// are older than the configurator. It reads the build folder of src in
+// root when the folder has the file, else the file list of src at url.
+func checkLiteBuildSource(ctx context.Context, root, url string, src litebuild.Source) error {
+	folder := filepath.Join(root, litebuild.BuildFolderName(src.Commit))
+	if _, err := os.Stat(litebuild.MasterConfPath(folder)); err == nil {
+		return nil
+	}
+	found, err := litebuild.HasMasterConf(ctx, url, src.Commit)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return liteBuildIncompatible(src)
+	}
+	return nil
+}
+
+// liteBuildIncompatible is the error of a Wendy Lite version without master
+// configuration.
+func liteBuildIncompatible(src litebuild.Source) error {
+	return fmt.Errorf("Wendy Lite %s is not compatible with this version of the CLI. Specify a Wendy Lite version with --version", src)
 }
 
 // liteBuildConfigureReason tells why the wendy-lite checkout in dir needs

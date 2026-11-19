@@ -136,27 +136,19 @@ func TestWendyConfPayload(t *testing.T) {
 	}
 }
 
-func TestLiteBuildRef(t *testing.T) {
-	for _, tc := range []struct {
-		nightly bool
-		version string
-		want    string
-	}{
-		{nightly: true, want: "nightly"},
-		{version: "v1.2.3", want: "v1.2.3"},
-		{want: litebuild.DefaultRef},
-	} {
-		if got := liteBuildRef(tc.nightly, tc.version); got != tc.want {
-			t.Errorf("liteBuildRef(%v, %q) = %q, want %q", tc.nightly, tc.version, got, tc.want)
-		}
-	}
+// liteTestCommits are the commits of liteTestRepo.
+type liteTestCommits struct {
+	old     string // tag v0.9.0, without master configuration
+	release string // tag v1.0.0, the latest release
+	nightly string // tag nightly
+	branch  string // the tip of the branch feature/x
 }
 
-// liteTestRepo makes a local wendy-lite repository with a tag "t1" and a
-// branch "feature/x", which the tests clone through a file:// URL, as the
-// flow clones GitHub. It returns the URL and the commits of the tag and the
-// branch.
-func liteTestRepo(t *testing.T) (url, tagged, branch string) {
+// liteTestRepo makes a local wendy-lite repository, which the tests clone
+// through a file:// URL, as the flow clones GitHub. Its commits change
+// file.txt to "old", "release", "nightly" and "branch"; all but the first
+// have a master configuration. It returns the URL and the commits.
+func liteTestRepo(t *testing.T) (string, liteTestCommits) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -171,12 +163,16 @@ func liteTestRepo(t *testing.T) (url, tagged, branch string) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	commit := func(content string) string {
+	write := func(name, content string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		git("add", "file.txt")
+		git("add", name)
+	}
+	commit := func(content string) string {
+		t.Helper()
+		write("file.txt", content)
 		git("commit", "--quiet", "-m", content)
 		return git("rev-parse", "HEAD")
 	}
@@ -184,11 +180,20 @@ func liteTestRepo(t *testing.T) (url, tagged, branch string) {
 		t.Fatal(err)
 	}
 	git("init", "--quiet")
-	tagged = commit("tagged")
-	git("tag", "t1")
+	// As GitHub: fetches of a commit hash, and without the file contents.
+	git("config", "uploadpack.allowAnySHA1InWant", "true")
+	git("config", "uploadpack.allowFilter", "true")
+	var c liteTestCommits
+	c.old = commit("old")
+	git("tag", "v0.9.0")
+	write(litebuild.MasterConfFile, "attributes: {}\n")
+	c.release = commit("release")
+	git("tag", "v1.0.0")
+	c.nightly = commit("nightly")
+	git("tag", "nightly")
 	git("checkout", "--quiet", "-b", "feature/x")
-	branch = commit("branch")
-	return "file://" + filepath.ToSlash(repo), tagged, branch
+	c.branch = commit("branch")
+	return "file://" + filepath.ToSlash(repo), c
 }
 
 // setLiteBuildRoot makes the build cache a temporary folder.
@@ -201,53 +206,90 @@ func setLiteBuildRoot(t *testing.T) string {
 	return root
 }
 
-// TestOpenLiteBuildFolder opens the build folders of a branch and a tag in
-// the cache, and checks the cache lock.
+// TestOpenLiteBuildFolder opens the build folders of the versions in the
+// cache, refuses a version without master configuration, and checks the
+// cache lock.
 func TestOpenLiteBuildFolder(t *testing.T) {
-	url, tagged, branch := liteTestRepo(t)
+	url, commits := liteTestRepo(t)
 	root := setLiteBuildRoot(t)
 	ctx := context.Background()
 
-	for _, tc := range []struct{ ref, content, commit string }{
-		{"feature/x", "branch", branch},
-		{"t1", "tagged", tagged},
+	for _, tc := range []struct {
+		name    string
+		nightly bool
+		version string
+		content string
+		want    litebuild.Source
+	}{
+		// A commit that is not the tip of a branch.
+		{name: "hash", version: commits.release, content: "release", want: litebuild.Source{Name: commits.release, Version: commits.release, Commit: commits.release}},
+		{name: "latest release", content: "release", want: litebuild.Source{Name: "1.0.0", Version: "1.0.0", Commit: commits.release}},
+		{name: "release", version: "1.0.0", content: "release", want: litebuild.Source{Name: "1.0.0", Version: "1.0.0", Commit: commits.release}},
+		{name: "nightly", nightly: true, content: "nightly", want: litebuild.Source{Name: "nightly", Version: commits.nightly, Commit: commits.nightly}},
+		{name: "branch", version: "feature/x", content: "branch", want: litebuild.Source{Name: "feature/x", Version: commits.branch, Commit: commits.branch}},
 	} {
-		dir, commit, release, err := openLiteBuildFolder(ctx, url, tc.ref)
+		dir, src, release, err := openLiteBuildFolder(ctx, url, tc.nightly, tc.version)
 		if err != nil {
-			t.Fatalf("%s: %v", tc.ref, err)
+			t.Fatalf("%s: %v", tc.name, err)
 		}
 		release()
-		if commit != tc.commit || dir != filepath.Join(root, litebuild.BuildFolderName(tc.commit)) {
-			t.Errorf("%s: folder %s at %s, want the folder of %s", tc.ref, dir, commit, tc.commit)
+		if src != tc.want || dir != filepath.Join(root, litebuild.BuildFolderName(tc.want.Commit)) {
+			t.Errorf("%s: folder %s of %+v, want the folder of %+v", tc.name, dir, src, tc.want)
 		}
 		data, err := os.ReadFile(filepath.Join(dir, "file.txt"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(data) != tc.content {
-			t.Errorf("%s: the folder has %q, want %q", tc.ref, data, tc.content)
+			t.Errorf("%s: the folder has %q, want %q", tc.name, data, tc.content)
 		}
 	}
 
-	// While a build holds the cache, another one stops.
-	_, _, release, err := openLiteBuildFolder(ctx, url, "t1")
-	if err != nil {
-		t.Fatal(err)
+	// A version without master configuration: an error that names it, and
+	// the cache does not change.
+	before := liteBuildFolders(t, root)
+	if _, _, _, err := openLiteBuildFolder(ctx, url, false, "0.9.0"); err == nil || err.Error() != "Wendy Lite 0.9.0 is not compatible with this version of the CLI. Specify a Wendy Lite version with --version" {
+		t.Errorf("version without master configuration: %v", err)
 	}
-	if _, _, _, err := openLiteBuildFolder(ctx, url, "t1"); err == nil || !strings.Contains(err.Error(), "another Wendy Lite build is running") {
+	if after := liteBuildFolders(t, root); !slices.Equal(after, before) {
+		t.Errorf("the build folders changed from %q to %q", before, after)
+	}
+
+	// While a build holds the cache, another one stops.
+	_, _, release, err := openLiteBuildFolder(ctx, url, false, "")
+	if err != nil {
+		t.Fatalf("the cache stayed locked after the failure: %v", err)
+	}
+	if _, _, _, err := openLiteBuildFolder(ctx, url, false, ""); err == nil || !strings.Contains(err.Error(), "another Wendy Lite build is running") {
 		t.Errorf("with the cache locked: %v", err)
 	}
 	release()
 
 	// An unknown ref: an error naming it, and the cache is unlocked.
-	if _, _, _, err := openLiteBuildFolder(ctx, url, "does-not-exist"); err == nil || !strings.Contains(err.Error(), "does-not-exist") {
+	if _, _, _, err := openLiteBuildFolder(ctx, url, false, "does-not-exist"); err == nil || !strings.Contains(err.Error(), "does-not-exist") {
 		t.Errorf("unknown ref: %v, want an error naming it", err)
 	}
-	_, _, release, err = openLiteBuildFolder(ctx, url, "t1")
+	_, _, release, err = openLiteBuildFolder(ctx, url, false, "")
 	if err != nil {
 		t.Fatalf("the cache stayed locked after the failure: %v", err)
 	}
 	release()
+}
+
+// liteBuildFolders returns the names of the folders in the build cache root.
+func liteBuildFolders(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }
 
 func TestLiteBuildConfigureReason(t *testing.T) {
@@ -297,9 +339,9 @@ func TestLiteBuildConfigureReason(t *testing.T) {
 // the ESP-IDF build folder and restores the tracked files, and keeps the
 // untracked files.
 func TestResetLiteBuildFolder(t *testing.T) {
-	url, _, _ := liteTestRepo(t)
+	url, _ := liteTestRepo(t)
 	setLiteBuildRoot(t)
-	dir, _, release, err := openLiteBuildFolder(context.Background(), url, "feature/x")
+	dir, _, release, err := openLiteBuildFolder(context.Background(), url, false, "feature/x")
 	if err != nil {
 		t.Fatal(err)
 	}

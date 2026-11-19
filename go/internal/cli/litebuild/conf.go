@@ -6,13 +6,6 @@ import (
 	"strings"
 )
 
-// DefaultRef is the wendy-lite tag or branch that the CLI builds without
-// --nightly or --version. The Python parity test (TestPythonParity) checks
-// the master configuration of this ref.
-//
-// TEMPORARY: the configurator is on this branch only.
-const DefaultRef = "gab/configurator"
-
 // MasterConfFile is the master configuration file, at the root of the
 // wendy-lite repository.
 const MasterConfFile = "master_config.yaml"

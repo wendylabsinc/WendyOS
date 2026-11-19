@@ -1,6 +1,7 @@
 package litebuild
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,12 +31,14 @@ import (
 //
 //	WENDY_LITE_PARITY=1 go test ./internal/cli/litebuild -run TestPythonParity
 //
-// By default it clones wendy-lite at DefaultRef, the ref that the CLI
-// builds, and makes a Python virtual environment with uv. Two optional
-// variables replace them:
+// By default it clones the wendy-lite version that the CLI builds by
+// default, the latest release (see ResolveSource), and makes a Python
+// virtual environment with uv. Optional variables replace them:
 //
+//   - WENDY_LITE_VERSION: the wendy-lite version to clone, as the --version
+//     of wendy install takes it: X.Y.Z, a branch or a commit hash;
 //   - WENDY_LITE_DIR: a wendy-lite checkout (an absolute path, or relative
-//     to this package directory);
+//     to this package directory), instead of a clone;
 //   - WENDY_LITE_PYTHON: a Python with PyYAML, for example the ESP-IDF
 //     Python.
 func TestPythonParity(t *testing.T) {
@@ -106,7 +109,8 @@ func TestPythonParity(t *testing.T) {
 }
 
 // wendyLiteSources returns the wendy-lite checkout: WENDY_LITE_DIR, else a
-// shallow clone of DefaultRef.
+// clone of WENDY_LITE_VERSION, by default the latest release, as the CLI
+// clones it.
 func wendyLiteSources(t *testing.T) string {
 	t.Helper()
 	if dir := os.Getenv("WENDY_LITE_DIR"); dir != "" {
@@ -117,13 +121,21 @@ func wendyLiteSources(t *testing.T) string {
 		t.Logf("wendy-lite: %s, commit %s", abs, gitCommit(abs))
 		return abs
 	}
-	dir := filepath.Join(t.TempDir(), "wendy-lite")
-	cmd := exec.Command("git", "clone", "--quiet", "--depth", "1", "--branch", DefaultRef, espidftoolchain.WendyLiteGitURL, dir)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("clone wendy-lite %s: %v\n%s", DefaultRef, err, out)
+	ctx := context.Background()
+	url := espidftoolchain.WendyLiteGitURL
+	src, err := ResolveSource(ctx, url, false, os.Getenv("WENDY_LITE_VERSION"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("wendy-lite: %s, commit %s", DefaultRef, gitCommit(dir))
+	if ok, err := HasMasterConf(ctx, url, src.Commit); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatalf("wendy-lite %s has no %s: set WENDY_LITE_VERSION or WENDY_LITE_DIR", src, MasterConfFile)
+	}
+	dir, err := PrepareSources(ctx, t.TempDir(), url, src, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
