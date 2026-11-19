@@ -24,7 +24,15 @@ compatibility finding inventory or repeat a concern as a second change item.
 Each item has a concrete title, category, plain_terms (one or two short sentences
 saying who notices what), change (explicit before -> after behavior), compatibility
 (affected consumers and consequences), impact, locations, coverage, and concern.
-Use plain language and inline backticks for code names. Category is network
+Every prose field must be a non-empty SINGLE LINE: no newline (LF), carriage
+return (CR), tab, NUL, or other control characters, including JSON-escaped ones.
+This applies to title, plain_terms, change, compatibility, coverage, every concern
+text, and coverage/update reasons. plain_terms must never be empty: always write
+one or two concrete sentences about who notices what. Do not use paragraphs,
+bullets or code fences inside strings. Use inline backticks for code names.
+Follow each field's stated character bound. During repair, preserve already-valid
+items exactly; correct invalid strings without introducing control characters.
+Category is network
 (ports/discovery/endpoints/wire identifiers), protobuf (RPC/message contracts),
 storage (durable paths/formats/readers/writers), config (keys/defaults/precedence),
 cli (commands/flags/output/errors), or other durable consumer-facing behavior.
@@ -88,6 +96,22 @@ def schema(base, evidence, assessment):
         "plain_terms": {"type": "string"}, "coverage": {"type": "string"},
         "concern": {"anyOf": [{"type": "null"}, fields.pop("compatibility_findings")["items"]]},
     })
+    # The pinned SDK supports descriptions, not minLength/maxLength. State the
+    # exact locally enforced contract without adding unsupported constraints.
+    for name, maximum in (("title", 200), ("change", 2000), ("compatibility", 2000),
+                          ("plain_terms", 1600), ("coverage", 1600)):
+        item["properties"][name]["description"] = (
+            f"Required non-empty single-line prose, at most {maximum} characters. "
+            "No newline, carriage return, tab or other control characters, even JSON-escaped. "
+            "Use inline backticks for code names; no paragraphs, bullets or code fences."
+            + (" Always write one or two concrete sentences saying who notices what." if name == "plain_terms" else ""))
+    concern = item["properties"]["concern"]["anyOf"][1]
+    for name in compat.FINDING_TEXT_FIELDS:
+        concern["properties"][name]["description"] += " Single-line prose only: no newline, carriage return, tab or other control characters."
+    for row in fields["compatibility_coverage"]["properties"].values():
+        row["properties"]["reason"]["description"] += " Single-line prose only: no newline, carriage return, tab or other control characters."
+    if "compatibility_updates" in fields:
+        fields["compatibility_updates"]["items"]["properties"]["reason"]["description"] += " Single-line prose only: no newline, carriage return, tab or other control characters."
     item["required"].extend(sorted(EXTRA_FIELDS))
     result["properties"].update(fields)
     result["required"].extend(fields)
@@ -99,12 +123,12 @@ def projection(payload):
     return {**payload, "compatibility_findings": [d["concern"] for d in payload["decisions"] if d["concern"] is not None]}
 
 
-def validate_item(item, *, resolved=False):
+def validate_item(item, *, resolved=False, path="decision"):
     from api_review import _text
     if not isinstance(item, dict) or set(item) != BASE_FIELDS | EXTRA_FIELDS:
         raise ReviewError("Unified change item has unexpected fields")
     for field in ("plain_terms", "coverage"):
-        _text(item[field], field, 1600)
+        _text(item[field], f"{path}.{field}", 1600)
     concern = item["concern"]
     if concern is not None and not isinstance(concern, dict):
         raise ReviewError("Unified concern must be null or a source-backed object")
@@ -123,8 +147,8 @@ def validate(payload, parsed, assessment, *, resolved=False):
     } or not isinstance(payload["decisions"], list):
         raise ReviewError("Unified response requires one decisions array and bounded coverage/history updates")
     result = copy.deepcopy(payload)
-    for item in result["decisions"]:
-        validate_item(item, resolved=resolved)
+    for index, item in enumerate(result["decisions"]):
+        validate_item(item, resolved=resolved, path=f"decisions[{index}]")
     legacy = {"risk": result["risk"], "decisions": [{k: d[k] for k in BASE_FIELDS} for d in result["decisions"]]}
     if not resolved:
         legacy = resolve_evidence(legacy, evidence_catalog(parsed))

@@ -392,10 +392,16 @@ def validate_model_response(payload, parsed, assessment=None):
 
 
 def _text(value: Any, field: str, maximum: int) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
-        raise ReviewError(f"Model response has an invalid {field}")
-    if any(ord(character) < 32 or ord(character) == 127 for character in value):
-        raise ReviewError(f"Model response has control characters in {field}")
+    if not isinstance(value, str):
+        raise ReviewError(f"Model response {field} must be a string")
+    if not value.strip():
+        raise ReviewError(f"Model response {field} must be non-empty prose (at most {maximum} characters)")
+    if len(value) > maximum:
+        raise ReviewError(f"Model response {field} exceeds its {maximum}-character bound ({len(value)} characters)")
+    control = next((character for character in value if ord(character) < 32 or ord(character) == 127), None)
+    if control is not None:
+        label = {"\n": "newline (LF)", "\r": "carriage return (CR)", "\t": "tab"}.get(control, f"U+{ord(control):04X}")
+        raise ReviewError(f"Model response {field} contains {label}; use single-line prose without control characters")
     return value.strip()
 
 
@@ -427,7 +433,7 @@ def validate_payload(payload: Any, parsed: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(decision["impact"], str) or decision["impact"] not in IMPACTS:
             raise ReviewError("Model response has an invalid compatibility impact")
         for field, maximum in (("title", 200), ("change", 2000), ("compatibility", 2000)):
-            decision[field] = _text(decision[field], field, maximum)
+            decision[field] = _text(decision[field], f"decisions[{decision_index}].{field}", maximum)
         locations = decision["locations"]
         if not isinstance(locations, list) or not 1 <= len(locations) <= 8:
             raise ReviewError("Each model decision must provide between one and eight code locations")

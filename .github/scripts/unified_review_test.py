@@ -2,6 +2,7 @@
 """Unified evidence contract, grouping, acceptance/history and dry-run examples."""
 import copy
 import json
+import re
 import unittest
 from unittest.mock import patch
 
@@ -68,6 +69,43 @@ class UnifiedTests(unittest.TestCase):
         bad = self.payload(); bad["decisions"][0]["plain_terms"] = ""
         with self.assertRaises(api.ReviewError):
             unified.validate(bad, self.parsed, self.assessment)
+
+    def test_prose_schema_describes_existing_bounds_without_unsupported_keywords(self):
+        schema = api.model_schema(api.evidence_catalog(self.parsed), self.assessment)
+        fields = schema["properties"]["decisions"]["items"]["properties"]
+        for name, maximum in (("title", 200), ("change", 2000), ("compatibility", 2000), ("plain_terms", 1600), ("coverage", 1600)):
+            self.assertIn("non-empty single-line", fields[name]["description"])
+            self.assertIn(str(maximum), fields[name]["description"])
+        self.assertIn("who notices what", fields["plain_terms"]["description"])
+        concern = fields["concern"]["anyOf"][1]
+        for name in compat.FINDING_TEXT_FIELDS:
+            self.assertIn(str(compat.MAX_FINDING_TEXT), concern["properties"][name]["description"])
+            self.assertIn("Single-line", concern["properties"][name]["description"])
+        for row in schema["properties"]["compatibility_coverage"]["properties"].values():
+            self.assertIn(str(compat.MAX_COVERAGE_REASON), row["properties"]["reason"]["description"])
+            self.assertIn("Single-line", row["properties"]["reason"]["description"])
+        from anthropic.lib._parse._transform import transform_schema
+        self.assertEqual(schema, transform_schema(copy.deepcopy(schema)))
+        for unsupported in ('"minLength"', '"maxLength"', '"pattern"'):
+            self.assertNotIn(unsupported, json.dumps(schema))
+
+    def test_prose_guards_reject_blank_multiline_controls_and_oversize_with_precise_diagnostics(self):
+        for name, maximum in (("title", 200), ("change", 2000), ("compatibility", 2000), ("plain_terms", 1600), ("coverage", 1600)):
+            cases = [("", "non-empty"), ("  ", "non-empty"), (None, "must be a string"),
+                     ("line one\nline two", "newline (LF)"), ("one\rtwo", "carriage return (CR)"),
+                     ("one\ttwo", "tab"), ("one\x00two", "U+0000"), ("one\x7ftwo", "U+007F"),
+                     ("x" * (maximum + 1), f"{maximum}-character bound")]
+            for value, message in cases:
+                with self.subTest(field=name, message=message):
+                    payload = self.payload(False)
+                    payload["decisions"][0][name] = value
+                    original = copy.deepcopy(payload)
+                    with self.assertRaisesRegex(api.ReviewError, re.escape(f"decisions[0].{name}") + ".*" + re.escape(message)):
+                        unified.validate(payload, self.parsed, self.assessment)
+                    self.assertEqual(payload, original)  # never normalize or hand-repair provider text
+            payload = self.payload(False)
+            payload["decisions"][0][name] = "x" * maximum
+            unified.validate(payload, self.parsed, self.assessment)
 
     def test_valid_item_cannot_disappear_during_shape_repair(self):
         previous = self.payload()
