@@ -1,0 +1,405 @@
+package services
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+	"unsafe"
+
+	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
+)
+
+// The writer side of an app's camera share node.
+//
+// Each camera app gets its own v4l2loopback node (the "share node"), and the
+// agent keeps it open as the node's writer. The sequence below is what Proof 1
+// in docs/superpowers/specs/2026-11-18-camera-sharing-proofs.md measured:
+//
+//   - A reader's STREAMON fails with EIO until a writer has run STREAMON on the
+//     OUTPUT side, and STREAMON with no buffer queued is enough. That is what
+//     turns the node into a capture device that declares the shared mode.
+//   - The same descriptor serves writing and the event subscription.
+//   - v4l2loopback's client-usage event reports how many readers are
+//     streaming. There is one pending event per subscription (the newest
+//     overwrites), and SEND_INITIAL delivers the current count at subscribe.
+//   - A new reader first receives the node's last written frame, which is why
+//     WriteBlank exists: it replaces a stale last frame with black.
+
+const (
+	// vidiocSubscribeEvent is _IOW('V', 90, struct v4l2_event_subscription).
+	vidiocSubscribeEvent = 0x4020565A
+	// vidiocDqevent is _IOR('V', 89, struct v4l2_event), 136 bytes.
+	vidiocDqevent = 0x80885659
+
+	// v4l2EventClientUsage is V4L2_EVENT_PRIVATE_START + 0x00E00001: the
+	// v4l2loopback event that carries the number of streaming clients.
+	v4l2EventClientUsage = 0x10E00001
+	// v4l2EventSubFlSendInitial is V4L2_EVENT_SUB_FL_SEND_INITIAL.
+	v4l2EventSubFlSendInitial = 1
+
+	// shareNodeBuffers is how many OUTPUT buffers the writer round-robins.
+	shareNodeBuffers = 2
+
+	// v4l2EventCountOffset and v4l2EventPendingOffset locate the client count
+	// (first word of the event union, which starts at 8 on 64-bit) and the
+	// number of events still queued behind this one in struct v4l2_event.
+	v4l2EventCountOffset   = 8
+	v4l2EventPendingOffset = 72
+)
+
+// v4l2EventSubscription matches struct v4l2_event_subscription (32 bytes).
+type v4l2EventSubscription struct {
+	Type  uint32
+	ID    uint32
+	Flags uint32
+	_     [5]uint32
+}
+
+// v4l2Event is a struct v4l2_event (136 bytes), read through offsets like
+// v4l2Buf so Go's layout rules never matter.
+type v4l2Event [136]byte
+
+var (
+	_ [32 - unsafe.Sizeof(v4l2EventSubscription{})]byte
+	_ [unsafe.Sizeof(v4l2EventSubscription{}) - 32]byte
+	_ [136 - unsafe.Sizeof(v4l2Event{})]byte
+	_ [unsafe.Sizeof(v4l2Event{}) - 136]byte
+)
+
+func (e *v4l2Event) count() uint32   { return *(*uint32)(unsafe.Pointer(&e[v4l2EventCountOffset])) }
+func (e *v4l2Event) pending() uint32 { return *(*uint32)(unsafe.Pointer(&e[v4l2EventPendingOffset])) }
+
+// shareNodeIO is what the pump needs of a share node.
+//
+// Contract: Counts reports how many readers are streaming (newest value only;
+// the channel closes when the node goes away or the writer is closed).
+// WriteFrame and WriteBlank may be called concurrently with each other and
+// with Close; after Close they fail with an error. Close is idempotent and
+// every call returns the first call's result.
+type shareNodeIO interface {
+	Counts() <-chan uint32
+	WriteFrame(data []byte, monoNs int64) error
+	WriteBlank(monoNs int64) error
+	Close() error
+}
+
+// openShareNode is a variable so the pump's tests can substitute a fake.
+var openShareNode = openShareNodeV4L2
+
+var errShareNodeClosed = errors.New("share node writer is closed")
+
+// blankFrames caches blankFrame by mode.
+var blankFrames sync.Map // sharedMode -> []byte
+
+// blankFrame is one black frame in mode. The slice is shared and cached:
+// callers must not modify it.
+func blankFrame(mode sharedMode) []byte {
+	if v, ok := blankFrames.Load(mode); ok {
+		return v.([]byte)
+	}
+	frame := make([]byte, mode.frameBytes())
+	var pattern []byte
+	switch mode.Fourcc {
+	case "YUYV":
+		pattern = []byte{0x10, 0x80, 0x10, 0x80}
+	case "UYVY":
+		pattern = []byte{0x80, 0x10, 0x80, 0x10}
+	}
+	for i := range pattern {
+		for j := i; j < len(frame); j += len(pattern) {
+			frame[j] = pattern[i]
+		}
+	}
+	v, _ := blankFrames.LoadOrStore(mode, frame)
+	return v.([]byte)
+}
+
+// shareNodeWriter is the V4L2 implementation of shareNodeIO.
+type shareNodeWriter struct {
+	path string
+	mode sharedMode
+	fd   int
+
+	// mu guards everything below and serialises writes against Close.
+	mu        sync.Mutex
+	buffers   [][]byte
+	next      int
+	streaming bool
+	closed    bool
+	closeErr  error
+
+	wakeR, wakeW int // wake pipe: a byte on wakeW ends the event goroutine
+	counts       chan uint32
+	done         chan struct{} // closed when the event goroutine has exited
+}
+
+func openShareNodeV4L2(path string, mode sharedMode) (shareNodeIO, error) {
+	if mode.pixelFormat() == 0 {
+		return nil, fmt.Errorf("share node %s: unknown pixel format %q", path, mode.Fourcc)
+	}
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("opening share node %s: %w", path, err)
+	}
+	w := &shareNodeWriter{path: path, mode: mode, fd: fd, wakeR: -1, wakeW: -1}
+	if err := w.configure(); err != nil {
+		_ = w.Close()
+		return nil, err
+	}
+	return w, nil
+}
+
+func (w *shareNodeWriter) ioctl(req uintptr, arg unsafe.Pointer) error {
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(w.fd), req, uintptr(arg)); errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func (w *shareNodeWriter) configure() error {
+	mode := w.mode
+
+	var vfmt v4l2Format
+	vfmt.Type = v4l2BufTypeVideoOutput
+	vfmt.Width = mode.Width
+	vfmt.Height = mode.Height
+	vfmt.PixelFormat = mode.pixelFormat()
+	vfmt.Field = v4l2FieldNone
+	vfmt.BytesPerLine = mode.BytesPerLine
+	vfmt.SizeImage = uint32(mode.frameBytes())
+	if err := w.ioctl(vidiocSFmt, unsafe.Pointer(&vfmt)); err != nil {
+		return fmt.Errorf("VIDIOC_S_FMT on %s: %w", w.path, err)
+	}
+	if vfmt.Width != mode.Width || vfmt.Height != mode.Height || vfmt.PixelFormat != mode.pixelFormat() ||
+		vfmt.BytesPerLine != mode.BytesPerLine || vfmt.SizeImage != uint32(mode.frameBytes()) {
+		return fmt.Errorf("share node %s took %dx%d %s (%d bytes per line, %d bytes) instead of %s",
+			w.path, vfmt.Width, vfmt.Height, fourccName(vfmt.PixelFormat), vfmt.BytesPerLine, vfmt.SizeImage, mode)
+	}
+
+	// Best effort. A refusal leaves the driver's default interval, which is a
+	// cosmetic difference for readers, never a correctness one.
+	if mode.FPS > 0 {
+		parm := v4l2StreamParm{Type: v4l2BufTypeVideoOutput, TpfNumerator: 1, TpfDenominator: mode.FPS}
+		if err := w.ioctl(vidiocSParm, unsafe.Pointer(&parm)); err != nil {
+			zap.L().Warn("VIDIOC_S_PARM refused on share node; it keeps the driver default interval",
+				zap.String("device", w.path), zap.Uint32("fps", mode.FPS), zap.Error(err))
+		}
+	}
+	// A best-effort per-node control that keeps the node a capture device while
+	// no writer streams (Task 2 check 8) would be set here, right after the
+	// format. None is known, so there is nothing to set.
+
+	var req v4l2ReqBuffers
+	req.Count = shareNodeBuffers
+	req.Type = v4l2BufTypeVideoOutput
+	req.Memory = v4l2MemoryMmap
+	if err := w.ioctl(vidiocReqbufs, unsafe.Pointer(&req)); err != nil {
+		return fmt.Errorf("VIDIOC_REQBUFS on %s: %w", w.path, err)
+	}
+	if req.Count == 0 {
+		return fmt.Errorf("VIDIOC_REQBUFS on %s allocated no buffers", w.path)
+	}
+	for i := uint32(0); i < req.Count; i++ {
+		var qbuf v4l2Buf
+		qbuf.setIndex(i)
+		qbuf.setType(v4l2BufTypeVideoOutput)
+		qbuf.setMemory(v4l2MemoryMmap)
+		if err := w.ioctl(vidiocQuerybuf, unsafe.Pointer(&qbuf)); err != nil {
+			return fmt.Errorf("VIDIOC_QUERYBUF %d on %s: %w", i, w.path, err)
+		}
+		mem, err := unix.Mmap(w.fd, int64(qbuf.offset()), int(v4l2BufLength(&qbuf)),
+			unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+		if err != nil {
+			return fmt.Errorf("mmap buffer %d on %s: %w", i, w.path, err)
+		}
+		w.buffers = append(w.buffers, mem)
+		if len(mem) < mode.frameBytes() {
+			return fmt.Errorf("share node %s buffer %d holds %d bytes, a frame is %d", w.path, i, len(mem), mode.frameBytes())
+		}
+	}
+
+	// STREAMON with no buffer queued: this is what makes the node a capture
+	// device with the declared format (Proof 1).
+	bufType := int32(v4l2BufTypeVideoOutput)
+	if err := w.ioctl(vidiocStreamon, unsafe.Pointer(&bufType)); err != nil {
+		return fmt.Errorf("VIDIOC_STREAMON on %s: %w", w.path, err)
+	}
+	w.streaming = true
+
+	sub := v4l2EventSubscription{Type: v4l2EventClientUsage, Flags: v4l2EventSubFlSendInitial}
+	if err := w.ioctl(vidiocSubscribeEvent, unsafe.Pointer(&sub)); err != nil {
+		return fmt.Errorf("VIDIOC_SUBSCRIBE_EVENT on %s: %w", w.path, err)
+	}
+
+	var pipe [2]int
+	if err := unix.Pipe(pipe[:]); err != nil {
+		return fmt.Errorf("wake pipe for %s: %w", w.path, err)
+	}
+	unix.CloseOnExec(pipe[0])
+	unix.CloseOnExec(pipe[1])
+	w.wakeR, w.wakeW = pipe[0], pipe[1]
+	w.counts = make(chan uint32, 1)
+	w.done = make(chan struct{})
+	go func() {
+		defer close(w.done)
+		pumpShareEvents(w.fd, w.wakeR, unix.POLLPRI, w.dequeueEvent, w.counts)
+	}()
+	return nil
+}
+
+// dequeueEvent runs one VIDIOC_DQEVENT: the client count and how many events
+// are still queued.
+func (w *shareNodeWriter) dequeueEvent(int) (count, pending uint32, err error) {
+	var ev v4l2Event
+	if err := w.ioctl(vidiocDqevent, unsafe.Pointer(&ev)); err != nil {
+		return 0, 0, err
+	}
+	return ev.count(), ev.pending(), nil
+}
+
+// pumpShareEvents is the event goroutine's body. It waits on the node for
+// wantEvents and on wakeFd for Close, drains every pending event on each wake
+// and hands only the newest count to out, a channel of capacity 1 in which the
+// newest value replaces an unread one. It is the only sender on out and closes
+// it on every exit: a wake byte, POLLERR/POLLHUP/POLLNVAL, or a dequeue error
+// (ENODEV when the node is removed).
+func pumpShareEvents(nodeFd, wakeFd int, wantEvents int16, dequeue func(fd int) (count, pending uint32, err error), out chan uint32) {
+	defer close(out)
+	fds := []unix.PollFd{
+		{Fd: int32(nodeFd), Events: wantEvents},
+		{Fd: int32(wakeFd), Events: unix.POLLIN},
+	}
+	const dead = unix.POLLERR | unix.POLLHUP | unix.POLLNVAL
+	for {
+		fds[0].Revents, fds[1].Revents = 0, 0
+		if _, err := unix.Poll(fds, -1); err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return
+		}
+		if fds[1].Revents != 0 {
+			return
+		}
+		if fds[0].Revents&dead != 0 {
+			return
+		}
+		if fds[0].Revents&wantEvents == 0 {
+			continue
+		}
+		var newest uint32
+		got := false
+		for {
+			count, pending, err := dequeue(nodeFd)
+			if err != nil {
+				if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EINTR) {
+					break // nothing (more) queued
+				}
+				return // ENODEV or anything else: the node is unusable
+			}
+			newest, got = count, true
+			if pending == 0 {
+				break
+			}
+		}
+		if !got {
+			continue
+		}
+		select {
+		case out <- newest:
+		default:
+			select {
+			case <-out: // drop the unread older value
+			default:
+			}
+			out <- newest // cannot block: this goroutine is the only sender
+		}
+	}
+}
+
+func (w *shareNodeWriter) Counts() <-chan uint32 { return w.counts }
+
+func (w *shareNodeWriter) WriteFrame(data []byte, monoNs int64) error {
+	if len(data) != w.mode.frameBytes() {
+		return fmt.Errorf("share node %s: frame is %d bytes, mode %s needs %d", w.path, len(data), w.mode, w.mode.frameBytes())
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errShareNodeClosed
+	}
+	if len(w.buffers) == 0 {
+		return fmt.Errorf("share node %s has no buffers", w.path)
+	}
+	idx := w.next
+	copy(w.buffers[idx], data)
+
+	var qbuf v4l2Buf
+	qbuf.setIndex(uint32(idx))
+	qbuf.setType(v4l2BufTypeVideoOutput)
+	qbuf.setMemory(v4l2MemoryMmap)
+	v4l2BufSetBytesUsed(&qbuf, uint32(len(data)))
+	v4l2BufSetField(&qbuf, v4l2FieldNone)
+	qbuf.setFlags(v4l2BufFlagTimestampCopy)
+	qbuf.setTimestampNanos(monoNs)
+	if err := w.ioctl(vidiocQbuf, unsafe.Pointer(&qbuf)); err != nil {
+		return fmt.Errorf("VIDIOC_QBUF on %s: %w", w.path, err)
+	}
+	w.next = (idx + 1) % len(w.buffers)
+	return nil
+}
+
+func (w *shareNodeWriter) WriteBlank(monoNs int64) error {
+	return w.WriteFrame(blankFrame(w.mode), monoNs)
+}
+
+// Close stops the event goroutine, turns the stream off, unmaps the buffers
+// and closes the node. It is idempotent: concurrent and repeated calls wait for
+// the first to finish and return its result. In-flight writes complete first;
+// later ones fail with errShareNodeClosed.
+func (w *shareNodeWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return w.closeErr
+	}
+	w.closed = true
+
+	var firstErr error
+	note := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	// The goroutine must be gone before the descriptor is closed under it.
+	if w.done != nil {
+		if w.wakeW >= 0 {
+			_, _ = unix.Write(w.wakeW, []byte{1})
+		}
+		<-w.done
+	}
+	if w.fd >= 0 {
+		if w.streaming {
+			bufType := int32(v4l2BufTypeVideoOutput)
+			if err := w.ioctl(vidiocStreamoff, unsafe.Pointer(&bufType)); err != nil {
+				note(fmt.Errorf("VIDIOC_STREAMOFF on %s: %w", w.path, err))
+			}
+			w.streaming = false
+		}
+		for _, mem := range w.buffers {
+			note(unix.Munmap(mem))
+		}
+		w.buffers = nil
+		note(unix.Close(w.fd))
+		w.fd = -1
+	}
+	for _, p := range []*int{&w.wakeR, &w.wakeW} {
+		if *p >= 0 {
+			_ = unix.Close(*p)
+			*p = -1
+		}
+	}
+	w.closeErr = firstErr
+	return firstErr
+}
