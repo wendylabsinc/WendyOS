@@ -350,7 +350,10 @@ func (s *VideoService) makeShareNodeFor(ctx context.Context, label string, owner
 	if !reuse {
 		held := s.heldShareNumbers()
 		var err error
-		nr, err = s.loopback.AllocateAuxNodeNumberSkipping(func(nr int) bool { return held[nr] })
+		// The allocator stats /dev; a node the kernel still has without its
+		// /dev entry (see attemptShareNodeRemoval) is skipped too, or CTL_ADD
+		// would answer EEXIST and the share would open nothing.
+		nr, err = s.loopback.AllocateAuxNodeNumberSkipping(func(nr int) bool { return held[nr] || shareNumberInKernel(nr) })
 		if errors.Is(err, ipcam.ErrBandExhausted) {
 			return 0, time.Time{}, fmt.Sprintf("no free v4l2loopback node number (%d-%d are in use)", ipcam.IDBandStart, ipcam.IDBandEnd)
 		}
@@ -382,9 +385,10 @@ func (s *VideoService) makeShareNodeFor(ctx context.Context, label string, owner
 
 // reusableShareNumber reports owner's own node number when its node can be
 // made there again: no other record names it, no node is being made or waits
-// to be removed at it, and the allocator, asked about that number alone,
-// would hand it out (it is in the band, no registered camera has it, and no
-// node is there now). heldShareNumbers counts owner's own number, so it is no
+// to be removed at it, the kernel has no node there (even one without a /dev
+// entry), and the allocator, asked about that number alone, would hand it out
+// (it is in the band, no registered camera has it, and no /dev entry is there
+// now). heldShareNumbers counts owner's own number, so it is no
 // use here. A nil owner has no number. Callers hold twoPlaneStartMu.
 func (s *VideoService) reusableShareNumber(owner *shareRecord) (int, bool) {
 	if owner == nil {
@@ -401,7 +405,7 @@ func (s *VideoService) reusableShareNumber(owner *shareRecord) (int, bool) {
 		}
 	}
 	s.shares.mu.Unlock()
-	if held {
+	if held || shareNumberInKernel(nr) {
 		return 0, false
 	}
 	got, err := s.loopback.AllocateAuxNodeNumberSkipping(func(n int) bool { return n != nr })
@@ -551,7 +555,12 @@ func (s *VideoService) attemptShareNodeRemoval(rm *shareRemoval) {
 		s.finishShareRemoval(rm)
 		return
 	}
-	if _, exists := s.loopback.NodePath(uint32(rm.nr)); !exists {
+	// Gone means gone from the kernel (sysfs), not from /dev: removeShareNode
+	// unlinks the entry before CTL_REMOVE, so a node whose removal was refused
+	// and whose entry could not be made again, or one an agent that died
+	// mid-attempt left without one, is still a node, and the safest one to
+	// remove, since nothing can open it by its path.
+	if !shareNumberInKernel(rm.nr) {
 		s.finishShareRemoval(rm)
 		return
 	}
@@ -588,13 +597,14 @@ func (s *VideoService) attemptShareNodeRemoval(rm *shareRemoval) {
 // removed. If a new node holds the number with another device number (the
 // kernel could not make its entry while this one was in the way), the entry is
 // made again with the new node's number. Either way the attempt then goes on
-// as for any node.
+// as for any node. rm.restored is cleared only once the entry it names is gone
+// or replaced, so an attempt that stops early (a holder) checks it again next
+// time; while it is still the node's own, removeShareNode unlinks it.
 func (s *VideoService) settleRestoredEntry(rm *shareRemoval) {
 	restored := rm.restored
 	if restored == 0 {
 		return
 	}
-	rm.restored = 0
 	path := shareNodePath(rm.nr)
 	now, err := shareNodeRdev(rm.nr)
 	switch {
@@ -605,11 +615,14 @@ func (s *VideoService) settleRestoredEntry(rm *shareRemoval) {
 		return
 	}
 	if uerr := unlinkShareNodeEntry(rm.nr, restored); uerr != nil {
-		if !errors.Is(uerr, fs.ErrNotExist) {
+		if errors.Is(uerr, fs.ErrNotExist) {
+			rm.restored = 0 // already gone
+		} else {
 			s.shareLogger().Warn(fmt.Sprintf("camera share: removing the stale entry %s that the agent made again failed: %v", path, uerr))
 		}
 		return
 	}
+	rm.restored = 0
 	if err != nil {
 		return // the node is gone, and now so is its entry
 	}
@@ -617,7 +630,15 @@ func (s *VideoService) settleRestoredEntry(rm *shareRemoval) {
 		s.shareLogger().Warn(fmt.Sprintf("camera share: making %s again for the node now at that number failed: %v", path, err))
 		return
 	}
+	rm.restored = now
 	s.giveShareNodeAccess(path)
+}
+
+// shareNumberInKernel reports whether the kernel has a node at nr, whatever
+// its /dev entry: a number whose sysfs entry cannot be read counts as taken.
+func shareNumberInKernel(nr int) bool {
+	_, err := shareNodeRdev(nr)
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // giveShareNodeAccess is setShareNodeAccess, logged when it fails.
@@ -654,6 +675,9 @@ func (s *VideoService) removeShareNode(rm *shareRemoval) (gone bool) {
 		err = unlinkShareNodeEntry(nr, rdev)
 	}
 	unlinked := err == nil
+	if unlinked || errors.Is(err, fs.ErrNotExist) {
+		rm.restored = 0 // no entry is left for it to name
+	}
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		s.shareLogger().Debug(fmt.Sprintf("camera share: not unlinking %s before removing it: %v", shareNodePath(nr), err))
 	}

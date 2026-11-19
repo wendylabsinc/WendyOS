@@ -47,17 +47,29 @@ func TestDispatch_ReportsAnOverflow(t *testing.T) {
 	}
 }
 
+// overflowTestEnv opts in to TestWatch_ReportsARealOverflow.
+const overflowTestEnv = "WENDY_DEVWATCH_OVERFLOW_TEST"
+
 // A real overflow: with the kernel's queue limit lowered, a reader held up
-// while nodes keep appearing gets IN_Q_OVERFLOW, which Watch reports. Needs
-// root and a writable /proc/sys (a privileged container); it skips otherwise.
+// while nodes keep appearing gets IN_Q_OVERFLOW, which Watch reports.
+//
+// fs.inotify.max_queued_events is one value for the whole kernel (no user or
+// mount namespace isolates it), so lowering it affects every inotify instance
+// made meanwhile on the machine. The test therefore runs only when
+// WENDY_DEVWATCH_OVERFLOW_TEST=1 is set, meant for a disposable privileged
+// container or VM, and needs root and a writable /proc/sys there. It puts the
+// value back as soon as its own watch is set up, and in t.Cleanup.
 func TestWatch_ReportsARealOverflow(t *testing.T) {
+	if os.Getenv(overflowTestEnv) != "1" {
+		t.Skipf("lowers a kernel-wide inotify limit; set %s=1 to run it (a disposable privileged container)", overflowTestEnv)
+	}
 	const knob = "/proc/sys/fs/inotify/max_queued_events"
 	old, err := os.ReadFile(knob)
 	if err != nil {
-		t.Skipf("reading %s: %v", knob, err)
+		t.Fatalf("%s=1, but reading %s failed: %v", overflowTestEnv, knob, err)
 	}
 	if err := os.WriteFile(knob, []byte("8"), 0); err != nil {
-		t.Skipf("lowering %s needs root and a writable /proc/sys: %v", knob, err)
+		t.Fatalf("%s=1, but lowering %s failed (it needs root and a writable /proc/sys): %v", overflowTestEnv, knob, err)
 	}
 	// The limit is read when the inotify instance is made, so it is put back
 	// as soon as Watch is set up rather than at the end.

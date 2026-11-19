@@ -64,6 +64,11 @@ type fakeLoopback struct {
 	// refuseRemove makes RemoveAuxNode leave the node, as the driver does
 	// (EBUSY) when something opened it.
 	refuseRemove bool
+	// noEntry holds the nodes in aux (the kernel's) whose /dev entry is gone,
+	// and staleEntry the numbers with a /dev entry but no node (one the agent
+	// made again with mknod, which the kernel does not remove with its node).
+	// NodePath and the allocator stat /dev, as the real ones do.
+	noEntry, staleEntry map[int]bool
 }
 
 // auxCall is one node creation: its number and label.
@@ -86,16 +91,24 @@ func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
 }
 
 func (f *fakeLoopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
+	// skip runs without the lock, as the real allocator's does: a caller's
+	// skip may look at this fake's nodes (the share manager's sysfs check).
+	skipped := map[int]bool{}
+	if skip != nil {
+		for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+			skipped[nr] = skip(nr)
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.auxErr != nil {
 		return 0, f.auxErr
 	}
 	for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
-		if skip != nil && skip(nr) {
+		if skipped[nr] {
 			continue
 		}
-		if _, ok := f.aux[nr]; ok {
+		if f.hasEntryLocked(nr) {
 			continue
 		}
 		if _, ok := f.nodePaths[uint32(nr)]; ok {
@@ -136,6 +149,7 @@ func (f *fakeLoopback) RemoveAuxNode(nr int) {
 	f.auxRemoved = append(f.auxRemoved, nr)
 	if !f.refuseRemove {
 		delete(f.aux, nr)
+		delete(f.noEntry, nr)
 	}
 	if f.onRemove != nil {
 		f.onRemove(nr)
@@ -214,10 +228,59 @@ func (f *fakeLoopback) NodePath(camID uint32) (string, bool) {
 	if path, ok := f.nodePaths[camID]; ok {
 		return path, true
 	}
-	if _, ok := f.aux[int(camID)]; ok {
+	if f.hasEntryLocked(int(camID)) {
 		return fmt.Sprintf("/dev/video%d", camID), true
 	}
 	return "", false
+}
+
+// setEntry makes /dev/video<nr> (present true) or takes it away. An entry
+// made for a number with no node is stale.
+func (f *fakeLoopback) setEntry(nr int, present bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.noEntry == nil {
+		f.noEntry, f.staleEntry = make(map[int]bool), make(map[int]bool)
+	}
+	_, node := f.aux[nr]
+	switch {
+	case present && node:
+		delete(f.noEntry, nr)
+	case present:
+		f.staleEntry[nr] = true
+	default:
+		delete(f.staleEntry, nr)
+		if node {
+			f.noEntry[nr] = true
+		}
+	}
+}
+
+// vanishKeepingEntry takes node nr away and leaves its /dev entry behind, as
+// happens to an entry the agent made again with mknod.
+func (f *fakeLoopback) vanishKeepingEntry(nr int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.noEntry == nil {
+		f.noEntry, f.staleEntry = make(map[int]bool), make(map[int]bool)
+	}
+	if _, node := f.aux[nr]; node && !f.noEntry[nr] {
+		f.staleEntry[nr] = true
+	}
+	delete(f.aux, nr)
+	delete(f.noEntry, nr)
+}
+
+// hasEntry reports whether /dev/video<nr> exists.
+func (f *fakeLoopback) hasEntry(nr int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hasEntryLocked(nr)
+}
+
+func (f *fakeLoopback) hasEntryLocked(nr int) bool {
+	_, node := f.aux[nr]
+	return (node && !f.noEntry[nr]) || f.staleEntry[nr]
 }
 
 func (f *fakeLoopback) AcquireView(camID uint32) func() {

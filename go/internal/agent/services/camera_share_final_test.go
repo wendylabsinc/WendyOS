@@ -278,7 +278,7 @@ func TestRemoveShareNode_ARestoredEntryWhoseNodeWentIsRemoved(t *testing.T) {
 	h.loop.mu.Unlock()
 	h.s.RemoveCameraShares("cv-a")
 	h.drainRemovals()
-	h.vanish(255)
+	h.loop.vanishKeepingEntry(255) // the kernel never removes an entry the agent made
 	h.loop.mu.Lock()
 	h.loop.refuseRemove = false
 	h.loop.mu.Unlock()
@@ -287,6 +287,118 @@ func TestRemoveShareNode_ARestoredEntryWhoseNodeWentIsRemoved(t *testing.T) {
 	want := []string{"access /dev/video255", "unlink 255 81:255", "remove 255", "mknod 255 81:255", "access /dev/video255", "unlink 255 81:255"}
 	if got := h.entryLog(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("entry operations = %v\nwant                   %v", got, want)
+	}
+	if pending := h.pendingRemovals(); len(pending) != 0 {
+		t.Fatalf("pending %v, want none", pending)
+	}
+}
+
+// M4 re-review: a removal that was refused and whose entry could not be made
+// again leaves a node with no /dev entry. The next attempt still removes it:
+// gone is read from sysfs, not from /dev.
+func TestRemoveShareNode_ANodeLeftWithoutItsEntryIsStillRemoved(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.loop.mu.Lock()
+	h.loop.refuseRemove = true
+	h.loop.mu.Unlock()
+	h.setEntryErrs(nil, nil, errors.New("mknod: no space left on device"))
+	h.s.RemoveCameraShares("cv-a")
+	h.drainRemovals()
+	if _, ok := h.loop.NodePath(255); ok || !reflect.DeepEqual(h.loop.liveAux(), []int{255}) {
+		t.Fatalf("setup: want node 255 in the kernel with no /dev entry; live %v", h.loop.liveAux())
+	}
+
+	h.loop.mu.Lock()
+	h.loop.refuseRemove = false
+	h.loop.mu.Unlock()
+	h.setEntryErrs(nil, nil, nil)
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{255, 255}) {
+		t.Fatalf("CTL_REMOVE calls = %v, want 255 twice (refused, then taken)", got)
+	}
+	if live, pending := h.loop.liveAux(), h.pendingRemovals(); len(live) != 0 || len(pending) != 0 {
+		t.Fatalf("live %v, pending %v; want the node gone", live, pending)
+	}
+}
+
+// M4 re-review: an agent that died between unlinking a node's entry and
+// CTL_REMOVE left the removal in the state file and the node in the kernel
+// with no entry; the next agent removes it.
+func TestRemoveShareNode_AnAgentThatDiedMidRemovalLeavesNothingBehind(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.writeState(`{"version":1,"containers":{},"removing":[{"node":254,"name":"Brio 101"}]}`)
+	h.loop.addLiveAux(254, "Brio 101")
+	h.loop.setEntry(254, false)
+	h.s.loadCameraShares()
+
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	if got := h.loop.removedAux(); !reflect.DeepEqual(got, []int{254}) {
+		t.Fatalf("CTL_REMOVE calls = %v, want 254", got)
+	}
+	if live, pending := h.loop.liveAux(), h.pendingRemovals(); len(live) != 0 || len(pending) != 0 {
+		t.Fatalf("live %v, pending %v; want the node gone", live, pending)
+	}
+	if removing := h.stateFile()["removing"]; removing != nil {
+		t.Fatalf("the state file still queues %v", removing)
+	}
+}
+
+// M4 re-review: share allocation never hands out a number the kernel still
+// has, though its /dev entry is gone (the allocator stats /dev, and CTL_ADD
+// there would answer EEXIST).
+func TestCreateCameraShares_NeverTakesANumberWhoseNodeLostItsEntry(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.loop.addLiveAux(255, "Brio 101") // no record, no queued removal
+	h.loop.setEntry(255, false)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	recs := h.records("cv-a")
+	if len(recs) != 1 || recs[0].node != 254 {
+		t.Fatalf("records = %+v, want one share at node 254", recs)
+	}
+
+	t.Run("nor makes a node lost in a reboot again at such a number", func(t *testing.T) {
+		h := newCSHarness(t, csBrio())
+		h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+			csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
+		h.s.loadCameraShares()
+		h.loop.addLiveAux(254, "Brio 101") // in the kernel, entry gone
+		h.loop.setEntry(254, false)
+		h.s.CoverCameraShares(context.Background(), "cv-a", 4242)
+		h.drainCovers()
+		if v := h.view("cv-a"); len(v) != 1 || v[0].node == 254 {
+			t.Fatalf("records = %+v, want the node made again at another number", v)
+		}
+	})
+}
+
+// M4 re-review: an attempt that stops before the removal (a holder) keeps
+// track of the entry it made again, so the next attempt still finds it stale
+// once the node has gone.
+func TestRemoveShareNode_ARestoredEntryIsTrackedAcrossAnAttemptThatStopsEarly(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.loop.mu.Lock()
+	h.loop.refuseRemove = true
+	h.loop.mu.Unlock()
+	h.s.RemoveCameraShares("cv-a")
+	h.drainRemovals()
+
+	h.setHeld("/dev/video255", deviceHolder{PID: 99, Comm: "wireplumber"})
+	h.s.SyncCameraShares(context.Background(), nil) // the holder stops it
+	h.drainRemovals()
+	h.setHeld("/dev/video255")
+	h.loop.vanishKeepingEntry(255)
+	h.loop.mu.Lock()
+	h.loop.refuseRemove = false
+	h.loop.mu.Unlock()
+	h.s.SyncCameraShares(context.Background(), nil)
+	h.drainRemovals()
+	log := h.entryLog()
+	if last := log[len(log)-1]; last != "unlink 255 81:255" || h.loop.hasEntry(255) {
+		t.Fatalf("entry operations = %v; want the stale entry unlinked last", log)
 	}
 	if pending := h.pendingRemovals(); len(pending) != 0 {
 		t.Fatalf("pending %v, want none", pending)
