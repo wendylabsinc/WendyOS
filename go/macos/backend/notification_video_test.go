@@ -260,3 +260,25 @@ func TestNotificationVideoReportsClipTooLargeToOpen(t *testing.T) {
 		t.Fatal("downloaded a clip over the quick-open limit")
 	}
 }
+
+func TestNotificationVideoAcceptsAnyUUIDCase(t *testing.T) {
+	const id = "dd97fd1c-db21-476f-b26f-b399d1fe229c"
+	b := New()
+	b.galleryReset(true) // Stop each lookup before it connects.
+	for _, eventID := range []string{id, strings.ToUpper(id), "{" + id + "}"} {
+		_, err := b.NotificationVideoNear("device", "thermal", eventID, 0, "")
+		if rejected := err != nil && err.Error() == "invalid notification recording reference"; rejected != strings.HasPrefix(eventID, "{") {
+			t.Fatalf("%s: %v", eventID, err)
+		}
+	}
+	for reference, logged := range map[string]string{strings.ToUpper(id): id, id: strings.ToUpper(id)} {
+		c := notificationRecordingFixture(map[string][]byte{"events.jsonl": []byte(`{"type":"event","attributes":{"notification_id":"` + logged + `"}}`), "cameras/c/playable.mp4": []byte("test-mp4-payload")})
+		got, err := readNotificationVideoNear(context.Background(), c, "thermal", reference, 0, "new")
+		if got.Preview.Path != "" {
+			defer os.Remove(got.Preview.Path)
+		}
+		if err != nil || got.Episode.GetId() != "new" {
+			t.Fatalf("%s did not match %s: %+v %v", reference, logged, got, err)
+		}
+	}
+}

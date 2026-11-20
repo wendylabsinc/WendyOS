@@ -42,7 +42,7 @@ func (b *Backend) NotificationVideoAt(selector, campaign, eventID string) (Notif
 }
 
 func (b *Backend) NotificationVideoNear(selector, campaign, eventID string, notificationUnix float64, hint string) (NotificationVideo, error) {
-	if id, err := uuid.Parse(eventID); err != nil || id.String() != eventID || campaign == "" || len(campaign) > 128 {
+	if id, err := uuid.Parse(eventID); err != nil || id.String() != strings.ToLower(eventID) || campaign == "" || len(campaign) > 128 {
 		return NotificationVideo{}, errors.New("invalid notification recording reference")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -246,8 +246,10 @@ func inspectNotificationCandidate(ctx context.Context, client pb.DataServiceClie
 }
 
 // Only the two fields that identify the event are decoded, so other attributes
-// of any JSON type, and any number of alerts, cannot hide it.
+// of any JSON type, and any number of alerts, cannot hide it. Apps may write
+// either UUID case, as the Agent accepts both.
 func notificationEventRecorded(events []byte, eventID string) bool {
+	eventID = strings.ToLower(eventID)
 	scan := bufio.NewScanner(bytes.NewReader(events))
 	scan.Buffer(make([]byte, 4096), 2<<20)
 	for scan.Scan() {
@@ -257,7 +259,7 @@ func notificationEventRecorded(events []byte, eventID string) bool {
 				NotificationID string `json:"notification_id"`
 			} `json:"attributes"`
 		}
-		if json.Unmarshal(scan.Bytes(), &row) == nil && row.Type == "event" && row.Attributes.NotificationID == eventID {
+		if json.Unmarshal(scan.Bytes(), &row) == nil && row.Type == "event" && strings.ToLower(row.Attributes.NotificationID) == eventID {
 			return true
 		}
 	}
