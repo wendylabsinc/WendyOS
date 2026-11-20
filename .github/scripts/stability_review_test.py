@@ -30,6 +30,8 @@ class FakeGitHub:
         if method == "GET":
             if "permission" in path:
                 return {"permission": self.permission}
+            if path.startswith("/pulls/comments/"):
+                return copy.deepcopy(next(row for row in self.comments if row["id"] == int(path.rsplit("/", 1)[1])))
             self.reads += 1
             pr = copy.deepcopy(self.pr)
             if self.reads >= self.stale_after:
@@ -175,6 +177,25 @@ class StabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed"):
             self.finish(github, self.request([owned()]), publish=True)
         self.assertEqual([call[0] for call in github.writes()], ["PATCH"])
+
+    def test_edit_after_state_read_is_preserved_by_immediate_comment_recheck(self):
+        from unittest.mock import patch
+        for change in ("body", "owner", "identity"):
+            github = FakeGitHub(self.pr, [owned()])
+            request = self.request([owned()])
+            def raced_read(path):
+                captured = copy.deepcopy(github.comments)
+                if change == "body":
+                    github.comments[0]["body"] += "\nHuman's new explanation"
+                elif change == "owner":
+                    github.comments[0]["user"] = {"login": "human", "type": "User"}
+                else:
+                    github.comments[0]["body"] = owned("different-finding")["body"]
+                return captured
+            with self.subTest(change=change), patch.object(github, "pages", side_effect=raced_read):
+                with self.assertRaisesRegex(ValueError, "Owned finding changed before update"):
+                    self.finish(github, request, publish=True)
+            self.assertEqual(github.writes(), [])
 
     def test_incomplete_missing_scope_malformed_output_and_bad_anchors_fail(self):
         original = copy.deepcopy(self.result)

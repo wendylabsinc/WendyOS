@@ -232,6 +232,11 @@ def finish(github, request, result, source, publish=False):
         for update in updates:
             if snapshot(github.request("GET", f"/pulls/{number}"), repo) != current:
                 raise ValueError("PR inputs changed before publication")
+            key = MARKER.search(update["body"])[1]
+            live = github.request("GET", f"/pulls/comments/{update['id']}")
+            if owned_findings([live]) != {key: request["previous"][key]}:
+                raise ValueError("Owned finding changed before update; preserving current discussion")
+            # Best-effort freshness check, not atomic CAS: GitHub has no such API.
             github.request("PATCH", f"/pulls/comments/{update['id']}", {"body": update["body"]})
         # Inline anchors cannot move on PATCH. Updated bodies link current evidence.
         # Each run's COMMENT summary records its scope; omitted threads are untouched.
