@@ -2,6 +2,7 @@ package dev.wendy.android
 
 import android.view.WindowManager
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -17,11 +18,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-/** Rename, remove from Cloud, reset local enrollment, and software updates (iOS DeviceManagementView). */
+/** Rename, remove from Cloud, reset local enrollment, and software updates (iOS DeviceManagementView). [session] is the connection it was opened on. */
 @Composable
-fun DeviceManagementPage(model: WendyModel, device: Device) {
+fun DeviceManagementPage(model: WendyModel, device: Device, session: Long) {
     val nav = LocalNavigator.current
-    val session = model.session
+    val sameSession = isCurrent(model, session)
     val scope = rememberCoroutineScope()
     var identity by remember { mutableStateOf<JSONObject?>(null) }
     var accounts by remember { mutableStateOf(emptyList<JSONObject>()) }
@@ -42,9 +43,10 @@ fun DeviceManagementPage(model: WendyModel, device: Device) {
         } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { busy = false }
     }
     val deviceID = identity?.text("DeviceID") ?: ""
-    val canManage = deviceID.isNotEmpty() && account.isNotEmpty() && !busy && !removed
+    val canManage = sameSession && deviceID.isNotEmpty() && account.isNotEmpty() && !busy && !removed
     LaunchedEffect(session) { refresh() }
     PageColumn {
+        if (!sameSession) deviceChanged(device)
         formSection("Device") {
             LabeledRow("Name", device.title)
             identity?.let {
@@ -65,20 +67,20 @@ fun DeviceManagementPage(model: WendyModel, device: Device) {
         }
         formSection {
             NavRow("Reset local enrollment", Icons.Outlined.RestartAlt, enabled = canManage) {
-                nav.push("Reset local enrollment") { LocalResetPage(model, device, account, identity?.text("OrganizationID") ?: "", deviceID) }
+                nav.push("Reset local enrollment") { LocalResetPage(model, device, session, account, identity?.text("OrganizationID") ?: "", deviceID) }
             }
         }
         formSection("Software and power") {
-            NavRow("Agent update and device info", Icons.Outlined.Info) { nav.push("Device info") { DeviceInfoPage(model, device.title) } }
-            NavRow("OS update", Icons.Outlined.SystemUpdate) { nav.push("OS update") { OSUpdatePage(model, device) } }
+            NavRow("Agent update and device info", Icons.Outlined.Info, enabled = sameSession) { nav.push("Device info") { DeviceInfoPage(model, device.title) } }
+            NavRow("OS update", Icons.Outlined.SystemUpdate, enabled = sameSession) { nav.push("OS update") { OSUpdatePage(model, device, session) } }
             SecondaryText("Remote restart is not supported yet.")
         }
         if (busy) item { LoadingRow("Applying to ${device.title}…") }
         message?.let { item { SecondaryText(it) } }
         error?.let { item { FormSection { FailureNote(it) } } }
-        if (!busy && !removed) item { TextButton(onClick = { scope.launch { refresh() } }) { Text("Refresh identity") } }
+        if (!busy && !removed && sameSession) item { TextButton(onClick = { scope.launch { refresh() } }) { Text("Refresh identity") } }
     }
-    confirm?.let { action ->
+    confirm?.takeIf { sameSession }?.let { action ->
         val remove = action == "remove"
         ConfirmAction(if (remove) "Remove ${device.title} from Wendy Cloud?" else "Rename ${device.title} to $name?",
             if (remove) "Cloud connections will stop. The device is not factory reset. Local recovery will be needed to enroll again." else "The Cloud name and local hostname will both change. Reconnect from Devices afterward.",
@@ -98,8 +100,8 @@ fun DeviceManagementPage(model: WendyModel, device: Device) {
 
 /** Two steps: the device proves its identity, then the person confirms the reset (iOS DeviceLocalResetView). */
 @Composable
-private fun LocalResetPage(model: WendyModel, device: Device, account: String, organization: String, deviceID: String) {
-    val session = model.session
+private fun LocalResetPage(model: WendyModel, device: Device, session: Long, account: String, organization: String, deviceID: String) {
+    val sameSession = isCurrent(model, session)
     val scope = rememberCoroutineScope()
     var plan by remember { mutableStateOf<JSONObject?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -111,16 +113,17 @@ private fun LocalResetPage(model: WendyModel, device: Device, account: String, o
         try { plan = model.backend.call("PrepareLocalReset", session, account, organization, deviceID).obj() } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { busy = false }
     }
     PageColumn {
+        if (!sameSession) deviceChanged(device)
         formSection(footer = "Resetting removes the device’s Cloud enrollment on the device itself, so it can be enrolled again. Apps and Wi-Fi stay. It requires a direct local connection.") {
             LabeledRow("Device", device.title)
             plan?.let { LabeledRow("Principal", it.text("Principal"), selectable = true); LabeledRow("Fingerprint", it.text("Fingerprint"), selectable = true) }
             if (busy) LoadingRow("Checking…")
             error?.let { FailureNote(it) }
             done?.let { Text(it, Modifier.padding(vertical = 8.dp)) }
-            if (plan != null && done == null) ActionRow("Reset local enrollment", Icons.Outlined.RestartAlt, destructive = true, enabled = !busy) { confirm = true }
+            if (plan != null && done == null) ActionRow("Reset local enrollment", Icons.Outlined.RestartAlt, destructive = true, enabled = !busy && sameSession) { confirm = true }
         }
     }
-    if (confirm) ConfirmAction("Reset local enrollment?", "${device.title} will forget its Cloud enrollment. You will need to enroll it again to reach it through Wendy Cloud.", "Reset", onDismiss = { confirm = false }) {
+    if (confirm && sameSession) ConfirmAction("Reset local enrollment?", "${device.title} will forget its Cloud enrollment. You will need to enroll it again to reach it through Wendy Cloud.", "Reset", onDismiss = { confirm = false }) {
         confirm = false
         val current = plan ?: return@ConfirmAction
         scope.launch {
@@ -150,8 +153,8 @@ data class OSUpdateProgress(val running: Boolean, val phase: String, val fractio
 
 /** Install an OS artifact and follow the agent's status (iOS DeviceOSUpdateView). */
 @Composable
-private fun OSUpdatePage(model: WendyModel, device: Device) {
-    val session = model.session
+private fun OSUpdatePage(model: WendyModel, device: Device, session: Long) {
+    val sameSession = isCurrent(model, session)
     val scope = rememberCoroutineScope()
     val activity = androidx.activity.compose.LocalActivity.current
     var snapshot by remember { mutableStateOf<JSONObject?>(null) }
@@ -170,9 +173,10 @@ private fun OSUpdatePage(model: WendyModel, device: Device) {
     val connector = status?.optJSONObject("engineStatus")?.optString("connector").orEmpty()
     val state = OSUpdateProgress.parse(snapshot)
     // Leaving Wendy closes the device connection, which stops the install, so the screen stays awake while it runs (iOS disables the idle timer).
-    DisposableEffect(activity, state.running) {
+    val awake = state.running && sameSession
+    DisposableEffect(activity, awake) {
         val window = activity?.window
-        if (!state.running || window == null) return@DisposableEffect onDispose {}
+        if (!awake || window == null) return@DisposableEffect onDispose {}
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
@@ -192,6 +196,7 @@ private fun OSUpdatePage(model: WendyModel, device: Device) {
         }
     }
     PageColumn {
+        if (!sameSession) deviceChanged(device)
         formSection("Operating system") {
             LabeledRow("Device", device.title)
             info?.let { LabeledRow("Installed", it.text("os_version", "os")) }
@@ -209,16 +214,16 @@ private fun OSUpdatePage(model: WendyModel, device: Device) {
             SecondaryText("This app cannot restart the device yet.")
         }
         if (state.error.isNotEmpty()) item { FormSection { FailureNote(state.error) } }
-        if (!state.running && !state.restartRequired) formSection("Install update", "Use the OS artifact for this device’s hardware. The Agent checks compatibility before installation. The update is only verified after the device restarts and passes its health checks.") {
+        if (sameSession && !state.running && !state.restartRequired) formSection("Install update", "Use the OS artifact for this device’s hardware. The Agent checks compatibility before installation. The update is only verified after the device restarts and passes its health checks.") {
             OutlinedTextField(artifact, { artifact = it }, Modifier.fillMaxWidth(), label = { Text("OS artifact URL") }, singleLine = true, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri))
             ActionRow("Install OS update", Icons.Outlined.SystemUpdate, enabled = !busy && connector.isNotEmpty() && artifact.isNotBlank()) { confirm = true }
             if (connector.isEmpty() && snapshot != null) SecondaryText("This device’s agent does not report an OS update engine.")
         }
         if (busy) item { LoadingRow("Checking OS update status…") }
         error?.let { item { FormSection { FailureNote(it) } } }
-        item { TextButton(onClick = { refresh++ }, enabled = !busy) { Text("Refresh status") } }
+        item { TextButton(onClick = { refresh++ }, enabled = !busy && sameSession) { Text("Refresh status") } }
     }
-    if (confirm) ConfirmAction("Install OS update?", "The operating system will be replaced. Keep power connected and plan for downtime while the device restarts. The update is only verified after post-boot health checks pass.", "Install OS update", onDismiss = { confirm = false }) {
+    if (confirm && sameSession) ConfirmAction("Install OS update?", "The operating system will be replaced. Keep power connected and plan for downtime while the device restarts. The update is only verified after post-boot health checks pass.", "Install OS update", onDismiss = { confirm = false }) {
         confirm = false
         scope.launch {
             busy = true; error = null
@@ -226,3 +231,8 @@ private fun OSUpdatePage(model: WendyModel, device: Device) {
         }
     }
 }
+
+/** These pages act only on the connection they were opened on (as Activity's Device update does); another device or a reconnect ends it. */
+private fun isCurrent(model: WendyModel, session: Long) = session != 0L && model.session == session
+
+private fun LazyListScope.deviceChanged(device: Device) = item { EmptyMessage("Device changed", "Open ${device.title} again to manage it.", Icons.Outlined.SyncProblem) }
