@@ -126,11 +126,16 @@ class PlatformServices(private val context: Context) {
         }
         private fun characteristic(args: JSONObject): BluetoothGattCharacteristic = gatt?.getService(uuid(args.getString("service")))?.getCharacteristic(uuid(args.getString("characteristic"))) ?: error("not_found")
         fun perform(method: String, args: JSONObject): Any? {
-            check(!closed) { "disconnected" }
+            if (method != "receive") check(!closed) { "disconnected" }
             when (method) {
                 "receive" -> {
-                    channelError?.let { error(it) }
-                    val bytes = packets.poll(args.optInt("timeout", 2).coerceIn(1, 35).toLong(), TimeUnit.SECONDS) ?: error("timeout")
+                    // The peer may close right after its last write: hand over what is queued before reporting the closure.
+                    // Read the flags first, so every packet queued before the channel ended is visible to the poll.
+                    val ended = closed || channelError != null
+                    val bytes = packets.poll() ?: run {
+                        if (ended) error(channelError ?: "disconnected")
+                        packets.poll(args.optInt("timeout", 2).coerceIn(1, 35).toLong(), TimeUnit.SECONDS) ?: error("timeout")
+                    }
                     if (bytes.isEmpty()) error(channelError ?: "disconnected")
                     return Base64.encodeToString(bytes, Base64.NO_WRAP)
                 }
