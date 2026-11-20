@@ -90,6 +90,8 @@ object UsdReader {
             val prim = layer.prims[path] ?: return
             val (local, reset) = localTransform(prim)
             val world = if (reset) local else multiply(local, parent)
+            // Face counts give a mesh's triangles before it is expanded, so an oversized mesh fails fast.
+            if (prim.type == "Mesh" && triangles + faceTriangles(prim) > MAXIMUM_TRIANGLES) throw UsdFormatException("This model has too many triangles to show.")
             when (prim.type) {
                 "Mesh" -> mesh(prim, world, layer, scale, zUp)?.let { triangles += it.positions.size / 9; meshes += it }
                 "Cube" -> cube(prim, world, layer, scale, zUp)?.let { triangles += it.positions.size / 9; meshes += it }
@@ -120,6 +122,13 @@ object UsdReader {
         }
         if (out.isEmpty()) return null
         return finish(prim, out.toFloatArray(), layer)
+    }
+
+    /** The triangles a mesh's faceVertexCounts describe, counted without expanding any vertex. */
+    private fun faceTriangles(prim: UsdPrim): Long {
+        var total = 0L
+        (prim.attributes["faceVertexCounts"] as? IntArray)?.forEach { if (it >= 3) total += it - 2 }
+        return total
     }
 
     private fun cube(prim: UsdPrim, world: DoubleArray, layer: UsdLayer, scale: Double, zUp: Boolean): SiteMesh {

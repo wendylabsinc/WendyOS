@@ -105,6 +105,13 @@ class UsdReaderTest {
         assertThrows(UsdFormatException::class.java) { UsdReader.read(table) }
     }
 
+    @Test fun oversizedMeshesFailBeforeTheyAreExpanded() {
+        // A face count alone implies 2,000,001 triangles, one over the limit; no vertex needs to be read to refuse it.
+        val layer = "#usda 1.0\ndef Mesh \"m\" {\n    int[] faceVertexCounts = [2000003]\n    int[] faceVertexIndices = [0, 1, 2]\n    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]\n}\n"
+        val error = assertThrows(UsdFormatException::class.java) { UsdReader.read(layer.toByteArray()) }
+        assertEquals("This model has too many triangles to show.", error.message)
+    }
+
     @Test fun integerAndLz4CodecsMatchUsd() {
         // Common delta 1, codes: common, int8 +3, int16 +300, int32 -100000.
         val raw = byteArrayOf(1, 0, 0, 0, 0b11_10_01_00.toByte(), 3, 0x2C, 0x01, 0x60, 0x79, 0xFE.toByte(), 0xFF.toByte())
