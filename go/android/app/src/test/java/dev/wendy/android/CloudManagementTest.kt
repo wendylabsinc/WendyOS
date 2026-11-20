@@ -3,6 +3,8 @@ package dev.wendy.android
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import java.util.Calendar
+import java.util.TimeZone
 
 class CloudManagementTest {
     private val overview = JSONObject("""{
@@ -29,5 +31,22 @@ class CloudManagementTest {
         assertEquals("thor", snapshot.rules[1].target)
         assertEquals(listOf("Active", "Expired", "Revoked"), snapshot.invitations.map { it.state(now = 1_000_000) })
         assertEquals(setOf("member:add", "invite:create"), snapshot.permissions)
+    }
+
+    @Test fun invitationExpiryReadsPickerDatesInUTC() {
+        fun local(zone: TimeZone, day: Int, hour: Int, minute: Int) = Calendar.getInstance(zone).apply { clear(); set(2026, Calendar.NOVEMBER, day, hour, minute) }.timeInMillis
+        fun utcMidnight(day: Int) = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { clear(); set(2026, Calendar.NOVEMBER, day) }.timeInMillis
+        val newYork = TimeZone.getTimeZone("America/New_York")
+        // West of UTC, choosing tomorrow keeps tomorrow, so the link can still be created.
+        val now = local(newYork, 20, 10, 30)
+        assertEquals(local(newYork, 21, 10, 30), InvitationExpiry.fromPicker(utcMidnight(21), now, newYork))
+        // The picker opens on the local date, even after that date has ended in UTC.
+        val evening = local(newYork, 27, 21, 0)
+        assertEquals(utcMidnight(27), InvitationExpiry.pickerDate(evening, newYork))
+        assertEquals(evening, InvitationExpiry.fromPicker(InvitationExpiry.pickerDate(evening, newYork), evening, newYork))
+        val tokyo = TimeZone.getTimeZone("Asia/Tokyo")
+        val morning = local(tokyo, 21, 8, 0)
+        assertEquals(utcMidnight(21), InvitationExpiry.pickerDate(morning, tokyo))
+        assertEquals(local(tokyo, 22, 8, 0), InvitationExpiry.fromPicker(utcMidnight(22), morning, tokyo))
     }
 }
