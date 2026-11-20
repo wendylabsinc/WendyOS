@@ -1,0 +1,54 @@
+name: AI Stability Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to prepare (scaffold only; no review)"
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    name: Prepare PR snapshot (scaffold only)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Resolve immutable PR snapshot
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const input = process.env.PR_NUMBER;
+            if (!/^[1-9][0-9]*$/.test(input) || !Number.isSafeInteger(Number(input))) {
+              throw new Error("PR number must be a positive integer");
+            }
+            const {data: pr} = await github.rest.pulls.get({
+              ...context.repo, pull_number: Number(input)
+            });
+            const snapshot = {
+              number: pr.number,
+              base: {repository: pr.base.repo.full_name, ref: pr.base.ref, sha: pr.base.sha},
+              head: {repository: pr.head.repo?.full_name ?? null, ref: pr.head.ref, sha: pr.head.sha}
+            };
+            for (const side of [snapshot.base, snapshot.head]) {
+              if (typeof side.sha !== "string" || !/^[0-9a-f]{40}$/.test(side.sha)) {
+                throw new Error("PR metadata did not contain immutable commit SHAs");
+              }
+            }
+            core.info(JSON.stringify(snapshot, null, 2));
+            return snapshot;
+
+      - name: Check out PR head with complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(steps.pr.outputs.result).head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Report scaffold status
+        run: echo "Scaffold only. PR snapshot prepared; stability review is not implemented."
