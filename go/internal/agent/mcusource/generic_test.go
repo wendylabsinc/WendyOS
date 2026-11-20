@@ -2,9 +2,12 @@ package mcusource
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
@@ -94,6 +97,62 @@ func TestSupervisorGenericBurstKeepsMediaCapacity(t *testing.T) {
 	delivered, err := supervisor.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "source")
 	if err != nil || !delivered || camera.frames != 1 || audio.frames != 1 || generic.frames != genericFIFOFrames {
 		t.Fatalf("camera=%d audio=%d generic=%d delivered=%v err=%v", camera.frames, audio.frames, generic.frames, delivered, err)
+	}
+}
+
+type mixedSubscriptionClient struct {
+	*fakeWendycomClient
+	rejectMixed bool
+	requests    *[][]uint32
+}
+
+func (c mixedSubscriptionClient) SensorLinkSubscribe(ids []uint32, timeout time.Duration) error {
+	*c.requests = append(*c.requests, slices.Clone(ids))
+	if slices.Contains(ids, uint32(3)) {
+		if c.rejectMixed {
+			return errors.New("generic channel is busy")
+		}
+		c.dropOff()
+		return nil
+	}
+	return c.fakeWendycomClient.SensorLinkSubscribe(ids, timeout)
+}
+
+func TestSupervisorRetriesMediaOnlyAfterMixedStartupFailure(t *testing.T) {
+	for _, name := range []string{"rejected subscription", "closed before frames"} {
+		t.Run(name, func(t *testing.T) {
+			manifest := &sensorpb.SensorManifest{Sensors: []*sensorpb.SensorDescriptor{
+				{ChannelId: 1, InputId: 1, Format: &sensorpb.SensorDescriptor_Video{Video: &sensorpb.VideoFormat{Codec: sensorpb.VideoFormat_H264}}},
+				{ChannelId: 2, InputId: 2, Format: &sensorpb.SensorDescriptor_Audio{Audio: &sensorpb.AudioFormat{Codec: sensorpb.AudioFormat_PCM_S16LE}}},
+				{ChannelId: 3, InputId: 3, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example", SampleBytes: 1}}},
+			}}
+			var clients []*fakeWendycomClient
+			var requests [][]uint32
+			factory := func(SensorPairing, string) (SensorTransport, error) {
+				client := newFakeWendycomClient()
+				client.manifest = manifest
+				client.onSubscribe = func() {
+					client.send(wholeFrame(1, 0))
+					client.send(wholeFrame(2, 0))
+					client.dropOff()
+				}
+				clients = append(clients, client)
+				return &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func(context.Context) (wendycomClient, error) {
+					return mixedSubscriptionClient{client, name == "rejected subscription", &requests}, nil
+				}}, nil
+			}
+			camera, audio, generic := &selectionCamera{}, &selectionAudio{}, &recordingGeneric{}
+			supervisor := NewSupervisor(zap.NewNop(), camera, factory, func(string) ros2camera.CameraWriter { return camera }, audio)
+			supervisor.SetGenericSink(generic)
+
+			delivered, err := supervisor.streamOnce(t.Context(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "source")
+			if err != nil || !delivered || camera.frames != 1 || audio.frames != 1 || !generic.released {
+				t.Fatalf("camera=%d audio=%d generic released=%v delivered=%v err=%v", camera.frames, audio.frames, generic.released, delivered, err)
+			}
+			if len(clients) != 2 || clients[0].closeCount() != 1 || !slices.EqualFunc(requests, [][]uint32{{1, 2, 3}, {1, 2}}, slices.Equal) {
+				t.Fatalf("connections=%d subscription requests=%v, want mixed then media-only on a fresh connection", len(clients), requests)
+			}
+		})
 	}
 }
 

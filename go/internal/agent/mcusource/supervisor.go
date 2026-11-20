@@ -2,6 +2,7 @@ package mcusource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -70,7 +71,7 @@ func (s *Supervisor) SetSourceResolver(resolve SourceResolver) {
 	s.resolveSource = resolve
 }
 
-// transportFor is called once per streamOnce attempt (not cached) so each
+// transportFor is called for each connection attempt (not cached) so each
 // pairing's mTLS handshake pins that specific source's identity,
 // mirroring mesh_dialer.go's per-target pinning — a single shared transport
 // cannot do that across pairings with different source identities.
@@ -267,10 +268,23 @@ func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr strin
 	}
 }
 
-// streamOnce connects, mounts supported channels, and copies frames until error.
+var errMixedSensorStartup = errors.New("combined media and generic sensor stream did not start")
+
+// streamOnce tries the combined subscription, then preserves media on a clean
+// connection if the combined stream fails to start.
+func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr string) (bool, error) {
+	delivered, err := s.streamPairing(ctx, p, addr, s.generic)
+	if !errors.Is(err, errMixedSensorStartup) || ctx.Err() != nil {
+		return delivered, err
+	}
+	s.logger.Warn("Retrying sensor source with media only", zap.String("source", p.Key()), zap.Error(err))
+	return s.streamPairing(ctx, p, addr, nil)
+}
+
+// streamPairing connects, mounts supported channels and copies frames.
 // delivered reports whether at least one frame was written, so the caller
 // can reset its reconnect backoff after a stream that was actually healthy.
-func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr string) (delivered bool, err error) {
+func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr string, genericSink GenericSink) (delivered bool, err error) {
 	s.setConnected(p, false)
 	defer s.setConnected(p, false)
 	tr, err := s.transportFor(p, addr)
@@ -296,7 +310,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	cams := cameraChannels(manifest, p.SensorAllowlist)
 	mics := microphoneChannels(manifest, p.SensorAllowlist)
 	var generic []*sensorlinkpb.SensorDescriptor
-	if s.generic != nil {
+	if genericSink != nil {
 		counts := make(map[uint32]int)
 		for _, ch := range manifest.GetSensors() {
 			counts[ch.GetChannelId()]++
@@ -378,6 +392,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		subs = append(subs, ch.ChannelId)
 		usedInputs[ch.InputId] = true
 	}
+	mediaCount := len(subs)
 	selectedGeneric := make([]*sensorlinkpb.SensorDescriptor, 0, len(generic))
 	for _, ch := range generic {
 		if exclusiveInputs && usedInputs[ch.InputId] {
@@ -391,7 +406,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	if len(selectedGeneric) > 0 {
 		var accepted []uint32
 		var release func()
-		accepted, publishGeneric, release = s.generic.Mount(p, selectedGeneric)
+		accepted, publishGeneric, release = genericSink.Mount(p, selectedGeneric)
 		subs = append(subs, accepted...)
 		defer release()
 		genericSamples = make(map[uint32]uint32, len(accepted))
@@ -407,6 +422,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	if len(subs) == 0 {
 		return false, nil
 	}
+	mixed := mediaCount > 0 && len(genericSamples) > 0
 
 	var latest []uint32
 	for _, ch := range cams {
@@ -418,6 +434,9 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	}
 	nextFrame, closeStream, err := streamLiveFrames(ctx, tr, subs, latest, genericSamples)
 	if err != nil {
+		if mixed {
+			return false, fmt.Errorf("%w: %w", errMixedSensorStartup, err)
+		}
 		return false, err
 	}
 	closeStream = sync.OnceValue(closeStream)
@@ -464,6 +483,11 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 			}
 			delivered = true
 		}
+	}
+	// Some transports report refused subscriptions by closing the stream
+	// instead of returning an error when it opens.
+	if mixed && !delivered && ctx.Err() == nil {
+		return false, errMixedSensorStartup
 	}
 	return delivered, nil
 }

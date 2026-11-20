@@ -87,6 +87,9 @@ For Wendy Lite, one format per `input_id` can be active. Mounted cameras have
 priority, followed by microphones, then generic channels in ascending channel-ID
 order. A pairing's sensor allowlist can select a particular mode. Older agent
 sources without meaningful input IDs retain concurrent streams.
+If the combined subscription fails to start, the agent retries with just
+camera and microphone channels. It tries generic channels again on the next
+pairing reconnect.
 
 Supported generic descriptors fit within 2048 protobuf bytes and have a
 nonempty schema of up to 1024 bytes and a name of at most 256 bytes.
