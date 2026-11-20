@@ -204,10 +204,12 @@ class PlatformServices(private val context: Context) {
                 if (closed) finishResolve() else nsd.resolveService(info, object : NsdManager.ResolveListener {
                     override fun onResolveFailed(service: NsdServiceInfo, code: Int) { main.post { finishResolve() } }
                     override fun onServiceResolved(service: NsdServiceInfo) { main.post {
-                        if (!closed) {
-                            val txt = JSONObject(); service.attributes.forEach { (key, value) -> txt.put(key, value.toString(Charsets.UTF_8)) }
+                        // Advertisements are untrusted LAN data: drop a malformed one rather than crash or stall the queue.
+                        if (!closed) try {
+                            // A TXT entry without a value, such as a boolean flag, has a null value here.
+                            val txt = JSONObject(); service.attributes.forEach { (key, value) -> txt.put(key, value?.toString(Charsets.UTF_8) ?: "") }
                             service.host?.hostAddress?.let { address -> rows[service.serviceName] = json("InstanceName" to service.serviceName, "Hostname" to address, "IPAddress" to address, "Port" to service.port, "TXTRecords" to txt) }
-                        }
+                        } catch (_: Exception) {}
                         finishResolve()
                     } }
                 })
