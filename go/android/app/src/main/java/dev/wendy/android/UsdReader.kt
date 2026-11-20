@@ -84,13 +84,15 @@ object UsdReader {
         val subsets = prim.children.mapNotNull { layer.prims[it] }.filter { it.type == "GeomSubset" && it.attributes["elementType"] == "face" }
         val owners = HashMap<Int, UsdPrim>()
         for (subset in subsets) for (face in subset.attributes["indices"] as? IntArray ?: intArrayOf()) {
-            if (face !in counts.indices || owners.put(face, subset) != null) throw UsdFormatException("Invalid material subsets")
+            if (face !in counts.indices) throw UsdFormatException("Invalid material subsets")
+            owners.putIfAbsent(face, subset)
         }
         val groups = LinkedHashMap<String, Pair<ArrayList<Float>, ArrayList<Float>>>()
         val materials = HashMap<String, UsdMaterial>()
         var cursor = 0
         for ((face, count) in counts.withIndex()) {
-            if (count < 3 || count > indices.size - cursor) throw UsdFormatException("Invalid mesh face")
+            if (count < 3) { cursor += maxOf(count, 0); continue }
+            if (count > indices.size - cursor) throw UsdFormatException("Invalid mesh face")
             val owner = owners[face] ?: prim
             val material = materials.getOrPut(owner.path) { UsdMaterial.resolve(owner, prim, layer, assets) }
             val (out, uv) = groups.getOrPut(owner.path) { ArrayList<Float>() to ArrayList<Float>() }
