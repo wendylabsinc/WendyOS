@@ -333,6 +333,16 @@ func brewPackageWithSpinner(ctx context.Context, action, formula, label string) 
 	cmd.Stderr = &out
 	cmd.Stdin = nil
 
+	// JSON and noninteractive callers cannot open a terminal for a spinner.
+	// Keep the same cancellable command and failure diagnostics in both paths.
+	if jsonOutput || !isInteractiveTerminal() {
+		if err := cmd.Run(); err != nil {
+			_, _ = os.Stderr.Write(out.Bytes())
+			return err
+		}
+		return nil
+	}
+
 	prog := tui.NewProgressProgram(tui.NewSpinner(label))
 
 	var (
