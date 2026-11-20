@@ -166,6 +166,18 @@ func (b *Backend) previewsReset(blocked bool) {
 	}
 }
 
+// RetirePreviews retires every preview before change switches the macOS
+// account, then accepts new previews again. iOS does this in SetMobileState.
+func (b *Backend) RetirePreviews(change func() error) error {
+	b.previewsReset(true)
+	defer func() {
+		b.previews.mu.Lock()
+		b.previews.blocked = false
+		b.previews.mu.Unlock()
+	}()
+	return change()
+}
+
 func (b *Backend) PreviewApps(id uint64) ([]*pb.AppContainer, error) {
 	p := b.preview(id)
 	if p == nil {
