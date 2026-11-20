@@ -75,8 +75,9 @@ func (WendyComAppType) EnumDescriptor() ([]byte, []int) {
 type WendyComConfPushMode int32
 
 const (
-	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_REPLACE WendyComConfPushMode = 0
-	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_UPDATE  WendyComConfPushMode = 1
+	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_REPLACE    WendyComConfPushMode = 0
+	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_UPDATE     WendyComConfPushMode = 1
+	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_MESH_TRUST WendyComConfPushMode = 2 // physical USB, current identity only
 )
 
 // Enum value maps for WendyComConfPushMode.
@@ -84,10 +85,12 @@ var (
 	WendyComConfPushMode_name = map[int32]string{
 		0: "WENDY_COM_CONF_PUSH_MODE_REPLACE",
 		1: "WENDY_COM_CONF_PUSH_MODE_UPDATE",
+		2: "WENDY_COM_CONF_PUSH_MODE_MESH_TRUST",
 	}
 	WendyComConfPushMode_value = map[string]int32{
-		"WENDY_COM_CONF_PUSH_MODE_REPLACE": 0,
-		"WENDY_COM_CONF_PUSH_MODE_UPDATE":  1,
+		"WENDY_COM_CONF_PUSH_MODE_REPLACE":    0,
+		"WENDY_COM_CONF_PUSH_MODE_UPDATE":     1,
+		"WENDY_COM_CONF_PUSH_MODE_MESH_TRUST": 2,
 	}
 )
 
@@ -2304,6 +2307,7 @@ type WendyComEnrollmentChallenge struct {
 	TenantId                       string                 `protobuf:"bytes,11,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	UuidEnrollmentSupported        bool                   `protobuf:"varint,12,opt,name=uuid_enrollment_supported,json=uuidEnrollmentSupported,proto3" json:"uuid_enrollment_supported,omitempty"`                              // UUID discovery and enrollment identity reporting
 	MldsaPeerVerificationSupported *bool                  `protobuf:"varint,13,opt,name=mldsa_peer_verification_supported,json=mldsaPeerVerificationSupported,proto3,oneof" json:"mldsa_peer_verification_supported,omitempty"` // peer verification independent of issuance profile
+	MeshTrustSupported             bool                   `protobuf:"varint,14,opt,name=mesh_trust_supported,json=meshTrustSupported,proto3" json:"mesh_trust_supported,omitempty"`                                             // provision tenant mesh trust during enrollment
 	unknownFields                  protoimpl.UnknownFields
 	sizeCache                      protoimpl.SizeCache
 }
@@ -2425,6 +2429,13 @@ func (x *WendyComEnrollmentChallenge) GetUuidEnrollmentSupported() bool {
 func (x *WendyComEnrollmentChallenge) GetMldsaPeerVerificationSupported() bool {
 	if x != nil && x.MldsaPeerVerificationSupported != nil {
 		return *x.MldsaPeerVerificationSupported
+	}
+	return false
+}
+
+func (x *WendyComEnrollmentChallenge) GetMeshTrustSupported() bool {
+	if x != nil {
+		return x.MeshTrustSupported
 	}
 	return false
 }
@@ -4381,7 +4392,7 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x1bWendyComGetDeviceInfoParams\"D\n" +
 	"!WendyComEnrollmentChallengeParams\x12\x1f\n" +
 	"\vstatus_only\x18\x01 \x01(\bR\n" +
-	"statusOnly\"\x92\x06\n" +
+	"statusOnly\"\xc4\x06\n" +
 	"\x1bWendyComEnrollmentChallenge\x12\x1b\n" +
 	"\tnonce_hex\x18\x01 \x01(\tR\bnonceHex\x12\x1a\n" +
 	"\benrolled\x18\x02 \x01(\bR\benrolled\x12.\n" +
@@ -4396,7 +4407,8 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	" \x01(\tR\bdeviceId\x12\x1b\n" +
 	"\ttenant_id\x18\v \x01(\tR\btenantId\x12:\n" +
 	"\x19uuid_enrollment_supported\x18\f \x01(\bR\x17uuidEnrollmentSupported\x12N\n" +
-	"!mldsa_peer_verification_supported\x18\r \x01(\bH\x02R\x1emldsaPeerVerificationSupported\x88\x01\x01B\x1d\n" +
+	"!mldsa_peer_verification_supported\x18\r \x01(\bH\x02R\x1emldsaPeerVerificationSupported\x88\x01\x01\x120\n" +
+	"\x14mesh_trust_supported\x18\x0e \x01(\bR\x12meshTrustSupportedB\x1d\n" +
 	"\x1b_cloud_enrollment_supportedB\x1f\n" +
 	"\x1d_mldsa_verification_supportedB$\n" +
 	"\"_mldsa_peer_verification_supported\"j\n" +
@@ -4511,10 +4523,11 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x03msg*M\n" +
 	"\x0fWendyComAppType\x12\x1b\n" +
 	"\x17WENDY_COM_APP_TYPE_WASM\x10\x00\x12\x1d\n" +
-	"\x19WENDY_COM_APP_TYPE_NATIVE\x10\x01*a\n" +
+	"\x19WENDY_COM_APP_TYPE_NATIVE\x10\x01*\x8a\x01\n" +
 	"\x14WendyComConfPushMode\x12$\n" +
 	" WENDY_COM_CONF_PUSH_MODE_REPLACE\x10\x00\x12#\n" +
-	"\x1fWENDY_COM_CONF_PUSH_MODE_UPDATE\x10\x01*x\n" +
+	"\x1fWENDY_COM_CONF_PUSH_MODE_UPDATE\x10\x01\x12'\n" +
+	"#WENDY_COM_CONF_PUSH_MODE_MESH_TRUST\x10\x02*x\n" +
 	"\x1aWendyComBluetoothPowerMode\x12\x1e\n" +
 	"\x1aWENDY_COM_BT_POWER_DEFAULT\x10\x00\x12\x1e\n" +
 	"\x1aWENDY_COM_BT_POWER_MAXIMUM\x10\x01\x12\x1a\n" +

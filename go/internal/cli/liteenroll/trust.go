@@ -17,6 +17,27 @@ import (
 const maxTrustBundle = 16384
 const maxDeviceTrustBundle = 32768
 
+// MeshTrustUpdate builds a USB update for the identity reported by the board.
+func MeshTrustUpdate(challenge *litepb.WendyComEnrollmentChallenge, pemBundle []byte, roots bool) (*litepb.WendyConfEnrollment, error) {
+	profile := TrustProfileFromChallenge(challenge)
+	if err := validateTrustBundleForProfile(pemBundle, profile); err != nil {
+		return nil, err
+	}
+	payload := &litepb.WendyConfEnrollment{TenantId: challenge.GetTenantId(), DeviceId: challenge.GetDeviceId()}
+	var der []byte
+	for rest := bytes.TrimSpace(pemBundle); len(rest) != 0; {
+		block, tail := pem.Decode(rest)
+		der = append(der, block.Bytes...)
+		rest = bytes.TrimSpace(tail)
+	}
+	if roots {
+		payload.DeviceRoots = der
+	} else {
+		payload.LiteDeviceIntermediates = der
+	}
+	return payload, nil
+}
+
 // ProvisionTrust explicitly installs operator-supplied CA bundles in the device
 // configuration. No certificates received from an endpoint become trust roots.
 // Omitting all paths preserves compatibility with build-pinned firmware.

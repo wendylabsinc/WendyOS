@@ -17,6 +17,7 @@ import (
 type TrustProfile struct {
 	mldsa                bool
 	peerMLDSA            bool
+	meshTrust            bool
 	extendedTrust        bool
 	existingDeviceIssuer bool
 }
@@ -30,6 +31,7 @@ func TrustProfileFromChallenge(challenge *litepb.WendyComEnrollmentChallenge) Tr
 	}
 	return TrustProfile{mldsa: challenge.GetMldsaVerificationSupported(),
 		peerMLDSA:     challenge.GetMldsaPeerVerificationSupported(),
+		meshTrust:     challenge.GetMeshTrustSupported(),
 		extendedTrust: challenge.MldsaPeerVerificationSupported != nil}
 }
 

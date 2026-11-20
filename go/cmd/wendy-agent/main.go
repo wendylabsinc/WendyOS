@@ -629,7 +629,7 @@ func main() {
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
 		if p.Transport == "wendycom" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
-			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr, provisioningSvc.LitePeerIssuers())
 		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
@@ -1015,7 +1015,7 @@ func main() {
 	// from the legacy physical and primary-operator listener's clock policy.
 	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
 	defer meshNativeListener.Close()
-	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) error {
+	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy, credentials *localmesh.Credentials) error {
 		mtlsMu.Lock()
 		defer mtlsMu.Unlock()
 		if meshNativeServer != nil {
@@ -1025,7 +1025,7 @@ func main() {
 		if orgMode != interceptor.OrgModeOff && !haveScope {
 			return errors.New("cannot determine mesh native agent identity scope")
 		}
-		srv, err := mtls.NewServerWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode,
+		srv, err := mtls.NewMeshServer(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode, credentials.ConfigureTLSServer,
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)))
 		if err != nil {
@@ -1229,7 +1229,7 @@ func main() {
 				logger.Warn("wendy net Lite issuers unavailable", zap.Error(err))
 			}
 		}
-		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy); err != nil {
+		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy, credentials); err != nil {
 			logger.Error("wendy net native agent TLS ingress unavailable", zap.Error(err))
 			return
 		}

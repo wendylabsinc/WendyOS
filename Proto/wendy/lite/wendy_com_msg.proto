@@ -58,6 +58,7 @@ message WendyComAppStopParams {}
 enum WendyComConfPushMode {
     WENDY_COM_CONF_PUSH_MODE_REPLACE = 0;
     WENDY_COM_CONF_PUSH_MODE_UPDATE  = 1;
+    WENDY_COM_CONF_PUSH_MODE_MESH_TRUST = 2; // physical USB, current identity only
 }
 
 // Params for WENDY_COM_CMD_CONF_PUSH_BEGIN
@@ -230,6 +231,7 @@ message WendyComEnrollmentChallenge {
     string tenant_id = 11;
     bool uuid_enrollment_supported = 12; // UUID discovery and enrollment identity reporting
     optional bool mldsa_peer_verification_supported = 13; // peer verification independent of issuance profile
+    bool mesh_trust_supported = 14; // provision tenant mesh trust during enrollment
 }
 
 

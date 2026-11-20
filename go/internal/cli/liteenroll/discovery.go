@@ -160,18 +160,15 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 				}
 				return err
 			}
-			if profile.peerMLDSA {
+			if profile.meshTrust {
 				discovered, err := discoveryCertificates(body, resp.Header.Get("Content-Type"))
 				if err != nil {
 					return err
 				}
-				deviceRoots, cfg.LiteDeviceIntermediates, err =
+				meshRoots, intermediates, err :=
 					discoverMeshTrust(ctx, client, u, cfg.TenantId, profile, discovered, deviceRoots)
-				if err != nil {
-					return fmt.Errorf("discovering tenant mesh trust: %w", err)
-				}
-				if err := validateTrustBundleForProfile(deviceRoots, profile); err != nil {
-					return err
+				if err == nil && validateTrustBundleForProfile(meshRoots, profile) == nil {
+					deviceRoots, cfg.LiteDeviceIntermediates = meshRoots, intermediates
 				}
 			}
 		} else {

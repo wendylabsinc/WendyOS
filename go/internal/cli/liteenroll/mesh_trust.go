@@ -46,16 +46,9 @@ func discoverMeshTrust(ctx context.Context, client *http.Client, endpoint *url.U
 	if err != nil {
 		return nil, nil, err
 	}
-	var twins []*x509.Certificate
 	if classical {
-		twins = discovered
-	}
-	pins, err := meshTrustBundle(path, twins, regular, tenant, now, classical)
-	if err != nil {
-		return nil, nil, err
-	}
-	if classical {
-		return pins, nil, nil
+		pins, err := meshTrustBundle(path, discovered, regular, tenant, now)
+		return pins, nil, err
 	}
 	var intermediates []byte
 	for _, cert := range path {
@@ -64,36 +57,50 @@ func discoverMeshTrust(ctx context.Context, client *http.Client, endpoint *url.U
 	if len(intermediates) > maxDeviceTrustBundle {
 		return nil, nil, fmt.Errorf("Lite intermediates exceed the firmware's 32 KiB limit")
 	}
-	return append(roots, pins...), intermediates, nil
+	// The regular EST bundle already has the normal chain. Keep the Lite
+	// path exclusively in the untrusted intermediate field.
+	return roots, intermediates, nil
 }
 
-func meshTrustBundle(path, twins, regular []*x509.Certificate, tenant string, now time.Time, classical bool) ([]byte, error) {
+func meshTrustBundle(path, twins, regular []*x509.Certificate, tenant string, now time.Time) ([]byte, error) {
 	if len(path) < 2 {
 		return nil, fmt.Errorf("Lite CA has no tenant intermediate")
 	}
 	var bundle []*x509.Certificate
-	if classical {
-		for _, ca := range twins {
-			if estcacerts.IsLiteDeviceCA(ca, tenant) && bytes.Equal(ca.RawSubject, path[0].RawSubject) &&
-				bytes.Equal(ca.RawSubjectPublicKeyInfo, path[0].RawSubjectPublicKeyInfo) &&
-				bytes.Equal(ca.RawIssuer, ca.RawSubject) && ca.CheckSignatureFrom(ca) == nil {
-				bundle = append(bundle, ca)
-				break
-			}
+	for _, ca := range twins {
+		if estcacerts.IsLiteDeviceCA(ca, tenant) && bytes.Equal(ca.RawSubject, path[0].RawSubject) &&
+			bytes.Equal(ca.RawSubjectPublicKeyInfo, path[0].RawSubjectPublicKeyInfo) &&
+			bytes.Equal(ca.RawIssuer, ca.RawSubject) && ca.CheckSignatureFrom(ca) == nil {
+			bundle = append(bundle, ca)
+			break
 		}
-		if len(bundle) == 0 {
-			return nil, fmt.Errorf("EST did not return the matching self-signed Lite Device CA")
-		}
+	}
+	if len(bundle) == 0 {
+		return nil, fmt.Errorf("EST did not return the matching self-signed Lite Device CA")
 	}
 	parent := path[1]
 	label, ok := strings.CutSuffix(parent.Subject.CommonName, " Intermediate CA")
 	if !ok || label == "" {
 		return nil, fmt.Errorf("unexpected tenant Intermediate CA name")
 	}
+	roots := x509.NewCertPool()
+	issuers := x509.NewCertPool()
+	for _, ca := range regular {
+		if ca.IsCA && bytes.Equal(ca.RawSubject, ca.RawIssuer) && ca.CheckSignatureFrom(ca) == nil {
+			roots.AddCert(ca)
+		} else if ca.IsCA {
+			issuers.AddCert(ca)
+		}
+	}
 	var devices, operators bool
 	for _, ca := range regular {
 		if !ca.IsCA || !ca.MaxPathLenZero || now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) ||
-			!bytes.Equal(ca.RawIssuer, parent.RawSubject) || ca.CheckSignatureFrom(parent) != nil {
+			!bytes.Equal(ca.RawIssuer, parent.RawSubject) {
+			continue
+		}
+		paths, err := ca.Verify(x509.VerifyOptions{Roots: roots, Intermediates: issuers, CurrentTime: now,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+		if err != nil || len(paths) == 0 || len(paths[0]) < 3 {
 			continue
 		}
 		switch ca.Subject.CommonName {
