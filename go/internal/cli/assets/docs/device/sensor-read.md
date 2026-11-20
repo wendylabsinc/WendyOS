@@ -69,12 +69,13 @@ for _, sensor := range manifest.GetSensors() {
 
 ## Samples and lifecycle
 
-Each output `SensorData` contains one reassembled sample: `chunk_seq=0`, the
+Each output `SensorData` contains one reassembled frame with one or more
+fixed-size readings. The payload is forwarded intact with `chunk_seq=0`, the
 last-chunk flag set, and the original frame sequence, source timestamp and other
-flags. Payload bytes are unchanged. `ts_us` remains in the source's time domain
-(for Wendy Lite, uptime in microseconds); it is not converted to host wall time.
-Equal, zero or decreasing timestamps are passed through. Apps decide how to
-handle source clocks and frame-sequence gaps or wraparound.
+flags. `ts_us` is the timestamp for the frame and remains in the source's time
+domain (for Wendy Lite, uptime in microseconds). Equal, zero or decreasing
+timestamps are passed through. Apps decide how to handle source clocks and
+frame-sequence gaps or wraparound.
 
 Subscriptions share the pairing's upstream connection. For this first version,
 paired channels are captured even without app readers, matching existing media
@@ -86,17 +87,20 @@ priority, followed by microphones, then generic channels in ascending channel-ID
 order. A pairing's sensor allowlist can select a particular mode. Older agent
 sources without meaningful input IDs retain concurrent streams.
 
-Supported generic descriptors fit within 2048 protobuf bytes and have a nonempty schema (up to 1024 bytes), a name
-of at most 256 bytes, and a fixed `sample_bytes` from 1 to 65,536. Unknown schemas
-are forwarded; `rate_hz=0` is allowed for event-driven fixed-size samples.
-Unspecified/variable sample sizes and malformed lengths are not forwarded.
+Supported generic descriptors fit within 2048 protobuf bytes and have a
+nonempty schema of up to 1024 bytes and a name of at most 256 bytes.
+`sample_bytes` is the size of one reading in bytes and must be from 1 to 65,536.
+A frame must be nonempty, contain a whole number of readings, and fit within
+65,536 payload bytes. The agent forwards unknown schemas and accepts
+`rate_hz=0` for event-driven fixed-size readings.
+
 Each pairing has a separate eight-frame FIFO for generic samples before app
 delivery. When that queue fills, newly arriving generic frames are dropped.
 Delivery is best effort. Applications needing guaranteed event delivery need
 a separate acknowledgement/replay protocol.
 
 Limits are 1024 active generic channels across sources, 64 concurrent readers,
-and 1–64 selected channels per reader. Each reader has an eight-sample queue.
+and 1–64 selected channels per reader. Each reader has an eight-frame queue.
 An overflowing reader ends with `ResourceExhausted`; a source disconnect ends
 its readers with `Unavailable`. Unknown or stale IDs return `NotFound`; an empty
 or oversized selection returns `InvalidArgument`. Refresh the manifest after a

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -77,7 +78,7 @@ func TestSensorReadRPCStreamDisconnectAndNoControlPlane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Wait until both RPCs subscribe, then publish one complete sample.
+	// Wait until both RPCs subscribe, then publish a batch in one frame.
 	for {
 		feed.mu.Lock()
 		n := len(feed.subscribers)
@@ -91,14 +92,19 @@ func TestSensorReadRPCStreamDisconnectAndNoControlPlane(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	publish(&sensorlink.SensorFrame{ChannelID: 1, TsUs: 1, Payload: []byte{3, 4}})
+	batch := bytes.Repeat([]byte{3, 4}, 3000)
+	if !publish(&sensorlink.SensorFrame{ChannelID: 1, Seq: 41, TsUs: 1, Flags: sensorlink.FlagKeyframe, Payload: batch}) {
+		t.Fatal("valid batch was dropped")
+	}
 	sample, err := stream.Recv()
-	if err != nil || string(sample.GetPayload()) != string([]byte{3, 4}) {
-		t.Fatalf("frame %v %v", sample, err)
+	if err != nil || !bytes.Equal(sample.GetPayload(), batch) || sample.GetFrameSeq() != 41 || sample.GetTsUs() != 1 ||
+		sample.GetChunkSeq() != 0 || sample.GetFlags() != sensorlink.FlagKeyframe|sensorlink.FlagLastChunk {
+		t.Fatalf("received batch: bytes=%d seq=%d ts=%d chunk=%d flags=%d error=%v", len(sample.GetPayload()),
+			sample.GetFrameSeq(), sample.GetTsUs(), sample.GetChunkSeq(), sample.GetFlags(), err)
 	}
 	other, err := second.Recv()
-	if err != nil || string(other.GetPayload()) != string(sample.GetPayload()) {
-		t.Fatalf("fanout: %v %v", other, err)
+	if err != nil || !bytes.Equal(other.GetPayload(), batch) {
+		t.Fatalf("fanout: bytes=%d error=%v", len(other.GetPayload()), err)
 	}
 	cancelReader()
 	if _, err := stream.Recv(); status.Code(err) != codes.Canceled {

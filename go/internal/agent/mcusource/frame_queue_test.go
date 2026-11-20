@@ -197,8 +197,11 @@ func TestLiveFrameQueueKeepsGenericAndMediaFIFOSeparate(t *testing.T) {
 			t.Fatal("malformed frame counted as a backpressure drop")
 		}
 	}
+	if q.offer(&sensorlink.SensorFrame{ChannelID: 3, Payload: make([]byte, MaxGenericFrameBytes+2)}) != 0 {
+		t.Fatal("oversized batch counted as a backpressure drop")
+	}
 	for seq := range uint32(genericFIFOFrames) {
-		if q.offer(&sensorlink.SensorFrame{ChannelID: 3 + seq%2, Seq: seq, Payload: []byte{1, 2}}) != 0 {
+		if q.offer(&sensorlink.SensorFrame{ChannelID: 3 + seq%2, Seq: seq, Payload: []byte{1, 2, 3, 4}}) != 0 {
 			t.Fatal("early generic drop")
 		}
 	}

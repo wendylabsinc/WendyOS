@@ -126,17 +126,30 @@ func TestGenericFeedBoundsAndRejectedChannels(t *testing.T) {
 	feed := NewGenericSensorFeed()
 	descriptors := make([]*sensorpb.SensorDescriptor, 1025)
 	for i := range descriptors {
-		descriptors[i] = &sensorpb.SensorDescriptor{ChannelId: uint32(i), Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "unknown", SampleBytes: 1}}}
+		descriptors[i] = &sensorpb.SensorDescriptor{ChannelId: uint32(i), Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "unknown", SampleBytes: 4}}}
 	}
 	accepted, pub, release := feed.Mount(mcusource.SensorPairing{SourceAssetID: 1}, descriptors)
 	defer release()
 	if len(accepted) != 1024 {
 		t.Fatal(len(accepted))
 	}
-	if pub(&sensorlink.SensorFrame{ChannelID: 1024, Payload: []byte{1}}) {
+	if pub(&sensorlink.SensorFrame{ChannelID: 1024, Payload: []byte{1, 2, 3, 4}}) {
 		t.Fatal("published rejected channel")
 	}
-	if pub(&sensorlink.SensorFrame{ChannelID: 1, Payload: []byte{1, 2}}) {
-		t.Fatal("accepted wrong sample length")
+	for _, tc := range []struct {
+		size int
+		want bool
+	}{
+		{0, false},
+		{3, false},
+		{4, true},
+		{5, false},
+		{6000, true},
+		{65536, true},
+		{65540, false},
+	} {
+		if got := pub(&sensorlink.SensorFrame{ChannelID: 1, Payload: make([]byte, tc.size)}); got != tc.want {
+			t.Errorf("%d-byte frame accepted=%v, want %v", tc.size, got, tc.want)
+		}
 	}
 }
