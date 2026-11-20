@@ -86,8 +86,9 @@ func TestNotificationVideoNeverUsesNearestUnrelatedClip(t *testing.T) {
 		t.Fatal("opened unrelated clip")
 	}
 	// The fixture intentionally returns a wrong manifest for the older candidate.
-	if err == nil {
-		t.Fatal("accepted a mismatched manifest")
+	// The newer one was read and lacks the event, so the result is "not found".
+	if err != nil {
+		t.Fatalf("reported an unrelated recording's failure: %v", err)
 	}
 }
 
@@ -190,5 +191,20 @@ func TestNotificationVideoRevalidatesHintsAndFallsBackAcrossClockSkew(t *testing
 				t.Fatal("stale hint did not fall back")
 			}
 		})
+	}
+}
+
+func TestNotificationVideoReportsFailuresOnlyWhenNoRecordingCouldBeRead(t *testing.T) {
+	const absent = "6f1c3f0e-8a52-4d7b-9a4e-2d6f3b1c9e07"
+	c := newNotificationLookupFixture()
+	delete(c.fixtures, "episode-05")
+	got, err := readNotificationVideoNear(context.Background(), c, "thermal", absent, 0, "")
+	if err != nil || got.Episode != nil {
+		t.Fatalf("reported an unrelated recording's failure: %+v %v", got, err)
+	}
+	c = newNotificationLookupFixture()
+	c.fixtures = map[string]*visualFixtureClient{}
+	if _, err := readNotificationVideoNear(context.Background(), c, "thermal", absent, 0, ""); err == nil {
+		t.Fatal("hid that no recording could be read")
 	}
 }

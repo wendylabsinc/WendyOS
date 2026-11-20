@@ -110,6 +110,7 @@ func readNotificationVideoNear(ctx context.Context, client pb.DataServiceClient,
 			return rows[i].GetStartedUnixNanos() > rows[j].GetStartedUnixNanos()
 		})
 		var firstError error
+		failed := 0
 		// Bound device load and preserve priority order, even if responses finish out of order.
 		for offset := 0; offset < len(rows); offset += 4 {
 			batch := rows[offset:min(offset+4, len(rows))]
@@ -131,8 +132,11 @@ func readNotificationVideoNear(ctx context.Context, client pb.DataServiceClient,
 				timings.Candidates++
 				timings.InspectSeconds += candidate.timings.InspectSeconds
 				timings.EventsSeconds += candidate.timings.EventsSeconds
-				if failures[i] != nil && firstError == nil {
-					firstError = failures[i]
+				if failures[i] != nil {
+					failed++
+					if firstError == nil {
+						firstError = failures[i]
+					}
 				}
 				if match.episode == nil && candidate.episode != nil {
 					match = candidate
@@ -143,6 +147,11 @@ func readNotificationVideoNear(ctx context.Context, client pb.DataServiceClient,
 			}
 		}
 		if match.episode == nil {
+			// An empty result means "not found". Another recording's failure does
+			// not explain a missing event unless no recording could be read.
+			if failed < len(rows) {
+				firstError = nil
+			}
 			return NotificationVideo{}, firstError
 		}
 	}
