@@ -102,6 +102,11 @@ class RecordingSnapshot(value: JSONObject) {
         return if (index == 0) null else byTrack.getValue(track)[index - 1]
     }
     fun numeric(track: String) = byTrack[track].orEmpty().filter { it.value != null }
+    /** The track's audio segment at [cursor], as on iOS, else its nearest segment. Each segment is one recorded file. */
+    fun audioAt(track: String, cursor: Double): RecordingAudio? {
+        val segments = audio.filter { it.track == track }
+        return segments.lastOrNull { cursor >= it.start && cursor < it.end } ?: segments.minByOrNull { max(it.start - cursor, cursor - it.end) }
+    }
     val mediaPaths get() = videos.map { it.path } + audio.map { it.path }
 }
 
@@ -242,10 +247,11 @@ private fun SnapshotPlayer(model: WendyModel, current: RecordingSnapshot, export
             }
             val selectedTrack = current.tracks.firstOrNull { it.id == track }
             val video = current.videos.firstOrNull { it.track == track }
-            val audio = current.audio.firstOrNull { it.track == track }
+            val audio = current.audioAt(track, cursor)
             val sample = current.latest(track, cursor)
             when {
-                video != null -> if (video.frame(cursor) != null) RecordedVideo(video, cursor, playing) else EmptyMessage("No frame at this time", "Move the cursor to a time with video.", Icons.Outlined.Videocam)
+                // Each camera gets its own player; a reused VideoView keeps the first camera's file.
+                video != null -> if (video.frame(cursor) != null) key(video.path) { RecordedVideo(video, cursor, playing) } else EmptyMessage("No frame at this time", "Move the cursor to a time with video.", Icons.Outlined.Videocam)
                 audio != null -> RecordedAudio(audio, cursor, playing)
                 sample != null && sample.points.isNotEmpty() -> PointCloudView(sample.points, Modifier.fillMaxWidth().aspectRatio(4f / 3f))
                 sample != null && sample.image.isNotEmpty() -> {

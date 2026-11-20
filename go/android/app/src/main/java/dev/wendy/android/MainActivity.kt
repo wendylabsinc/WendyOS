@@ -59,6 +59,12 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart() { super.onStart(); model.setForeground(true) }
     override fun onStop() { model.setForeground(false); super.onStop() }
+    // singleTop: the VPN notification and system VPN settings reuse this Activity
+    // and its model instead of stacking a second one that fights over visibility.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == WendyVpnService.OPEN) model.requestVpnPage = true
+    }
 }
 
 /**
@@ -130,6 +136,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     LaunchedEffect(model.browserURL) { model.browserURL?.let { model.browserURL = null; openURL(it) } }
     LaunchedEffect(model.linkRequest) { model.linkRequest?.let { model.linkRequest = null; openURL(it) } }
     LaunchedEffect(model.requestNearbySetup) { if (model.requestNearbySetup) { model.requestNearbySetup = false; routes.openSetup() } }
+    LaunchedEffect(model.requestVpnPage) { if (model.requestVpnPage) { model.requestVpnPage = false; if (nav.stack.none { it.title == "Private network" }) routes.openVpn() } }
     LaunchedEffect(model.requestSettings) { if (model.requestSettings) { model.requestSettings = false; settings = true } }
     LaunchedEffect(model.requestChat) { if (model.requestChat) { model.requestChat = false; routes.chat = true } }
     // Device pages belong to one account and organization (iOS drops device routes when it changes).
