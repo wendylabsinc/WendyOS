@@ -170,8 +170,14 @@ func readNotificationVideoNear(ctx context.Context, client pb.DataServiceClient,
 		end = manifest.CaptureStoppedEpisodeNS
 	}
 	preview := VisualPreview{Reason: manifest.Trigger.Reason, Duration: (float64(end) - float64(start)) / 1e9, MaximumCelsius: recordedThermalMaximum(events)}
+	tooLarge := false
 	for _, file := range manifest.Files {
-		if file.Role == data.FileRoleDerived && path.Base(file.Path) == "playable.mp4" && strings.HasPrefix(file.Path, "cameras/") && file.Size > 0 && file.Size <= 64<<20 {
+		if file.Role == data.FileRoleDerived && path.Base(file.Path) == "playable.mp4" && strings.HasPrefix(file.Path, "cameras/") && file.Size > 0 {
+			// The full viewer accepts larger clips; a notification opens only quick ones.
+			if file.Size > 64<<20 {
+				tooLarge = true
+				continue
+			}
 			stageStart = time.Now()
 			preview.Path, err = visualDownloadVideo(ctx, client, manifest.ID, file)
 			timings.VideoSeconds = time.Since(stageStart).Seconds()
@@ -181,6 +187,9 @@ func readNotificationVideoNear(ctx context.Context, client pb.DataServiceClient,
 			}
 			return NotificationVideo{Episode: episode, Preview: preview, Timings: timings}, nil
 		}
+	}
+	if tooLarge {
+		return NotificationVideo{}, errors.New("the event was recorded, but its camera video is too large to open from the notification")
 	}
 	return NotificationVideo{}, errors.New("the event was recorded, but its playable camera video is unavailable")
 }

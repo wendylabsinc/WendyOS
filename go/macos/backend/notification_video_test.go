@@ -243,3 +243,20 @@ func TestNotificationVideoFindsEventBesideAnyAttributesAndManyAlerts(t *testing.
 		})
 	}
 }
+
+func TestNotificationVideoReportsClipTooLargeToOpen(t *testing.T) {
+	const id = "dd97fd1c-db21-476f-b26f-b399d1fe229c"
+	c := notificationRecordingFixture(map[string][]byte{"events.jsonl": []byte(`{"type":"event","attributes":{"notification_id":"` + id + `"}}`), "cameras/c/playable.mp4": []byte("test-mp4-payload")})
+	for i := range c.manifest.Files {
+		if c.manifest.Files[i].Path == "cameras/c/playable.mp4" {
+			c.manifest.Files[i].Size = 64<<20 + 1
+		}
+	}
+	got, err := readNotificationVideoNear(context.Background(), c, "thermal", id, 0, "new")
+	if err == nil || !strings.Contains(err.Error(), "too large") || got.Preview.Path != "" {
+		t.Fatalf("large clip not reported: %+v %v", got, err)
+	}
+	if slices.Contains(c.downloads, "cameras/c/playable.mp4") {
+		t.Fatal("downloaded a clip over the quick-open limit")
+	}
+}
