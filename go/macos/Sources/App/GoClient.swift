@@ -99,7 +99,7 @@ final class GoClient: Sendable {
                     appropriateFor: nil, create: true
                 ).appendingPathComponent("Wendy", isDirectory: true)
                 directory = FileManager.default.containerURL(
-                    forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile"
+                    forSecurityApplicationGroupIdentifier: "group.dev.wendy.WendyCompanion"
                 )?.appendingPathComponent("Wendy", isDirectory: true) ?? legacy
                 if directory != legacy && !FileManager.default.fileExists(atPath: directory.path)
                     && FileManager.default.fileExists(atPath: legacy.path) {

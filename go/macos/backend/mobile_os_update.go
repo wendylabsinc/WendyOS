@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -31,6 +32,19 @@ type OSInstallState struct {
 type OSUpdateSnapshot struct {
 	Status  json.RawMessage `json:"status"`
 	Install OSInstallState  `json:"install"`
+}
+
+func (b *Backend) CheckOSRelease(session uint64) (*commands.DesktopOSRelease, error) {
+	ctx, done := b.begin()
+	defer done()
+	if session == 0 {
+		return nil, errors.New("select a device first")
+	}
+	conn, err := b.connection(session)
+	if err != nil {
+		return nil, err
+	}
+	return commands.DesktopCheckOSRelease(ctx, conn)
 }
 
 // GetOSUpdateStatus is read-only; progress is scoped to the connection that
