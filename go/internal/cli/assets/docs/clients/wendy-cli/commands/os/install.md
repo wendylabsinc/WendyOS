@@ -4,7 +4,7 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 
 > **Tip:** [`wendy install`](../install.md) is the recommended, surfaced entry point for this command. `wendy os install` remains available and behaves identically — it is kept for backward compatibility and for discoverability under the `wendy os` group.
 
-The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers offers ESP32 platform, which builds Wendy Lite for your board. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
+The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers offers Wendy Lite for the ESP32 platform. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
 
 - **Jetson Orin Nano / AGX Orin** -> download a recovery flashpack -> verify the module/carrier -> update QSPI and NVMe/eMMC together
 - **Raspberry Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
@@ -42,7 +42,7 @@ wendy install --device-type esp32 --build-attr board=esp32c61_devkit_c_1 \
   --build-attr cloud_tunnel=false --no-wifi
 ```
 
-> **Note:** `--device-type esp32` builds Wendy Lite for your board, then flashes the connected ESP32. The build asks a few questions, starting with the board; each `--build-attr NAME=VALUE` answers one of them, for example `board=esp32c61_devkit_c_1`. Some values follow from earlier answers (the board sets its chip and flash size): a `--build-attr` for one of them must match, and a build attribute that the chosen board does not use is an error. The other questions are asked; without a terminal, the install stops and names the next question with its allowed values. The specific ESP32 targets (`esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) are not `--device-type` values: use `esp32`.
+> **Note:** `--device-type esp32` builds Wendy Lite for your board and flashes it to the connected ESP32. The install asks a few build questions, starting with the board. To answer one in advance, pass `--build-attr NAME=VALUE`, for example `--build-attr board=esp32c61_devkit_c_1`. You don't need to answer what the board already sets, such as its chip and flash size. Without a terminal, the install stops at the first unanswered question and lists its allowed values.
 
 > **Without a terminal**, also pass a Wi-Fi choice (`--wifi`, `--wifi-ssid` or `--no-wifi`) and `--force`. See [Running without a terminal](#running-without-a-terminal).
 
@@ -260,9 +260,9 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--binary` | — | Path to a local Linux ELF `wendy-agent` binary; skips the agent download and requires matching ARM64 or x86_64 architecture |
 | `--nightly` | false | Use nightly/pre-release builds |
 | `--pr` | — | Install from wendyos-builder PR #N (mutually exclusive with `--nightly`, `--version`, positional path; not supported for ESP32 targets) |
-| `--device-type` | — | Device type from manifest (e.g. `raspberry-pi-5`), or `esp32` to build Wendy Lite for an ESP32 board and flash it. The specific ESP32 targets (`esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) are not supported |
+| `--device-type` | — | Device type from manifest (e.g. `raspberry-pi-5`), or `esp32` to build Wendy Lite for an ESP32 board and flash it |
 | `--build-attr` | — | Repeatable `NAME=VALUE`: a build attribute of Wendy Lite (`--device-type esp32`), which answers that build question |
-| `--version` | latest | WendyOS version to install; with `--device-type esp32`, the Wendy Lite version to build: `X.Y.Z`, a wendy-lite branch or a full commit hash |
+| `--version` | latest | WendyOS or Wendy Lite version to install |
 | `--drive` | interactive | Target drive path (e.g. `/dev/disk4`) |
 | `--rootfs-only` | false | Explicitly write only an Orin SD/NVMe image; QSPI is not updated |
 | `--force` | false | Skip confirmation prompts; required without a terminal |

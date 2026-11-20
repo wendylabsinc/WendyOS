@@ -262,10 +262,10 @@ Queries the device for information about its hardware and software. The device r
 Queries the device for how its firmware was built. The device responds with a `WendyComBuildInfo` message containing:
 
 - `os_version` — the version of the wendy-lite source (`CONFIG_WENDY_VERSION`): `X.Y.Z` when the commit has the tag `vX.Y.Z`, else the full commit hash, with `-dirty` added when tracked files had uncommitted changes. The same value as `os_version` in `WendyComDeviceInfo`.
-- `build_profile` — the configurator input values (`CONFIG_WENDY_BUILD_PROFILE`) as a JSON object on one line, e.g. `{"board":"m5_stamp_s3","app_type":"native"}`.
+- `build_profile` — the answers to the Wendy Lite build questions (`CONFIG_WENDY_BUILD_PROFILE`) as a JSON object on one line, e.g. `{"board":"m5_stamp_s3","app_type":"native"}`.
 - `build_tool` — `idf-` followed by the ESP-IDF version, e.g. `idf-v6.0.3`.
 
-Each field is empty when the build does not know it, typically when wendy-lite was not configured with `tools/configure.py`. Firmware older than this command answers it with `WENDY_COM_RESULT_UNKNOWN_ERROR`. `wendy run` builds a native app for the reported version and build profile, so it does not build one for such a device.
+Each field is empty when the build does not know it, typically when wendy-lite was built without the build questions. Firmware older than this command answers it with `WENDY_COM_RESULT_UNKNOWN_ERROR`. `wendy run` builds a native app for the reported version and build profile, so it does not build one for such a device.
 
 ### NetGet
 
