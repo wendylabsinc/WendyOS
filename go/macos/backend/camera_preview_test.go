@@ -268,3 +268,30 @@ func TestPreviewRefreshKeepsPlayingStream(t *testing.T) {
 		t.Fatalf("other target: %d dials, %v", dials, err)
 	}
 }
+func TestPreviewAccountSwitchRetiresHandles(t *testing.T) {
+	b := previewFixture(t)
+	id := b.PreviewCreate()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PreviewPlay(id, "camera"); err != nil {
+		t.Fatal(err)
+	}
+	child := b.preview(id).backend
+	refused := errors.New("account unavailable")
+	err := b.RetirePreviews(func() error {
+		if b.preview(id) != nil || child.conn != nil || b.PreviewCreate() != 0 {
+			t.Error("preview outlived the previous account")
+		}
+		return refused
+	})
+	if !errors.Is(err, refused) {
+		t.Fatalf("switch error: %v", err)
+	}
+	if _, err := b.PreviewCameras(id, "device", false); err == nil {
+		t.Fatal("retired handle allowed inventory")
+	}
+	if next := b.PreviewCreate(); next == 0 || next == id {
+		t.Fatal("account switch blocked new previews")
+	}
+}
