@@ -44,9 +44,13 @@ struct OSUpdateSnapshot: Decodable, Sendable {
             }
         }
         func hasFinalResult(after baseline: Int64) -> Bool {
-            hasResult == true && timestamp > baseline &&
-                (Int64(finalizedAtUnix ?? "") ?? 0) > 0 &&
-                ["OUTCOME_COMMITTED", "OUTCOME_ROLLED_BACK", "OUTCOME_ROLLBACK_FAILED", "OUTCOME_COMMIT_FAILED"].contains(outcome ?? "")
+            guard hasResult == true && timestamp > baseline else { return false }
+            switch outcome {
+            case "OUTCOME_COMMITTED", "OUTCOME_ROLLED_BACK": return (Int64(finalizedAtUnix ?? "") ?? 0) > 0
+            // The health gate never finalizes these; the device stays up on the slot it booted.
+            case "OUTCOME_ROLLBACK_FAILED", "OUTCOME_COMMIT_FAILED": return true
+            default: return false
+            }
         }
         func verifies(_ install: Install, installedVersion: String?) -> Bool {
             hasResult == true && timestamp > install.baseline && outcome == "OUTCOME_COMMITTED" &&
@@ -335,7 +339,8 @@ struct DeviceOSUpdateView: View {
                 let deviceInfo = try await GoClient.shared.deviceInfo(session: session)
                 guard !Task.isCancelled else { return }
                 snapshot = value; info = deviceInfo; checked = Date()
-                if !pending && value.status.hasFinalResult(after: restartBaseline) { waitingForRestart = false; return }
+                // A failed commit leaves the update pending for a retry, so pending state cannot gate this.
+                if value.status.hasFinalResult(after: restartBaseline) { waitingForRestart = false; return }
             } catch { if Task.isCancelled { return } }
         }
         if !Task.isCancelled {

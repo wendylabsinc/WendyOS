@@ -23,6 +23,18 @@ final class OSUpdateTests: XCTestCase {
         XCTAssertTrue(value.status.hasFinalResult(after: 12))
         value.status.finalizedAtUnix = "0"
         XCTAssertFalse(value.status.hasFinalResult(after: 12))
+        value.status.finalizedAtUnix = nil
+        for outcome in ["OUTCOME_ROLLBACK_FAILED", "OUTCOME_COMMIT_FAILED"] {
+            value.status.outcome = outcome
+            XCTAssertTrue(value.status.hasFinalResult(after: 12), outcome)
+            XCTAssertFalse(value.status.hasFinalResult(after: 13), outcome)
+        }
+        value.status.outcome = "OUTCOME_COMMITTED"
+        XCTAssertFalse(value.status.hasFinalResult(after: 12))
+        value.status.finalizedAtUnix = "14"
+        XCTAssertTrue(value.status.hasFinalResult(after: 12))
+        value.status.outcome = "OUTCOME_UNSPECIFIED"
+        XCTAssertFalse(value.status.hasFinalResult(after: 12))
     }
     func testRestartIsOfferedOnlyForAnInstalledUpdate() throws {
         let json = #"{"status":{"createdAtUnix":"12","engineStatus":{"connector":"tegrauefi","pending":{"phase":"installed"}}},"install":{"active":false,"phase":"","percent":-1,"rebootRequired":false,"error":"","baseline":0}}"#
