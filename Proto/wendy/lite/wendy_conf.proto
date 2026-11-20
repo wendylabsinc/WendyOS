@@ -48,6 +48,9 @@ message WendyConfEnrollment {
     bytes tsa_roots = 10;
     bytes https_roots = 11;
     bool provision_trust = 12;
+    // Parent-signed Lite Device CA path, excluding the platform root.
+    // Candidate issuers for mesh verification; these are never trust anchors.
+    bytes lite_device_intermediates = 13;
 }
 
 message WendyConf {

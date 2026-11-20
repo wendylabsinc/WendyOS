@@ -16,6 +16,8 @@ import (
 // Its zero value preserves the mbedTLS restrictions used by older firmware.
 type TrustProfile struct {
 	mldsa                bool
+	peerMLDSA            bool
+	extendedTrust        bool
 	existingDeviceIssuer bool
 }
 
@@ -23,7 +25,16 @@ type TrustProfile struct {
 // that its optional verifier is enabled. Missing or unknown legacy capabilities
 // must not infer support from the enrolling computer's crypto implementation.
 func TrustProfileFromChallenge(challenge *litepb.WendyComEnrollmentChallenge) TrustProfile {
-	return TrustProfile{mldsa: challenge.GetMldsaVerificationSupported()}
+	if challenge == nil {
+		return TrustProfile{}
+	}
+	return TrustProfile{mldsa: challenge.GetMldsaVerificationSupported(),
+		peerMLDSA:     challenge.GetMldsaPeerVerificationSupported(),
+		extendedTrust: challenge.MldsaPeerVerificationSupported != nil}
+}
+
+func (profile TrustProfile) supportsMLDSAPeers() bool {
+	return profile.mldsa || profile.peerMLDSA
 }
 
 // WithExistingDeviceIssuer preserves an issuer configured with explicit root
@@ -47,22 +58,40 @@ func validateMbedTLSTrustBundle(data []byte) error {
 }
 
 func validateTrustBundleForProfile(data []byte, profile TrustProfile) error {
-	if err := validateTrustBundle(data); err != nil {
+	return validateTrustDomain(data, profile, true)
+}
+
+func validateTrustDomain(data []byte, profile TrustProfile, device bool) error {
+	limit := maxTrustBundle
+	if device && profile.extendedTrust {
+		limit = maxDeviceTrustBundle
+	}
+	pemLimit := limit
+	if profile.extendedTrust {
+		// The firmware receives concatenated DER; PEM framing is host-only.
+		pemLimit *= 2
+	}
+	if err := validateTrustBundleSize(data, pemLimit); err != nil {
 		return err
 	}
+	derSize := 0
 	for rest := bytes.TrimSpace(data); len(rest) > 0; {
 		block, tail := pem.Decode(rest)
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			return fmt.Errorf("invalid certificate: %w", err)
 		}
+		derSize += len(block.Bytes)
+		if derSize > limit {
+			return fmt.Errorf("trust bundle exceeds %d DER bytes", limit)
+		}
 		if !profile.supportsCertificateAlgorithms(cert) {
-			if profile.mldsa {
+			if profile.supportsMLDSAPeers() {
 				return fmt.Errorf("CA public key %s and signature %s are not supported by the board's advertised verifier; use a certificate chain with RSA, ECDSA or ML-DSA algorithms; no cloud asset was reserved", cert.PublicKeyAlgorithm, cert.SignatureAlgorithm)
 			}
 			remedy := "the PKI deployment needs an mbedTLS-compatible certificate chain using RSA or ECDSA"
 			if cert.PublicKeyAlgorithm == x509.MLDSA || cert.SignatureAlgorithm == x509.MLDSA44 || cert.SignatureAlgorithm == x509.MLDSA65 || cert.SignatureAlgorithm == x509.MLDSA87 {
-				remedy += ", or firmware built with CONFIG_WENDY_PKI_WOLFSSL enabled for ML-DSA verification"
+				remedy += ", or firmware built with ML-DSA verification"
 			}
 			return fmt.Errorf("CA public key %s and signature %s are not supported by the current Wendy Lite mbedTLS firmware; %s; no cloud asset was reserved", cert.PublicKeyAlgorithm, cert.SignatureAlgorithm, remedy)
 		}
@@ -75,7 +104,7 @@ func (profile TrustProfile) supportsCertificateAlgorithms(cert *x509.Certificate
 	switch cert.PublicKeyAlgorithm {
 	case x509.RSA, x509.ECDSA:
 	case x509.MLDSA:
-		if !profile.mldsa {
+		if !profile.supportsMLDSAPeers() {
 			return false
 		}
 	default:
@@ -110,7 +139,7 @@ func (profile TrustProfile) supportsCertificateAlgorithms(cert *x509.Certificate
 	case "2.16.840.1.101.3.4.3.17", // ML-DSA-44
 		"2.16.840.1.101.3.4.3.18", // ML-DSA-65
 		"2.16.840.1.101.3.4.3.19": // ML-DSA-87
-		return profile.mldsa
+		return profile.supportsMLDSAPeers()
 	default:
 		return false
 	}

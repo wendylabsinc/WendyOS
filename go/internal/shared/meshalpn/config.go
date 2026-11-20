@@ -25,6 +25,11 @@ func (c *Certificates) clientProtocols(known []*x509.Certificate, protocols ...s
 	}
 	var result []string
 	for _, protocol := range protocols {
+		if c.acceptsLite(time.Now()) {
+			if issuer, ok := certificateIssuer(c.certificate, known); ok {
+				result = append(result, leafOffer(protocol, regularClient, issuer))
+			}
+		}
 		result = append(result, Offer(protocol, c.path, cached)...)
 	}
 	return result
@@ -105,7 +110,7 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 			hinted = false
 			for _, protocol := range config.NextProtos {
 				_, hashes := Decode(protocol)
-				if len(hashes) > 0 || strings.HasPrefix(protocol, inventory) {
+				if _, kind, _ := decodeLeafOffer(protocol); len(hashes) > 0 || kind != 0 || strings.HasPrefix(protocol, inventory) {
 					hinted = true
 					break
 				}
@@ -120,6 +125,7 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 		return
 	}
 	var acknowledged []Fingerprint
+	var leafOnly bool
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		if previous != nil {
@@ -128,6 +134,8 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 			}
 		}
 		_, acknowledged = Decode(state.NegotiatedProtocol)
+		_, kind, _ := decodeLeafOffer(state.NegotiatedProtocol)
+		leafOnly = kind == regularClient
 		return nil
 	}
 	selectCertificate := config.GetClientCertificate
@@ -142,6 +150,9 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 				return selected, err
 			}
 			certificate = *selected
+		}
+		if leafOnly {
+			return leafCertificate(certificate), nil
 		}
 		known := make(map[Fingerprint]bool, len(acknowledged))
 		for _, hash := range acknowledged {
@@ -191,6 +202,18 @@ func (c *Certificates) ConfigureServer(config *tls.Config) {
 			}
 		}
 		cooldown := c.recoveryState().active()
+		if !cooldown {
+			if protocol := c.liteServerOffer(selected.NextProtos, hello.SupportedProtos, available, time.Now()); protocol != "" {
+				result := selected.Clone()
+				result.GetConfigForClient = nil
+				result.NextProtos = []string{protocol}
+				result.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return leafCertificate(c.certificate), nil
+				}
+				c.bindIssuerSnapshot(result, available, true)
+				return result, nil
+			}
+		}
 		protocol := Select(selected.NextProtos, hello.SupportedProtos, func(hash Fingerprint) bool { return !cooldown && known[hash] })
 		if protocol == "" {
 			return selected, nil

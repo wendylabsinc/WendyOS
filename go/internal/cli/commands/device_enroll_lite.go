@@ -160,7 +160,10 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 			return err
 		}
 	}
-	if len(cfg.SignedTime)+len(cfg.DeviceRoots)+len(cfg.TsaRoots)+len(cfg.HttpsRoots) > 65536 {
+	if err := liteenroll.EncodeTrustForDevice(cfg, challenge); err != nil {
+		return err
+	}
+	if len(cfg.SignedTime)+len(cfg.DeviceRoots)+len(cfg.TsaRoots)+len(cfg.HttpsRoots)+len(cfg.LiteDeviceIntermediates) > 65536 {
 		return fmt.Errorf("signed time and trust bundles exceed the firmware's 64 KiB enrollment limit")
 	}
 	cloud, err := dialCloudGRPC(auth)

@@ -201,6 +201,11 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		} else {
 			window, err = verifyChain(chain, now)
 			if err != nil {
+				if completed := material.LiteCandidates(chain, baseNow); len(completed) > len(chain) {
+					window, err = verifyChain(completed, now)
+				}
+			}
+			if err != nil {
 				return Identity{}, err
 			}
 		}

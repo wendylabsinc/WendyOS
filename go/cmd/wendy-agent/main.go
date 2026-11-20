@@ -1224,6 +1224,11 @@ func main() {
 			logger.Error("wendy net identity unavailable", zap.Error(err))
 			return
 		}
+		if bundle := provisioningSvc.LitePeerIssuers(); bundle != "" {
+			if err := credentials.SetLiteIssuerChain(bundle, chainPEM, clock.Base); err != nil {
+				logger.Warn("wendy net Lite issuers unavailable", zap.Error(err))
+			}
+		}
 		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy); err != nil {
 			logger.Error("wendy net native agent TLS ingress unavailable", zap.Error(err))
 			return
@@ -1299,9 +1304,9 @@ func main() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
-						Agent:        services.MeshAgentMetadata(),
-						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
-						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
+						Agent:               services.MeshAgentMetadata(),
+						AppEndpoints:        []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
+						PreparedCredentials: credentials,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
@@ -1743,6 +1748,10 @@ func main() {
 	// restarts start to hurt.
 	go provisioningSvc.RunRenewal(ctx, func() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
+		agentRestart.Schedule()
+	})
+	go provisioningSvc.RunLiteIssuerRefresh(ctx, func() {
+		logger.Info("Wendy Net Lite issuer set updated — restarting agent")
 		agentRestart.Schedule()
 	})
 

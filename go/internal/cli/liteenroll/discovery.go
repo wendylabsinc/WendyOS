@@ -4,18 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/asn1"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/estcacerts"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
@@ -48,7 +45,7 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 		data []byte
 	}{{"device", cfg.DeviceRoots}, {"HTTPS", cfg.HttpsRoots}} {
 		if len(bundle.data) != 0 {
-			if err := validateTrustBundleForProfile(bundle.data, profile); err != nil {
+			if err := validateTrustDomain(bundle.data, profile, bundle.name == "device"); err != nil {
 				return fmt.Errorf("existing %s roots: %w", bundle.name, err)
 			}
 		}
@@ -58,7 +55,7 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 		tsaRoots = bytes.Clone(defaultTSARoots)
 	}
 	if cfg.TimeUrl != "roughtime" {
-		if err := validateTrustBundleForProfile(tsaRoots, profile); err != nil {
+		if err := validateTrustDomain(tsaRoots, profile, false); err != nil {
 			return fmt.Errorf("RFC 3161 enrollment requires trusted TSA roots; use the default Sigstore endpoint or supply --device-roots, --https-roots and --tsa-roots: %w", err)
 		}
 	}
@@ -163,11 +160,25 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 				}
 				return err
 			}
+			if profile.peerMLDSA {
+				discovered, err := discoveryCertificates(body, resp.Header.Get("Content-Type"))
+				if err != nil {
+					return err
+				}
+				deviceRoots, cfg.LiteDeviceIntermediates, err =
+					discoverMeshTrust(ctx, client, u, cfg.TenantId, profile, discovered, deviceRoots)
+				if err != nil {
+					return fmt.Errorf("discovering tenant mesh trust: %w", err)
+				}
+				if err := validateTrustBundleForProfile(deviceRoots, profile); err != nil {
+					return err
+				}
+			}
 		} else {
 			resp.Body.Close()
 		}
 	}
-	if err := validateTrustBundleForProfile(httpsRoots, profile); err != nil {
+	if err := validateTrustDomain(httpsRoots, profile, false); err != nil {
 		return fmt.Errorf("discovered HTTPS roots: %w", err)
 	}
 	cfg.DeviceRoots, cfg.TsaRoots, cfg.HttpsRoots = deviceRoots, tsaRoots, httpsRoots
@@ -200,66 +211,6 @@ func discoveryRootsForProfile(body []byte, contentType string, profile TrustProf
 	return roots, nil
 }
 
-// discoveryCertificates parses a PEM or EST certs-only CMS cacerts body.
 func discoveryCertificates(body []byte, contentType string) ([]*x509.Certificate, error) {
-	var certs []*x509.Certificate
-	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("-----BEGIN CERTIFICATE-----")) {
-		if err := validateTrustBundle(body); err != nil {
-			return nil, err
-		}
-		for rest := body; len(bytes.TrimSpace(rest)) > 0; {
-			block, tail := pem.Decode(rest)
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, err
-			}
-			certs = append(certs, cert)
-			rest = tail
-		}
-	} else {
-		media, _, err := mime.ParseMediaType(contentType)
-		if err != nil || media != "application/pkcs7-mime" {
-			return nil, fmt.Errorf("CA discovery expected PEM or EST certs-only CMS")
-		}
-		der := body
-		if len(der) == 0 || der[0] != 0x30 {
-			der, err = base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
-			if err != nil {
-				return nil, fmt.Errorf("invalid EST base64: %w", err)
-			}
-		}
-		var ci struct {
-			Type    asn1.ObjectIdentifier
-			Content asn1.RawValue
-		}
-		rest, err := asn1.Unmarshal(der, &ci)
-		if err != nil || len(rest) != 0 || !ci.Type.Equal(asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}) {
-			return nil, fmt.Errorf("invalid EST SignedData")
-		}
-		sdDER := ci.Content.FullBytes
-		// Accept RFC 5652 explicit content and the direct SEQUENCE emitted by
-		// existing pki-core deployments.
-		if ci.Content.Class == 2 && ci.Content.Tag == 0 {
-			sdDER = ci.Content.Bytes
-		}
-		var sd struct {
-			Version int
-			Digests []pkix.AlgorithmIdentifier `asn1:"set"`
-			Content struct{ Type asn1.ObjectIdentifier }
-			Certs   []asn1.RawValue `asn1:"optional,tag:0"`
-			Signers []asn1.RawValue `asn1:"set"`
-		}
-		rest, err = asn1.Unmarshal(sdDER, &sd)
-		if err != nil || len(rest) != 0 || sd.Version != 1 || len(sd.Digests) != 0 || !sd.Content.Type.Equal(asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}) || len(sd.Signers) != 0 || len(sd.Certs) > 16 {
-			return nil, fmt.Errorf("invalid EST certs-only SignedData")
-		}
-		for _, raw := range sd.Certs {
-			cert, err := x509.ParseCertificate(raw.FullBytes)
-			if err != nil {
-				return nil, err
-			}
-			certs = append(certs, cert)
-		}
-	}
-	return certs, nil
+	return estcacerts.ParseCertificates(body, contentType)
 }

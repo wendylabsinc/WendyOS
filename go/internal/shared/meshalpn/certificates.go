@@ -19,14 +19,16 @@ const maxCandidateCertificates = 16
 // Certificates retains CA material as untrusted path candidates. It does not
 // add roots or replace the TLS caller's principal, time or certificate policy.
 type Certificates struct {
-	recovery    *Recovery
-	certificate tls.Certificate
-	anchors     map[Fingerprint]bool
-	mu          sync.Mutex
-	own         []*x509.Certificate
-	path        []Fingerprint
-	cached      []*x509.Certificate // Bounded FIFO; these never become trust anchors.
-	bytes       int
+	recovery                    *Recovery
+	certificate                 tls.Certificate
+	anchors                     map[Fingerprint]bool
+	mu                          sync.Mutex
+	own                         []*x509.Certificate
+	path                        []Fingerprint
+	cached                      []*x509.Certificate // Bounded FIFO; these never become trust anchors.
+	bytes                       int
+	liteIssuers                 []*x509.Certificate
+	liteNotBefore, liteNotAfter time.Time
 }
 
 func issuerParent(child, parent *x509.Certificate) bool {
@@ -86,6 +88,9 @@ func (m *Certificates) snapshot(now time.Time) []*x509.Certificate {
 	defer m.mu.Unlock()
 	m.reap(now)
 	result := append([]*x509.Certificate(nil), m.own...)
+	if m.validLiteIssuers(now) {
+		result = append(result, m.liteIssuers...)
+	}
 	return append(result, m.cached...)
 }
 
