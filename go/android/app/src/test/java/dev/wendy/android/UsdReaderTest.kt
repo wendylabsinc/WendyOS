@@ -112,6 +112,21 @@ class UsdReaderTest {
         assertEquals("This model has too many triangles to show.", error.message)
     }
 
+    @Test fun invertedOpsAndEveryRotationOrderAreApplied() {
+        val corners = " int[] faceVertexCounts = [3]\n int[] faceVertexIndices = [0, 1, 2]\n point3f[] points = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]\n"
+        val rotations = listOf("XZY", "YXZ", "YZX", "ZXY").joinToString("") { "def Mesh \"$it\" {\n$corners float3 xformOp:rotate$it = (90, 90, 90)\n uniform token[] xformOpOrder = [\"xformOp:rotate$it\"]\n}\n" }
+        val pivot = "def Mesh \"Pivot\" {\n$corners float3 xformOp:translate:pivot = (1, 0, 0)\n float xformOp:rotateZ = 90\n" +
+            " uniform token[] xformOpOrder = [\"xformOp:translate:pivot\", \"xformOp:rotateZ\", \"!invert!xformOp:translate:pivot\"]\n}\n"
+        val meshes = UsdReader.read("#usda 1.0\n(\n metersPerUnit = 1\n)\n$rotations$pivot".toByteArray()).meshes.associate { it.name to it.positions }
+        // A quarter turn about each axis in the order the op names moves the corners on X, Y and Z here.
+        assertArrayEquals(floatArrayOf(0f, 1f, 0f, 1f, 0f, 0f, 0f, 0f, -1f), meshes.getValue("XZY"), 1e-5f)
+        assertArrayEquals(floatArrayOf(-1f, 0f, 0f, 0f, 0f, 1f, 0f, 1f, 0f), meshes.getValue("YXZ"), 1e-5f)
+        assertArrayEquals(floatArrayOf(0f, 1f, 0f, -1f, 0f, 0f, 0f, 0f, 1f), meshes.getValue("YZX"), 1e-5f)
+        assertArrayEquals(floatArrayOf(1f, 0f, 0f, 0f, 0f, 1f, 0f, -1f, 0f), meshes.getValue("ZXY"), 1e-5f)
+        // A quarter turn about Z through the pivot (1, 0, 0), which the inverted op translates back.
+        assertArrayEquals(floatArrayOf(1f, 0f, 0f, 0f, -1f, 0f, 1f, -1f, 1f), meshes.getValue("Pivot"), 1e-5f)
+    }
+
     @Test fun integerAndLz4CodecsMatchUsd() {
         // Common delta 1, codes: common, int8 +3, int16 +300, int32 -100000.
         val raw = byteArrayOf(1, 0, 0, 0, 0b11_10_01_00.toByte(), 3, 0x2C, 0x01, 0x60, 0x79, 0xFE.toByte(), 0xFF.toByte())

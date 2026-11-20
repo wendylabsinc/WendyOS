@@ -181,9 +181,11 @@ object UsdReader {
         var result = identity()
         var reset = false
         for (raw in order) {
-            val name = raw as? String ?: continue
+            var name = raw as? String ?: continue
             if (name == "!resetXformStack!") { reset = true; result = identity(); continue }
-            if (name.startsWith("!invert!")) continue
+            // An inverted op names another op and applies its inverse, such as the translation back from a pivot.
+            val inverted = name.startsWith("!invert!")
+            name = name.removePrefix("!invert!")
             val value = prim.attributes[name]
             val op = when {
                 name.startsWith("xformOp:transform") -> (value as? DoubleArray)?.takeIf { it.size == 16 }
@@ -192,13 +194,18 @@ object UsdReader {
                 name.startsWith("xformOp:orient") -> vector(value)?.takeIf { it.size == 4 }?.let { quaternion(it) }
                 name.startsWith("xformOp:rotateXYZ") -> vector(value)?.let { multiply(multiply(rotate(0, it[0]), rotate(1, it[1])), rotate(2, it[2])) }
                 name.startsWith("xformOp:rotateZYX") -> vector(value)?.let { multiply(multiply(rotate(2, it[2]), rotate(1, it[1])), rotate(0, it[0])) }
+                name.startsWith("xformOp:rotateXZY") -> vector(value)?.let { multiply(multiply(rotate(0, it[0]), rotate(2, it[2])), rotate(1, it[1])) }
+                name.startsWith("xformOp:rotateYXZ") -> vector(value)?.let { multiply(multiply(rotate(1, it[1]), rotate(0, it[0])), rotate(2, it[2])) }
+                name.startsWith("xformOp:rotateYZX") -> vector(value)?.let { multiply(multiply(rotate(1, it[1]), rotate(2, it[2])), rotate(0, it[0])) }
+                name.startsWith("xformOp:rotateZXY") -> vector(value)?.let { multiply(multiply(rotate(2, it[2]), rotate(0, it[0])), rotate(1, it[1])) }
                 name.startsWith("xformOp:rotateX") -> number(value)?.let { rotate(0, it) }
                 name.startsWith("xformOp:rotateY") -> number(value)?.let { rotate(1, it) }
                 name.startsWith("xformOp:rotateZ") -> number(value)?.let { rotate(2, it) }
                 else -> null
             } ?: continue
+            val applied = if (inverted) invert(op) ?: continue else op
             // The first op is outermost: points are transformed by the last op first.
-            result = multiply(op, result)
+            result = multiply(applied, result)
         }
         return result to reset
     }
@@ -212,6 +219,25 @@ object UsdReader {
     }
     internal fun identity() = DoubleArray(16).also { it[0] = 1.0; it[5] = 1.0; it[10] = 1.0; it[15] = 1.0 }
     internal fun multiply(a: DoubleArray, b: DoubleArray) = DoubleArray(16) { i -> val r = i / 4; val c = i % 4; (0..3).sumOf { a[r * 4 + it] * b[it * 4 + c] } }
+    /** A 4×4 inverse by Gauss-Jordan elimination with partial pivoting, or null for a singular matrix. */
+    private fun invert(m: DoubleArray): DoubleArray? {
+        val a = m.copyOf(); val out = identity()
+        for (col in 0..3) {
+            val pivot = (col..3).maxBy { abs(a[it * 4 + col]) }
+            if (abs(a[pivot * 4 + col]) < 1e-12) return null
+            for (k in 0..3) {
+                a[col * 4 + k] = a[pivot * 4 + k].also { a[pivot * 4 + k] = a[col * 4 + k] }
+                out[col * 4 + k] = out[pivot * 4 + k].also { out[pivot * 4 + k] = out[col * 4 + k] }
+            }
+            val scale = a[col * 4 + col]
+            for (k in 0..3) { a[col * 4 + k] /= scale; out[col * 4 + k] /= scale }
+            for (row in 0..3) if (row != col) {
+                val f = a[row * 4 + col]
+                for (k in 0..3) { a[row * 4 + k] -= f * a[col * 4 + k]; out[row * 4 + k] -= f * out[col * 4 + k] }
+            }
+        }
+        return out
+    }
     private fun translate(v: DoubleArray) = identity().also { it[12] = v[0]; it[13] = v.getOrElse(1) { 0.0 }; it[14] = v.getOrElse(2) { 0.0 } }
     private fun scaleMatrix(v: DoubleArray) = identity().also { it[0] = v[0]; it[5] = v.getOrElse(1) { v[0] }; it[10] = v.getOrElse(2) { v[0] } }
     private fun rotate(axis: Int, degrees: Double): DoubleArray {
