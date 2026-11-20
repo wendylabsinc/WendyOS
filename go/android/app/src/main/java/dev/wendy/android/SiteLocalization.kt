@@ -1,5 +1,6 @@
 package dev.wendy.android
 
+import org.opencv.android.OpenCVLoader
 import org.opencv.calib3d.Calib3d
 import org.opencv.core.Core
 import org.opencv.core.CvType
@@ -61,6 +62,13 @@ class SiteLocalizationOutput(var reason: Int = 1, var matches: Int = 0) {
     /** Column-major 4×4: optical camera (right, down, forward) to model world. */
     val worldFromCamera = DoubleArray(16)
 }
+
+/**
+ * OpenCV's Java classes call into libopencv_java4 without loading it. Load it once per process before the first native
+ * call; a failure becomes an ordinary exception, which each entry point below turns into a failed result.
+ */
+private val openCV by lazy { runCatching { OpenCVLoader.initLocal() }.getOrDefault(false) }
+private fun requireOpenCV() { if (!openCV) throw IllegalStateException("OpenCV could not be loaded.") }
 
 private fun imageSize(w: Int, h: Int) = w >= 32 && h >= 32 && w <= 8192 && h <= 8192 && w.toLong() * h <= 32_000_000
 private fun finite(values: DoubleArray?, count: Int) = values != null && values.size >= count && (0 until count).all { values[it].isFinite() }
@@ -159,6 +167,7 @@ class SiteLandmarkMap {
         if (gray.size != w * h || !imageSize(w, h) || dw < 8 || dh < 8 || dw > 1024 || dh > 1024 || depth.size != dw * dh || confidence.size != dw * dh ||
             !finite(k, 4) || !finite(transform, 16) || k[0] <= 0 || k[1] <= 0) return -1
         return try {
+            requireOpenCV()
             val keys = MatOfKeyPoint(); val desc = Mat()
             sift.detectAndCompute(Mat(h, w, CvType.CV_8U).apply { put(0, 0, gray) }, Mat(), keys, desc)
             val rows = descriptorRows(desc); val pts = keys.toArray()
@@ -226,6 +235,7 @@ object SiteSolver {
         val minimum = if (estimated) SiteLocalizationLimits.MIN_ESTIMATED_INLIERS else if (known != null) SiteLocalizationLimits.MIN_POSE_INLIERS else SiteLocalizationLimits.MIN_LENS_INLIERS
         if (n < minimum || n > 1800 || !imageSize(w, h) || !finite(xyz, n * 3) || !finite(uv, n * 2) || (known != null && !finite(known, 9))) return out
         try {
+            requireOpenCV()
             val points = ArrayList<Point3>(); val pixels = ArrayList<Point>()
             for (i in 0 until n) {
                 if (abs(xyz[i * 3]) > 1000 || abs(xyz[i * 3 + 1]) > 1000 || abs(xyz[i * 3 + 2]) > 1000 || uv[i * 2] < 0 || uv[i * 2] >= w || uv[i * 2 + 1] < 0 || uv[i * 2 + 1] >= h) return out
@@ -365,6 +375,7 @@ object SiteSolver {
         val out = SiteLocalizationOutput(reason = 1)
         if (gray.size != w * h || !imageSize(w, h)) return out
         try {
+            requireOpenCV()
             if (map.count < 120) return out
             var full = Mat(h, w, CvType.CV_8U).apply { put(0, 0, gray) }
             var mask = Mat(); var k = Mat(); var d = Mat()
@@ -438,6 +449,7 @@ class ScreenLensCalibrator {
     @Synchronized fun add(gray: ByteArray, w: Int, h: Int): Int {
         if (gray.size != w * h || !imageSize(w, h)) return -1
         return try {
+            requireOpenCV()
             if (width != 0 && (width != w || height != h)) return -2
             width = w; height = h; detection = 0; lastBox = Rect()
             val found = Mat()
@@ -472,6 +484,7 @@ class ScreenLensCalibrator {
         val box = ScreenLensProgress(views.size, detection, revision, lastBox.x.toDouble() / width, lastBox.y.toDouble() / height, lastBox.width.toDouble() / width, lastBox.height.toDouble() / height)
         if (views.isEmpty()) return box
         return try {
+            requireOpenCV()
             val all = views.flatten(); val centres = views.map { v -> Point(v.sumOf { it.x } / v.size, v.sumOf { it.y } / v.size) }
             val hull = hullArea(all); val b = Imgproc.boundingRect(MatOfPoint2f(*centres.toTypedArray()))
             val coverage = hull / (width.toDouble() * height)
@@ -484,6 +497,7 @@ class ScreenLensCalibrator {
     @Synchronized fun solve(): SiteLocalizationOutput {
         val out = SiteLocalizationOutput(reason = ScreenLensReason.VIEWS)
         return try {
+            requireOpenCV()
             out.matches = views.size; if (views.size < 12) return out
             val all = views.flatten(); val centres = views.map { v -> Point(v.sumOf { it.x } / v.size, v.sumOf { it.y } / v.size) }
             val bounds = Imgproc.boundingRect(MatOfPoint2f(*centres.toTypedArray()))
