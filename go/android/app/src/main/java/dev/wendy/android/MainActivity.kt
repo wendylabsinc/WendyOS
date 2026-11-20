@@ -191,9 +191,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     }
     CompositionLocalProvider(LocalNavigator provides nav, LocalRecordingCatalog provides catalog, LocalRecordingPosters provides posters) {
         model.appURL?.let { url ->
-            AppBrowser(url, model.appPage?.first, model.appPage?.second?.ifEmpty { null }, { model.appURL = null; model.appPage = null }, openURL) { external ->
-                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(external))) }.onFailure { model.error = it.message }
-            }
+            AppBrowser(url, model.appPage?.first, model.appPage?.second?.ifEmpty { null }, { model.appURL = null; model.appPage = null }, openURL)
         }
         NearbySetupPrompt(model, active = model.initialized && model.inForeground && nav.stack.none { it.title == "Device setup" } && !settings && !routes.chat && !routes.address && !routes.recognizing && model.appDeletion == null && model.appURL == null) { device ->
             routes.openSetup(device)
