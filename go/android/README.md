@@ -55,7 +55,8 @@ macOS or Linux.
   including devices discovered after connecting. The shared automatic controller
   uses an available mesh uplink if normal internet fails and switches back when
   it recovers. Public DNS uses Android's resolver while normal internet is active.
-  The foreground notification opens or stops the VPN.
+  The foreground notification opens or stops the VPN. On Android 13 and later,
+  Wendy asks to show it when you turn VPN on; the VPN also starts without it.
 - Wendy's existing geometric app mark, with adaptive and monochrome launcher icons.
 
 Device and Cloud operations are wired to real backend methods. Successful

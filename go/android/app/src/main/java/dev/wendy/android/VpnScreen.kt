@@ -59,7 +59,8 @@ import org.json.JSONObject
         } catch (e: Exception) { pending = null; localError = e.message ?: "Could not request VPN permission" }
     }
     val bluetooth = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants.values.any { !it }) localError = "Bluetooth access is off. Mesh will use available network connections."
+        // Notifications only show the VPN's status and controls, so a denial does not stop it.
+        if (grants.filterKeys { it != Manifest.permission.POST_NOTIFICATIONS }.values.any { !it }) localError = "Bluetooth access is off. Mesh will use available network connections."
         pending?.let { requestVpnPermission(it) }
     }
     Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -78,9 +79,11 @@ import org.json.JSONObject
                             val permissions = if (Build.VERSION.SDK_INT >= 31)
                                 arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
                             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-                            if (permissions.any { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+                            // Android 13+ hides the notification that opens or stops the VPN until it is allowed.
+                            val requested = if (Build.VERSION.SDK_INT >= 33) permissions + Manifest.permission.POST_NOTIFICATIONS else permissions
+                            if (requested.any { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
                                 pending = request
-                                bluetooth.launch(permissions)
+                                bluetooth.launch(requested)
                             } else requestVpnPermission(request)
                         }
                     })
