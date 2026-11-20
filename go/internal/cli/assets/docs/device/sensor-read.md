@@ -28,8 +28,9 @@ Neither four channels nor any particular sensor model is assumed.
 
 ## Source identity
 
-Forwarded `channel_id` and `input_id` values are local routing IDs. They change
-when a source reconnects or the agent restarts. Do not persist them as identities.
+Forwarded `channel_id` and `input_id` values are local routing IDs. The agent
+assigns fresh IDs when a source reconnects, including after an agent restart.
+The device can reuse IDs after a reboot, so fetch a fresh manifest on app startup.
 The original display name, schema, sample size and rate are preserved.
 
 Each returned descriptor contains an optional `SensorSource source` message:

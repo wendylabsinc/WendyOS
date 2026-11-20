@@ -2,17 +2,99 @@ package services
 
 import (
 	"context"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	sensorpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
+func newTestGenericSensorFeed(t testing.TB) *GenericSensorFeed {
+	t.Helper()
+	return NewGenericSensorFeed(zap.NewNop(), filepath.Join(t.TempDir(), "channel-ids"))
+}
+
+func TestGenericSensorChannelIDsRejectOldSubscriptionAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run", "channel-ids")
+	descriptors := []*sensorpb.SensorDescriptor{{
+		ChannelId: 7,
+		Format:    &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example", SampleBytes: 4}},
+	}}
+	first := NewGenericSensorFeed(zap.NewNop(), path)
+	_, _, releaseFirst := first.Mount(mcusource.SensorPairing{SourceAssetID: 1}, descriptors)
+	manifest, _ := first.GetSensorManifest(context.Background(), nil)
+	releaseFirst()
+	if len(manifest.GetSensors()) != 1 {
+		t.Fatalf("first manifest = %v", manifest)
+	}
+	oldID := manifest.Sensors[0].GetChannelId()
+
+	restarted := NewGenericSensorFeed(zap.NewNop(), path)
+	_, _, releaseRestarted := restarted.Mount(mcusource.SensorPairing{SourceAssetID: 2}, descriptors)
+	defer releaseRestarted()
+	manifest, _ = restarted.GetSensorManifest(context.Background(), nil)
+	if len(manifest.GetSensors()) != 1 || manifest.Sensors[0].GetChannelId() != 33 {
+		t.Fatalf("first channel after restart should skip the reserved block: %v", manifest)
+	}
+	err := restarted.StreamSensors(&agentpb.StreamSensorsRequest{ChannelId: []uint32{oldID}}, nil)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("old channel %d returned %v, want NotFound", oldID, err)
+	}
+}
+
+func TestGenericChannelIDsReserveBlocks(t *testing.T) {
+	ids := genericChannelIDs{path: filepath.Join(t.TempDir(), "channel-ids")}
+	for want := uint32(1); want <= 33; want++ {
+		got, err := ids.allocate()
+		if err != nil || got != want {
+			t.Fatalf("allocate() = %d, %v, want %d", got, err, want)
+		}
+		high, err := os.ReadFile(ids.path)
+		wantHigh := "32"
+		if want == 33 {
+			wantHigh = "64"
+		}
+		if err != nil || string(high) != wantHigh {
+			t.Fatalf("counter after allocating %d = %q, %v, want %q", want, high, err, wantHigh)
+		}
+	}
+}
+
+func TestGenericChannelIDsFailClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "channel-ids")
+	if err := os.WriteFile(path, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ids := genericChannelIDs{path: path}
+	if got, err := ids.allocate(); err == nil || got != 0 {
+		t.Fatalf("allocated %d with invalid counter, err=%v", got, err)
+	}
+	if err := os.WriteFile(path, strconv.AppendUint(nil, math.MaxUint32-1, 10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ids.allocate(); err != nil || got != math.MaxUint32 {
+		t.Fatalf("last ID = %d, %v, want %d", got, err, uint32(math.MaxUint32))
+	}
+	if got, err := ids.allocate(); err == nil || got != 0 {
+		t.Fatalf("allocated %d after exhaustion, err=%v", got, err)
+	}
+	restarted := genericChannelIDs{path: path}
+	if got, err := restarted.allocate(); err == nil || got != 0 {
+		t.Fatalf("allocated %d after restart with exhausted counter, err=%v", got, err)
+	}
+}
+
 func TestGenericSensorFeedIsolationLifetimeAndBackpressure(t *testing.T) {
-	s := NewGenericSensorFeed()
+	s := newTestGenericSensorFeed(t)
 	descriptors := []*sensorpb.SensorDescriptor{{ChannelId: 1, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example", SampleBytes: 2}}}}
 	_, pub1, close1 := s.Mount(mcusource.SensorPairing{SourceAssetID: 1}, descriptors)
 	_, pub2, close2 := s.Mount(mcusource.SensorPairing{SourceAssetID: 2}, descriptors)
@@ -68,7 +150,7 @@ func TestGenericSensorFeedIsolationLifetimeAndBackpressure(t *testing.T) {
 }
 
 func BenchmarkGenericSensorFeedWithoutReaders(b *testing.B) {
-	s := NewGenericSensorFeed()
+	s := newTestGenericSensorFeed(b)
 	_, pub, release := s.Mount(mcusource.SensorPairing{SourceAssetID: 1}, []*sensorpb.SensorDescriptor{{ChannelId: 1, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example.array.v1", SampleBytes: 1536}}}})
 	defer release()
 	f := &sensorlink.SensorFrame{ChannelID: 1, TsUs: 1, Payload: make([]byte, 1536)}
@@ -82,7 +164,7 @@ func BenchmarkGenericSensorFeedWithoutReaders(b *testing.B) {
 }
 
 func TestGenericManifestPreservesFormatsAndIdentityAcrossReconnect(t *testing.T) {
-	feed := NewGenericSensorFeed()
+	feed := newTestGenericSensorFeed(t)
 	descriptors := []*sensorpb.SensorDescriptor{
 		{ChannelId: 0, InputId: 7, Name: "温度", Source: &sensorpb.SensorSource{PairingKey: "spoofed", ChannelId: 99, InputId: 99}, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "vendor.unknown.v9", RateHz: 0, SampleBytes: 2}}},
 		{ChannelId: 9, InputId: 7, Name: "alternative", Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "vendor.other", SampleBytes: 4}}},
@@ -123,7 +205,7 @@ func TestGenericManifestPreservesFormatsAndIdentityAcrossReconnect(t *testing.T)
 }
 
 func TestGenericFeedBoundsAndRejectedChannels(t *testing.T) {
-	feed := NewGenericSensorFeed()
+	feed := newTestGenericSensorFeed(t)
 	descriptors := make([]*sensorpb.SensorDescriptor, 1025)
 	for i := range descriptors {
 		descriptors[i] = &sensorpb.SensorDescriptor{ChannelId: uint32(i), Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "unknown", SampleBytes: 4}}}

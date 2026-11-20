@@ -644,7 +644,7 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
-	genericSensorFeed := services.NewGenericSensorFeed()
+	genericSensorFeed := services.NewGenericSensorFeed(logger, filepath.Join(supervisor.RemoteSeenDir, "sensor-channel-ids"))
 	sensorSup.SetGenericSink(genericSensorFeed)
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))

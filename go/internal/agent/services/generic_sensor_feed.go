@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"math"
 	"sort"
 	"sync"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,12 +18,13 @@ import (
 
 // GenericSensorFeed exposes paired, authenticated generic samples on the local
 // read-only socket. It never handles device keys or decodes application schemas.
-// Channel and input IDs are session-local. Each descriptor's typed source maps
-// these IDs back to the paired source and its native IDs. No history is replayed.
+// Channel and input IDs are local routing handles. Each descriptor's typed
+// source maps them back to the paired source and its native IDs. No history is replayed.
 type GenericSensorFeed struct {
 	agentpbv2.UnimplementedWendySensorServiceServer
+	logger      *zap.Logger
 	mu          sync.Mutex
-	next        uint32
+	channelIDs  genericChannelIDs
 	channels    map[uint32]*sensorlinkpb.SensorDescriptor
 	subscribers map[*genericSubscription]bool
 }
@@ -35,8 +36,13 @@ type genericSubscription struct {
 	err    error
 }
 
-func NewGenericSensorFeed() *GenericSensorFeed {
-	return &GenericSensorFeed{channels: make(map[uint32]*sensorlinkpb.SensorDescriptor), subscribers: make(map[*genericSubscription]bool)}
+func NewGenericSensorFeed(logger *zap.Logger, channelIDPath string) *GenericSensorFeed {
+	return &GenericSensorFeed{
+		logger:      logger,
+		channelIDs:  genericChannelIDs{path: channelIDPath},
+		channels:    make(map[uint32]*sensorlinkpb.SensorDescriptor),
+		subscribers: make(map[*genericSubscription]bool),
+	}
 }
 
 // NewSensorReadServer deliberately excludes all control-plane RPCs and reflection.
@@ -56,11 +62,14 @@ func (s *GenericSensorFeed) Mount(p mcusource.SensorPairing, descriptors []*sens
 		if !mcusource.ValidGenericDescriptor(d) || ids[d.ChannelId] != 0 {
 			continue
 		}
-		if len(s.channels) >= 1024 || s.next == math.MaxUint32 {
+		if len(s.channels) >= 1024 {
 			break
 		}
-		s.next++
-		id := s.next
+		id, err := s.channelIDs.allocate()
+		if err != nil {
+			s.logger.Warn("Could not allocate generic sensor channel ID", zap.String("source", p.Key()), zap.Error(err))
+			break
+		}
 		ids[d.ChannelId] = id
 		clone := proto.Clone(d).(*sensorlinkpb.SensorDescriptor)
 		clone.ChannelId = id

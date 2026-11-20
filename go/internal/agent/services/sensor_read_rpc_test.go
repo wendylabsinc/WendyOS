@@ -22,7 +22,7 @@ import (
 )
 
 func TestSensorReadRPCStreamDisconnectAndNoControlPlane(t *testing.T) {
-	feed := NewGenericSensorFeed()
+	feed := newTestGenericSensorFeed(t)
 	_, publish, release := feed.Mount(mcusource.SensorPairing{SourceAssetID: 1}, []*sensorpb.SensorDescriptor{{ChannelId: 1, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "test", SampleBytes: 2}}}})
 	defer release()
 	server := NewSensorReadServer(feed)
@@ -144,7 +144,7 @@ func (s *blockedSensorStream) Send(*sensorpb.SensorData) error {
 func TestSensorReadBlockedSendTerminates(t *testing.T) {
 	for _, disconnect := range []bool{false, true} {
 		t.Run(fmt.Sprint("disconnect=", disconnect), func(t *testing.T) {
-			feed := NewGenericSensorFeed()
+			feed := newTestGenericSensorFeed(t)
 			_, publish, release := feed.Mount(mcusource.SensorPairing{SourceAssetID: 1}, []*sensorpb.SensorDescriptor{{ChannelId: 1, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example", SampleBytes: 1}}}})
 			defer release()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -208,7 +208,7 @@ func TestSensorReadBlockedSendTerminates(t *testing.T) {
 func TestSensorReadManifestFitsSmallHeaderLimit(t *testing.T) {
 	for _, count := range []int{64, 1024} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			feed := NewGenericSensorFeed()
+			feed := newTestGenericSensorFeed(t)
 			pairing := mcusource.SensorPairing{SourcePrincipalURI: certs.DeviceSPIFFEURI("5c9e14bb-49c0-4178-9cc5-493a151f9885", "eec8d3ea-542f-491f-8554-29ecb2bf1ee4"), Transport: "wendycom"}
 			if err := pairing.Validate(); err != nil {
 				t.Fatal(err)
