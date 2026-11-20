@@ -89,7 +89,7 @@ compilation does not establish that hardware-dependent workflows work.
 | Sites and digital twin: local 3D site documents, USDZ import and sharing, RoomPlan capture, photo reconstruction, recognition viewfinder, lens calibration, site reference capture | Not implemented. Needs a 3D stack decision (see the parity PR). The Digital Twin pane explains this. |
 | Robot localization, navigation and motion in the twin | Not implemented. On iOS these live only in the twin and need the site's floor geometry. Robot pairing is available. |
 | Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. Campaign permissions can still be changed. |
-| Always-on VPN | Not implemented. The service declares `SUPPORTS_ALWAYS_ON=false`; the VPN needs the app's account to start. |
+| Always-on VPN | Implemented as an Android addition; the iOS app does not connect on demand. When Android's Always-on VPN setting starts Wendy, including after a restart, the VPN uses the account and organization the app last had selected. Without a saved account it does not start, and the VPN page says why. "Block connections without VPN" must stay off: it also blocks the app's own route to the mesh, so the VPN cannot connect. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |
 
 Physical-device checks are still required for BLE GATT/L2CAP, cloud sign-in,
