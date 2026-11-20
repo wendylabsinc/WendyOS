@@ -618,6 +618,12 @@
           "description": "Talk to the board microcontroller's sketch through Arduino's router (Arduino UNO Q). Mounts /run/arduino-router and sets APP_SOCKET for Arduino's Bridge client."
         },
         {
+          "properties": { "type": { "const": "sensor-read" } },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Read all paired generic SensorLink samples through WENDY_SENSOR_SOCKET. No pairing, credentials, container control or other administrative APIs. At most one per app."
+        },
+        {
           "properties": {
             "type": { "const": "admin" }
           },

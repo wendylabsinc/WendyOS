@@ -33,7 +33,8 @@ func projectCatalog() []projectFeature {
 		"input": "Input devices", "display": "Display access", "bluetooth": "Bluetooth access",
 		"avahi": "Private mDNS (Avahi)", "nan": "Wi-Fi Aware control",
 		"episode-write": "Episode recording", "notifications": "Notifications", "admin": "Agent administration",
-		"build": "Container builds", "video": "Video access (deprecated; use camera)",
+		"sensor-read": "SensorLink readings",
+		"build":       "Container builds", "video": "Video access (deprecated; use camera)",
 		"arduino-bridge": "Arduino UNO Q microcontroller bridge",
 	}
 	for _, name := range appconfig.ValidEntitlementTypes {

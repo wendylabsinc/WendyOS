@@ -117,6 +117,8 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 // connectToCloudAgentWithAuthExpecting checks a saved identity before treating
 // a Cloud name match as the same device (see connectToPinnedCloudName).
 func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err
@@ -124,8 +126,6 @@ func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.Auth
 	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
 		return nil, err
 	}
-	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
-
 	return asset.connect(ctx, auth, brokerURL)
 }
 
@@ -161,6 +161,23 @@ func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cl
 }
 
 func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
+	// Cloud selects the identity, not the transport. CLI commands also prefer
+	// authenticated LAN; only native sessions retain and share the connection.
+	if cloudTunnelOnly(ctx) {
+		cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
+		return cloudTunnelDial()(ctx, auth, asset, brokerURL)
+	}
+	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); native {
+		expected := cloudDiscoveryIdentity(auth, asset)
+		desktopRememberCloudTarget(ctx, auth, asset, expected.IdentityKey())
+		return desktopSessionConnection(ctx, auth, expected.IdentityKey(), func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return desktopReconnectableCloudConnection(ctx, auth, asset, brokerURL)
+		})
+	}
+	return connectCloudDevicePreferLAN(ctx, auth, asset, brokerURL)
+}
+
+func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
