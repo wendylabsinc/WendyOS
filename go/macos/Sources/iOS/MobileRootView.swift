@@ -12,6 +12,8 @@ enum MobileInventorySource: CaseIterable, Hashable {
 }
 
 struct MobileRootView: View {
+    @ObservedObject private var osUpdate = MobileOSUpdateTask.shared
+    private var meshActive: Bool { scenePhase != .background || osUpdate.keepsConnection(session: model.deviceSession, scope: model.mobileCloudSelectionKey) }
     @StateObject private var appearances = DeviceAppearanceStore()
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
@@ -46,11 +48,12 @@ struct MobileRootView: View {
         .task { await model.start() }
         .task(id: model.account) { await model.refreshMobileCloudSelection() }
         .task(
-            id: "\(model.initialized)/\(scenePhase == .background)/\(model.mobileCloudSelectionKey)"
+            id: "\(model.initialized)/\(meshActive)/\(model.mobileCloudSelectionKey)"
         ) {
-            await model.runMobileMesh(active: scenePhase != .background)
+            await model.runMobileMesh(active: meshActive)
         }
         .task { await actions.run() }
+        .onChange(of: model.deviceSession) { _, session in osUpdate.selectionChanged(session: session, scope: model.mobileCloudSelectionKey) }
         .task(id: "\(model.initialized)/\(scenePhase == .active)") {
             if model.initialized && scenePhase == .active { await model.maintainExperience() }
         }
@@ -61,6 +64,7 @@ struct MobileRootView: View {
             if let device = selectedRouteDevice { await model.connect(device) }
         }
         .onChange(of: model.mobileCloudSelectionKey) { _, _ in
+            osUpdate.selectionChanged(session: model.deviceSession, scope: model.mobileCloudSelectionKey)
             // A source list can reload in the new organization; a device or log route cannot.
             homePath = homePath.filter { if case .device = $0 { return false }; return true }
             recordingPicker = nil

@@ -15,6 +15,15 @@ final class OSUpdateTests: XCTestCase {
         value.status.finalizedAtUnix = "14"
         XCTAssertEqual(value.status.title, "Previous OS restored")
     }
+    func testRestartWaitsForANewFinalHealthResult() throws {
+        let json = #"{"status":{"hasResult":true,"outcome":"OUTCOME_ROLLED_BACK","createdAtUnix":"12","finalizedAtUnix":"14"},"install":{"active":false,"phase":"Installed","percent":100,"rebootRequired":true,"error":"","baseline":12}}"#
+        var value = try JSONDecoder().decode(OSUpdateSnapshot.self, from: Data(json.utf8))
+        XCTAssertFalse(value.status.hasFinalResult(after: 12))
+        value.status.createdAtUnix = "13"
+        XCTAssertTrue(value.status.hasFinalResult(after: 12))
+        value.status.finalizedAtUnix = "0"
+        XCTAssertFalse(value.status.hasFinalResult(after: 12))
+    }
     func testUnreportedOrInvalidProgressRemainsIndeterminate() throws {
         let json = #"{"status":{},"install":{"active":true,"phase":"Starting","percent":-1,"rebootRequired":false,"error":"","baseline":0}}"#
         var value = try JSONDecoder().decode(OSUpdateSnapshot.self, from: Data(json.utf8))

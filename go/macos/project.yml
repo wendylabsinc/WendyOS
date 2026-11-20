@@ -143,6 +143,8 @@ targets:
       properties:
         ITSAppUsesNonExemptEncryption: false
         WendyPushEnvironment: "$(WENDY_PUSH_ENVIRONMENT)"
+        BGTaskSchedulerPermittedIdentifiers: [dev.wendy.WendyCompanion.os-update]
+        UIBackgroundModes: [processing]
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Wendy

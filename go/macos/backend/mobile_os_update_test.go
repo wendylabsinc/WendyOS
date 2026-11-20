@@ -56,11 +56,21 @@ func TestMobileOSUpdateStreamRequiresExplicitCompletion(t *testing.T) {
 
 type mobileOSAgent struct {
 	pb.UnimplementedWendyOSUpdateServiceServer
-	release chan struct{}
-	calls   chan string
+	release      chan struct{}
+	calls        chan string
+	probeStarted chan struct{}
+	probeGate    chan struct{}
 }
 
-func (a *mobileOSAgent) GetOSUpdateStatus(context.Context, *pb.GetOSUpdateStatusRequest) (*pb.GetOSUpdateStatusResponse, error) {
+func (a *mobileOSAgent) GetOSUpdateStatus(ctx context.Context, _ *pb.GetOSUpdateStatusRequest) (*pb.GetOSUpdateStatusResponse, error) {
+	if a.probeStarted != nil {
+		close(a.probeStarted)
+		select {
+		case <-a.probeGate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return &pb.GetOSUpdateStatusResponse{HasResult: true, CreatedAtUnix: 12, Outcome: pb.GetOSUpdateStatusResponse_OUTCOME_ROLLED_BACK, EngineStatus: &pb.OSUpdateEngineStatus{Connector: "tegrauefi"}}, nil
 }
 func (a *mobileOSAgent) UpdateOS(req *pb.UpdateOSRequest, stream grpc.ServerStreamingServer[pb.UpdateOSResponse]) error {
@@ -73,10 +83,10 @@ func (a *mobileOSAgent) UpdateOS(req *pb.UpdateOSRequest, stream grpc.ServerStre
 	}
 	return stream.Send(&pb.UpdateOSResponse{ResponseType: &pb.UpdateOSResponse_Completed_{Completed: &pb.UpdateOSResponse_Completed{RebootRequired: true}}})
 }
-func TestMobileOSUpdateSessionAndConcurrentStart(t *testing.T) {
+func newMobileOSBackend(t *testing.T, agent *mobileOSAgent) *Backend {
+	t.Helper()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	agent := &mobileOSAgent{release: make(chan struct{}), calls: make(chan string, 4)}
 	pb.RegisterWendyOSUpdateServiceServer(server, agent)
 	go server.Serve(listener)
 	conn, err := grpc.NewClient("passthrough:///os-update", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }))
@@ -88,6 +98,11 @@ func TestMobileOSUpdateSessionAndConcurrentStart(t *testing.T) {
 	b.session = 7
 	b.life, b.stop = context.WithCancel(context.Background())
 	t.Cleanup(func() { b.Shutdown(); server.Stop(); listener.Close() })
+	return b
+}
+func TestMobileOSUpdateSessionAndConcurrentStart(t *testing.T) {
+	agent := &mobileOSAgent{release: make(chan struct{}), calls: make(chan string, 4)}
+	b := newMobileOSBackend(t, agent)
 	for _, session := range []uint64{0, 6, 8} {
 		if _, err := b.MobileOSUpdate(session, "https://example.test/os.wendy", true); err == nil {
 			t.Fatalf("accepted stale session %d", session)
@@ -121,4 +136,73 @@ func TestMobileOSUpdateSessionAndConcurrentStart(t *testing.T) {
 	if value.Install.Active || !value.Install.RebootRequired || !strings.Contains(string(value.Status), "ROLLED_BACK") {
 		t.Fatalf("lost progress or prior result: %+v", value)
 	}
+}
+
+func TestMobileOSUpdateExpirationCancelsPreflight(t *testing.T) {
+	agent := &mobileOSAgent{probeStarted: make(chan struct{}), probeGate: make(chan struct{}), calls: make(chan string, 1)}
+	b := newMobileOSBackend(t, agent)
+	done := make(chan error, 1)
+	go func() { _, err := b.MobileOSUpdate(7, "https://example.test/os.wendy", true); done <- err }()
+	select {
+	case <-agent.probeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("preflight did not start")
+	}
+	b.CancelMobileOSUpdate(7)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled preflight started installation")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation blocked on request lock")
+	}
+	select {
+	case <-agent.calls:
+		t.Fatal("install RPC was called")
+	default:
+	}
+}
+func TestMobileOSUpdateExpirationCancelsLiveStream(t *testing.T) {
+	agent := &mobileOSAgent{release: make(chan struct{}), calls: make(chan string, 1)}
+	b := newMobileOSBackend(t, agent)
+	if _, err := b.MobileOSUpdate(7, "https://example.test/os.wendy", true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-agent.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("install did not start")
+	}
+	b.CancelMobileOSUpdate(7)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		value, err := b.MobileOSUpdate(7, "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !value.Install.Active {
+			if value.Install.Error == "" || value.Install.RebootRequired {
+				t.Fatalf("cancellation reported success: %+v", value)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stream remained active after cancellation")
+}
+
+func TestMobileOSUpdateExpirationBeforeBridgeStarts(t *testing.T) {
+	agent := &mobileOSAgent{release: make(chan struct{}), calls: make(chan string, 1)}
+	b := newMobileOSBackend(t, agent)
+	b.PrepareMobileOSUpdate(7)
+	b.CancelMobileOSUpdate(7)
+	if _, err := b.MobileOSUpdate(7, "https://example.test/os.wendy", true); err != context.Canceled {
+		t.Fatalf("queued update ignored cancellation: %v", err)
+	}
+	b.PrepareMobileOSUpdate(7)
+	if _, err := b.MobileOSUpdate(7, "https://example.test/os.wendy", true); err != nil {
+		t.Fatalf("fresh request could not start: %v", err)
+	}
+	b.CancelMobileOSUpdate(7)
 }
