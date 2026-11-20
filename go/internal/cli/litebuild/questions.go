@@ -322,7 +322,8 @@ func (c *Configurator) givenKept(s *state, k int) bool {
 // with the given values before it in question order. The message starts
 // with the NAME=VALUE text of the value.
 type GivenError struct {
-	Msg string
+	Name string // the attribute of the value
+	Msg  string
 }
 
 func (e *GivenError) Error() string { return e.Msg }
@@ -347,9 +348,9 @@ func (c *Configurator) givenError() error {
 		item := attr.Name + "=" + attr.Key(given)
 		if !c.feasible(newState(), 0) {
 			if len(before) == 0 {
-				return &GivenError{Msg: item + " is not possible in any configuration"}
+				return &GivenError{Name: attr.Name, Msg: item + " is not possible in any configuration"}
 			}
-			return &GivenError{Msg: item + " is not possible with " + strings.Join(before, ", ")}
+			return &GivenError{Name: attr.Name, Msg: item + " is not possible with " + strings.Join(before, ", ")}
 		}
 		before = append(before, item)
 	}

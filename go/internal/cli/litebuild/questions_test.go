@@ -501,6 +501,8 @@ func TestRunGivenErrors(t *testing.T) {
 			var givenErr *GivenError
 			if !errors.As(err, &givenErr) {
 				t.Errorf("Run error is a %T, want *GivenError", err)
+			} else if !strings.HasPrefix(tc.want, givenErr.Name+"=") {
+				t.Errorf("GivenError.Name = %q, want the attribute of %q", givenErr.Name, tc.want)
 			}
 			if len(c.Given) != len(tc.given) {
 				t.Errorf("Given changed to %v", c.Given)

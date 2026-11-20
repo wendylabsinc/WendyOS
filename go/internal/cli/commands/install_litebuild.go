@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,6 +32,77 @@ const liteBuildValue = "wlite_build"
 
 // liteBuildDeviceType is the --device-type of the same entry.
 const liteBuildDeviceType = "esp32"
+
+// liteBuildS31Value is the install picker value of a detected ESP32-S31 in
+// ROM download mode: the Wendy Lite build with the S31 chip given.
+const liteBuildS31Value = "wlite_build_esp32s31"
+
+// liteCatalogInstallEnv brings back the installs of the published Wendy
+// Lite firmware: the ESP32 targets of the install picker (then a board
+// model), a detected ESP32-S31 leading to them, and the reinstall offer of
+// wendy run. Without it, all of them build Wendy Lite (runLiteBuild).
+// Deliberately undocumented.
+const liteCatalogInstallEnv = "WENDY_LITE_CATALOG_INSTALL"
+
+// liteCatalogInstallEnabled reports whether liteCatalogInstallEnv is true.
+func liteCatalogInstallEnabled() bool {
+	enabled, err := strconv.ParseBool(os.Getenv(liteCatalogInstallEnv))
+	return err == nil && enabled
+}
+
+// litePickerItems returns the Microcontrollers entries of the install
+// picker: the published-firmware targets when liteCatalogInstallEnabled,
+// with their boards for the picker's device map, then the Wendy Lite build.
+func litePickerItems(nightly bool) (items []tui.PickerItem, boards []WendyLiteBoard) {
+	if liteCatalogInstallEnabled() {
+		var targets []WendyLiteTarget
+		boards, targets = fetchLiteCatalog(nightly)
+		for _, t := range targets {
+			items = append(items, tui.PickerItem{
+				Name:    t.DisplayName,
+				Section: "Wendy Lite",
+				SortKey: "1_lite_" + strings.ToLower(t.DisplayName),
+				Value:   "wlite_target_" + t.Name,
+			})
+		}
+	}
+	return append(items, liteBuildPickerItem()), boards
+}
+
+// liteBuildOptionsFor returns the build options of the install picker
+// selection, and false when the selection is not a Wendy Lite build. A
+// detected ESP32-S31 gives its chip.
+func liteBuildOptionsFor(selected string, o liteBuildOptions) (liteBuildOptions, bool) {
+	switch selected {
+	case liteBuildValue:
+		return o, true
+	case liteBuildS31Value:
+		o.required = map[string]string{litebuild.Chip: "esp32s31"}
+		return o, true
+	}
+	return o, false
+}
+
+// liteBuildOptions are the inputs of runLiteBuild.
+type liteBuildOptions struct {
+	nightly bool
+	version string // --version: a Wendy Lite version, branch or commit
+	// attrs are the --build-attr flags: a bad name or value is an error.
+	attrs map[string]string
+	// required are values that the caller knows: the chip of a detected
+	// board, the app type that wendy run needs. A --build-attr of the same
+	// name wins. A value that the master configuration does not accept is
+	// skipped: the chip check before flashing still protects the board.
+	required   map[string]string
+	wifi       wifiCLIOptions
+	deviceName string
+	preOpts    preEnrollOptions
+	// port is the board to flash; empty, the ESP32 ports are scanned.
+	port discovery.SerialPortInfo
+	// versionHint replaces "Specify a Wendy Lite version with --version" in
+	// the error of a Wendy Lite version that cannot be built.
+	versionHint string
+}
 
 // parseBuildAttrs reads the --build-attr flags: NAME=VALUE, each name once.
 // The names and values are checked against the master configuration later,
@@ -84,10 +157,19 @@ func checkLiteBuildFlags(cmd *cobra.Command, deviceType string, positional, buil
 	return nil
 }
 
-// liteBuildGiven returns the configurator values of the --build-attr
-// flags, checked against the master configuration m.
-func liteBuildGiven(m *litebuild.Model, attrs map[string]string) (map[string]any, error) {
+// liteBuildGiven returns the configurator values of the --build-attr flags
+// (attrs), checked against the master configuration m, and the required
+// values that m accepts and attrs does not name.
+func liteBuildGiven(m *litebuild.Model, attrs, required map[string]string) (map[string]any, error) {
 	given := map[string]any{}
+	for name, text := range required {
+		if _, ok := attrs[name]; ok {
+			continue
+		}
+		if value, err := m.ParseValue(name, text); err == nil && value != nil {
+			given[name] = value
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(attrs)) {
 		value, err := m.ParseValue(name, attrs[name])
 		if err != nil {
@@ -139,8 +221,8 @@ func noTerminalQuestion(q litebuild.Question) error {
 // liteBuildPickerItem is the install picker entry of runLiteBuild.
 func liteBuildPickerItem() tui.PickerItem {
 	return tui.PickerItem{
-		Name:        "ESP32 platform via new configurator",
-		Description: "Build Wendy Lite from source with the configurator",
+		Name:        "ESP32 platform",
+		Description: "Build Wendy Lite for your board and flash it",
 		Section:     "Wendy Lite",
 		// Before the "1_lite_<target>" entries: first in its tab.
 		SortKey: "1_lite_0_build",
@@ -151,6 +233,32 @@ func liteBuildPickerItem() tui.PickerItem {
 // Seams for tests.
 var (
 	runLiteBuildFn = runLiteBuild
+
+	// fetchLiteCatalog returns the boards with published firmware and their
+	// targets: a catalog entry with no build yet would otherwise reach the
+	// picker and fail immediately after selection, and a target with no
+	// board would lead to an empty second picker.
+	fetchLiteCatalog = func(nightly bool) ([]WendyLiteBoard, []WendyLiteTarget) {
+		boards, err := WendyLiteBoardsWithFirmware(nightly)
+		if err != nil {
+			log.Printf("WARNING: could not fetch Wendy Lite board catalog: %v", err)
+		}
+		targets, err := WendyLiteTargets()
+		if err != nil {
+			log.Printf("WARNING: could not fetch Wendy Lite target catalog: %v", err)
+		}
+		boardTargets := make(map[string]bool, len(boards))
+		for _, b := range boards {
+			boardTargets[b.Target] = true
+		}
+		var withBoards []WendyLiteTarget
+		for _, t := range targets {
+			if boardTargets[t.Name] {
+				withBoards = append(withBoards, t)
+			}
+		}
+		return boards, withBoards
+	}
 
 	// liteBuildRoot returns the cache folder of the Wendy Lite build: the
 	// build folders (see litebuild.PrepareSources), the answers and the
@@ -195,7 +303,7 @@ var (
 //
 // The build folder stays in the cache for the next build of the same
 // commit, which is incremental when the answers are the same.
-func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[string]string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+func runLiteBuild(ctx context.Context, o liteBuildOptions) error {
 	interactive := isInteractiveTerminal()
 	// In a terminal, JSON is on only with an explicit --json (see
 	// startInstallSession). Without one, root turns it on by itself, and
@@ -211,9 +319,9 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[s
 	if err := litebuild.CheckGit(); err != nil {
 		return err
 	}
-	dir, src, release, err := openLiteBuildFolder(ctx, espidftoolchain.WendyLiteGitURL, nightly, version)
+	dir, src, release, err := openLiteBuildFolder(ctx, espidftoolchain.WendyLiteGitURL, o.nightly, o.version)
 	if err != nil {
-		return err
+		return o.withVersionHint(err)
 	}
 	defer release()
 
@@ -221,7 +329,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[s
 	// is built.
 	model, err := litebuild.LoadFile(litebuild.MasterConfPath(dir))
 	if errors.Is(err, fs.ErrNotExist) {
-		return liteBuildIncompatible(src)
+		return o.withVersionHint(liteBuildIncompatible(src))
 	}
 	if err != nil {
 		return err
@@ -230,7 +338,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[s
 	if err != nil {
 		return err
 	}
-	configurator.Given, err = liteBuildGiven(model, attrs)
+	configurator.Given, err = liteBuildGiven(model, o.attrs, o.required)
 	if err != nil {
 		return err
 	}
@@ -251,7 +359,10 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[s
 	}
 	var givenErr *litebuild.GivenError
 	if errors.As(err, &givenErr) {
-		return usageErrorf("--build-attr %v", err)
+		if _, ok := o.attrs[givenErr.Name]; ok {
+			return usageErrorf("--build-attr %v", err)
+		}
+		return fmt.Errorf("Wendy Lite cannot be built for this board: %w", err)
 	}
 	if err != nil {
 		return err
@@ -280,7 +391,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[s
 
 	// Device configuration: the wendy_conf partition. It holds the Wi-Fi
 	// password, so it stays in memory, out of the build folder.
-	prov, err := resolveLiteProvisioning(ctx, wifi, deviceName, preOpts)
+	prov, err := resolveLiteProvisioning(ctx, o.wifi, o.deviceName, o.preOpts)
 	if err != nil {
 		return err
 	}
@@ -334,7 +445,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[s
 	release()
 	fmt.Printf("\nBuilt Wendy Lite %s for the %s.\n", src, chipModelName(chip))
 
-	port, autoDiscover, err := detectLiteInstallPort(discovery.SerialPortInfo{}, true)
+	port, autoDiscover, err := detectLiteInstallPort(o.port, interactive)
 	if err != nil {
 		return err
 	}
@@ -445,10 +556,36 @@ func checkLiteBuildSource(ctx context.Context, root, url string, src litebuild.S
 	return nil
 }
 
+// liteBuildIncompatibleError is the error of a Wendy Lite version without
+// master configuration. hint says what to do instead; the default names
+// --version.
+type liteBuildIncompatibleError struct {
+	src  litebuild.Source
+	hint string
+}
+
+func (e *liteBuildIncompatibleError) Error() string {
+	hint := e.hint
+	if hint == "" {
+		hint = "Specify a Wendy Lite version with --version"
+	}
+	return fmt.Sprintf("Wendy Lite %s is not compatible with this version of the CLI. %s", e.src, hint)
+}
+
 // liteBuildIncompatible is the error of a Wendy Lite version without master
 // configuration.
 func liteBuildIncompatible(src litebuild.Source) error {
-	return fmt.Errorf("Wendy Lite %s is not compatible with this version of the CLI. Specify a Wendy Lite version with --version", src)
+	return &liteBuildIncompatibleError{src: src}
+}
+
+// withVersionHint returns err, or, when o.versionHint is set and err is (or
+// wraps) a liteBuildIncompatible error, that error with o.versionHint.
+func (o liteBuildOptions) withVersionHint(err error) error {
+	var incompatible *liteBuildIncompatibleError
+	if o.versionHint != "" && errors.As(err, &incompatible) {
+		return &liteBuildIncompatibleError{src: incompatible.src, hint: o.versionHint}
+	}
+	return err
 }
 
 // liteBuildConfigureReason tells why the wendy-lite checkout in dir needs
@@ -514,15 +651,15 @@ func liteBuildSteps(m *litebuild.Model, res *litebuild.Result) (liteBuild, error
 	values := res.Solution.Values
 	chip, ok := values[litebuild.Chip].(string)
 	if !ok {
-		return liteBuild{}, fmt.Errorf("the configurator gave no %s", litebuild.Chip)
+		return liteBuild{}, fmt.Errorf("the build configuration has no %s", litebuild.Chip)
 	}
 	idfVersion, ok := values[litebuild.IDFVersion].(string)
 	if !ok {
-		return liteBuild{}, fmt.Errorf("the configurator gave no %s", litebuild.IDFVersion)
+		return liteBuild{}, fmt.Errorf("the build configuration has no %s", litebuild.IDFVersion)
 	}
 	preview, ok := values[litebuild.IDFPreview].(bool)
 	if !ok {
-		return liteBuild{}, fmt.Errorf("the configurator gave no %s", litebuild.IDFPreview)
+		return liteBuild{}, fmt.Errorf("the build configuration has no %s", litebuild.IDFPreview)
 	}
 	return liteBuild{
 		chip:       chip,

@@ -531,7 +531,7 @@ func (p *MicroWendyProvider) buildSwift(ctx context.Context, device models.Exter
 
 	// check device capability
 	if !di.WasmAppSupport {
-		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "WASM apps"}
+		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "WASM apps", Target: di.DeviceType}
 	}
 
 	swiftlyTestCmd := exec.CommandContext(ctx, "swiftly", "--version")
@@ -621,6 +621,9 @@ func espIdfBinaryPath(projectPath, product string) (string, error) {
 type AppRequirementsUnsupportedError struct {
 	Device  models.ExternalDevice
 	Missing string
+	// Target is the chip of the device ("esp32c61"), when its firmware
+	// reports it; empty for a device without Wendy Lite firmware.
+	Target string
 }
 
 func (e *AppRequirementsUnsupportedError) Error() string {
@@ -722,7 +725,7 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 
 	// check device capability
 	if !di.NativeAppSupport {
-		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "native apps"}
+		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "native apps", Target: di.DeviceType}
 	}
 	// A native app is built for the Wendy Lite version and build profile of
 	// the device.

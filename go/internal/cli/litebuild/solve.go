@@ -16,6 +16,7 @@ const BuildProfileOption = "CONFIG_WENDY_BUILD_PROFILE"
 // extra_required).
 const (
 	Chip       = "chip"        // idf.py set-target
+	AppType    = "app_type"    // the apps the firmware runs: "native" or "wasm"
 	IDFVersion = "idf_version" // the ESP-IDF version, "6.0.3" or "6.1"
 	IDFPreview = "idf_preview" // idf.py --preview
 )

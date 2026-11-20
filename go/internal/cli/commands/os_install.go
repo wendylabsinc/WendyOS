@@ -100,8 +100,8 @@ Pre-seed multiple WiFi networks (repeatable, highest-priority first):
     --wifi "ssid=Office,password=corp,priority=50" \
     --wifi "ssid=Cafe,hidden=true"
 
-Build Wendy Lite with the configurator and flash it to the connected ESP32;
-each --build-attr answers one configurator question:
+Build Wendy Lite for the connected ESP32 and flash it; each --build-attr
+answers one build question:
   wendy os install --device-type esp32 --build-attr board=esp32c61_devkit_c_1 --no-wifi
 
 Flags can be provided progressively — omitted values trigger interactive pickers.
@@ -234,9 +234,9 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 	cmd.Flags().BoolVar(&rootfsOnly, "rootfs-only", false, "Write only the SD/NVMe rootfs image; does not update Jetson QSPI boot firmware")
 	cmd.Flags().StringVar(&storageOverride, "storage", "", "Force image storage variant: nvme or sd (default: auto-detect — real NVMe drives use nvme; a USB-attached drive uses the device's published image, SD for Raspberry Pi / NVMe for Jetson SSD enclosures). For jetson-agx-orin, emmc flashes the onboard eMMC over USB recovery instead of writing a drive")
 	cmd.Flags().BoolVar(&yesOverwriteInternal, "yes-overwrite-internal", false, "Required to wipe an internal (non-removable) drive in non-interactive mode")
-	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5), or esp32 to build Wendy Lite with the configurator and flash it")
-	cmd.Flags().StringArrayVar(&buildAttrItems, "build-attr", nil, "Configurator attribute of the Wendy Lite build (--device-type esp32), as NAME=VALUE; skips that question. Repeatable")
-	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted); for the ESP* configurator entry, a Wendy Lite version (X.Y.Z), a wendy-lite branch or a commit hash; default: the latest release")
+	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5), or esp32 to build Wendy Lite for an ESP32 board and flash it")
+	cmd.Flags().StringArrayVar(&buildAttrItems, "build-attr", nil, "Build attribute of Wendy Lite (--device-type esp32), as NAME=VALUE; answers that build question. Repeatable")
+	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted); with --device-type esp32 or the ESP32 platform entry, a Wendy Lite version (X.Y.Z), a wendy-lite branch or a commit hash; default: the latest release")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
@@ -466,8 +466,9 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	ctx, finish := startActivationOperation(ctx, "install", "wendy install")
 	defer func() { finish(retErr) }()
 	// The Wendy Lite build clones its sources: no manifest is fetched.
+	liteOpts := liteBuildOptions{nightly: nightly, version: flagVersion, attrs: buildAttrs, wifi: wifi, deviceName: deviceName, preOpts: preOpts}
 	if flagDeviceType == liteBuildDeviceType {
-		return runLiteBuildFn(ctx, nightly, flagVersion, buildAttrs, wifi, deviceName, preOpts)
+		return runLiteBuildFn(ctx, liteOpts)
 	}
 	if agent != nil {
 		if flagDeviceType == linuxDesktopValue || flagDeviceType == headlessMacValue {
@@ -536,31 +537,6 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		log.Printf("WARNING: could not fetch Linux device manifest: %v", err)
 	}
 
-	// Fetch Wendy Lite boards and targets, keeping only boards with published
-	// firmware — a catalog entry with no build yet would otherwise reach the
-	// picker and fail immediately after selection.
-	wliteBoards, err := WendyLiteBoardsWithFirmware(nightly)
-	if err != nil {
-		log.Printf("WARNING: could not fetch Wendy Lite board catalog: %v", err)
-	}
-	wliteTargets, err := WendyLiteTargets()
-	if err != nil {
-		log.Printf("WARNING: could not fetch Wendy Lite target catalog: %v", err)
-	}
-	// Drop targets with no board left so the picker never offers a target
-	// that leads to an empty second picker.
-	boardTargets := make(map[string]bool, len(wliteBoards))
-	for _, b := range wliteBoards {
-		boardTargets[b.Target] = true
-	}
-	var targetsWithBoards []WendyLiteTarget
-	for _, t := range wliteTargets {
-		if boardTargets[t.Name] {
-			targetsWithBoards = append(targetsWithBoards, t)
-		}
-	}
-	wliteTargets = targetsWithBoards
-
 	// Build picker items.
 	var items []tui.PickerItem
 	deviceMap := make(map[string]pickerDevice)
@@ -598,6 +574,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// ignores prNumber, so offering ESP32 here would silently install release
 	// firmware instead of a PR build.
 	if flagDeviceType == "" && prNumber == 0 {
+		liteItems, wliteBoards := litePickerItems(nightly)
 		for _, v := range wliteBoards {
 			deviceMap["wlite_"+v.Board] = pickerDevice{
 				Name:       v.DisplayName,
@@ -606,16 +583,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 				ESP32Board: v.Board,
 			}
 		}
-
-		for _, t := range wliteTargets {
-			items = append(items, tui.PickerItem{
-				Name:    t.DisplayName,
-				Section: "Wendy Lite",
-				SortKey: "1_lite_" + strings.ToLower(t.DisplayName),
-				Value:   "wlite_target_" + t.Name,
-			})
-		}
-		items = append(items, liteBuildPickerItem())
+		items = append(items, liteItems...)
 
 		items = append(items, tui.PickerItem{
 			Name:        "Linux Desktop",
@@ -688,8 +656,8 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 	}
 
-	if selected == liteBuildValue {
-		return runLiteBuildFn(ctx, nightly, flagVersion, buildAttrs, wifi, deviceName, preOpts)
+	if o, ok := liteBuildOptionsFor(selected, liteOpts); ok {
+		return runLiteBuildFn(ctx, o)
 	}
 	if len(buildAttrs) > 0 {
 		return usageErrorf("--build-attr applies only to the Wendy Lite build (--device-type %s)", liteBuildDeviceType)

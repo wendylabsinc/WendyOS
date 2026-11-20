@@ -35,9 +35,9 @@ func TestInstallPickerLiteBuildFirst(t *testing.T) {
 		t.Fatalf("active tab = %q, want Microcontrollers", got)
 	}
 	view := m.View()
-	entry, target := strings.Index(view, "ESP32 platform via new configurator"), strings.Index(view, "ESP32-C5")
+	entry, target := strings.Index(view, "ESP32 platform"), strings.Index(view, "ESP32-C5")
 	if entry < 0 || target < 0 || entry > target {
-		t.Fatalf("the configurator entry is not first in the tab:\n%s", view)
+		t.Fatalf("the ESP32 platform entry is not first in the tab:\n%s", view)
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(tabbedPickerModel)

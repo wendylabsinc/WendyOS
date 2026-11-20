@@ -10,8 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -624,5 +626,26 @@ func TestResolveStagefileGPUTargetIgnoresUnselectedCUDAStagefile(t *testing.T) {
 		if err != nil || got != nil {
 			t.Fatalf("%s unexpectedly resolved a GPU target: %v, %v", source, got, err)
 		}
+	}
+}
+
+func TestLiteRunBuildOptions(t *testing.T) {
+	device := models.ExternalDevice{DisplayName: "lite", ConnectionInfo: map[string]string{"type": "USB", "serialPort": "/dev/cu.usbmodem1101"}}
+	reinstall := &providers.AppRequirementsUnsupportedError{Device: device, Missing: "native apps", Target: "esp32c61"}
+	o := liteRunBuildOptions(device, reinstall, "esp-idf")
+	if o.port.Port != "/dev/cu.usbmodem1101" || o.port.Transport != discovery.SerialTransportNativeUSB {
+		t.Errorf("port = %+v", o.port)
+	}
+	if o.required[litebuild.AppType] != "native" || o.required[litebuild.Chip] != "esp32c61" {
+		t.Errorf("required = %v, want a native app on the esp32c61", o.required)
+	}
+	if o.nightly || o.version != "" || o.versionHint != liteRunBuildVersionHint || o.preOpts.mode != preEnrollAuto {
+		t.Errorf("options = %+v, want the latest release with the wendy install hint", o)
+	}
+
+	fresh := &providers.AppRequirementsUnsupportedError{Device: device, Missing: "Wendy Lite firmware (none installed)"}
+	o = liteRunBuildOptions(device, fresh, "swift")
+	if _, ok := o.required[litebuild.Chip]; ok || o.required[litebuild.AppType] != "wasm" {
+		t.Errorf("required = %v, want a WASM app and no chip", o.required)
 	}
 }

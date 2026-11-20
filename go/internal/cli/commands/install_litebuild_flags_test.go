@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"strings"
@@ -29,25 +30,18 @@ func TestParseBuildAttrs(t *testing.T) {
 	}
 }
 
-// liteBuildCall records a runLiteBuildFn call.
-type liteBuildCall struct {
-	version string
-	attrs   map[string]string
-	wifi    wifiCLIOptions
-}
-
-// stubLiteBuild replaces the Wendy Lite build, and fails the test on any
-// manifest request.
-func stubLiteBuild(t *testing.T) *[]liteBuildCall {
+// stubLiteBuild replaces the Wendy Lite build with a recorder of its
+// options, and fails the test on any manifest request.
+func stubLiteBuild(t *testing.T) *[]liteBuildOptions {
 	t.Helper()
 	stubSessionTerminals(t, false, false, nil)
 	analytics.Disable()
 	serveManifests(t, nil)
-	var calls []liteBuildCall
+	var calls []liteBuildOptions
 	prev := runLiteBuildFn
 	t.Cleanup(func() { runLiteBuildFn = prev })
-	runLiteBuildFn = func(_ context.Context, _ bool, version string, attrs map[string]string, wifi wifiCLIOptions, _ string, _ preEnrollOptions) error {
-		calls = append(calls, liteBuildCall{version, attrs, wifi})
+	runLiteBuildFn = func(_ context.Context, o liteBuildOptions) error {
+		calls = append(calls, o)
 		return nil
 	}
 	return &calls
@@ -136,7 +130,7 @@ func TestLiteBuildGiven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	given, err := liteBuildGiven(m, map[string]string{"board": "b", "tunnel": "yes"})
+	given, err := liteBuildGiven(m, map[string]string{"board": "b", "tunnel": "yes"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,10 +142,101 @@ func TestLiteBuildGiven(t *testing.T) {
 		"board=c":    "--build-attr board=c: board: c is not one of: a, b",
 	} {
 		name, value, _ := strings.Cut(attrs, "=")
-		_, err := liteBuildGiven(m, map[string]string{name: value})
+		_, err := liteBuildGiven(m, map[string]string{name: value}, nil)
 		if err == nil || err.Error() != want || !IsUsageError(err) {
 			t.Errorf("%s: %v; want the usage error %q", attrs, err, want)
 		}
+	}
+
+	// The required values come under the flags; the ones that the master
+	// configuration does not accept are skipped.
+	given, err = liteBuildGiven(m, map[string]string{"board": "a"},
+		map[string]string{"board": "b", "tunnel": "true", "chip": "esp32c61"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]any{"board": "a", "tunnel": true}; !maps.Equal(given, want) {
+		t.Errorf("given = %v, want %v", given, want)
+	}
+	if given, err := liteBuildGiven(m, nil, map[string]string{"board": "z"}); err != nil || len(given) != 0 {
+		t.Errorf("invalid required value: %v, %v; want it skipped", given, err)
+	}
+}
+
+func TestLiteCatalogInstallEnabled(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "1": true, "true": true, "0": false, "nope": false} {
+		t.Setenv(liteCatalogInstallEnv, value)
+		if got := liteCatalogInstallEnabled(); got != want {
+			t.Errorf("%s=%q: %v, want %v", liteCatalogInstallEnv, value, got, want)
+		}
+	}
+}
+
+// stubLiteCatalog replaces the published-firmware catalog with one ESP32-C6
+// board, and counts the fetches.
+func stubLiteCatalog(t *testing.T) *int {
+	t.Helper()
+	fetches := 0
+	prev := fetchLiteCatalog
+	t.Cleanup(func() { fetchLiteCatalog = prev })
+	fetchLiteCatalog = func(bool) ([]WendyLiteBoard, []WendyLiteTarget) {
+		fetches++
+		return []WendyLiteBoard{{Board: "xiao_c6", Target: "esp32c6"}},
+			[]WendyLiteTarget{{Name: "esp32c6", DisplayName: "ESP32-C6"}}
+	}
+	return &fetches
+}
+
+func TestLitePickerItems(t *testing.T) {
+	fetches := stubLiteCatalog(t)
+	t.Setenv(liteCatalogInstallEnv, "")
+	items, boards := litePickerItems(false)
+	if len(items) != 1 || items[0].Value != liteBuildValue || len(boards) != 0 || *fetches != 0 {
+		t.Fatalf("catalog off: items %+v, boards %+v, %d fetches; want only the ESP32 platform entry and no fetch", items, boards, *fetches)
+	}
+
+	t.Setenv(liteCatalogInstallEnv, "1")
+	items, boards = litePickerItems(false)
+	var values []any
+	for _, item := range items {
+		values = append(values, item.Value)
+	}
+	if want := []any{"wlite_target_esp32c6", liteBuildValue}; len(values) != 2 || values[0] != want[0] || values[1] != want[1] {
+		t.Errorf("catalog on: values %v, want %v", values, want)
+	}
+	if len(boards) != 1 || boards[0].Board != "xiao_c6" {
+		t.Errorf("catalog on: boards %+v", boards)
+	}
+}
+
+func TestLiteBuildOptionsFor(t *testing.T) {
+	base := liteBuildOptions{version: "1.2.3", attrs: map[string]string{"board": "x"}}
+	if o, ok := liteBuildOptionsFor(liteBuildValue, base); !ok || o.required != nil || o.version != "1.2.3" {
+		t.Errorf("ESP32 platform: %+v, %v", o, ok)
+	}
+	o, ok := liteBuildOptionsFor(liteBuildS31Value, base)
+	if !ok || o.required[litebuild.Chip] != "esp32s31" || o.attrs["board"] != "x" {
+		t.Errorf("detected S31: %+v, %v; want the S31 chip required", o, ok)
+	}
+	if base.required != nil {
+		t.Errorf("the caller's options changed: %+v", base)
+	}
+	if _, ok := liteBuildOptionsFor("raspberry-pi-5", base); ok {
+		t.Error("raspberry-pi-5 is not a Wendy Lite build")
+	}
+}
+
+// The incompatible-version error keeps the user's wording; wendy run
+// replaces the --version hint, which it has no flag for.
+func TestLiteBuildVersionHint(t *testing.T) {
+	src := litebuild.Source{Name: "0.15.0", Version: "0.15.0", Commit: strings.Repeat("a", 40)}
+	err := liteBuildOptions{}.withVersionHint(liteBuildIncompatible(src))
+	if want := "Wendy Lite 0.15.0 is not compatible with this version of the CLI. Specify a Wendy Lite version with --version"; err.Error() != want {
+		t.Errorf("install: %q, want %q", err, want)
+	}
+	err = liteBuildOptions{versionHint: liteRunBuildVersionHint}.withVersionHint(fmt.Errorf("opening: %w", liteBuildIncompatible(src)))
+	if want := "Wendy Lite 0.15.0 is not compatible with this version of the CLI. " + liteRunBuildVersionHint; err.Error() != want {
+		t.Errorf("run: %q, want %q", err, want)
 	}
 }
 
