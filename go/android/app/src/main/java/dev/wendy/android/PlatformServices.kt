@@ -6,6 +6,7 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.ConnectivityManager
@@ -46,10 +47,12 @@ class PlatformServices(private val context: Context) {
         } catch (e: Exception) { json("error" to (e.message ?: "Android service request failed")) }
         return response.toString().toByteArray(Charsets.UTF_8)
     }
-    private fun checkBluetooth() {
+    private fun checkBluetooth(scanning: Boolean = false) {
         val permission = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_CONNECT else Manifest.permission.ACCESS_FINE_LOCATION
         check(context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) { "Allow nearby device access in Wendy to use Bluetooth" }
         check(adapter.isEnabled) { "Turn on Bluetooth to discover nearby devices" }
+        // Android 10 and 11 deliver no scan results while system Location is off, even with the permission granted.
+        if (scanning && Build.VERSION.SDK_INT < 31) check(context.getSystemService(LocationManager::class.java)?.isLocationEnabled != false) { "Turn on Location to discover nearby devices" }
     }
     private fun dispatch(method: String, args: JSONObject): Any? {
         when (method) {
@@ -72,9 +75,9 @@ class PlatformServices(private val context: Context) {
                     return Base64.encodeToString(result.get(args.optLong("timeoutMs", 10000).coerceIn(1, 10000), TimeUnit.MILLISECONDS), Base64.NO_WRAP)
                 } finally { cancellation.cancel() }
             }
-            "ble.check" -> { checkBluetooth(); return true }
+            "ble.check" -> { checkBluetooth(scanning = true); return true }
             "ble.scanStart" -> {
-                checkBluetooth(); check(scans.size < 16) { "Too many Bluetooth scans" }
+                checkBluetooth(scanning = true); check(scans.size < 16) { "Too many Bluetooth scans" }
                 val scan = RadioScan(args.optJSONArray("services")); val id = ids.getAndIncrement(); scans[id] = scan
                 try { scan.start() } catch (e: Exception) { scans.remove(id); throw e }; return id
             }
@@ -149,11 +152,16 @@ class PlatformServices(private val context: Context) {
         }
         private fun characteristic(args: JSONObject): BluetoothGattCharacteristic = gatt?.getService(uuid(args.getString("service")))?.getCharacteristic(uuid(args.getString("characteristic"))) ?: error("not_found")
         fun perform(method: String, args: JSONObject): Any? {
-            check(!closed) { "disconnected" }
+            if (method != "receive") check(!closed) { "disconnected" }
             when (method) {
                 "receive" -> {
-                    channelError?.let { error(it) }
-                    val bytes = packets.poll(args.optInt("timeout", 2).coerceIn(1, 35).toLong(), TimeUnit.SECONDS) ?: error("timeout")
+                    // The peer may close right after its last write: hand over what is queued before reporting the closure.
+                    // Read the flags first, so every packet queued before the channel ended is visible to the poll.
+                    val ended = closed || channelError != null
+                    val bytes = packets.poll() ?: run {
+                        if (ended) error(channelError ?: "disconnected")
+                        packets.poll(args.optInt("timeout", 2).coerceIn(1, 35).toLong(), TimeUnit.SECONDS) ?: error("timeout")
+                    }
                     if (bytes.isEmpty()) error(channelError ?: "disconnected")
                     return Base64.encodeToString(bytes, Base64.NO_WRAP)
                 }
@@ -227,10 +235,12 @@ class PlatformServices(private val context: Context) {
                 if (closed) finishResolve() else nsd.resolveService(info, object : NsdManager.ResolveListener {
                     override fun onResolveFailed(service: NsdServiceInfo, code: Int) { main.post { finishResolve() } }
                     override fun onServiceResolved(service: NsdServiceInfo) { main.post {
-                        if (!closed) {
-                            val txt = JSONObject(); service.attributes.forEach { (key, value) -> txt.put(key, value.toString(Charsets.UTF_8)) }
+                        // Advertisements are untrusted LAN data: drop a malformed one rather than crash or stall the queue.
+                        if (!closed) try {
+                            // A TXT entry without a value, such as a boolean flag, has a null value here.
+                            val txt = JSONObject(); service.attributes.forEach { (key, value) -> txt.put(key, value?.toString(Charsets.UTF_8) ?: "") }
                             service.host?.hostAddress?.let { address -> rows[service.serviceName] = json("InstanceName" to service.serviceName, "Hostname" to address, "IPAddress" to address, "Port" to service.port, "TXTRecords" to txt) }
-                        }
+                        } catch (_: Exception) {}
                         finishResolve()
                     } }
                 })
