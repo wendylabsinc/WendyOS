@@ -25,19 +25,21 @@ import (
 
 type recordingLibraryAgent struct {
 	pb.UnimplementedDataServiceServer
-	largeIndex bool
-	block      chan struct{}
-	arrived    chan struct{}
+	largeIndex    bool
+	mediaRequests chan bool
+	block         chan struct{}
+	arrived       chan struct{}
 }
 
 type legacyRecordingIndexClient struct {
 	pb.DataServiceClient
-	calls int
+	calls        int
+	includeMedia bool
 }
 
 func (c *legacyRecordingIndexClient) Episodes(_ context.Context, req *pb.DataEpisodesRequest, _ ...grpc.CallOption) (*pb.DataEpisodesResponse, error) {
-	if !req.GetIncludeMedia() {
-		return nil, fmt.Errorf("recording index did not request media")
+	if req.GetIncludeMedia() != c.includeMedia {
+		return nil, fmt.Errorf("include media: got %v, want %v", req.GetIncludeMedia(), c.includeMedia)
 	}
 	c.calls++
 	if c.calls == 1 {
@@ -47,14 +49,21 @@ func (c *legacyRecordingIndexClient) Episodes(_ context.Context, req *pb.DataEpi
 }
 
 func TestRecordingIndexFallsBackForAgentWithoutCompression(t *testing.T) {
-	client := &legacyRecordingIndexClient{}
-	index, err := recordingEpisodeIndex(context.Background(), client)
-	if err != nil || len(index.GetEpisodes()) != 1 || client.calls != 2 {
-		t.Fatalf("legacy index: %v, %v, calls=%d", index, err, client.calls)
+	for _, includeMedia := range []bool{false, true} {
+		t.Run(fmt.Sprintf("includeMedia=%v", includeMedia), func(t *testing.T) {
+			client := &legacyRecordingIndexClient{includeMedia: includeMedia}
+			index, err := recordingEpisodeIndex(context.Background(), client, includeMedia)
+			if err != nil || len(index.GetEpisodes()) != 1 || client.calls != 2 {
+				t.Fatalf("legacy index: %v, %v, calls=%d", index, err, client.calls)
+			}
+		})
 	}
 }
 
-func (f *recordingLibraryAgent) Episodes(ctx context.Context, _ *pb.DataEpisodesRequest) (*pb.DataEpisodesResponse, error) {
+func (f *recordingLibraryAgent) Episodes(ctx context.Context, req *pb.DataEpisodesRequest) (*pb.DataEpisodesResponse, error) {
+	if f.mediaRequests != nil {
+		f.mediaRequests <- req.GetIncludeMedia()
+	}
 	if f.largeIndex {
 		return &pb.DataEpisodesResponse{Episodes: []*pb.DataEpisode{{Id: "large", Name: strings.Repeat("a", 5<<20)}}}, nil
 	}
@@ -379,5 +388,49 @@ func TestRecordingTransportFailureAllowsFreshConnection(t *testing.T) {
 	defer release(nil)
 	if first == second {
 		t.Fatal("retry reused a failed relay")
+	}
+}
+
+func TestRecordingMediaRequestedOnlyForGallery(t *testing.T) {
+	requests := make(chan bool, 4)
+	isolatedRecordingAgent(t, &recordingLibraryAgent{mediaRequests: requests})
+	b := New()
+	b.recordings.setActive(true)
+	defer b.galleryReset(true)
+	id := b.BeginRecordingRead()
+	defer b.EndRecordingRead(id)
+	ctx, conn, release, err := b.recordingConnection(id, "fixture", false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release(nil)
+	b.conn, b.session = conn, 1
+	checks := []struct {
+		name string
+		want bool
+		run  func() error
+	}{
+		{"Gallery", true, func() error { _, err := b.VisualEpisodesAt("fixture"); return err }},
+		{"Visualizer", false, func() error { _, err := b.VisualEpisodes(1); return err }},
+		{"RecordingLibrary", false, func() error { _, err := readRecordingLibrary(ctx, conn.DataService); return err }},
+		{"CampaignClips", false, func() error {
+			_, err := inspectSavedEpisodes(ctx, conn.DataService, time.Second, func(e *pb.DataEpisode, _ *data.Manifest) string { return e.GetId() })
+			return err
+		}},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if err := check.run(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-requests:
+				if got != check.want {
+					t.Fatalf("include media: got %v, want %v", got, check.want)
+				}
+			default:
+				t.Fatal("no recording index request")
+			}
+		})
 	}
 }
