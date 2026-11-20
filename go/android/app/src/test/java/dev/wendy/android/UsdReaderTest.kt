@@ -2,10 +2,41 @@ package dev.wendy.android
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /** Fixtures were written by Apple's usdcat and usdzip, and by SceneKit's USDZ export, on macOS. */
 class UsdReaderTest {
     private fun fixture(name: String) = javaClass.classLoader!!.getResourceAsStream("sites/$name")!!.readBytes()
+
+    private fun longs(vararg values: Long): ByteArray = ByteBuffer.allocate(values.size * 8).order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach { putLong(it) } }.array()
+
+    /** A usdc layer: the bootstrap, then [sections] in order, then their table of contents. */
+    private fun crate(vararg sections: Pair<String, ByteArray>): ByteArray {
+        val toc = 88 + sections.sumOf { it.second.size }
+        val out = ByteBuffer.allocate(toc + 8 + sections.size * 32).order(ByteOrder.LITTLE_ENDIAN)
+        out.put("PXR-USDC".toByteArray(Charsets.US_ASCII)); out.put(byteArrayOf(0, 8, 0)); out.putLong(16, toc.toLong())
+        out.position(88)
+        for ((_, bytes) in sections) out.put(bytes)
+        out.putLong(sections.size.toLong())
+        var start = 88L
+        for ((name, bytes) in sections) { out.put(name.toByteArray(Charsets.US_ASCII).copyOf(16)); out.putLong(start); out.putLong(bytes.size.toLong()); start += bytes.size }
+        return out.array()
+    }
+
+    // One token, "a": TfFastCompression's header, then an LZ4 block of two literal bytes.
+    private val tokens = "TOKENS" to (longs(1, 2, 4) + byteArrayOf(0, 0x20, 'a'.code.toByte(), 0))
+    private val noStrings = "STRINGS" to longs(0)
+    private val noFields = "FIELDS" to (longs(0, 0, 1) + byteArrayOf(0))
+    private val noFieldSets = "FIELDSETS" to longs(0, 0)
+
+    /** Compressed integers as USD writes them: the byte count, then [raw] as one literal LZ4 block after TfFastCompression's header. */
+    private fun ints(raw: ByteArray): ByteArray {
+        val length = if (raw.size < 15) byteArrayOf((raw.size shl 4).toByte())
+            else byteArrayOf(0xF0.toByte()) + ByteArray((raw.size - 15) / 255) { 0xFF.toByte() } + byteArrayOf(((raw.size - 15) % 255).toByte())
+        val framed = byteArrayOf(0) + length + raw
+        return longs(framed.size.toLong()) + framed
+    }
 
     @Test fun textBinaryAndArchiveLayersReadTheSameRoom() {
         val geometries = listOf("room.usda", "room.usdc", "room.usdz").map { UsdReader.read(fixture(it)) }
@@ -63,6 +94,59 @@ class UsdReaderTest {
         assertThrows(UsdFormatException::class.java) { UsdReader.read("not a model".toByteArray()) }
         val truncated = fixture("room.usdc").copyOf(400)
         assertThrows(Exception::class.java) { UsdReader.read(truncated) }
+    }
+
+    @Test fun unclosedPathsAndDeepNestingAreDamagedModels() {
+        val layers = listOf("def Xform \"a\" { asset x = @foo }", "def Mesh \"a\" { rel material:binding = </Looks/Wall }",
+            "def Mesh \"a\" { float[] x = " + "[".repeat(100_000) + " }", "def \"a\" {\n".repeat(100_000))
+        for (layer in layers) assertThrows(UsdFormatException::class.java) { UsdReader.read("#usda 1.0\n$layer\n".toByteArray()) }
+    }
+
+    @Test fun crateCountsAreCheckedBeforeAllocating() {
+        // Each count takes eight bytes of the file but would size an array of gigabytes.
+        val layers = listOf(
+            crate("TOKENS" to (longs(0x7FFFFFFF, 2, 4) + byteArrayOf(0, 0x20, 'a'.code.toByte(), 0))),
+            crate(tokens, "STRINGS" to longs(0x7FFFFFFF)),
+            crate(tokens, noStrings, "FIELDS" to (longs(1_000_000, 6) + byteArrayOf(0, 0x40, 0, 0, 0, 0))),
+            crate(tokens, noStrings, noFields, noFieldSets, "PATHS" to longs(0x7FFFFFFF, 0, 0, 0, 0)))
+        for (layer in layers) assertThrows(UsdFormatException::class.java) { UsdReader.read(layer) }
+    }
+
+    @Test(timeout = 10_000) fun repeatedPathsAndChildrenAreReadOnce() {
+        // Every prim lists the same child twice; visited naively, 40 levels would take 2^40 visits.
+        val layer = StringBuilder("#usda 1.0\n")
+        repeat(40) { layer.append("def \"x\" {}\ndef \"x\" {\n") }
+        layer.append("def Cube \"c\" {}\n").append("}\n".repeat(40))
+        assertEquals(listOf("c"), UsdReader.read(layer.toString().toByteArray()).meshes.map { it.name })
+        // Sixty crate paths whose every entry has both a child and a sibling at the next entry, which names each slot again.
+        fun codes(vararg ones: Int) = ByteArray(15).also { c -> ones.forEach { c[it / 4] = (c[it / 4].toInt() or (1 shl (it % 4 * 2))).toByte() } }
+        val indexes = ints(byteArrayOf(1, 0, 0, 0) + codes(0) + byteArrayOf(0))
+        val elements = ints(ByteArray(4) + codes())
+        val jumps = ints(ByteArray(4) + codes(0, 59) + byteArrayOf(1, -3))
+        val table = crate(tokens, noStrings, noFields, noFieldSets, "PATHS" to (longs(60, 60) + indexes + elements + jumps))
+        assertThrows(UsdFormatException::class.java) { UsdReader.read(table) }
+    }
+
+    @Test fun oversizedMeshesFailBeforeTheyAreExpanded() {
+        // A face count alone implies 2,000,001 triangles, one over the limit; no vertex needs to be read to refuse it.
+        val layer = "#usda 1.0\ndef Mesh \"m\" {\n    int[] faceVertexCounts = [2000003]\n    int[] faceVertexIndices = [0, 1, 2]\n    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]\n}\n"
+        val error = assertThrows(UsdFormatException::class.java) { UsdReader.read(layer.toByteArray()) }
+        assertEquals("This model has too many triangles to show.", error.message)
+    }
+
+    @Test fun invertedOpsAndEveryRotationOrderAreApplied() {
+        val corners = " int[] faceVertexCounts = [3]\n int[] faceVertexIndices = [0, 1, 2]\n point3f[] points = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]\n"
+        val rotations = listOf("XZY", "YXZ", "YZX", "ZXY").joinToString("") { "def Mesh \"$it\" {\n$corners float3 xformOp:rotate$it = (90, 90, 90)\n uniform token[] xformOpOrder = [\"xformOp:rotate$it\"]\n}\n" }
+        val pivot = "def Mesh \"Pivot\" {\n$corners float3 xformOp:translate:pivot = (1, 0, 0)\n float xformOp:rotateZ = 90\n" +
+            " uniform token[] xformOpOrder = [\"xformOp:translate:pivot\", \"xformOp:rotateZ\", \"!invert!xformOp:translate:pivot\"]\n}\n"
+        val meshes = UsdReader.read("#usda 1.0\n(\n metersPerUnit = 1\n)\n$rotations$pivot".toByteArray()).meshes.associate { it.name to it.positions }
+        // A quarter turn about each axis in the order the op names moves the corners on X, Y and Z here.
+        assertArrayEquals(floatArrayOf(0f, 1f, 0f, 1f, 0f, 0f, 0f, 0f, -1f), meshes.getValue("XZY"), 1e-5f)
+        assertArrayEquals(floatArrayOf(-1f, 0f, 0f, 0f, 0f, 1f, 0f, 1f, 0f), meshes.getValue("YXZ"), 1e-5f)
+        assertArrayEquals(floatArrayOf(0f, 1f, 0f, -1f, 0f, 0f, 0f, 0f, 1f), meshes.getValue("YZX"), 1e-5f)
+        assertArrayEquals(floatArrayOf(1f, 0f, 0f, 0f, 0f, 1f, 0f, -1f, 0f), meshes.getValue("ZXY"), 1e-5f)
+        // A quarter turn about Z through the pivot (1, 0, 0), which the inverted op translates back.
+        assertArrayEquals(floatArrayOf(1f, 0f, 0f, 0f, -1f, 0f, 1f, -1f, 1f), meshes.getValue("Pivot"), 1e-5f)
     }
 
     @Test fun integerAndLz4CodecsMatchUsd() {

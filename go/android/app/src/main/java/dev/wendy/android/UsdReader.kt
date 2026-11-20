@@ -44,8 +44,11 @@ object UsdReader {
     /** Reads a USDZ archive (or a bare usda or usdc layer) into triangles in metres, Y up. */
     fun read(bytes: ByteArray): SiteGeometry {
         if (bytes.size > MAXIMUM_BYTES) throw UsdFormatException("This model is too large. Export a USDZ model smaller than 128 MB.")
-        val archive = UsdAssets.read(bytes)
-        return compose(parseLayer(archive.layer), archive)
+        // The readers' limits refuse damaged input; these Errors are a backstop, because callers catch only exceptions.
+        return try {
+            val archive = UsdAssets.read(bytes)
+            compose(parseLayer(archive.layer), archive)
+        } catch (_: StackOverflowError) { throw UsdFormatException("This model is nested too deeply to read.") } catch (_: OutOfMemoryError) { throw UsdFormatException("This model is too large to show on this phone.") }
     }
 
     internal fun parseLayer(bytes: ByteArray): UsdLayer = when {
@@ -61,10 +64,15 @@ object UsdReader {
         var triangles = 0
         val scale = if (layer.metersPerUnit.isFinite() && layer.metersPerUnit > 0) layer.metersPerUnit else 1.0
         val zUp = layer.upAxis.equals("Z", ignoreCase = true)
+        // Each prim is drawn once, even when a damaged layer lists one child repeatedly at every level.
+        val visited = HashSet<String>()
         fun visit(path: String, parent: DoubleArray) {
+            if (!visited.add(path)) return
             val prim = layer.prims[path] ?: return
             val (local, reset) = localTransform(prim)
             val world = if (reset) local else multiply(local, parent)
+            // Face counts give a mesh's triangles before it is expanded, so an oversized mesh fails fast.
+            if (prim.type == "Mesh" && triangles + faceTriangles(prim) > MAXIMUM_TRIANGLES) throw UsdFormatException("This model has too many triangles to show.")
             when (prim.type) {
                 "Mesh" -> mesh(prim, world, layer, scale, zUp, assets).forEach { triangles += it.positions.size / 9; meshes += it }
                 "Cube" -> cube(prim, world, layer, scale, zUp)?.let { triangles += it.positions.size / 9; meshes += it }
@@ -112,6 +120,13 @@ object UsdReader {
             val material = materials.getValue(path)
             SiteMesh(base.name, base.positions, base.normals, material.color, data.second.toFloatArray(), material.texture)
         }
+    }
+
+    /** The triangles a mesh's faceVertexCounts describe, counted without expanding any vertex. */
+    private fun faceTriangles(prim: UsdPrim): Long {
+        var total = 0L
+        (prim.attributes["faceVertexCounts"] as? IntArray)?.forEach { if (it >= 3) total += it - 2 }
+        return total
     }
 
     private fun cube(prim: UsdPrim, world: DoubleArray, layer: UsdLayer, scale: Double, zUp: Boolean): SiteMesh {
@@ -164,9 +179,11 @@ object UsdReader {
         var result = identity()
         var reset = false
         for (raw in order) {
-            val name = raw as? String ?: continue
+            var name = raw as? String ?: continue
             if (name == "!resetXformStack!") { reset = true; result = identity(); continue }
-            if (name.startsWith("!invert!")) continue
+            // An inverted op names another op and applies its inverse, such as the translation back from a pivot.
+            val inverted = name.startsWith("!invert!")
+            name = name.removePrefix("!invert!")
             val value = prim.attributes[name]
             val op = when {
                 name.startsWith("xformOp:transform") -> (value as? DoubleArray)?.takeIf { it.size == 16 }
@@ -175,13 +192,18 @@ object UsdReader {
                 name.startsWith("xformOp:orient") -> vector(value)?.takeIf { it.size == 4 }?.let { quaternion(it) }
                 name.startsWith("xformOp:rotateXYZ") -> vector(value)?.let { multiply(multiply(rotate(0, it[0]), rotate(1, it[1])), rotate(2, it[2])) }
                 name.startsWith("xformOp:rotateZYX") -> vector(value)?.let { multiply(multiply(rotate(2, it[2]), rotate(1, it[1])), rotate(0, it[0])) }
+                name.startsWith("xformOp:rotateXZY") -> vector(value)?.let { multiply(multiply(rotate(0, it[0]), rotate(2, it[2])), rotate(1, it[1])) }
+                name.startsWith("xformOp:rotateYXZ") -> vector(value)?.let { multiply(multiply(rotate(1, it[1]), rotate(0, it[0])), rotate(2, it[2])) }
+                name.startsWith("xformOp:rotateYZX") -> vector(value)?.let { multiply(multiply(rotate(1, it[1]), rotate(2, it[2])), rotate(0, it[0])) }
+                name.startsWith("xformOp:rotateZXY") -> vector(value)?.let { multiply(multiply(rotate(2, it[2]), rotate(0, it[0])), rotate(1, it[1])) }
                 name.startsWith("xformOp:rotateX") -> number(value)?.let { rotate(0, it) }
                 name.startsWith("xformOp:rotateY") -> number(value)?.let { rotate(1, it) }
                 name.startsWith("xformOp:rotateZ") -> number(value)?.let { rotate(2, it) }
                 else -> null
             } ?: continue
+            val applied = if (inverted) invert(op) ?: continue else op
             // The first op is outermost: points are transformed by the last op first.
-            result = multiply(op, result)
+            result = multiply(applied, result)
         }
         return result to reset
     }
@@ -195,6 +217,25 @@ object UsdReader {
     }
     internal fun identity() = DoubleArray(16).also { it[0] = 1.0; it[5] = 1.0; it[10] = 1.0; it[15] = 1.0 }
     internal fun multiply(a: DoubleArray, b: DoubleArray) = DoubleArray(16) { i -> val r = i / 4; val c = i % 4; (0..3).sumOf { a[r * 4 + it] * b[it * 4 + c] } }
+    /** A 4×4 inverse by Gauss-Jordan elimination with partial pivoting, or null for a singular matrix. */
+    private fun invert(m: DoubleArray): DoubleArray? {
+        val a = m.copyOf(); val out = identity()
+        for (col in 0..3) {
+            val pivot = (col..3).maxBy { abs(a[it * 4 + col]) }
+            if (abs(a[pivot * 4 + col]) < 1e-12) return null
+            for (k in 0..3) {
+                a[col * 4 + k] = a[pivot * 4 + k].also { a[pivot * 4 + k] = a[col * 4 + k] }
+                out[col * 4 + k] = out[pivot * 4 + k].also { out[pivot * 4 + k] = out[col * 4 + k] }
+            }
+            val scale = a[col * 4 + col]
+            for (k in 0..3) { a[col * 4 + k] /= scale; out[col * 4 + k] /= scale }
+            for (row in 0..3) if (row != col) {
+                val f = a[row * 4 + col]
+                for (k in 0..3) { a[row * 4 + k] -= f * a[col * 4 + k]; out[row * 4 + k] -= f * out[col * 4 + k] }
+            }
+        }
+        return out
+    }
     private fun translate(v: DoubleArray) = identity().also { it[12] = v[0]; it[13] = v.getOrElse(1) { 0.0 }; it[14] = v.getOrElse(2) { 0.0 } }
     private fun scaleMatrix(v: DoubleArray) = identity().also { it[0] = v[0]; it[5] = v.getOrElse(1) { v[0] }; it[10] = v.getOrElse(2) { v[0] } }
     private fun rotate(axis: Int, degrees: Double): DoubleArray {
@@ -260,6 +301,8 @@ private class CrateReader(private val data: ByteArray) {
         val count = buffer.getLong(p).toInt(); val uncompressed = buffer.getLong(p + 8).toInt(); val compressed = buffer.getLong(p + 16).toInt(); p += 24
         if (count < 0 || uncompressed !in 0..(64 shl 20)) throw UsdFormatException("Invalid USD tokens")
         val raw = Lz4.fast(data, p, compressed, uncompressed)
+        // Each token ends in a NUL, so a larger count is damaged; it is refused before the list is sized.
+        if (count > raw.size) throw UsdFormatException("Invalid USD tokens")
         val list = ArrayList<String>(count)
         var start = 0
         for (i in raw.indices) if (raw[i].toInt() == 0) { list += String(raw, start, i - start, Charsets.UTF_8); start = i + 1; if (list.size == count) break }
@@ -269,7 +312,7 @@ private class CrateReader(private val data: ByteArray) {
     private fun readStrings() {
         val p = section("STRINGS")
         val count = buffer.getLong(p).toInt()
-        strings = IntArray(count) { buffer.getInt(p + 8 + it * 4) }
+        strings = IntArray(fit(count, 4, p + 8)) { buffer.getInt(p + 8 + it * 4) }
     }
     private fun readFields() {
         var p = section("FIELDS")
@@ -277,6 +320,7 @@ private class CrateReader(private val data: ByteArray) {
         val (indexes, next) = compressedInts(p, count); fieldTokens = indexes; p = next
         val compressed = buffer.getLong(p).toInt(); p += 8
         val raw = Lz4.fast(data, p, compressed, count * 8)
+        if (raw.size < count * 8L) throw UsdFormatException("Invalid USD fields")
         val reps = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
         fieldReps = LongArray(count) { reps.getLong(it * 8) }
     }
@@ -292,6 +336,8 @@ private class CrateReader(private val data: ByteArray) {
         val (pathIndexes, a) = compressedInts(p, encoded)
         val (elementTokens, b) = compressedInts(a, encoded)
         val (jumps, _) = compressedInts(b, encoded)
+        // USD encodes every path but the empty one, so a larger table is damaged and is not allocated.
+        if (total < 0 || total > encoded + 1) throw UsdFormatException("Invalid USD paths")
         paths = arrayOfNulls(total)
         if (encoded > 0) build(pathIndexes, elementTokens, jumps, 0, null)
     }
@@ -310,7 +356,10 @@ private class CrateReader(private val data: ByteArray) {
                     val name = tokens.getOrNull(abs(token)) ?: throw UsdFormatException("Invalid USD paths")
                     if (token < 0) "$parent.$name" else if (parent == "/") "/$name" else "$parent/$name"
                 }
-                paths[pathIndexes[index]] = path
+                // A table that names a slot twice walks the same subtree again for each repeat, in exponential time.
+                val slot = pathIndexes[index]
+                if (slot !in paths.indices || paths[slot] != null) throw UsdFormatException("Invalid USD paths")
+                paths[slot] = path
                 val jump = jumps[index]
                 val hasChild = jump > 0 || jump == -1
                 val hasSibling = jump >= 0
@@ -334,9 +383,16 @@ private class CrateReader(private val data: ByteArray) {
     private fun compressedInts(at: Int, count: Int): Pair<IntArray, Int> {
         val size = buffer.getLong(at).toInt()
         if (count == 0) return IntArray(0) to at + 8 + size
-        val working = 4 + (count * 2 + 7) / 8 + count * 4
-        val raw = Lz4.fast(data, at + 8, size, working)
+        val working = 4L + (count * 2L + 7) / 8 + count * 4L
+        if (count < 0 || working > UsdReader.MAXIMUM_BYTES) throw UsdFormatException("Invalid compressed data in this model.")
+        val raw = Lz4.fast(data, at + 8, size, working.toInt())
         return UsdIntegers.decode32(raw, count) to at + 8 + size
+    }
+
+    /** [count] items of [width] bytes at [at], refused before anything is allocated when fewer bytes remain. */
+    private fun fit(count: Int, width: Int, at: Int): Int {
+        if (count < 0 || at < 0 || count.toLong() * width > data.size - at) throw UsdFormatException("A value in this model is damaged.")
+        return count
     }
 
     fun layer(): UsdLayer {
@@ -443,22 +499,22 @@ private class CrateReader(private val data: ByteArray) {
             24 -> FloatArray(3) { buffer.getFloat(p + it * 4) }
             27 -> DoubleArray(4) { buffer.getDouble(p + it * 8) }
             28 -> FloatArray(4) { buffer.getFloat(p + it * 4) }
-            41 -> { val count = buffer.getLong(p).toInt(); List(count) { tokens.getOrNull(buffer.getInt(p + 8 + it * 4)) ?: "" } }
+            41 -> { val count = buffer.getLong(p).toInt(); List(fit(count, 4, p + 8)) { tokens.getOrNull(buffer.getInt(p + 8 + it * 4)) ?: "" } }
             else -> null
         }
         val count: Int
         if (version >= 700) { count = buffer.getLong(p).toInt(); p += 8 } else { count = buffer.getInt(p); p += 4 }
         if (count < 0 || count > 64_000_000) throw UsdFormatException("A value in this model is too large.")
         return when (type) {
-            3, 4 -> if (compressed && version >= 500) compressedInts(p, count).first else IntArray(count) { buffer.getInt(p + it * 4) }
-            8 -> if (compressed && version >= 600) floats(p, count) else FloatArray(count) { buffer.getFloat(p + it * 4) }
-            9 -> if (compressed && version >= 600) floats(p, count, double = true) else DoubleArray(count) { buffer.getDouble(p + it * 8) }
-            11 -> List(count) { tokens.getOrNull(buffer.getInt(p + it * 4)) ?: "" }
-            20 -> FloatArray(count * 2) { buffer.getFloat(p + it * 4) }
-            24 -> FloatArray(count * 3) { buffer.getFloat(p + it * 4) }
-            23 -> DoubleArray(count * 3) { buffer.getDouble(p + it * 8) }
-            28 -> FloatArray(count * 4) { buffer.getFloat(p + it * 4) }
-            25 -> FloatArray(count * 3) { half(buffer.getShort(p + it * 2)) }
+            3, 4 -> if (compressed && version >= 500) compressedInts(p, count).first else IntArray(fit(count, 4, p)) { buffer.getInt(p + it * 4) }
+            8 -> if (compressed && version >= 600) floats(p, count) else FloatArray(fit(count, 4, p)) { buffer.getFloat(p + it * 4) }
+            9 -> if (compressed && version >= 600) floats(p, count, double = true) else DoubleArray(fit(count, 8, p)) { buffer.getDouble(p + it * 8) }
+            11 -> List(fit(count, 4, p)) { tokens.getOrNull(buffer.getInt(p + it * 4)) ?: "" }
+            20 -> FloatArray(fit(count, 8, p) * 2) { buffer.getFloat(p + it * 4) }
+            24 -> FloatArray(fit(count, 12, p) * 3) { buffer.getFloat(p + it * 4) }
+            23 -> DoubleArray(fit(count, 24, p) * 3) { buffer.getDouble(p + it * 8) }
+            28 -> FloatArray(fit(count, 16, p) * 4) { buffer.getFloat(p + it * 4) }
+            25 -> FloatArray(fit(count, 6, p) * 3) { half(buffer.getShort(p + it * 2)) }
             else -> null
         }
     }
@@ -471,8 +527,8 @@ private class CrateReader(private val data: ByteArray) {
             'i' -> { val ints = compressedInts(p, count).first; if (double) DoubleArray(count) { ints[it].toDouble() } else FloatArray(count) { ints[it].toFloat() } }
             't' -> {
                 val size = buffer.getInt(p); p += 4
-                val table = if (double) DoubleArray(size) { buffer.getDouble(p + it * 8) } else null
-                val tableF = if (!double) FloatArray(size) { buffer.getFloat(p + it * 4) } else null
+                val table = if (double) DoubleArray(fit(size, 8, p)) { buffer.getDouble(p + it * 8) } else null
+                val tableF = if (!double) FloatArray(fit(size, 4, p)) { buffer.getFloat(p + it * 4) } else null
                 p += size * if (double) 8 else 4
                 val indexes = compressedInts(p, count).first
                 if (double) DoubleArray(count) { table!![indexes[it]] } else FloatArray(count) { tableF!![indexes[it]] }
@@ -495,6 +551,8 @@ private class CrateReader(private val data: ByteArray) {
 /** USD integer compression: a common delta, two-bit codes, then 8, 16 or 32-bit deltas. */
 internal object UsdIntegers {
     fun decode32(raw: ByteArray, count: Int): IntArray {
+        // Every value has a two-bit code, so the codes present bound the count before the output is allocated.
+        if (count < 0 || raw.size < 4 + (count * 2L + 7) / 8) throw UsdFormatException("Invalid compressed data in this model.")
         val buffer = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
         val common = buffer.getInt(0)
         val codes = 4
@@ -518,8 +576,9 @@ internal object UsdIntegers {
 /** LZ4 block decompression inside TfFastCompression's chunked framing. */
 internal object Lz4 {
     fun fast(source: ByteArray, offset: Int, size: Int, outputSize: Int): ByteArray {
-        if (size <= 0 || offset < 0 || offset + size > source.size) throw UsdFormatException("Invalid compressed data in this model.")
-        val output = ByteArray(outputSize)
+        if (size <= 0 || offset < 0 || size > source.size - offset || outputSize !in 0..UsdReader.MAXIMUM_BYTES) throw UsdFormatException("Invalid compressed data in this model.")
+        // LZ4 expands a byte at most 255 times, so no more than that is allocated, whatever size the file claims.
+        val output = ByteArray(minOf(outputSize.toLong(), size * 255L).toInt())
         val chunks = source[offset].toInt() and 0xFF
         if (chunks == 0) { val n = block(source, offset + 1, size - 1, output, 0); return if (n == outputSize) output else output.copyOf(n) }
         var p = offset + 1; var written = 0
@@ -559,6 +618,7 @@ private class UsdaReader(private val text: String) {
     private val prims = LinkedHashMap<String, UsdPrim>()
     private var upAxis = "Y"
     private var metersPerUnit = 0.01
+    private var depth = 0
 
     fun layer(): UsdLayer {
         skipLine() // #usda 1.0
@@ -594,6 +654,7 @@ private class UsdaReader(private val text: String) {
         space()
         if (peek() != '{') return true
         i++
+        nest()
         while (true) {
             space()
             if (i >= text.length) break
@@ -603,8 +664,12 @@ private class UsdaReader(private val text: String) {
             statement(prim)
             if (i == before) i++
         }
+        depth--
         return true
     }
+
+    /** Prims and lists nest by recursion, so a damaged layer must fail before it exhausts the stack. */
+    private fun nest() { if (++depth > MAXIMUM_DEPTH) throw UsdFormatException("This model is nested too deeply to read.") }
 
     /** One property line, or anything else up to the end of its line. */
     private fun statement(prim: UsdPrim) {
@@ -657,13 +722,14 @@ private class UsdaReader(private val text: String) {
             '[' -> list(']')
             '(' -> list(')')
             '"' -> quoted()
-            '<' -> { val end = text.indexOf('>', i); val v = text.substring(i + 1, end); i = end + 1; v }
+            '<' -> { val end = text.indexOf('>', i); if (end < 0) throw UsdFormatException("Unclosed path"); val v = text.substring(i + 1, end); i = end + 1; v }
             '@' -> { val end = text.indexOf('@', i + 1); if (end < 0) throw UsdFormatException("Unclosed asset path"); val path = text.substring(i + 1, end); i = end + 1; path }
             else -> { val w = word(); w.toDoubleOrNull() ?: w }
         }
     }
     private fun list(close: Char): List<Any?> {
         i++
+        nest()
         val items = mutableListOf<Any?>()
         while (true) {
             space()
@@ -675,6 +741,7 @@ private class UsdaReader(private val text: String) {
             // A damaged file must not stall the reader.
             if (i == before) i++
         }
+        depth--
         return items
     }
 
@@ -718,4 +785,6 @@ private class UsdaReader(private val text: String) {
         }
         return text.length - 1
     }
+
+    private companion object { const val MAXIMUM_DEPTH = 128 }
 }

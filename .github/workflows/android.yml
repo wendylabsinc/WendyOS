@@ -1,10 +1,10 @@
 name: Android companion
 on:
   pull_request:
-    paths: ['go/android/**', 'go/macos/backend/**', 'go/macos/vpn/**', 'go/internal/**', 'go/proto/**', 'go.mod', 'go.sum', '.github/workflows/android.yml']
+    paths: ['go/android/**', 'go/macos/backend/**', 'go/macos/vpn/**', 'go/internal/**', 'go/proto/**', 'go/simulator/**', 'go/babel/**', 'go.mod', 'go.sum', '.github/workflows/android.yml']
   push:
     branches: [main]
-    paths: ['go/android/**', 'go/macos/backend/**', 'go/macos/vpn/**', 'go/internal/**', 'go/proto/**', 'go.mod', 'go.sum', '.github/workflows/android.yml']
+    paths: ['go/android/**', 'go/macos/backend/**', 'go/macos/vpn/**', 'go/internal/**', 'go/proto/**', 'go/simulator/**', 'go/babel/**', 'go.mod', 'go.sum', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:
   contents: read

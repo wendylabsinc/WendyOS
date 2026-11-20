@@ -25,10 +25,11 @@ import androidx.compose.ui.window.DialogProperties
 
 /**
  * A device app's dashboard (iOS MobileAppBrowser). It stays in this Activity so the authenticated
- * forward stays alive; links to other origins open outside the app.
+ * forward stays alive; links to other origins open outside the app. Unlike iOS it offers no
+ * "Open in browser": the loopback forward closes as soon as Wendy leaves the foreground.
  */
 @SuppressLint("SetJavaScriptEnabled")
-@Composable fun AppBrowser(url: String, app: String?, device: String?, close: () -> Unit, openExternal: (String) -> Unit, openOutside: (String) -> Unit) {
+@Composable fun AppBrowser(url: String, app: String?, device: String?, close: () -> Unit, openExternal: (String) -> Unit) {
     var browser by remember { mutableStateOf<WebView?>(null) }
     var address by remember(url) { mutableStateOf(url) }
     var progress by remember { mutableIntStateOf(0) }
@@ -41,7 +42,6 @@ import androidx.compose.ui.window.DialogProperties
                 TextButton(onClick = close) { Text("Done", fontWeight = FontWeight.SemiBold) }
                 Text(address, Modifier.weight(1f).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape).padding(horizontal = 12.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-                IconButton(onClick = { openOutside(address) }) { Icon(Icons.Outlined.Public, "Open in browser") }
             }
             Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Dashboard", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)

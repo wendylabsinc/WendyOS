@@ -400,7 +400,7 @@ fun DeviceLensActions(model: WendyModel, device: Device) {
             add(MenuItem("App activity", Icons.Outlined.MonitorHeart) { nav.push("App activity") { AppsScreen(model) } })
             add(MenuItem("Digital Twin", Icons.Outlined.ViewInAr) { nav.push("Digital Twin") { DigitalTwinScreen(model) } })
             add(MenuItem("Campaigns", Icons.Outlined.FiberManualRecord) { nav.push("Campaigns") { CampaignsScreen(model) } })
-            add(MenuItem("Device management", Icons.Outlined.Settings) { nav.push("Device management") { DeviceManagementPage(model, device) } })
+            add(MenuItem("Device management", Icons.Outlined.Settings) { val session = model.session; nav.push("Device management") { DeviceManagementPage(model, device, session) } })
         }
     }, icon = Icons.Outlined.MoreHoriz)
 }

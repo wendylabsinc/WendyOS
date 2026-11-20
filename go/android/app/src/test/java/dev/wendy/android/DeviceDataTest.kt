@@ -164,4 +164,38 @@ class DeviceDataTest {
         assertEquals("1.5 KiB", binarySize(1536.0))
         assertEquals("12 B", binarySize(12.0))
     }
+
+    @Test fun osUpdateProgressFollowsTheInstallAndItsRestart() {
+        // While an install runs, Go answers polls from the stream without probing the engine.
+        val running = OSUpdateProgress.parse(JSONObject("""{"status":{},"install":{"active":true,"phase":"downloading","percent":42,"rebootRequired":false,"error":"","baseline":100}}"""))
+        assertTrue(running.running)
+        assertEquals("downloading", running.phase)
+        assertEquals(0.42f, running.fraction!!, 1e-6f)
+        assertFalse(running.restartRequired)
+        assertNull(OSUpdateProgress.parse(JSONObject("""{"status":{},"install":{"active":true,"phase":"Starting","percent":-1,"baseline":100}}""")).fraction)
+        // Installed: a restart is due until the agent records a result newer than the install's baseline.
+        val installed = """{"status":{"createdAtUnix":"%s","engineStatus":{"connector":"wendyos-update"}},"install":{"active":false,"phase":"Installed","percent":100,"rebootRequired":true,"error":"","baseline":100}}"""
+        assertTrue(OSUpdateProgress.parse(JSONObject(installed.format("100"))).restartRequired)
+        assertFalse(OSUpdateProgress.parse(JSONObject(installed.format("200"))).restartRequired)
+        // A pending engine update always needs a restart, even from another connection.
+        assertTrue(OSUpdateProgress.parse(JSONObject("""{"status":{"engineStatus":{"connector":"wendyos-update","pending":{"artifactVersion":"1.2"}}},"install":{"active":false}}""")).restartRequired)
+        val failed = OSUpdateProgress.parse(JSONObject("""{"status":{},"install":{"active":false,"phase":"Failed","error":"download failed"}}"""))
+        assertFalse(failed.running); assertEquals("download failed", failed.error)
+        assertFalse(OSUpdateProgress.parse(null).running)
+    }
+
+    @Test fun retriedSightingKeepsTheMTLSRequirement() {
+        val secure = Device("spiffe://wendy.sh/tenant/7/device/9", "pi", "pi.local:50051", "LAN", requiresMTLS = true)
+        // A newer sighting may move the device, but cannot drop its mTLS requirement on LAN or USB.
+        val moved = secure.resighted(listOf(Device(secure.id, "pi", "[fe80::1%usb0]:50051", "USB")))
+        assertEquals("[fe80::1%usb0]:50051", moved.selector)
+        assertTrue(moved.requiresMTLS)
+        assertTrue(secure.resighted(listOf(secure.copy(requiresMTLS = false))).requiresMTLS)
+        // Mesh dials its own way and never takes the requirement; an unseen device is retried as it was.
+        assertFalse(secure.resighted(listOf(Device(secure.id, "pi", "pi", "Mesh"))).requiresMTLS)
+        assertSame(secure, secure.resighted(emptyList()))
+        // A device that never required mTLS keeps the sighting as it is.
+        val plain = Device("d", "pi", "pi.local:50051", "LAN")
+        assertFalse(plain.resighted(listOf(plain.copy(selector = "10.0.0.2:50051"))).requiresMTLS)
+    }
 }

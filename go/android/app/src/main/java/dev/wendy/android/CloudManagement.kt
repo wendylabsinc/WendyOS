@@ -1,9 +1,11 @@
 package dev.wendy.android
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.PersistableBundle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,6 +29,7 @@ import org.json.JSONObject
 import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
+import java.util.TimeZone
 
 data class CloudMember(val id: String, val name: String, val email: String, val roleID: String, val profileError: String) {
     val title get() = name.ifEmpty { email.ifEmpty { id } }
@@ -40,6 +43,20 @@ data class CloudAccessRule(val id: String, val principalID: String, val principa
 }
 data class CloudInvitation(val id: String, val role: String, val expiresSeconds: Long, val revoked: Boolean) {
     fun state(now: Long = System.currentTimeMillis() / 1000) = if (revoked) "Revoked" else if (expiresSeconds <= now) "Expired" else "Active"
+}
+/** Material's date picker selects a calendar date as its UTC midnight; an invitation expires at a local date and time. */
+internal object InvitationExpiry {
+    private val utc = TimeZone.getTimeZone("UTC")
+    /** The picker value for the local date of [expires]. */
+    fun pickerDate(expires: Long, zone: TimeZone = TimeZone.getDefault()): Long {
+        val local = Calendar.getInstance(zone).apply { timeInMillis = expires }
+        return Calendar.getInstance(utc).apply { clear(); set(local.get(Calendar.YEAR), local.get(Calendar.MONTH), local.get(Calendar.DAY_OF_MONTH)) }.timeInMillis
+    }
+    /** The picked [date] at [now]'s local time of day. */
+    fun fromPicker(date: Long, now: Long = System.currentTimeMillis(), zone: TimeZone = TimeZone.getDefault()): Long {
+        val day = Calendar.getInstance(utc).apply { timeInMillis = date }
+        return Calendar.getInstance(zone).apply { timeInMillis = now; set(day.get(Calendar.YEAR), day.get(Calendar.MONTH), day.get(Calendar.DAY_OF_MONTH)) }.timeInMillis
+    }
 }
 
 /** An organization overview: one request, with per-section errors (iOS CloudOrganizationSnapshot). */
@@ -275,7 +292,11 @@ private fun InvitationForm(state: CloudManagementState) {
         PageColumn {
             formSection(footer = "Copy or share this link before leaving. Anyone with the link can join with the selected role until it expires.") {
                 SelectionContainer { Text(link, Modifier.padding(vertical = 8.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium) }
-                ActionRow("Copy link", Icons.Outlined.ContentCopy) { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Wendy invitation", link)) }
+                ActionRow("Copy link", Icons.Outlined.ContentCopy) {
+                    // Anyone with the link can join, so mark it sensitive; Android 13 and later then hide it in the clipboard preview.
+                    val clip = ClipData.newPlainText("Wendy invitation", link).apply { description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) } }
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
+                }
                 ActionRow("Share link", Icons.Outlined.Share) {
                     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link), "Share invitation"))
                 }
@@ -290,16 +311,14 @@ private fun InvitationForm(state: CloudManagementState) {
         NavRow("Expires", value = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(expires))) { picking = true }
     }
     if (picking) {
-        val picker = rememberDatePickerState(initialSelectedDateMillis = expires, selectableDates = object : SelectableDates {
+        val picker = rememberDatePickerState(initialSelectedDateMillis = InvitationExpiry.pickerDate(expires), selectableDates = object : SelectableDates {
             override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis >= System.currentTimeMillis() - 86_400_000L
         })
         DatePickerDialog(onDismissRequest = { picking = false }, confirmButton = {
             TextButton(onClick = {
                 picker.selectedDateMillis?.let { day ->
                     // Keep the current time of day on the chosen date.
-                    val now = Calendar.getInstance()
-                    val chosen = Calendar.getInstance().apply { timeInMillis = day; set(Calendar.HOUR_OF_DAY, now.get(Calendar.HOUR_OF_DAY)); set(Calendar.MINUTE, now.get(Calendar.MINUTE)) }
-                    expires = chosen.timeInMillis
+                    expires = InvitationExpiry.fromPicker(day)
                 }
                 picking = false
             }) { Text("OK") }

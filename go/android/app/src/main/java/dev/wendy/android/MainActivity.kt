@@ -59,6 +59,12 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart() { super.onStart(); model.setForeground(true) }
     override fun onStop() { model.setForeground(false); super.onStop() }
+    // singleTop: the VPN notification and system VPN settings reuse this Activity
+    // and its model instead of stacking a second one that fights over visibility.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == WendyVpnService.OPEN) model.requestVpnPage = true
+    }
 }
 
 /**
@@ -98,7 +104,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
         openRecordings()
         nav.push(device.title) { EpisodePickerPage(model, recordingDeviceID(device), device, null, null) }
     }
-    fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device) { nav.pop(); model.task { model.refresh() } } }
+    fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device, ::select) { nav.pop(); model.task { model.refresh() } } }
     fun openVpn() = nav.push("Private network") { VpnScreen(model) { nav.pop() } }
 
     @Composable private fun DevicesHomeActions() {
@@ -130,6 +136,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     LaunchedEffect(model.browserURL) { model.browserURL?.let { model.browserURL = null; openURL(it) } }
     LaunchedEffect(model.linkRequest) { model.linkRequest?.let { model.linkRequest = null; openURL(it) } }
     LaunchedEffect(model.requestNearbySetup) { if (model.requestNearbySetup) { model.requestNearbySetup = false; routes.openSetup() } }
+    LaunchedEffect(model.requestVpnPage) { if (model.requestVpnPage) { model.requestVpnPage = false; if (nav.stack.none { it.title == "Private network" }) routes.openVpn() } }
     LaunchedEffect(model.requestSettings) { if (model.requestSettings) { model.requestSettings = false; settings = true } }
     LaunchedEffect(model.requestChat) { if (model.requestChat) { model.requestChat = false; routes.chat = true } }
     // Device pages belong to one account and organization (iOS drops device routes when it changes).
@@ -191,9 +198,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     }
     CompositionLocalProvider(LocalNavigator provides nav, LocalRecordingCatalog provides catalog, LocalRecordingPosters provides posters) {
         model.appURL?.let { url ->
-            AppBrowser(url, model.appPage?.first, model.appPage?.second?.ifEmpty { null }, { model.appURL = null; model.appPage = null }, openURL) { external ->
-                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(external))) }.onFailure { model.error = it.message }
-            }
+            AppBrowser(url, model.appPage?.first, model.appPage?.second?.ifEmpty { null }, { model.appURL = null; model.appPage = null }, openURL)
         }
         NearbySetupPrompt(model, active = model.initialized && model.inForeground && nav.stack.none { it.title == "Device setup" } && !settings && !routes.chat && !routes.address && !routes.recognizing && model.appDeletion == null && model.appURL == null) { device ->
             routes.openSetup(device)

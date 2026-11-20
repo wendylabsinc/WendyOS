@@ -143,7 +143,7 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
             if (generation != discoveryGeneration || source != inference || (source == ChatInference.Device && portNumber != requested)) return
             models = result
             choose(if (result.any { it.id == previous }) previous else result.firstOrNull()?.id ?: "")
-            if (source == ChatInference.Device) { loadedPort = if (result.isEmpty()) null else requested; onDeviceDiscovery?.invoke(result) }
+            if (source == ChatInference.Device) { loadedPort = if (result.isEmpty()) null else portNumber; onDeviceDiscovery?.invoke(result) }
         } catch (e: CancellationException) { throw e } catch (e: Exception) { if (generation == discoveryGeneration) error = e.message }
         finally { if (generation == discoveryGeneration) loading = false }
     }

@@ -47,6 +47,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     var organization by mutableStateOf(""); private set
     var accounts by mutableStateOf(emptyList<JSONObject>()); private set
     var organizations by mutableStateOf(emptyList<JSONObject>()); private set
+    /** Set when the VPN notification or system VPN settings reopen the Activity. */
+    var requestVpnPage by mutableStateOf(false)
     var browserURL by mutableStateOf<String?>(null)
     var appURL by mutableStateOf<String?>(null)
     /** The app and device whose page [appURL] shows, for the browser's header. */
@@ -148,6 +150,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         if (accounts.none { it.text("Context") == account }) account = accounts.firstOrNull { it.flag("Active") }?.text("Context") ?: accounts.firstOrNull()?.text("Context") ?: ""
         organizations = if (account.isBlank()) emptyList() else backend.call("Organizations", account).items()
         if (organizations.none { it.text("id") == organization }) organization = organizations.firstOrNull()?.text("id") ?: ""
+        // Android's Always-on VPN starts without the app and uses this saved selection.
+        preferences.edit().putString("account", account).putString("organization", organization).apply()
     }
     fun chooseAccount(id: String, org: String = "") = task {
         check(!WendyVpnService.engaged) { "Disconnect the Wendy VPN before changing accounts or organizations." }
@@ -244,7 +248,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 val refreshed = backend.call("Nearby").items().map(Device::parse)
                 if (epoch != connectionGeneration) return@launch
                 nearbyDevices = refreshed
-                val current = refreshed.firstOrNull { it.id == device.id } ?: device
+                val current = device.resighted(refreshed)
                 session = 0
                 connect(current, false)
             } catch (e: CancellationException) { throw e } catch (e: Exception) {
