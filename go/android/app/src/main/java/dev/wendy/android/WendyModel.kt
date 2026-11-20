@@ -239,7 +239,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 val refreshed = backend.call("Nearby").items().map(Device::parse)
                 if (epoch != connectionGeneration) return@launch
                 nearbyDevices = refreshed
-                val current = refreshed.firstOrNull { it.id == device.id } ?: device
+                val current = device.resighted(refreshed)
                 session = 0
                 connect(current, false)
             } catch (e: CancellationException) { throw e } catch (e: Exception) {
