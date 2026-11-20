@@ -92,6 +92,9 @@ class WendyVpnService : VpnService() {
             // The embedded broker, resolver and reachability probes must use
             // the physical network even while the mesh supplies internet.
             .addDisallowedApplication(packageName).setConfigureIntent(configure).setBlocking(false)
+            // Only device routes and DNS use the tunnel by default, so other apps
+            // keep the underlying network's metered state.
+            .setMetered(false)
         if (settings.address6 != null) builder.addAddress(settings.address6, 128)
         else builder.allowFamily(OsConstants.AF_INET6)
         settings.routes.forEach { (address, prefix) -> builder.addRoute(address, prefix) }
