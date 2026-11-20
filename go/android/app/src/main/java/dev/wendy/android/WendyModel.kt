@@ -34,6 +34,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     var organization by mutableStateOf(""); private set
     var accounts by mutableStateOf(emptyList<JSONObject>()); private set
     var organizations by mutableStateOf(emptyList<JSONObject>()); private set
+    /** Set when the VPN notification or system VPN settings reopen the Activity. */
+    var requestVpnPage by mutableStateOf(false)
     var browserURL by mutableStateOf<String?>(null)
     var appURL by mutableStateOf<String?>(null)
     /** A link the activity should open; loopback app links stay in the in-app browser. */

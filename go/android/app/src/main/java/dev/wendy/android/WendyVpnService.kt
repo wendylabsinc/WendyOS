@@ -69,8 +69,9 @@ class WendyVpnService : VpnService() {
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
+                    // Disconnecting cancels the native session, which fails its pending call.
                     // In lockdown, Android blocks this app's own traffic, which the mesh broker needs.
-                    failure.value = if (isLockdownEnabled()) "Turn off “Block connections without VPN” for Wendy in Android settings. Wendy needs your normal network to reach the mesh."
+                    if (isActive) failure.value = if (isLockdownEnabled()) "Turn off “Block connections without VPN” for Wendy in Android settings. Wendy needs your normal network to reach the mesh."
                         else e.message ?: "VPN connection failed"
                 }
                 finally {
@@ -104,6 +105,9 @@ class WendyVpnService : VpnService() {
             // The embedded broker, resolver and reachability probes must use
             // the physical network even while the mesh supplies internet.
             .addDisallowedApplication(packageName).setConfigureIntent(configure).setBlocking(false)
+            // Only device routes and DNS use the tunnel by default, so other apps
+            // keep the underlying network's metered state.
+            .setMetered(false)
         if (settings.address6 != null) builder.addAddress(settings.address6, 128)
         else builder.allowFamily(OsConstants.AF_INET6)
         settings.routes.forEach { (address, prefix) -> builder.addRoute(address, prefix) }
