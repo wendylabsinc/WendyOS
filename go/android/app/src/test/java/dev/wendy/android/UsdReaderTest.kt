@@ -30,6 +30,14 @@ class UsdReaderTest {
     private val noFields = "FIELDS" to (longs(0, 0, 1) + byteArrayOf(0))
     private val noFieldSets = "FIELDSETS" to longs(0, 0)
 
+    /** Compressed integers as USD writes them: the byte count, then [raw] as one literal LZ4 block after TfFastCompression's header. */
+    private fun ints(raw: ByteArray): ByteArray {
+        val length = if (raw.size < 15) byteArrayOf((raw.size shl 4).toByte())
+            else byteArrayOf(0xF0.toByte()) + ByteArray((raw.size - 15) / 255) { 0xFF.toByte() } + byteArrayOf(((raw.size - 15) % 255).toByte())
+        val framed = byteArrayOf(0) + length + raw
+        return longs(framed.size.toLong()) + framed
+    }
+
     @Test fun textBinaryAndArchiveLayersReadTheSameRoom() {
         val geometries = listOf("room.usda", "room.usdc", "room.usdz").map { UsdReader.read(fixture(it)) }
         for (geometry in geometries) {
@@ -80,6 +88,21 @@ class UsdReaderTest {
             crate(tokens, noStrings, "FIELDS" to (longs(1_000_000, 6) + byteArrayOf(0, 0x40, 0, 0, 0, 0))),
             crate(tokens, noStrings, noFields, noFieldSets, "PATHS" to longs(0x7FFFFFFF, 0, 0, 0, 0)))
         for (layer in layers) assertThrows(UsdFormatException::class.java) { UsdReader.read(layer) }
+    }
+
+    @Test(timeout = 10_000) fun repeatedPathsAndChildrenAreReadOnce() {
+        // Every prim lists the same child twice; visited naively, 40 levels would take 2^40 visits.
+        val layer = StringBuilder("#usda 1.0\n")
+        repeat(40) { layer.append("def \"x\" {}\ndef \"x\" {\n") }
+        layer.append("def Cube \"c\" {}\n").append("}\n".repeat(40))
+        assertEquals(listOf("c"), UsdReader.read(layer.toString().toByteArray()).meshes.map { it.name })
+        // Sixty crate paths whose every entry has both a child and a sibling at the next entry, which names each slot again.
+        fun codes(vararg ones: Int) = ByteArray(15).also { c -> ones.forEach { c[it / 4] = (c[it / 4].toInt() or (1 shl (it % 4 * 2))).toByte() } }
+        val indexes = ints(byteArrayOf(1, 0, 0, 0) + codes(0) + byteArrayOf(0))
+        val elements = ints(ByteArray(4) + codes())
+        val jumps = ints(ByteArray(4) + codes(0, 59) + byteArrayOf(1, -3))
+        val table = crate(tokens, noStrings, noFields, noFieldSets, "PATHS" to (longs(60, 60) + indexes + elements + jumps))
+        assertThrows(UsdFormatException::class.java) { UsdReader.read(table) }
     }
 
     @Test fun integerAndLz4CodecsMatchUsd() {

@@ -83,7 +83,10 @@ object UsdReader {
         var triangles = 0
         val scale = if (layer.metersPerUnit.isFinite() && layer.metersPerUnit > 0) layer.metersPerUnit else 1.0
         val zUp = layer.upAxis.equals("Z", ignoreCase = true)
+        // Each prim is drawn once, even when a damaged layer lists one child repeatedly at every level.
+        val visited = HashSet<String>()
         fun visit(path: String, parent: DoubleArray) {
+            if (!visited.add(path)) return
             val prim = layer.prims[path] ?: return
             val (local, reset) = localTransform(prim)
             val world = if (reset) local else multiply(local, parent)
@@ -320,7 +323,10 @@ private class CrateReader(private val data: ByteArray) {
                     val name = tokens.getOrNull(abs(token)) ?: throw UsdFormatException("Invalid USD paths")
                     if (token < 0) "$parent.$name" else if (parent == "/") "/$name" else "$parent/$name"
                 }
-                paths[pathIndexes[index]] = path
+                // A table that names a slot twice walks the same subtree again for each repeat, in exponential time.
+                val slot = pathIndexes[index]
+                if (slot !in paths.indices || paths[slot] != null) throw UsdFormatException("Invalid USD paths")
+                paths[slot] = path
                 val jump = jumps[index]
                 val hasChild = jump > 0 || jump == -1
                 val hasSibling = jump >= 0
