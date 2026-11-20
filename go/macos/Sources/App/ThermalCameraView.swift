@@ -144,8 +144,7 @@ struct ThermalCameraDisplay: View {
                     .background(.black.opacity(0.4), in: Capsule())
                     .padding(12)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { open?() }
+                .modifier(CameraFeedTap(open: open))
                 .overlay(alignment: .topTrailing) {
                     Button { choosingScale = true } label: {
                         Image(systemName: frame.allowScaleOverride ? "slider.horizontal.3" : "info.circle")

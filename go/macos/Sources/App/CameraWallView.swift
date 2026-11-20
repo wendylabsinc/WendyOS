@@ -160,9 +160,19 @@ struct CameraFeedDisplay: View {
                     CameraDisplayView(decoder: feed.decoder)
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture { open?() }
+            .modifier(CameraFeedTap(open: open))
         }
+    }
+}
+
+// Only displays given open take taps; others leave them to a parent's
+// gesture or Button.
+struct CameraFeedTap: ViewModifier {
+    let open: (() -> Void)?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let open {
+            content.contentShape(Rectangle()).onTapGesture { open() }
+        } else { content }
     }
 }
 
