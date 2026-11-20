@@ -4,7 +4,7 @@ WendyOS uses systemd-journald for log management. All services write to the jour
 
 ## Default behaviour
 
-Whether journal logs survive a reboot depends on `WENDYOS_PERSIST_JOURNAL_LOGS`, whose default tracks `WENDYOS_OTA`. Boards built with the `wendyos-update` OTA stack (`WENDYOS_OTA = "wendy"`) have a `/data` partition and keep persistent logs there. The legacy `qemuarm64-wendyos` build (`WENDYOS_OTA = "none"`) and Raspberry Pi, which sets the option to `0` for now, store logs in volatile memory (`/run/log/journal`), where they are lost on reboot. The separate `vm-x86-64-wendyos` image includes A/B OTA and persistent-journal configuration; running under QEMU does not itself imply volatile logging.
+Whether journal logs survive a reboot depends on `WENDYOS_PERSIST_JOURNAL_LOGS`, whose default tracks `WENDYOS_OTA`. Boards built with the `wendyos-update` OTA stack (`WENDYOS_OTA = "wendy"`) have a `/data` partition and keep persistent logs there. Images built without an OTA stack (`WENDYOS_OTA = "none"`) and Raspberry Pi, which sets the option to `0` for now, store logs in volatile memory (`/run/log/journal`), where they are lost on reboot. The `vm-x86-64-wendyos` image includes A/B OTA and persistent-journal configuration; running under QEMU does not itself imply volatile logging.
 
 ## Persistent journal option
 
