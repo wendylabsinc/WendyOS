@@ -296,3 +296,25 @@ func TestCooldownDeclinesExistingTickets(t *testing.T) {
 		})
 	}
 }
+
+// A peer that selects the ordinary protocol sent its full chain, so hints
+// cannot explain a rejection. An untrusted peer must not pause hints for every
+// other connection of the runtime.
+func TestUnacknowledgedHintsDoNotStartCooldown(t *testing.T) {
+	a, _ := recoveryFixtures(t)
+	_, stranger := recoveryFixtures(t) // issued under an unrelated root
+	ar := new(Recovery)
+	client := a.config(false)
+	a.material(ar).ConfigureClient(client, "test/1")
+	server := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{stranger.pair}, NextProtos: []string{"test/1"}}
+	cs, _, err := recoveryWire(client, server)
+	if err == nil {
+		t.Fatal("untrusted peer verified")
+	}
+	if cs.NegotiatedProtocol != "" && cs.NegotiatedProtocol != "test/1" {
+		t.Fatalf("peer acknowledged %q; the test needs the ordinary protocol", cs.NegotiatedProtocol)
+	}
+	if ar.active() {
+		t.Fatal("rejecting a full presentation paused issuer hints")
+	}
+}

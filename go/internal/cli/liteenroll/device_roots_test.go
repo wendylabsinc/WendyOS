@@ -16,6 +16,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
 )
 
 func TestDiscoverLiteDeviceCAChainReturnsChainedCAsOnly(t *testing.T) {
@@ -174,5 +177,12 @@ func TestDiscoverLiteDeviceCAChainSharesInFlightFetch(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("fetches = %d, want 1 shared", calls.Load())
+	}
+}
+
+// Enrollment requests and Lite Device CA discovery name the same EST chain.
+func TestLiteDeviceCAChainUsesTheEnrollmentChainAlgorithm(t *testing.T) {
+	if literelay.ChainAlgorithmP256 != cloudrequest.EnrollmentChainP256 {
+		t.Fatalf("discovery selector %q != enrollment selector %q", literelay.ChainAlgorithmP256, cloudrequest.EnrollmentChainP256)
 	}
 }

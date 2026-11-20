@@ -1,21 +1,19 @@
 package liteenroll
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
 )
 
 const chainAlgorithmHeader = "X-Wendy-Chain-Algorithm"
@@ -83,15 +81,14 @@ var liteDeviceCAChains = struct {
 }{byKey: map[string]*liteDeviceCAChainFetch{}}
 
 func discoverLiteDeviceCAChainUncached(ctx context.Context, pkiEndpoint, tenantID string) (string, error) {
-	id, err := uuid.Parse(tenantID)
-	if err != nil || id.String() != tenantID || id == uuid.Nil {
-		return "", fmt.Errorf("invalid tenant for Lite device CA discovery")
-	}
 	host := cloudenroll.PKISiblingHost(pkiEndpoint, "est")
 	if host == "" {
 		return "", fmt.Errorf("selected session has no PKI CA discovery endpoint")
 	}
-	endpoint := "https://" + host + "/.well-known/est/" + tenantID + "/cacerts?chain_algorithm=" + cloudrequest.EnrollmentChainP256 + "&full_chain=true"
+	endpoint, err := literelay.LiteDeviceCAChainURL(host, tenantID)
+	if err != nil {
+		return "", err
+	}
 	return fetchLiteDeviceCAChain(ctx, endpoint)
 }
 
@@ -100,54 +97,9 @@ var fetchLiteDeviceCAChain = func(ctx context.Context, endpoint string) (string,
 	return discoverLiteDeviceCAChain(ctx, http.DefaultClient, endpoint)
 }
 
-// Fetched certs are intermediates only, never anchors, so X-Wendy-Chain-Algorithm is not checked here.
+// discoverLiteDeviceCAChain is replaced in tests.
 func discoverLiteDeviceCAChain(ctx context.Context, client *http.Client, endpoint string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-	if req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" {
-		return "", fmt.Errorf("Lite device CA discovery requires HTTPS without credentials or fragment")
-	}
-	secureClient := *client
-	secureClient.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return fmt.Errorf("Lite device CA discovery redirects are not allowed")
-	}
-	resp, err := secureClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("discovering Lite device CA chain: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Lite device CA discovery returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024+1))
-	if err != nil {
-		return "", err
-	}
-	if len(body) > 128*1024 {
-		return "", fmt.Errorf("Lite device CA discovery response too large")
-	}
-	certs, err := discoveryCertificates(body, resp.Header.Get("Content-Type"))
-	if err != nil {
-		return "", fmt.Errorf("discovering Lite device CA chain: %w", err)
-	}
-	var chain []byte
-	chained := false
-	for _, cert := range certs {
-		if !cert.IsCA {
-			continue
-		}
-		chained = chained || !bytes.Equal(cert.RawIssuer, cert.RawSubject)
-		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})...)
-	}
-	// A PKI without full_chain support answers with the self-signed twin only.
-	if !chained {
-		return "", fmt.Errorf("PKI did not return the platform-chained Lite device CA; update PKI to support full_chain")
-	}
-	return string(chain), nil
+	return literelay.FetchLiteDeviceCAChain(ctx, client, endpoint)
 }
 
 func p256DiscoveryRoots(body []byte, header http.Header) ([]byte, error) {
@@ -179,13 +131,13 @@ func p256DiscoveryRoots(body []byte, header http.Header) ([]byte, error) {
 // DiscoverLiteDeviceCAChainWithClient uses the caller's verified HTTPS transport.
 // Returned certificates remain intermediates, never new trust anchors.
 func DiscoverLiteDeviceCAChainWithClient(ctx context.Context, client *http.Client, pkiEndpoint, tenantID string) (string, error) {
-	id, err := uuid.Parse(tenantID)
-	if err != nil || id.String() != tenantID || id == uuid.Nil {
-		return "", fmt.Errorf("invalid Lite tenant")
-	}
 	host := cloudenroll.PKISiblingHost(pkiEndpoint, "est")
 	if host == "" {
 		return "", fmt.Errorf("missing Lite discovery authority")
 	}
-	return discoverLiteDeviceCAChain(ctx, client, "https://"+host+"/.well-known/est/"+tenantID+"/cacerts?chain_algorithm="+cloudrequest.EnrollmentChainP256+"&full_chain=true")
+	endpoint, err := literelay.LiteDeviceCAChainURL(host, tenantID)
+	if err != nil {
+		return "", err
+	}
+	return discoverLiteDeviceCAChain(ctx, client, endpoint)
 }

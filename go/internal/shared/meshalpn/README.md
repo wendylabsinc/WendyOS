@@ -50,7 +50,9 @@ to verify against their exact advertised certificate chain, independently of
 other versions of an issuer that happen to be cached for TLS.
 
 A locally detected issuer-path failure during a hint-enabled handshake pauses
-this optimization process-wide for 120 seconds. Missing/unusable issuers and
+this optimization process-wide for 120 seconds. When the connection-level check
+sees that the ordinary protocol was selected, the peer sent its full presentation,
+so the failure does not start recovery. Missing/unusable issuers and
 signature-path failures can indicate a false availability hint, including a
 fingerprint collision, but also an ordinary trust configuration problem. Known
 expiry, not-yet-valid, usage, identity, tenant and other policy failures do not

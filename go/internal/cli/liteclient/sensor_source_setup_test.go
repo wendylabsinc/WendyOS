@@ -53,7 +53,7 @@ func TestNormalSensorSourceAllowsSlowAuthenticatedSetup(t *testing.T) {
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := client.connectSensorSourceWithBudgets(ctx, listener.Addr().String(), cert, chain, base+"source", 100*time.Millisecond, 2*time.Second); err != nil {
+	if err := client.connectSensorSourceWithBudgets(ctx, listener.Addr().String(), cert, chain, base+"source", nil, 100*time.Millisecond, 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -84,7 +84,7 @@ func TestNormalSensorSourceTLSSetupRemainsBounded(t *testing.T) {
 	// Model a source that has accepted TCP but has not yet become ready to
 	// process its certificate flight. The longer TLS phase is still finite.
 	started := time.Now()
-	err = client.connectSensorSourceWithBudgets(context.Background(), listener.Addr().String(), cert, chain, base+"source", 100*time.Millisecond, 75*time.Millisecond)
+	err = client.connectSensorSourceWithBudgets(context.Background(), listener.Addr().String(), cert, chain, base+"source", nil, 100*time.Millisecond, 75*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("setup error = %v", err)
 	}

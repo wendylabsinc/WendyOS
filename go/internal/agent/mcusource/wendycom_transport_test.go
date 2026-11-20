@@ -150,7 +150,7 @@ func TestNewWendyComTransportRejectsMissingIdentity(t *testing.T) {
 		{"no key", "cert", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewWendyComTransport(zap.NewNop(), tc.cert, "chain", tc.key, SensorPairing{SourceAssetID: 7}, "board:5054"); err == nil {
+			if _, err := NewWendyComTransport(zap.NewNop(), tc.cert, "chain", tc.key, SensorPairing{SourceAssetID: 7}, "board:5054", nil); err == nil {
 				t.Fatal("expected an error when the agent has no mTLS identity")
 			}
 		})
@@ -158,7 +158,7 @@ func TestNewWendyComTransportRejectsMissingIdentity(t *testing.T) {
 }
 
 func TestNewWendyComTransportRejectsMissingChain(t *testing.T) {
-	if _, err := NewWendyComTransport(zap.NewNop(), "cert", "", "key", SensorPairing{SourceAssetID: 7}, "board:5054"); err == nil {
+	if _, err := NewWendyComTransport(zap.NewNop(), "cert", "", "key", SensorPairing{SourceAssetID: 7}, "board:5054", nil); err == nil {
 		t.Fatal("expected an error when the agent has no CA chain to verify the board against")
 	}
 }
@@ -166,7 +166,7 @@ func TestNewWendyComTransportRejectsMissingChain(t *testing.T) {
 // Credentials are parsed at connect time, as mtlsDialer does, so a broken
 // identity surfaces from FetchManifest before anything is dialed.
 func TestWendyComTransportReportsBadClientCertificate(t *testing.T) {
-	tr, err := NewWendyComTransport(zap.NewNop(), "cert", "chain", "key", SensorPairing{SourceAssetID: 7}, "board.invalid:5054")
+	tr, err := NewWendyComTransport(zap.NewNop(), "cert", "chain", "key", SensorPairing{SourceAssetID: 7}, "board.invalid:5054", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +516,8 @@ func TestSupervisorWendycomConnectionHasSeparateManifestDeadline(t *testing.T) {
 			}
 		}}
 		sup := NewSupervisor(zap.NewNop(), nil, func(SensorPairing, string) (SensorTransport, error) { return tr, nil }, nil, nil)
-		if _, err := sup.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "board:5054"); err != nil {
+		// The empty manifest is fetched, so the only outcome is nothing to mount.
+		if _, err := sup.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "board:5054"); !errors.Is(err, errNothingToMount) {
 			t.Fatalf("valid slow connection failed before fetching its manifest: %v", err)
 		}
 	})

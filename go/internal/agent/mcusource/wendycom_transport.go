@@ -16,6 +16,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrSourceRejectedCertificate reports that a source refused this agent's
+// certificate.
+var ErrSourceRejectedCertificate = liteclient.ErrSourceRejectedCertificate
+
 const (
 	// Wendy Lite TLS and protocol handshakes need their own connection budget.
 	wendycomConnectTimeout = 15 * time.Second
@@ -69,7 +73,11 @@ type wendycomTransport struct {
 // chains to the agent's CA, so the transport also refuses a board whose
 // certificate does not name p.SourceAssetID, as mtlsDialer does for the other
 // transports.
-func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
+//
+// A board on the classical Lite chain is issued by its tenant's Lite Device
+// CA, which the agent's own chain does not carry; lite, when non-nil, supplies
+// that CA as an untrusted intermediate for principal-pinned pairings.
+func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string, lite liteclient.LiteDeviceCAChain) (SensorTransport, error) {
 	if p.SourcePrincipalURI != "" {
 		if err := p.Validate(); err != nil {
 			return nil, err
@@ -92,7 +100,7 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 			}
 			if p.SourcePrincipalURI != "" {
 				c := liteclient.NewWendyLiteClient()
-				if err := c.ConnectSensorSource(ctx, addr, cert, chainPEM, p.SourcePrincipalURI); err != nil {
+				if err := c.ConnectSensorSource(ctx, addr, cert, chainPEM, p.SourcePrincipalURI, lite); err != nil {
 					return nil, err
 				}
 				return c, nil

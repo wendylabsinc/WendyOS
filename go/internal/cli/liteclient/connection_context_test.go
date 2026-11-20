@@ -239,7 +239,7 @@ func TestSensorTransportSetupContextCancellation(t *testing.T) {
 		connect func(*WendyLiteClient, context.Context, string) error
 	}{
 		{"principal", func(c *WendyLiteClient, ctx context.Context, address string) error {
-			return c.ConnectSensorSource(ctx, address, cert, chain, base+"source")
+			return c.ConnectSensorSource(ctx, address, cert, chain, base+"source", nil)
 		}},
 		{"legacy", func(c *WendyLiteClient, ctx context.Context, address string) error {
 			return c.ConnectWithMutualAuthenticationContext(ctx, address, cert, *roots)
