@@ -39,3 +39,14 @@ func WDOSUpdateFree(p *C.WDOSUpdateResult) {
 	free(p.json)
 	free(p)
 }
+
+//export WDOSUpdateCancel
+func WDOSUpdateCancel(session C.uint64_t) { desktop.CancelMobileOSUpdate(uint64(session)) }
+
+//export WDOSRestart
+func WDOSRestart(session C.uint64_t) *C.WDStatus {
+	return statusResult(desktop.RestartAfterOSUpdate(uint64(session)))
+}
+
+//export WDOSUpdatePrepare
+func WDOSUpdatePrepare(session C.uint64_t) { desktop.PrepareMobileOSUpdate(uint64(session)) }

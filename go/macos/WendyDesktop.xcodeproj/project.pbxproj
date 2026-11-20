@@ -60,6 +60,8 @@
 		2A9AE663651AA823593B45CC /* InstallSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5EEDDF6B4AA3E5169763239 /* InstallSession.swift */; };
 		2AE48E3AFC2A12929B38DCFD /* CampaignsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */; };
 		2B299C6B91E78CA498A2F771 /* MobileRecordingLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E74260209A4087633FC774 /* MobileRecordingLibrary.swift */; };
+		2D2EAC25720DD135F3CBE844 /* BackgroundOSUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23B45E2B14A46B604A908A5 /* BackgroundOSUpdateTests.swift */; };
+		2D387AB30A0629A6D26B6085 /* MobileOSUpdateTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F51BA9603852A5455AADE5C /* MobileOSUpdateTask.swift */; };
 		2D56AD29CF7094E56D4C28D4 /* PresentedFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */; };
 		2DD8FB6D5BC5F30F83C8C71C /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D80556F17991D76C5790CE15 /* CoreAudio.framework */; };
 		2FD819F5EEB474D4FF9E0C1F /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE9A9C8F45E321960D15CEF8 /* PairingView.swift */; };
@@ -531,6 +533,7 @@
 		88980115DE513BF1DED28B61 /* RobotLensCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotLensCalibrationView.swift; sourceTree = "<group>"; };
 		8BAB3A815C395E9C07C56795 /* NearbySetupPromptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupPromptTests.swift; sourceTree = "<group>"; };
 		8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViewfinder.swift; sourceTree = "<group>"; };
+		8F51BA9603852A5455AADE5C /* MobileOSUpdateTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileOSUpdateTask.swift; sourceTree = "<group>"; };
 		91E03E29F774A31822696188 /* PhoneLensCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLensCalibrationView.swift; sourceTree = "<group>"; };
 		956D04288AC871766E33F388 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementView.swift; sourceTree = "<group>"; };
@@ -548,6 +551,7 @@
 		A08F325BB22813193B75ED5F /* DeviceRecognition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRecognition.swift; sourceTree = "<group>"; };
 		A0FD78A95A6F8642DAC85357 /* SiteRoomCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRoomCapture.swift; sourceTree = "<group>"; };
 		A19B0A13014E2020EF1D3397 /* installation */ = {isa = PBXFileReference; lastKnownFileType = folder; name = installation; path = ../internal/cli/assets/docs/videos/installation; sourceTree = SOURCE_ROOT; };
+		A23B45E2B14A46B604A908A5 /* BackgroundOSUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundOSUpdateTests.swift; sourceTree = "<group>"; };
 		A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignRecordingsView.swift; sourceTree = "<group>"; };
 		A2D3B6424879FD4924BE05FA /* ConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcurrencyTests.swift; sourceTree = "<group>"; };
 		A42B4C81072A80F34E80568B /* MobileDeviceActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDeviceActivity.swift; sourceTree = "<group>"; };
@@ -874,6 +878,7 @@
 		4FE7BDE560CB2771FA9DF7F8 /* Tests-iOS */ = {
 			isa = PBXGroup;
 			children = (
+				A23B45E2B14A46B604A908A5 /* BackgroundOSUpdateTests.swift */,
 				F85C825F391DB90657D2435A /* CloudChatTests.swift */,
 				BF11CFFFA6C015AEF47DE015 /* DeviceAppearanceTests.swift */,
 				71147C6CE8E18CA4930B9052 /* DeviceManagementTests.swift */,
@@ -957,6 +962,7 @@
 				11989D9F81DE33926C6744D5 /* MobileLensData.swift */,
 				82AC2E778CCB1834490684FD /* MobileLensViews.swift */,
 				10ABDA820D872A8026204A1D /* MobileLoadingPlaceholder.swift */,
+				8F51BA9603852A5455AADE5C /* MobileOSUpdateTask.swift */,
 				D82158ABFAEE221FC6FDCAC9 /* MobilePlatform.swift */,
 				D75F511A7F81D16A68154921 /* MobileRealityProjection.swift */,
 				EDB6ECAA67E9890B0CF2C13E /* MobileRecordingCards.swift */,
@@ -1594,6 +1600,7 @@
 				E022926994D8FA6445C54B5F /* MobileLensData.swift in Sources */,
 				C030F868D356184175923A14 /* MobileLensViews.swift in Sources */,
 				F5CE0A610676E382D367A65A /* MobileLoadingPlaceholder.swift in Sources */,
+				2D387AB30A0629A6D26B6085 /* MobileOSUpdateTask.swift in Sources */,
 				4C5CF7A1B3ED504E7994B90B /* MobilePlatform.swift in Sources */,
 				887AF890C1AA1CBC4FE336A5 /* MobileRealityProjection.swift in Sources */,
 				5AEBF29BA828D490E66E39E5 /* MobileRecordingCards.swift in Sources */,
@@ -1673,6 +1680,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2D2EAC25720DD135F3CBE844 /* BackgroundOSUpdateTests.swift in Sources */,
 				B55D56471F1D00551BBEB799 /* CloudChatTests.swift in Sources */,
 				635A18F2E5FC3C3480A85510 /* ConcurrencyTests.swift in Sources */,
 				819BE305C463CE619D441D70 /* DeviceAppearanceTests.swift in Sources */,
