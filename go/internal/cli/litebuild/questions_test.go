@@ -383,3 +383,181 @@ rules:
 		t.Fatalf("Run error = %v, want ErrNoConfiguration", err)
 	}
 }
+
+// givenConf has a board rule that sets wendy_net, a forbidden combination,
+// and an attribute that no rule uses.
+const givenConf = `
+attributes:
+  board: {type: string, enum: [a, b, c]}
+  chip: {type: string, enum: [c6, s3]}
+  idf_version: {type: string, enum: ["6.0.3"]}
+  idf_preview: {type: boolean}
+  wendy_net: {type: boolean}
+  tunnel: {type: boolean}
+  unused: {type: boolean}
+display:
+  board: {title: Board, priority: 1}
+  wendy_net: {title: Wendy Net, priority: 2}
+  tunnel: {title: Tunnel, priority: 3}
+  unused: {title: Unused}
+rules:
+  - if: board == "a"
+    set: {chip: c6, wendy_net: false}
+  - if: board == "b" || board == "c"
+    set: {chip: s3}
+  - if: chip == "c6" || chip == "s3"
+    set: {idf_version: "6.0.3", idf_preview: false}
+  - if: wendy_net
+    sdkconfig: CONFIG_WENDY_NET=y
+  - if: tunnel
+    sdkconfig: CONFIG_TUNNEL=y
+  - if: board == "c" && tunnel
+    valid: false
+`
+
+// TestRunGiven checks that a given value answers its question, and that
+// the questions before it offer only the answers that keep it.
+func TestRunGiven(t *testing.T) {
+	c := newTestConfigurator(t, givenConf)
+	c.Given = map[string]any{"tunnel": true}
+	p := newScripted(t, map[string]string{"board": "b", "wendy_net": "true"})
+	res, err := c.Run(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"board", "wendy_net"}; !slices.Equal(p.asked, want) {
+		t.Errorf("asked %v, want %v", p.asked, want)
+	}
+	if got := p.options["board"]; !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("board options = %v, want [a b] (c forbids tunnel)", got)
+	}
+	if p.infos["tunnel"] != "given" || res.Inputs["tunnel"] != true {
+		t.Errorf("tunnel: info %q, input %v, want the given value true", p.infos["tunnel"], res.Inputs["tunnel"])
+	}
+	for _, step := range res.Steps {
+		if step.Attr.Name == "tunnel" && step.Source != SourceGiven {
+			t.Errorf("tunnel source = %q, want %q", step.Source, SourceGiven)
+		}
+	}
+	if want := []string{"CONFIG_WENDY_NET=y", "CONFIG_TUNNEL=y"}; !slices.Equal(res.Solution.Sdkconfig, want) {
+		t.Errorf("sdkconfig = %v, want %v", res.Solution.Sdkconfig, want)
+	}
+}
+
+// TestRunGivenAll checks a run without questions: every value is given or
+// set by a rule.
+func TestRunGivenAll(t *testing.T) {
+	c := newTestConfigurator(t, givenConf)
+	c.Given = map[string]any{"board": "a", "wendy_net": false, "tunnel": false}
+	p := newScripted(t, nil) // any question fails the test
+	res, err := c.Run(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wendy_net is set by the board rule: it is not an input.
+	if want := map[string]any{"board": "a", "tunnel": false}; len(res.Inputs) != len(want) || res.Inputs["board"] != "a" || res.Inputs["tunnel"] != false {
+		t.Errorf("inputs = %v, want %v", res.Inputs, want)
+	}
+	if p.infos["wendy_net"] != "set by Board" {
+		t.Errorf("wendy_net info = %q, want the board rule", p.infos["wendy_net"])
+	}
+}
+
+// TestRunGivenRuleValue checks that a given value of an attribute that a
+// rule sets restricts the answers to the rules that set it.
+func TestRunGivenRuleValue(t *testing.T) {
+	c := newTestConfigurator(t, givenConf)
+	c.Given = map[string]any{"wendy_net": true}
+	p := newScripted(t, map[string]string{"board": "b", "tunnel": "false"})
+	res, err := c.Run(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.options["board"]; !slices.Equal(got, []string{"b", "c"}) {
+		t.Errorf("board options = %v, want [b c] (a sets wendy_net to false)", got)
+	}
+	if res.Solution.Values["wendy_net"] != true {
+		t.Errorf("wendy_net = %v, want true", res.Solution.Values["wendy_net"])
+	}
+}
+
+func TestRunGivenErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		given map[string]any
+		want  string
+	}{
+		{"rule conflict", map[string]any{"board": "a", "wendy_net": true}, "wendy_net=true is not possible with board=a"},
+		{"forbidden", map[string]any{"board": "c", "tunnel": true}, "tunnel=true is not possible with board=c"},
+		{"unused", map[string]any{"unused": true}, "unused=true is not possible in any configuration"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestConfigurator(t, givenConf)
+			c.Given = tc.given
+			_, err := c.Run(newScripted(t, nil))
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("Run error = %v, want %q", err, tc.want)
+			}
+			var givenErr *GivenError
+			if !errors.As(err, &givenErr) {
+				t.Errorf("Run error is a %T, want *GivenError", err)
+			}
+			if len(c.Given) != len(tc.given) {
+				t.Errorf("Given changed to %v", c.Given)
+			}
+		})
+	}
+}
+
+// TestRunGivenInternal checks that an internal attribute that needs a
+// question can be given.
+func TestRunGivenInternal(t *testing.T) {
+	conf := `
+attributes:
+  chip: {type: string, enum: [c6]}
+  idf_version: {type: string, enum: ["6.0.3"]}
+  idf_preview: {type: boolean}
+  log_level: {type: string, enum: [info, debug]}
+rules:
+  - if: chip == "c6"
+    set: {idf_version: "6.0.3", idf_preview: false}
+  - if: log_level == "debug"
+    sdkconfig: CONFIG_DEBUG=y
+`
+	c := newTestConfigurator(t, conf)
+	if _, err := c.Run(newScripted(t, nil)); err == nil || !strings.Contains(err.Error(), "internal") {
+		t.Fatalf("Run without the value: %v, want the internal attribute error", err)
+	}
+	c.Given = map[string]any{"log_level": "debug"}
+	res, err := c.Run(newScripted(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Solution.Sdkconfig, []string{"CONFIG_DEBUG=y"}) {
+		t.Errorf("sdkconfig = %v", res.Solution.Sdkconfig)
+	}
+}
+
+func TestParseValue(t *testing.T) {
+	m, err := Load([]byte(givenConf), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := m.ParseValue("tunnel", " yes "); err != nil || v != true {
+		t.Errorf("tunnel=yes: %v, %v; want true", v, err)
+	}
+	if v, err := m.ParseValue("board", ""); err != nil || v != nil {
+		t.Errorf("board=: %v, %v; want undefined", v, err)
+	}
+	for name, want := range map[string]string{
+		"colour":  `unknown attribute "colour"`,
+		Sdkconfig: "sdkconfig cannot be given on the command line",
+	} {
+		if _, err := m.ParseValue(name, "x"); err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", name, err, want)
+		}
+	}
+	if _, err := m.ParseValue("board", "d"); err == nil || err.Error() != "board: d is not one of: a, b, c" {
+		t.Errorf("board=d: %v", err)
+	}
+}

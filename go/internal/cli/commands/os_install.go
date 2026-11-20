@@ -57,7 +57,7 @@ const (
 	preEnrollSkip                        // --pre-enroll explicitly set to false
 )
 
-var errESP32DeviceType = errors.New("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+var errESP32DeviceType = errors.New("--device-type does not support ESP32 targets; to build and flash Wendy Lite, use --device-type esp32 with --build-attr board=<board>, or the interactive picker")
 
 func newOSInstallCmd() *cobra.Command {
 	var nightly bool
@@ -79,6 +79,7 @@ func newOSInstallCmd() *cobra.Command {
 	var prNumber int
 	var binaryPath string
 	var drivers []string
+	var buildAttrItems []string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -98,6 +99,10 @@ Pre-seed multiple WiFi networks (repeatable, highest-priority first):
     --wifi "ssid=Home,password=hunter2,priority=100" \
     --wifi "ssid=Office,password=corp,priority=50" \
     --wifi "ssid=Cafe,hidden=true"
+
+Build Wendy Lite with the configurator and flash it to the connected ESP32;
+each --build-attr answers one configurator question:
+  wendy os install --device-type esp32 --build-attr board=esp32c61_devkit_c_1 --no-wifi
 
 Flags can be provided progressively — omitted values trigger interactive pickers.
 Prompts still work when output is piped, as long as you type the command in a
@@ -119,6 +124,13 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			// Refuse unsupported explicit targets before either path runs.
 			if isESP32Target(deviceType) {
 				return errESP32DeviceType
+			}
+			buildAttrs, err := parseBuildAttrs(buildAttrItems)
+			if err != nil {
+				return err
+			}
+			if err := checkLiteBuildFlags(cmd, deviceType, len(args) > 0, len(buildAttrs) > 0); err != nil {
+				return err
 			}
 			if len(drivers) > 0 {
 				if len(args) != 0 || deviceType == "" || deviceName == "" {
@@ -194,9 +206,12 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
 			// Map an alias first so driver lookup and the install checks see the device it stands for.
-			var aliasErr error
-			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(cmd.Context(), deviceType, storageOverride, prNumber); aliasErr != nil {
-				return aliasErr
+			// The Wendy Lite build needs no manifest.
+			if deviceType != liteBuildDeviceType {
+				var aliasErr error
+				if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(cmd.Context(), deviceType, storageOverride, prNumber); aliasErr != nil {
+					return aliasErr
+				}
 			}
 			prepared, err := prepareOSInstallDrivers(cmd.Context(), deviceType, versionFlag, nightly, prNumber, drivers)
 			if err != nil {
@@ -206,7 +221,7 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			if prepared != nil {
 				versionFlag = prepared.version
 			}
-			if err := runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent); err != nil {
+			if err := runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent, buildAttrs); err != nil {
 				return err
 			}
 			return prepared.installAfterBoot(cmd.Context(), deviceName)
@@ -219,7 +234,8 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 	cmd.Flags().BoolVar(&rootfsOnly, "rootfs-only", false, "Write only the SD/NVMe rootfs image; does not update Jetson QSPI boot firmware")
 	cmd.Flags().StringVar(&storageOverride, "storage", "", "Force image storage variant: nvme or sd (default: auto-detect — real NVMe drives use nvme; a USB-attached drive uses the device's published image, SD for Raspberry Pi / NVMe for Jetson SSD enclosures). For jetson-agx-orin, emmc flashes the onboard eMMC over USB recovery instead of writing a drive")
 	cmd.Flags().BoolVar(&yesOverwriteInternal, "yes-overwrite-internal", false, "Required to wipe an internal (non-removable) drive in non-interactive mode")
-	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
+	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5), or esp32 to build Wendy Lite with the configurator and flash it")
+	cmd.Flags().StringArrayVar(&buildAttrItems, "build-attr", nil, "Configurator attribute of the Wendy Lite build (--device-type esp32), as NAME=VALUE; skips that question. Repeatable")
 	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted); for the ESP* configurator entry, a Wendy Lite version (X.Y.Z), a wendy-lite branch or a commit hash; default: the latest release")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
@@ -446,9 +462,13 @@ func pickWendyLiteBoard(target string, nightly bool) (string, error) {
 	return pickFromItems("Select your board model", items)
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly, rootfsOnlyExplicit bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int, agent *localInstallAgent) (retErr error) {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly, rootfsOnlyExplicit bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int, agent *localInstallAgent, buildAttrs map[string]string) (retErr error) {
 	ctx, finish := startActivationOperation(ctx, "install", "wendy install")
 	defer func() { finish(retErr) }()
+	// The Wendy Lite build clones its sources: no manifest is fetched.
+	if flagDeviceType == liteBuildDeviceType {
+		return runLiteBuildFn(ctx, nightly, flagVersion, buildAttrs, wifi, deviceName, preOpts)
+	}
 	if agent != nil {
 		if flagDeviceType == linuxDesktopValue || flagDeviceType == headlessMacValue {
 			return usageErrorf("--binary is supported only when installing a WendyOS image")
@@ -624,6 +644,9 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 					available = append(available, k)
 				}
 			}
+			if prNumber == 0 {
+				available = append(available, liteBuildDeviceType)
+			}
 			sort.Strings(available)
 			if prNumber > 0 {
 				return fmt.Errorf("device %q not built by PR %d (built: %s)", flagDeviceType, prNumber, strings.Join(available, ", "))
@@ -666,7 +689,10 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	}
 
 	if selected == liteBuildValue {
-		return runLiteBuild(ctx, nightly, flagVersion, wifi, deviceName, preOpts)
+		return runLiteBuildFn(ctx, nightly, flagVersion, buildAttrs, wifi, deviceName, preOpts)
+	}
+	if len(buildAttrs) > 0 {
+		return usageErrorf("--build-attr applies only to the Wendy Lite build (--device-type %s)", liteBuildDeviceType)
 	}
 
 	// Thor flashes over USB recovery via its flashpack, never to a drive. The
@@ -3414,23 +3440,29 @@ func flashLiteImage(ctx context.Context, img *EspFlashImage, expectedChip chipMo
 		}
 
 		fmt.Println()
-		flashProg := tui.NewProgress(fmt.Sprintf("Flashing to %s...", serialDevice.Port))
-		fp := tui.NewProgressProgram(flashProg)
+		var flashErr error
+		if interactive {
+			flashProg := tui.NewProgress(fmt.Sprintf("Flashing to %s...", serialDevice.Port))
+			fp := tui.NewProgressProgram(flashProg)
 
-		go func() {
-			flashErr := flashFirmwareImage(serialDevice.Port, img, serialDevice.Transport, expectedChip, func(pct float64) {
-				fp.Send(tui.ProgressUpdateMsg{Percent: pct})
-			})
-			fp.Send(tui.ProgressDoneMsg{Err: flashErr})
-		}()
+			go func() {
+				flashErr := flashFirmwareImage(serialDevice.Port, img, serialDevice.Transport, expectedChip, func(pct float64) {
+					fp.Send(tui.ProgressUpdateMsg{Percent: pct})
+				})
+				fp.Send(tui.ProgressDoneMsg{Err: flashErr})
+			}()
 
-		flashFinal, err := tui.RunProgram(fp)
-		if err != nil {
-			return fmt.Errorf("flash TUI: %w", err)
+			flashFinal, err := tui.RunProgram(fp)
+			if err != nil {
+				return fmt.Errorf("flash TUI: %w", err)
+			}
+			flashErr = flashFinal.(tui.ProgressModel).Err()
+		} else {
+			// No terminal for the progress bar: it would open /dev/tty.
+			// Same stream as the progress bar.
+			fmt.Fprintf(os.Stderr, "Flashing to %s...\n", serialDevice.Port)
+			flashErr = flashFirmwareImage(serialDevice.Port, img, serialDevice.Transport, expectedChip, plainFlashProgress(os.Stderr))
 		}
-
-		flashModel := flashFinal.(tui.ProgressModel)
-		flashErr := flashModel.Err()
 
 		retry, fatal := flashRetryAction(flashErr, interactive)
 		if fatal != nil {
@@ -3466,6 +3498,20 @@ func flashLiteImage(ctx context.Context, img *EspFlashImage, expectedChip chipMo
 		return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, prov.name, version, interactive)
 	}
 	return nil
+}
+
+// plainFlashProgress returns a flash progress callback (pct from 0 to 1)
+// that prints a line at each 10%, for a run without a terminal.
+func plainFlashProgress(w io.Writer) func(pct float64) {
+	next := 10
+	return func(pct float64) {
+		done := int(pct * 100)
+		if done < next {
+			return
+		}
+		fmt.Fprintf(w, "  %d%%\n", done/10*10)
+		next = done/10*10 + 10
+	}
 }
 
 func esp32InstallCandidateMessage(device discovery.SerialPortInfo) string {

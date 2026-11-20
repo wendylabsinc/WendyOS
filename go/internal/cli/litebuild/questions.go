@@ -14,6 +14,7 @@ const (
 	SourceAnswer = "answer"       // the user answered the question
 	SourceOnly   = "only allowed" // the only allowed value: no question
 	SourceRule   = "rule"         // a rule set it
+	SourceGiven  = "given"        // Configurator.Given: no question
 )
 
 // Question is one question to the user.
@@ -46,7 +47,7 @@ type Prompter interface {
 type Step struct {
 	Attr   *Attribute
 	Value  any
-	Source string // SourceAnswer, SourceOnly or SourceRule
+	Source string // SourceAnswer, SourceOnly, SourceGiven or SourceRule
 	Rule   *Rule  // for SourceRule: the rule that set the value
 }
 
@@ -86,6 +87,14 @@ type Configurator struct {
 	// LoadAnswers). The previous value of a question is its default when it
 	// is allowed.
 	Previous map[string]any
+
+	// Given are values fixed before the run, by attribute name (the
+	// --build-attr values of the CLI). Each one must be in the
+	// configuration: it answers the question of its attribute, and it must
+	// be the value of a rule that sets the attribute. An attribute that the
+	// configuration does not use cannot be given. The questions offer only
+	// the answers that keep all the given values.
+	Given map[string]any
 }
 
 // NewConfigurator prepares the questions. extra adds required attributes,
@@ -272,7 +281,7 @@ func (c *Configurator) asked(s *state, k int) bool {
 func (c *Configurator) feasible(s *state, k int) bool {
 	s = s.clone()
 	for ; k < len(c.order); k++ {
-		if c.forbidden(s, k) || c.apply(s, k) != nil {
+		if c.forbidden(s, k) || c.apply(s, k) != nil || !c.givenKept(s, k) {
 			return false
 		}
 		if !c.asked(s, k) {
@@ -293,6 +302,60 @@ func (c *Configurator) feasible(s *state, k int) bool {
 	return len(c.solver.FindMissing(s.values, c.required)) == 0
 }
 
+// givenKept tells if the given value of the attribute at position k, if
+// any, can still be in the configuration after the rules of position k: a
+// rule set the same value, or the attribute gets a question (its domain is
+// then the given value).
+func (c *Configurator) givenKept(s *state, k int) bool {
+	name := c.order[k].Name
+	given, ok := c.Given[name]
+	if !ok {
+		return true
+	}
+	if v := s.values[name]; v != nil {
+		return v == given
+	}
+	return c.asked(s, k)
+}
+
+// GivenError means that a given value (Configurator.Given) is not possible
+// with the given values before it in question order. The message starts
+// with the NAME=VALUE text of the value.
+type GivenError struct {
+	Msg string
+}
+
+func (e *GivenError) Error() string { return e.Msg }
+
+// givenError explains why the given values have no allowed configuration:
+// it adds them one by one, in question order, and names the first one that
+// leaves no allowed configuration.
+func (c *Configurator) givenError() error {
+	all := c.Given
+	defer func() { c.Given = all }()
+	c.Given = map[string]any{}
+	if !c.feasible(newState(), 0) {
+		return ErrNoConfiguration
+	}
+	var before []string
+	for _, attr := range c.order {
+		given, ok := all[attr.Name]
+		if !ok {
+			continue
+		}
+		c.Given[attr.Name] = given
+		item := attr.Name + "=" + attr.Key(given)
+		if !c.feasible(newState(), 0) {
+			if len(before) == 0 {
+				return &GivenError{Msg: item + " is not possible in any configuration"}
+			}
+			return &GivenError{Msg: item + " is not possible with " + strings.Join(before, ", ")}
+		}
+		before = append(before, item)
+	}
+	return ErrNoConfiguration
+}
+
 // try tells if value v of the attribute at position k can lead to an
 // allowed configuration.
 func (c *Configurator) try(s *state, k int, v any) bool {
@@ -303,10 +366,13 @@ func (c *Configurator) try(s *state, k int, v any) bool {
 	return ok
 }
 
-// domain returns the values to try for an attribute: its enum, false and
-// true, or for an attribute without enum one value of each class that the
-// rules can tell apart.
+// domain returns the values to try for an attribute: its given value, its
+// enum, false and true, or for an attribute without enum one value of each
+// class that the rules can tell apart.
 func (c *Configurator) domain(attr *Attribute) []any {
+	if given, ok := c.Given[attr.Name]; ok {
+		return []any{given}
+	}
 	if attr.Enum != nil {
 		return attr.Enum
 	}
@@ -375,6 +441,8 @@ func (c *Configurator) representatives(attr *Attribute) []any {
 // configuration. One allowed answer is shown without a question. Two or
 // more give a question. The default answer is the previous value
 // (c.Previous) when it is allowed, else display.default when it is allowed.
+// A given value (c.Given) is shown without a question, even for an internal
+// attribute.
 //
 // An internal attribute (not in the display section) is never shown. It
 // can get its value from a rule or as the only allowed value. If it needs a
@@ -382,6 +450,9 @@ func (c *Configurator) representatives(attr *Attribute) []any {
 func (c *Configurator) Run(p Prompter) (*Result, error) {
 	s := newState()
 	if !c.feasible(s, 0) {
+		if len(c.Given) > 0 {
+			return nil, c.givenError()
+		}
 		return nil, ErrNoConfiguration
 	}
 	inputs := map[string]any{}
@@ -409,7 +480,12 @@ func (c *Configurator) Run(p Prompter) (*Result, error) {
 		var value any
 		var err error
 		source := SourceAnswer
-		if attr.Enum == nil && attr.Type != TypeBoolean {
+		if given, ok := c.Given[attr.Name]; ok {
+			// Allowed: the walk is feasible, and the domain of a given
+			// attribute is its given value.
+			value, source = given, SourceGiven
+			p.Info(attr, value, "given")
+		} else if attr.Enum == nil && attr.Type != TypeBoolean {
 			if !attr.Visible {
 				return nil, c.internalError(attr)
 			}

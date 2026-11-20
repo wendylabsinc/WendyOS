@@ -308,22 +308,10 @@ func (m *Model) ParseAssignments(items []string) (map[string]any, error) {
 			return nil, confErrorf("command line: \"%s\": expected NAME=VALUE", item)
 		}
 		err := func() error {
-			if name == Sdkconfig {
-				return confErrorf("%s cannot be given on the command line", Sdkconfig)
-			}
-			attr := m.Attributes[name]
-			if attr == nil {
-				return confErrorf("unknown attribute \"%s\"", name)
-			}
-			if _, ok := values[name]; ok {
+			if _, ok := values[name]; ok && m.Attributes[name] != nil {
 				return confErrorf("%s is given twice", name)
 			}
-			raw = strings.TrimSpace(raw)
-			if raw == "" {
-				values[name] = nil
-				return nil
-			}
-			value, err := attr.Normalize(raw)
+			value, err := m.ParseValue(name, raw)
 			values[name] = value
 			return err
 		}()
@@ -332,6 +320,23 @@ func (m *Model) ParseAssignments(items []string) (map[string]any, error) {
 		}
 	}
 	return values, nil
+}
+
+// ParseValue reads the VALUE of a NAME=VALUE argument for the attribute
+// name. An empty value gives nil: the attribute is undefined.
+func (m *Model) ParseValue(name, raw string) (any, error) {
+	if name == Sdkconfig {
+		return nil, confErrorf("%s cannot be given on the command line", Sdkconfig)
+	}
+	attr := m.Attributes[name]
+	if attr == nil {
+		return nil, confErrorf("unknown attribute \"%s\"", name)
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	return attr.Normalize(raw)
 }
 
 // Assignments returns the input values as NAME=VALUE arguments, in

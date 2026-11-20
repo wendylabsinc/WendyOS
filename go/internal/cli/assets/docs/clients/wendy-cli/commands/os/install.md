@@ -10,6 +10,7 @@ The command presents a device picker with Linux, Mac, and Microcontrollers tabs.
 - **Raspberry Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
 - **Jetson AGX Thor** -> download flashpack -> boot over USB recovery -> flash QSPI and internal NVMe
 - **ESP32 targets** → detect USB serial port → download firmware `.bin` → flash over serial
+- **ESP32 platform via new configurator** (`--device-type esp32`) → clone Wendy Lite → answer the configurator questions → build with ESP-IDF → flash over serial
 
 ```sh
 # Interactive (recommended)
@@ -36,9 +37,13 @@ wendy install --device-type jetson-orin-nano --rootfs-only --drive /dev/disk4
 
 # Direct install from a local image (Linux only)
 wendy install path/to/image.img /dev/disk4 --force
+
+# ESP32: build Wendy Lite with the configurator and flash the connected board
+wendy install --device-type esp32 --build-attr board=esp32c61_devkit_c_1 \
+  --build-attr cloud_tunnel=false --no-wifi
 ```
 
-> **Note:** `--device-type` is not supported for ESP32 targets. Use the interactive picker to flash an ESP32.
+> **Note:** `--device-type esp32` builds Wendy Lite from source with the configurator, then flashes the connected ESP32. Each `--build-attr NAME=VALUE` answers one configurator question: `NAME` is an attribute of the Wendy Lite `master_config.yaml`, and `VALUE` is written as in a `configure.py` argument. A value that a rule of the configuration sets must match it, and an attribute that the configuration does not use is an error. The other questions are asked; without a terminal, the install stops and names the next question with its allowed values. The specific ESP32 targets (`esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) are not `--device-type` values: use `esp32`, or the interactive picker for the published firmware.
 
 > **Without a terminal**, also pass a Wi-Fi choice (`--wifi`, `--wifi-ssid` or `--no-wifi`) and `--force`. See [Running without a terminal](#running-without-a-terminal).
 
@@ -256,8 +261,9 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--binary` | — | Path to a local Linux ELF `wendy-agent` binary; skips the agent download and requires matching ARM64 or x86_64 architecture |
 | `--nightly` | false | Use nightly/pre-release builds |
 | `--pr` | — | Install from wendyos-builder PR #N (mutually exclusive with `--nightly`, `--version`, positional path; not supported for ESP32 targets) |
-| `--device-type` | — | Device type from manifest (Linux targets only, e.g. `raspberry-pi-5`; not supported for ESP32 targets: `esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) |
-| `--version` | latest | WendyOS version to install (Linux only) |
+| `--device-type` | — | Device type from manifest (e.g. `raspberry-pi-5`), or `esp32` to build Wendy Lite with the configurator and flash it. The specific ESP32 targets (`esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) are not supported |
+| `--build-attr` | — | Repeatable `NAME=VALUE`: a configurator attribute of the Wendy Lite build (`--device-type esp32`), which skips that question |
+| `--version` | latest | WendyOS version to install; with `--device-type esp32`, the Wendy Lite version to build: `X.Y.Z`, a wendy-lite branch or a full commit hash |
 | `--drive` | interactive | Target drive path (e.g. `/dev/disk4`) |
 | `--rootfs-only` | false | Explicitly write only an Orin SD/NVMe image; QSPI is not updated |
 | `--force` | false | Skip confirmation prompts; required without a terminal |
@@ -292,6 +298,7 @@ Without a terminal on the input (CI, an agent's shell), nothing is asked, and ev
 | Erase and ready confirmations | `--force` is required. |
 | Internal drive | `--yes-overwrite-internal` is required. |
 | Several boards in recovery or EDL mode | Connect only the one to flash. |
+| Wendy Lite configurator questions (`--device-type esp32`) | One `--build-attr NAME=VALUE` per question that the rules do not answer. The answers of the last run are not used. |
 
 Before anything is erased or flashed, the installer prints what first boot will apply, also with `--force`. Passwords are never printed:
 

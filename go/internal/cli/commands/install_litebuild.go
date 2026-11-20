@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/spf13/cobra"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
@@ -23,6 +27,114 @@ import (
 // Lite from source with the configurator, then flashes it. The wlite_ prefix
 // puts it in the Microcontrollers tab.
 const liteBuildValue = "wlite_build"
+
+// liteBuildDeviceType is the --device-type of the same entry.
+const liteBuildDeviceType = "esp32"
+
+// parseBuildAttrs reads the --build-attr flags: NAME=VALUE, each name once.
+// The names and values are checked against the master configuration later,
+// when it is cloned.
+func parseBuildAttrs(items []string) (map[string]string, error) {
+	attrs := map[string]string{}
+	for _, item := range items {
+		name, value, found := strings.Cut(item, "=")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		switch {
+		case !found || name == "":
+			return nil, usageErrorf("--build-attr %q: expected NAME=VALUE", item)
+		case value == "":
+			return nil, usageErrorf("--build-attr %s: give a value", name)
+		}
+		if _, ok := attrs[name]; ok {
+			return nil, usageErrorf("--build-attr %s is given twice", name)
+		}
+		attrs[name] = value
+	}
+	return attrs, nil
+}
+
+// liteBuildIgnoredFlags are the install flags that the Wendy Lite build
+// does not use: it builds the firmware and flashes it over USB.
+var liteBuildIgnoredFlags = []string{"pr", "driver", "binary", "drive", "storage", "rootfs-only"}
+
+// checkLiteBuildFlags refuses, before anything is fetched, --build-attr
+// for an install that is not the Wendy Lite build, and the flags that
+// --device-type esp32 would ignore.
+func checkLiteBuildFlags(cmd *cobra.Command, deviceType string, positional, buildAttrs bool) error {
+	if deviceType != liteBuildDeviceType {
+		if buildAttrs && (deviceType != "" || positional) {
+			return usageErrorf("--build-attr applies only to --device-type %s", liteBuildDeviceType)
+		}
+		return nil
+	}
+	// Without a terminal, root turns JSON on by itself: only an explicit
+	// --json is refused.
+	if cmd.Root().PersistentFlags().Changed("json") && jsonOutput {
+		return usageErrorf("--device-type %s does not support --json", liteBuildDeviceType)
+	}
+	var ignored []string
+	for _, name := range liteBuildIgnoredFlags {
+		if cmd.Flags().Changed(name) {
+			ignored = append(ignored, "--"+name)
+		}
+	}
+	if len(ignored) > 0 {
+		return usageErrorf("--device-type %s builds Wendy Lite and flashes it over USB: remove %s", liteBuildDeviceType, strings.Join(ignored, ", "))
+	}
+	return nil
+}
+
+// liteBuildGiven returns the configurator values of the --build-attr
+// flags, checked against the master configuration m.
+func liteBuildGiven(m *litebuild.Model, attrs map[string]string) (map[string]any, error) {
+	given := map[string]any{}
+	for _, name := range slices.Sorted(maps.Keys(attrs)) {
+		value, err := m.ParseValue(name, attrs[name])
+		if err != nil {
+			if m.Attributes[name] == nil {
+				names := make([]string, len(m.Order))
+				for i, a := range m.Order {
+					names[i] = a.Name
+				}
+				return nil, usageErrorf("--build-attr %s=%s: %v (attributes: %s)", name, attrs[name], err, strings.Join(names, ", "))
+			}
+			return nil, usageErrorf("--build-attr %s=%s: %v", name, attrs[name], err)
+		}
+		given[name] = value
+	}
+	return given, nil
+}
+
+// noTerminalPrompter answers no question: without a terminal, every
+// question needs a --build-attr flag.
+type noTerminalPrompter struct {
+	litebuild.TUIPrompter // for Info
+}
+
+func (p *noTerminalPrompter) Select(q litebuild.Question) (int, error) {
+	return 0, noTerminalQuestion(q)
+}
+
+func (p *noTerminalPrompter) Confirm(q litebuild.Question) (bool, error) {
+	return false, noTerminalQuestion(q)
+}
+
+func (p *noTerminalPrompter) Text(q litebuild.Question, _ func(string) error) (string, error) {
+	return "", noTerminalQuestion(q)
+}
+
+// noTerminalQuestion is the error of a question without a terminal: it
+// names the flag that answers it, with the allowed values.
+func noTerminalQuestion(q litebuild.Question) error {
+	if len(q.Options) == 0 {
+		return usageErrorf("no terminal to ask %q: pass --build-attr %s=<value>", q.Attr.Title(), q.Attr.Name)
+	}
+	keys := make([]string, len(q.Options))
+	for i, v := range q.Options {
+		keys[i] = q.Attr.Key(v)
+	}
+	return usageErrorf("no terminal to ask %q: pass --build-attr %s=<value> (allowed: %s)", q.Attr.Title(), q.Attr.Name, strings.Join(keys, ", "))
+}
 
 // liteBuildPickerItem is the install picker entry of runLiteBuild.
 func liteBuildPickerItem() tui.PickerItem {
@@ -38,6 +150,8 @@ func liteBuildPickerItem() tui.PickerItem {
 
 // Seams for tests.
 var (
+	runLiteBuildFn = runLiteBuild
+
 	// liteBuildRoot returns the cache folder of the Wendy Lite build: the
 	// build folders (see litebuild.PrepareSources), the answers and the
 	// lock.
@@ -67,8 +181,10 @@ var (
 //     nightly tag, or --version), check that it has a master configuration,
 //     and reuse or clone the build folder of its commit (see
 //     openLiteBuildFolder)
-//  3. ask the configurator questions of the folder's master configuration;
-//     the answers of the last run are the defaults
+//  3. ask the configurator questions of the folder's master configuration,
+//     except the ones that attrs (the --build-attr flags) answer; the
+//     answers of the last run are the defaults. Without a terminal, every
+//     question needs a --build-attr flag
 //  4. ask for Wi-Fi, the device name and Cloud enrollment: the content of
 //     the wendy_conf partition
 //  5. install the ESP-IDF version that the answers need
@@ -79,9 +195,13 @@ var (
 //
 // The build folder stays in the cache for the next build of the same
 // commit, which is incremental when the answers are the same.
-func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
-	if jsonOutput || !isInteractiveTerminal() {
-		return usageErrorf("the Wendy Lite build asks questions: run it in an interactive terminal, without --json")
+func runLiteBuild(ctx context.Context, nightly bool, version string, attrs map[string]string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+	interactive := isInteractiveTerminal()
+	// In a terminal, JSON is on only with an explicit --json (see
+	// startInstallSession). Without one, root turns it on by itself, and
+	// checkLiteBuildFlags refuses an explicit --json.
+	if interactive && jsonOutput {
+		return usageErrorf("the Wendy Lite build does not support --json")
 	}
 
 	if err := ensureLiteBuildEIM(ctx); err != nil {
@@ -110,14 +230,28 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err != nil {
 		return err
 	}
+	configurator.Given, err = liteBuildGiven(model, attrs)
+	if err != nil {
+		return err
+	}
 	answersPath, answersErr := liteBuildAnswersPath()
-	if answersErr == nil {
+	// Without a terminal, the answers of the last run are not used: the
+	// result depends only on the command line.
+	if answersErr == nil && interactive {
 		configurator.Previous = litebuild.LoadAnswers(model, answersPath)
 	}
+	var prompter litebuild.Prompter = &litebuild.TUIPrompter{In: os.Stdin, Out: os.Stderr}
+	if !interactive {
+		prompter = &noTerminalPrompter{litebuild.TUIPrompter{Out: os.Stderr}}
+	}
 	fmt.Println()
-	result, err := configurator.Run(&litebuild.TUIPrompter{In: os.Stdin, Out: os.Stderr})
+	result, err := configurator.Run(prompter)
 	if errors.Is(err, tui.ErrCancelled) {
 		return ErrUserCancelled
+	}
+	var givenErr *litebuild.GivenError
+	if errors.As(err, &givenErr) {
+		return usageErrorf("--build-attr %v", err)
 	}
 	if err != nil {
 		return err
