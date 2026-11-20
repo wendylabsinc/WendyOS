@@ -77,6 +77,9 @@ const (
 	// via its local unix socket — the most security-sensitive entitlement.
 	// See entitlements.md for the blast radius.
 	EntitlementAdmin = "admin"
+	// EntitlementSensorRead grants read-only access to paired generic sensor
+	// samples, without provisioning, container control, or credential access.
+	EntitlementSensorRead = "sensor-read"
 	// EntitlementBuild grants the namespace/mount privileges a nested container
 	// builder (BuildKit) needs — CAP_SYS_ADMIN plus the unshare/userns-clone
 	// syscalls the default seccomp profile denies. It is privileged-equivalent
@@ -115,6 +118,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementEpisodeWrite,
 	EntitlementNotifications,
 	EntitlementAdmin,
+	EntitlementSensorRead,
 	EntitlementBuild,
 	EntitlementHTTP,
 	EntitlementArduinoBridge,
@@ -156,6 +160,7 @@ var allowedKeys = map[string][]string{
 	EntitlementEpisodeWrite:  {"type", "streams"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
+	EntitlementSensorRead:    {"type"},
 	EntitlementBuild:         {"type"},
 	EntitlementHTTP:          {"type", "port"},
 	EntitlementArduinoBridge: {"type"},
@@ -675,13 +680,20 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 	}
 
 	adminCount := 0
+	sensorReadCount := 0
 	for _, e := range entitlements {
+		if e.Type == EntitlementSensorRead {
+			sensorReadCount++
+		}
 		if e.Type == EntitlementAdmin {
 			adminCount++
 		}
 	}
 	if adminCount > 1 {
 		return fmt.Errorf("at most one admin entitlement is allowed in %s, found %d", prefix, adminCount)
+	}
+	if sensorReadCount > 1 {
+		return fmt.Errorf("at most one sensor-read entitlement is allowed in %s", prefix)
 	}
 	nanCount := 0
 	for _, e := range entitlements {

@@ -152,6 +152,30 @@ public nonisolated struct Wendylite_V1_SensorFormat: Sendable {
   public init() {}
 }
 
+/// Identity attached by a forwarding agent to a channel in its manifest.
+/// Absent on directly advertised channels and manifests from older agents.
+/// This describes the authenticated immediate upstream pairing, not an identity
+/// assertion supplied by the sensor itself. Receivers must not use it as a grant.
+public nonisolated struct Wendylite_V1_SensorSource: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Stable pairing key: device SPIFFE principal, or "asset:<id>" for legacy
+  /// numeric pairings. Display names and forwarded routing IDs are not identities.
+  public var pairingKey: String = String()
+
+  /// channel_id in the paired source's manifest; zero is valid
+  public var channelID: UInt32 = 0
+
+  /// input_id in the paired source's manifest; zero is valid
+  public var inputID: UInt32 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 public nonisolated struct Wendylite_V1_SensorDescriptor: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -190,6 +214,18 @@ public nonisolated struct Wendylite_V1_SensorDescriptor: Sendable {
     set {format = .sensor(newValue)}
   }
 
+  /// The forwarding agent remaps channel_id/input_id for local routing, preserves
+  /// the display name and format, and sets source from the authenticated pairing.
+  /// It must replace any upstream-provided source rather than trusting it.
+  public var source: Wendylite_V1_SensorSource {
+    get {_source ?? Wendylite_V1_SensorSource()}
+    set {_source = newValue}
+  }
+  /// Returns true if `source` has been explicitly set.
+  public var hasSource: Bool {self._source != nil}
+  /// Clears the value of `source`. Subsequent reads from it will return its default value.
+  public mutating func clearSource() {self._source = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public nonisolated enum OneOf_Format: Equatable, Sendable {
@@ -200,6 +236,8 @@ public nonisolated struct Wendylite_V1_SensorDescriptor: Sendable {
   }
 
   public init() {}
+
+  fileprivate var _source: Wendylite_V1_SensorSource? = nil
 }
 
 public nonisolated struct Wendylite_V1_SensorManifest: Sendable {
@@ -474,9 +512,49 @@ nonisolated extension Wendylite_V1_SensorFormat: SwiftProtobuf.Message, SwiftPro
   }
 }
 
+nonisolated extension Wendylite_V1_SensorSource: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SensorSource"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}pairing_key\0\u{3}channel_id\0\u{3}input_id\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.pairingKey) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.channelID) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.inputID) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.pairingKey.isEmpty {
+      try visitor.visitSingularStringField(value: self.pairingKey, fieldNumber: 1)
+    }
+    if self.channelID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.channelID, fieldNumber: 2)
+    }
+    if self.inputID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.inputID, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendylite_V1_SensorSource, rhs: Wendylite_V1_SensorSource) -> Bool {
+    if lhs.pairingKey != rhs.pairingKey {return false}
+    if lhs.channelID != rhs.channelID {return false}
+    if lhs.inputID != rhs.inputID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension Wendylite_V1_SensorDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SensorDescriptor"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{3}input_id\0\u{1}name\0\u{1}video\0\u{1}audio\0\u{1}sensor\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{3}input_id\0\u{1}name\0\u{1}video\0\u{1}audio\0\u{1}sensor\0\u{1}source\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -526,6 +604,7 @@ nonisolated extension Wendylite_V1_SensorDescriptor: SwiftProtobuf.Message, Swif
           self.format = .sensor(v)
         }
       }()
+      case 7: try { try decoder.decodeSingularMessageField(value: &self._source) }()
       default: break
       }
     }
@@ -560,6 +639,9 @@ nonisolated extension Wendylite_V1_SensorDescriptor: SwiftProtobuf.Message, Swif
     }()
     case nil: break
     }
+    try { if let v = self._source {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -568,6 +650,7 @@ nonisolated extension Wendylite_V1_SensorDescriptor: SwiftProtobuf.Message, Swif
     if lhs.inputID != rhs.inputID {return false}
     if lhs.name != rhs.name {return false}
     if lhs.format != rhs.format {return false}
+    if lhs._source != rhs._source {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

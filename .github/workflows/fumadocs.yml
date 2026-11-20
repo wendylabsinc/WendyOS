@@ -103,7 +103,7 @@ jobs:
           cache-dependency-path: docs/package-lock.json
 
       - name: Set up Go for CLI reference generation
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -286,7 +286,7 @@ jobs:
               DEPLOY_PATHS=("${DEPLOY_PATH}" "latest")
             fi
           else
-            BRANCH="$(sanitize "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}")"
+            BRANCH="$(sanitize "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" | tr '.' '-')"
             if [[ ! "${DOCS_COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
               echo "::error::Unsupported commit SHA for docs deploy path: ${DOCS_COMMIT_SHA}"
               exit 1

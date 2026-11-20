@@ -18,6 +18,23 @@ Declare them in the `entitlements` array of your `wendy.json`, or add one with `
 
 A device's agent ignores an entitlement type it does not know, and starts the app without that access. When the agent reports the types it supports, `wendy run` checks your `wendy.json` against them before building and stops on a type the agent does not support, suggesting `wendy device update`. Agents that predate this report are not checked.
 
+## Generic SensorLink readings
+
+Use `{ "type": "sensor-read" }` to read generic samples from paired SensorLink
+sources through `WENDY_SENSOR_SOCKET`. This mounts `/run/wendy/sensors` read-only
+and grants the app API socket group so non-root applications can connect.
+The dedicated server implements only `WendySensorService.GetSensorManifest` and
+`StreamSensors`; it cannot pair devices, read credentials, or manage containers.
+It grants access to all paired generic channels, not a per-source allowlist.
+
+Refresh the manifest after reconnecting: channel IDs belong to the current
+source connection and may change. Disconnects end affected subscriptions; slow
+readers are disconnected when their bounded queue fills. No old samples are
+replayed on subscription. This requires an agent and CLI supporting `sensor-read`;
+do not substitute `admin` when an older agent lacks the read API. See
+[Read generic SensorLink samples](/docs/advanced/device/sensor-read) for source identity, API usage
+and forwarding limits.
+
 ## Notifications
 
 Use `{ "type": "notifications" }` when an app needs to alert operators through

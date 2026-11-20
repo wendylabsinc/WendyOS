@@ -36,6 +36,7 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementEpisodeWrite:  "Write application events to episode recordings",
 	appconfig.EntitlementNotifications: "Send app notifications",
 	appconfig.EntitlementAdmin:         "Full local control of the device agent",
+	appconfig.EntitlementSensorRead:    "Read paired generic SensorLink samples",
 	appconfig.EntitlementBuild:         "Grant privileges for nested container builds",
 	appconfig.EntitlementArduinoBridge: "Talk to the Arduino UNO Q microcontroller's sketch",
 }
