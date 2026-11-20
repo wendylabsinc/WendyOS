@@ -57,6 +57,7 @@ type testRelay struct {
 	leaseJWS            string
 	signing, encryption []byte
 	requested           chan *pb.RequestTunnelRequest
+	grantTTL            int64 // admission window of issued grants in seconds; 0 is 60
 	offers              chan *pb.SessionOffer
 	present             chan struct{}
 	ack                 chan struct{}
@@ -271,7 +272,11 @@ func (r *testRelay) RequestTunnel(ctx context.Context, req *pb.RequestTunnelRequ
 		return nil, fmt.Errorf("UUID or signed request body mismatch")
 	}
 	now := time.Now().Unix()
-	g := claims{Iss: r.verifier.Issuer, Aud: r.broker().Audience, Iat: now, Exp: now + 60, JTI: uuid.NewString(), Correlation: "opaque-correlation", Route: r.lease.Route, Session: "opaque-session", Presence: r.lease.JTI, Request: binding(req.PrincipalRequest.Value), Attestation: binding([]byte("attestation")), Caller: binding(req.RequestBody.CallerSigningPublicKeySpkiDer), Agent: r.lease.Signing, RelayExp: now + 300}
+	ttl := int64(60)
+	if r.grantTTL > 0 {
+		ttl = r.grantTTL
+	}
+	g := claims{Iss: r.verifier.Issuer, Aud: r.broker().Audience, Iat: now, Exp: now + ttl, JTI: uuid.NewString(), Correlation: "opaque-correlation", Route: r.lease.Route, Session: "opaque-session", Presence: r.lease.JTI, Request: binding(req.PrincipalRequest.Value), Attestation: binding([]byte("attestation")), Caller: binding(req.RequestBody.CallerSigningPublicKeySpkiDer), Agent: r.lease.Signing, RelayExp: now + 300}
 	envelope, e := sealTestInstruction(r.encryption, g, r.instruction)
 	if e != nil {
 		return nil, e

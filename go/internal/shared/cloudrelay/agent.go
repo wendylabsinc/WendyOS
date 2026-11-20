@@ -481,6 +481,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 	pending := map[string]*offerState{}
 	// Offers refused on this stream, until the broker stops redelivering them.
 	rejected := map[string]int64{}
+	// Offers dropped at their grant's expiry, until a confirmation of their
+	// acknowledgement can no longer be on its way.
+	expired := map[string]int64{}
 	var renewing *pb.IssuePresenceLeaseResponse
 	var renewedClaims claims
 	type renewalResult struct {
@@ -512,6 +515,14 @@ func (a *Agent) runOnce(parent context.Context) error {
 			if s.c.Exp <= now.Unix() {
 				delete(pending, id)
 				_ = os.Remove(filepath.Join(a.StateDir, "offer-"+binding([]byte(id))+".pb"))
+				if len(expired) < maxRetainedOffers {
+					expired[id] = now.Add(time.Minute + cloudClockSkew).Unix()
+				}
+			}
+		}
+		for id, until := range expired {
+			if until <= now.Unix() {
+				delete(expired, id)
 			}
 		}
 		for id, l := range a.leases {
@@ -711,8 +722,22 @@ func (a *Agent) runOnce(parent context.Context) error {
 				}
 			case *pb.RegisterPresenceResponse_OfferAcknowledged:
 				s := pending[m.OfferAcknowledged.OfferId]
+				if s == nil {
+					// The broker confirms an acknowledgement whenever it
+					// arrives. One for an offer whose grant has since expired
+					// is late, not a protocol error: ending presence for it
+					// would drop the lease and every other session.
+					if _, late := expired[m.OfferAcknowledged.OfferId]; late {
+						continue
+					}
+				}
 				if s == nil || s.c.Session != m.OfferAcknowledged.SessionId {
 					return fmt.Errorf("unknown relay offer acknowledgement")
+				}
+				if !s.started && s.c.Exp <= time.Now().Unix() {
+					// Confirmed too late to join: the broker admits no proof
+					// after the grant's expiry.
+					continue
 				}
 				if !s.started {
 					select {
@@ -751,12 +776,36 @@ type offerState struct {
 
 var errUnknownPresenceLease = errors.New("relay offer presence lease is not yet known")
 
+const (
+	// maxWaitingOffers bounds the offers retained while their session has not
+	// started. A started session holds one of the agent's session slots
+	// instead, so a minute of many short connections is not refused.
+	maxWaitingOffers = 64
+	// maxRetainedOffers bounds every offer retained until its grant expires,
+	// started or not, and with it the memory and state files they hold.
+	maxRetainedOffers = 512
+)
+
+// offerRoom refuses a new offer while too many are retained.
+func offerRoom(pending map[string]*offerState) error {
+	waiting := 0
+	for _, s := range pending {
+		if !s.started {
+			waiting++
+		}
+	}
+	if waiting >= maxWaitingOffers || len(pending) >= maxRetainedOffers {
+		return status.Error(codes.ResourceExhausted, "too many relay offers")
+	}
+	return nil
+}
+
 // admitOffer verifies an offer's grant against the presence lease, decrypts and
 // checks its dial instruction, and retains it durably, as tunnel/v2 requires
 // before an acknowledgement. An error refuses this offer only.
 func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims, leases map[string]claims, pending map[string]*offerState, now time.Time) (*offerState, error) {
-	if len(pending) >= 64 {
-		return nil, status.Error(codes.ResourceExhausted, "too many relay offers")
+	if err := offerRoom(pending); err != nil {
+		return nil, err
 	}
 	g, err := a.Verifier.verify(ctx, o.SessionGrantJws, grantType, lease.Aud, now)
 	if err != nil {
