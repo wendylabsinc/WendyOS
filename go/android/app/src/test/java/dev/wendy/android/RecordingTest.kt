@@ -55,4 +55,19 @@ class RecordingTest {
         assertEquals(listOf("/tmp/a.mp4", "/tmp/a.wav"), snapshot.mediaPaths)
         assertEquals("clipped", snapshot.warnings)
     }
+
+    @Test fun audioFollowsTheSegmentAtTheCursor() {
+        val snapshot = RecordingSnapshot(JSONObject("""{
+            "Start":0,"End":30000000000,
+            "Audio":[{"Track":"mic","Path":"/tmp/a.wav","Start":0,"End":10000000000},{"Track":"mic","Path":"/tmp/b.wav","Start":10000000000,"End":20000000000},
+                     {"Track":"other","Path":"/tmp/c.wav","Start":0,"End":30000000000}]
+        }"""))
+        assertEquals("/tmp/a.wav", snapshot.audioAt("mic", 9.9)!!.path)
+        assertEquals("/tmp/b.wav", snapshot.audioAt("mic", 10.0)!!.path)
+        assertEquals("/tmp/b.wav", snapshot.audioAt("mic", 15.0)!!.path)
+        // Outside every segment the nearest one stays selected, so the page still says there is no audio here.
+        assertEquals("/tmp/b.wav", snapshot.audioAt("mic", 25.0)!!.path)
+        assertEquals("/tmp/a.wav", snapshot.audioAt("mic", -1.0)!!.path)
+        assertNull(snapshot.audioAt("lidar", 5.0))
+    }
 }

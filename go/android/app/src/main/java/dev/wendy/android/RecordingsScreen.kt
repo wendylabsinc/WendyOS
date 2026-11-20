@@ -102,6 +102,11 @@ class RecordingSnapshot(value: JSONObject) {
         return if (index == 0) null else byTrack.getValue(track)[index - 1]
     }
     fun numeric(track: String) = byTrack[track].orEmpty().filter { it.value != null }
+    /** The track's audio segment at [cursor], as on iOS, else its nearest segment. Each segment is one recorded file. */
+    fun audioAt(track: String, cursor: Double): RecordingAudio? {
+        val segments = audio.filter { it.track == track }
+        return segments.lastOrNull { cursor >= it.start && cursor < it.end } ?: segments.minByOrNull { max(it.start - cursor, cursor - it.end) }
+    }
     val mediaPaths get() = videos.map { it.path } + audio.map { it.path }
 }
 
@@ -223,7 +228,7 @@ fun EpisodeViewer(model: WendyModel, initialEpisode: String?) {
                     }
                     val selectedTrack = current.tracks.firstOrNull { it.id == track }
                     val video = current.videos.firstOrNull { it.track == track }
-                    val audio = current.audio.firstOrNull { it.track == track }
+                    val audio = current.audioAt(track, cursor)
                     val sample = current.latest(track, cursor)
                     when {
                         // Each camera gets its own player; a reused VideoView keeps the first camera's file.
