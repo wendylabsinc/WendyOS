@@ -2,10 +2,33 @@ package dev.wendy.android
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /** Fixtures were written by Apple's usdcat and usdzip, and by SceneKit's USDZ export, on macOS. */
 class UsdReaderTest {
     private fun fixture(name: String) = javaClass.classLoader!!.getResourceAsStream("sites/$name")!!.readBytes()
+
+    private fun longs(vararg values: Long): ByteArray = ByteBuffer.allocate(values.size * 8).order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach { putLong(it) } }.array()
+
+    /** A usdc layer: the bootstrap, then [sections] in order, then their table of contents. */
+    private fun crate(vararg sections: Pair<String, ByteArray>): ByteArray {
+        val toc = 88 + sections.sumOf { it.second.size }
+        val out = ByteBuffer.allocate(toc + 8 + sections.size * 32).order(ByteOrder.LITTLE_ENDIAN)
+        out.put("PXR-USDC".toByteArray(Charsets.US_ASCII)); out.put(byteArrayOf(0, 8, 0)); out.putLong(16, toc.toLong())
+        out.position(88)
+        for ((_, bytes) in sections) out.put(bytes)
+        out.putLong(sections.size.toLong())
+        var start = 88L
+        for ((name, bytes) in sections) { out.put(name.toByteArray(Charsets.US_ASCII).copyOf(16)); out.putLong(start); out.putLong(bytes.size.toLong()); start += bytes.size }
+        return out.array()
+    }
+
+    // One token, "a": TfFastCompression's header, then an LZ4 block of two literal bytes.
+    private val tokens = "TOKENS" to (longs(1, 2, 4) + byteArrayOf(0, 0x20, 'a'.code.toByte(), 0))
+    private val noStrings = "STRINGS" to longs(0)
+    private val noFields = "FIELDS" to (longs(0, 0, 1) + byteArrayOf(0))
+    private val noFieldSets = "FIELDSETS" to longs(0, 0)
 
     @Test fun textBinaryAndArchiveLayersReadTheSameRoom() {
         val geometries = listOf("room.usda", "room.usdc", "room.usdz").map { UsdReader.read(fixture(it)) }
@@ -41,6 +64,22 @@ class UsdReaderTest {
         assertThrows(UsdFormatException::class.java) { UsdReader.read("not a model".toByteArray()) }
         val truncated = fixture("room.usdc").copyOf(400)
         assertThrows(Exception::class.java) { UsdReader.read(truncated) }
+    }
+
+    @Test fun unclosedPathsAndDeepNestingAreDamagedModels() {
+        val layers = listOf("def Xform \"a\" { asset x = @foo }", "def Mesh \"a\" { rel material:binding = </Looks/Wall }",
+            "def Mesh \"a\" { float[] x = " + "[".repeat(100_000) + " }", "def \"a\" {\n".repeat(100_000))
+        for (layer in layers) assertThrows(UsdFormatException::class.java) { UsdReader.read("#usda 1.0\n$layer\n".toByteArray()) }
+    }
+
+    @Test fun crateCountsAreCheckedBeforeAllocating() {
+        // Each count takes eight bytes of the file but would size an array of gigabytes.
+        val layers = listOf(
+            crate("TOKENS" to (longs(0x7FFFFFFF, 2, 4) + byteArrayOf(0, 0x20, 'a'.code.toByte(), 0))),
+            crate(tokens, "STRINGS" to longs(0x7FFFFFFF)),
+            crate(tokens, noStrings, "FIELDS" to (longs(1_000_000, 6) + byteArrayOf(0, 0x40, 0, 0, 0, 0))),
+            crate(tokens, noStrings, noFields, noFieldSets, "PATHS" to longs(0x7FFFFFFF, 0, 0, 0, 0)))
+        for (layer in layers) assertThrows(UsdFormatException::class.java) { UsdReader.read(layer) }
     }
 
     @Test fun integerAndLz4CodecsMatchUsd() {
