@@ -987,7 +987,7 @@ func main() {
 		// HostShell. It is intentionally not part of
 		// registerAllServices: that would also expose it on the unauthenticated
 		// plaintext pre-provisioning server (handing anyone on the LAN a host
-		// root shell) and on the local admin socket.
+		// root shell). The local admin socket registers it explicitly below.
 		agentpb.RegisterWendyShellServiceServer(srv, shellSvc)
 
 		// WendyTunnelService can reach arbitrary valid UDP ports on agent
@@ -1579,6 +1579,9 @@ func main() {
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
 		registerAllServices(localSocketServer)
+		// The Unix socket is available only to admin-entitled containers.
+		// Keep HostShell out of registerAllServices so provisioning TCP cannot expose it.
+		agentpb.RegisterWendyShellServiceServer(localSocketServer, shellSvc)
 		// Generic samples are available only to explicitly trusted local apps.
 		agentpbv2.RegisterWendySensorServiceServer(localSocketServer, genericSensorFeed)
 		agentpbv2.RegisterWendyUnitreeServiceServer(localSocketServer, unitreeSvc)

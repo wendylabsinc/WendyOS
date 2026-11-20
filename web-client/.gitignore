@@ -49,3 +49,6 @@ next-env.d.ts
 !/vendor/
 
 *.tsbuildinfo
+
+/dist-device/
+/.device-package/

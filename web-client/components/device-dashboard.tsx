@@ -9,6 +9,8 @@ import {
   Square,
   RotateCw,
 } from "lucide-react";
+import MetricCharts from "@/components/metric-charts";
+import { metricServiceLabel, updateMetricHistory, type MetricSeries } from "@/lib/metric-charts";
 import { Button } from "@/components/ui/button";
 import { WendyClient, formatBytes } from "@/lib/client";
 import {
@@ -26,11 +28,17 @@ export default function DeviceDashboard({
   client,
   onBack,
   requestedView,
+  local = false,
+  onViewChange,
+  initialApp = "",
 }: {
   device: { id: string; name: string };
   client: WendyClient;
   onBack: () => void;
   requestedView: string;
+  local?: boolean;
+  onViewChange?: (view: string) => void;
+  initialApp?: string;
 }) {
   const [tab, setTab] = useState<Tab>("top");
   const [connected, setConnected] = useState(false);
@@ -43,9 +51,10 @@ export default function DeviceDashboard({
     containers: new Map(),
   });
   const [history, setHistory] = useState<number[]>([]);
+  const [metricSeries, setMetricSeries] = useState<MetricSeries[]>([]);
   const [rows, setRows] = useState<TelemetryRow[]>([]);
   const [streamError, setStreamError] = useState("");
-  const [app, setApp] = useState("");
+  const [app, setApp] = useState(initialApp);
   const [search, setSearch] = useState("");
   const [severity, setSeverity] = useState("info");
   const [sort, setSort] = useState<"cpu" | "memory">("cpu");
@@ -83,8 +92,7 @@ export default function DeviceDashboard({
       }
       if (alive) timer = setTimeout(poll, 2000);
     }
-    client
-      .call("cloud-connect", { id: device.id })
+    (local ? Promise.resolve() : client.call("cloud-connect", { id: device.id }))
       .then(() => {
         if (alive) {
           setConnecting(false);
@@ -101,11 +109,12 @@ export default function DeviceDashboard({
     return () => {
       alive = false;
       clearTimeout(timer);
-      void client.call("disconnect").catch(() => {});
+      if (!local) void client.call("disconnect").catch(() => {});
     };
-  }, [client, device.id, retry]);
+  }, [client, device.id, retry, local]);
   useEffect(() => {
     setRows([]);
+    setMetricSeries([]);
     setStreamError("");
     if (!connected || tab === "top") return;
     let alive = true,
@@ -118,6 +127,7 @@ export default function DeviceDashboard({
         ...r,
         key: r.key || String(++seq),
       }));
+      if (tab === "metrics") setMetricSeries((old) => updateMetricHistory(old, incoming));
       setRows((old) => {
         if (tab === "logs")
           return [...incoming.reverse(), ...old].slice(0, 500);
@@ -153,9 +163,9 @@ export default function DeviceDashboard({
     : null;
   const totalMemory = host?.memTotalBytes ? Number(host.memTotalBytes) : null;
   const temperatures = [
-    ...(host?.thermalZones || []).map((z) => z.tempC ?? 0),
+    ...(host?.thermalZones || []).map((z) => z.tempC),
     ...(host?.gpus || []).map((g) => g.tempC),
-  ].filter((t): t is number => t !== undefined);
+  ].filter((t): t is number => typeof t === "number" && Number.isFinite(t));
   const apps = (sample?.apps || [])
     .map((a) => {
       const services =
@@ -196,13 +206,13 @@ export default function DeviceDashboard({
       className="cloud-dashboard"
       aria-label={`${device.name || "Device"} dashboard`}
     >
-      <button className="device-back" onClick={onBack}>
+      {!local && <button className="device-back" onClick={onBack}>
         <ArrowLeft size={15} /> Online cloud devices
-      </button>
+      </button>}
       <div className="page-heading">
         <div>
-          <p className="eyebrow">CLOUD DEVICE</p>
-          <h1>{device.name || "Unnamed device"}</h1>
+          {!local && <p className="eyebrow">CLOUD DEVICE</p>}
+          <h1>{local && tab !== "top" ? tab[0].toUpperCase() + tab.slice(1) : device.name || "Unnamed device"}</h1>
           <p className="subtle">
             {connecting
               ? "Establishing a secure device session…"
@@ -211,7 +221,7 @@ export default function DeviceDashboard({
                 : "Device session unavailable"}
           </p>
         </div>
-        <span className={`tag ${connected && !error ? "live" : ""}`}>
+        <span className={`tag ${connected && !error ? "live" : error ? "error" : ""}`}>
           {connecting ? (
             <Loader2 size={14} className="animate-spin" />
           ) : (
@@ -232,22 +242,22 @@ export default function DeviceDashboard({
           </Button>
         </div>
       )}
-      <div className="device-tabs" aria-label="Device views">
+      {!local && <div className="device-tabs" aria-label="Device views">
         {(["top", "logs", "metrics", "traces"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)} aria-pressed={tab === t}>
             {t === "top" ? "Dashboard" : t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
-      </div>
+      </div>}
       {connecting && (
         <div className="device-wait">
           <Loader2 className="animate-spin" />
-          <p>Connecting through Wendy Cloud</p>
+          <p>{local ? "Connecting to this device…" : "Connecting through Wendy Cloud"}</p>
         </div>
       )}
       {connected && tab === "top" && (
         <>
-          <div className="top-metrics">
+          <div className="top-metrics overview-metrics">
             <Meter
               label="CPU"
               value={
@@ -273,7 +283,7 @@ export default function DeviceDashboard({
               }
             />
             <Meter
-              label="Container storage"
+              label="Application storage"
               value={disk ? formatBytes(Number(disk.usedBytes || 0)) : "—"}
               note={
                 disk
@@ -287,7 +297,7 @@ export default function DeviceDashboard({
                   : null
               }
             />
-            <Meter
+            {temperatures.length > 0 && <Meter
               label="Temperature"
               value={
                 temperatures.length
@@ -298,7 +308,7 @@ export default function DeviceDashboard({
                 temperatures.length ? "Hottest reported sensor" : "Not reported"
               }
               percent={null}
-            />
+            />}
           </div>
           {!!sample?.warnings?.length && (
             <div className="inline-error">{sample.warnings.join(" · ")}</div>
@@ -395,12 +405,14 @@ export default function DeviceDashboard({
                       <td>
                         <button
                           className="app-link"
+                          title={a.appName}
                           onClick={() => {
                             setApp(a.appName);
                             setTab("logs");
+                            onViewChange?.("Logs");
                           }}
                         >
-                          {a.appName}
+                          {metricServiceLabel(a.appName)}
                         </button>
                         {a.services.map((s) => (
                           <div className="subtle service-stat" key={s.name}>
@@ -412,7 +424,7 @@ export default function DeviceDashboard({
                       </td>
                       <td>
                         <span
-                          className={`tag ${a.runningState === "RUNNING" ? "live" : ""}`}
+                          className={`tag ${a.runningState === "RUNNING" ? "live" : a.runningState === "STOPPED" ? "stopped" : ""}`}
                         >
                           {(a.runningState || "unknown")
                             .toLowerCase()
@@ -470,12 +482,11 @@ export default function DeviceDashboard({
         <section className="panel telemetry-panel">
           <div className="panel-heading">
             <div>
-              <h2>OpenTelemetry {tab}</h2>
+              <h2>{tab === "metrics" ? "Live metrics" : `OpenTelemetry ${tab}`}</h2>
               <p className="subtle">
                 {tab === "metrics"
-                  ? "Latest values per metric and attribute set"
-                  : "Recent history and live events"}{" "}
-                · up to 500 entries
+                  ? "Live history while this view is open"
+                  : "Recent history and live events · up to 500 entries"}
               </p>
             </div>
             <div className="telemetry-controls">
@@ -499,7 +510,7 @@ export default function DeviceDashboard({
                 <option value="">All applications</option>
                 {apps.map((a) => (
                   <option key={a.appName} value={a.appName}>
-                    {a.appName}
+                    {metricServiceLabel(a.appName)}
                   </option>
                 ))}
               </select>
@@ -516,7 +527,7 @@ export default function DeviceDashboard({
               {streamError}
             </div>
           )}
-          <div className="telemetry-rows">
+          {tab === "metrics" && metricSeries.length > 0 ? <MetricCharts series={metricSeries} search={search} /> : tab !== "metrics" && <div className="telemetry-rows">
             {shownRows
               .map((r) => (
                 <details key={r.key} className="telemetry-row" data-severity={r.severity}>
@@ -536,8 +547,8 @@ export default function DeviceDashboard({
                   <pre>{JSON.stringify(r.detail, null, 2)}</pre>
                 </details>
               ))}
-          </div>
-          {!shownRows.length && (
+          </div>}
+          {(tab === "metrics" ? !metricSeries.length : !shownRows.length) && (
             <div className="device-wait">
               <Activity />
               <h3>

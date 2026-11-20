@@ -50,9 +50,13 @@ func (s *LocalMeshAdminService) SetRuntimeStatusSource(source func() LocalMeshRu
 	s.mu.Unlock()
 }
 
-// authorize admits only a user certificate in this device's tenant. It gates
-// ConfigureLocalMesh, whose audit log names that user.
+// authorize admits a tenant user or an admin-entitled local container.
+// The Unix socket is administrator authority; plaintext TCP is never admitted.
 func (s *LocalMeshAdminService) authorize(ctx context.Context) (meshid.Device, error) {
+	if p, ok := peer.FromContext(ctx); ok && onLocalAdminSocket(p) {
+		_, device, err := s.enrolledIdentity()
+		return device, err
+	}
 	actor, err := userIdentityFromContext(ctx, "administering wendy net")
 	if err != nil {
 		return meshid.Device{}, err
@@ -67,19 +71,8 @@ func (s *LocalMeshAdminService) authorize(ctx context.Context) (meshid.Device, e
 	return device, nil
 }
 
-// authorizeRead gates the read-only RPCs. Beyond what authorize admits, it
-// admits the local admin socket: that caller has no certificate, but reaching
-// the socket is already full-agent authority (see onLocalAdminSocket), so
-// withholding this device's own Wendy Net view from it protects nothing. The
-// plaintext provisioning listener has no certificate either, but it is TCP, so
-// it falls through to authorize and is refused. Writes stay user-only, as
-// SetBuildHostEnabled does: they change which radios run and what this device
-// offers its tenant, and the audit log should name the person who did that.
+// Reads and writes share the same local-admin or tenant-user policy.
 func (s *LocalMeshAdminService) authorizeRead(ctx context.Context) (meshid.Device, error) {
-	if p, ok := peer.FromContext(ctx); ok && onLocalAdminSocket(p) {
-		_, device, err := s.enrolledIdentity()
-		return device, err
-	}
 	return s.authorize(ctx)
 }
 
@@ -222,7 +215,7 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	}
 	if s.logger != nil {
 		actor, _ := userIdentityFromContext(ctx, "wendy net configuration")
-		s.logger.Info("wendy net configuration saved", zap.String("actorTenant", actor.TenantUUID), zap.String("actorUser", actor.EntityID),
+		s.logger.Info("wendy net configuration saved", zap.String("actorTenant", actor.TenantUUID), zap.String("actorUser", actor.EntityID), zap.Bool("localAdmin", isLocalAdminContext(ctx)),
 			zap.Bool("participate", sharing.Participate), zap.Bool("roam", sharing.Roam), zap.Bool("shareUplink", sharing.ShareUplink),
 			zap.Bool("nan", carriers.NAN), zap.Bool("ble", carriers.BLE),
 			zap.Bool("ethernet", carriers.Ethernet), zap.Bool("infrastructureWifi", carriers.InfrastructureWiFi))

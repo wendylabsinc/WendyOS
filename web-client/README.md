@@ -439,3 +439,84 @@ origins. It performs no real sign-in, token exchange or certificate issuance;
 those protocol and same-key checks run in the Go fixture. Physical iOS and a
 real federated account login remain separate integration QA. Embedding clients
 also need to verify their actual static-host delivery and published asset pin.
+
+## Device-hosted panel
+
+The one-device panel runs inside WendyOS and uses the same Go WASM client as
+this workspace. A small native server serves the static UI and relays its
+same-origin WebSocket to the admin Unix socket granted by the `admin`
+entitlement. It needs no Cloud login to control the local device.
+
+Build and deploy from the repository root:
+
+```sh
+npm --prefix web-client ci
+npm --prefix web-client run device:package
+wendy json validate web-client/.device-package
+wendy run --device vm:go2-data-branch --prefix web-client/.device-package \
+  --build-arg WENDY_WEB_PASSWORD='<device password>' --detach --wait-ready
+```
+
+Replace the simulator selector with your device selector. Open the URL reported
+by `wendy run` on port 8080. For deliberately open access, replace the password
+argument with `--build-arg WENDY_WEB_ALLOW_OPEN=true`. The server refuses to start
+with neither authentication mode selected, or with both selected. Build
+arguments become image environment values; use a runtime password override
+instead when distributing the same image to multiple devices. Open mode gives
+anyone who can reach the panel full device administrator access.
+
+The image contains only the static files and native relay. `device:package`
+builds Linux arm64 and amd64 binaries into the ignored `.device-package`
+directory; the Dockerfile selects the target architecture. The image does not
+need Node or Go at runtime. Re-run packaging and deployment after source changes.
+
+The panel includes live monitoring, application controls, device and storage
+summaries, LAN addresses, Wi-Fi, mesh, Bluetooth, cameras, audio, sensor pairing,
+updates, ROS 2, recordings, enrollment, and a host terminal. Device support
+varies by board and agent version. Power settings disappear on non-Jetson
+hardware. A device without Wi-Fi shows its LAN connections without wireless
+configuration controls. Empty fields are omitted, technical details are
+collapsed, and Refresh performs a read immediately. Operations with input
+filters have a separate Options button. Configuration changes require review.
+
+Application cards show names, live CPU and memory usage, and recent CPU history.
+Select an application to open its controls in a side sheet. Settings and camera
+previews also open in sheets. Missing Bluetooth adapters hide pairing and radio
+controls. Storage and memory use decimal KB, MB and GB throughout the panel.
+The metrics view charts each application and attribute set separately, with
+readable names for standard metrics. Cumulative CPU time becomes a usage rate;
+100% is one CPU core. Chart history is bounded and resets when leaving the view.
+
+Host shell, mesh configuration and build-host configuration use the local
+admin socket. Agents built before this panel's local admin support may reject
+those operations. The shell is registered only on the admin socket and existing
+authenticated network listener, not the plaintext provisioning listener.
+Network callers still require the existing user/tenant authorization.
+
+Password sessions expire after eight hours or a server restart. Sign-out
+revokes the session and closes its active relay connections. Requests enforce
+same-origin access and reject arbitrary DNS hostnames; set `WENDY_WEB_ORIGIN`
+to the exact origin for a custom hostname. To serve HTTPS directly, provide
+`WENDY_WEB_TLS_CERT` and `WENDY_WEB_TLS_KEY` with mounted certificate files.
+HTTP does not encrypt passwords or device traffic; use HTTPS for untrusted
+networks. Camera preview requires browser VP8/MediaSource support; microphone
+playback uses PCM audio. Downloads are bounded to 128 MiB in browser memory;
+use the CLI for larger files. Camera, radio, and other physical hardware paths
+need validation on a device with that hardware.
+
+Checks from `web-client`:
+
+```sh
+npm run device:test
+npx tsc --noEmit
+```
+
+The Go relay tests run with `go test -race ./go/cmd/wendy-device-web` at the
+repository root. An opt-in integration test reads the deployed device,
+lists applications and runs a read-only shell probe:
+
+```sh
+WENDY_TEST_PANEL_URL=http://127.0.0.1:8080 \
+WENDY_TEST_PANEL_PASSWORD='<device password>' \
+go test ./go/cmd/wendy-device-web -run TestDeployedPanel -v -count=1
+```

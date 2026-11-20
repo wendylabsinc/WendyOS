@@ -60,6 +60,8 @@ type bridge struct {
 	telemetryCancel context.CancelFunc
 	shellCancel     context.CancelFunc
 	shell           agentpb.WendyShellService_HostShellClient
+	deviceLocal     bool
+	deviceStreams   map[string]deviceStream
 }
 
 func send(v any) {
@@ -103,6 +105,12 @@ func main() {
 }
 
 func (b *bridge) handle(r request) (any, error) {
+	if r.Method == "device-connect" {
+		return b.connectLocalDevice()
+	}
+	if strings.HasPrefix(r.Method, "device-") {
+		return b.deviceRequest(r)
+	}
 	if r.Method == "init" {
 		// A deployment's page pins its services. They are called directly, so
 		// the dev dashboard's same-origin auth proxy is not involved.
@@ -214,7 +222,12 @@ func (b *bridge) handle(r request) (any, error) {
 		return headack.Verify(&resp, root, p.Device, p.OrganizationID, p.Kept)
 	}
 	if strings.HasPrefix(r.Method, "shell-") {
-		return nil, errors.New("Shell access is disabled in the browser client")
+		b.mu.Lock()
+		local := b.deviceLocal
+		b.mu.Unlock()
+		if !local {
+			return nil, errors.New("Shell access is disabled in the browser client")
+		}
 	}
 	if r.Method == "mesh-topology" {
 		var p struct {
@@ -265,6 +278,7 @@ func (b *bridge) handle(r request) (any, error) {
 			return nil, fmt.Errorf("Connecting to cloud device: %w", err)
 		}
 		b.conn, b.life, b.close = conn, life, stop
+		b.deviceLocal = false
 		return true, nil
 	}
 	if r.Method == "cloud-discover" || r.Method == "mesh-discover" {

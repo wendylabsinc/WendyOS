@@ -84,6 +84,17 @@ export type TelemetryRow = {
   status?: string;
   severity?: LogSeverity;
   detail: unknown;
+  metric?: MetricSample;
+};
+export type MetricSample = {
+  time: number;
+  value: number | null;
+  startTime?: string;
+  unit: string;
+  kind: "gauge" | "sum" | "histogram" | "summary";
+  temporality?: string | number;
+  monotonic?: boolean;
+  attributes: { [key: string]: string };
 };
 type AnyValue = {
   stringValue?: string;
@@ -100,13 +111,14 @@ type Point = {
   count?: string;
   sum?: number;
   timeUnixNano?: string;
+  startTimeUnixNano?: string;
   attributes?: Attribute[];
 };
 type Metric = {
   name: string;
   unit?: string;
   gauge?: { dataPoints?: Point[] };
-  sum?: { dataPoints?: Point[] };
+  sum?: { dataPoints?: Point[]; aggregationTemporality?: string | number; isMonotonic?: boolean };
   histogram?: { dataPoints?: Point[] };
   exponentialHistogram?: { dataPoints?: Point[] };
   summary?: { dataPoints?: Point[] };
@@ -129,7 +141,7 @@ type Span = {
 type Resource = {
   resource?: { attributes?: Attribute[] };
   scopeLogs?: { logRecords?: Record[] }[];
-  scopeMetrics?: { metrics?: Metric[] }[];
+  scopeMetrics?: { scope?: { name?: string; version?: string; attributes?: Attribute[] }; metrics?: Metric[] }[];
   scopeSpans?: { spans?: Span[] }[];
 };
 export type OTelBatch = {
@@ -149,6 +161,11 @@ function value(v?: AnyValue): string {
           ? JSON.stringify(v)
           : "")
   );
+}
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(canonical).sort().join(",") + "]";
+  if (value && typeof value === "object") return "{" + Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => JSON.stringify(key) + ":" + canonical(item)).join(",") + "}";
+  return JSON.stringify(value) ?? "null";
 }
 function time(n?: string) {
   return n && n !== "0"
@@ -230,8 +247,20 @@ export function telemetryRows(kind: string, batch: OTelBatch): TelemetryRow[] {
               .sort()
               .join(", ");
             const v = point.asDouble ?? point.asInt;
+            const metricKind = m.gauge ? "gauge" : m.sum ? "sum" : m.summary ? "summary" : "histogram";
+            const numeric = v !== undefined ? Number(v) : Number(point.count) > 0 && point.sum !== undefined ? point.sum / Number(point.count) : null;
             out.push({
-              key: service + m.name + labels + JSON.stringify(r.resource),
+              key: JSON.stringify([service, m.name, labels, canonical(point.attributes), canonical(r.resource), canonical(scope.scope), m.unit || "", metricKind]),
+              metric: {
+                time: point.timeUnixNano ? Number(point.timeUnixNano) / 1e6 : NaN,
+                value: numeric !== null && Number.isFinite(numeric) ? numeric : null,
+                startTime: point.startTimeUnixNano,
+                unit: m.unit || "",
+                kind: metricKind,
+                temporality: m.sum?.aggregationTemporality,
+                monotonic: m.sum?.isMonotonic,
+                attributes: Object.fromEntries((point.attributes || []).map((a) => [a.key, value(a.value)])),
+              },
               service,
               name: m.name,
               value:

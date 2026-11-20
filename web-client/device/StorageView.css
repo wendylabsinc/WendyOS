@@ -1,0 +1,42 @@
+.storage-view { display: grid; gap: 28px; }
+.storage-capacity { padding: 24px; }
+.storage-capacity-heading, .storage-capacity-heading > div { display: flex; align-items: center; gap: 12px; }
+.storage-capacity-heading { justify-content: space-between; }
+.storage-capacity-heading h2, .storage-section-heading h2, .storage-cleanup h2 { font-size: 16px; font-weight: 500; }
+.storage-capacity-heading > span { color: var(--muted-foreground); font-size: 13px; }
+.storage-capacity-value { display: flex; align-items: baseline; gap: 10px; margin: 28px 0 18px; }
+.storage-capacity-value strong { font-size: 30px; font-weight: 500; }
+.storage-capacity-value > span, .storage-capacity-foot { color: var(--muted-foreground); font-size: 12px; }
+.storage-view meter { width: 100%; height: 7px; display: block; background: var(--muted); border: 0; }
+.storage-view meter::-webkit-meter-bar { border: 0; border-radius: 0; background: var(--border); }
+.storage-view meter::-webkit-meter-optimum-value { background: var(--foreground); }
+.storage-view meter::-moz-meter-bar { background: var(--foreground); }
+.storage-capacity-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.storage-section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.storage-section-heading p, .storage-cleanup p { margin-top: 6px; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.storage-volume-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 18px; }
+.storage-volume-card { padding: 22px; min-width: 0; }
+.storage-volume-icon { display: flex; justify-content: space-between; align-items: center; color: var(--muted-foreground); margin-bottom: 20px; font-size: 11px; }
+.storage-volume-card h3 { font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
+.storage-volume-size { display: block; font-size: 24px; font-weight: 500; margin: 12px 0 8px; }
+.storage-volume-apps { font-size: 12px; color: var(--muted-foreground); min-height: 2.5em; overflow-wrap: anywhere; }
+.storage-volume-share { margin: 20px 0; }
+.storage-volume-share meter { height: 4px; }
+.storage-volume-share small { display: block; margin-top: 8px; color: var(--muted-foreground); font-size: 11px; }
+.storage-volume-actions, .storage-cleanup-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.storage-volume-actions { margin-top: 20px; }
+.storage-cleanup { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 24px; }
+.storage-empty { padding: 36px 24px; text-align: center; }
+.storage-empty svg { margin: 0 auto 14px; color: var(--muted-foreground); }
+.storage-empty h3 { font-size: 15px; font-weight: 500; }
+.storage-empty p { margin-top: 8px; font-size: 13px; color: var(--muted-foreground); }
+.storage-volume-details { display: grid; gap: 20px; font-size: 13px; }
+.storage-volume-details > div { display: grid; gap: 7px; }
+.storage-volume-details dt { color: var(--muted-foreground); }
+.storage-volume-details dd { margin: 0; overflow-wrap: anywhere; }
+.storage-path { font-family: var(--font-mono); font-size: 12px; }
+@media (max-width: 760px) {
+  .storage-capacity, .storage-cleanup { padding: 20px; }
+  .storage-capacity-heading, .storage-cleanup { align-items: flex-start; flex-direction: column; }
+  .storage-capacity-foot { flex-direction: column; }
+}

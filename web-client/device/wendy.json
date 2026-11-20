@@ -1,0 +1,10 @@
+{
+  "appId": "sh.wendy.device-panel",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "admin" },
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8080 }
+  ]
+}
