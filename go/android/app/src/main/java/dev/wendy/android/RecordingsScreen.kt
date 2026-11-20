@@ -226,7 +226,8 @@ fun EpisodeViewer(model: WendyModel, initialEpisode: String?) {
                     val audio = current.audio.firstOrNull { it.track == track }
                     val sample = current.latest(track, cursor)
                     when {
-                        video != null -> if (video.frame(cursor) != null) RecordedVideo(video, cursor, playing) else EmptyMessage("No frame at this time", "Move the cursor to a time with video.", Icons.Outlined.Videocam)
+                        // Each camera gets its own player; a reused VideoView keeps the first camera's file.
+                        video != null -> if (video.frame(cursor) != null) key(video.path) { RecordedVideo(video, cursor, playing) } else EmptyMessage("No frame at this time", "Move the cursor to a time with video.", Icons.Outlined.Videocam)
                         audio != null -> RecordedAudio(audio, cursor, playing)
                         sample != null && sample.points.isNotEmpty() -> PointCloudView(sample.points, Modifier.fillMaxWidth().aspectRatio(4f / 3f))
                         sample != null && sample.image.isNotEmpty() -> {
