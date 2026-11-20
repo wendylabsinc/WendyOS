@@ -56,6 +56,7 @@ void WDNetworkSettingsFree(WDNetworkSettingsResult *value);
 WDStatus *WDJoinWiFi(uint64_t session, char *ssid, char *password, int32_t security, int32_t hidden);
 WDStatus *WDDisconnectWiFi(uint64_t session);
 WDStatus *WDForgetWiFi(uint64_t session, char *ssid);
+WDStatus *WDSetWiFiPriority(uint64_t session, char *ssid, int32_t priority);
 WDStatus *WDConfigureMesh(uint64_t session, uint32_t changed, uint32_t enabled);
 typedef struct {
     char *name, *address, *device_type;
@@ -132,4 +133,5 @@ typedef struct {
 } WDInboxResult;
 WDInboxResult *WDInbox(char *account);
 void WDInboxFree(WDInboxResult *value);
+WDStatus *WDManageDevice(uint64_t session, char *account, char *organization, char *device, char *name, int32_t remove);
 #endif

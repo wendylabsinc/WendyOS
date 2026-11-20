@@ -249,7 +249,7 @@ struct SiteCameraAlignmentView: View {
 
 }
 
-private struct AlignmentLivePreview: View {
+struct AlignmentLivePreview: View {
     @State private var ownedStream: UInt64 = 0
     @State private var calibrationLease: UUID?
     @ObservedObject var model: AppModel

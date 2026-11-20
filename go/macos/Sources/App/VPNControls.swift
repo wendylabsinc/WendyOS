@@ -68,7 +68,7 @@ struct VPNPopover: View {
                     .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             }
             if let error = model.vpnError ?? vpn.connectionError, error != vpn.setupIssue {
-                FailureNote(message: error)
+                FailureNote(message: model.vpnErrorFailure ?? WendyError(message: error))
             }
             Divider()
             Label("All devices over mesh", systemImage: "network")

@@ -1,0 +1,16 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+// Authenticated, immutable .wendysite archives. IDs are SHA-256 content hashes.
+service SiteModelService {
+  rpc List(SiteModelListRequest) returns (SiteModelListResponse);
+  rpc Upload(stream SiteModelUploadRequest) returns (SiteModelInfo);
+  rpc Download(SiteModelDownloadRequest) returns (stream SiteModelChunk);
+}
+message SiteModelListRequest {}
+message SiteModelInfo { string id = 1; string name = 2; int64 size = 3; }
+message SiteModelListResponse { repeated SiteModelInfo models = 1; }
+// First frame is metadata only; following frames contain <=256 KiB each.
+message SiteModelUploadRequest { SiteModelInfo info = 1; bytes data = 2; }
+message SiteModelDownloadRequest { string id = 1; }
+message SiteModelChunk { bytes data = 1; }

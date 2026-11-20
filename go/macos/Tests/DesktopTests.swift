@@ -195,8 +195,9 @@ final class DesktopTests: XCTestCase {
         let next = Device(id: "next", name: "Next", selector: "next", transport: .lan, address: "next")
         let started = expectation(description: "Connection started")
         var pending: CheckedContinuation<DeviceConnection, Error>?
-        let model = AppModel { _, _, _ in
-            try await withCheckedThrowingContinuation { continuation in
+        let model = AppModel { device, _, _ in
+            if device.id == old.id { return DeviceConnection(session: 3, lite: false) }
+            return try await withCheckedThrowingContinuation { continuation in
                 pending = continuation
                 started.fulfill()
             }
@@ -363,7 +364,7 @@ final class DesktopTests: XCTestCase {
     func testTypedErrorPreservesRecoveryFlag() {
         let message = strdup("identity changed")
         defer { free(message) }
-        XCTAssertThrowsError(try GoClient.check(WDStatus(message: message, can_forget_identity: 1))) {
+        XCTAssertThrowsError(try GoClient.check(WDStatus(message: message, can_forget_identity: 1, error_code: 5, remedy: 7))) {
             XCTAssertTrue(($0 as? WendyError)?.canForgetIdentity == true)
         }
     }
