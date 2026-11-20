@@ -179,8 +179,15 @@ func TestPrepareEnrollmentAuthDoesNotLoginWithoutInteractiveConsent(t *testing.T
 			if tc.legacy {
 				auth.OAuthIssuer = ""
 			}
-			if _, err := prepareEnrollmentAuth(context.Background(), auth); !errors.Is(err, errCertExpired) {
+			_, err := prepareEnrollmentAuth(context.Background(), auth)
+			if !errors.Is(err, errCertExpired) {
 				t.Fatalf("expected actionable expiry error, got %v", err)
+			}
+			// Only a person who was asked can decline; an install then goes on
+			// without enrolling instead of failing.
+			declined := tc.interactive && !tc.json && !tc.confirm && !tc.legacy
+			if got := errors.As(err, new(enrollmentSignInDeclinedError)); got != declined {
+				t.Fatalf("reported as declined = %v, want %v", got, declined)
 			}
 		})
 	}

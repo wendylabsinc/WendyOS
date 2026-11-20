@@ -146,7 +146,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 
 	// Device configuration: the wendy_conf partition. It holds the Wi-Fi
 	// password, so it stays in memory, out of the build folder.
-	prov, err := resolveLiteProvisioning(wifi, deviceName, preOpts)
+	prov, err := resolveLiteProvisioning(ctx, wifi, deviceName, preOpts)
 	if err != nil {
 		return err
 	}
