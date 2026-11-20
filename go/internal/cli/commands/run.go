@@ -2197,7 +2197,7 @@ func offerLiteReinstallAndRebuild(ctx context.Context, p providers.DeviceProvide
 		return nil, ctx.Err()
 	}
 
-	if err := waitForDeviceReady(ctx, p, device, 30*time.Second); err != nil {
+	if err := waitForLiteAfterInstall(ctx, p, device, !opts.yes && isInteractiveTerminal(), 30*time.Second); err != nil {
 		return nil, fmt.Errorf("device did not come back after reinstall: %w", err)
 	}
 
@@ -2212,20 +2212,26 @@ func offerLiteReinstallAndRebuild(ctx context.Context, p providers.DeviceProvide
 // waitForDeviceReady polls the provider until the device answers again after
 // a reboot, or the timeout elapses.
 func waitForDeviceReady(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var lastErr error
 	for {
-		if _, err := p.GetDeviceInfo(ctx, device); err == nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if waitCtx.Err() != nil {
+			if lastErr != nil {
+				return lastErr
+			}
+			return waitCtx.Err()
+		}
+		if _, err := p.GetDeviceInfo(waitCtx, device); err == nil {
 			return nil
 		} else {
 			lastErr = err
 		}
-		if time.Now().After(deadline) {
-			return lastErr
-		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-waitCtx.Done():
 		case <-time.After(time.Second):
 		}
 	}
