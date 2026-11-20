@@ -59,6 +59,10 @@
       "target": "FuzzDecoderRoundTrip"
     },
     {
+      "package": "go/internal/rtps",
+      "target": "FuzzPublishingParticipantDatagrams"
+    },
+    {
       "package": "go/internal/shared/builddelivery",
       "target": "FuzzDeliveryAdmission"
     },

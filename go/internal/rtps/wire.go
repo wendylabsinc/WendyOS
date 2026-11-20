@@ -1,10 +1,15 @@
-// Package rtps is a minimal, read-oriented RTPS 2.x client: enough to discover
-// a writer on a DDS domain and receive its samples, and nothing more.
+// Package rtps is a minimal RTPS 2.x client: enough to discover a writer on a
+// DDS domain and receive its samples and, for a participant created with
+// Config.Publish, to write small samples that ROS 2 nodes receive.
 //
-// It is not a DDS implementation. There is no reliable-reader state machine
-// (a BEST_EFFORT reader matches a RELIABLE writer under the RxO rule, which is
-// what ROS 2's default QoS offers), bounded DATA_FRAG reassembly, no security,
-// no content filtering, and discovery endpoint disposal only.
+// It is not a DDS implementation. Reading has no reliable-reader state
+// machine for user data (a BEST_EFFORT reader matches a RELIABLE writer under
+// the RxO rule, which is what ROS 2's default QoS offers) and bounded
+// DATA_FRAG reassembly. Writing offers RELIABLE so that every reader matches,
+// but keeps no history and resends nothing: a sample is one datagram, sent
+// once, and a heartbeat tells reliable readers not to wait for a lost one.
+// There is no security, no content filtering, no fragmentation of written
+// samples, and discovery endpoint disposal only.
 package rtps
 
 import (
@@ -25,6 +30,7 @@ var protocolID = [4]byte{'R', 'T', 'P', 'S'}
 const (
 	subACKNACK   = 0x06
 	subHEARTBEAT = 0x07
+	subGAP       = 0x08
 	subINFO_TS   = 0x09
 	subINFO_SRC  = 0x0c
 	subINFO_DST  = 0x0e
@@ -70,9 +76,10 @@ const (
 
 // Builtin endpoint set bits advertised in SPDP: what this participant can do.
 // We announce ourselves, detect other participants, detect their publications,
-// and announce our own subscriptions. We deliberately do not claim to be a
-// publication announcer or subscription detector — we publish no user data and
-// do not care who else subscribes.
+// and announce our own subscriptions. A read-only participant deliberately
+// does not claim to be a publication announcer or subscription detector — it
+// publishes no user data and does not care who else subscribes. A publishing
+// participant adds those two (publishEndpoints).
 const builtinEndpoints = 0x01 | 0x02 | 0x08 | 0x10
 
 // reliabilityBestEffort / reliabilityReliable are the QoS kind values as they
