@@ -99,6 +99,15 @@ class SitesTest {
         assertNull(SiteRay.nearest(geometry, floatArrayOf(50f, 10f, 50f), floatArrayOf(0f, -1f, 0f)))
     }
 
+    @Test fun siteScaleKeepsTextureCoordinates() {
+        val texture = SiteTexture("wall.png", byteArrayOf(1, 2, 3))
+        val mesh = SiteMesh("Wall", FloatArray(9) { it.toFloat() }, FloatArray(9), floatArrayOf(1f, 1f, 1f), floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f), texture)
+        val scaledMesh = scaled(SiteGeometry(listOf(mesh)), 0.01).meshes.single()
+        assertEquals(0.08f, scaledMesh.positions[8], 1e-6f)
+        assertArrayEquals(mesh.uv, scaledMesh.uv, 0f)
+        assertSame(texture, scaledMesh.texture)
+    }
+
     @Test fun removedCapturesCanBeRestored() {
         val store = SiteModelStore(temporary())
         val saved = store.create("Lab", fixture("room.usdz"))
