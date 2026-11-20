@@ -46,6 +46,12 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart() { super.onStart(); model.setForeground(true) }
     override fun onStop() { model.setForeground(false); super.onStop() }
+    // singleTop: the VPN notification and system VPN settings reuse this Activity
+    // and its model instead of stacking a second one that fights over visibility.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == WendyVpnService.OPEN) model.requestVpnPage = true
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,6 +63,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     var addDevice by remember { mutableStateOf(false) }
     var setup by rememberSaveableState(if (openVpn) "vpn" else "")
     LaunchedEffect(model.browserURL) { model.browserURL?.let { model.browserURL = null; openURL(it) } }
+    LaunchedEffect(model.requestVpnPage) { if (model.requestVpnPage) { model.requestVpnPage = false; setup = "vpn" } }
     BackHandler(model.selected != null || setup.isNotBlank()) { if (setup.isNotBlank()) setup = "" else model.disconnect() }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
