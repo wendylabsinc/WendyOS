@@ -989,6 +989,10 @@ type VideoService struct {
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
 
+	// camSandbox starts camera GStreamer subprocesses without root. Nil, as in
+	// a VideoService built without NewVideoService, starts them unchanged.
+	camSandbox *cameraSandbox
+
 	// runGStreamer is the injection seam for the network capture subprocess.
 	runGStreamer func(ctx context.Context, args []string, onFrame func([]byte)) error
 
@@ -1118,6 +1122,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	svc.discoverer.Credentials = svc.credentials.Get
 	svc.learnStreamPaths = svc.discoverer.LearnStreamPaths
 	svc.links = ipcam.NewLinkManager(svc.registry, logger)
+	svc.camSandbox = newCameraSandbox(logger, os.Getenv(cameraSandboxEnv))
 	svc.runGStreamer = svc.gstreamerFrames
 	svc.cameraReachable = ipcam.Reachable
 	svc.probeCamera = ipcam.ProbeCredentials
@@ -2288,6 +2293,7 @@ const pipeWireProbeTimeout = 2 * time.Second
 // The second return separates a definite "raw" from an inconclusive probe: a deadline or a
 // missing session is not evidence, and treating it as one built a pipeline that stalled.
 func (s *VideoService) nodeServesJPEG(ctx context.Context, gstPath string, serial uint64) (jpeg, known bool) {
+	s.camSandbox.warm(true)
 	probeCtx, cancel := context.WithTimeout(ctx, pipeWireProbeTimeout)
 	defer cancel()
 	cmd, err := audio.Command(probeCtx, gstPath, "-q",
@@ -2298,7 +2304,11 @@ func (s *VideoService) nodeServesJPEG(ctx context.Context, gstPath string, seria
 			zap.Uint64("node_serial", serial), zap.Error(err))
 		return false, false
 	}
-	if runErr := cmd.Run(); runErr != nil {
+	runErr := s.camSandbox.start(cmd, true)
+	if runErr == nil {
+		runErr = cmd.Wait()
+	}
+	if runErr != nil {
 		// Only a clean refusal is evidence. If our own deadline killed the probe, or the
 		// parent context went away, the format is simply unknown.
 		if probeCtx.Err() != nil || ctx.Err() != nil {
@@ -3265,6 +3275,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 			return status.Errorf(codes.Internal, "failed to build GStreamer pipeline: %v", err)
 		}
 	}
+	plan.session = pw.serial != 0
 	args := plan.args
 	var cmd *exec.Cmd
 	if pw.serial != 0 {
@@ -3318,7 +3329,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 		}
 		cmd.ExtraFiles = []*os.File{rawW}
 	}
-	if err := cmd.Start(); err != nil {
+	if err := s.camSandbox.start(cmd, plan.session); err != nil {
 		if rawR != nil {
 			rawR.Close() //nolint:errcheck
 			rawW.Close() //nolint:errcheck
@@ -3350,7 +3361,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 			return
 		}
 		msg := strings.TrimSpace(stderrBuf.buf.String())
-		runErr = gstCameraPipelineError(path, enc.element, msg, waitErr, runErr)
+		runErr = s.camSandbox.explain(gstCameraPipelineError(path, enc.element, msg, waitErr, runErr), msg, plan.session)
 		if runErr != nil {
 			s.logger.Error("GStreamer pipeline failed", zap.String("device", path),
 				zap.String("encoder", enc.element), zap.String("stderr", msg), zap.Error(runErr))
@@ -3639,6 +3650,9 @@ type gstPipelinePlan struct {
 	raw *agentpb.RawFormat
 	// rawWhy says why raw is not offered — the reason a raw subscriber is refused with.
 	rawWhy string
+	// session marks a PipeWire client. It can reach the session's socket only as
+	// that session's user, so it is sandboxed as that user rather than nobody.
+	session bool
 	// rawWhyLazy is rawWhy for the refusals that have to ask the device what it
 	// IS (an open and a VIDIOC_ENUM_FRAMESIZES for Z16, see rawWhyDepthNode).
 	// Deferred so the probe runs only when a raw subscriber is actually

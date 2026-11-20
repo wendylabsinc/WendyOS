@@ -30,13 +30,17 @@ import (
 // redirect it into a tempdir.
 var SocketGlob = "/run/user/*/pipewire-0"
 
+// SessionUser owns the PipeWire session. A client reaches that session's
+// socket only as this user or as root.
+const SessionUser = "wendy"
+
 // expectedUID resolves the "wendy" user's UID, the only session whose socket
 // root will trust. Without this, RuntimeDir would hand a root-run process to
 // whichever local UID's session socket happened to glob first on a
 // multi-user host. Behind a var so tests can stub it without requiring a real
 // "wendy" account on the test host.
 var expectedUID = func() (uint32, bool) {
-	u, err := user.Lookup("wendy")
+	u, err := user.Lookup(SessionUser)
 	if err != nil {
 		return 0, false
 	}

@@ -51,7 +51,7 @@ func (s *VideoService) gstreamerFrames(ctx context.Context, args []string, onFra
 	// Bounded so a misbehaving child cannot exhaust the heap through stderr.
 	diagnostics := &limitedBuffer{limit: maxStderrBytes}
 	cmd.Stderr = diagnostics
-	if err := cmd.Start(); err != nil {
+	if err := s.camSandbox.start(cmd, false); err != nil {
 		return fmt.Errorf("starting GStreamer helper: %w", err)
 	}
 

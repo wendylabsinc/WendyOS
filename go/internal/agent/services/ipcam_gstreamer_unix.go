@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/ebitengine/purego"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/sandbox"
 )
 
 // GStreamer state and message constants from gst/gstelement.h and
@@ -158,6 +160,11 @@ func gstreamerPipelineDescription(args []string, fd uintptr) (string, bool, erro
 // credentials never enter argv while GStreamer plugin failures remain isolated
 // from the long-running agent.
 func RunIPCameraGStreamerHelper(in io.Reader, out io.Writer) error {
+	// The pipeline about to be read holds the camera's password. Before it is in
+	// this process's memory, close that memory to ptrace and /proc.
+	if err := sandbox.HideMemory(); err != nil {
+		return errors.New("protecting GStreamer helper memory failed")
+	}
 	// GStreamer initialization on macOS must happen on the process's initial OS
 	// thread. handleUtilityCommand invokes this before the agent starts any other
 	// work, so locking here preserves that requirement.
