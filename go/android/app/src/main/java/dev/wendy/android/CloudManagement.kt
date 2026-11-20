@@ -1,9 +1,11 @@
 package dev.wendy.android
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.PersistableBundle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -290,7 +292,11 @@ private fun InvitationForm(state: CloudManagementState) {
         PageColumn {
             formSection(footer = "Copy or share this link before leaving. Anyone with the link can join with the selected role until it expires.") {
                 SelectionContainer { Text(link, Modifier.padding(vertical = 8.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium) }
-                ActionRow("Copy link", Icons.Outlined.ContentCopy) { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Wendy invitation", link)) }
+                ActionRow("Copy link", Icons.Outlined.ContentCopy) {
+                    // Anyone with the link can join, so mark it sensitive; Android 13 and later then hide it in the clipboard preview.
+                    val clip = ClipData.newPlainText("Wendy invitation", link).apply { description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) } }
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
+                }
                 ActionRow("Share link", Icons.Outlined.Share) {
                     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link), "Share invitation"))
                 }
