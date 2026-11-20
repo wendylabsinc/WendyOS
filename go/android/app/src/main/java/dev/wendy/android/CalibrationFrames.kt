@@ -25,19 +25,22 @@ class CameraCalibrationFrames {
     /** The newest decoded picture in colour, kept only while [wantsColor] (iOS latestColor, for projection). */
     @Volatile var latestColor: CameraColorFrame? = null; private set
     @Volatile var wantsColor = false
-    private val worker by lazy { Handler(HandlerThread("WendyCalibrationFrames").apply { start() }.looper) }
+    /** The decoder thread, started for the first IDR picture and stopped when the last owner releases. Guarded by this. */
+    private var worker: Handler? = null
 
     val enabled get() = owners.get() > 0
 
     fun acquire() { if (owners.getAndIncrement() == 0) reset() }
-    fun release() { if (owners.decrementAndGet() <= 0) { owners.set(0); reset() } }
+    fun release() { if (owners.decrementAndGet() <= 0) { owners.set(0); reset(); stop() } }
     fun reset() { generation.incrementAndGet(); latest = null; latestColor = null; pending.set(false) }
 
     /** One access unit holding an IDR picture, with the stream's parameter sets. */
     internal fun acceptH264(sps: ByteArray, pps: ByteArray, accessUnit: ByteArray, width: Int, height: Int) {
         if (!enabled || width !in 1..8192 || height !in 1..8192 || width.toLong() * height > 32_000_000 || !pending.compareAndSet(false, true)) return
         val current = generation.get(); val received = System.currentTimeMillis(); val number = sequence.incrementAndGet()
-        worker.post {
+        // A thread starts only while an owner holds this, so a release racing this call leaves none behind.
+        val decoder = synchronized(this) { if (enabled) worker ?: Handler(HandlerThread("WendyCalibrationFrames").apply { start() }.looper).also { worker = it } else null } ?: return
+        decoder.post {
             try {
                 if (!enabled || generation.get() != current) return@post
                 val frame = decodeLuma(sps, pps, accessUnit, width, height) ?: return@post
@@ -49,6 +52,9 @@ class CameraCalibrationFrames {
             finally { if (generation.get() == current) pending.set(false) }
         }
     }
+
+    /** Quits the decoder thread unless an owner acquired again meanwhile; the next IDR picture starts a new one. */
+    private fun stop() { synchronized(this) { if (!enabled) { worker?.looper?.quitSafely(); worker = null } } }
 
     /** A decoded JPEG frame (iOS CameraCalibrationFrame.jpeg draws it into a grey context). */
     fun acceptJpeg(bitmap: Bitmap) {
