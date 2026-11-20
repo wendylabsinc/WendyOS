@@ -219,7 +219,11 @@ struct DeviceOSUpdateView: View {
         } catch { if !Task.isCancelled { releaseError = error.localizedDescription } }
     }
     private func start(artifact target: String) async {
-        guard canStart, target == artifact else { return }
+        guard canStart, target == artifact else {
+            // The check can expire or be replaced while the confirmation is open.
+            if error == nil { error = "The OS update did not start because the release information changed or is out of date. Check for updates, then confirm again." }
+            return
+        }
         busy = true; error = nil; defer { busy = false }
         do {
             let value = try await GoClient.shared.osUpdate(session: session, artifact: target, start: true)
