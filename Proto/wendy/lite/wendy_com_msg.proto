@@ -225,7 +225,7 @@ message WendyComEnrollmentChallenge {
     bool builtin_tsa_roots_ready = 6;
     bool enrollment_reset_supported = 7; // physical USB reset with current nonce
     optional bool cloud_enrollment_supported = 8; // absent on older firmware
-    optional bool mldsa_verification_supported = 9; // wolfSSL ML-DSA CA and peer certificate verification
+    optional bool mldsa_verification_supported = 9; // ML-DSA-65 CA and peer certificate verification
     string device_id = 10; // configured PKI identity; distinct from the USB hardware ID
     string tenant_id = 11;
     bool uuid_enrollment_supported = 12; // UUID discovery and enrollment identity reporting
@@ -286,6 +286,8 @@ message WendyComConsoleEnd {}
 
 message WendyComDeviceInfo {
     string os = 1; // typically "wendy-lite"
+    // Wendy Lite version, the same value as WendyComBuildInfo.os_version.
+    // Empty when not known.
     string os_version = 2;
     string cpu_architecture = 3;
     // SoC name, e.g. "esp32c6" or "esp32s3".
@@ -296,6 +298,24 @@ message WendyComDeviceInfo {
     // Empty when the board is not known, which is typically the case when
     // wendy-lite is compiled and flashed manually.
     string board = 7;
+}
+
+message WendyComGetBuildInfoParams {}
+
+// How the firmware was built. Each field is empty when the build does not
+// know it, typically when wendy-lite was not configured with
+// tools/configure.py.
+message WendyComBuildInfo {
+    // Version of the wendy-lite source (CONFIG_WENDY_VERSION): "X.Y.Z" when
+    // the commit has the tag vX.Y.Z, else the full commit hash, with
+    // "-dirty" when tracked files had uncommitted changes. The same value as
+    // WendyComDeviceInfo.os_version.
+    string os_version = 1;
+    // Configurator input values (CONFIG_WENDY_BUILD_PROFILE) as a JSON object
+    // on one line, e.g. {"board":"m5_stamp_s3","app_type":"native"}.
+    string build_profile = 2;
+    // "idf-" followed by the ESP-IDF version, e.g. "idf-v6.0.3".
+    string build_tool = 3;
 }
 
 // Command sent host -> device — the oneof variant identifies the command.
@@ -327,6 +347,7 @@ message WendyComCommand {
         WendyComNetTopologyParams net_topology = 24;
         WendyComBluetoothPowerGetParams bluetooth_power_get = 25;
         WendyComBluetoothPowerSetParams bluetooth_power_set = 26;
+        WendyComGetBuildInfoParams get_build_info = 27;
     }
 }
 
@@ -360,6 +381,7 @@ message WendyComResponse {
         WendyComNetStatus net_status = 8;
         WendyComNetTopologyPage net_topology = 9;
         WendyComBluetoothPowerStatus bluetooth_power = 10;
+        WendyComBuildInfo build_info = 11;
     }
 }
 

@@ -17,7 +17,8 @@ import (
 	"strings"
 )
 
-// DefaultVersion is the ESP-IDF version used to build Wendy Lite native apps,
+// DefaultVersion is the ESP-IDF version used to build Wendy Lite native apps
+// when the device gives no Wendy Lite version (see ProjectToolchain.UseIDF),
 // named as eim (the ESP-IDF Installation Manager) names it.
 const DefaultVersion = "v6.0.3"
 
@@ -26,7 +27,7 @@ const DefaultVersion = "v6.0.3"
 // cannot stand in for it.
 const EIMFormula = "espressif/eim/eim"
 
-// ErrEIMNotInstalled reports that eim is not on PATH, so EnsureVersion cannot
+// ErrEIMNotInstalled reports that eim is not on PATH, so EnsureIDF cannot
 // check or install the toolchain. The CLI offers to install eim when it sees it.
 var ErrEIMNotInstalled = errors.New("eim (ESP-IDF Installation Manager) is not installed")
 
@@ -102,6 +103,31 @@ func ProjectTarget(dir string) string {
 		return ""
 	}
 	return config.IdfTarget
+}
+
+// BuildIDFVersion returns the ESP-IDF version that configured the build
+// folder of the project in dir: the git_revision of
+// build/project_description.json, such as "v6.0.3". It returns "" when the
+// project has not been configured.
+func BuildIDFVersion(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "build", "project_description.json"))
+	if err != nil {
+		return ""
+	}
+	var description struct {
+		GitRevision string `json:"git_revision"`
+	}
+	if json.Unmarshal(data, &description) != nil {
+		return ""
+	}
+	return description.GitRevision
+}
+
+// SameIDFVersion reports whether the ESP-IDF version that configured a
+// build folder (BuildIDFVersion) is want, an eim name such as "v6.1". A
+// development suffix ("v6.1-dirty") counts as the same version.
+func SameIDFVersion(configured, want string) bool {
+	return configured == want || strings.HasPrefix(configured, want+"-")
 }
 
 // ReadSdkconfig reads the sdkconfig of the ESP-IDF project in dir and returns
@@ -202,14 +228,12 @@ func parseSdkconfigValue(value string) any {
 	return value
 }
 
-// EnsureVersion verifies that eim is installed and that the DefaultVersion
-// ESP-IDF toolchain is available, installing the toolchain via eim when it
-// is missing. Without eim it returns an error wrapping ErrEIMNotInstalled.
-func EnsureVersion(ctx context.Context) error {
+// CheckEIM verifies that eim is installed. Without eim it returns an error
+// wrapping ErrEIMNotInstalled, with the command that installs it.
+func CheckEIM(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
 	checkCmd := execCommandContext(ctx, "eim", "--version")
 	checkCmd.Stdout = io.Discard
 	checkCmd.Stderr = io.Discard
@@ -218,6 +242,27 @@ func EnsureVersion(ctx context.Context) error {
 			return fmt.Errorf("%w; %s", ErrEIMNotInstalled, eimInstallHint(runtime.GOOS))
 		}
 		return fmt.Errorf("running 'eim --version': %w", err)
+	}
+	return nil
+}
+
+// EIMVersion returns the eim name of an ESP-IDF version: the ESP-IDF tag,
+// "v6.0.3" for "6.0.3" and "v6.1" for "6.1". A name that already starts with
+// "v" is returned as is.
+func EIMVersion(idfVersion string) string {
+	if strings.HasPrefix(idfVersion, "v") {
+		return idfVersion
+	}
+	return "v" + idfVersion
+}
+
+// EnsureIDF verifies that eim is installed and that the ESP-IDF toolchain
+// version (an eim name such as "v6.1") is available, installing it via eim
+// when it is missing. Without eim it returns an error wrapping
+// ErrEIMNotInstalled.
+func EnsureIDF(ctx context.Context, version string) error {
+	if err := CheckEIM(ctx); err != nil {
+		return err
 	}
 
 	listCmd := execCommandContext(ctx, "eim", "list")
@@ -239,17 +284,17 @@ func EnsureVersion(ctx context.Context) error {
 		return fmt.Errorf("running 'eim list': %w", err)
 	}
 	for _, v := range parseInstalledVersions(string(out)) {
-		if v == DefaultVersion {
+		if v == version {
 			return nil
 		}
 	}
 
-	fmt.Fprintf(os.Stdout, "Installing ESP-IDF %s (this may take a while)...\n", DefaultVersion)
-	installCmd := execCommandContext(ctx, "eim", "install", "-i", DefaultVersion, "-n", "true")
+	fmt.Fprintf(os.Stdout, "Installing ESP-IDF %s (this may take a while)...\n", version)
+	installCmd := execCommandContext(ctx, "eim", "install", "-i", version, "-n", "true")
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr
 	if err := installCmd.Run(); err != nil {
-		return fmt.Errorf("installing ESP-IDF %s via eim: %w", DefaultVersion, err)
+		return fmt.Errorf("installing ESP-IDF %s via eim: %w", version, err)
 	}
 	return nil
 }
@@ -288,12 +333,20 @@ func parseInstalledVersions(output string) []string {
 // shell, so each argument is quoted to survive spaces and other shell
 // metacharacters.
 func IdfCommandContext(ctx context.Context, args ...string) *exec.Cmd {
+	return EIMCommandContext(ctx, DefaultVersion, "idf.py", args...)
+}
+
+// EIMCommandContext returns a command that runs name with the given arguments
+// inside the environment of the ESP-IDF version (an eim name such as "v6.1"),
+// with 'eim run', in the caller's working directory. Each argument is quoted
+// for the POSIX shell that eim runs the command with.
+func EIMCommandContext(ctx context.Context, version, name string, args ...string) *exec.Cmd {
 	parts := make([]string, 0, len(args)+1)
-	parts = append(parts, "idf.py")
+	parts = append(parts, shellQuote(name))
 	for _, arg := range args {
 		parts = append(parts, shellQuote(arg))
 	}
-	return execCommandContext(ctx, "eim", "run", strings.Join(parts, " "), DefaultVersion)
+	return execCommandContext(ctx, "eim", "run", strings.Join(parts, " "), version)
 }
 
 // shellSafePattern matches arguments that need no quoting in a POSIX shell.

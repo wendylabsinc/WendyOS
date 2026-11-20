@@ -357,12 +357,13 @@ func TestInstallPickersNeedATerminal(t *testing.T) {
 		{Name: "Raspberry Pi 5", Value: "raspberry-pi-5"},
 		{Name: "Jetson AGX Thor", Value: thorDeviceType},
 		{Name: "ESP32-C6", Value: "wlite_target_esp32c6"},
+		liteBuildPickerItem(),
 		{Name: "Linux Desktop", Value: linuxDesktopValue},
 	})
 	if err == nil || !IsUsageError(err) {
 		t.Fatalf("device picker: %v; want a usage error", err)
 	}
-	for _, want := range []string{"--device-type", "raspberry-pi-5", thorDeviceType, linuxDesktopValue} {
+	for _, want := range []string{"--device-type", "raspberry-pi-5", thorDeviceType, linuxDesktopValue, liteBuildDeviceType} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("device picker error %q does not mention %q", err, want)
 		}

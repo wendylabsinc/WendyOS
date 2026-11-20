@@ -32,15 +32,17 @@ import (
 // belongs to an unrelated authority and must not replace the LAN credential.
 func TestLocalLiteDeviceInfoUsesTenantPrimaryIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		cached   bool
-		override bool
-		wrongCA  bool
+		name        string
+		cached      bool
+		override    bool
+		wrongCA     bool
+		oldFirmware bool
 	}{
 		{name: "ML-DSA tenant primary"},
 		{name: "ignore cached P-256 relay identity", cached: true},
 		{name: "explicit identity override preserves device trust", override: true},
 		{name: "reject unrelated device authority", cached: true, wrongCA: true},
+		{name: "firmware without get_build_info", oldFirmware: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("WENDY_LITE_OPERATOR_CERT", "")
@@ -100,7 +102,12 @@ func TestLocalLiteDeviceInfoUsesTenantPrimaryIdentity(t *testing.T) {
 				}
 				defer conn.Close()
 				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-				serverDone <- serveLocalLiteDeviceInfo(tls.Server(conn, serverTLS))
+				buildResult := wendypb.WendyComResult_WENDY_COM_RESULT_OK
+				if tc.oldFirmware {
+					// The answer of a firmware to a command it does not know.
+					buildResult = wendypb.WendyComResult_WENDY_COM_RESULT_UNKNOWN_ERROR
+				}
+				serverDone <- serveLocalLiteDeviceInfo(tls.Server(conn, serverTLS), buildResult)
 			}()
 			host, port, err := net.SplitHostPort(listener.Addr().String())
 			if err != nil {
@@ -124,6 +131,14 @@ func TestLocalLiteDeviceInfoUsesTenantPrimaryIdentity(t *testing.T) {
 			}
 			if info.OS != "wendy-lite" || info.OSVersion != "0.9.1" || info.DeviceType != "esp32c6" {
 				t.Fatalf("GetDeviceInfo = %+v, want the LAN board's response", info)
+			}
+			// The build info, without "-dirty"; unknown for an older firmware.
+			wantVersion, wantProfile := testLiteBuildCommit, testLiteBuildProfile
+			if tc.oldFirmware {
+				wantVersion, wantProfile = "", ""
+			}
+			if info.LiteVersion != wantVersion || info.LiteBuildProfile != wantProfile {
+				t.Fatalf("GetDeviceInfo Lite build = %q, %q; want %q, %q", info.LiteVersion, info.LiteBuildProfile, wantVersion, wantProfile)
 			}
 			if err := <-serverDone; err != nil {
 				t.Fatalf("LAN device: %v", err)
@@ -228,9 +243,18 @@ func localLiteTestSession(t *testing.T, deviceTrust string, primaryExpiry time.T
 	}}}
 }
 
-// Serve only the WendyCom handshake and device-info command, preserving the
-// client's framing so the test covers the normal provider and protocol path.
-func serveLocalLiteDeviceInfo(conn *tls.Conn) error {
+// The build info that serveLocalLiteDeviceInfo reports: a commit with
+// uncommitted changes.
+const (
+	testLiteBuildCommit  = "1d93ece2f307d9722325a6f2eebe52fdcd475740"
+	testLiteBuildProfile = `{"board":"esp32c6_devkit_c_1","app_type":"native"}`
+)
+
+// Serve only the WendyCom handshake and the device-info and build-info
+// commands, preserving the client's framing so the test covers the normal
+// provider and protocol path. buildResult is the result of get_build_info:
+// OK reports testLiteBuildCommit with "-dirty" and testLiteBuildProfile.
+func serveLocalLiteDeviceInfo(conn *tls.Conn, buildResult wendypb.WendyComResult) error {
 	if err := conn.Handshake(); err != nil {
 		return err
 	}
@@ -253,13 +277,21 @@ func serveLocalLiteDeviceInfo(conn *tls.Conn) error {
 		case request.GetHandshake() != nil:
 			reply = request
 		case request.GetCommand().GetGetDeviceInfo() != nil:
-			done = true
 			reply = &wendypb.WendyComMessage{Msg: &wendypb.WendyComMessage_Response{Response: &wendypb.WendyComResponse{
 				RequestId: request.GetCommand().GetRequestId(),
 				Data: &wendypb.WendyComResponse_DeviceInfo{DeviceInfo: &wendypb.WendyComDeviceInfo{
 					Os: "wendy-lite", OsVersion: "0.9.1", CpuArchitecture: "riscv32", Target: "esp32c6",
 				}},
 			}}}
+		case request.GetCommand().GetGetBuildInfo() != nil:
+			done = true
+			response := &wendypb.WendyComResponse{RequestId: request.GetCommand().GetRequestId(), Result: buildResult}
+			if buildResult == wendypb.WendyComResult_WENDY_COM_RESULT_OK {
+				response.Data = &wendypb.WendyComResponse_BuildInfo{BuildInfo: &wendypb.WendyComBuildInfo{
+					OsVersion: testLiteBuildCommit + "-dirty", BuildProfile: testLiteBuildProfile, BuildTool: "idf-v6.0.3",
+				}}
+			}
+			reply = &wendypb.WendyComMessage{Msg: &wendypb.WendyComMessage_Response{Response: response}}
 		default:
 			return fmt.Errorf("unexpected WendyCom request")
 		}

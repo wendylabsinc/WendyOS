@@ -330,7 +330,7 @@ func TestParseInstalledVersions(t *testing.T) {
 	}
 }
 
-func TestEnsureVersion_AlreadyInstalled(t *testing.T) {
+func TestEnsureIDFDefault_AlreadyInstalled(t *testing.T) {
 	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		if len(args) > 0 && args[0] == "list" {
 			return exec.CommandContext(ctx, "echo", "- "+DefaultVersion+" (selected) [/x]")
@@ -338,8 +338,8 @@ func TestEnsureVersion_AlreadyInstalled(t *testing.T) {
 		return exec.CommandContext(ctx, "true")
 	})
 
-	if err := EnsureVersion(context.Background()); err != nil {
-		t.Fatalf("EnsureVersion() unexpected error: %v", err)
+	if err := EnsureIDF(context.Background(), DefaultVersion); err != nil {
+		t.Fatalf("EnsureIDF() unexpected error: %v", err)
 	}
 
 	want := [][]string{{"eim", "--version"}, {"eim", "list"}}
@@ -348,7 +348,7 @@ func TestEnsureVersion_AlreadyInstalled(t *testing.T) {
 	}
 }
 
-func TestEnsureVersion_InstallsWhenMissing(t *testing.T) {
+func TestEnsureIDFDefault_InstallsWhenMissing(t *testing.T) {
 	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		if len(args) > 0 && args[0] == "list" {
 			return exec.CommandContext(ctx, "echo", "- v6.0.1 [/x]")
@@ -356,8 +356,8 @@ func TestEnsureVersion_InstallsWhenMissing(t *testing.T) {
 		return exec.CommandContext(ctx, "true")
 	})
 
-	if err := EnsureVersion(context.Background()); err != nil {
-		t.Fatalf("EnsureVersion() unexpected error: %v", err)
+	if err := EnsureIDF(context.Background(), DefaultVersion); err != nil {
+		t.Fatalf("EnsureIDF() unexpected error: %v", err)
 	}
 
 	if len(*calls) != 3 {
@@ -369,18 +369,18 @@ func TestEnsureVersion_InstallsWhenMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureVersion_EimNotFound(t *testing.T) {
+func TestEnsureIDFDefault_EimNotFound(t *testing.T) {
 	stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "nonexistent-binary-that-does-not-exist")
 	})
 
-	err := EnsureVersion(context.Background())
+	err := EnsureIDF(context.Background(), DefaultVersion)
 	if err == nil {
-		t.Fatal("EnsureVersion() expected error when eim is not installed, got nil")
+		t.Fatal("EnsureIDF() expected error when eim is not installed, got nil")
 	}
 	// The CLI recognizes this to offer the install.
 	if !errors.Is(err, ErrEIMNotInstalled) {
-		t.Errorf("EnsureVersion() = %v, want ErrEIMNotInstalled", err)
+		t.Errorf("EnsureIDF() = %v, want ErrEIMNotInstalled", err)
 	}
 	if !strings.Contains(err.Error(), "eim (ESP-IDF Installation Manager) is not installed") ||
 		!strings.Contains(err.Error(), eimInstallHint(runtime.GOOS)) {
@@ -414,5 +414,43 @@ func TestIdfCommandContext(t *testing.T) {
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls = %v, want %v", *calls, want)
+	}
+}
+
+func TestEnsureIDF_InstallsRequestedVersion(t *testing.T) {
+	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) > 0 && args[0] == "list" {
+			return exec.CommandContext(ctx, "echo", "- "+DefaultVersion+" (selected) [/x]")
+		}
+		return exec.CommandContext(ctx, "true")
+	})
+
+	if err := EnsureIDF(context.Background(), "v6.1"); err != nil {
+		t.Fatalf("EnsureIDF() unexpected error: %v", err)
+	}
+	want := [][]string{{"eim", "--version"}, {"eim", "list"}, {"eim", "install", "-i", "v6.1", "-n", "true"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("calls = %v, want %v", *calls, want)
+	}
+}
+
+func TestEIMCommandContext(t *testing.T) {
+	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	})
+
+	EIMCommandContext(context.Background(), "v6.1", "python", "tools/configure.py", "board=seeed_xiao", "name=a b")
+
+	want := [][]string{{"eim", "run", `python tools/configure.py board=seeed_xiao 'name=a b'`, "v6.1"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("calls = %v, want %v", *calls, want)
+	}
+}
+
+func TestEIMVersion(t *testing.T) {
+	for in, want := range map[string]string{"6.0.3": "v6.0.3", "6.1": "v6.1", "v6.1": "v6.1"} {
+		if got := EIMVersion(in); got != want {
+			t.Errorf("EIMVersion(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

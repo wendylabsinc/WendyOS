@@ -14,7 +14,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const wendyCoreGitURL = "https://github.com/wendylabsinc/wendy-lite.git"
+// WendyLiteGitURL is the git repository of the Wendy Lite firmware: the
+// source of the wendy_core component and of the firmware that `wendy install`
+// builds.
+const WendyLiteGitURL = "https://github.com/wendylabsinc/wendy-lite.git"
+
+var releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// WendyLiteGitRef returns the git ref in WendyLiteGitURL of a Wendy Lite
+// version as a device reports it (CONFIG_WENDY_VERSION): "X.Y.Z" is the
+// release tag vX.Y.Z, and anything else, such as a full commit hash, is a
+// ref already.
+func WendyLiteGitRef(version string) string {
+	if releaseVersion.MatchString(version) {
+		return "v" + version
+	}
+	return version
+}
 
 // HasBuildComponent checks ESP-IDF's generated list of linked components.
 func HasBuildComponent(projectPath, name string) (bool, error) {
@@ -44,6 +60,7 @@ func HasBuildComponent(projectPath, name string) (bool, error) {
 type WendyCoreSetup struct {
 	projectPath   string
 	toolchain     *ProjectToolchain
+	version       string
 	sourcePath    string
 	original      []byte
 	updated       []byte
@@ -59,9 +76,11 @@ func (s *WendyCoreSetup) SourcePath() string {
 // PrepareWendyCore locates a single app_main in the main component and prepares
 // its initialization without writing files. Unrecognized layouts need manual
 // setup so we do not guess which entry point to change. Apply runs idf.py
-// through toolchain, the one that built the project; nil selects EIM.
-func PrepareWendyCore(projectPath string, toolchain *ProjectToolchain) (*WendyCoreSetup, error) {
-	s := &WendyCoreSetup{projectPath: projectPath, toolchain: toolchain}
+// through toolchain, the one that built the project; nil selects EIM. A
+// version (the Wendy Lite version of the device) pins the added dependency
+// to its git ref (WendyLiteGitRef); "" adds it without a version.
+func PrepareWendyCore(projectPath string, toolchain *ProjectToolchain, version string) (*WendyCoreSetup, error) {
+	s := &WendyCoreSetup{projectPath: projectPath, toolchain: toolchain, version: WendyLiteGitRef(version)}
 	manifestPath := filepath.Join(projectPath, "main", "idf_component.yml")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -132,7 +151,11 @@ func (s *WendyCoreSetup) Apply(ctx context.Context) error {
 		return err
 	}
 	if !s.hasDependency {
-		if err := s.runIDF(ctx, "add-dependency", "--component", "main", "--git", wendyCoreGitURL, "--git-path", "components/wendy_core", "wendy_core"); err != nil {
+		args := []string{"add-dependency", "--component", "main", "--git", WendyLiteGitURL, "--git-path", "components/wendy_core"}
+		if s.version != "" {
+			args = append(args, "--git-ref", s.version)
+		}
+		if err := s.runIDF(ctx, append(args, "wendy_core")...); err != nil {
 			return err
 		}
 	}

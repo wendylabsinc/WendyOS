@@ -6,7 +6,7 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 
 The two commands are the **same command** — they accept identical flags and arguments and behave identically. `wendy os install` remains available for backward compatibility and for discoverability under the `wendy os` group.
 
-The interactive picker has Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, use the arrow keys to choose a device, and press Enter to select it. Linux includes WendyOS devices and Linux Desktop; Mac offers Headless Mac; Microcontrollers lists ESP32 targets with published Wendy Lite firmware. Empty categories are hidden.
+The interactive picker has Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, use the arrow keys to choose a device, and press Enter to select it. Linux includes WendyOS devices and Linux Desktop; Mac offers Headless Mac; Microcontrollers offers Wendy Lite for the ESP32 platform, built for your board and flashed to it. Empty categories are hidden.
 
 When supported USB flashing devices are connected, a Detected USB tab appears first. It recognizes Jetson AGX Thor, AGX Orin and Orin Nano recovery mode, Qualcomm EDL mode for Dragonwing and Arduino UNO Q, and ESP32-S31 ROM download mode for boards such as Mosaico. Qualcomm and ESP32-S31 devices still require a board-model choice because their USB IDs are shared. The scan reads USB descriptors without resetting or opening devices. Ordinary ESP32 serial interfaces and USB-UART bridges cannot prove flashing mode, so use the Microcontrollers tab for those. The installer selects the physical target again before flashing.
 
@@ -36,6 +36,11 @@ wendy install --device-type raspberry-pi-5 --binary ./wendy-agent-linux-arm64
 # Direct install from a local image (Linux only)
 wendy install path/to/image.img /dev/disk4 --force
 
+# ESP32: build Wendy Lite for the connected board and flash it;
+# each --build-attr answers one build question
+wendy install --device-type esp32 --build-attr board=esp32c61_devkit_c_1 \
+  --build-attr cloud_tunnel=false --no-wifi
+
 # Install wendy-agent on an existing Linux machine or Mac (prints a one-liner)
 wendy install --device-type linux-desktop
 wendy install --device-type headless-mac
@@ -48,7 +53,7 @@ wendy install --device-type linux-desktop --pre-enroll
 
 When you type `wendy install` in a terminal, it asks its questions even when its output goes to a pipe or a file, as in `wendy install | tee install.log`. The prompts are drawn on the terminal, together with the first-boot summary and the warning before each erase. The log keeps the rest of the output, including that summary and the flash steps.
 
-Without a terminal (CI, an agent's shell), nothing is asked. Pass `--wifi` or `--wifi-ssid`, or `--no-wifi`; without one of them the install stops before anything is downloaded or erased. Pass `--force` for the confirmations. Without `--device-name`, the device gets an auto-generated name. See [Running without a terminal](./os/install.md#running-without-a-terminal) for every flag a script needs.
+Without a terminal (CI, an agent's shell), nothing is asked. Pass `--wifi` or `--wifi-ssid`, or `--no-wifi`; without one of them the install stops before anything is downloaded or erased. Pass `--force` for the confirmations. Without `--device-name`, the device gets an auto-generated name. For `--device-type esp32`, pass a `--build-attr` for each build question; the install names the next one it cannot ask. See [Running without a terminal](./os/install.md#running-without-a-terminal) for every flag a script needs.
 
 Before anything is erased, the installer prints what first boot will apply, also with `--force`: the device name, the Wi-Fi networks and Cloud enrollment (Wendy Lite enrolls after flashing, so its summary has no Cloud line). Passwords are never printed.
 

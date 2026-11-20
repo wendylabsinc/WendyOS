@@ -41,12 +41,10 @@ func prepareLiteFlash(name string, data []byte) ([]byte, error) {
 	conf := &litepb.WendyConf{DeviceName: proto.String(name), Wifi: &litepb.WendyConfWifi{
 		Networks: []*litepb.WendyConfWifiNetwork{{Ssid: vm.LiteSSID, Password: vm.LitePassword}},
 	}}
-	pb, err := proto.Marshal(conf)
+	payload, err := wendyConfPayload(conf)
 	if err != nil {
 		return nil, err
 	}
-	payload := append([]byte("WYC0\x00\x00\x00\x00"), pb...)
-	binary.LittleEndian.PutUint32(payload[4:8], uint32(len(pb)))
 	if err := img.SetPartition("wendy_conf", payload); err != nil {
 		return nil, err
 	}

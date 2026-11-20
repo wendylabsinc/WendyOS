@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
 func TestLegacyLiteDeviceInfoSelectsOrgUserAndVerifiesAsset(t *testing.T) {
@@ -67,7 +68,7 @@ func TestLegacyLiteDeviceInfoSelectsOrgUserAndVerifiesAsset(t *testing.T) {
 				}
 				defer conn.Close()
 				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-				serverDone <- serveLocalLiteDeviceInfo(tls.Server(conn, serverTLS))
+				serverDone <- serveLocalLiteDeviceInfo(tls.Server(conn, serverTLS), wendypb.WendyComResult_WENDY_COM_RESULT_OK)
 			}()
 			host, port, err := net.SplitHostPort(listener.Addr().String())
 			if err != nil {

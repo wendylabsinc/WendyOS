@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -400,7 +401,7 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 		return want, nil
 	}
 	name := "dev"
-	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+	got, err := resolveACMEPreEnrollment(context.Background(), validSessionConfig(t),
 		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
 	if err != nil {
 		t.Fatalf("resolveACMEPreEnrollment: %v", err)
@@ -428,6 +429,15 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 			t.Errorf("acme-enrollment.json missing %s; got %s", frag, blob)
 		}
 	}
+}
+
+// validSessionConfig is twoSessionConfig with a certificate valid for a day on
+// the prod.example.com session: the install checks it before enrolling.
+func validSessionConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := twoSessionConfig()
+	cfg.Auth[0].Certificates[0].PemCertificate = testCertPEM(t, time.Now().Add(24*time.Hour))
+	return cfg
 }
 
 // cloudAcceptsDeviceName is EnrollDeviceRequest.name's rule (WDY-3016):
@@ -502,7 +512,7 @@ func TestProvisioningJSONBlankNameReservesTheNameItBakes(t *testing.T) {
 func TestACMEPreEnrollmentForcedNonInteractiveBlankNameNeedsDeviceName(t *testing.T) {
 	stubEnrollPrompts(t) // preEnrollACMEFn and promptDeviceName fail the test if called
 	name := ""
-	_, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+	_, err := resolveACMEPreEnrollment(context.Background(), validSessionConfig(t),
 		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
 	if err == nil || !strings.Contains(err.Error(), "--device-name") {
 		t.Fatalf("err = %v, want one naming --device-name", err)
@@ -596,5 +606,102 @@ func TestPreEnrollTakenNameStopKeepsTheWayOut(t *testing.T) {
 	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}, interactive: true}, &name)
 	if !asked || !errors.Is(err, ErrUserCancelled) {
 		t.Fatalf("asked %v, err %v", asked, err)
+	}
+}
+
+// An install checks the session's certificate when enrollment is chosen, before
+// anything is downloaded, built or written, as 'wendy device enroll' does: an
+// expired certificate is offered a new sign-in, and declining it installs
+// without enrollment, with no further question.
+func TestInstallEnrollmentChecksTheCertificateWhenChosen(t *testing.T) {
+	resolvers := map[string]func(context.Context, *config.Config, preEnrollOptions, bool) (*config.AuthConfig, error){
+		"full OS": func(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.AuthConfig, error) {
+			name := ""
+			plan, err := planACMEPreEnrollment(ctx, cfg, opts, interactive, &name)
+			if plan == nil {
+				return nil, err
+			}
+			if name != "lab-box" {
+				t.Errorf("device name = %q, want the prompted one", name)
+			}
+			return plan.auth, err
+		},
+		"Wendy Lite": resolveLiteInstallEnrollment,
+	}
+	for kind, resolve := range resolvers {
+		for _, tc := range []struct {
+			name        string
+			mode        preEnrollMode
+			interactive bool
+			signIn      bool  // the answer to "Sign in again now?"
+			loginErr    error // the sign-in's failure
+			ack         bool  // the answer to "Continue installing without enrollment?"
+		}{
+			{name: "signed in again", mode: preEnrollAuto, interactive: true, signIn: true},
+			{name: "sign-in declined", mode: preEnrollAuto, interactive: true},
+			{name: "sign-in failed", mode: preEnrollAuto, interactive: true, signIn: true, loginErr: errors.New("browser login cancelled"), ack: true},
+			{name: "forced without a terminal", mode: preEnrollForced},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				stubEnrollPrompts(t)
+				withStubbedReloginDeps(t, tc.interactive, false, tc.signIn, nil)
+				auth := expiredEnrollmentAuth(t)
+				auth.CloudGRPC = "grpc.wendy.sh:443"
+				seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+				freshPEM := testCertPEM(t, time.Now().Add(time.Hour))
+				logins := 0
+				stubEnrollmentLogin(t, func(context.Context, oidcLoginOptions) error {
+					logins++
+					if tc.loginErr != nil {
+						return tc.loginErr
+					}
+					fresh := *auth
+					fresh.Certificates = append([]config.CertificateInfo(nil), auth.Certificates...)
+					fresh.Certificates[0].PemCertificate = freshPEM
+					return config.Save(&config.Config{Auth: []config.AuthConfig{fresh}})
+				})
+				confirmPreEnroll = func() (bool, error) { return true, nil }
+				acks := 0
+				confirmContinueUnenrolled = func() (bool, error) {
+					acks++
+					return tc.ack, nil
+				}
+				names := 0
+				promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) {
+					names++
+					return "lab-box", nil
+				}
+
+				got, err := resolve(context.Background(), &config.Config{Auth: []config.AuthConfig{*auth}}, preEnrollOptions{mode: tc.mode}, tc.interactive)
+
+				wantLogins, wantAcks := 0, 0
+				switch tc.name {
+				case "signed in again":
+					wantLogins = 1
+					if err != nil || got == nil || got.Certificates[0].PemCertificate != freshPEM {
+						t.Fatalf("session = %v, error = %v; want the new certificate", got, err)
+					}
+				case "sign-in declined":
+					if err != nil || got != nil {
+						t.Fatalf("session = %v, error = %v; want the install to go on without enrollment", got, err)
+					}
+					if names != 0 {
+						t.Fatal("asked for a device name to enroll after enrollment was declined")
+					}
+				case "sign-in failed":
+					wantLogins, wantAcks = 1, 1
+					if err != nil || got != nil {
+						t.Fatalf("session = %v, error = %v; want the acknowledged install to go on without enrollment", got, err)
+					}
+				case "forced without a terminal":
+					if got != nil || !errors.Is(err, errCertExpired) || !strings.Contains(err.Error(), "--pre-enroll:") {
+						t.Fatalf("session = %v, error = %v; want the expiry before anything is written", got, err)
+					}
+				}
+				if logins != wantLogins || acks != wantAcks {
+					t.Fatalf("sign-ins = %d, continue-unenrolled questions = %d; want %d and %d", logins, acks, wantLogins, wantAcks)
+				}
+			})
+		}
 	}
 }
