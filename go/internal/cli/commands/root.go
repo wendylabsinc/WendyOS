@@ -68,6 +68,7 @@ func NewRootCmd() *cobra.Command {
 				return err
 			}
 			premark("  prerun: config.Load")
+			noteLegacyDefaultDevice(cmd, cfg)
 
 			firstRun = initializeCommandAnalytics(cmd, cfg, true)
 			premark("  prerun: analytics.Init")

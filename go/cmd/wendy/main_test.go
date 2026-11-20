@@ -540,6 +540,15 @@ func TestFormatError_CloudUnavailablePreservesDetails(t *testing.T) {
 	}
 }
 
+func TestFormatError_PreservesRemoteBuildUpgradeHint(t *testing.T) {
+	const message = "missing operator build delivery authorization. Update the wendy CLI and retry"
+	err := fmt.Errorf("build on spark-office failed or did not complete: %w", status.Error(codes.PermissionDenied, message))
+	want := "build on spark-office failed or did not complete: " + message
+	if got := formatError(err).Error(); got != want {
+		t.Fatalf("formatted error = %q, want %q", got, want)
+	}
+}
+
 func TestFormatError_UnimplementedPreservesContextualDescription(t *testing.T) {
 	err := fmt.Errorf("listing audio devices: %w", status.Error(codes.Unimplemented, "Audio device management is currently not supported by Wendy Agent for Mac."))
 
@@ -885,5 +894,14 @@ func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
 		if got := formatError(tc.err).Error(); got != tc.want {
 			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestFormatError_LeavesADeviceVerdictAlone(t *testing.T) {
+	// The device's reason can quote a gRPC error about the new agent's socket;
+	// it says nothing about the user's own connection.
+	err := errors.New(commands.AgentVerdictPrefix + `did not pass its checks within 3m0s: agent does not answer on its local socket: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial unix /x: connect: connection refused"; the device went back to agent 2026.12.04-100000 from /data`)
+	if got := formatError(err).Error(); got != err.Error() {
+		t.Fatalf("a device verdict was rewritten:\n%s", got)
 	}
 }

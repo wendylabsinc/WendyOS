@@ -43,6 +43,19 @@ unknown because selecting or creating a VM would change state.
 
 ## Checks and results
 
+The terminal view groups results by what needs your attention:
+
+- **Needs attention** lists failed required checks and their fixes first.
+- **Optional tools** lists missing tools that the selected route does not require.
+- **Ready** gives one short line for each successful check.
+- **Not checked** explains missing project or device context, or checks that could
+  not establish a result.
+
+Checks that do not apply are omitted from the terminal view. Without a selected
+device, its entry explains the missing context and the redundant authentication
+entry is hidden. The JSON report retains every check and its original status.
+
+
 Doctor checks project configuration and build inputs, the Docker executable,
 daemon and Buildx plugin, QEMU and ARM64 firmware, and the selected target's
 connection. Project validation does not execute project commands or hooks.

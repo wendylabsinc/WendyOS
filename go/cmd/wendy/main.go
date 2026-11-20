@@ -267,6 +267,7 @@ func renderError(err error) string {
 	}
 	message := formatError(err).Error()
 	_, steps := sessionbroker.OperatorRecovery(err)
+	steps = append(steps, commands.ResetCleanupRecovery(err)...)
 	for _, step := range steps {
 		if !strings.Contains(message, step) {
 			message += "\n  " + step
@@ -293,7 +294,8 @@ func formatError(err error) error {
 
 func formatErrorParts(err error) formattedError {
 	msg := err.Error()
-	if !strings.Contains(msg, "rpc error: code = ") {
+	// A verdict can quote a gRPC error about the new agent, not about this connection.
+	if !strings.Contains(msg, "rpc error: code = ") || strings.HasPrefix(msg, commands.AgentVerdictPrefix) {
 		return formattedError{text: msg}
 	}
 

@@ -2,8 +2,11 @@
 check what `wendy chat` sends it, run benchmark.py, and leave the report on the device.
 Python standard library only."""
 
+from inference_observer import InferenceObserver, identity, hardware_identity, file_sha256
+
 import collections
 import http.client
+import hashlib
 import json
 import os
 import re
@@ -389,12 +392,23 @@ def run_benchmark(argv, cwd, env, tail_lines=40):
     return process.wait(), "\n".join(tail)
 
 
+RUNTIME_ENV = ("GGML_CUDA_ENABLE_UNIFIED_MEMORY", "GGML_CUDA_DISABLE_GRAPHS", "GGML_BACKEND_PATH", "LD_LIBRARY_PATH")
+
+
+def settings_fingerprint(pin, context, environ, harness):
+    settings = {"pin": pin, "context": context, "server_binary": file_sha256(LLAMA_SERVER),
+                "container_recipe": file_sha256(Path(harness) / "Dockerfile"),
+                "runtime_environment": {key: environ.get(key) for key in RUNTIME_ENV}}
+    return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12]
+
+
 def run_pass(environ):
     """One pass. Returns 0 when it finished, else a nonzero code with the reason in <results>/last-error.txt."""
     results = Path(environ.get("EVAL_RESULTS", "/results"))
     results.mkdir(parents=True, exist_ok=True)
     (results / "last-error.txt").unlink(missing_ok=True)
     server = None
+    observer = None
 
     def fail(message):
         print(f"on-device pass stopped: {message}", file=sys.stderr, flush=True)
@@ -423,7 +437,8 @@ def run_pass(environ):
             cli_commit = (treatment / "REVISION").read_text().strip() or "unknown"
         except OSError:
             cli_commit = "unknown"
-        label = f"pass{environ.get('EVAL_PASS') or 1}-{cli_commit[:12]}"
+        settings = settings_fingerprint(pin, context, environ, harness)
+        label = f"pass{environ.get('EVAL_PASS') or 1}-{cli_commit[:12]}-{settings}"
         pdir = pass_dir(results, model_id, pin["revision"], label)
         pdir.mkdir(parents=True, exist_ok=True)
         _point_latest(results, pdir)  # from the start, so a long fetch never leaves the last pass's report in place
@@ -478,7 +493,24 @@ def run_pass(environ):
             "notes": [f"wendy chat sent {sent} tools on its first request, before wendy_tools was called",
                       f"the baseline prompt is {tokens} tokens of a {context}-token context"]})
 
+        try:
+            with urllib.request.urlopen(f"http://{HOST}:{PORT}/props", timeout=10) as response:
+                props = json.load(response)
+        except (OSError, ValueError):
+            props = {}
+        experiment = identity(pin, context, argv, LLAMA_SERVER, {**facts, **hardware_identity()}, props)
+        experiment["runtime"] = {"container_recipe_sha256": file_sha256(harness / "Dockerfile"),
+            "environment": {key: environ.get(key) for key in RUNTIME_ENV}}
+        if experiment["runtime"]["container_recipe_sha256"] is None:
+            experiment["missing"].append("container recipe")
+        _write_json(pdir / "inference-identity.json", experiment)
+        observer = InferenceObserver(PORT, pdir / "inference-requests.jsonl")
+        observer.start()
+        env["WENDY_EVAL_MODEL_REQUESTS"] = str(pdir / "inference-requests.jsonl")
         config = json.loads((harness / "config.on-device.json").read_text())
+        config["inference_identity"] = experiment
+        command = config["agents"]["chat"]["command"]
+        command[command.index("--base-url") + 1] = observer.base_url
         config["agents"]["chat"]["model"] = model_id
         config_path = results / f"{pdir.name}.config.json"
         _write_json(config_path, config)
@@ -497,6 +529,8 @@ def run_pass(environ):
     except Exception as error:  # a pass must leave a reason, not a traceback in a container that then idles
         return fail(f"{type(error).__name__}: {error}")
     finally:
+        if observer is not None:
+            observer.close()
         if server is not None:
             server.stop()
 

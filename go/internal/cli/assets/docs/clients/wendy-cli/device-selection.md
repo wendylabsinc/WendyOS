@@ -234,3 +234,14 @@ You can select it directly with:
 ```sh
 wendy run --device local
 ```
+
+## Migrating from a saved default
+
+The CLI no longer saves or selects a default device. An old `defaultDevice`
+config entry is ignored; commands without an explicit target print a migration
+notice to stderr while that entry remains. The next normal config save removes
+it. Use `--device <device>` or set `WENDY_DEVICE` for the current shell instead.
+
+`wendy device set-default`, `get-default`, and `unset-default` remain hidden
+migration commands: they fail with this replacement guidance and do not change
+configuration or connect to a device.

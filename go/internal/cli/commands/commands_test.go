@@ -338,8 +338,8 @@ func TestNewDeviceCmd(t *testing.T) {
 		t.Errorf("device version should be hidden; cmd=%v err=%v", versionCmd, err)
 	}
 	for _, removed := range []string{"set-default", "get-default", "unset-default"} {
-		if subNames[removed] {
-			t.Errorf("device %s was removed but is still registered", removed)
+		if legacy, _, err := cmd.Find([]string{removed}); err != nil || !legacy.Hidden {
+			t.Errorf("device %s must remain a hidden migration stub", removed)
 		}
 	}
 

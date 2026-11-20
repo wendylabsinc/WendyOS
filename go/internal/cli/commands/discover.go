@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -248,7 +249,7 @@ func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions, includeL
 		p.Send(work())
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -391,7 +392,7 @@ func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.Discove
 	// Alt screen: the table grows to fill the window, and the alternate
 	// buffer restores the user's terminal content when the TUI exits.
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -1244,10 +1245,16 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 
 		newConn, err := waitForAgentRestartKeyed(ctx, addr, pinKey)
 		if err != nil {
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			if versionResp.GetSupervision() == nil {
+				return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			}
+			// A trial that never listens is replaced only at its deadline.
+			newConn = nil
 		}
+		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) { return waitForAgentRestart(ctx, addr) }
+		_, newConn, err = awaitAgentVerdict(ctx, newConn, reconnect, sha256Hash, func() {})
 		newConn.Close()
-		return discoverUpdateDoneMsg{deviceName: name}
+		return discoverUpdateDoneMsg{deviceName: name, err: err}
 	}
 }
 
@@ -1493,6 +1500,26 @@ func annotateLANUSBFromEthernet(collection *models.DevicesCollection) {
 	}
 }
 
+// lanDeviceInterfaces returns the lower-cased names of the host interfaces
+// that devices were seen on: the interface mDNS answered on and the zone of
+// every scoped address.
+func lanDeviceInterfaces(devices []models.LANDevice) map[string]bool {
+	interfaces := make(map[string]bool)
+	add := func(name string) {
+		if name != "" {
+			interfaces[strings.ToLower(name)] = true
+		}
+	}
+	for i := range devices {
+		add(devices[i].NetworkInterface)
+		add(interfaceNameFromScopedAddress(devices[i].IPAddress))
+		for _, addr := range devices[i].Addresses {
+			add(interfaceNameFromScopedAddress(addr))
+		}
+	}
+	return interfaces
+}
+
 func interfaceNameFromScopedAddress(addr string) string {
 	_, zone, ok := strings.Cut(addr, "%")
 	if !ok {
@@ -1519,7 +1546,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 	}
 	annotateLANUSBFromEthernet(collection)
 
+	lanInterfaces := lanDeviceInterfaces(collection.LANDevices)
 	for _, d := range collection.USBDevices {
+		if d.NetworkInterface != "" && lanInterfaces[strings.ToLower(d.NetworkInterface)] {
+			// The board answers on its USB network link, so it already has a
+			// row with an address and agent. A second row would only repeat
+			// its USB product name.
+			continue
+		}
 		deviceType := "USB"
 		items = append(items, discoverTableItem{
 			picker: tui.PickerItem{

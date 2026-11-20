@@ -9,12 +9,176 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
+
+func TestKnownCloudNameSkipsProviderAndDNSDiscovery(t *testing.T) {
+	stubUnresolvedCloudPinSideEffects(t)
+	setTempConfig(t, &config.Config{
+		Auth:       []config.AuthConfig{{CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}},
+		DevicePins: map[string]config.DevicePin{"known-camera": {OrgID: 7, CloudGRPC: "cloud.test:443", AssetID: "42", Source: config.PinSourceCloud}},
+	})
+	oldFind, oldLookup, oldMesh := findDeviceByIDFn, osLookupHostFn, meshDirectoryRead
+	t.Cleanup(func() { findDeviceByIDFn, osLookupHostFn, meshDirectoryRead = oldFind, oldLookup, oldMesh })
+	meshDirectoryRead = func(context.Context) (sessionbroker.OperatorDirectory, error) {
+		return sessionbroker.OperatorDirectory{}, nil
+	}
+	findDeviceByIDFn = func(context.Context, string) *SelectedDevice {
+		t.Error("known Cloud agent scanned external providers")
+		return nil
+	}
+	osLookupHostFn = func(context.Context, string) ([]string, error) {
+		t.Error("known Cloud agent attempted local DNS")
+		return nil, unresolvedCloudNameError()
+	}
+	want := &grpcclient.AgentConnection{}
+	calls := 0
+	connectCloudLookupFn = func(_ context.Context, auth *config.AuthConfig, name, _ string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+		calls++
+		if auth.CloudGRPC != "cloud.test:443" || name != "42" || expected == nil || expected.OrgID != 7 || expected.EntityID != "42" {
+			t.Fatal("Cloud shortcut lost the pinned device or session")
+		}
+		return want, nil
+	}
+	selected, err := resolveTarget(context.Background(), SelectDevice("known-camera"), SuppressUpdateCheck())
+	if err != nil || selected == nil || selected.Agent != want || calls != 1 {
+		t.Fatalf("known Cloud connection = %v, %v; calls=%d", selected, err, calls)
+	}
+}
+
+// stubKnownCloudNameLocalPath pins known-camera through Cloud and keeps the
+// local path offline. It reports how often local DNS was asked for the name.
+func stubKnownCloudNameLocalPath(t *testing.T) *int {
+	t.Helper()
+	restoreDeviceGlobals(t)
+	stubNonInteractive(t)
+	stubUnresolvedCloudPinSideEffects(t)
+	setPinCache(t)
+	// Real credentials, so the local mTLS dial reaches name resolution.
+	auth, _ := legacyLiteTestPKI(t, 7, certs.AssetURN(7, 42))
+	auth.CloudGRPC = "cloud.test:443"
+	setTempConfig(t, &config.Config{
+		Auth:       []config.AuthConfig{*auth},
+		DevicePins: map[string]config.DevicePin{"known-camera": {OrgID: 7, CloudGRPC: "cloud.test:443", AssetID: "42", Source: config.PinSourceCloud}},
+	})
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldLookup, oldBrowse, oldDiscover := osLookupHostFn, lanBrowseFn, discoverLANDevices
+	oldUSB, oldFind, oldMesh, oldResolver := usbDirectCandidatesFn, findDeviceByIDFn, meshDirectoryRead, net.DefaultResolver
+	t.Cleanup(func() {
+		osLookupHostFn, lanBrowseFn, discoverLANDevices = oldLookup, oldBrowse, oldDiscover
+		usbDirectCandidatesFn, findDeviceByIDFn, meshDirectoryRead, net.DefaultResolver = oldUSB, oldFind, oldMesh, oldResolver
+	})
+	meshDirectoryRead = func(context.Context) (sessionbroker.OperatorDirectory, error) {
+		return sessionbroker.OperatorDirectory{}, nil
+	}
+	// gRPC retries DNS itself after the CLI's resolver misses.
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, unresolvedCloudNameError()
+		},
+	}
+	lookups := 0
+	osLookupHostFn = func(_ context.Context, host string) ([]string, error) {
+		if host == "known-camera" {
+			lookups++
+		}
+		return nil, unresolvedCloudNameError()
+	}
+	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
+	discoverLANDevices = lanBrowseFn
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	findDeviceByIDFn = func(context.Context, string) *SelectedDevice { return nil }
+	return &lookups
+}
+
+var knownCloudNameOptions = []resolveOption{SelectDevice("known-camera"), SuppressUpdateCheck(), SuppressProvisioningHint(), DisableSessionBroker(), NonInteractive()}
+
+func TestKnownCloudNameFailureFallsBackToLocalPath(t *testing.T) {
+	stubKnownCloudNameLocalPath(t)
+	offline := commandErrorf(errDeviceOffline, "device is enrolled but offline")
+	calls := 0
+	connectCloudLookupFn = func(context.Context, *config.AuthConfig, string, string, *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+		calls++
+		return nil, offline
+	}
+	local := &SelectedDevice{Agent: &grpcclient.AgentConnection{}}
+	findDeviceByIDFn = func(_ context.Context, device string) *SelectedDevice {
+		if device != "known-camera" {
+			t.Errorf("local path looked up %q", device)
+		}
+		return local
+	}
+	selected, err := resolveTarget(context.Background(), knownCloudNameOptions...)
+	if err != nil || selected != local || calls != 1 {
+		t.Fatalf("selection = %v, %v; Cloud calls=%d; want the local device after one Cloud lookup", selected, err, calls)
+	}
+}
+
+func TestKnownCloudNameFailureReportsCloudErrorAfterLocalMiss(t *testing.T) {
+	lookups := stubKnownCloudNameLocalPath(t)
+	for _, want := range []error{
+		commandErrorf(errDeviceOffline, "device is enrolled but offline"),
+		noPinnedCloudLogin("No Cloud login matches the organization saved for device %q.", "known-camera"),
+		// A Cloud-side resolver miss must not trigger an unpinned retry either.
+		unresolvedCloudNameError(),
+	} {
+		*lookups = 0
+		calls := 0
+		connectCloudLookupFn = func(context.Context, *config.AuthConfig, string, string, *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+			calls++
+			return nil, want
+		}
+		_, err := resolveTarget(context.Background(), knownCloudNameOptions...)
+		var resolved *cloudNameResolutionError
+		if !errors.Is(err, want) || !errors.As(err, &resolved) || calls != 1 || *lookups == 0 {
+			t.Fatalf("error = %v; Cloud calls=%d, local lookups=%d; want Cloud's error after one lookup and a local attempt", err, calls, *lookups)
+		}
+	}
+}
+
+func TestKnownCloudNameRefusalSkipsLocalPath(t *testing.T) {
+	lookups := stubKnownCloudNameLocalPath(t)
+	findDeviceByIDFn = func(context.Context, string) *SelectedDevice {
+		t.Error("refused Cloud name scanned external providers")
+		return nil
+	}
+	for _, want := range []error{refuseIdentity("saved device identity changed"), context.Canceled} {
+		connectCloudLookupFn = func(context.Context, *config.AuthConfig, string, string, *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+			return nil, want
+		}
+		if _, err := resolveTarget(context.Background(), knownCloudNameOptions...); !errors.Is(err, want) || *lookups != 0 {
+			t.Fatalf("error = %v, local lookups=%d; want the refusal without a local attempt", err, *lookups)
+		}
+	}
+}
+
+func TestKnownCloudNameLeavesOtherSelectorsAlone(t *testing.T) {
+	stubUnresolvedCloudPinSideEffects(t)
+	for _, tc := range []struct{ name, source, endpoint, asset string }{
+		{"unknown", "", "", ""},
+		{"lan-camera", config.PinSourceLAN, "cloud.test:443", "42"},
+		{"old-camera", "", "cloud.test:443", "42"},
+		{"org-only", config.PinSourceCloud, "cloud.test:443", ""},
+		{"camera.local", config.PinSourceCloud, "cloud.test:443", "42"},
+		{"192.168.1.42", config.PinSourceCloud, "cloud.test:443", "42"},
+		{"adb:camera", config.PinSourceCloud, "cloud.test:443", "42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{tc.name: {
+				OrgID: 7, CloudGRPC: tc.endpoint, AssetID: tc.asset, Source: tc.source,
+			}}})
+			if _, matched, err := connectKnownCloudName(context.Background(), tc.name, resolveConfig{}); matched || err != nil {
+				t.Fatalf("selector %q intercepted: matched=%v err=%v", tc.name, matched, err)
+			}
+		})
+	}
+}
 
 func unresolvedCloudNameError() error {
 	return &net.DNSError{Name: "ci-mesh-2", Err: "no such host", IsNotFound: true}
@@ -285,12 +449,20 @@ func TestNamedCloudDeviceResolvesThroughBothAgentEntryPoints(t *testing.T) {
 			deviceFlag = "ci-mesh-2"
 			oldLookup, oldBrowse, oldDiscover := osLookupHostFn, lanBrowseFn, discoverLANDevices
 			oldUSB, oldFind := usbDirectCandidatesFn, findDeviceByIDFn
-			oldCloud := connectCloudLookupFn
+			oldCloud, oldResolver := connectCloudLookupFn, net.DefaultResolver
 			t.Cleanup(func() {
 				osLookupHostFn, lanBrowseFn, discoverLANDevices = oldLookup, oldBrowse, oldDiscover
 				usbDirectCandidatesFn, findDeviceByIDFn = oldUSB, oldFind
-				connectCloudLookupFn = oldCloud
+				connectCloudLookupFn, net.DefaultResolver = oldCloud, oldResolver
 			})
+			// gRPC retries DNS itself after the CLI's resolver misses. Keep that
+			// lookup offline too; CI resolvers may return SERVFAIL for bare names.
+			net.DefaultResolver = &net.Resolver{
+				PreferGo: true,
+				Dial: func(context.Context, string, string) (net.Conn, error) {
+					return nil, unresolvedCloudNameError()
+				},
+			}
 			osLookupHostFn = func(context.Context, string) ([]string, error) { return nil, unresolvedCloudNameError() }
 			lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
 			discoverLANDevices = lanBrowseFn

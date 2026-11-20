@@ -97,6 +97,17 @@ func resolveOptionsDevice(opts []resolveOption) string {
 	return cfg.device
 }
 
+// resolveOptionsNoIdentityPrompt reports whether opts forbid the changed
+// identity prompt: non-interactive callers, and enrollment, which has its own
+// trust prompt that clears the old identity only after enrollment succeeds.
+func resolveOptionsNoIdentityPrompt(opts []resolveOption) bool {
+	cfg := resolveConfig{excludeProviderKeys: make(map[string]bool)}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return cfg.nonInteractive || cfg.enrollmentTrustRecovery
+}
+
 // mcpStartupDevice picks the device `wendy mcp serve` connects to on startup,
 // with the same precedence as every other command: its own -d/--device, then
 // WENDY_DEVICE (set per AI session in the MCP client's env block).

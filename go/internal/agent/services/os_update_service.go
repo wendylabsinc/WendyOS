@@ -29,11 +29,21 @@ func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.S
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
 
+	verifying := func() {
+		_ = stream.Send(&agentpbv2.UpdateOSResponse{ResponseType: &agentpbv2.UpdateOSResponse_Progress_{
+			Progress: &agentpbv2.UpdateOSResponse_Progress{Phase: "Verifying the agent update"},
+		}})
+	}
+	if msg := osUpdateTrialGate(stream.Context(), verifying); msg != "" {
+		return sendOSUpdateFailureV2(stream, msg)
+	}
+
 	if !s.installer.TryLock() {
 		s.logger.Warn("UpdateOS rejected: another update is already in progress")
 		return sendOSUpdateFailureV2(stream, updateInProgressMessage)
 	}
 	defer s.installer.Unlock()
+	defer holdSupervisorWake()()
 
 	if !s.isWendyOSHost() {
 		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))

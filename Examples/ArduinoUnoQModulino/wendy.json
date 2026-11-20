@@ -1,0 +1,22 @@
+{
+    "appId": "sh.wendy.examples.arduino-uno-q-modulino",
+    "version": "1.0.0",
+    "platform": "linux",
+    "language": "python",
+    "mcu": {
+        "sketch": "sketch"
+    },
+    "entitlements": [
+        {
+            "type": "arduino-bridge"
+        },
+        {
+            "type": "network",
+            "mode": "host"
+        },
+        {
+            "type": "http",
+            "port": 8000
+        }
+    ]
+}

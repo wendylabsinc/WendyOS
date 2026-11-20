@@ -315,7 +315,7 @@ func pickXcodeAppInteractive(apps []string) (string, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return "", fmt.Errorf("picker: %w", err)
 	}
@@ -452,10 +452,7 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
 	}
-	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkToolchainBuildPrerequisites(ctx, cwd, versionResp); err != nil {
 		return err
 	}
 

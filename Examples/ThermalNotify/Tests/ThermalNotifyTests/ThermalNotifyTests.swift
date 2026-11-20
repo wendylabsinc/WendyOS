@@ -281,3 +281,40 @@ private func hikFrame(hot: UInt16 = 5346, x: UInt16 = 1000, compact: Bool = fals
     #expect(state.next(now: now.addingTimeInterval(29.999)) == nil)
     #expect(state.next(now: now.addingTimeInterval(30)) != nil)
 }
+
+@Test func `custom 30 degree threshold controls alerts and payload`() throws {
+    var state = AlertState()
+    state.threshold = 30
+    state.observe(camera: camera(), reading: try reading(30315))
+    #expect(state.next(now: now) == nil)
+    state.observe(camera: camera(), reading: try reading(30316))
+    let candidate = state.next(now: now)
+    let alert = try #require(candidate)
+    #expect(alert.request.metadata.fields["threshold_celsius"]?.numberValue == 30)
+    #expect(alert.request.title == "Thermal camera above 30°C")
+    #expect(alert.request.body.contains("30°C threshold"))
+}
+
+@Test func `threshold defaults and invalid configuration`() throws {
+    #expect(try thermalThreshold(nil) == 80)
+    #expect(try thermalThreshold("30") == 30)
+    #expect(try thermalThreshold("-5.5") == -5.5)
+    for value in ["", "hot", "nan", "inf", "-inf"] {
+        #expect(throws: MonitorError.self) { try thermalThreshold(value) }
+    }
+}
+
+@Test func `test notification preserves real reading and explicit audience`() throws {
+    let measured = try reading(29815)
+    let recipient = UUID().uuidString.lowercased()
+    let request = testNotificationRequest(camera: camera(), reading: measured, recipients: [recipient], threshold: 30)
+    #expect(request.severity == .info)
+    #expect(request.title == "Thermal notification test")
+    #expect(request.body.contains("25.00°C"))
+    #expect(request.body.contains("Test only"))
+    #expect(request.audience.userIds == [recipient])
+    #expect(request.audience.roles.isEmpty)
+    #expect(request.metadata.fields["test"]?.boolValue == true)
+    #expect(request.metadata.fields["max_celsius"]?.numberValue == measured.celsius)
+    #expect(request.metadata.fields["threshold_celsius"]?.numberValue == 30)
+}

@@ -139,3 +139,8 @@ func WDForgetWiFi(session C.uint64_t, ssid *C.char) *C.WDStatus {
 func WDConfigureMesh(session C.uint64_t, changed, enabled C.uint32_t) *C.WDStatus {
 	return statusResult(desktop.ConfigureMesh(uint64(session), uint32(changed), uint32(enabled)))
 }
+
+//export WDSetWiFiPriority
+func WDSetWiFiPriority(session C.uint64_t, ssid *C.char, priority C.int32_t) *C.WDStatus {
+	return statusResult(desktop.SetWiFiPriority(uint64(session), C.GoString(ssid), int32(priority)))
+}

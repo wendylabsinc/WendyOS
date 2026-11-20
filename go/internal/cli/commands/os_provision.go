@@ -252,20 +252,46 @@ type configTarget interface {
 // dirTarget writes into a mounted config-partition directory.
 type dirTarget string
 
+// WriteFile syncs each file: on removable media the drive can be pulled the
+// moment the install says it is done.
 func (d dirTarget) WriteFile(name string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(filepath.Join(string(d), name), data, perm)
+	f, err := os.OpenFile(filepath.Join(string(d), name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
-func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, enrollmentJSON []byte) error {
-	return writeConfigFilesTo(dirTarget(mountPoint), agentBinary, creds, deviceName, enrollmentJSON)
+func writeConfigFiles(mountPoint string, agent configAgent, creds []wendyconf.WifiCredential, deviceName string, enrollmentJSON []byte) error {
+	return writeConfigFilesTo(dirTarget(mountPoint), agent, creds, deviceName, enrollmentJSON)
 }
 
-// writeConfigFilesTo writes the config-partition files to any target. agentBinary
+// configAgent is the agent binary written to /config. local marks a --binary:
+// the supervisor then gives it a trial even when the image's agent is newer.
+type configAgent struct {
+	data  []byte
+	local bool
+}
+
+// writeConfigFilesTo writes the config-partition files to any target. The agent
 // is skipped when empty (Thor omits it only if a caller passes none).
-func writeConfigFilesTo(t configTarget, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, enrollmentJSON []byte) error {
-	if len(agentBinary) > 0 {
-		if err := t.WriteFile("wendy-agent", agentBinary, 0o755); err != nil {
+func writeConfigFilesTo(t configTarget, agent configAgent, creds []wendyconf.WifiCredential, deviceName string, enrollmentJSON []byte) error {
+	if len(agent.data) > 0 {
+		if err := t.WriteFile("wendy-agent", agent.data, 0o755); err != nil {
 			return fmt.Errorf("writing wendy-agent to config partition: %w", err)
+		}
+		if agent.local {
+			// Agents without the supervisor ignore it.
+			if err := t.WriteFile("wendy-agent.local", nil, 0o644); err != nil {
+				return fmt.Errorf("writing wendy-agent.local to config partition: %w", err)
+			}
 		}
 	}
 

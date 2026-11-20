@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -63,7 +64,7 @@ const (
 
 // tlsDebugWriter is where WENDY_TLS_DEBUG resumption logging is written.
 // Overridable in tests to capture output.
-var tlsDebugWriter io.Writer = os.Stderr
+var tlsDebugWriter io.Writer = terminaloutput.Stderr
 
 type AgentConnection struct {
 	Conn *grpc.ClientConn
@@ -80,6 +81,11 @@ type AgentConnection struct {
 	// DevicePinKey retains the selected local device name independently of the
 	// resolved IP. Enrollment and reconnects use this same saved binding.
 	DevicePinKey string
+	// NoSavedIdentity marks a connection to a device this CLI had no saved
+	// identity for: an enrolled device verified only against the trust roots,
+	// or an unenrolled device that answered without TLS. Commands tell the
+	// user once (see the commands package's first-contact notice).
+	NoSavedIdentity bool
 	// SimulatorName retains the VM pin identity independently of its loopback endpoint.
 	SimulatorName  string
 	IsMTLS         bool                    // true when connected via mutual TLS
@@ -120,6 +126,7 @@ type AgentConnection struct {
 	UnitreeService       agentpbv2.WendyUnitreeServiceClient
 	RobotArmService      agentpbv2.WendyRobotArmServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
+	McuService           agentpbv2.WendyArduinoMcuServiceClient
 	DataService          agentpbv2.DataServiceClient
 	// CalibratedFrameService serves RGB-D frames: colour plus depth aligned to
 	// it, with the scale and intrinsics that make both measurable. Separate
@@ -166,6 +173,8 @@ type AgentConnection struct {
 	// tcpDial records failures before TCP connected, separately from TLS errors.
 	// nil when gRPC owns dialing, including HTTP CONNECT proxy transports.
 	tcpDial *agentTCPDialState
+	// A pooled lease releases its owner instead of closing the shared channel.
+	release func() error
 }
 
 type agentTCPDialState struct {
@@ -407,6 +416,7 @@ func newAgentTLSConfig(
 	observedOrg *atomic.Int32,
 	observedIdentity *atomic.Pointer[certs.WendyIdentity],
 	expected *certs.WendyIdentity,
+	firstContact bool,
 	mismatch *atomic.Pointer[certs.IdentityMismatchError],
 	pinMismatch *atomic.Pointer[devicepin.PinMismatchError],
 ) (*tls.Config, error) {
@@ -425,6 +435,7 @@ func newAgentTLSConfig(
 		ExpectedOrgID:            int32(certInfo.OrganizationID),
 		PinStore:                 pins,
 		ExpectedIdentity:         expected,
+		FirstContact:             firstContact,
 		OnServerIdentity:         observedOrgSink(observedOrg),
 		OnVerifiedServerIdentity: verifiedIdentitySink(observedIdentity),
 	})
@@ -534,11 +545,28 @@ func ConnectWithTLSAndPins(ctx context.Context, address string, certInfo *config
 // broker, which must pin its retained transport open (grpc.WithIdleTimeout(0))
 // because for it a teardown-and-redial is a trust event, not a transparency.
 func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker, expected *certs.WendyIdentity, extraOpts ...grpc.DialOption) (*AgentConnection, error) {
+	return connectWithTLS(ctx, address, certInfo, pins, expected, false, extraOpts...)
+}
+
+// ConnectWithTLSFirstContact connects to a device this CLI has no saved
+// identity for. The device's certificate is still verified against the trust
+// roots in certInfo's chain, must name a Wendy device, and is checked against
+// pins; only the comparison with a saved identity is missing. The device
+// decides whether it accepts certInfo. The connection is marked NoSavedIdentity.
+func ConnectWithTLSFirstContact(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker) (*AgentConnection, error) {
+	conn, err := connectWithTLS(ctx, address, certInfo, pins, nil, true)
+	if conn != nil {
+		conn.NoSavedIdentity = true
+	}
+	return conn, err
+}
+
+func connectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker, expected *certs.WendyIdentity, firstContact bool, extraOpts ...grpc.DialOption) (*AgentConnection, error) {
 	observedOrg := new(atomic.Int32)
 	observedIdentity := new(atomic.Pointer[certs.WendyIdentity])
 	mismatch := new(atomic.Pointer[certs.IdentityMismatchError])
 	pinMismatch := new(atomic.Pointer[devicepin.PinMismatchError])
-	tlsCfg, err := newAgentTLSConfig(address, certInfo, pins, observedOrg, observedIdentity, expected, mismatch, pinMismatch)
+	tlsCfg, err := newAgentTLSConfig(address, certInfo, pins, observedOrg, observedIdentity, expected, firstContact, mismatch, pinMismatch)
 	if err != nil {
 		return nil, err
 	}
@@ -580,6 +608,13 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	ac.pinMismatch = pinMismatch
 	ac.tcpDial = tcpDial
 	return ac, nil
+}
+
+// UnverifiedPlaintext reports a plaintext connection to an unenrolled device
+// that nothing authenticated (see NoSavedIdentity). Secrets such as Wi-Fi
+// passwords need the user's consent before they go over it.
+func (c *AgentConnection) UnverifiedPlaintext() bool {
+	return c != nil && c.NoSavedIdentity && !c.IsMTLS
 }
 
 // grpcTarget converts a host:port address into a gRPC target string.
@@ -656,12 +691,18 @@ func (c *AgentConnection) Close() error {
 		return nil
 	}
 	c.extraMu.Lock()
+	if c.extraClosed {
+		c.extraMu.Unlock()
+		return nil
+	}
 	c.extraClosed = true
 	closers := c.ExtraClosers
 	c.ExtraClosers = nil
 	c.extraMu.Unlock()
 	var errs []error
-	if c.Conn != nil {
+	if c.release != nil {
+		errs = append(errs, c.release())
+	} else if c.Conn != nil {
 		errs = append(errs, c.Conn.Close())
 	}
 	for _, closer := range closers {
@@ -786,6 +827,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(conn),
 		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
+		McuService:           agentpbv2.NewWendyArduinoMcuServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
 
 		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),

@@ -202,9 +202,33 @@ Python-specific settings.
 | `python.sourceRoot` | Path to the Python source root directory |
 | `python.container.sourceRoot` | Path to the Python source root inside the container image |
 
+### `mcu`
+
+An Arduino sketch for the board's microcontroller (Arduino UNO Q). `wendy run` compiles it, flashes the STM32, then deploys the app as usual. The layout matches Arduino App Lab: the `.ino` and a `sketch.yaml` in one folder.
+
+```json
+"mcu": { "sketch": "sketch" }
+```
+
+| Field | Description |
+|-------|-------------|
+| `mcu.sketch` | Sketch folder, relative to the project (required). It must hold a `sketch.yaml` that pins the platform, e.g. `arduino:zephyr (1.1.0)`. |
+| `mcu.profile` | `sketch.yaml` profile to build. Default: its `default_profile`. |
+
+- Wendy compiles with its own pinned `arduino-cli`, downloaded on first use. Your Arduino IDE setup is not touched.
+- Supported cores: `arduino:zephyr` 1.0 and 1.1. If the sketch talks to Linux, list `Arduino_RouterBridge` in the profile; the core does not bundle it.
+- The sketch is flashed before the container build. If the compile or the flash fails, the app is not deployed.
+- The board needs a WendyOS and agent that can flash it; otherwise `wendy run` stops and asks you to run `wendy device update`.
+- One board per run: `wendy run` refuses a project with `mcu` when `--device` lists several devices.
+- With `--watch`, the sketch is compiled and flashed again only when a file in the sketch folder changes.
+- The board holds one sketch. Deploying a second app with a sketch replaces the first app's sketch and stops that app. To go back, run `wendy run` in the first app's project again. `wendy device apps start <app>` never flashes: it is refused when the board does not hold that app's sketch. Removing an app also removes its sketch from the board. Stopping an app leaves its sketch running.
+- `wendy build` compiles the sketch too; it needs no device.
+- A `sketch.yaml` from Arduino App Lab works as it is. When it names no board, does not pin `arduino:zephyr`, or lists no libraries for a sketch that uses the Bridge, Wendy fills these in on a copy and prints a notice for each. Your file is not changed.
+- To talk to the sketch from the app, add the [`arduino-bridge`](#arduino-bridge) entitlement.
+
 ### `resources`
 
-Optional CPU, memory, and process-count ceilings the agent enforces on the container via cgroups. Edge devices are resource-constrained and often run several apps side by side, so capping a service keeps one busy or leaky app from starving its neighbours. Every field is optional. Omitting `memory` or `cpus` leaves that resource **unbounded** (the historical behaviour), so adding `resources` is backward compatible. `pids` is the exception: when omitted, a conservative default ceiling (4096) is applied as a fork-bomb guard — set it explicitly to raise or lower that ceiling.
+Optional CPU, memory, and process-count ceilings the agent enforces on the container via cgroups. Edge devices are resource-constrained and often run several apps side by side, so capping a service keeps one busy or leaky app from starving its neighbours. Every field is optional. Omitting `memory` or `cpus` sets no limit of its own for that resource (the historical behaviour), so adding `resources` is backward compatible. `pids` is the exception: when omitted, a conservative default ceiling (4096) is applied as a fork-bomb guard — set it explicitly to raise or lower that ceiling. Apps also share one host memory budget on most devices; see [Host memory protection](#host-memory-protection).
 
 ```json
 {
@@ -237,6 +261,14 @@ For multi-service apps, set `resources` at the top level as the default and/or p
 
 Here `web` inherits the full app-level limits (`1Gi`, `pids: 512`). `worker` uses its own `256Mi` and `0.5` cores, and still **inherits** the app-level `pids: 512` it did not override.
 
+#### Host memory protection
+
+On cgroup v2 devices with a memory controller and at least about 512 MiB of RAM, apps share a hard memory limit. Wendy reserves 768 MiB plus 3% of RAM for the host, capped at half the total RAM. Apps and ROS 2 helpers share the rest. Set `resources.memory` to limit an individual container.
+
+To change the reserve, write a size such as `768Mi` to `/etc/wendy-agent/host-memory-reserve`, or `off` to disable it. Invalid values fall back to the default. Changes apply at the next app start or agent restart. Increasing the reserve can kill running app processes if their memory use exceeds the new limit.
+
+Restart existing apps after an agent update to apply the shared limit. When apps reach it, the kernel may kill a process in any app. GPU memory counts toward the limit on Jetson Orin, but not on Thor.
+
 ### `env`
 
 Environment variables injected into the container at start. These are deploy-time configuration, applied on top of whatever the image itself sets — unlike a Dockerfile `ENV`, changing them does not rebuild the image.
@@ -253,7 +285,7 @@ Environment variables injected into the container at start. These are deploy-tim
 
 A value may reference an environment variable on the deploying machine as `${VAR}` (or `$VAR`); `wendy run` expands it at deploy time, which keeps secrets out of the file. An entry whose value expands to empty is dropped, so the container falls back to whatever the image sets rather than receiving an empty override.
 
-Keys must be POSIX-portable environment variable names: letters, digits and `_`, not starting with a digit. The agent additionally reserves the `WENDY_`, `LD_` and `DYLD_` prefixes, and Wendy's own variables (`WENDY_APP_ID`, `WENDY_HOSTNAME`, and the OTel exporter settings) always win over an app-supplied value of the same name.
+Keys must be POSIX-portable environment variable names: letters, digits and `_`, not starting with a digit. The agent additionally reserves the `WENDY_`, `LD_` and `DYLD_` prefixes, and Wendy's own variables (`WENDY_APP_ID`, `WENDY_HOSTNAME`, `WENDY_DEVICE_NAME`, `WENDY_AGENT_VERSION`, and the OTel exporter settings) always win over an app-supplied value of the same name. [Environment variables injected into app containers](/docs/advanced/cloud/telemetry#environment-variables-injected-into-app-containers) lists them all.
 
 For multi-service apps, the top-level `env` is the default for every service and `services.<name>.env` overrides it **per key**, so a service can change one variable without dropping the rest:
 
@@ -576,6 +608,26 @@ GPIO pin access.
 |-------|-------------|
 | `pins` | Pin numbers to expose. Omit to grant access to all GPIO chips. |
 
+### `arduino-bridge`
+
+Talk to the microcontroller's sketch through Arduino's router (Arduino UNO Q). The agent mounts `/run/arduino-router` and sets `APP_SOCKET`, which Arduino's Python package `arduino-router-bridge` reads. A value you set in `env` wins.
+
+```json
+{ "type": "arduino-bridge" }
+```
+
+No fields. On other boards, and on older WendyOS, `wendy run` refuses it before building.
+
+```python
+import os
+from arduino.router_bridge import Bridge
+
+bridge = Bridge(os.environ["APP_SOCKET"])
+bridge.connect(timeout=5)
+bridge.provide("climate", lambda celsius, humidity: print(celsius, humidity))  # sketch: Bridge.notify("climate", c, h)
+bridge.call("buzz", 880, 200)                                                  # sketch: Bridge.provide_safe("buzz", buzz)
+```
+
 ### `spi`
 
 SPI device access via `spidev` (`/dev/spidev<bus>.<chipselect>`). Takes no options — grants the SPI subsystem as a whole. See the [SPI guide](/docs/advanced/device/entitlements#spi).
@@ -750,6 +802,8 @@ Grants the container the wendy-agent's **full gRPC over a local unix socket** (`
 An app with `admin` can start, stop, and delete apps and read all device data locally. The socket is bind-mounted **only** into containers that declare `admin` — that mount is the entire trust boundary — and it is never reachable off-device (a unix socket, not TCP). At most one `admin` per app.
 
 > **Security:** `admin` is a privileged, deliberate grant equivalent to local device control. Grant it only to fully-trusted first-party apps (e.g. the WendyOS shell). Requires an agent build that serves the local socket.
+
+An app that only needs the agent's version or the device's name does not need `admin`: every app can read them from the `WENDY_AGENT_VERSION` and `WENDY_DEVICE_NAME` [environment variables](/docs/advanced/cloud/telemetry#environment-variables-injected-into-app-containers).
 
 ---
 

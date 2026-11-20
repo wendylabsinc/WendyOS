@@ -23,9 +23,16 @@ package() {
     cd "${srcdir}"
 
     # Find the extracted directory
-    if [[ "${CARCH}" == "x86_64" ]]; then
-        install -Dm755 "wendy-cli-linux-amd64/wendy" "${pkgdir}/usr/bin/wendy"
-    else
-        install -Dm755 "wendy-cli-linux-arm64/wendy" "${pkgdir}/usr/bin/wendy"
-    fi
+    local _dir=wendy-cli-linux-amd64
+    [[ "${CARCH}" == "aarch64" ]] && _dir=wendy-cli-linux-arm64
+
+    install -Dm755 "${_dir}/wendy" "${pkgdir}/usr/bin/wendy"
+    # USB access for `wendy os install` recovery/EDL flashing. The rules grant
+    # it to plugdev, which Arch lacks: the sysusers.d entry creates it as a
+    # system group. pacman's hooks run sysusers (20-) before the udev reload
+    # and re-trigger (35-) after the transaction.
+    install -Dm644 -t "${pkgdir}/usr/lib/udev/rules.d" \
+        "${_dir}/udev/70-wendy-jetson.rules" \
+        "${_dir}/udev/70-wendy-qualcomm.rules"
+    install -Dm644 "${_dir}/sysusers.d/wendy.conf" "${pkgdir}/usr/lib/sysusers.d/wendy.conf"
 }

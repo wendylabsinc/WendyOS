@@ -43,10 +43,12 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
 	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
@@ -55,7 +57,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
-	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
+	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -116,6 +119,7 @@ func dbusProxyManagerOrNil(m *dbusproxy.Manager) dbusProxyManager {
 }
 
 type Client struct {
+	deliverySource          delivery.Source
 	client                  *containerd.Client
 	logger                  *zap.Logger
 	namespace               string
@@ -227,6 +231,7 @@ type Client struct {
 	// meshIngressMu serializes the check, iptables update, and claim so two
 	// concurrent starts cannot publish the same host port.
 	meshIngress   *meshingress.Registry
+	sketches      SketchOwnership
 	meshMDNS      meshMDNSService
 	meshIngressMu sync.Mutex
 	// A task-exit callback may arrive after a restart has published the same
@@ -243,6 +248,12 @@ type Client struct {
 	// tests construct a bare *Client) — suppressRestarts no-ops in that case,
 	// same nil-tolerant treatment as meshDNS above.
 	restartMonitor restartSuppressor
+
+	// appMemoryBudget configures the shared app cgroup; nil means no budget
+	// work. appMemoryBudgetLogged is the state last logged.
+	appMemoryBudget       func() appcgroup.Status
+	appMemoryBudgetMu     sync.Mutex
+	appMemoryBudgetLogged string
 
 	// freeBytes and forceGC are test seams for PruneCache's free-space
 	// measurement and forced-GC pass. NewClient defaults them to
@@ -1051,23 +1062,41 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 		}
 	}
 
-	// Create or update the image in the image store.
-	_, err = is.Create(ctx, images.Image{
-		Name:   imageName,
-		Target: manifestDesc,
+	// Both delivery transports and operator writes serialize their final
+	// reference mutation through the same store. Content assembly stays outside
+	// this boundary so PrepareImage can wait for concurrent WriteChunks calls.
+	err = delivery.Commit(ctx, c.deliverySource, imageName, manifestDigest.String(), func() (string, error) {
+		image, err := is.Get(ctx, imageName)
+		if errdefs.IsNotFound(err) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return image.Target.Digest.String(), nil
+	}, func() error {
+		_, err := is.Create(ctx, images.Image{
+			Name:   imageName,
+			Target: manifestDesc,
+		})
+		if err != nil {
+			if errdefs.IsAlreadyExists(err) {
+				_, err = is.Update(ctx, images.Image{
+					Name:   imageName,
+					Target: manifestDesc,
+				})
+				if err != nil {
+					return fmt.Errorf("updating image %q: %w", imageName, err)
+				}
+			} else {
+				return fmt.Errorf("creating image %q: %w", imageName, err)
+			}
+		}
+
+		return nil
 	})
 	if err != nil {
-		if errdefs.IsAlreadyExists(err) {
-			_, err = is.Update(ctx, images.Image{
-				Name:   imageName,
-				Target: manifestDesc,
-			})
-			if err != nil {
-				return fmt.Errorf("updating image %q: %w", imageName, err)
-			}
-		} else {
-			return fmt.Errorf("creating image %q: %w", imageName, err)
-		}
+		return err
 	}
 
 	c.logger.Info("Assembled image",
@@ -1417,16 +1446,18 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	if err := validateUserEnv(req.GetEnv()); err != nil {
 		return fmt.Errorf("invalid env var in request (SOC2-CC6, NIST-SI-10): %w", err)
 	}
-	var env []string
-	env = append(env, imageSpec.Config.Env...)
-	env = append(env, req.GetEnv()...)
-	env = appendFallbackEnv(env)
-	env = append(env, wendyEnv...)
+	env := mergeContainerEnv(imageSpec.Config.Env, req.GetEnv(), wendyEnv)
 	ros2Env, err := buildROS2Env(appCfg, appID, serviceName)
 	if err != nil {
 		// Fail the create rather than start a ROS 2 container with no
 		// ROS_DOMAIN_ID, which silently lands it on the global default domain 0.
 		return fmt.Errorf("resolving ROS 2 environment for %q: %w", appID, err)
+	}
+	for _, entry := range ros2Env {
+		if entry == "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(nil, false) {
+			c.logger.Info("ROS discovery uses loopback only at container creation; recreate the app after network interfaces change",
+				zap.String(logfields.AppID, appID))
+		}
 	}
 	env = append(env, ros2Env...)
 	env = injectOTELEnvIfNeeded(env, appCfg, appID)
@@ -1559,17 +1590,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// collision risk that a hyphen separator would have introduced.
 	//   - Single-container: "system.slice:{systemdSvc}:{appID}"
 	//   - Multi-service:    "system.slice:{systemdSvc}:{appID}@{serviceName}"
+	// On cgroup v2 both sit under /wendy-apps, the shared app memory budget.
 	//
 	// INVARIANT: ApplyEntitlements and CDI helpers must not set CgroupsPath.
 	// The assertion below detects any future violation at runtime (SOC2-CC6).
 	if spec.Linux.CgroupsPath != "" {
 		return fmt.Errorf("security: CgroupsPath was unexpectedly set before assignment (%q); ApplyEntitlements or CDI must not set it", spec.Linux.CgroupsPath)
 	}
-	cgroupSuffix := appID
-	if serviceName != "" {
-		cgroupSuffix = appID + "@" + serviceName
-	}
-	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:%s:%s", sharedenv.SystemdServiceName(), cgroupSuffix)
+	spec.Linux.CgroupsPath = appcgroup.ContainerPath(appID, serviceName, appcgroup.Unified())
 
 	// Apply CPU/memory/PID ceilings from wendy.json (per-service overrides
 	// the app-level default). Malformed values are rejected here rather than
@@ -1687,6 +1715,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		return err
 	}
 	specDuration = time.Since(phaseStarted)
+	// Before the old version is removed: a refused deploy leaves it running.
+	if err := c.checkHostPorts(ctx, appID, entCfg.Entitlements); err != nil {
+		return err
+	}
 	if validateOnly {
 		return nil
 	}
@@ -2105,8 +2137,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 // same injection. A warning naming a GPU would send someone debugging a
 // display-only app looking for an entitlement it never declared.
 func (c *Client) applyNvidiaCDI(spec *localoci.Spec) error {
-	mgr := cdi.NewManager()
-	cdiSpec, specPath, err := mgr.LoadNVIDIACDISpec()
+	cdiSpec, specPath, err := loadNvidiaCDISpec()
 	if err != nil {
 		// No nvidia-ctk-generated CDI spec. On Tegra/L4T this is expected when the
 		// device's nvidia-container-toolkit predates `nvidia-ctk cdi generate`
@@ -2245,10 +2276,15 @@ func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.
 	if err != nil {
 		return fmt.Errorf("encoding refreshed spec for %q: %w", appName, err)
 	}
-	// A field mask preserves labels/snapshot metadata updated by another
-	// lifecycle operation since Info was read.
-	_, err = c.client.ContainerService().Update(ctx, containers.Container{
-		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: newSpecJSON},
+	return c.persistSpecJSON(ctx, container, info, newSpecJSON)
+}
+
+// persistSpecJSON replaces the stored spec of a container that has no task
+// yet. A field mask preserves labels/snapshot metadata updated by another
+// lifecycle operation since Info was read.
+func (c *Client) persistSpecJSON(ctx context.Context, container containerd.Container, info containers.Container, specJSON []byte) error {
+	_, err := c.client.ContainerService().Update(ctx, containers.Container{
+		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: specJSON},
 	}, "spec")
 	return err
 }
@@ -2299,6 +2335,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	}
 	unlockNetwork := c.lockNetworkOperation(appName)
 	defer unlockNetwork()
+	if err := c.checkSketchBeforeStart(ctx, appName, appID); err != nil {
+		return nil, err
+	}
 	// Hold c.mu for the initial container/metadata snapshot. It is released for
 	// sandbox health checks and CNI cleanup, then reacquired around NewTask so a
 	// concurrent DeleteContainer cannot remove the container between the final
@@ -2399,6 +2438,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// network-operation lock above still serializes this container's lifecycle.
 	muHeld = false
 	c.mu.Unlock()
+	if err := c.checkHostPorts(ctx, appID, parseEntitlementsFromAnnotations(containerLabels)); err != nil {
+		return nil, err
+	}
 	if hasNANEntitlement(parseEntitlementsFromAnnotations(containerLabels)) {
 		unlockNAN := c.lockNANOperation(appID)
 		defer unlockNAN()
@@ -2413,6 +2455,13 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		}
 		nanStartLease.finishStart()
 	}()
+
+	// OS-update resilience for NVIDIA driver files: the stored spec bind-mounts
+	// each one by the exact name it had when the container was created, and an
+	// OS update renames them. Bring the spec in line with the host's current
+	// list before anything below reads it, so that later steps which write the
+	// spec back carry the refreshed mounts instead of overwriting them.
+	c.refreshNvidiaCDIForStart(ctx, container, appName, containerLabels)
 
 	// Reboot resilience for wendy-managed DNS files: host-network and meshed
 	// containers bind-mount /etc/resolv.conf from tmpfs paths written once at
@@ -2455,9 +2504,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		if serialErr != nil {
 			return nil, fmt.Errorf("refreshing serial devices for %q: %w", appName, serialErr)
 		}
-		if changed {
+		policyChanged := c.applyAppResourcePolicy(storedSpec, appID, serviceName)
+		if changed || policyChanged {
 			if updateErr := container.Update(ctx, withUpdatedContainerSpec(storedSpec)); updateErr != nil {
-				return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				if changed {
+					return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				}
+				// The task starts from the saved spec, in its old cgroup.
+				c.logger.Warn("could not save the app resource policy",
+					zap.String("app_name", appName), zap.Error(updateErr))
 			}
 		}
 	} else {
@@ -3068,12 +3123,9 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("reading container spec for %q: %w", appName, err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = tty
 	pspec.Args = command
-	// Defensive copy of Env before use (mirrors the ROS 2 exec path) so we never
-	// mutate the slice backing the cached container spec.
-	pspec.Env = append([]string(nil), pspec.Env...)
 
 	var ioCreator cio.Creator
 	if tty {
@@ -3133,6 +3185,13 @@ var deviceHostnameWithSuffix = func() string {
 	return h + ".local"
 }
 
+// agentVersion and deviceName supply WENDY_AGENT_VERSION and
+// WENDY_DEVICE_NAME. Tests replace them.
+var (
+	agentVersion = func() string { return version.Version }
+	deviceName   = services.DeviceName
+)
+
 // fallbackContainerEnv holds generic default env entries that are injected
 // only when neither the image config nor the caller defines the same key.
 // Unlike the WENDY_* identity vars (which are appended last so they always
@@ -3156,6 +3215,18 @@ func appendFallbackEnv(env []string) []string {
 		}
 	}
 	return env
+}
+
+// mergeContainerEnv lists a container's environment in the order that decides
+// which source wins, since the last assignment of a key is the one the
+// process sees: the image's env, the deploy's env, the PATH and TERM fallbacks
+// for keys still unset, then the Wendy identity env.
+func mergeContainerEnv(imageEnv, userEnv, wendyEnv []string) []string {
+	var env []string
+	env = append(env, imageEnv...)
+	env = append(env, userEnv...)
+	env = appendFallbackEnv(env)
+	return append(env, wendyEnv...)
 }
 
 // envHasKey reports whether env contains an entry that sets key (an exact
@@ -3186,6 +3257,11 @@ func envHasKey(env []string, key string) bool {
 //   - WENDY_HOSTNAME is set to "{serviceName}.local" so each service has a
 //     distinct hostname identity.
 //   - WENDY_APP_GROUP is set to appID so the service can discover its siblings.
+//
+// For both, WENDY_DEVICE_NAME is the device's name and WENDY_AGENT_VERSION is
+// this agent's version. Like the rest of this env they are written into the
+// container's stored spec when it is created, and a start reuses that spec, so
+// they hold the values of the last deploy until the app is deployed again.
 func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 	// Defence-in-depth: reject non-empty inputs that fail validation at the
 	// injection site so callers can't accidentally inject control characters
@@ -3227,6 +3303,14 @@ func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 	if deviceHost != "" {
 		env = append(env, "WENDY_DEVICE_HOSTNAME="+deviceHost)
 	}
+	// WENDY_DEVICE_NAME and WENDY_AGENT_VERSION are two facts about the host
+	// that an app could otherwise read only over the agent socket, which takes
+	// the admin entitlement. They come from the host and not from the deploy,
+	// so a value that is unknown or cannot be written safely is left out and
+	// the create goes ahead.
+	if name := deviceName(); usableHostEnvValue(name) {
+		env = append(env, "WENDY_DEVICE_NAME="+name)
+	}
 	// WENDY_APP_ID is injected unconditionally (all network modes) so app code
 	// can always read its own identity. The OTel identity vars are injected only
 	// under host networking (in injectOTELEnvIfNeeded) because the OTLP receiver
@@ -3234,7 +3318,17 @@ func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 	if appID != "" {
 		env = append(env, "WENDY_APP_ID="+appID)
 	}
+	if v := agentVersion(); usableHostEnvValue(v) {
+		env = append(env, "WENDY_AGENT_VERSION="+v)
+	}
 	return env, nil
+}
+
+// usableHostEnvValue reports whether a value read from the host can go into a
+// WENDY_* variable: it is known, and it holds none of the characters
+// buildContainerBaseEnv refuses in an app ID or a service name.
+func usableHostEnvValue(value string) bool {
+	return value != "" && !strings.ContainsAny(value, "\x00\n\r=\t")
 }
 
 // validateUserEnv rejects caller-supplied env entries that contain characters
@@ -3320,16 +3414,18 @@ const cycloneDDSInlineConfig = `<CycloneDDS><Domain><SharedMemory><Enable>false<
 // every interface and no longer discovers anything beyond the device.
 //
 // interfaces limits discovery to the given peripheral interfaces; with none,
-// CycloneDDS picks the device's interface as it does without a configuration.
+// autodetermine retains CycloneDDS selection when an external IPv4 interface
+// exists. It must be false on loopback-only hosts: selecting lo explicitly and
+// again through autodetermine makes CycloneDDS refuse to create the domain.
 // The names come from rtps.PeripheralInterfaces, which only returns kernel
 // interface names, so they are safe to place in the XML.
-func cycloneDDSBeyondDeviceConfig(interfaces []string) string {
+func cycloneDDSBeyondDeviceConfig(interfaces []string, autodetermine bool) string {
 	var b strings.Builder
 	b.WriteString(`<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/>`)
 	for _, name := range interfaces {
 		b.WriteString(`<NetworkInterface name="` + name + `"/>`)
 	}
-	if len(interfaces) == 0 {
+	if autodetermine {
 		b.WriteString(`<NetworkInterface autodetermine="true"/>`)
 	}
 	b.WriteString(`</Interfaces></General>`)
@@ -3390,7 +3486,15 @@ func buildROS2Env(appCfg *appconfig.AppConfig, appID, serviceName string) ([]str
 		env = append(env, "RMW_IMPLEMENTATION="+rmw)
 		if rmw == appconfig.ROS2DefaultRMW {
 			if scope == appconfig.ROS2ScopePeripherals || scope == appconfig.ROS2ScopeNetwork {
-				env = append(env, "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(peripherals))
+				autodetermine := false
+				if scope == appconfig.ROS2ScopeNetwork {
+					var err error
+					autodetermine, err = ros2HasExternalIPv4()
+					if err != nil {
+						return nil, fmt.Errorf("finding network interfaces for frameworks.ros2: %w", err)
+					}
+				}
+				env = append(env, "CYCLONEDDS_URI="+cycloneDDSBeyondDeviceConfig(peripherals, autodetermine))
 			} else {
 				env = append(env, "CYCLONEDDS_URI="+cycloneDDSInlineConfig)
 			}
@@ -3578,6 +3682,7 @@ var startPostStartHookCommand = func(argv []string) (func() error, error) {
 		return nil, errors.New("postStart hook argv is empty")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	oomscore.ResetChild(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -3871,7 +3976,19 @@ var _ services.GroupRestarter = (*Client)(nil)
 // restart through RestartGroup instead of an independent StartContainer, which
 // would leave a secondary attached to the primary's now-dead namespace.
 func (c *Client) GroupRestartAppID(ctx context.Context, appName string) (string, bool) {
-	appID, svcName, err := ParseContainerName(appName)
+	// Underscores are valid in app IDs, so a container name alone cannot
+	// distinguish a service from a single-container app. Use its persisted
+	// ownership and require those labels to reconstruct this exact name.
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, appName)
+	if err != nil {
+		return "", false
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return "", false
+	}
+	appID, svcName, err := containerOwnerFromLabels(appName, labels)
 	if err != nil || svcName == "" {
 		return "", false
 	}
@@ -4961,7 +5078,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 		if imgName != "" && !seen[imgName] {
 			seen[imgName] = true
 			imgSvc := c.client.ImageService()
-			if err := imgSvc.Delete(ctx, imgName); err != nil && !errdefs.IsNotFound(err) {
+			if err := delivery.Direct(c.deliverySource, func() error {
+				return imgSvc.Delete(ctx, imgName)
+			}); err != nil && !errdefs.IsNotFound(err) {
 				c.logger.Warn("Failed to delete image", zap.String("image", imgName), zap.Error(err))
 			} else {
 				c.logger.Info("Image deleted", zap.String("image", imgName))
@@ -4984,6 +5103,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 	// have changed regardless of errs — see StartContainer for the
 	// WithoutCancel/go rationale).
 	go c.SyncCameraLoopbacks(context.WithoutCancel(ctx))
+	if wholeApp && len(errs) == 0 && c.sketches != nil {
+		go c.sketches.ForgetApp(context.WithoutCancel(ctx), appID)
+	}
 
 	return errors.Join(errs...)
 }

@@ -26,16 +26,16 @@ var (
 )
 
 // writeConfigPartition finds, mounts, populates, and unmounts the FAT32 config
-// partition on d after a dd write. agentBinary is the arm64 agent binary
-// content. creds and deviceName are written to wendy.conf when non-empty.
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
+// partition on d after a dd write. agent is the agent binary for /config
+// content. creds and deviceName are written to wendy.conf when non-empty. A
+// failed unmount is a *configStillMountedError: the drive is not safe to remove yet.
+func writeConfigPartition(d drive, agent configAgent, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
 	rescanPartitionTable(d)
 
 	tmpDir, err := os.MkdirTemp("", "wendyos-config-*")
 	if err != nil {
 		return fmt.Errorf("creating temp mount dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
 
 	// vfat has no on-disk ownership; the kernel synthesizes each file's uid from
 	// the mounting process. Without uid=/gid=, sudo gives every file to root and
@@ -55,11 +55,18 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 		return false, nil
 	}, func() bool { return drivePresent(d) })
 	if err != nil {
+		os.Remove(tmpDir) //nolint:errcheck
 		return err
 	}
-	defer exec.Command("sudo", "umount", tmpDir).Run() //nolint:errcheck
 
-	return writeConfigFiles(tmpDir, agentBinary, creds, deviceName, provisioningJSON)
+	writeErr := writeConfigFiles(tmpDir, agent, creds, deviceName, provisioningJSON)
+	unmountErr := releaseMount(tmpDir, func() ([]byte, error) {
+		return exec.Command("sudo", "umount", tmpDir).CombinedOutput()
+	}, time.Sleep)
+	if writeErr != nil {
+		return errors.Join(writeErr, unmountErr)
+	}
+	return unmountErr
 }
 
 func findConfigPartition(diskDev string) (string, error) {
@@ -122,5 +129,6 @@ func readDriveIdentity(d drive) (driveIdentity, error) {
 	return parseLsblkIdentity(out)
 }
 
-// ejectDisk is a no-op on Linux; drives are simply unmounted.
-func ejectDisk(_ drive) {}
+// ejectDisk is a no-op on Linux: writeConfigPartition already unmounted the
+// only volume this CLI mounted, and reported it if it could not.
+func ejectDisk(_ drive) error { return nil }

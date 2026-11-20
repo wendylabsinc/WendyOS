@@ -229,6 +229,10 @@ func (c *IdentityCache) Put(chain [][]byte, now time.Time) (string, error) {
 	return c.put(chain, "", now)
 }
 
+// A fully verified, principal-bound older device chain cannot replace a live
+// renewal. Neighbors can legitimately retain that older descriptor in flight.
+var errIdentityNotRenewal = errors.New("identity bundle is not a renewal")
+
 func (c *IdentityCache) put(chain [][]byte, expected string, now time.Time) (string, error) {
 	if len(chain) == 0 || len(chain) > 16 || chainSize(chain) > c.limits.Bytes {
 		return "", errors.New("identity bundle exceeds cache limits")
@@ -269,7 +273,7 @@ func (c *IdentityCache) put(chain [][]byte, expected string, now time.Time) (str
 				c.rememberCertificates(chain, id.NotAfter, now)
 				return principal, nil
 			}
-			return "", errors.New("identity bundle is not a renewal")
+			return "", errIdentityNotRenewal
 		}
 	}
 	entry := cachedIdentity{Chain: cloneChain(chain), Added: now, Used: now}

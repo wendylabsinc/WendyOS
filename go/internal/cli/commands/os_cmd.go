@@ -520,7 +520,7 @@ func spinOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -724,7 +724,7 @@ func waitForDeviceOnline(ctx context.Context, prior *grpcclient.AgentConnection)
 			p.Send(tui.SpinnerDoneMsg{})
 		}
 	}()
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -1572,7 +1572,7 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 
 	fmt.Printf("Agent version: %s — checking for updates...\n", agentVer)
 
-	latestVer, _, err := resolveAgentVersion(nightly)
+	latestVer, _, err := resolveAgentVersionFn(nightly)
 	if err != nil {
 		fmt.Printf("Could not check for agent updates: %v\n", err)
 		return conn, nil
@@ -1589,19 +1589,34 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 
 	fmt.Printf("Updating agent: %s → %s\n", agentVer, latestVer)
-	if err := performAgentUpdate(ctx, conn, osName, arch, nightly); err != nil {
+	sha, err := performAgentUpdateFn(ctx, conn, osName, arch, nightly)
+	if err != nil {
+		var refused *agentCheckRefusedError
+		var paused *agentUpdatesPausedError
+		if errors.As(err, &refused) || errors.As(err, &paused) {
+			// Nothing restarted, so the OS update goes on with the agent it has.
+			fmt.Printf("%v; the device kept agent %s. Continuing with the OS update.\n", err, agentVer)
+			return conn, nil
+		}
 		return nil, fmt.Errorf("agent update failed: %w", err)
 	}
 	conn.Close()
 
-	fmt.Print("Waiting for agent to restart...")
-	newConn, err := reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	fmt.Println("Waiting for agent to restart...")
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, conn)
 	}
-	fmt.Println(" done.")
-	return newConn, nil
+	// The OS update must not start while the new agent is on trial.
+	return confirmAgentAfterRestart(ctx, versionResp.GetSupervision() != nil, reconnect, sha, os.Stdout)
 }
+
+// Seams over the release lookup and download, the upload and the OS step for tests.
+var (
+	resolveAgentVersionFn  = resolveAgentVersion
+	resolveAgentArtifactFn = resolveAgentArtifact
+	performAgentUpdateFn   = performAgentUpdate
+	maybeCheckOSUpdateFn   = maybeCheckOSUpdate
+)
 
 // Seams over linklocal for tests.
 var (
@@ -1693,7 +1708,7 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		p.Send(tui.ProgressDoneMsg{Err: downloadToFile(ctx, img, tmpFile, sendProgress)})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		tmpFile.Close()
 		os.Remove(tmpFile.Name())

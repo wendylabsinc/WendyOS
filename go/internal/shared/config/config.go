@@ -13,8 +13,11 @@ import (
 
 // Config represents the top-level CLI configuration.
 type Config struct {
-	Auth      []AuthConfig     `json:"auth,omitempty"`
-	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
+	// LegacyDefaultDevice is read only to explain migration from older CLIs.
+	// It never selects a device and is omitted on the next config save.
+	LegacyDefaultDevice string           `json:"-"`
+	Auth                []AuthConfig     `json:"auth,omitempty"`
+	Analytics           *AnalyticsConfig `json:"analytics,omitempty"`
 	// SessionBrokerIdleTimeout controls the grace period after the final user
 	// lease/operation ends. Empty uses five minutes; housekeeping is not a lease.
 	SessionBrokerIdleTimeout string `json:"sessionBrokerIdleTimeout,omitempty"`
@@ -245,9 +248,15 @@ func Load() (*Config, error) {
 	}
 
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	legacy := struct {
+		*Config
+		DefaultDevice string `json:"defaultDevice"`
+	}{Config: &cfg}
+	if err := json.Unmarshal(data, &legacy); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+
+	cfg.LegacyDefaultDevice = legacy.DefaultDevice
 
 	// Older clients can rewrite the config while dropping newer identity fields.
 	// Recover the PKI identity from the certificate instead of interpreting an

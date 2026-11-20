@@ -77,6 +77,9 @@ const (
 	// via its local unix socket — the most security-sensitive entitlement.
 	// See entitlements.md for the blast radius.
 	EntitlementAdmin = "admin"
+	// EntitlementSensorRead grants read-only access to paired generic sensor
+	// samples, without provisioning, container control, or credential access.
+	EntitlementSensorRead = "sensor-read"
 	// EntitlementBuild grants the namespace/mount privileges a nested container
 	// builder (BuildKit) needs — CAP_SYS_ADMIN plus the unshare/userns-clone
 	// syscalls the default seccomp profile denies. It is privileged-equivalent
@@ -87,6 +90,9 @@ const (
 	// declares the app's primary HTTP port so clients (wendy run, remote
 	// management apps) can discover and open it. See entitlements.md.
 	EntitlementHTTP = "http"
+	// EntitlementArduinoBridge reaches the microcontroller's sketch through
+	// Arduino's router: the agent mounts its socket directory and sets APP_SOCKET.
+	EntitlementArduinoBridge = "arduino-bridge"
 )
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
@@ -112,8 +118,10 @@ var ValidEntitlementTypes = []string{
 	EntitlementEpisodeWrite,
 	EntitlementNotifications,
 	EntitlementAdmin,
+	EntitlementSensorRead,
 	EntitlementBuild,
 	EntitlementHTTP,
+	EntitlementArduinoBridge,
 }
 
 // FrameworkROS2 is the "ros2" key under wendy.json's "frameworks" object.
@@ -152,8 +160,10 @@ var allowedKeys = map[string][]string{
 	EntitlementEpisodeWrite:  {"type", "streams"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
+	EntitlementSensorRead:    {"type"},
 	EntitlementBuild:         {"type"},
 	EntitlementHTTP:          {"type", "port"},
+	EntitlementArduinoBridge: {"type"},
 }
 
 // Platform constants identify the target hardware family.
@@ -345,6 +355,8 @@ type AppConfig struct {
 	// key by key. Values may reference host env vars via ${VAR}, expanded by
 	// `wendy run` at deploy time (see ServiceConfig.Env).
 	Env map[string]string `json:"env,omitempty"`
+	// MCU is the Arduino sketch flashed to the board's microcontroller.
+	MCU *MCUConfig `json:"mcu,omitempty"`
 }
 
 // ContainerName returns the container identifier for this app config.
@@ -615,6 +627,7 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
+		case EntitlementArduinoBridge:
 		case EntitlementMCP:
 			if e.Port < 1 || e.Port > 65535 {
 				return fmt.Errorf("%s[%d]: mcp port must be between 1 and 65535, got %d", prefix, i, e.Port)
@@ -667,13 +680,20 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 	}
 
 	adminCount := 0
+	sensorReadCount := 0
 	for _, e := range entitlements {
+		if e.Type == EntitlementSensorRead {
+			sensorReadCount++
+		}
 		if e.Type == EntitlementAdmin {
 			adminCount++
 		}
 	}
 	if adminCount > 1 {
 		return fmt.Errorf("at most one admin entitlement is allowed in %s, found %d", prefix, adminCount)
+	}
+	if sensorReadCount > 1 {
+		return fmt.Errorf("at most one sensor-read entitlement is allowed in %s", prefix)
 	}
 	nanCount := 0
 	for _, e := range entitlements {
@@ -804,6 +824,10 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if err := validateEntitlements(c.Entitlements, "entitlement"); err != nil {
+		return err
+	}
+
+	if err := validateMCU(c.MCU); err != nil {
 		return err
 	}
 
@@ -1222,6 +1246,10 @@ func ValidateJSON(data []byte) []string {
 	warnings = append(warnings, validateHooksJSON(raw["hooks"], "hooks")...)
 	warnings = append(warnings, validateReadinessJSON(raw["readiness"], "readiness")...)
 	warnings = append(warnings, validateFrameworksJSON(raw["frameworks"], "frameworks")...)
+	var mcuRaw map[string]json.RawMessage
+	if json.Unmarshal(raw["mcu"], &mcuRaw) == nil {
+		warnings = append(warnings, unknownKeyWarnings(mcuRaw, "mcu", jsonFieldNames(reflect.TypeOf(MCUConfig{})))...)
+	}
 
 	// Validate service-level entitlements, frameworks, and hooks when a
 	// services map is present. Unmarshal into map[string]json.RawMessage first

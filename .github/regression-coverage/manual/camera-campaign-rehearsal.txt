@@ -1,0 +1,130 @@
+Physical published-model camera campaign, audit1890
+
+Generation only reads local inventory and hashes files. Every case starts
+not_run. This procedure is for a reserved Linux target with two identified
+physical cameras and a consenting participant. It does not measure general
+model accuracy or prove the example application's V4L2 sample-ID join.
+
+1. Qualify the target before executing any generated command. The inventory
+   must bind CLI and installed Agent SHA256 to a reproducible candidate build,
+   machine-id, hardware serial, OS/kernel, camera USB serial/topology and exact
+   returned V4L2 source IDs. On its console compare /etc/machine-id, uname -a,
+   systemctl show wendy-agent.service -p MainPID -p ExecStart, and sha256sum
+   /proc/PID/exe to the inventory. Capture PID birth time and boot_id. This
+   procedure does not install/update an Agent or change enrollment. Resolve
+   mismatches before continuing. Have the owner's working recovery image and
+   console access; stop if the candidate cannot be restored safely.
+
+   Record authorization for this bounded capture, camera unplug/replug and one
+   Agent restart. Keep other people and private material outside the scene.
+   Provision only the generated @PLAN@/cli-profile with the operator's
+   authorized credentials for this target. The commands pin that profile and
+   use its private file secret store. Do not copy credentials into the evidence.
+   The records.scene_protocol file must define camera placement/lighting,
+   the empty scene, a consenting person's marked standing region and timed
+   entry/exit sequence, plus the observer who labels those intervals.
+
+2. Compare candidate/CLI hashes again. Run these bounded commands, preserving
+   stdout, stderr and shell exit status. A timeout or nonzero status fails the
+   phase. Rename each observation before repeating it so earlier evidence is
+   not overwritten. No host/target is selected implicitly.
+
+   @INFO@
+   @SOURCES@
+   @LIST@
+   @STATUS@
+
+   Require the inventoried device and cameras and no preexisting campaigns or
+   recording. Disconnect only camera B, identified by its serial and USB port;
+   re-run sources and confirm A remains. Inventory IDs are observations, not
+   a claim that /dev/video numbers survive a reconnect.
+
+3. The model manifest must come from an independently reviewed download of
+   facebook/detr-resnet-50 commit1d5f47bd3bdd2c4bbfa585418ffe6da5028b4c0b,
+   including config/processor and safetensors hashes. Verify the Agent's actual
+   snapshot files against it after loading. Never substitute locally fitted
+   weights, a branch name, pickle weights or supplied predictions. Record the
+   candidate's managed Python and locked dependency versions, model snapshot
+   location and available RAM/storage. Allow at most15minutes for initial
+   loading and5minutes for each later phase; expiry is failed/inconclusive,
+   never a pass. Runtime/model caches are retained after this rehearsal.
+
+   @DEPLOY@
+   @INSPECT@
+
+   Poll inspect every5seconds within that deadline. Require the exact model,
+   revision, CPU accelerator, running inference_status, A in its sources and
+   advancing inference stats. Deploy success alone does not establish capture.
+   The generated plan keeps uploads manual and has no notification policy.
+   Do not manually trigger an episode: detection must cause it.
+
+4. With A's scene empty for30seconds, no owned detection episode may start.
+   The observer records wall time and target boot time when the consenting
+   person enters the marked region. Keep the person visible for45seconds.
+   Require an event:person_detected episode and no repeated episode while the
+   person remains present. Leave the scene empty for10seconds, and wait until
+   at least30seconds have elapsed since the last detection before re-entering.
+   Require a new episode. Failure to detect this qualified scene is a failed
+   physical acceptance, not evidence that a synthetic model test sufficed.
+
+   @EPISODES@
+   @STATUS@
+
+   Select IDs only by trigger.campaign_name=@NAME@ and the recorded phase.
+   For each selected ID run the actual commands below, replacing EPISODE_ID
+   and NEW_DIRECTORY with that owned ID and a fresh path under this plan.
+   Bound each command with the same guardian shown above, at120seconds.
+
+       @CLI@ --json --device @ENDPOINT@ data inspect EPISODE_ID
+       @CLI@ --json --device @ENDPOINT@ data download EPISODE_ID --output NEW_DIRECTORY
+
+   Inspect must return exit0 with verified checksums and state complete.
+   Retain manifest.json, events.jsonl, model_inputs.jsonl and camera payloads.
+   Independently decode the recorded camera media with the inventoried
+   decoder and compare it to the observer's scene timeline. Require actual
+   person detections, configured model revision in model_versions, positive
+   model_io prediction/input-delivery counts, correct source IDs and positive
+   frame dimensions. Report unknown input_reference_status honestly: this
+   managed opaque-video decoder does not provide exact per-prediction sample
+   joins. Missing or fabricated sample references are not acceptable proof.
+
+5. Keep the person visible on A. Unplug A for10seconds, reconnect its exact
+   serial/port, then within5minutes require resumed frames/new source stream
+   and no duplicate appearance episode caused only by the outage. An outage
+   is not an empty-scene observation. Keep all evidence from that interval.
+   Now attach B. Within5minutes require B to join inference_status.sources.
+   Give B an empty10second interval then the same marked person challenge.
+   Require B's own detection and recorded bytes. An already open episode may
+   retain its original source set; repeat after it seals before judging B.
+
+6. Leave both scenes empty and wait for all owned captures to seal. Save
+   inspect, sources and process observations. On the reserved target console
+   execute exactly `sudo systemctl restart wendy-agent.service`. Confirm a
+   new Agent PID/birth time, unchanged binary hash and same boot_id. Do not
+   redeploy the plan. Within5minutes require the persisted campaign and both
+   physical sources to resume; repeat the empty/person challenge and inspect
+   the new complete episode. A fresh deploy is not restart-persistence proof.
+
+7. @DISARM@
+   Poll inspect until state and inference_status report disarmed. Wait for
+   any owned episode to seal naturally. Compare lsof/process observations
+   against the pretrial idle baseline: no campaign model worker or camera
+   descriptor may remain owned solely by this campaign. Shared platform
+   services can remain; do not kill them. Then execute:
+   @REMOVE@
+   @LIST@
+   Require the exact owned campaign absent. Episodes and model/runtime caches
+   remain for review; do not use data stop, data delete --all or purge caches.
+   Restore camera cabling and the owner's original idle Agent state. Record
+   cleanup failures explicitly. Do not remove unrelated files or processes.
+
+Regression sensitivity and limits
+
+The existing generated-scene runtime gate independently rejects restoring
+lost-presence and omitted-model-input-ledger behavior. Its controls must pass
+their intended failure boundaries before claiming regression coverage; they
+do not establish physical capture or published-model acceptance. This human
+run adds those observations using unchanged candidate code. Historical
+sample-ID timestamp behavior belongs to the separate example-app/kernel
+join case and remains pending until actually exercised. No GPU, radio,
+deployed Cloud or general detection-accuracy claim follows from this result.

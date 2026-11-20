@@ -26,6 +26,10 @@ func DesktopConnectTarget(ctx context.Context, selector string) (*grpcclient.Age
 	if conn, ok, err := dialAgentSocketIfSet(ctx); ok {
 		return conn, nil, err
 	}
+	if desktopPinnedLAN(ctx, selector) {
+		conn, err := DesktopConnectSecureLAN(ctx, mcpStartupAddress(selector))
+		return conn, nil, err
+	}
 	ctx = context.WithValue(ctx, detachedJSONRunKey{}, true)
 	picked, matched, err := connectNamedDeviceSelector(robotRuntimePromptContext(ctx, true), selector, true)
 	if err != nil {

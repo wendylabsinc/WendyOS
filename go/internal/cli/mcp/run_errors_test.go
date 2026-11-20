@@ -582,3 +582,41 @@ func TestRunInsideDeviceContainerDoesNotSayNotConnected(t *testing.T) {
 		t.Fatalf("next step wrongly says not connected: %s", next)
 	}
 }
+
+// A run refused before the build because Docker has no Buildx plugin deployed
+// nothing: the result must say so and point at installing Buildx, alone or
+// together with a full disk.
+func TestRunBuildxRefusalSaysNothingWasDeployed(t *testing.T) {
+	const buildx = `  - Docker Buildx is not installed; wendy builds images with it`
+	const disk = `  - not enough free disk space to build: 1.0 GiB free on the disk holding /Users/me/Library/Caches, and a build needs at least 3.0 GiB`
+	for _, tc := range []struct {
+		name, code, message string
+		wantDisk            bool
+	}{
+		{"buildx only", "builder_unavailable", `run failed during build: build prerequisites need attention:\n` + buildx, false},
+		{"buildx and disk", "disk_full", `run failed during build: build prerequisites need attention:\n` + disk + `\n` + buildx, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(&config.Config{}, nil)
+			s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+				return `{"error":{"code":"` + tc.code + `","exit":1,"message":"` + tc.message + `","retryable":false}}` + "\n", false, errors.New("exit status 1")
+			}
+			r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051"}))
+			if err != nil || !r.IsError {
+				t.Fatalf("want tool error: %v %v", r, err)
+			}
+			out := structuredMap(t, r)
+			got, _ := out["message"].(string)
+			next, _ := out["suggested_next_step"].(string)
+			if strings.Contains(got, "may already have created") || !strings.Contains(got, "Nothing was deployed") || !strings.Contains(got, "Buildx") {
+				t.Fatalf("message = %q; want a refusal naming Buildx before anything was deployed", got)
+			}
+			if !strings.Contains(next, "Buildx") {
+				t.Fatalf("suggested_next_step = %q; want installing Buildx", next)
+			}
+			if tc.wantDisk && (!strings.Contains(got, "disk space") || !strings.Contains(next, "free")) {
+				t.Fatalf("disk blocker dropped: message = %q, next = %q", got, next)
+			}
+		})
+	}
+}

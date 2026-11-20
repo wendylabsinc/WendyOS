@@ -1,0 +1,251 @@
+---
+title: Services between devices with Offline Protocol
+description: Run the Offline Protocol service as a Wendy app, then call services on other devices over plain HTTP, connect over Bluetooth LE, and use encrypted groups, files, and replicated documents.
+---
+
+Let an app on one WendyOS device call an app on another with an ordinary HTTP
+request. The [Offline Protocol](/docs/integrations/offline-protocol) service
+runs as one Wendy app per device and carries each request end-to-end encrypted
+over the local network, Bluetooth LE, or a device in between. Your apps keep
+their own code and language and need no SDK.
+
+To embed the SDK in a Python app instead, follow the
+[three-board tutorial](/docs/guides/tutorials/python/offline-protocol-three-boards).
+
+## 1. Create the service app
+
+Create a directory with two files. Save this as `Dockerfile`:
+
+```dockerfile
+FROM ghcr.io/offline-protocol/offline-protocol-service:0.32.0
+```
+
+The image is published for `linux/arm64` and `linux/amd64`. Save this as
+`wendy.json`:
+
+```json
+{
+  "appId": "dev.offlineprotocol.service",
+  "version": "0.32.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "bluetooth", "mode": "bluez" },
+    { "type": "persist", "name": "offline-protocol-data", "path": "/var/lib/offline-protocol" }
+  ]
+}
+```
+
+| Entitlement | Why the service needs it |
+| --- | --- |
+| `network` mode `host` | Multicast DNS finds other devices only on the host network. It also puts the HTTP front on the device's loopback, and lets other devices connect to the peer stream port, 7878. |
+| `bluetooth` mode `bluez` | Advertising, scanning, and connecting over Bluetooth LE through BlueZ. Leave it out on a device without an adapter or for wired links only. |
+| `persist` at `/var/lib/offline-protocol` | The device's identity, encrypted sessions, held messages, and service registrations, sealed under the store key. |
+
+See [entitlements](/docs/device/entitlements) for each type.
+
+## 2. Deploy with a store key
+
+Generate a store key for each device and keep it in your secret store:
+
+```bash
+(umask 077; openssl rand -hex 32 > device-a.store-key)
+```
+
+The key seals everything the service keeps on disk. Together, the key and the
+volume are the device's identity. Pass the key as an environment variable and
+keep it off the volume.
+
+Deploy from the service directory:
+
+```bash
+wendy run --device <device-a> --detach --restart-unless-stopped \
+  --env "OFFLINE_PROTOCOL_STORE_KEY=$(cat device-a.store-key)" \
+  --env OP_CONFIG=/etc/offline-protocol/config-ble.json \
+  --env OP_LISTEN=<device-a-lan-address>:7878
+```
+
+Set `OP_LISTEN` to the device's LAN address and reserve that address in your
+DHCP server. Repeat for each device with its own key and address. Devices on
+the same network find each other and form encrypted sessions on their own.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OFFLINE_PROTOCOL_STORE_KEY` | required | 64 hex digits. The service exits with code 64 without it. |
+| `OP_CONFIG` | `/etc/offline-protocol/config.json` | Transport configuration (below). |
+| `OP_LISTEN` | `0.0.0.0:7878` | Where other devices open peer streams. |
+| `OP_HTTP` | `127.0.0.1:8080` | Where the HTTP front listens. Empty for no front. |
+| `OP_LAN` | `1` | Advertise and discover over multicast DNS. `0` turns it off. |
+| `OP_PEERS` | none | Space-separated `host:port` entries for devices multicast cannot reach. |
+| `OP_HTTP_TOKEN_FILE` | none | Require a per-launch token on every request to the front. |
+| `OP_HTTP_ALIASES` | none | A JSON file of friendly device names. |
+| `OP_SOCKET` | `/run/offline-protocol/api.sock` | The local API socket. |
+
+The image ships three configurations in `/etc/offline-protocol/`. All require
+encryption and form sessions automatically:
+
+| File | Local network | Bluetooth LE | Internet relay |
+| --- | --- | --- | --- |
+| `config.json` | on | off | off |
+| `config-ble.json` | on | on | off |
+| `config-relay.json` | on | off | on, with `OP_RELAY` |
+
+Check the service:
+
+```bash
+wendy device apps list --device <device-a>
+wendy device logs --app dev.offlineprotocol.service --device <device-a>
+```
+
+From an app on the device, `GET http://127.0.0.1:8080/health` returns the
+front's `name`, `version`, `connected`, and `local_address`. The
+`local_address` (`off1…`) is the name other devices use to call this one.
+
+## 3. Register a service on device B
+
+Any HTTP server on the device's loopback can be a provider. Give its app the
+`network` entitlement in `host` mode so it shares the front's loopback, then
+register it:
+
+```bash
+curl -X PUT http://127.0.0.1:8080/services/timeofday \
+  -H 'content-type: application/json' \
+  -d '{"callback": "http://127.0.0.1:9000", "version": "1"}'
+```
+
+- The name is a DNS label: lowercase letters, digits, and hyphens.
+- The request's path and query are appended to the callback, so a call to
+  `/now?tz=utc` reaches `http://127.0.0.1:9000/now?tz=utc`.
+- Registration is idempotent; register at every startup. A `409` means
+  another local app owns the name.
+- `GET /services` lists this device's registrations and
+  `DELETE /services/<name>` removes one. Registrations persist on the volume
+  across restarts.
+
+Each delivered request carries these headers:
+
+| Header | Value |
+| --- | --- |
+| `X-Offline-Protocol-Sender` | The calling device's address, authenticated by the encrypted session. |
+| `X-Offline-Protocol-Request-Id` | Unique per request. A retry gets a new one. |
+| `X-Offline-Protocol-Service` | The service name the caller used. |
+
+The status, headers, and body your callback returns go back to the caller.
+
+## 4. Call it from device A
+
+Send a normal request to the local front. The `Host` header names the service
+and the target device:
+
+```bash
+curl http://127.0.0.1:8080/now \
+  -H 'Host: timeofday.<device-b-address>.offline.protocol.internal' \
+  -H 'X-Offline-Protocol-Timeout: 90'
+```
+
+The request travels end-to-end encrypted over whichever link the devices share
+and returns as an ordinary HTTP response. `X-Offline-Protocol-Timeout` sets
+the wait from 1 to 300 seconds; the default is 30.
+
+Calls are durable. If device B is away, the request keeps travelling and runs
+when B is reachable. A caller that stops waiting gets `504` with
+`X-Offline-Protocol-Error: deadline_exceeded`, and the provider still serves
+the request if it arrives within 60 seconds of the deadline. For anything with
+a side effect, send your own idempotency key in an `x-` header and have the
+provider ignore keys it has handled.
+
+To find providers, `GET /browse/<name>` streams server-sent events for every
+device offering the service, with its address, version, capabilities, and hop
+count. For friendly names, point `OP_HTTP_ALIASES` at a file such as
+`{"aliases": {"kitchen": "off1…"}}`, then call
+`timeofday.kitchen.offline.protocol.internal`.
+
+| Status | `X-Offline-Protocol-Error` | Meaning |
+| --- | --- | --- |
+| 400 | `bad_host` | The `Host` header is not `<service>.<device>.offline.protocol.internal`. |
+| 404 | `unknown_device` | The device is neither an address nor an alias. |
+| 404 | `unknown_service` | Nothing is registered under that name on the target. |
+| 413 | `body_too_large` | The request body is over 128 KiB. |
+| 502 | `recipient_unreachable` | The target device could not be reached. |
+| 502 | `callback_failed` | The provider's callback failed or timed out. |
+| 504 | `deadline_exceeded` | No answer before the timeout. The request may still run. |
+
+The [HTTP front specification](https://github.com/Offline-Protocol/offline-protocol-sdk/blob/main/docs/spec/http-front.md) lists every
+endpoint, limit, and error, and the [http-front example](https://github.com/Offline-Protocol/offline-protocol-sdk/tree/main/examples/http-front)
+has a provider and caller in standard-library Python.
+
+## 5. Connect over Bluetooth LE
+
+With `config-ble.json` and the `bluetooth` entitlement in `bluez` mode, the
+service advertises its own GATT service and scans for and connects to peers
+through BlueZ. Two WendyOS devices talk with no network between them, and a
+phone running an app built on the SDK reaches a device directly. There is no
+pairing: every link is authenticated and encrypted by MLS. The
+[demo app](https://github.com/Offline-Protocol/offline-protocol-sdk/tree/main/examples/demo-app) is the reference phone app.
+
+If another app on the device holds the adapter's only advertising slot, the
+service logs the refusal and keeps running on its other transports.
+
+## 6. Use groups, files, and replicated documents
+
+The local API exposes the rest of the SDK: JSON-RPC 2.0 over a WebSocket on the
+service's Unix socket. One service serves any number of apps, and each app sees
+only the messages addressed to it. To share the socket, deploy the service with
+`--env OP_SOCKET=/var/lib/offline-protocol/api.sock` and mount the same volume
+in your app:
+
+```json
+{
+  "appId": "dev.example.groupbot",
+  "version": "1.0.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "persist", "name": "offline-protocol-data", "path": "/var/lib/offline-protocol" }
+  ]
+}
+```
+
+Each connection starts with `hello`, then calls the engine's methods by name:
+
+| Feature | Methods |
+| --- | --- |
+| Encrypted groups | `create_group`, `invite_to_group`, `send_group_message` |
+| File transfer | `send_file`, `get_file_progress` |
+| Replicated documents | `data.create_doc`, `data.map_set`, `data.doc_json` |
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"app_id":"notes","client":"notes-desktop/2.4"}}
+{"jsonrpc":"2.0","id":2,"method":"data.create_doc","params":{"space_id":"notes-1","doc_id":"todo"}}
+```
+
+The [local API guide](https://github.com/Offline-Protocol/offline-protocol-sdk/blob/main/docs/local-api.md) documents every method
+and event, and the [Python client example](https://github.com/Offline-Protocol/offline-protocol-sdk/blob/main/bindings/python/examples/local_api_client.py)
+is a complete client.
+
+## Secure the front
+
+- The front listens on loopback and refuses requests with a browser `Origin`
+  header. On a device that runs a browser, also set `OP_HTTP_TOKEN_FILE`: the
+  front writes a fresh token there at every start and requires it in
+  `X-Offline-Protocol-Token`. Mount the file's directory, not the file.
+- Any device running the SDK that reaches port 7878 can form a session. To
+  serve only known devices, compare `X-Offline-Protocol-Sender` with an allow
+  list and answer `403` to the rest. Keep callbacks on loopback so only the
+  front can reach them.
+- Keep device clocks in sync with `wendy device sync-time`; request deadlines
+  and encryption use them.
+
+## Troubleshoot
+
+| Symptom | What to check |
+| --- | --- |
+| The service exits at start | `OFFLINE_PROTOCOL_STORE_KEY` is missing (exit code 64), `OP_LISTEN` is not an address the device has, or `OP_RELAY` is set without `config-relay.json`. |
+| Devices do not find each other | Both need `network` in `host` mode and `OP_LAN=1` on the same network segment. Across subnets, set `OP_PEERS=<other-ip>:7878`. |
+| An app cannot reach `127.0.0.1:8080` | The app needs `network` in `host` mode. Check the service with `wendy device apps list`. |
+| `404 unknown_service` | Register the provider on the target device at startup. |
+| `502 callback_failed` | Nothing answered at the callback URL, it was too slow, or 32 requests were already in flight. |
+| A new address after a redeploy | Mount the volume at `/var/lib/offline-protocol` and keep the same store key. |
+| A phone cannot see the device | Use `config-ble.json` and the `bluetooth` entitlement; check that no other app holds the advertising slot. |
+
+See the [service image guide](https://github.com/Offline-Protocol/offline-protocol-sdk/tree/main/bindings/python/docker) for every
+variable and grant.

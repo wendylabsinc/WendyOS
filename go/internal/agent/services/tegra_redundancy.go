@@ -55,6 +55,15 @@ type jetsonRootfsPreparation struct {
 	writeVar   func(string, []byte) error
 }
 
+// Only this validated legacy incompatibility can be delegated to the selected
+// updater's boot-chain policy. The retry budget must already be valid; other
+// validation failures and all writable repairs remain the Agent's responsibility.
+type jetsonFirmwareManagedRedundancyError struct{ attributes uint32 }
+
+func (e *jetsonFirmwareManagedRedundancyError) Error() string {
+	return fmt.Sprintf("%s is disabled and firmware-managed (volatile EFI attributes %#x); a runtime write would not survive reboot. Enable rootfs A/B in the firmware configuration or reflash with an A/B-enabled image", rootfsRedundancy, e.attributes)
+}
+
 type jetsonEFIVariable struct {
 	attributes uint32
 	value      uint32
@@ -132,6 +141,9 @@ func (p jetsonRootfsPreparation) prepare(ctx context.Context) (bool, error) {
 		v    jetsonEFIVariable
 	}{{rootfsRedundancy, level}, {rootfsRetryMax, retries}} {
 		if setting.v.value == 0 && setting.v.attributes&efiNonVolatile == 0 {
+			if setting.name == rootfsRedundancy && retries.value > 0 {
+				return false, &jetsonFirmwareManagedRedundancyError{attributes: setting.v.attributes}
+			}
 			return false, fmt.Errorf("%s is disabled and firmware-managed (volatile EFI attributes %#x); a runtime write would not survive reboot. Enable rootfs A/B in the firmware configuration or reflash with an A/B-enabled image", setting.name, setting.v.attributes)
 		}
 	}

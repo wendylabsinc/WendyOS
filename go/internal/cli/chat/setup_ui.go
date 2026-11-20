@@ -41,7 +41,7 @@ func (ui terminalSetupUI) Choose(ctx context.Context, title, description string,
 		return "", fmt.Errorf("no choices available for %s", chatSingleLine(title))
 	}
 	m := newSetupChoiceModel(title, description, choices)
-	_, err := tea.NewProgram(m, ui.options(ctx)...).Run()
+	_, err := tui.RunProgram(tea.NewProgram(m, ui.options(ctx)...))
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -59,7 +59,7 @@ func (ui terminalSetupUI) Text(ctx context.Context, title, description, initial 
 		return "", err
 	}
 	m := newSetupTextModel(title, description, initial, secret)
-	_, err := tea.NewProgram(m, ui.options(ctx)...).Run()
+	_, err := tui.RunProgram(tea.NewProgram(m, ui.options(ctx)...))
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -98,7 +98,7 @@ func (ui terminalSetupUI) Work(ctx context.Context, title string, fn func(contex
 		<-exited
 	}()
 	m := newSetupWorkModel(title, cancel, progress, done)
-	_, err := tea.NewProgram(m, ui.options(ctx)...).Run()
+	_, err := tui.RunProgram(tea.NewProgram(m, ui.options(ctx)...))
 	// Always join the worker before reporting a result or starting a retry.
 	cancel()
 	<-exited

@@ -18,6 +18,23 @@ Declare them in the `entitlements` array of your `wendy.json`, or add one with `
 
 A device's agent ignores an entitlement type it does not know, and starts the app without that access. When the agent reports the types it supports, `wendy run` checks your `wendy.json` against them before building and stops on a type the agent does not support, suggesting `wendy device update`. Agents that predate this report are not checked.
 
+## Generic SensorLink readings
+
+Use `{ "type": "sensor-read" }` to read generic samples from paired SensorLink
+sources through `WENDY_SENSOR_SOCKET`. This mounts `/run/wendy/sensors` read-only
+and grants the app API socket group so non-root applications can connect.
+The dedicated server implements only `WendySensorService.GetSensorManifest` and
+`StreamSensors`; it cannot pair devices, read credentials, or manage containers.
+It grants access to all paired generic channels, not a per-source allowlist.
+
+Refresh the manifest after reconnecting: channel IDs belong to the current
+source connection and may change. Disconnects end affected subscriptions; slow
+readers are disconnected when their bounded queue fills. No old samples are
+replayed on subscription. This requires an agent and CLI supporting `sensor-read`;
+do not substitute `admin` when an older agent lacks the read API. See
+[Read generic SensorLink samples](/docs/advanced/device/sensor-read) for source identity, API usage
+and forwarding limits.
+
 ## Notifications
 
 Use `{ "type": "notifications" }` when an app needs to alert operators through
@@ -144,6 +161,11 @@ server:
 ]
 ```
 
+With host networking, two apps cannot serve the same port. The device refuses
+to start an app whose `http` or `mcp` port another app or process already
+uses, and names the holder; `wendy run` stops before the build when it can
+confirm the clash.
+
 Ordinary detached agent deployments include HTTP URLs in their
 [endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
 checking application health. See the [full `http` reference](/docs/reference/app-configuration#http)
@@ -253,6 +275,34 @@ The container receives:
 Use `serial` for serial ports and `usb` for raw USB protocols — they expose different device majors. The SO-101's `/dev/ttyACM0` is reached with `serial`, not `usb`.
 
 > **Security note:** the cgroup rule is scoped to the named device's exact `major:minor`, so — unlike a whole-major grant — it never exposes other devices that share the major (e.g. other `ttyACM*`/`ttyUSB*` adapters on the host). The entitlement is USB-only, so it can never reach an on-board console UART. See *Replug behavior* above for why a reconnect needs a redeploy.
+
+## Arduino UNO Q microcontroller
+
+The UNO Q's STM32 runs an Arduino sketch next to WendyOS. Two `wendy.json` entries cover it:
+
+- **[`mcu`](/docs/apps/wendy.json#mcu)** names the sketch folder. `wendy run` compiles it with a pinned `arduino-cli`, then flashes it before the container deploy. If the compile or the flash fails, the app is not deployed.
+- **`arduino-bridge`** lets the app talk to the sketch through Arduino's router, the same Bridge that Arduino App Lab uses. Modulino modules sit on the microcontroller's Qwiic bus, so Linux reaches them only this way.
+
+```json
+{
+    "mcu": { "sketch": "sketch" },
+    "entitlements": [{ "type": "arduino-bridge" }]
+}
+```
+
+The container receives:
+- A bind mount of the host directory `/run/arduino-router`, which holds the router's socket. It is the directory, not the socket, so a router restart doesn't break the app.
+- The router's `arduino-router` group.
+- `APP_SOCKET=unix:///run/arduino-router/router.sock`, unless the app's `env` sets it.
+
+> The router starts at boot and tells the microcontroller that Linux is ready, so a sketch built with Arduino's default "wait for Linux" option starts after every reboot.
+
+> One Bridge message holds about 235 bytes (the buffer of Arduino_RPClite on the microcontroller). Send larger data in pieces.
+
+**Troubleshooting**
+- *"microcontroller is busy with another flash"*: another flash is still running after a 3-minute wait. Run again when it finishes.
+- *"cannot drive BOOT0 (GPIO 37) low"*: another app holds the microcontroller's GPIO lines, for example an old OpenOCD flasher app. Stop it and run again.
+- *"Warning: Arduino router is not running"*: the sketch was flashed, but it starts only once `wendyos-arduino-router` runs on the device.
 
 ## SPI
 

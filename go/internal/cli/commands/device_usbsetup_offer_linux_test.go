@@ -64,9 +64,37 @@ func TestDetectUnconfiguredUSBGadget(t *testing.T) {
 }
 
 func TestResolveUSBSetupInterface_Override(t *testing.T) {
+	orig := isWendyUSBGadget
+	t.Cleanup(func() { isWendyUSBGadget = orig })
+	isWendyUSBGadget = func(name string) bool { return name == "usb7" }
+
 	got, err := resolveUSBSetupInterface("usb7")
 	if err != nil || got != "usb7" {
 		t.Fatalf("resolveUSBSetupInterface(override) = %q, %v; want usb7, nil", got, err)
+	}
+	// An ordinary USB network adapter is refused, never configured.
+	if got, err := resolveUSBSetupInterface("enp195s0f3u1"); err == nil {
+		t.Fatalf("resolveUSBSetupInterface(non-Wendy) = %q, nil; want an error", got)
+	}
+}
+
+func TestResolveUSBSetupInterface_AutoDetect(t *testing.T) {
+	orig := usbGadgetIfaceNames
+	t.Cleanup(func() { usbGadgetIfaceNames = orig })
+	for _, c := range []struct {
+		names   []string
+		want    string
+		wantErr bool
+	}{
+		{nil, "", true},
+		{[]string{"enp0s20f0u2"}, "enp0s20f0u2", false},
+		{[]string{"enp0s20f0u2", "enp0s20f0u3"}, "", true},
+	} {
+		usbGadgetIfaceNames = func() ([]string, error) { return c.names, nil }
+		got, err := resolveUSBSetupInterface("")
+		if got != c.want || (err != nil) != c.wantErr {
+			t.Errorf("resolveUSBSetupInterface(%v) = %q, %v; want %q, error %v", c.names, got, err, c.want, c.wantErr)
+		}
 	}
 }
 

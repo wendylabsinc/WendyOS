@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -30,12 +32,12 @@ func DesktopPinRecovery(err error) string {
 	if !errors.As(err, &refusal) {
 		return ""
 	}
-	if refusal.diagnostic != nil {
-		return refusal.diagnostic.hostname
-	}
 	var mismatch *devicepin.PinMismatchError
 	if errors.As(err, &mismatch) {
 		return mismatch.Key
+	}
+	if refusal.diagnostic != nil {
+		return refusal.diagnostic.hostname
 	}
 	return ""
 }
@@ -51,12 +53,13 @@ func DesktopUnpin(target string) error {
 }
 
 type DesktopDevice struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Selector  string `json:"selector"`
-	Transport string `json:"transport"`
-	Address   string `json:"address"`
-	Lite      bool   `json:"lite"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Selector     string `json:"selector"`
+	Transport    string `json:"transport"`
+	Address      string `json:"address"`
+	Lite         bool   `json:"lite"`
+	RequiresMTLS bool   `json:"requiresMTLS,omitempty"`
 }
 
 // InitializeDesktop must run once, before any other desktop operation.
@@ -95,11 +98,13 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 	var devices []models.LANDevice
 	var lite []models.ExternalDevice
 	var err, liteErr error
+	var browse lanBrowseErrors
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		options := cliLANStreamOptions(ctx)
+		options.OnBackendError = browse.record
 		options.Supplemental = meshDiscoveryStream
 		if runtime.GOOS == "ios" {
 			options.Supplemental = mobileMeshDiscoveryStream
@@ -139,9 +144,10 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		}
 	}
 	if len(result) == 0 {
-		return mergeDesktopDevices(result), errors.Join(err, liteErr)
+		return mergeDesktopDevices(result), errors.Join(browse.first(), err, liteErr)
 	}
-	return mergeDesktopDevices(result), nil
+	// USB or mesh peers remain usable when Bonjour is unavailable.
+	return mergeDesktopDevices(result), browse.first()
 }
 
 func DesktopCloud(ctx context.Context) ([]DesktopDevice, error) {
@@ -172,7 +178,72 @@ func DesktopConnect(ctx context.Context, selector string) (*grpcclient.AgentConn
 	if strings.TrimSpace(selector) == "" {
 		return nil, errors.New("choose a device")
 	}
+	if os.Getenv("WENDY_AGENT_SOCKET") == "" && desktopPinnedLAN(ctx, selector) {
+		return DesktopConnectSecureLAN(ctx, mcpStartupAddress(selector))
+	}
 	return connectMCPDevice(ctx, selector)
+}
+
+type cloudTunnelOnlyKey struct{}
+
+// DesktopConnectTunnel is DesktopConnect for VPN flows and their probes. A
+// flow needs the device's TCP ports through RegistryDialer, which only the
+// Cloud tunnel provides, so a Cloud device stays on its tunnel even when it
+// is also on the LAN. The connection is the caller's own, never a shared one.
+func DesktopConnectTunnel(ctx context.Context, selector string) (*grpcclient.AgentConnection, error) {
+	return DesktopConnect(context.WithValue(ctx, cloudTunnelOnlyKey{}, true), selector)
+}
+
+func cloudTunnelOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(cloudTunnelOnlyKey{}).(bool)
+	return only
+}
+
+// DesktopRecordingConnect uses only the mobile app's current Cloud identity.
+// A background library scan must not select a different saved login or start
+// certificate recovery simply because its selector names the same tenant.
+func DesktopRecordingConnect(ctx context.Context, selector string, secureLAN bool) (*grpcclient.AgentConnection, error) {
+	if _, simulator, _ := simulatorName(selector); simulator {
+		return nil, errors.New("choose a reachable WendyOS device")
+	}
+	if secureLAN {
+		return DesktopConnectSecureLAN(ctx, selector)
+	}
+	target, cloud, err := parseCloudDeviceSelector(selector)
+	if err != nil {
+		return nil, err
+	}
+	if !cloud {
+		return DesktopConnect(ctx, selector)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	auth, err := config.ResolveAuth(cfg, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	if !target.matches(auth) {
+		return nil, failure.Wrap(errors.New("this recording device is outside the current Cloud organization"), failure.AccountMismatch, failure.ChooseAccount)
+	}
+	if conn, err := desktopExistingCloudConnection(ctx, auth, target.String()); conn != nil || err != nil {
+		return conn, err
+	}
+	devices, err := listCloudDiscoveryDevices(ctx, auth, true)
+	if err != nil {
+		return nil, err
+	}
+	id := target.AssetUUID
+	if id == "" {
+		id = strconv.FormatInt(int64(target.AssetID), 10)
+	}
+	for _, device := range devices {
+		if device.key == id {
+			return device.connect(ctx, auth, os.Getenv("WENDY_BROKER_URL"))
+		}
+	}
+	return nil, errors.New("this recording device is offline or unavailable")
 }
 
 type desktopLoginURLKey struct{}
@@ -280,7 +351,55 @@ func desktopNearbyDevice(d models.LANDevice) DesktopDevice {
 	if d.PrincipalURI != "" {
 		id = d.PrincipalURI
 	}
-	return DesktopDevice{ID: id, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite}
+	return DesktopDevice{ID: id, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite,
+		RequiresMTLS: d.IsMTLS && !d.Mesh && !d.WendyLite}
+}
+
+// DesktopConnectSecureLAN dials an advertised enrolled agent using only the
+// current app account. An mDNS advertisement can require stronger transport,
+// but never establishes trust in the peer or overrides the saved pin.
+func DesktopConnectSecureLAN(ctx context.Context, selector string) (*grpcclient.AgentConnection, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Auth) == 0 {
+		return nil, failure.Wrap(errors.New("sign in to Wendy Cloud to connect to this enrolled device"), failure.AuthenticationRequired, failure.SignIn)
+	}
+	auth, ok := cfg.ContextByName(cfg.CurrentContext)
+	if !ok && len(cfg.Auth) == 1 {
+		auth = &cfg.Auth[0]
+	}
+	if auth == nil {
+		return nil, failure.Wrap(errors.New("choose the account for this enrolled device before connecting"), failure.AccountMismatch, failure.ChooseAccount)
+	}
+	if len(auth.Certificates) == 0 {
+		if desktopAccountInfo(*auth).State != 1 {
+			return nil, failure.Wrap(errors.New("sign in to Wendy Cloud to connect to this enrolled device"), failure.AuthenticationRequired, failure.SignIn)
+		}
+		return nil, failure.Wrap(errors.New("this account has no device connection certificate; sign in again with an account in the device's organization"), failure.AuthenticationRequired, failure.SignIn)
+	}
+	// Renew the selected account before taking the dial's credential snapshot.
+	// This also recovers an expired certificate using the saved OAuth session,
+	// with token rotation serialized and persisted across app/CLI processes.
+	if err := prepareDefaultCloudCertificate(ctx, auth); err != nil {
+		return nil, fmt.Errorf("renewing device connection credentials: %w", err)
+	}
+	target := newDialTarget(pinKeyForAddr(selector), selector)
+	target.RequiresMTLS = true
+	key := "lan:" + selector
+	if target.Expected != nil {
+		key = target.Expected.IdentityKey()
+	}
+	return desktopSessionConnection(ctx, auth, key, func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		// A shared channel needs no repeat DNS lookup. Only its creator resolves.
+		target.Candidates = resolveAddrCandidates(ctx, selector)
+		if len(target.Candidates) > 0 {
+			target.Addr = target.Candidates[0]
+		}
+		conn, _, err := dialAgentLadderWithCerts(ctx, target, auth.Certificates)
+		return conn, err
+	})
 }
 
 // Addresses and transports may change while the enrolled identity stays the same.

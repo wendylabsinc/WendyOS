@@ -176,7 +176,7 @@ func downloadFirmware(asset *firmwareAsset, dir string) (string, error) {
 		p.Send(tui.ProgressDoneMsg{Err: err})
 	}()
 
-	if _, err := p.Run(); err != nil {
+	if _, err := tui.RunProgram(p); err != nil {
 		if r := <-resC; r.path != "" {
 			os.Remove(r.path)
 		}

@@ -340,6 +340,12 @@ func TestClassifyRemoteBuildError_JudgesTheHostsErrorNotTheBuildSummary(t *testi
 	if want := "build on spark-office failed or did not complete: rpc error: code = Internal desc = build failed: exit status 1"; !isImageBuildFailure(buildErr) || buildErr.Error() != want {
 		t.Fatalf("build failure = %q, want %q", buildErr, want)
 	}
+
+	upgradeHint := "missing operator build delivery authorization. Update the wendy CLI and retry"
+	upgradeErr := remoteBuild("", status.Error(codes.PermissionDenied, upgradeHint))
+	if want := "build on spark-office failed or did not complete: rpc error: code = PermissionDenied desc = " + upgradeHint; !isImageBuildFailure(upgradeErr) || upgradeErr.Error() != want {
+		t.Fatalf("upgrade error = %q, want %q", upgradeErr, want)
+	}
 }
 
 func TestClassifyRemoteBuildError_DoesNotAssumeGenericTransportErrorIsDelivery(t *testing.T) {
@@ -395,15 +401,11 @@ func TestConsumeBuildProgress_StopsAtResultWithoutWaitingForEOF(t *testing.T) {
 	}
 }
 
-// EOF without a result is still a clean end: an older agent may not send one.
-func TestConsumeBuildProgress_StopsAtEOF(t *testing.T) {
+func TestConsumeBuildProgress_RejectsEOFWithoutResult(t *testing.T) {
 	recv := func() (*agentpbv2.BuildImageProgress, error) { return nil, io.EOF }
 	result, err := consumeBuildProgress(recv, io.Discard)
-	if err != nil {
-		t.Fatalf("a stream that just ends must not be an error, got %v", err)
-	}
-	if result != nil {
-		t.Fatalf("legacy EOF result = %#v, want nil", result)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || result != nil {
+		t.Fatalf("result = %#v, error = %v, want unexpected EOF", result, err)
 	}
 }
 
@@ -424,10 +426,14 @@ func TestReportedDeliveryError_PreventsStartingFailedOrUnreportedTarget(t *testi
 	}
 }
 
-func TestReportedDeliveryError_PreservesLegacySingleTargetContract(t *testing.T) {
-	for _, result := range []*agentpbv2.BuildImageResult{nil, {ImageDigest: "sha256:legacy"}} {
-		if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000007"); err != nil {
-			t.Fatalf("legacy result %#v rejected: %v", result, err)
+func TestStartAfterReportedDelivery_RejectsMissingReceipts(t *testing.T) {
+	for _, result := range []*agentpbv2.BuildImageResult{nil, {ImageDigest: "sha256:abc"}} {
+		err := startAfterReportedDelivery(result, "00000000-0000-4000-8000-000000000007", func() error {
+			t.Fatal("started without a delivery receipt")
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "no delivery result") {
+			t.Fatalf("result %#v: got %v, want missing delivery result", result, err)
 		}
 	}
 }

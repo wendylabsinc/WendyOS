@@ -25,6 +25,11 @@ Follow the CLI's recovery hint. If the device clock may be wrong, run `wendy dev
 
 Simulator startup stops retrying when authentication is rejected. It reports the authentication error without the boot-console tail. See [simulator startup and authentication failures](/docs/advanced/clients/wendy-cli/device-selection#simulator-startup-and-authentication-failures).
 
+For OIDC sign-ins, automatic certificate re-issuance through the sign-in session
+runs at most once per CLI invocation. If another target needs re-issuance in the
+same command, run `wendy auth refresh-certs` explicitly and retry. See
+[certificate renewal](/docs/advanced/clients/wendy-cli/commands/auth/refresh-certs).
+
 ## Wendy Net connection limit
 
 If you see `Wendy Net is closing a backup connection to free a slot; retry shortly`,

@@ -97,6 +97,23 @@ func TestSerialExternalDeviceUnresponsive(t *testing.T) {
 	}
 }
 
+// A board whose port another process holds is listed, but never as unflashed:
+// offering to flash a working board would be wrong.
+func TestSerialExternalDeviceBusy(t *testing.T) {
+	p := &MicroWendyProvider{}
+	dev := p.serialExternalDevice(discovery.SerialDevice{Port: "/dev/cu.usbmodem101", Busy: true})
+
+	if dev.ConnectionInfo["needsInstall"] != "" {
+		t.Errorf("a busy port must not be offered a firmware install, got ConnectionInfo=%+v", dev.ConnectionInfo)
+	}
+	if dev.ConnectionInfo["busy"] != "true" || dev.ConnectionInfo["serialPort"] != "/dev/cu.usbmodem101" || dev.ConnectionType() != "USB" {
+		t.Errorf("expected a busy USB row carrying its port, got ConnectionInfo=%+v", dev.ConnectionInfo)
+	}
+	if !strings.Contains(dev.DisplayName, "in use") || !strings.Contains(dev.DisplayName, "/dev/cu.usbmodem101") {
+		t.Errorf("DisplayName = %q, want it to say the port is in use", dev.DisplayName)
+	}
+}
+
 func TestSerialExternalDeviceResponsive(t *testing.T) {
 	p := &MicroWendyProvider{}
 	dev := p.serialExternalDevice(discovery.SerialDevice{

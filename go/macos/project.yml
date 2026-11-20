@@ -276,6 +276,19 @@ targets:
         OTHER_LDFLAGS: []
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
         LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks"]
+  WendyMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources: [UITests-iOS]
+    dependencies:
+      - target: WendyMobile
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.mobile.uitests
+        TEST_TARGET_NAME: WendyMobile
+        ARCHS: arm64
 schemes:
   WendyDesktop:
     build:
@@ -288,6 +301,6 @@ schemes:
       targets:
         WendyMobile: all
     test:
-      targets: [WendyMobileTests]
+      targets: [WendyMobileTests, WendyMobileUITests]
       environmentVariables:
         WENDY_MOBILE_TEST_HOST: "1"
