@@ -20,6 +20,7 @@ type cameraPreview struct {
 	mu      sync.Mutex
 	backend *Backend
 	request uint64
+	secure  bool
 	ctx     context.Context
 	cancel  context.CancelFunc
 }
@@ -57,13 +58,24 @@ func (b *Backend) PreviewCameras(id uint64, selector string, secure bool) ([]*pb
 	if err := p.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := p.backend.ConnectTargetRequest(selector, false, p.request, secure); err != nil {
-		return nil, err
+	// Redialing ends the playing stream without an error event. Refresh over
+	// the current connection; redial for another target or a lost connection.
+	var rows []*pb.VideoDevice
+	var err error
+	connected := p.backend.deviceSelector == selector && p.secure == secure
+	if connected {
+		rows, err = p.backend.Cameras()
 	}
-	if err := p.ctx.Err(); err != nil {
-		return nil, err
+	if !connected || (err != nil && p.ctx.Err() == nil) {
+		if _, err := p.backend.ConnectTargetRequest(selector, false, p.request, secure); err != nil {
+			return nil, err
+		}
+		p.secure = secure
+		if err := p.ctx.Err(); err != nil {
+			return nil, err
+		}
+		rows, err = p.backend.Cameras()
 	}
-	rows, err := p.backend.Cameras()
 	if err == nil {
 		p.backend.cameraDevices = make(map[uint32]*pb.VideoDevice, len(rows))
 		for _, row := range rows {

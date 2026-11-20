@@ -237,3 +237,34 @@ func TestPreviewPlayReplacesPlayingSensor(t *testing.T) {
 		t.Fatalf("frame from another sensor: %v", frame)
 	}
 }
+func TestPreviewRefreshKeepsPlayingStream(t *testing.T) {
+	b := previewAgentFixture(t, &previewAgent{})
+	dials := 0
+	dial := b.connectTarget
+	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
+		dials++
+		return dial(ctx, selector)
+	}
+	id := b.PreviewCreate()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PreviewPlay(id, "camera"); err != nil {
+		t.Fatal(err)
+	}
+	previewVideo(t, b, id)
+	if cameras, err := b.PreviewCameras(id, "device", false); err != nil || len(cameras) != 4 {
+		t.Fatalf("refresh: %v %v", cameras, err)
+	}
+	if dials != 1 || len(b.preview(id).backend.videoStops) != 1 {
+		t.Fatalf("refresh redialed (%d dials) and ended the stream", dials)
+	}
+	// A lost connection, or another target, still needs a new dial.
+	b.preview(id).backend.conn.Close()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil || dials != 2 {
+		t.Fatalf("lost connection: %d dials, %v", dials, err)
+	}
+	if _, err := b.PreviewCameras(id, "other-device", false); err != nil || dials != 3 {
+		t.Fatalf("other target: %d dials, %v", dials, err)
+	}
+}
