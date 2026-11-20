@@ -97,6 +97,11 @@ func (b *Backend) PreviewPlay(id uint64, stableID string) error {
 	if camera == nil {
 		return errors.New("this sensor is no longer connected to the device")
 	}
+	// Every stream of this preview uses the handle id, so it plays one sensor
+	// at a time. Stop the current one before starting another.
+	p.backend.mu.Lock()
+	p.backend.stopCameras()
+	p.backend.mu.Unlock()
 	return p.backend.StartCamera(camera.GetId(), id, p.backend.session, stableID)
 }
 func (b *Backend) PreviewPoll(id uint64) []Event {
