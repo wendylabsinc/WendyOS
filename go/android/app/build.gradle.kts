@@ -46,8 +46,11 @@ dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.03.01"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20251224")
 }

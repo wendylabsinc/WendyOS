@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/cli/modelhub"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -59,6 +60,16 @@ func New() *Client {
 	c.methods = map[string]any{
 		"StartVPN": c.startVPN, "RefreshVPN": c.refreshVPN, "CancelVPN": c.cancelVPN, "StopVPN": c.stopVPN, "VPNRead": c.readPacket, "VPNWrite": c.writePacket,
 		"NearbyDiscover": b.NearbyDiscover, "NearbyOpen": b.NearbyOpen, "NearbyClose": b.NearbyClose, "NearbyAction": b.NearbyAction,
+		// Setup state survives a failed step, as in the iOS bridge: attempted and
+		// pending must stay visible so enrollment is never sent twice.
+		"NearbySetupOpen": func(address string) nearbySetupResult {
+			state, err := b.NearbyOpen(address)
+			return newNearbySetupResult(state, err)
+		},
+		"NearbySetupAction": func(session uint64, action int, ssid, password, account, organization, name string) nearbySetupResult {
+			state, err := b.NearbyAction(session, action, ssid, password, account, organization, name)
+			return newNearbySetupResult(state, err)
+		},
 		"Nearby": b.Nearby, "Cloud": b.Cloud, "Account": b.Account, "Accounts": b.Accounts,
 		"Login": b.Login, "CancelLogin": b.CancelLogin, "SetMobileState": c.setMobileState,
 		"MobileMeshSummary": func() map[string]string {
@@ -139,6 +150,32 @@ func New() *Client {
 			ctx, cancel := cloudContext()
 			defer cancel()
 			return commands.DesktopDeleteAccess(ctx, account, org, id)
+		},
+		"DeviceAccess": func(account, org, device string) (any, error) {
+			ctx, cancel := cloudContext()
+			defer cancel()
+			return commands.DesktopDeviceAccess(ctx, account, org, device)
+		},
+		// Hugging Face lookups match the iOS bridge's timeouts. They read public
+		// metadata only; nothing is downloaded or executed on the phone.
+		"SearchModels": func(query string) ([]modelhub.Repository, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return modelhub.New().Search(ctx, query)
+		},
+		"ModelFiles": func(repo string) (modelhub.Details, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return modelhub.New().Details(ctx, repo)
+		},
+		"VisionModel": func(repo string, classification bool) (modelhub.VisionModel, error) {
+			task := "object-detection"
+			if classification {
+				task = "image-classification"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			return modelhub.New().VisionDetails(ctx, repo, task)
 		},
 	}
 	return c
@@ -420,4 +457,17 @@ func (c *Client) writePacket(packet []byte) error {
 	}
 	engine.Write(packet)
 	return nil
+}
+
+type nearbySetupResult struct {
+	State backend.NearbySetupState
+	Error string `json:",omitempty"`
+}
+
+func newNearbySetupResult(state backend.NearbySetupState, err error) nearbySetupResult {
+	result := nearbySetupResult{State: state}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	return result
 }
