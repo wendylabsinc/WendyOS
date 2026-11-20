@@ -122,6 +122,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         if (accounts.none { it.text("Context") == account }) account = accounts.firstOrNull { it.flag("Active") }?.text("Context") ?: accounts.firstOrNull()?.text("Context") ?: ""
         organizations = if (account.isBlank()) emptyList() else backend.call("Organizations", account).items()
         if (organizations.none { it.text("id") == organization }) organization = organizations.firstOrNull()?.text("id") ?: ""
+        // Android's Always-on VPN starts without the app and uses this saved selection.
+        preferences.edit().putString("account", account).putString("organization", organization).apply()
     }
     fun chooseAccount(id: String, org: String = "") = task {
         check(!WendyVpnService.engaged) { "Disconnect the Wendy VPN before changing accounts or organizations." }

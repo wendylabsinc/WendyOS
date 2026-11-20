@@ -36,6 +36,11 @@ class WendyVpnService : VpnService() {
         val account = if (systemStart) selection.getString("account", "").orEmpty() else intent.getStringExtra(ACCOUNT).orEmpty()
         val organization = if (systemStart) selection.getString("organization", "").orEmpty() else intent.getStringExtra(ORGANIZATION).orEmpty()
         alwaysOn.value = isAlwaysOn(); lockdown.value = isLockdownEnabled()
+        // Without an account the embedded broker stays off and the mesh would have no devices.
+        if (systemStart && account.isEmpty()) {
+            failure.value = "Always-on VPN could not start because no Wendy account is selected. Sign in to Wendy, then turn VPN on."
+            stopSelf(); return START_NOT_STICKY
+        }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel("network", "Wendy network", NotificationManager.IMPORTANCE_LOW))
         startForeground(1, notification("Connecting to mesh"))
