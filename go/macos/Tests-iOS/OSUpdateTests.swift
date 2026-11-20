@@ -51,6 +51,16 @@ final class OSUpdateTests: XCTestCase {
         value.status.createdAtUnix = "13"
         XCTAssertFalse(value.awaitsRestart, "A newer result means the restart already happened")
     }
+    func testRestartNeedsAnAuthenticatedConnection() throws {
+        let json = #"{"status":{"engineStatus":{"pending":{"phase":"installed"}}},"install":{"active":false,"phase":"","percent":-1,"rebootRequired":false,"error":"","baseline":0},"restartSupported":false}"#
+        var value = try JSONDecoder().decode(OSUpdateSnapshot.self, from: Data(json.utf8))
+        XCTAssertTrue(value.awaitsRestart)
+        XCTAssertFalse(value.canRestart)
+        value.restartSupported = true
+        XCTAssertTrue(value.canRestart)
+        value.status.engineStatus?.pending?.phase = "failed"
+        XCTAssertFalse(value.canRestart)
+    }
     func testUnreportedOrInvalidProgressRemainsIndeterminate() throws {
         let json = #"{"status":{},"install":{"active":true,"phase":"Starting","percent":-1,"rebootRequired":false,"error":"","baseline":0}}"#
         var value = try JSONDecoder().decode(OSUpdateSnapshot.self, from: Data(json.utf8))

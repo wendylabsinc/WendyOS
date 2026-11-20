@@ -35,6 +35,8 @@ type OSInstallState struct {
 type OSUpdateSnapshot struct {
 	Status  json.RawMessage `json:"status"`
 	Install OSInstallState  `json:"install"`
+	// RestartSupported mirrors RestartAfterOSUpdate, which needs an authenticated connection.
+	RestartSupported bool `json:"restartSupported"`
 }
 
 func (b *Backend) CheckOSRelease(session uint64) (*commands.DesktopOSRelease, error) {
@@ -94,7 +96,7 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 	b.osUpdate.mu.Unlock()
 	// Do not serialize a live engine probe against each progress poll.
 	if state.Active && !start {
-		return &OSUpdateSnapshot{Status: json.RawMessage(`{}`), Install: state}, nil
+		return &OSUpdateSnapshot{Status: json.RawMessage(`{}`), Install: state, RestartSupported: conn.IsMTLS}, nil
 	}
 	var runCtx context.Context
 	var stop context.CancelFunc
@@ -169,7 +171,7 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 		}()
 	}
 	encoded, err := protojson.Marshal(result)
-	return &OSUpdateSnapshot{Status: encoded, Install: state}, err
+	return &OSUpdateSnapshot{Status: encoded, Install: state, RestartSupported: conn.IsMTLS}, err
 }
 func validateOSUpdateStart(artifact string, result *pb.GetOSUpdateStatusResponse) error {
 	u, err := url.Parse(artifact)

@@ -59,6 +59,7 @@ struct OSUpdateSnapshot: Decodable, Sendable {
     }
     var status: Status
     var install: Install
+    var restartSupported: Bool?
     /// The only states RestartAfterOSUpdate accepts: the updater reports its pending
     /// update installed, or this connection's install finished and awaits a result.
     var awaitsRestart: Bool {
@@ -66,6 +67,8 @@ struct OSUpdateSnapshot: Decodable, Sendable {
         if let pending = status.engineStatus?.pending { return pending.phase == "installed" }
         return install.rebootRequired && status.timestamp <= install.baseline
     }
+    /// Restarting from the app needs an authenticated connection, which the backend reports.
+    var canRestart: Bool { awaitsRestart && restartSupported == true }
 }
 extension GoClient {
     func restartAfterOSUpdate(session: UInt64) async throws {
@@ -124,6 +127,7 @@ struct DeviceOSUpdateView: View {
     }
     private var running: Bool { snapshot?.install.active == true }
     private var awaitsRestart: Bool { snapshot?.awaitsRestart == true }
+    private var canRestart: Bool { snapshot?.canRestart == true }
     private var pendingNote: String {
         let phase = snapshot?.status.engineStatus?.pending?.phase ?? ""
         if phase == "failed" {
@@ -203,9 +207,14 @@ struct DeviceOSUpdateView: View {
                     }
                 } else if awaitsRestart {
                     Section("Restart required") {
-                        Text("Restart the device to finish installing the OS update. Wendy will check its health after it reconnects.")
-                        if waitingForRestart { ProgressView("Waiting for device to restart…") }
-                        else { Button("Restart device") { confirmRestart = true }.disabled(busy) }
+                        if canRestart {
+                            Text("Restart the device to finish installing the OS update. Wendy will check its health after it reconnects.")
+                            if waitingForRestart { ProgressView("Waiting for device to restart…") }
+                            else { Button("Restart device") { confirmRestart = true }.disabled(busy) }
+                        } else {
+                            Text("The OS is installed but has not been verified. Restart the device using its local controls or Wendy CLI device shell, then reconnect and check the update result.")
+                            Text("Restarting from this app requires an enrolled device and an authenticated connection.").font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
                 } else if pending && !waitingForRestart {
                     Section("Update pending") { Text(pendingNote) }
@@ -265,7 +274,7 @@ struct DeviceOSUpdateView: View {
         .task(id: "\(session):\(refreshID)") { await refresh() }
         .task(id: running) { if running { await monitor() } }
         .task(id: waitingForRestart) { if waitingForRestart { await monitorRestart() } }
-        .onChange(of: awaitsRestart) { _, needsRestart in
+        .onChange(of: canRestart) { _, needsRestart in
             if needsRestart && !promptedRestart { promptedRestart = true; confirmRestart = true }
         }
         .confirmationDialog("Restart \(deviceName)?", isPresented: $confirmRestart, titleVisibility: .visible) {
@@ -321,7 +330,7 @@ struct DeviceOSUpdateView: View {
         #endif
     }
     private func restart() async {
-        guard awaitsRestart, !running, !busy else { return }
+        guard canRestart, !running, !busy else { return }
         busy = true; error = nil; defer { busy = false }
         do {
             restartBaseline = snapshot?.status.timestamp ?? 0

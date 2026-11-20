@@ -138,6 +138,31 @@ func TestMobileOSUpdateSessionAndConcurrentStart(t *testing.T) {
 	}
 }
 
+func TestMobileOSUpdateReportsRestartSupport(t *testing.T) {
+	agent := &mobileOSAgent{release: make(chan struct{}), calls: make(chan string, 1)}
+	b := newMobileOSBackend(t, agent)
+	for _, mtls := range []bool{false, true} {
+		b.conn.IsMTLS = mtls
+		value, err := b.MobileOSUpdate(7, "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value.RestartSupported != mtls {
+			t.Fatalf("mTLS %v reported restart support %v", mtls, value.RestartSupported)
+		}
+	}
+	if _, err := b.MobileOSUpdate(7, "https://example.test/os.wendy", true); err != nil {
+		t.Fatal(err)
+	}
+	value, err := b.MobileOSUpdate(7, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.Install.Active || !value.RestartSupported {
+		t.Fatalf("progress poll lost restart support: %+v", value)
+	}
+}
+
 func TestMobileOSUpdateExpirationCancelsPreflight(t *testing.T) {
 	agent := &mobileOSAgent{probeStarted: make(chan struct{}), probeGate: make(chan struct{}), calls: make(chan string, 1)}
 	b := newMobileOSBackend(t, agent)
