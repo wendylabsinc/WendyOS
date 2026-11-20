@@ -57,7 +57,10 @@ class WendyVpnService : VpnService() {
                         config = awaitConfiguration(next)
                     }
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { failure.value = e.message ?: "VPN connection failed" }
+                catch (e: Exception) {
+                    // Disconnecting cancels the native session, which fails its pending call.
+                    if (isActive) failure.value = e.message ?: "VPN connection failed"
+                }
                 finally {
                     phase.value = VpnPhase.Disconnecting
                     // Packet workers have stopped before their descriptor is
