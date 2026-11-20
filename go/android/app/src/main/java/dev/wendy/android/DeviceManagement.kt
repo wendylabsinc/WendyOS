@@ -1,5 +1,6 @@
 package dev.wendy.android
 
+import android.view.WindowManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -12,6 +13,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -131,11 +133,27 @@ private fun LocalResetPage(model: WendyModel, device: Device, account: String, o
     }
 }
 
+/** What the OS update page shows from a MobileOSUpdate snapshot (iOS OSUpdateSnapshot). */
+data class OSUpdateProgress(val running: Boolean, val phase: String, val fraction: Float?, val restartRequired: Boolean, val error: String) {
+    companion object {
+        fun parse(snapshot: JSONObject?): OSUpdateProgress {
+            val install = snapshot?.child("install") ?: JSONObject()
+            val status = snapshot?.child("status") ?: JSONObject()
+            val percent = install.optLong("percent", -1)
+            // An installed update waits for a restart until the agent records a newer result; protojson writes int64 as a string.
+            val restart = status.child("engineStatus").optJSONObject("pending") != null ||
+                install.flag("rebootRequired") && (status.text("createdAtUnix").toLongOrNull() ?: 0L) <= install.number("baseline")
+            return OSUpdateProgress(install.flag("active"), install.text("phase"), if (percent in 0L..100L) percent / 100f else null, restart, install.text("error"))
+        }
+    }
+}
+
 /** Install an OS artifact and follow the agent's status (iOS DeviceOSUpdateView). */
 @Composable
 private fun OSUpdatePage(model: WendyModel, device: Device) {
     val session = model.session
     val scope = rememberCoroutineScope()
+    val activity = androidx.activity.compose.LocalActivity.current
     var snapshot by remember { mutableStateOf<JSONObject?>(null) }
     var info by remember { mutableStateOf<JSONObject?>(null) }
     var artifact by remember { mutableStateOf("") }
@@ -150,6 +168,29 @@ private fun OSUpdatePage(model: WendyModel, device: Device) {
     }
     val status = snapshot?.optJSONObject("status")
     val connector = status?.optJSONObject("engineStatus")?.optString("connector").orEmpty()
+    val state = OSUpdateProgress.parse(snapshot)
+    // Leaving Wendy closes the device connection, which stops the install, so the screen stays awake while it runs (iOS disables the idle timer).
+    DisposableEffect(activity, state.running) {
+        val window = activity?.window
+        if (!state.running || window == null) return@DisposableEffect onDispose {}
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+    // Follows the install until it ends (iOS monitor). Only the connection that started it reports progress.
+    LaunchedEffect(session, state.running) {
+        if (!state.running) return@LaunchedEffect
+        while (true) {
+            delay(3_000)
+            try {
+                val value = model.backend.call("MobileOSUpdate", session, "", false).obj()
+                snapshot = value
+                if (!OSUpdateProgress.parse(value).running) return@LaunchedEffect
+            } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                snapshot = null; error = "Connection interrupted. Reconnect to this device and reopen OS update to verify its result."
+                return@LaunchedEffect
+            }
+        }
+    }
     PageColumn {
         formSection("Operating system") {
             LabeledRow("Device", device.title)
@@ -158,7 +199,17 @@ private fun OSUpdatePage(model: WendyModel, device: Device) {
             snapshot?.optJSONObject("install")?.let { TechnicalDetails(it, "Install progress") }
             status?.let { TechnicalDetails(it, "Agent status") }
         }
-        formSection("Install update", "Use the OS artifact for this device’s hardware. The Agent checks compatibility before installation. The update is only verified after the device restarts and passes its health checks.") {
+        if (state.running) formSection("Updating") {
+            Text(state.phase.replaceFirstChar { it.uppercase() }.ifEmpty { "Updating" }, Modifier.padding(vertical = 6.dp))
+            val fraction = state.fraction
+            if (fraction != null) LinearProgressIndicator(progress = { fraction }, Modifier.fillMaxWidth()) else LinearProgressIndicator(Modifier.fillMaxWidth())
+            SecondaryText("Keep the device powered on, and keep Wendy open with the screen on, until installation finishes. Leaving Wendy or switching devices interrupts the update.")
+        } else if (state.restartRequired) formSection("Restart required") {
+            Text("The OS is installed but has not been verified. Restart the device using its local controls or Wendy CLI device shell, then reconnect and check the update result.", Modifier.padding(vertical = 6.dp))
+            SecondaryText("This app cannot restart the device yet.")
+        }
+        if (state.error.isNotEmpty()) item { FormSection { FailureNote(state.error) } }
+        if (!state.running && !state.restartRequired) formSection("Install update", "Use the OS artifact for this device’s hardware. The Agent checks compatibility before installation. The update is only verified after the device restarts and passes its health checks.") {
             OutlinedTextField(artifact, { artifact = it }, Modifier.fillMaxWidth(), label = { Text("OS artifact URL") }, singleLine = true, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri))
             ActionRow("Install OS update", Icons.Outlined.SystemUpdate, enabled = !busy && connector.isNotEmpty() && artifact.isNotBlank()) { confirm = true }
             if (connector.isEmpty() && snapshot != null) SecondaryText("This device’s agent does not report an OS update engine.")
