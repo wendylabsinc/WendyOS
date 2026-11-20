@@ -113,7 +113,7 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
             if (portNumber != requested) return
             models = result
             choose(if (result.any { it.id == previous }) previous else result.firstOrNull()?.id ?: "")
-            loadedPort = if (result.isEmpty()) null else requested
+            loadedPort = if (result.isEmpty()) null else portNumber
         } catch (e: CancellationException) { throw e } catch (e: Exception) { if (portNumber == requested) error = e.message } finally { loading = false }
     }
     fun send() {
