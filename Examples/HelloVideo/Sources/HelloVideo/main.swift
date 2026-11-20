@@ -73,11 +73,29 @@ router.get("/") { _, _ -> Response in
     )
 }
 
+/// A plain-text error response. The message also goes to stderr, which is not
+/// buffered, so it reaches `wendy device logs` at once.
+func failure(_ status: HTTPResponse.Status, _ message: String) -> Response {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+    return Response(
+        status: status,
+        headers: [
+            .contentType: "text/plain; charset=utf-8"
+        ],
+        body: ResponseBody(byteBuffer: ByteBuffer(string: message + "\n"))
+    )
+}
+
 // Add route to capture a frame
-router.get("/capture") { req, context in
-    let devices = try VideoDeviceManager.listDevices()
+router.get("/capture") { req, context -> Response in
+    let devices: [VideoDevice]
+    do {
+        devices = try VideoDeviceManager.listDevices()
+    } catch {
+        return failure(.internalServerError, "Listing video devices failed: \(error)")
+    }
     guard let device = devices.first(where: { $0.supportsCapture }) else {
-        throw VideoError.unsupportedOperation(message: "No video capture device found")
+        return failure(.serviceUnavailable, "No video capture device found")
     }
 
     let width: UInt32 =
@@ -93,7 +111,11 @@ router.get("/capture") { req, context in
     var writer = ResponseBodyJPEGWriter()
     defer { writer.stream.continuation.finish() }
     let body = ResponseBody(asyncSequence: writer.stream.stream)
-    try await device.captureRGBFrame(width: width, height: height, writer: &writer)
+    do {
+        try await device.captureRGBFrame(width: width, height: height, writer: &writer)
+    } catch {
+        return failure(.internalServerError, "Capturing a frame from \(device.path) failed: \(error)")
+    }
 
     // Set content type for raw RGB
     return Response(

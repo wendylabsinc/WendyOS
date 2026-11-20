@@ -66,6 +66,8 @@ const (
 	vidiocSExtCtrls = 0xC0205648 // _IOWR('V', 72, struct v4l2_ext_controls), 32 bytes
 	// _IOWR('V', 74, struct v4l2_frmsizeenum): 4+4+4 + 24 (stepwise union) + 8 = 44 bytes.
 	vidiocEnumFramesizes = 0xC02C564A
+	// _IOWR('V', 2, struct v4l2_fmtdesc), 64 bytes.
+	vidiocEnumFmt = 0xC0405602
 
 	v4l2FrmsizeTypeDiscrete = 1
 
@@ -303,6 +305,43 @@ var deviceSupportsMJPEGSize = func(path string, width, height uint32) bool {
 	return false
 }
 
+// v4l2FmtDesc matches struct v4l2_fmtdesc (64 bytes).
+type v4l2FmtDesc struct {
+	Index       uint32
+	Type        uint32
+	Flags       uint32
+	Description [32]byte
+	PixelFormat uint32
+	MbusCode    uint32
+	_           [3]uint32
+}
+
+// v4l2CapturePixelFormats lists the pixel formats a node's capture queue
+// offers, and false when the driver would not say (the node cannot be opened,
+// or it lists nothing for this queue).
+//
+// VIDIOC_ENUM_FMT is a query: it works on a read-only descriptor and while
+// another process is streaming, and it changes nothing. That is the point of
+// asking this way. VIDIOC_S_FMT answers the same question only by taking the
+// device, which fails while an app has it and gets in the app's way otherwise.
+func v4l2CapturePixelFormats(path string) ([]uint32, bool) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, false
+	}
+	defer unix.Close(fd) //nolint:errcheck
+	var formats []uint32
+	for index := uint32(0); index < 64; index++ {
+		desc := v4l2FmtDesc{Index: index, Type: v4l2BufTypeVideoCapture}
+		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocEnumFmt,
+			uintptr(unsafe.Pointer(&desc))); errno != 0 {
+			break // EINVAL marks the end of the list
+		}
+		formats = append(formats, desc.PixelFormat)
+	}
+	return formats, len(formats) > 0
+}
+
 // v4l2ReqBuffers matches struct v4l2_requestbuffers (20 bytes).
 type v4l2ReqBuffers struct {
 	Count        uint32
@@ -524,11 +563,19 @@ type deviceHub struct {
 	// explicit consumer has left degrades back to a defaulted hub that episode
 	// capture may restart. Protected by h.mu.
 	subExplicit map[int]string
-	// restarted marks that this hub's producer was torn down by an episode
-	// capture takeover (takeOverDefaultedHub) rather than by a fault or a
-	// normal last-unsubscribe. Parameter-less subscribers use it to reattach
-	// to the replacement hub after their channel closes. Protected by h.mu.
-	restarted bool
+	// restarted marks that this hub's producer was torn down by a takeover
+	// (an episode capture's, takeOverDefaultedHub, or a camera share's,
+	// takeOverHubForShare) rather than by a fault or a normal
+	// last-unsubscribe. Parameter-less subscribers use it to reattach to the
+	// replacement hub after their channel closes. restartedForShare says the
+	// takeover was a share's, so the ended streams name the right cause.
+	// Protected by h.mu.
+	restarted         bool
+	restartedForShare bool
+	// captureFree is made on demand for a share waiting on a recording
+	// (camera_share_mode.go) and closed by unsubscribe once no subscriber
+	// holds the hub's parameters as an episode capture. Protected by h.mu.
+	captureFree chan struct{}
 	// sampleSeq is the per-device sample counter, shared with every hub that
 	// has served the same device key. It outlives the hub so sample identities
 	// stay monotonic across producer restarts within one episode.
@@ -602,8 +649,9 @@ func (h *deviceHub) subscribeAsKind(explicitHolder string, raw, pixels bool) (in
 		return 0, nil, errRawUnavailable(reason())
 	}
 	if refused := h.demand.refused; pixels && refused != nil {
+		held := h.demand.refusedHeld
 		h.mu.Unlock()
-		return 0, nil, pixelRefusal(refused)
+		return 0, nil, pixelRefusal(refused, held)
 	}
 	if len(h.subs) >= maxSubscribersPerHub {
 		h.mu.Unlock()
@@ -647,6 +695,7 @@ func (h *deviceHub) unsubscribe(id int) uint64 {
 	delete(h.subs, id)
 	delete(h.subDrops, id)
 	delete(h.subExplicit, id)
+	h.releaseCaptureHoldLocked()
 	if len(h.subs) == 0 {
 		h.cancel()
 	}
@@ -672,14 +721,22 @@ func (h *deviceHub) heldExplicitly() (holder string, held bool) {
 	return holder, lowest != -1
 }
 
-// wasRestarted reports whether this hub's producer was torn down by an
-// episode-capture takeover. Subscribers that observe their channel closed
-// check it to distinguish "the stream is being restarted at the campaign's
-// parameters, reattach" from "the producer stopped, give up".
+// wasRestarted reports whether this hub's producer was torn down by a
+// takeover. Subscribers that observe their channel closed check it to
+// distinguish "the stream is being restarted at other parameters, reattach"
+// from "the producer stopped, give up".
 func (h *deviceHub) wasRestarted() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.restarted
+}
+
+// wasRestartedForShare reports whether the takeover that restarted this hub
+// was a camera share's rather than an episode capture's.
+func (h *deviceHub) wasRestartedForShare() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.restarted && h.restartedForShare
 }
 
 // drops reports how many frames the hub has dropped for one subscriber so far.
@@ -892,6 +949,7 @@ func (h *deviceHub) rawOffered(format *agentpb.RawFormat) {
 	h.rawState = rawAvailable
 	h.rawFormat = format
 	h.demand.tap = false
+	h.demand.held = false
 }
 
 // rawNotOffered records that this producer has no raw frames to give, and turns
@@ -1000,6 +1058,12 @@ type cameraLoopback interface {
 	AllocateAuxNodeNumber() (int, error)
 	EnsureAuxNode(ctx context.Context, nr int, label string) error
 	RemoveAuxNode(nr int)
+	// EnsureShareNode makes an app's camera share node (camera_share.go): an
+	// auxiliary node that announces CAPTURE even while no writer streams.
+	EnsureShareNode(ctx context.Context, nr int, label string) error
+	// AllocateAuxNodeNumberSkipping also passes over the numbers skip
+	// reports: share records hold numbers whose nodes a reboot removed.
+	AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error)
 }
 
 // VideoService implements agentpb.WendyVideoServiceServer.
@@ -1009,6 +1073,12 @@ type VideoService struct {
 	globDevices     func() ([]string, error)
 	readDeviceName  func(base string) (string, error)
 	hasVideoCapture func(path string) bool
+	// capturePixelFormats lists the pixel formats a camera offers without
+	// claiming it; see v4l2CapturePixelFormats. Injectable so tests can
+	// describe a camera without a V4L2 node.
+	capturePixelFormats func(path string) ([]uint32, bool)
+	// gstMemo caches a successful element listing; see gstElements.
+	gstMemo gstElementsMemo
 	// readStableNames returns the udev by-id / by-path names keyed by resolved
 	// device path. Injectable so the enumeration can be tested without
 	// /dev/v4l. See video_stable_id.go for why these exist.
@@ -1106,6 +1176,15 @@ type VideoService struct {
 	// a producer restart does not reissue sample identities the harness has
 	// already handed out for that source.
 	sampleSeqs map[string]*atomic.Uint64
+
+	// shares holds the cameras containers share (camera_share_mode.go). Its
+	// zero value shares nothing. Its lock is never held with mu.
+	shares cameraShares
+	// cameraIdentity and presentCameras read camera identities from sysfs
+	// (camera.IdentityOf, camera.PresentIdentities) for the share manager.
+	// Seams so tests describe cameras without sysfs; nil means the defaults.
+	cameraIdentity func(base string) (camera.Identity, error)
+	presentCameras func() map[string]camera.Identity
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -1139,10 +1218,13 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 			_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQueryCap, uintptr(unsafe.Pointer(&cap)))
 			return errno == 0 && cap.hasVideoCapture()
 		},
+		capturePixelFormats: v4l2CapturePixelFormats,
 		readStableNames: func() map[string]stableNames {
 			return readStableNames(v4lByIDDir, v4lByPathDir)
 		},
 		classifyTransport:  camera.Classify,
+		cameraIdentity:     camera.IdentityOf,
+		presentCameras:     camera.PresentIdentities,
 		enumerateLibcamera: camera.EnumerateLibcamera,
 		findCameraSource:   audio.FindCameraSource,
 		isJetson:           func() bool { return board.Detect().IsJetson() },
@@ -1165,6 +1247,9 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	if err := svc.controls.Load(); err != nil {
 		logger.Warn("loading camera controls failed", zap.Error(err))
 	}
+	// Share nodes made before an agent restart: known as share nodes from
+	// here on, and adopted by the first SyncCameraShares.
+	svc.loadCameraShares()
 	svc.discoverer = ipcam.NewDiscoverer(svc.registry, logger)
 	// ONVIF stream-path lookups use the same login `camera login` stored, so a
 	// camera that protects ONVIF still tells us its paths once it has one.
@@ -1263,6 +1348,27 @@ func (s *VideoService) StartDiscovery() {
 			s.links.Run(s.ctx)
 		}()
 	}
+	// A replugged camera shared with apps gets their nodes over it again.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.watchCameraReplugs(s.serviceContext())
+	}()
+	// The first camera app's create decides each camera's share with the
+	// GStreamer element listing, which is memoised but can take a second or
+	// more the first time; listed now, at agent start, it is normally ready
+	// before that create's budget (cameraShareCreateBudget) is spent on it. A
+	// create that comes first waits for this listing rather than starting
+	// another. The listing is bounded by gstInspectTimeout.
+	if s.loopback != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if _, _, err := s.gstElements(); err != nil {
+				s.logger.Debug("camera share: listing GStreamer elements ahead of the first camera app failed", zap.Error(err))
+			}
+		}()
+	}
 	if s.discoverer == nil {
 		return
 	}
@@ -1312,6 +1418,9 @@ func (s *VideoService) Shutdown() {
 	// stop them eventually but would not wait, so a pump could still be
 	// releasing its node after Shutdown returned.
 	s.stopAllTwoPlane()
+	// Share pumps hold hub subscriptions too. Their nodes and records stay
+	// for the next agent to adopt.
+	s.stopCameraSharePumps()
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Shutdown()
 	}
@@ -1320,6 +1429,8 @@ func (s *VideoService) Shutdown() {
 	}
 	s.cancel()
 	s.wg.Wait()
+	// The replug watch has stopped: the share namespaces can go.
+	s.closeCameraShareNamespaces()
 }
 
 // listCameras enumerates every camera the device can offer: local V4L2 nodes
@@ -1357,6 +1468,12 @@ func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpai
 		csiDeviceIdxs []int
 	)
 	for _, path := range paths {
+		// An app's share node announces CAPTURE (announce_all_caps), so it is
+		// told apart by identity before anything opens or probes it: it is
+		// never one of the agent's own cameras.
+		if s.IsShareNode(path) {
+			continue
+		}
 		base := filepath.Base(path)
 		numStr := strings.TrimPrefix(base, "video")
 		id, err := strconv.ParseUint(numStr, 10, 32)
@@ -1957,22 +2074,24 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 // the wrapped message names the holder and both parameter sets.
 var errCameraHeldExplicitly = errors.New("camera is held at explicitly requested stream parameters")
 
-// errCameraReleaseTimeout is the named refusal for a capture takeover whose
-// outgoing producer did not release the device within hubTeardownTimeout.
+// errCameraReleaseTimeout is the named refusal for a takeover (an episode
+// capture's or a camera share's) whose outgoing producer did not release the
+// device within hubTeardownTimeout.
 // Starting the replacement anyway is worse than refusing: the old producer
 // still holds the file descriptor, VIDIOC_S_FMT returns EBUSY, and the
 // replacement hub fails to produce anything at all, so every parameter-less
 // subscriber that reattached to it loses the camera as well as the campaign
 // losing its capture. Refusing costs this one campaign source its clip and
 // leaves the running stream untouched.
-var errCameraReleaseTimeout = errors.New("camera did not release in time for a capture takeover")
+var errCameraReleaseTimeout = errors.New("camera did not release in time for its producer to restart")
 
 // isCameraCaptureRefusal reports whether err is one of the named camera
 // refusals a campaign records in its manifest instead of failing the whole
-// episode. Both mean "this one source was not captured, and here is exactly
-// why"; neither means the episode is broken.
+// episode. Each means "this one source was not captured, and here is exactly
+// why"; none means the episode is broken.
 func isCameraCaptureRefusal(err error) bool {
-	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout)
+	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout) ||
+		errors.Is(err, errCameraShared)
 }
 
 // joinHubForCapture is the episode-capture join. It implements the parameter
@@ -1989,9 +2108,21 @@ func isCameraCaptureRefusal(err error) bool {
 //   - A capture with explicit parameters that conflict with a hub held at
 //     parameters ANOTHER consumer asserted explicitly is refused with
 //     errCameraHeldExplicitly, never silently downgraded.
+//   - On a camera apps share, explicit parameters other than the shared mode
+//     are refused with errCameraShared, and the shared mode itself joins as a
+//     parameter-less capture (applySharedModeToCapture).
 func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
+	req, admitted, err := s.applySharedModeToCapture(key, req)
+	if err != nil {
+		return nil, 0, nil, 0, 0, 0, false, err
+	}
 	if !streamRequestAssertsParams(req) {
 		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req)
+		if err == nil && admitted != nil && width == 0 && height == 0 && framerate == 0 {
+			// A shared camera's defaults are its shared mode, which is what this
+			// capture asked for; reporting 0x0@0 would note a mismatch that is not.
+			width, height, framerate = admitted.Width, admitted.Height, admitted.FPS
+		}
 		return hub, id, ch, width, height, framerate, false, err
 	}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
@@ -2081,6 +2212,18 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		zap.Uint32("width", req.GetWidth()), zap.Uint32("height", req.GetHeight()),
 		zap.Uint32("framerate", req.GetFramerate()))
 
+	if err := s.startReplacementHub(ctx, key, old, h, req, "capture takeover"); err != nil {
+		return nil, 0, nil, false, err
+	}
+	return h, id, ch, false, nil
+}
+
+// startReplacementHub is the second half of a takeover (takeOverDefaultedHub,
+// takeOverHubForShare): with h already installed in s.hubs and old cancelled,
+// it waits for old's producer to release the device and then starts h's. When
+// the wait is cut short, h is dismantled and the error returned; what names
+// the takeover in the log.
+func (s *VideoService) startReplacementHub(ctx context.Context, key string, old, h *deviceHub, req *agentpb.StreamVideoRequest, what string) error {
 	// abort dismantles the replacement hub when the caller's context ends
 	// before its producer was started. No runProducer exists for it yet, so
 	// the cleanup runProducer would normally perform (evict from the map,
@@ -2093,7 +2236,7 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 			delete(s.hubs, key)
 		}
 		s.mu.Unlock()
-		cancel()
+		h.cancel()
 		h.mu.Lock()
 		for _, sub := range h.subs {
 			// Guarded exactly as runProducer's teardown is: a raw subscriber
@@ -2117,12 +2260,12 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 	case <-ctx.Done():
 		waitCancel()
 		abort()
-		return nil, 0, nil, false, ctx.Err()
+		return ctx.Err()
 	case <-waitCtx.Done():
 		if ctx.Err() != nil {
 			waitCancel()
 			abort()
-			return nil, 0, nil, false, ctx.Err()
+			return ctx.Err()
 		}
 		// The old producer still holds the device. Starting the replacement now
 		// would bind nothing (EBUSY on VIDIOC_S_FMT) and take the camera away
@@ -2130,19 +2273,19 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		// installed above, so the takeover is abandoned instead: abort() puts
 		// the subscribers back on the "producer stopped" path rather than
 		// leaving them on a hub whose producer will never start, and the
-		// campaign gets a named refusal for its manifest.
+		// caller gets a named refusal.
 		waitCancel()
 		abort()
-		s.logger.Warn("abandoning capture takeover: camera did not release in time",
+		s.logger.Warn("abandoning "+what+": camera did not release in time",
 			zap.String("device", key), zap.Duration("waited", hubTeardownTimeout))
-		return nil, 0, nil, false, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: %s was still held by the previous producer after %s; refusing to start a replacement that cannot bind the device",
 			errCameraReleaseTimeout, key, hubTeardownTimeout)
 	}
 	waitCancel()
 
-	s.startProducer(hctx, h, key, req)
-	return h, id, ch, false, nil
+	s.startProducer(h.ctx, h, key, req)
+	return nil
 }
 
 // sampleSeqLocked returns the sample counter for a device key, creating it on
@@ -2287,6 +2430,14 @@ type tapDeliveries struct {
 	delivered *atomic.Bool
 }
 
+// pixelsFromHeldCamera passes the held-camera mark on to the hub; the embedded
+// interface does not carry it.
+func (t tapDeliveries) pixelsFromHeldCamera() {
+	if h, ok := t.hubSink.(heldCameraSink); ok {
+		h.pixelsFromHeldCamera()
+	}
+}
+
 func (t tapDeliveries) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
 	ok := t.hubSink.publishRaw(data, tsNs, format)
 	if ok {
@@ -2353,6 +2504,11 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	}
 	s.logger.Info("camera held by another client, capturing through PipeWire",
 		zap.String("device", path), zap.Uint64("node_serial", serial))
+	// That start has no tap, and its pixel refusal is because of the holder:
+	// a share pump then says the camera is held, not that PipeWire is in use.
+	if held, ok := sink.(heldCameraSink); ok {
+		held.pixelsFromHeldCamera()
+	}
 
 	// Contention stays the answer when sharing fails outright: it is the cause an operator
 	// can act on, and a graph error names a pipeline they did not ask for. Once the shared
@@ -2677,6 +2833,12 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	// use for streaming, so capability verification and streaming happen atomically
 	// on a single fd rather than across separate opens.
 
+	if src.kind == sourceV4L2 {
+		// A camera apps share runs only at its shared mode (camera_share_mode.go).
+		if req, err = s.applySharedMode(path, req); err != nil {
+			return err
+		}
+	}
 	h, id, ch, err := s.getOrCreateHub(ctx, path, req, hubHolderStreamClient)
 	if err != nil {
 		return err
@@ -2714,15 +2876,19 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				if err := h.terminalErr(); err != nil {
 					return err
 				}
-				// A capture takeover ends this stream rather than splicing new
+				// A takeover ends this stream rather than splicing new
 				// sequence parameter sets into it mid-timeline; the client
 				// reconnects and joins the restarted producer as a new stream.
 				if h.wasRestarted() {
+					cause := "episode capture restarted the camera producer at the campaign's requested parameters"
+					if h.wasRestartedForShare() {
+						cause = shareRestartCause
+					}
 					// Machine-readable so a client can tell this apart from
 					// every other Unavailable and rejoin by itself; the CLI's
 					// `camera view` does exactly that.
 					return streamreason.New(codes.Unavailable,
-						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+						"video stream ended: "+cause+"; reconnect to join the new stream",
 						streamreason.CameraProducerRestarted, nil)
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.
@@ -3844,6 +4010,10 @@ func (p gstPipelinePlan) rawRefusalReason() func() string {
 // function to the hub instead.
 func (p gstPipelinePlan) rawReason() string { return p.rawRefusalReason()() }
 
+// pipeWireRawWhy is the raw refusal of a camera read through PipeWire, which the
+// agent does only when another client holds it (captureLocalCamera).
+const pipeWireRawWhy = "camera is shared through PipeWire; raw frames are not offered"
+
 // fixedReason wraps a reason already in hand for rawSink.rawNotOffered.
 func fixedReason(reason string) func() string { return func() string { return reason } }
 
@@ -4000,7 +4170,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 	case strings.HasPrefix(src, "libcamerasrc"):
 		plan.rawWhy = "CSI cameras are captured through the ISP pipeline; raw frames are not offered"
 	case usingPipeWire:
-		plan.rawWhy = "camera is shared through PipeWire; raw frames are not offered"
+		plan.rawWhy = pipeWireRawWhy
 	case useMJPEG:
 		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
 		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.

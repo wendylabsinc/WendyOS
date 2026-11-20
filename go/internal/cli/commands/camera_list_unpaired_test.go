@@ -26,7 +26,7 @@ func unpairedListingFixture() []*agentpb.VideoDevice {
 // how to pair or list them.
 func TestRenderCameraListHidesUnpairedNetworkCameras(t *testing.T) {
 	var out bytes.Buffer
-	if err := renderCameraList(&out, unpairedListingFixture(), false); err != nil {
+	if err := renderCameraList(&out, unpairedListingFixture(), false, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -47,7 +47,7 @@ func TestRenderCameraListExplainsAnEmptyListing(t *testing.T) {
 	var out bytes.Buffer
 	devices := unpairedListingFixture()[2:]
 	devices = append(devices, &agentpb.VideoDevice{Id: 202, Name: "C320WS", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP})
-	if err := renderCameraList(&out, devices, false); err != nil {
+	if err := renderCameraList(&out, devices, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -58,7 +58,7 @@ func TestRenderCameraListExplainsAnEmptyListing(t *testing.T) {
 
 func TestRenderCameraListAllShowsUnpairedNetworkCameras(t *testing.T) {
 	var out bytes.Buffer
-	if err := renderCameraList(&out, unpairedListingFixture(), true); err != nil {
+	if err := renderCameraList(&out, unpairedListingFixture(), true, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -81,7 +81,7 @@ func TestRenderCameraListJSONHidesUnpairedNetworkCameras(t *testing.T) {
 		want []uint32
 	}{{false, []uint32{0, 200}}, {true, []uint32{0, 200, 201}}} {
 		var out bytes.Buffer
-		if err := renderCameraList(&out, unpairedListingFixture(), tc.all); err != nil {
+		if err := renderCameraList(&out, unpairedListingFixture(), tc.all, nil); err != nil {
 			t.Fatal(err)
 		}
 		var listed []struct {

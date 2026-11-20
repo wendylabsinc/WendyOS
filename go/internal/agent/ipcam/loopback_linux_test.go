@@ -43,3 +43,12 @@ func TestLoopbackNodeRemoveDeletesTheNode(t *testing.T) {
 		t.Fatalf("/dev/video%d still exists after removeLoopbackNode reported success", nr)
 	}
 }
+
+func TestNewLoopbackConfig_AnnounceAllCapsOnlyForShareNodes(t *testing.T) {
+	if cfg := newLoopbackConfig(5, "cam", 0); cfg.announceAllCaps != 0 || cfg.outputNr != 5 || cfg.maxOpeners != 8 {
+		t.Fatalf("camera node config = %+v", cfg)
+	}
+	if cfg := newLoopbackConfig(5, "share", 1); cfg.announceAllCaps != 1 || cfg.maxOpeners != 8 {
+		t.Fatalf("share node config = %+v", cfg)
+	}
+}
