@@ -90,9 +90,10 @@ Supported generic descriptors fit within 2048 protobuf bytes and have a nonempty
 of at most 256 bytes, and a fixed `sample_bytes` from 1 to 65,536. Unknown schemas
 are forwarded; `rate_hz=0` is allowed for event-driven fixed-size samples.
 Unspecified/variable sample sizes and malformed lengths are not forwarded.
-This is best-effort live delivery, not a lossless event log: existing transport
-queues may drop complete frames under pressure. Applications needing guaranteed
-event delivery need a separate acknowledgement/replay protocol.
+Each pairing has a separate eight-frame FIFO for generic samples before app
+delivery. When that queue fills, newly arriving generic frames are dropped.
+Delivery is best effort. Applications needing guaranteed event delivery need
+a separate acknowledgement/replay protocol.
 
 Limits are 1024 active generic channels across sources, 64 concurrent readers,
 and 1–64 selected channels per reader. Each reader has an eight-sample queue.

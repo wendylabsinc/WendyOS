@@ -386,13 +386,23 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		usedInputs[ch.InputId] = true
 		selectedGeneric = append(selectedGeneric, ch)
 	}
+	var genericSamples map[uint32]uint32
 	var publishGeneric func(*sensorlink.SensorFrame) bool
 	if len(selectedGeneric) > 0 {
-		var release func()
 		var accepted []uint32
+		var release func()
 		accepted, publishGeneric, release = s.generic.Mount(p, selectedGeneric)
 		subs = append(subs, accepted...)
 		defer release()
+		genericSamples = make(map[uint32]uint32, len(accepted))
+		for _, id := range accepted {
+			genericSamples[id] = 0
+		}
+		for _, ch := range selectedGeneric {
+			if _, ok := genericSamples[ch.ChannelId]; ok {
+				genericSamples[ch.ChannelId] = ch.GetSensor().GetSampleBytes()
+			}
+		}
 	}
 	if len(subs) == 0 {
 		return false, nil
@@ -406,16 +416,14 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 			latest = append(latest, ch.ChannelId)
 		}
 	}
-	nextFrame, closeStream, err := streamLiveFrames(ctx, tr, subs, latest)
+	nextFrame, closeStream, err := streamLiveFrames(ctx, tr, subs, latest, genericSamples)
 	if err != nil {
 		return false, err
 	}
 	closeStream = sync.OnceValue(closeStream)
 	defer closeStream()
-	// The reader goroutine inside Connect only unblocks when the conn is
-	// closed or a read fails; without this, an idle source (no frames, no
-	// error) leaves `range frames` blocked forever even after ctx is
-	// cancelled. Closing the stream on cancellation forces the read to fail.
+	// Close the upstream stream on cancellation to interrupt an idle read
+	// and unblock transports whose FIFO only wakes on delivery or close.
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {

@@ -82,8 +82,8 @@ func (s *GenericSensorFeed) Mount(p mcusource.SensorPairing, descriptors []*sens
 			return false
 		}
 		id := ids[f.ChannelID]
-		descriptor := s.channels[id]
-		if descriptor == nil || len(f.Payload) != int(descriptor.GetSensor().GetSampleBytes()) {
+		sampleBytes := s.channels[id].GetSensor().GetSampleBytes()
+		if !mcusource.ValidGenericPayloadSize(len(f.Payload), sampleBytes) {
 			return false
 		}
 		var frame *sensorlinkpb.SensorData

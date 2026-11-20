@@ -14,3 +14,8 @@ func ValidGenericDescriptor(d *sensorlinkpb.SensorDescriptor) bool {
 	return f != nil && len(f.GetSchema()) > 0 && len(f.GetSchema()) <= 1024 &&
 		len(d.GetName()) <= 256 && proto.Size(d) <= 2048 && f.GetSampleBytes() > 0 && f.GetSampleBytes() <= 65536
 }
+
+// ValidGenericPayloadSize reports whether a frame has the declared sample size.
+func ValidGenericPayloadSize(payloadBytes int, sampleBytes uint32) bool {
+	return payloadBytes > 0 && payloadBytes == int(sampleBytes)
+}

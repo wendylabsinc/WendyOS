@@ -11,6 +11,9 @@ import (
 
 const sensorFIFOFrames = 8
 
+// genericFIFOFrames bounds generic samples independently of media.
+const genericFIFOFrames = 8
+
 // cameraRunFrames bounds the frames one camera may have pending at once.
 const cameraRunFrames = 8
 
@@ -21,8 +24,8 @@ const cameraRunFrames = 8
 const cameraMaxWait = 25 * time.Millisecond
 
 // frameSink accepts complete frames without blocking the transport reader.
-// offer reports how many frames it discarded, including superseded camera
-// frames. The transport serializes offer with finish.
+// offer reports backpressure drops, including superseded camera frames.
+// The transport serializes offer with finish.
 type frameSink interface {
 	offer(*sensorlink.SensorFrame) int
 	finish()
@@ -47,7 +50,7 @@ type liveFrameTransport interface {
 	streamFrames(context.Context, []uint32, frameSink) (func() error, error)
 }
 
-// cameraFrameQueue gives each MJPEG camera one turn in the queue, alongside
+// liveFrameQueue gives each MJPEG camera one turn in the media queue, alongside
 // the existing eight-frame FIFO for audio and dependent video codecs. A turn
 // holds a short run of frames, so frames that arrive together, as after a
 // network stall, are all delivered. A frame that has waited longer than
@@ -55,13 +58,19 @@ type liveFrameTransport interface {
 // replaces it. Replacing within the turn preserves fairness between cameras.
 // Receiving under the same lock avoids holding a stale frame in a blocked
 // channel send.
-type cameraFrameQueue struct {
-	mu      sync.Mutex
-	latest  map[uint32]bool
-	pending []*frameRun
-	fifo    int
-	closed  bool
-	wake    chan struct{}
+//
+// Generic frames have their own drop-newest FIFO. The consumer alternates
+// between media and generic frames when both have work.
+type liveFrameQueue struct {
+	mu             sync.Mutex
+	latest         map[uint32]bool
+	mediaPending   []*frameRun
+	mediaFIFO      int
+	genericSamples map[uint32]uint32
+	genericPending []*sensorlink.SensorFrame
+	genericNext    bool
+	closed         bool
+	wake           chan struct{}
 }
 
 // frameRun is one channel's turn in the queue: a single FIFO frame, or the
@@ -90,30 +99,46 @@ func (r *frameRun) makeRoom(now time.Time) int {
 	return discarded
 }
 
-func newCameraFrameQueue(channels []uint32) *cameraFrameQueue {
-	q := &cameraFrameQueue{latest: make(map[uint32]bool), wake: make(chan struct{}, 1)}
-	for _, id := range channels {
+func newLiveFrameQueue(latest []uint32, genericSamples map[uint32]uint32) *liveFrameQueue {
+	q := &liveFrameQueue{
+		latest:         make(map[uint32]bool, len(latest)),
+		genericSamples: genericSamples,
+		wake:           make(chan struct{}, 1),
+	}
+	for _, id := range latest {
 		q.latest[id] = true
 	}
 	return q
 }
 
-func (q *cameraFrameQueue) notify() {
+func (q *liveFrameQueue) notify() {
 	select {
 	case q.wake <- struct{}{}:
 	default:
 	}
 }
 
-func (q *cameraFrameQueue) offer(frame *sensorlink.SensorFrame) int {
+func (q *liveFrameQueue) offer(frame *sensorlink.SensorFrame) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
 		return 0
 	}
+	if sampleBytes, generic := q.genericSamples[frame.ChannelID]; generic {
+		// Invalid frames do not use queue capacity or count as backpressure.
+		if !ValidGenericPayloadSize(len(frame.Payload), sampleBytes) {
+			return 0
+		}
+		if len(q.genericPending) == genericFIFOFrames {
+			return 1
+		}
+		q.genericPending = append(q.genericPending, frame)
+		q.notify()
+		return 0
+	}
 	arrival := pendingFrame{frame: frame, arrived: time.Now()}
 	if q.latest[frame.ChannelID] {
-		for _, run := range q.pending {
+		for _, run := range q.mediaPending {
 			if run.channel == frame.ChannelID {
 				discarded := run.makeRoom(arrival.arrived)
 				run.frames = append(run.frames, arrival)
@@ -121,33 +146,41 @@ func (q *cameraFrameQueue) offer(frame *sensorlink.SensorFrame) int {
 			}
 		}
 	} else {
-		if q.fifo == sensorFIFOFrames {
+		if q.mediaFIFO == sensorFIFOFrames {
 			return 1
 		}
-		q.fifo++
+		q.mediaFIFO++
 	}
-	q.pending = append(q.pending, &frameRun{channel: frame.ChannelID, frames: []pendingFrame{arrival}})
+	q.mediaPending = append(q.mediaPending, &frameRun{channel: frame.ChannelID, frames: []pendingFrame{arrival}})
 	q.notify()
 	return 0
 }
 
-func (q *cameraFrameQueue) next(ctx context.Context) (*sensorlink.SensorFrame, bool) {
+func (q *liveFrameQueue) next(ctx context.Context) (*sensorlink.SensorFrame, bool) {
 	for {
 		if ctx.Err() != nil {
 			return nil, false
 		}
 		q.mu.Lock()
-		if len(q.pending) > 0 {
-			run := q.pending[0]
+		if len(q.genericPending) > 0 && (q.genericNext || len(q.mediaPending) == 0) {
+			frame := q.genericPending[0]
+			q.genericPending = slices.Delete(q.genericPending, 0, 1)
+			q.genericNext = false
+			q.mu.Unlock()
+			return frame, true
+		}
+		if len(q.mediaPending) > 0 {
+			run := q.mediaPending[0]
 			frame := run.frames[0].frame
 			run.frames = slices.Delete(run.frames, 0, 1)
-			q.pending = slices.Delete(q.pending, 0, 1)
+			q.mediaPending = slices.Delete(q.mediaPending, 0, 1)
 			if !q.latest[run.channel] {
-				q.fifo--
+				q.mediaFIFO--
 			} else if len(run.frames) > 0 {
 				// The rest of the run waits its turn behind the other channels.
-				q.pending = append(q.pending, run)
+				q.mediaPending = append(q.mediaPending, run)
 			}
+			q.genericNext = true
 			q.mu.Unlock()
 			return frame, true
 		}
@@ -164,18 +197,18 @@ func (q *cameraFrameQueue) next(ctx context.Context) (*sensorlink.SensorFrame, b
 	}
 }
 
-func (q *cameraFrameQueue) finish() {
+func (q *liveFrameQueue) finish() {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
 	q.notify()
 }
 
-// streamLiveFrames keeps the generic transport API's FIFO behavior available
-// to other consumers. Pairing requests freshness only for its MJPEG channels.
-func streamLiveFrames(ctx context.Context, tr SensorTransport, channels, latest []uint32) (func() (*sensorlink.SensorFrame, bool), func() error, error) {
-	if live, ok := tr.(liveFrameTransport); ok && len(latest) > 0 {
-		queue := newCameraFrameQueue(latest)
+// streamLiveFrames uses the pairing queue for MJPEG freshness or generic
+// sensor isolation. Ordinary Stream callers keep their original FIFO.
+func streamLiveFrames(ctx context.Context, tr SensorTransport, channels, latest []uint32, genericSamples map[uint32]uint32) (func() (*sensorlink.SensorFrame, bool), func() error, error) {
+	if live, ok := tr.(liveFrameTransport); ok && (len(latest) > 0 || len(genericSamples) > 0) {
+		queue := newLiveFrameQueue(latest, genericSamples)
 		closeStream, err := live.streamFrames(ctx, channels, queue)
 		return func() (*sensorlink.SensorFrame, bool) { return queue.next(ctx) }, closeStream, err
 	}

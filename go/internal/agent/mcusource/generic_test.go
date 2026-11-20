@@ -66,6 +66,37 @@ func TestSupervisorGenericDoesNotDisplaceMedia(t *testing.T) {
 	}
 }
 
+func TestSupervisorGenericBurstKeepsMediaCapacity(t *testing.T) {
+	const cameraID, audioID, genericID = 1, 2, 3
+	client := newFakeWendycomClient()
+	client.manifest = &sensorpb.SensorManifest{Sensors: []*sensorpb.SensorDescriptor{
+		{ChannelId: cameraID, InputId: 1, Format: &sensorpb.SensorDescriptor_Video{Video: &sensorpb.VideoFormat{Codec: sensorpb.VideoFormat_H264}}},
+		{ChannelId: audioID, InputId: 2, Format: &sensorpb.SensorDescriptor_Audio{Audio: &sensorpb.AudioFormat{Codec: sensorpb.AudioFormat_PCM_S16LE}}},
+		{ChannelId: genericID, InputId: 3, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example", SampleBytes: 1}}},
+	}}
+	client.onSubscribe = func() {
+		// All frames arrive before the supervisor starts draining.
+		for seq := range uint32(genericFIFOFrames + 1) {
+			frame := wholeFrame(genericID, seq)
+			frame.Payload = []byte{1}
+			client.send(frame)
+		}
+		client.send(wholeFrame(audioID, 0))
+		client.send(wholeFrame(cameraID, 0))
+		client.dropOff()
+	}
+	tr, _ := newTestWendycomTransport(zap.NewNop(), client)
+	camera, audio, generic := &selectionCamera{}, &selectionAudio{}, &recordingGeneric{}
+	supervisor := NewSupervisor(zap.NewNop(), camera, func(SensorPairing, string) (SensorTransport, error) { return tr, nil },
+		func(string) ros2camera.CameraWriter { return camera }, audio)
+	supervisor.SetGenericSink(generic)
+
+	delivered, err := supervisor.streamOnce(context.Background(), SensorPairing{SourceAssetID: 7, Transport: "wendycom"}, "source")
+	if err != nil || !delivered || camera.frames != 1 || audio.frames != 1 || generic.frames != genericFIFOFrames {
+		t.Fatalf("camera=%d audio=%d generic=%d delivered=%v err=%v", camera.frames, audio.frames, generic.frames, delivered, err)
+	}
+}
+
 func TestGenericDescriptorValidation(t *testing.T) {
 	for _, tc := range []struct {
 		schema string
