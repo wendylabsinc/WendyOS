@@ -98,7 +98,7 @@ class SetupFlow {
 
 /** Bluetooth setup for a nearby device in four steps (iOS NearbySetupView). Discovery and status checks run on their own. */
 @Composable
-fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () -> Unit) {
+fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, open: (Device) -> Unit, done: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val page = LocalNavPage.current
@@ -225,7 +225,7 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
             busy = true; automatic = true
             val id = state.deviceID
             val device = if (id.isEmpty()) null else model.lookupDevice { it.id == id || (it.selector.startsWith("cloud://") && it.selector.substringAfterLast('/') == id) }
-            if (device != null) { done(); model.connect(device) }
+            if (device != null) { done(); open(device) }
             else error = "Your device is not in the device list yet. Keep it online, then open it again."
         } finally { busy = false; automatic = false; opening = false }
     }

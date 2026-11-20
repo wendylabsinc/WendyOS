@@ -98,7 +98,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
         openRecordings()
         nav.push(device.title) { EpisodePickerPage(model, recordingDeviceID(device), device, null, null) }
     }
-    fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device) { nav.pop(); model.task { model.refresh() } } }
+    fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device, ::select) { nav.pop(); model.task { model.refresh() } } }
     fun openVpn() = nav.push("Private network") { VpnScreen(model) { nav.pop() } }
 
     @Composable private fun DevicesHomeActions() {
