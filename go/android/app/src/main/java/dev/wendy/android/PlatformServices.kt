@@ -6,6 +6,7 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -42,16 +43,18 @@ class PlatformServices(private val context: Context) {
         } catch (e: Exception) { json("error" to (e.message ?: "Android service request failed")) }
         return response.toString().toByteArray(Charsets.UTF_8)
     }
-    private fun checkBluetooth() {
+    private fun checkBluetooth(scanning: Boolean = false) {
         val permission = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_CONNECT else Manifest.permission.ACCESS_FINE_LOCATION
         check(context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) { "Allow nearby device access in Wendy to use Bluetooth" }
         check(adapter.isEnabled) { "Turn on Bluetooth to discover nearby devices" }
+        // Android 10 and 11 deliver no scan results while system Location is off, even with the permission granted.
+        if (scanning && Build.VERSION.SDK_INT < 31) check(context.getSystemService(LocationManager::class.java)?.isLocationEnabled != false) { "Turn on Location to discover nearby devices" }
     }
     private fun dispatch(method: String, args: JSONObject): Any? {
         when (method) {
-            "ble.check" -> { checkBluetooth(); return true }
+            "ble.check" -> { checkBluetooth(scanning = true); return true }
             "ble.scanStart" -> {
-                checkBluetooth(); check(scans.size < 16) { "Too many Bluetooth scans" }
+                checkBluetooth(scanning = true); check(scans.size < 16) { "Too many Bluetooth scans" }
                 val scan = RadioScan(args.optJSONArray("services")); val id = ids.getAndIncrement(); scans[id] = scan
                 try { scan.start() } catch (e: Exception) { scans.remove(id); throw e }; return id
             }
