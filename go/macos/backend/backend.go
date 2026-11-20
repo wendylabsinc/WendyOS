@@ -41,6 +41,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	previews                cameraPreviews
 	gallery                 galleryConnections
 	discovery               nearbyDiscovery
 	discoverNearby          func(context.Context) ([]commands.DesktopDevice, error)
@@ -481,6 +482,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.previewsReset(true)
 	b.tunnelSession.SetActive(false)
 	b.resetNearbyDiscovery(true)
 	b.galleryReset(true)
