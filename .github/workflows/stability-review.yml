@@ -103,7 +103,8 @@ jobs:
           claude_args: >-
             --safe-mode --restricted --strict-mcp-config --mcp-config '{"mcpServers":{}}'
             --permission-mode dontAsk --tools Read,Glob,Grep,Bash
-            --allowedTools 'Read,Glob,Grep,Bash(git -C source diff --no-ext-diff --no-textconv *),Bash(git -C source show --no-ext-diff --no-textconv *),Bash(git -C source log --no-ext-diff --no-textconv *),Bash(git -C source grep *),Bash(git -C source ls-tree *),Bash(git -C source merge-base *),Bash(git -C source tag --list *),Bash(git -C source describe *),Bash(git -C source rev-list *),Bash(git -C source rev-parse *)'
+            --allowedTools 'Read,Glob,Grep,Bash(git -C source diff --no-ext-diff --no-textconv *),Bash(git -C source show --no-ext-diff --no-textconv *),Bash(git -C source log --no-ext-diff --no-textconv *),Bash(git -C source ls-tree *),Bash(git -C source merge-base *),Bash(git -C source tag --list *),Bash(git -C source describe *),Bash(git -C source rev-list *),Bash(git -C source rev-parse *)'
+            --disallowedTools 'Bash(git -C source *--output*),Bash(git -C source *--ext-diff*),Bash(git -C source *--textconv*)'
             --model claude-opus-5-5 --effort high --max-turns 24 --max-budget-usd 10
             --json-schema '${{ steps.snapshot.outputs.schema }}'
 
