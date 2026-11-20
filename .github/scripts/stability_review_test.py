@@ -255,6 +255,21 @@ class StabilityTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 review.snapshot(pr, REPO)
 
+    def test_generated_prompt_shows_literal_permitted_working_scope_queries(self):
+        prompt = review.build_prompt(self.request())
+        for flag in ("--name-status", "--stat"):
+            command = f"git -C source diff --no-ext-diff --no-textconv {flag} {self.base}...{self.head}"
+            self.assertIn(command, prompt)
+            # The same query against actual fixture commits succeeds and sees
+            # both the modified file and deletion; no diff is prepacked.
+            output = self.run_git("diff", "--no-ext-diff", "--no-textconv", flag, self.base + "..." + self.head)
+            self.assertIn("consumer.txt", output)
+            self.assertIn("deleted.txt", output)
+        self.assertIn("Do not use\ncd, insert --no-pager", prompt)
+        self.assertNotIn("BASE_SHA", prompt)
+        self.assertNotIn("HEAD_SHA", prompt)
+        self.assertNotIn("diff --git", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
