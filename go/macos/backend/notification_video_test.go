@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -206,5 +207,39 @@ func TestNotificationVideoReportsFailuresOnlyWhenNoRecordingCouldBeRead(t *testi
 	c.fixtures = map[string]*visualFixtureClient{}
 	if _, err := readNotificationVideoNear(context.Background(), c, "thermal", absent, 0, ""); err == nil {
 		t.Fatal("hid that no recording could be read")
+	}
+}
+
+// notificationRecordingFixture serves one verified recording, "new", of campaign "thermal".
+func notificationRecordingFixture(files map[string][]byte) *notificationVideoFixture {
+	manifest := data.Manifest{ID: "new", Name: "thermal", State: "complete", StoppedEpisodeNS: 20e9}
+	for path, raw := range files {
+		sum := sha256.Sum256(raw)
+		manifest.Files = append(manifest.Files, data.File{Path: path, Size: int64(len(raw)), SHA256: hex.EncodeToString(sum[:]), Role: data.FileRoleDerived})
+	}
+	return &notificationVideoFixture{visualFixtureClient: &visualFixtureClient{manifest: manifest, files: files}}
+}
+
+func TestNotificationVideoFindsEventBesideAnyAttributesAndManyAlerts(t *testing.T) {
+	const id = "dd97fd1c-db21-476f-b26f-b399d1fe229c"
+	var many strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&many, `{"type":"event","attributes":{"notification_id":"%08d-0000-4000-8000-000000000000"}}`+"\n", i)
+	}
+	for name, events := range map[string]string{
+		"after 300 alerts": many.String() + `{"type":"event","attributes":{"notification_id":"` + id + `"}}`,
+		"string labels":    `{"type":"event","attributes":{"notification_id":"` + id + `","labels":"person"}}`,
+		"numeric label":    `{"type":"event","attributes":{"notification_id":"` + id + `","label":3}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := notificationRecordingFixture(map[string][]byte{"events.jsonl": []byte(events), "cameras/c/playable.mp4": []byte("test-mp4-payload")})
+			got, err := readNotificationVideoNear(context.Background(), c, "thermal", id, 0, "new")
+			if got.Preview.Path != "" {
+				defer os.Remove(got.Preview.Path)
+			}
+			if err != nil || got.Episode.GetId() != "new" {
+				t.Fatalf("missed the recorded event: %+v %v", got, err)
+			}
+		})
 	}
 }

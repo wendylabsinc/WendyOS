@@ -1,12 +1,13 @@
 package backend
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"math"
 	"path"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -222,7 +223,7 @@ func inspectNotificationCandidate(ctx context.Context, client pb.DataServiceClie
 		}
 		break
 	}
-	if !slices.Contains(galleryMetadata("", events, true).NotificationIDs, eventID) {
+	if !notificationEventRecorded(events, eventID) {
 		return notificationCandidate{timings: timings}, nil
 	}
 	if episode.GetState() == "" {
@@ -233,4 +234,23 @@ func inspectNotificationCandidate(ctx context.Context, client pb.DataServiceClie
 		episode = &pb.DataEpisode{Id: manifest.ID, Name: manifest.Name, State: manifest.State, StartedUnixNanos: manifest.StartedUnixNanos, SizeBytes: size}
 	}
 	return notificationCandidate{episode: episode, manifest: manifest, events: events, timings: timings}, nil
+}
+
+// Only the two fields that identify the event are decoded, so other attributes
+// of any JSON type, and any number of alerts, cannot hide it.
+func notificationEventRecorded(events []byte, eventID string) bool {
+	scan := bufio.NewScanner(bytes.NewReader(events))
+	scan.Buffer(make([]byte, 4096), 2<<20)
+	for scan.Scan() {
+		var row struct {
+			Type       string `json:"type"`
+			Attributes struct {
+				NotificationID string `json:"notification_id"`
+			} `json:"attributes"`
+		}
+		if json.Unmarshal(scan.Bytes(), &row) == nil && row.Type == "event" && row.Attributes.NotificationID == eventID {
+			return true
+		}
+	}
+	return false
 }
