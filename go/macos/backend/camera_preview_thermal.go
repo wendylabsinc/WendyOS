@@ -11,8 +11,10 @@ import (
 	"time"
 )
 
-// PreviewThermalFrames reads all four channels through the authenticated app
-// tunnel. Callers cannot supply a URL, port, app identity or redirect target.
+// PreviewThermalFrames reads all four channels from the address
+// PreviewOpenApp returns: the app forward for mesh and Cloud connections,
+// plain HTTP to the device for a direct LAN connection. Callers cannot supply
+// a URL, port, app identity or redirect target.
 func (b *Backend) PreviewThermalFrames(id uint64) (json.RawMessage, error) {
 	p := b.preview(id)
 	if p == nil {
