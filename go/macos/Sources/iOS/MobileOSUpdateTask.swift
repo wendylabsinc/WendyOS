@@ -44,6 +44,7 @@ final class MobileOSUpdateTask: ObservableObject {
     @Published private(set) var active = false
     @Published private(set) var session: UInt64 = 0
     @Published private(set) var scope = ""
+    @Published private(set) var device = ""
     @Published private(set) var snapshot: OSUpdateSnapshot?
     @Published private(set) var error: String?
 
@@ -60,11 +61,19 @@ final class MobileOSUpdateTask: ObservableObject {
     func keepsConnection(session: UInt64, scope: String) -> Bool {
         active && self.session == session && self.scope == scope
     }
-    func start(session: UInt64, scope: String, name: String, artifact: String) throws {
+    /// Reconnecting replaces the session that ran the install, so a failed or
+    /// interrupted outcome is kept for its device until the user dismisses it.
+    func failure(device: String) -> String? {
+        !active && !device.isEmpty && self.device == device ? error : nil
+    }
+    func dismissFailure(device: String) {
+        if failure(device: device) != nil { error = nil }
+    }
+    func start(session: UInt64, scope: String, device: String, name: String, artifact: String) throws {
         guard !active && !workerRunning else { throw WendyError(message: "An OS update is already running.") }
         let id = UUID()
         WDOSUpdatePrepare(session)
-        request = id; self.session = session; self.scope = scope
+        request = id; self.session = session; self.scope = scope; self.device = device
         snapshot = nil; error = nil; active = true
         do {
             try submit(name) { [weak self] task in

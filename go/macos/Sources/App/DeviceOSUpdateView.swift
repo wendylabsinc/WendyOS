@@ -119,6 +119,20 @@ struct DeviceOSUpdateView: View {
         false
         #endif
     }
+    #if os(iOS)
+    /// The same device across reconnects and routes; a background install outlives its session.
+    private var updateDevice: String {
+        guard model.deviceSession == session, let device = model.connected else { return "" }
+        return recordingDeviceID(device)
+    }
+    #endif
+    private var backgroundFailure: String? {
+        #if os(iOS)
+        backgroundUpdate.failure(device: updateDevice)
+        #else
+        nil
+        #endif
+    }
     private var artifact: String { customArtifact ?? release?.artifactURL ?? "" }
     private var canStart: Bool {
         !busy && !running && !pending && !backgroundBusy && error == nil && checked.map { Date().timeIntervalSince($0) < 60 } == true &&
@@ -131,6 +145,12 @@ struct DeviceOSUpdateView: View {
                 LabeledContent("Device", value: deviceName)
                 if let info { LabeledContent("Installed", value: info.osVersion.isEmpty ? info.os : info.osVersion) }
                 else if let release, !release.installed.isEmpty { LabeledContent("Installed", value: release.installed) }
+            }
+            if let backgroundFailure {
+                Section("Last update attempt") {
+                    FailureNote(message: backgroundFailure)
+                    Button("Dismiss") { dismissBackgroundFailure() }
+                }
             }
             if !running && !pending {
                 Section("OS update") {
@@ -219,9 +239,6 @@ struct DeviceOSUpdateView: View {
         .onReceive(backgroundUpdate.$snapshot) { value in
             if backgroundUpdate.session == session, let value { snapshot = value; checked = Date() }
         }
-        .onReceive(backgroundUpdate.$error) { value in
-            if backgroundUpdate.session == session, let value { error = value }
-        }
         .onChange(of: scenePhase) { _, phase in if phase == .active { refreshID += 1 } }
         #endif
         .task(id: "\(session):\(refreshID)") { await refresh() }
@@ -269,13 +286,18 @@ struct DeviceOSUpdateView: View {
         busy = true; error = nil; defer { busy = false }
         do {
             #if os(iOS)
-            try backgroundUpdate.start(session: session, scope: model.mobileCloudSelectionKey, name: deviceName, artifact: target)
+            try backgroundUpdate.start(session: session, scope: model.mobileCloudSelectionKey, device: updateDevice, name: deviceName, artifact: target)
             #else
             let value = try await GoClient.shared.osUpdate(session: session, artifact: target, start: true)
             guard !Task.isCancelled else { return }
             snapshot = value
             #endif
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+    private func dismissBackgroundFailure() {
+        #if os(iOS)
+        backgroundUpdate.dismissFailure(device: updateDevice)
+        #endif
     }
     private func restart() async {
         guard pending, !running, !busy else { return }

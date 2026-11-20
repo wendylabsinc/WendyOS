@@ -19,7 +19,7 @@ final class BackgroundOSUpdateTests: XCTestCase {
         let runner = MobileOSUpdateTask(submit: { _, _ in throw CancellationError() }, update: { _, _, _ in
             starts += 1; throw CancellationError()
         }, cancelUpdate: { _ in XCTFail("No installation to cancel") })
-        XCTAssertThrowsError(try runner.start(session: 7, scope: "a", name: "test", artifact: "https://example.test/os"))
+        XCTAssertThrowsError(try runner.start(session: 7, scope: "a", device: "tenant/device", name: "test", artifact: "https://example.test/os"))
         XCTAssertFalse(runner.active)
         XCTAssertEqual(starts, 0)
     }
@@ -32,7 +32,7 @@ final class BackgroundOSUpdateTests: XCTestCase {
             starts += 1
             return try JSONDecoder().decode(OSUpdateSnapshot.self, from: Data(#"{"status":{},"install":{"active":false,"phase":"Installed","percent":100,"rebootRequired":true,"error":"","baseline":12}}"#.utf8))
         }, cancelUpdate: { _ in XCTFail("Successful install must not be cancelled") })
-        try runner.start(session: 7, scope: "a", name: "test", artifact: "https://example.test/os")
+        try runner.start(session: 7, scope: "a", device: "tenant/device", name: "test", artifact: "https://example.test/os")
         XCTAssertEqual(starts, 0, "Must wait for runtime grant")
         XCTAssertTrue(runner.keepsConnection(session: 7, scope: "a"))
         XCTAssertFalse(runner.keepsConnection(session: 8, scope: "a"))
@@ -48,6 +48,7 @@ final class BackgroundOSUpdateTests: XCTestCase {
         XCTAssertEqual(task.percentages, [100])
         XCTAssertEqual(task.completions, [true])
         XCTAssertTrue(runner.snapshot?.install.rebootRequired == true)
+        XCTAssertNil(runner.failure(device: "tenant/device"))
     }
 
     func testExpirationCancelsInstallationWithoutReportingSuccess() async throws {
@@ -60,7 +61,7 @@ final class BackgroundOSUpdateTests: XCTestCase {
         }, cancelUpdate: { session in
             cancelled.append(session); pending.finish(.failure(CancellationError()))
         })
-        try runner.start(session: 7, scope: "a", name: "test", artifact: "https://example.test/os")
+        try runner.start(session: 7, scope: "a", device: "tenant/device", name: "test", artifact: "https://example.test/os")
         let task = FakeOSBackgroundTask(); launch?(task)
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await runner.run() }
@@ -72,13 +73,19 @@ final class BackgroundOSUpdateTests: XCTestCase {
         XCTAssertTrue(cancelled.contains(7))
         XCTAssertEqual(task.completions, [false])
         XCTAssertNotNil(runner.error)
+        XCTAssertEqual(runner.failure(device: "tenant/device"), runner.error, "Kept for the device, not the session")
+        XCTAssertNil(runner.failure(device: "tenant/other"))
+        runner.dismissFailure(device: "tenant/other")
+        XCTAssertNotNil(runner.failure(device: "tenant/device"))
+        runner.dismissFailure(device: "tenant/device")
+        XCTAssertNil(runner.failure(device: "tenant/device"))
     }
 
     func testSelectionChangeRejectsLateGrant() throws {
         var launch: MobileOSUpdateTask.Launch?
         var cancelled: [UInt64] = []
         let runner = MobileOSUpdateTask(submit: { _, handler in launch = handler }, cancelUpdate: { cancelled.append($0) })
-        try runner.start(session: 7, scope: "a", name: "test", artifact: "https://example.test/os")
+        try runner.start(session: 7, scope: "a", device: "tenant/device", name: "test", artifact: "https://example.test/os")
         runner.selectionChanged(session: 7, scope: "b")
         let task = FakeOSBackgroundTask(); launch?(task)
         XCTAssertFalse(runner.active)
