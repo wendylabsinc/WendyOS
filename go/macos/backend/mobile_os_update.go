@@ -36,15 +36,24 @@ type OSUpdateSnapshot struct {
 
 func (b *Backend) CheckOSRelease(session uint64) (*commands.DesktopOSRelease, error) {
 	ctx, done := b.begin()
-	defer done()
 	if session == 0 {
+		done()
 		return nil, errors.New("select a device first")
 	}
 	conn, err := b.connection(session)
 	if err != nil {
+		done()
 		return nil, err
 	}
-	return commands.DesktopCheckOSRelease(ctx, conn)
+	info, err := commands.DesktopOSReleaseIdentity(ctx, conn)
+	// The public catalog can take tens of seconds on a slow network. Fetch it
+	// without the request lock; the lookup still ends with this connection.
+	life := b.life
+	done()
+	if err != nil {
+		return nil, err
+	}
+	return commands.DesktopResolveOSRelease(life, info)
 }
 
 // GetOSUpdateStatus is read-only; progress is scoped to the connection that
