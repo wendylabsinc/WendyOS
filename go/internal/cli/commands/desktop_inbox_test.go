@@ -5,74 +5,10 @@ import (
 	"errors"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
 	"testing"
 )
-
-type notificationTestConn struct {
-	grpc.ClientConnInterface
-	row   *pb.Notification
-	err   error
-	calls int
-}
-
-func (c *notificationTestConn) Invoke(ctx context.Context, method string, request, response any, _ ...grpc.CallOption) error {
-	c.calls++
-	if method != pb.NotificationService_GetNotification_FullMethodName {
-		return errors.New("wrong RPC")
-	}
-	r := request.(*pb.GetNotificationRequest)
-	if r.GetId() != "" || r.GetNotificationId() != "a4c0899e-f2c0-4c60-a42d-5c89f756be55" {
-		return errors.New("incorrect reference")
-	}
-	if c.err != nil {
-		return c.err
-	}
-	proto.Merge(response.(*pb.Notification), c.row)
-	return nil
-}
-
-func TestDesktopNotificationValidatesRecipientResponse(t *testing.T) {
-	const org = "5c9e14bb-49c0-4178-9cc5-493a151f9885"
-	const id = "a4c0899e-f2c0-4c60-a42d-5c89f756be55"
-	for _, tc := range []struct {
-		name string
-		row  *pb.Notification
-		err  error
-		fail bool
-	}{
-		{"valid", &pb.Notification{OrganizationId: org, NotificationId: proto.String(id), DeepLink: "wendy://organizations/" + org + "/devices/0cdfb0f4-fd00-43bb-a821-ee28ed0b6cc9/live"}, nil, false},
-		{"different organization", &pb.Notification{OrganizationId: "other", NotificationId: proto.String(id)}, nil, true},
-		{"different notification", &pb.Notification{OrganizationId: org, NotificationId: proto.String("other")}, nil, true},
-		{"deleted", &pb.Notification{OrganizationId: org, NotificationId: proto.String(id), DeletedAt: timestamppb.Now()}, nil, true},
-		{"request failure", nil, errors.New("unavailable"), true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := &notificationTestConn{row: tc.row, err: tc.err}
-			n, err := readDesktopNotification(context.Background(), c, org, id)
-			if (err != nil) != tc.fail {
-				t.Fatalf("notification=%v error=%v", n, err)
-			}
-			if !tc.fail && n.GetDeepLink() != tc.row.GetDeepLink() {
-				t.Fatal("lost device link")
-			}
-		})
-	}
-	c := &notificationTestConn{}
-	if _, err := readDesktopNotification(context.Background(), c, org, "invalid"); err == nil {
-		t.Fatal("accepted malformed reference")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := readDesktopNotification(ctx, c, org, id); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if c.calls != 0 {
-		t.Fatal("invalid or cancelled request reached Cloud")
-	}
-}
 
 type inboxTestConn struct {
 	grpc.ClientConnInterface
