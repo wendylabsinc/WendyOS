@@ -235,7 +235,7 @@ private fun EnrollmentPage(model: WendyModel, session: Long, deviceName: String,
         WifiJoinDialog(model, session, deviceName, null, networks,
             explanation = if (canRetry) "Connect this device to the internet before enrolling in Wendy Cloud. If it already has internet through Ethernet or another connection, you can continue."
                 else "The device could not reach Wendy Cloud. Connect it to Wi-Fi, then check its enrollment status. Its Cloud name has already been reserved.",
-            skip = if (canRetry) { { resumeAfterWiFi = true; wifi = null } } else null,
+            skip = if (canRetry) { { scope.launch { enroll(false) }; wifi = null } } else null,
             dismiss = { wifi = null; if (resumeAfterWiFi) { resumeAfterWiFi = false; scope.launch { enroll(false) } } }) { resumeAfterWiFi = canRetry }
     }
 }
