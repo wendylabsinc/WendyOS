@@ -138,7 +138,7 @@ func newRealWorker(mgr *data.Manager, client cloudpb.DataIngestServiceClient) *D
 		now:         time.Now,
 		newSleeper:  contextSleeper,
 	}
-	w.factory = func(context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
+	w.factory = func(context.Context, string) (cloudpb.DataIngestServiceClient, func(), error) {
 		return client, func() {}, nil
 	}
 	return w
