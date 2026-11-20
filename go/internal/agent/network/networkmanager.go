@@ -782,9 +782,9 @@ func keyMgmtFromHint(hint, password string) string {
 	return ""
 }
 
-// ConnectToWiFi connects through a profile it writes for hidden networks and
+// connectToWiFi connects through a profile it writes for hidden networks and
 // known key management, and through `nmcli device wifi connect` otherwise.
-func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
+func (n *NMCLINetworkManager) connectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
 	ssid := req.GetSsid()
 	hidden := req.GetHidden()
 	password := req.GetPassword()
