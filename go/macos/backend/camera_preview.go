@@ -20,6 +20,7 @@ type cameraPreview struct {
 	mu      sync.Mutex
 	backend *Backend
 	request uint64
+	secure  bool
 	ctx     context.Context
 	cancel  context.CancelFunc
 }
@@ -57,13 +58,24 @@ func (b *Backend) PreviewCameras(id uint64, selector string, secure bool) ([]*pb
 	if err := p.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := p.backend.ConnectTargetRequest(selector, false, p.request, secure); err != nil {
-		return nil, err
+	// Redialing ends the playing stream without an error event. Refresh over
+	// the current connection; redial for another target or a lost connection.
+	var rows []*pb.VideoDevice
+	var err error
+	connected := p.backend.deviceSelector == selector && p.secure == secure
+	if connected {
+		rows, err = p.backend.Cameras()
 	}
-	if err := p.ctx.Err(); err != nil {
-		return nil, err
+	if !connected || (err != nil && p.ctx.Err() == nil) {
+		if _, err := p.backend.ConnectTargetRequest(selector, false, p.request, secure); err != nil {
+			return nil, err
+		}
+		p.secure = secure
+		if err := p.ctx.Err(); err != nil {
+			return nil, err
+		}
+		rows, err = p.backend.Cameras()
 	}
-	rows, err := p.backend.Cameras()
 	if err == nil {
 		p.backend.cameraDevices = make(map[uint32]*pb.VideoDevice, len(rows))
 		for _, row := range rows {
@@ -97,6 +109,11 @@ func (b *Backend) PreviewPlay(id uint64, stableID string) error {
 	if camera == nil {
 		return errors.New("this sensor is no longer connected to the device")
 	}
+	// Every stream of this preview uses the handle id, so it plays one sensor
+	// at a time. Stop the current one before starting another.
+	p.backend.mu.Lock()
+	p.backend.stopCameras()
+	p.backend.mu.Unlock()
 	return p.backend.StartCamera(camera.GetId(), id, p.backend.session, stableID)
 }
 func (b *Backend) PreviewPoll(id uint64) []Event {
@@ -147,6 +164,18 @@ func (b *Backend) previewsReset(blocked bool) {
 		_ = p.backend.Disconnect()
 		p.mu.Unlock()
 	}
+}
+
+// RetirePreviews retires every preview before change switches the macOS
+// account, then accepts new previews again. iOS does this in SetMobileState.
+func (b *Backend) RetirePreviews(change func() error) error {
+	b.previewsReset(true)
+	defer func() {
+		b.previews.mu.Lock()
+		b.previews.blocked = false
+		b.previews.mu.Unlock()
+	}()
+	return change()
 }
 
 func (b *Backend) PreviewApps(id uint64) ([]*pb.AppContainer, error) {

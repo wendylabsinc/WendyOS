@@ -17,6 +17,7 @@ import (
 type previewAgent struct {
 	pb.UnimplementedWendyVideoServiceServer
 	pb.UnimplementedWendyContainerServiceServer
+	ended chan string
 }
 
 func (*previewAgent) ListContainers(_ *pb.ListContainersRequest, stream grpc.ServerStreamingServer[pb.ListContainersResponse]) error {
@@ -27,24 +28,35 @@ func (*previewAgent) ListVideoDevices(context.Context, *pb.ListVideoDevicesReque
 	return &pb.ListVideoDevicesResponse{Devices: []*pb.VideoDevice{
 		{Id: 0, StableId: "camera", Name: "Camera"},
 		{Id: 1, StableId: "duplicate"}, {Id: 2, StableId: "duplicate"},
+		{Id: 3, StableId: "second", Name: "Second"},
 	}}, nil
 }
-func (*previewAgent) StreamVideo(req *pb.StreamVideoRequest, stream grpc.ServerStreamingServer[pb.VideoFrame]) error {
-	if req.GetStableId() != "camera" || req.GetDeviceId() != 0 {
+
+// Each sensor sends one frame tagged with its device id, then holds the stream.
+func (a *previewAgent) StreamVideo(req *pb.StreamVideoRequest, stream grpc.ServerStreamingServer[pb.VideoFrame]) error {
+	if !(req.GetStableId() == "camera" && req.GetDeviceId() == 0) && !(req.GetStableId() == "second" && req.GetDeviceId() == 3) {
 		return errors.New("wrong sensor")
 	}
-	if err := stream.Send(&pb.VideoFrame{Codec: pb.VideoCodec_VIDEO_CODEC_H264, Data: []byte{0, 0, 1, 0x67, 1}}); err != nil {
+	if err := stream.Send(&pb.VideoFrame{Codec: pb.VideoCodec_VIDEO_CODEC_H264, Data: []byte{0, 0, 1, 0x67, byte(req.GetDeviceId()) + 1}}); err != nil {
 		return err
 	}
 	<-stream.Context().Done()
+	select {
+	case a.ended <- req.GetStableId():
+	default:
+	}
 	return stream.Context().Err()
 }
 func previewFixture(t *testing.T) *Backend {
 	t.Helper()
+	return previewAgentFixture(t, &previewAgent{})
+}
+func previewAgentFixture(t *testing.T, agent *previewAgent) *Backend {
+	t.Helper()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	pb.RegisterWendyVideoServiceServer(server, &previewAgent{})
-	pb.RegisterWendyContainerServiceServer(server, &previewAgent{})
+	pb.RegisterWendyVideoServiceServer(server, agent)
+	pb.RegisterWendyContainerServiceServer(server, agent)
 	go server.Serve(listener)
 	t.Cleanup(func() { server.Stop(); listener.Close() })
 	b := New()
@@ -69,7 +81,7 @@ func TestPreviewsKeepDevicesAndInteractiveSessionSeparate(t *testing.T) {
 	for index, id := range []uint64{first, second} {
 		selector := []string{"first-device", "second-device"}[index]
 		cameras, err := b.PreviewCameras(id, selector, false)
-		if err != nil || len(cameras) != 3 {
+		if err != nil || len(cameras) != 4 {
 			t.Fatalf("inventory: %v %v", cameras, err)
 		}
 		if err := b.PreviewPlay(id, "camera"); err != nil {
@@ -182,5 +194,104 @@ func TestPreviewThermalAppUsesExistingConnection(t *testing.T) {
 	b.PreviewClose(id)
 	if _, err := b.PreviewOpenApp(id, "dev.wendy.thermal-viewer"); err == nil {
 		t.Fatal("closed preview still opens apps")
+	}
+}
+
+func previewVideo(t *testing.T, b *Backend, id uint64) []byte {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		for _, event := range b.PreviewPoll(id) {
+			if event.Kind == EventVideo {
+				return event.Bytes
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("preview sent no video")
+	return nil
+}
+func TestPreviewPlayReplacesPlayingSensor(t *testing.T) {
+	agent := &previewAgent{ended: make(chan string, 4)}
+	b := previewAgentFixture(t, agent)
+	id := b.PreviewCreate()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PreviewPlay(id, "camera"); err != nil {
+		t.Fatal(err)
+	}
+	previewVideo(t, b, id)
+	if err := b.PreviewPlay(id, "second"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case stableID := <-agent.ended:
+		if stableID != "camera" {
+			t.Fatalf("stopped %q", stableID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("previous sensor kept streaming into the preview")
+	}
+	if frame := previewVideo(t, b, id); frame[len(frame)-1] != 4 {
+		t.Fatalf("frame from another sensor: %v", frame)
+	}
+}
+func TestPreviewRefreshKeepsPlayingStream(t *testing.T) {
+	b := previewAgentFixture(t, &previewAgent{})
+	dials := 0
+	dial := b.connectTarget
+	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
+		dials++
+		return dial(ctx, selector)
+	}
+	id := b.PreviewCreate()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PreviewPlay(id, "camera"); err != nil {
+		t.Fatal(err)
+	}
+	previewVideo(t, b, id)
+	if cameras, err := b.PreviewCameras(id, "device", false); err != nil || len(cameras) != 4 {
+		t.Fatalf("refresh: %v %v", cameras, err)
+	}
+	if dials != 1 || len(b.preview(id).backend.videoStops) != 1 {
+		t.Fatalf("refresh redialed (%d dials) and ended the stream", dials)
+	}
+	// A lost connection, or another target, still needs a new dial.
+	b.preview(id).backend.conn.Close()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil || dials != 2 {
+		t.Fatalf("lost connection: %d dials, %v", dials, err)
+	}
+	if _, err := b.PreviewCameras(id, "other-device", false); err != nil || dials != 3 {
+		t.Fatalf("other target: %d dials, %v", dials, err)
+	}
+}
+func TestPreviewAccountSwitchRetiresHandles(t *testing.T) {
+	b := previewFixture(t)
+	id := b.PreviewCreate()
+	if _, err := b.PreviewCameras(id, "device", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PreviewPlay(id, "camera"); err != nil {
+		t.Fatal(err)
+	}
+	child := b.preview(id).backend
+	refused := errors.New("account unavailable")
+	err := b.RetirePreviews(func() error {
+		if b.preview(id) != nil || child.conn != nil || b.PreviewCreate() != 0 {
+			t.Error("preview outlived the previous account")
+		}
+		return refused
+	})
+	if !errors.Is(err, refused) {
+		t.Fatalf("switch error: %v", err)
+	}
+	if _, err := b.PreviewCameras(id, "device", false); err == nil {
+		t.Fatal("retired handle allowed inventory")
+	}
+	if next := b.PreviewCreate(); next == 0 || next == id {
+		t.Fatal("account switch blocked new previews")
 	}
 }

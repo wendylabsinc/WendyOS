@@ -19,11 +19,9 @@ type DesktopOSRelease struct {
 	BlockedReason string `json:"blockedReason"`
 }
 
-// DesktopCheckOSRelease uses the CLI's stable OTA catalog and storage selection.
-// It only reads device identity and release metadata; it never starts an update.
-func DesktopCheckOSRelease(ctx context.Context, conn *grpcclient.AgentConnection) (*DesktopOSRelease, error) {
-	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
-	defer cancel()
+// DesktopOSReleaseIdentity reads the device identity an OS release check needs.
+// It is the only step of the check that uses the device connection.
+func DesktopOSReleaseIdentity(ctx context.Context, conn *grpcclient.AgentConnection) (*agentpb.GetAgentVersionResponse, error) {
 	probeCtx, cancelProbe := context.WithTimeout(ctx, 8*time.Second)
 	info, err := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 	cancelProbe()
@@ -36,6 +34,15 @@ func DesktopCheckOSRelease(ctx context.Context, conn *grpcclient.AgentConnection
 	if info.GetDeviceType() == "" {
 		return nil, errors.New("the device did not report its device type; automatic OS update checking is unavailable")
 	}
+	return info, nil
+}
+
+// DesktopResolveOSRelease uses the CLI's stable OTA catalog and storage selection.
+// It reads only public release metadata, so callers need not hold the device
+// connection while it waits on the network. It never starts an update.
+func DesktopResolveOSRelease(ctx context.Context, info *agentpb.GetAgentVersionResponse) (*DesktopOSRelease, error) {
+	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
 	artifact, latest, err := getLatestOTAInfoForDeviceTypeContext(ctx, info.GetDeviceType(), info.GetStorageMedium(), false)
 	if err != nil {
 		return nil, err
