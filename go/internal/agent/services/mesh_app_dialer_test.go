@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"syscall"
 	"testing"
@@ -107,6 +108,74 @@ func TestMeshAppDialerFollowsLateRuntimeWithoutRestart(t *testing.T) {
 	available = false
 	assertUnavailable()
 	if probes.lookups != 0 || probes.lanDials != 0 || probes.brokerDials != 0 {
-		t.Fatalf("app used fallback: %+v", probes)
+		t.Fatalf("missing route used an administrative path: %+v", probes)
+	}
+}
+
+func TestMeshAppDialerUsesOnlyExplicitAppCloudCapability(t *testing.T) {
+	d, probes := testDialer()
+	d.SetCloudEndpoint("api.cloud.test:443")
+	peer := appTestMeshDevice(t)
+	called := 0
+	d.cloudAppDial = func(_ context.Context, device meshid.Device, port uint16) (net.Conn, error) {
+		called++
+		if device != peer || port != 8080 {
+			t.Fatalf("Cloud app target=%s:%d", device, port)
+		}
+		local, remote := net.Pipe()
+		remote.Close()
+		return local, nil
+	}
+	flow, mode, err := NewMeshAppDialer(d).DialDevice(context.Background(), peer, 8080)
+	if err != nil || mode != "cloud-app" || called != 1 || probes.lookups != 0 || probes.lanDials != 0 || probes.brokerDials != 0 {
+		t.Fatalf("Cloud app mode=%q err=%v calls=%d probes=%+v", mode, err, called, probes)
+	}
+	flow.Close()
+	d.SetLocalMeshDialer(func(context.Context, meshid.Device, uint16) (net.Conn, error) { return nil, meshsession.ErrDenied })
+	if _, _, err := NewMeshAppDialer(d).DialDevice(context.Background(), peer, 8080); !errors.Is(err, meshsession.ErrDenied) || called != 1 {
+		t.Fatal("mesh denial triggered Cloud fallback")
+	}
+}
+
+func TestAppTransportsRetireWhenEnrolledIdentityChanges(t *testing.T) {
+	d, _ := testDialer()
+	identity := d.identity()
+	local, remote := net.Pipe()
+	defer remote.Close()
+	flow, err := d.ownApplicationConnection(local, func() error { return nil }, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.UpdateIdentity("replacement certificate", "replacement key", "replacement issuer")
+	if _, err := flow.Write([]byte("old tenant")); !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("retired app transport write=%v", err)
+	}
+	local, remote = net.Pipe()
+	defer remote.Close()
+	if flow, err := d.ownApplicationConnection(local, func() error { return nil }, identity); err == nil {
+		flow.Close()
+		t.Fatal("in-flight setup admitted a replaced identity")
+	}
+}
+
+func TestAppTransportsRetireWhenEnrolledCloudChanges(t *testing.T) {
+	d, _ := testDialer()
+	d.SetCloudEndpoint("https://old.example")
+	identity := d.identity()
+	local, remote := net.Pipe()
+	defer remote.Close()
+	flow, err := d.ownApplicationConnection(local, func() error { return nil }, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.UpdateCloudIdentity("https://new.example", identity.certPEM, identity.keyPEM, identity.chainPEM)
+	if _, err := flow.Write([]byte("old cloud")); !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("retired cloud transport write=%v", err)
+	}
+	local, remote = net.Pipe()
+	defer remote.Close()
+	if flow, err := d.ownApplicationConnection(local, func() error { return nil }, identity); err == nil {
+		flow.Close()
+		t.Fatal("in-flight setup admitted a replaced Cloud endpoint")
 	}
 }

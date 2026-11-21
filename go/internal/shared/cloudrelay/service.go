@@ -8,11 +8,21 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 )
 
+// ApplicationService is the device-to-device app-only relay capability. Its
+// sealed port is a protocol identifier; Agent dispatches it to ApplicationDial
+// and never opens that loopback port as an ordinary network connection.
+const ApplicationService = "wendy-app"
+
+const applicationServicePort = 43022
+
 // UnsupportedServiceError means Cloud predates this service descriptor. It is
 // distinct from an authorization refusal, which must not trigger a fallback.
 type UnsupportedServiceError struct{ Service string }
 
 func (e *UnsupportedServiceError) Error() string {
+	if e.Service == ApplicationService {
+		return "Cloud does not offer device-originated application relays; the Cloud backend must support the wendy-app service"
+	}
 	return fmt.Sprintf("Cloud does not offer tunnel service %q; port tunnels need a Cloud release with WDY-3955", e.Service)
 }
 
@@ -39,6 +49,8 @@ func serviceTarget(service string) (pb.DialTransport, uint32, error) {
 		return pb.DialTransport_DIAL_TRANSPORT_TCP, 22, nil
 	case "wendy-agent":
 		return pb.DialTransport_DIAL_TRANSPORT_TCP, 50052, nil
+	case ApplicationService:
+		return pb.DialTransport_DIAL_TRANSPORT_TCP, applicationServicePort, nil
 	}
 	protocol, text, ok := strings.Cut(service, "-")
 	port, err := strconv.ParseUint(text, 10, 16)
