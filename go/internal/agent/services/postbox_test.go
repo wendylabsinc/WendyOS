@@ -275,6 +275,7 @@ func (f *pbFixture) newPostbox() *Postbox {
 		return f.cloud, io.NopCloser(nil), nil
 	}
 	p.checkpoint = f.cloud.notarize
+	p.dialArtifacts = refuseArtifacts
 	p.UpdateIdentity("https://cloud.test", f.certPEM, f.keyPEM, f.chainPEM)
 	return p
 }
@@ -409,6 +410,7 @@ func (f *pbFixture) cycle() {
 	if err := f.p.cycle(context.Background()); err != nil {
 		f.t.Fatal(err)
 	}
+	f.p.waitPulls()
 }
 
 func (f *pbFixture) outcome(app string) postboxOutcome {
@@ -663,6 +665,10 @@ type crashingControl struct{}
 func (crashingControl) StartApp(context.Context, string) error      { panic("agent killed") }
 func (crashingControl) StopApp(context.Context, string) error       { panic("agent killed") }
 func (crashingControl) AppOf(_ context.Context, name string) string { return name }
+func (crashingControl) RemoveReleaseImages(context.Context) error   { panic("agent killed") }
+func (crashingControl) RemoveReleases(context.Context, string, []string) error {
+	panic("agent killed")
+}
 
 func TestPostboxReportsEntryInterruptedByCrash(t *testing.T) {
 	f := newPBFixture(t)
@@ -703,12 +709,12 @@ func TestPostboxHoldsWithoutVerifiedCheckpoint(t *testing.T) {
 	}
 }
 
-func TestPostboxAssignmentHeldUntilMaterialPull(t *testing.T) {
+func TestPostboxAssignmentHeldWhenThePullIsRefused(t *testing.T) {
 	f := newPBFixture(t)
 	dep := uuid.NewString()
 	resource := "org/" + f.tenant + "/deployment/" + dep + "/device/" + f.uuid
 	assign := &cloudpbv2.DeviceAssignment{
-		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: "rel",
+		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: uuid.NewString(),
 		ManifestDigest: "sha256:ab", DeploymentKeyId: "k1", DesiredState: cloudpbv2.Running_RUNNING,
 		ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
 	}
@@ -719,7 +725,7 @@ func TestPostboxAssignmentHeldUntilMaterialPull(t *testing.T) {
 		t.Fatalf("assignment not held: %+v", f.p.snapshot().Assignments)
 	}
 	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED {
-		t.Fatalf("outcome = %+v, want the T14 seam's pull refusal", o)
+		t.Fatalf("outcome = %+v, want the registry's refusal", o)
 	}
 
 	unassign := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour))}
