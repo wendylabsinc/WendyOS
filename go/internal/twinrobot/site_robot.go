@@ -17,6 +17,7 @@ type SiteRobotSnapshot struct {
 	Disconnected                                         bool
 	LookDirection                                        int
 	LookState                                            int // 0 idle, 1 turning, 2 completed, 3 aborted
+	DiscoveryState                                       int // 0 idle, 1 advancing, 2 completed, 3 aborted
 	Message                                              string
 	ControlWarning                                       string
 	Pose, Ready, Aligned, Moving                         bool
@@ -64,6 +65,9 @@ type SiteRobot struct {
 	goal                            sitenav.Point
 	moving                          bool
 	lookTurn                        *siteLookTurn
+	discoveryMove                   *discoveryMove
+	discoveryState                  int
+	discoveryHistory                discoveryHistory
 	lookState                       int
 	lookDirection                   int
 	started, heartbeat              time.Time
@@ -352,6 +356,10 @@ func (r *SiteRobot) stopLocked() error {
 		r.lookState = 3
 	}
 	r.lookTurn = nil
+	if r.discoveryMove != nil && r.discoveryState != 2 {
+		r.discoveryState = 3
+	}
+	r.discoveryMove = nil
 	r.departure = nil
 	r.route = nil
 	r.preview = nil
@@ -372,7 +380,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		fault = errors.New("Movement stopped because the map is no longer active.")
 	case now.Sub(r.started) > 30*time.Second:
 		fault = errors.New("The 30-second movement limit was reached.")
-	case r.frame == "" && r.lookTurn == nil:
+	case r.frame == "" && r.lookTurn == nil && r.discoveryMove == nil:
 		fault = errors.New("Align Go2 with this site again.")
 	default:
 		fault = r.observed.Ready(now)
@@ -380,6 +388,10 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	if fault != nil {
 		r.message = fault.Error()
 		r.stopLocked()
+		return
+	}
+	if r.discoveryMove != nil {
+		r.stepDiscoveryLocked(now)
 		return
 	}
 	if r.lookTurn != nil {
@@ -653,6 +665,7 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 		return s
 	}
 	s.LookState = r.lookState
+	s.DiscoveryState = r.discoveryState
 	s.LookDirection = r.lookDirection
 	s.ObservationRevision = r.observed.Surfaces.Fingerprint()
 	s.ArrivalTiming = r.observed.AllowArrivalTime

@@ -26,6 +26,8 @@ type Response struct {
 	SearchState   string
 	SearchMessage string
 	SearchTurns   int
+	SearchMoves   int
+	SearchPhase   string
 	RoomID        string
 	Handle        string
 	Snapshot      SiteRobotSnapshot

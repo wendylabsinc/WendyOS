@@ -69,6 +69,8 @@ final class SiteRobotMapModel: ObservableObject {
     private var positionSearch = RobotPositionSearch()
     @Published private(set) var searchConclusion: String?
     @Published private(set) var searchTurns = 0
+    @Published private(set) var searchMoves = 0
+    @Published var exploreDuringSearch = true
     @Published private(set) var rotationState: RobotRotationState = .idle
     private var rotationStartPending = false
     @Published private(set) var lensSelection: RobotLensSelection?
@@ -205,7 +207,7 @@ final class SiteRobotMapModel: ObservableObject {
         let epoch = generation
         telemetry.reading = nil; reading = nil; anchor = nil; lastPosition = nil; lastYaw = 0; destination = nil; placing = false; error = nil
         handle = 0; connecting = false; remoteSearching = false
-        searchConclusion = nil; searchTurns = 0
+        searchConclusion = nil; searchTurns = 0; searchMoves = 0
         rotationState = .idle; rotationStartPending = false
         showRotationPrompt = false; rotationOffer = RobotRotationOffer()
         lensSession = nil; lensCalibrating = false; lensSelection = nil; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel(); showLensCalibration = false
@@ -239,9 +241,14 @@ final class SiteRobotMapModel: ObservableObject {
                     let progress = try await searchClient.searchStatus(owned)
                     guard epoch == generation, !Task.isCancelled else { break }
                     searchTurns = progress.SearchTurns
+                    searchMoves = progress.SearchMoves ?? 0
                     if let report = progress.Fusion { fusionReport = report }
                     if progress.SearchState == "searching" {
-                        rotationState = result.moving ? .turning(searchTurns) : .matching(searchTurns)
+                        switch progress.SearchPhase {
+                        case "advancing": rotationState = .advancing(searchMoves)
+                        case "settling": rotationState = .settling(searchMoves)
+                        default: rotationState = result.moving ? .turning(searchTurns) : .matching(searchTurns)
+                        }
                     } else {
                         remoteSearching = false; positionSearch.cancel(); localizing = false
                         if let report = progress.Fusion, progress.SearchState == "complete" {
@@ -407,7 +414,7 @@ final class SiteRobotMapModel: ObservableObject {
         automaticPaused = true; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel()
         candidates = []; localizing = false
         placing = false; destination = nil
-        searchConclusion = nil; searchTurns = 0
+        searchConclusion = nil; searchTurns = 0; searchMoves = 0
         rotationState = .idle; rotationStartPending = false
         dismissRotationPrompt()
         let h = handle, request = actionGeneration
@@ -450,8 +457,9 @@ final class SiteRobotMapModel: ObservableObject {
         dismissRotationPrompt()
         actionGeneration += 1
         let request = actionGeneration, h = handle, epoch = generation, f = frame, scale = geometryScale, revision = siteRevision
+        let explore = exploreDuringSearch
         remoteSearchSequence = request; remoteSearching = false; localizing = true
-        searchConclusion = nil; searchTurns = 0; rotationState = .matching(0)
+        searchConclusion = nil; searchTurns = 0; searchMoves = 0; rotationState = .matching(0)
         actions.submit {
             do {
                 let mesh = try await SiteRobotGeometry.semantic(url, scale: scale)
@@ -459,7 +467,7 @@ final class SiteRobotMapModel: ObservableObject {
                 let hint = try await self.cameraHint(model: url, frame: f, revision: revision, request: request, epoch: epoch)
                 guard epoch == self.generation, request == self.actionGeneration else { return }
                 try await self.searchClient.search(h, sequence: request,
-                    request: RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: hint, reference: []))
+                    request: RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: hint, reference: [], explore: explore))
                 if epoch == self.generation, request == self.actionGeneration { self.remoteSearching = true }
             } catch {
                 guard epoch == self.generation, request == self.actionGeneration else { return }
@@ -762,17 +770,19 @@ struct SiteRobotRotationPrompt: ViewModifier {
     var onStart: () -> Void = {}
 
     func body(content: Content) -> some View {
-        content.alert("Rotate Go2 to find its position?", isPresented: Binding(
+        content.alert("Let Go2 find its position?", isPresented: Binding(
             get: { enabled && model.showRotationPrompt },
             set: { if !$0 { model.dismissRotationPrompt() } }
         )) {
-            Button("Start rotation") {
+            Button("Start discovery") {
                 onStart()
                 model.startRotationSearch()
             }.disabled(!model.canStartRotationSearch)
             Button("Not now", role: .cancel) { model.dismissRotationPrompt() }
         } message: {
-            Text("No reliable position match was found. Go2 will check clearance, turn in 30° steps, and match its LiDAR observations after each turn. A calibrated camera can also help. Keep Go2 in sight and its turning area clear.")
+            Text(model.exploreDuringSearch
+                 ? "Go2 will turn and may make up to three 40 cm moves on observed clear floor to gather new views. Keep Go2 in sight and Stop within reach."
+                 : "Go2 will check clearance and turn in 30° steps to match its LiDAR observations. Keep Go2 in sight and its turning area clear.")
         }
     }
 }
@@ -927,11 +937,16 @@ struct SiteRobotTimingControls: View {
 struct SiteRobotLocalizationControls: View {
     @ObservedObject var model: SiteRobotMapModel
     var body: some View {
+        Toggle("Move between views during discovery", isOn: $model.exploreDuringSearch)
+            .font(.caption)
+            .disabled(model.localizing || model.reading?.moving == true)
+        Text("Up to three 40 cm moves, with fresh LiDAR and clear observed floor. Turn this off for rotation only.")
+            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if let conclusion = model.searchConclusion {
             VStack(alignment: .leading, spacing: 8) {
                 Text(conclusion).font(.caption).fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Button("Try rotation again") { model.offerRotationRetry() }
+                    Button("Try discovery again") { model.offerRotationRetry() }
                         .disabled(!model.canStartRotationSearch)
                     Button("Place Manually") { model.beginAlignment() }
                         .disabled(model.reading?.pose != true)

@@ -31,7 +31,8 @@ type robotSession struct {
 	searchCancel               context.CancelFunc
 	searchRoot                 uint64
 	searchState, searchMessage string
-	searchTurns                int
+	searchTurns, searchMoves   int
+	searchPhase                string
 	searchReport               json.RawMessage
 }
 type Server struct {
@@ -237,6 +238,8 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		out.SearchState = session.searchState
 		out.SearchMessage = session.searchMessage
 		out.SearchTurns = session.searchTurns
+		out.SearchMoves = session.searchMoves
+		out.SearchPhase = session.searchPhase
 		out.Fusion = session.searchReport
 		session.searchMu.Unlock()
 	case "poll":

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
+	"fmt"
 	"log"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
 )
 
 func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
@@ -33,7 +35,8 @@ func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 	session.searchRoot = q.Sequence
 	session.searchState = "searching"
 	session.searchMessage = "Checking robot observations"
-	session.searchTurns = 0
+	session.searchTurns, session.searchMoves = 0, 0
+	session.searchPhase = "matching"
 	session.searchReport = nil
 	session.searchMu.Unlock()
 	go s.search(ctx, cancel, session, q.Sequence, input)
@@ -67,7 +70,16 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 	}
 	fail := func(message string) { session.robot.Stop(root + 999999); finish("failed", message, lastReport) }
-	for turn := 0; turn <= 12; turn++ {
+	phase := func(value string) {
+		session.searchMu.Lock()
+		defer session.searchMu.Unlock()
+		if session.searchRoot == root {
+			session.searchPhase = value
+		}
+	}
+	moves := 0
+	attempted := map[int]bool{}
+	for turn := 0; turn <= 12; {
 		for {
 			if !wait() {
 				fail("Position search ended")
@@ -82,6 +94,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 				break
 			}
 		}
+		if ctx.Err() != nil {
+			fail("Position search ended")
+			return
+		}
+		phase("matching")
 		sequence++
 		report, err := session.robot.FuseLocalization(sequence, input)
 		// The initial camera hint is checked against fresh paired odometry by
@@ -114,14 +131,55 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			finish("complete", report.Message, &report)
 			return
 		}
+		if input.Explore && moves < 3 && turn > 0 && turn < 12 && turn%3 == 0 && !attempted[turn] {
+			attempted[turn] = true
+			if ctx.Err() != nil {
+				fail("Position search ended")
+				return
+			}
+			sequence++
+			err := session.robot.DiscoveryStep(sequence, root)
+			if err != nil && !errors.Is(err, twinrobot.ErrDiscoveryBlocked) {
+				fail(err.Error())
+				return
+			}
+			if err == nil {
+				moves++
+				phase("advancing")
+				session.searchMu.Lock()
+				if session.searchRoot == root {
+					session.searchMoves = moves
+					session.searchMessage = "Moving to a nearby viewpoint on observed floor"
+				}
+				session.searchMu.Unlock()
+				for {
+					if !wait() {
+						fail("Position search ended")
+						return
+					}
+					state := session.robot.Status()
+					if state.Disconnected || state.DiscoveryState == 3 {
+						fail(state.Message)
+						return
+					}
+					if state.DiscoveryState == 2 && !state.Moving {
+						break
+					}
+				}
+				settledAfter = time.Now().Add(time.Second)
+				phase("settling")
+				continue // match the translated view before turning again
+			}
+		}
 		if turn == 12 {
-			fail("No reliable position match after a full rotation. " + lastReason)
+			fail(fmt.Sprintf("No reliable position match after a full rotation and %d viewpoint moves. %s", moves, lastReason))
 			return
 		}
 		if ctx.Err() != nil {
 			fail("Position search ended")
 			return
 		}
+		phase("turning")
 		sequence++
 		if err = session.robot.Look(sequence, direction); err != nil {
 			fail(err.Error())
@@ -133,6 +191,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			session.searchMessage = "Turning and matching on Linux"
 		}
 		session.searchMu.Unlock()
+		turn++
 		for {
 			if !wait() {
 				fail("Position search ended")

@@ -1332,6 +1332,37 @@ and paired odometry, then discards it before any search turn. Camera failures
 fall back to LiDAR-only search. This does not add a factory-calibration API.
 Physical lens accuracy and mounting tolerances still need validation on a Go2. The bundled BSD-2-Clause notice is in `Resources/Notices/go2-camera-LICENSE.txt`.
 
+## Go2 discovery viewpoints
+
+Position search now defaults to **Move between views during discovery** on
+Apple clients. If matching remains ambiguous after 3, 6, or 9 turns, the Linux
+service can move Go2 approximately 40 cm forward before matching again. It tries
+at most three such moves, alongside the existing twelve-turn and five-minute
+limits. Turn the option off for rotation-only discovery. Stop cancels the search
+and any active movement.
+
+Each move uses the live odometry frame, since the room transform is not yet
+confirmed. The complete body sweep and stopping distance must fit on observed
+clear floor, with a margin for drift. The hidden-floor allowance can cover the
+fixed departure footprint only. The supervised option that permits unobserved
+floor during ordinary navigation does not apply to discovery moves. Blocked
+viewpoints are skipped; stale sensors, an expired operator lease, unexpected
+drift, a rejected movement command, or an unacknowledged stop end the attempt.
+
+The controller avoids recently visited endpoints and stops before rematching.
+New scans must contain new geometry to count as independent evidence. Merely
+moving or replaying an accumulated map does not increase confidence. Camera
+hints from earlier viewpoints are discarded. A candidate position still needs
+confirmation before normal site navigation.
+
+The robot search request adds optional `Fusion.explore`, defaulting to false
+when omitted. Search replies add `SearchMoves` and `SearchPhase`; phases are
+`matching`, `turning`, `advancing`, and `settling`. The robot snapshot adds
+`DiscoveryState` with idle, advancing, completed, and aborted values 0–3.
+Existing clients keep rotation-only searches; Apple clients tolerate older
+servers that omit the new status fields. Physical walking and braking accuracy
+still require validation on a Go2.
+
 ## Android companion
 
 The native Android companion lives in [`../android`](../android/README.md). It

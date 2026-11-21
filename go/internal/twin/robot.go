@@ -18,6 +18,7 @@ type robotControl interface {
 	Align(uint64, string, float64, float64, float64, float64) error
 	Destination(uint64, string, float64, float64, bool) error
 	Look(uint64, int) error
+	DiscoveryStep(uint64, uint64) error
 	SetArrivalTiming(uint64, bool) error
 	SetUnderBodyAllowance(uint64, bool) error
 	SetAllowUnobservedFloor(uint64, bool) error

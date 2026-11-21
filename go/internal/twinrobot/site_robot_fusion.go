@@ -11,6 +11,7 @@ import (
 )
 
 type SiteFusionRequest struct {
+	Explore      bool                `json:"explore,omitempty"`
 	Frame        string              `json:"frame"`
 	Architecture []float64           `json:"architecture"`
 	Furniture    []float64           `json:"furniture"`

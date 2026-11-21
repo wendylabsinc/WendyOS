@@ -165,7 +165,15 @@ func (g Grid) ClearPose(p Point, yaw float64) bool {
 }
 
 func (g Grid) Sweep(a, b Point, yaw float64) bool {
-	return g.sweptCells(a, b, yaw, 0, func(c Cell) bool { return g.Floor[c] && !g.obstacleOverlaps(c, a, b, yaw, 0) })
+	return g.SweepWithMargin(a, b, yaw, 0)
+}
+
+// SweepWithMargin reserves additional clearance around a straight movement.
+func (g Grid) SweepWithMargin(a, b Point, yaw, margin float64) bool {
+	if !finite(margin) || margin < 0 || margin > 1 {
+		return false
+	}
+	return g.sweptCells(a, b, yaw, margin, func(c Cell) bool { return g.Floor[c] && !g.obstacleOverlaps(c, a, b, yaw, margin) })
 }
 
 // Turn checks the shortest in-place turn used by the controller. Padding bounds

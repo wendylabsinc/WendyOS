@@ -337,7 +337,9 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
         if rejectTurns { throw WendyError(message: "An obstacle or drop overlaps Go2's body during this turn.") }
     }
     func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply { progress }
-    func publish(turns: Int) { progress.SearchTurns = turns }
+    func publish(turns: Int, moves: Int? = nil, phase: String? = nil) {
+        progress.SearchTurns = turns; progress.SearchMoves = moves; progress.SearchPhase = phase
+    }
 }
 
 @MainActor
@@ -634,5 +636,53 @@ private final class PresetTestMatcher: RobotVisualMatching {
             #expect(!model.localizing)
             #expect(await robot.turns.isEmpty)
         }
+    }
+}
+
+
+@Suite @MainActor struct Go2DiscoveryTests {
+    @Test func discoveryRequestsTranslationAndShowsRemoteMovementPhases() async throws {
+        try await withRotationModel { model, robot in
+            model.startRotationSearch()
+            for _ in 0..<200 {
+                if await !robot.searchRequests.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let request = try #require(await robot.searchRequests.first)
+            #expect(request.explore)
+            await robot.publish(turns: 3, moves: 1, phase: "advancing")
+            for _ in 0..<100 {
+                if model.rotationState == .advancing(1) { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.rotationState == .advancing(1))
+            #expect(model.searchMoves == 1)
+            await robot.publish(turns: 3, moves: 1, phase: "settling")
+            for _ in 0..<100 {
+                if model.rotationState == .settling(1) { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.rotationState == .settling(1))
+            #expect(await robot.turns.isEmpty)
+        }
+    }
+
+    @Test func rotationOnlyPreferenceDoesNotRequestTranslation() async throws {
+        try await withRotationModel { model, robot in
+            model.exploreDuringSearch = false
+            model.startRotationSearch()
+            for _ in 0..<200 {
+                if await !robot.searchRequests.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let request = try #require(await robot.searchRequests.first)
+            #expect(!request.explore)
+        }
+    }
+
+    @Test func oldSearchRepliesRemainDecodable() throws {
+        let data = Data(#"{"SearchState":"searching","SearchMessage":"Turning","SearchTurns":1}"#.utf8)
+        let reply = try JSONDecoder().decode(SiteRobotClient.RemoteReply.self, from: data)
+        #expect(reply.SearchMoves == nil && reply.SearchPhase == nil)
     }
 }

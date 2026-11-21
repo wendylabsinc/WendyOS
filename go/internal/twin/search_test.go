@@ -3,6 +3,7 @@ package twin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	"strings"
@@ -12,20 +13,27 @@ import (
 
 type searchRobot struct {
 	*twinrobot.SiteRobot
-	ready             bool
-	turns, matchAfter int
-	reject            bool
-	stopped           uint64
-	directions        []int
-	visuals           []*sitenav.VisualHint
+	ready                                          bool
+	turns, matchAfter                              int
+	reject                                         bool
+	stopped                                        uint64
+	directions                                     []int
+	visuals                                        []*sitenav.VisualHint
+	moves, discoveryAttempts                       int
+	discoveryBlocked, discoveryFailed, matchOnMove bool
 }
 
 func (r *searchRobot) Status() twinrobot.SiteRobotSnapshot {
-	return twinrobot.SiteRobotSnapshot{MeasurementsReady: r.ready, LookState: 2, LookDirection: -1}
+	return twinrobot.SiteRobotSnapshot{MeasurementsReady: r.ready, LookState: 2, LookDirection: -1, DiscoveryState: func() int {
+		if r.discoveryFailed {
+			return 3
+		}
+		return 2
+	}()}
 }
 func (r *searchRobot) FuseLocalization(sequence uint64, input twinrobot.SiteFusionRequest) (twinrobot.SiteFusionReport, error) {
 	r.visuals = append(r.visuals, input.Visual)
-	if r.matchAfter >= 0 && r.turns >= r.matchAfter {
+	if r.matchOnMove && r.moves > 0 || !r.matchOnMove && r.matchAfter >= 0 && r.turns >= r.matchAfter {
 		return twinrobot.SiteFusionReport{Candidates: []twinrobot.SiteRobotCandidate{{X: 1}}}, nil
 	}
 	return twinrobot.SiteFusionReport{Message: "Several room positions still fit.", Accepted: 42}, nil
@@ -81,7 +89,7 @@ func TestLinuxSearchHasBoundedFullRotation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()
 	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{})
-	if robot.turns != 12 || session.searchState != "failed" || !strings.Contains(session.searchMessage, "Several room positions") || !strings.Contains(string(session.searchReport), `"Accepted":42`) {
+	if robot.moves != 0 || robot.discoveryAttempts != 0 || robot.turns != 12 || session.searchState != "failed" || !strings.Contains(session.searchMessage, "Several room positions") || !strings.Contains(string(session.searchReport), `"Accepted":42`) {
 		t.Fatalf("unbounded search: %d %s", robot.turns, session.searchState)
 	}
 }
@@ -98,5 +106,62 @@ func TestLinuxSearchUsesCameraHintOnlyBeforeTheFirstTurn(t *testing.T) {
 	}
 	if robot.visuals[0] != hint || robot.visuals[1] != nil {
 		t.Fatalf("camera hint missing initially or reused after turning: %v", robot.visuals)
+	}
+}
+
+func (r *searchRobot) DiscoveryStep(sequence, root uint64) error {
+	r.discoveryAttempts++
+	if r.discoveryBlocked {
+		return twinrobot.ErrDiscoveryBlocked
+	}
+	r.moves++
+	return nil
+}
+
+func TestDiscoverySearchMatchesTranslatedViewBeforeAnotherTurn(t *testing.T) {
+	robot := &searchRobot{ready: true, matchOnMove: true}
+	session := &robotSession{robot: robot, searchRoot: 1000000}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Explore: true})
+	if session.searchState != "complete" || robot.turns != 3 || robot.moves != 1 || session.searchMoves != 1 {
+		t.Fatalf("did not gather a translated view: state=%s turns=%d moves=%d", session.searchState, robot.turns, robot.moves)
+	}
+	if len(robot.visuals) != 5 {
+		t.Fatalf("did not re-match immediately after moving: %d", len(robot.visuals))
+	}
+}
+
+func TestDiscoverySearchIsBoundedAndBlockedViewpointsAreSkipped(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(fmt.Sprint(blocked), func(t *testing.T) {
+			t.Parallel()
+			robot := &searchRobot{ready: true, matchAfter: -1, discoveryBlocked: blocked}
+			session := &robotSession{robot: robot, searchRoot: 1000000}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Explore: true})
+			if session.searchState != "failed" || robot.turns != 12 || robot.discoveryAttempts != 3 || robot.stopped == 0 {
+				t.Fatalf("unbounded search: state=%s turns=%d attempts=%d", session.searchState, robot.turns, robot.discoveryAttempts)
+			}
+			expected := 3
+			if blocked {
+				expected = 0
+			}
+			if robot.moves != expected {
+				t.Fatalf("moves=%d want=%d", robot.moves, expected)
+			}
+		})
+	}
+}
+
+func TestDiscoveryMovementFailureEndsSearch(t *testing.T) {
+	robot := &searchRobot{ready: true, matchAfter: -1, discoveryFailed: true}
+	session := &robotSession{robot: robot, searchRoot: 1000000}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Explore: true})
+	if session.searchState != "failed" || robot.turns != 3 || robot.moves != 1 || robot.stopped == 0 {
+		t.Fatal("failed movement continued discovery")
 	}
 }

@@ -97,6 +97,10 @@ func TestNewGeometryRequiresChangedViewpoint(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		changed.Surfaces = append(changed.Surfaces, Surface{Position: Vertex{float64(i) * .1, 3, .5}})
 	}
+	translatedReplay := tracker.Update(Pose{Position: Point{.4, 0}}, cloud, nil, now.Add(500*time.Millisecond))
+	if translatedReplay.IndependentViews != 1 {
+		t.Fatal("translation without new geometry created independent evidence")
+	}
 	result := tracker.Update(Pose{}, changed, nil, now.Add(time.Second))
 	if result.IndependentViews != 1 {
 		t.Fatal("stationary map changes counted as new viewpoints")

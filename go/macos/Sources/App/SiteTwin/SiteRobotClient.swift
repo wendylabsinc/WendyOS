@@ -58,6 +58,8 @@ final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSear
         var SearchState: String
         var SearchMessage: String
         var SearchTurns: Int
+        var SearchMoves: Int?
+        var SearchPhase: String?
         var Fusion: RobotFusionReport?
     }
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {

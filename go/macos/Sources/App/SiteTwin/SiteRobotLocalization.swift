@@ -23,6 +23,7 @@ struct RobotFusionRequest: Encodable, Sendable {
     var architecture, furniture: [Double]
     var visual: RobotVisualHint?
     var reference: [RobotObservedSurface]
+    var explore = false
 }
 struct RobotScanPoint: Decodable, Equatable, Sendable {
     var X, Y, Z: Double
@@ -244,7 +245,7 @@ struct RobotRotationOffer {
 
 enum RobotRotationState: Equatable {
     case idle, waitingForMeasurements
-    case checking(Int), turning(Int), matching(Int)
+    case checking(Int), turning(Int), matching(Int), advancing(Int), settling(Int)
     case stopped(String)
 
     var title: String? {
@@ -254,7 +255,9 @@ enum RobotRotationState: Equatable {
         case .checking: "Checking space to turn"
         case .turning: "Looking around"
         case .matching: "Finding Go2 in the room"
-        case .stopped: "Rotation stopped"
+        case .advancing: "Moving to a new viewpoint"
+        case .settling: "Gathering fresh observations"
+        case .stopped: "Discovery stopped"
         }
     }
 
@@ -265,6 +268,8 @@ enum RobotRotationState: Equatable {
         case .checking(let turn): "Checking clearance for turn \(turn) of 12."
         case .turning(let turn): "Turn \(turn) of 12. Keep Go2 in sight and its turning area clear."
         case .matching(let turn): "Comparing the view after turn \(turn) of 12 with your room."
+        case .advancing(let move): "Viewpoint move \(move) of 3. Go2 moves about 40 cm on observed clear floor."
+        case .settling(let move): "Stopped after viewpoint move \(move) of 3. Waiting for fresh LiDAR before matching."
         case .stopped(let reason): reason
         }
     }
