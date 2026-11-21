@@ -247,7 +247,7 @@ The `--wifi` flag accepts `key=value` pairs separated by commas. Keys: `ssid` (r
 wendy install --pre-enroll
 ```
 
-Requires an active `wendy auth login` session. The CLI creates an enrollment token via Wendy Cloud and writes provisioning JSON to the config partition so the device enrolls and receives mTLS certificates on first boot. Without `--pre-enroll`, the device boots unenrolled and can be enrolled later with `wendy device enroll`. For WendyOS images, Wendy Cloud registers the device under its name, so a blank name is not auto-generated when pre-enrolling: pass `--device-name` or enter a name when prompted. The device is given that same name. Without a terminal, `--pre-enroll` without `--device-name` fails before anything is written.
+Requires a Wendy Cloud login. In a terminal, an install on a CLI that is not logged in offers to log in first, before anything is downloaded or written, whether or not `--pre-enroll` was passed; declining installs without enrollment. Without a terminal, `--pre-enroll` fails when there is no `wendy auth login` session. The CLI creates an enrollment token via Wendy Cloud and writes provisioning JSON to the config partition so the device enrolls and receives mTLS certificates on first boot. Without `--pre-enroll`, the device boots unenrolled and can be enrolled later with `wendy device enroll`. For WendyOS images, Wendy Cloud registers the device under its name, so a blank name is not auto-generated when pre-enrolling: pass `--device-name` or enter a name when prompted. The device is given that same name. Without a terminal, `--pre-enroll` without `--device-name` fails before anything is written.
 
 ### Flags reference
 

@@ -20,20 +20,12 @@ import (
 
 // Lite must boot before it can supply the nonce and trust capabilities needed
 // for Tier C enrollment. Select and validate the session before flashing, and
-// renew or sign in again there if its certificate needs it, but leave
-// credential issuance to the live USB enrollment flow after reboot.
+// log in, renew or sign in again there if it needs it, but leave credential
+// issuance to the live USB enrollment flow after reboot.
 func resolveLiteInstallEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.AuthConfig, error) {
-	switch opts.mode {
-	case preEnrollSkip:
-		return nil, nil
-	case preEnrollAuto:
-		if !interactive || len(cfg.Auth) == 0 {
-			return nil, nil
-		}
-		ok, err := confirmPreEnroll()
-		if err != nil || !ok {
-			return nil, err
-		}
+	cfg, err := chooseInstallEnrollment(ctx, cfg, opts, interactive)
+	if err != nil || cfg == nil {
+		return nil, err
 	}
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
 	if err == nil && auth != nil {
