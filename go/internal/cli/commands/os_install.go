@@ -2726,7 +2726,7 @@ func resolveDeviceName(flagName string) (string, error) {
 // *deviceName is filled in when the device is pre-enrolled, so the caller
 // writes the name Cloud reserved.
 func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName *string) ([]byte, error) {
-	plan, err := planProvisioning(preOpts, deviceName)
+	plan, err := planProvisioning(ctx, preOpts, deviceName)
 	if err != nil || plan == nil {
 		return nil, err
 	}
@@ -2735,7 +2735,7 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 
 // planProvisioning is the question half of resolveProvisioningJSON: it may
 // prompt and fill a blank *deviceName, but reserves nothing in Cloud.
-func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnrollPlan, error) {
+func planProvisioning(ctx context.Context, preOpts preEnrollOptions, deviceName *string) (*acmePreEnrollPlan, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2746,7 +2746,7 @@ func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnr
 		}
 		cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 	}
-	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal(), deviceName)
+	return planACMEPreEnrollment(ctx, cfg, preOpts, isInteractiveTerminal(), deviceName)
 }
 
 // mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
@@ -2884,7 +2884,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 		return diskInstallSettled{}, err
 	}
 
-	creds, name, plan, err := confirmDiskInstall(d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
+	creds, name, plan, err := confirmDiskInstall(ctx, d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
 	if err != nil {
 		return diskInstallSettled{}, err
 	}
@@ -2900,7 +2900,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 // confirmDiskInstall settles what first boot will apply, including whether to
 // pre-enroll, and shows it before asking to erase d, so nothing that changes
 // the result is asked afterwards. The returned plan is minted only after this.
-func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+func confirmDiskInstall(ctx context.Context, d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return nil, "", nil, err
@@ -2917,7 +2917,7 @@ func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts
 		return nil, "", nil, err
 	}
 	// It may ask for the name to enroll, which the summary then shows.
-	plan, err := planProvisioning(preOpts, &name)
+	plan, err := planProvisioning(ctx, preOpts, &name)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -3271,7 +3271,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 		}
 		var resolveErr error
-		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
+		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(ctx, cfg, preOpts, isInteractiveTerminal())
 		if resolveErr != nil {
 			return resolveErr
 		}

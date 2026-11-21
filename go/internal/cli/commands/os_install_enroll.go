@@ -146,7 +146,7 @@ func resolvePreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrol
 		return nil, ackContinueUnenrolled()
 	}
 	if auth == nil {
-		fmt.Println("Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot.")
+		fmt.Println(skippingInstallEnrollmentMessage)
 		return nil, nil
 	}
 
@@ -175,6 +175,25 @@ func resolvePreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrol
 	return nil, ackContinueUnenrolled()
 }
 
+// skippingInstallEnrollmentMessage is what an install says when it goes on
+// without enrolling the device by the person's choice.
+const skippingInstallEnrollmentMessage = "Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot."
+
+// prepareInstallEnrollmentAuth checks the selected session's certificate when
+// enrollment is chosen, before anything is downloaded, built or written, as
+// 'wendy device enroll' does: a valid certificate may be renewed, and an
+// expired one may be replaced by signing in again. When the person declines
+// to sign in again, the install goes on without enrollment: it returns nil,
+// nil. Any other failure is returned for the caller to report.
+func prepareInstallEnrollmentAuth(ctx context.Context, auth *config.AuthConfig) (*config.AuthConfig, error) {
+	fresh, err := prepareEnrollmentAuth(ctx, auth)
+	if errors.As(err, new(enrollmentSignInDeclinedError)) {
+		fmt.Println(skippingInstallEnrollmentMessage)
+		return nil, nil
+	}
+	return fresh, err
+}
+
 // ackContinueUnenrolled pauses for explicit confirmation before continuing an
 // install whose enrollment step failed. Returns ErrUserCancelled when the
 // user declines, nil when they accept.
@@ -200,7 +219,7 @@ func ackContinueUnenrolled() error {
 // settled before the mint and written back, so the device is given the name
 // Cloud reserved.
 func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
-	plan, err := planACMEPreEnrollment(cfg, opts, interactive, deviceName)
+	plan, err := planACMEPreEnrollment(ctx, cfg, opts, interactive, deviceName)
 	if err != nil || plan == nil {
 		return nil, err
 	}
@@ -249,9 +268,10 @@ type acmePreEnrollPlan struct {
 }
 
 // planACMEPreEnrollment asks everything resolveACMEPreEnrollment asks and
-// settles a blank *deviceName, reading only the local config: Cloud is not
-// contacted. A nil plan means nothing will be baked.
-func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
+// settles a blank *deviceName. Nothing is reserved in Cloud: only the session's
+// certificate may be renewed, or signed in again, before the image is written.
+// A nil plan means nothing will be baked.
+func planACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
 	switch opts.mode {
 	case preEnrollSkip:
 		return nil, nil
@@ -269,6 +289,12 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 	}
 
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
+	if err == nil && auth != nil {
+		auth, err = prepareInstallEnrollmentAuth(ctx, auth)
+		if err == nil && auth == nil {
+			return nil, nil
+		}
+	}
 	if err != nil {
 		if errors.Is(err, ErrUserCancelled) {
 			return nil, err
@@ -280,7 +306,7 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 		return nil, ackContinueUnenrolled()
 	}
 	if auth == nil {
-		fmt.Println("Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot.")
+		fmt.Println(skippingInstallEnrollmentMessage)
 		return nil, nil
 	}
 
