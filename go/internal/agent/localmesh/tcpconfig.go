@@ -42,6 +42,7 @@ type TCPPeer struct {
 type TCPIdentity struct {
 	// TimePolicy is runtime-only and applies solely to mesh carrier credentials.
 	TimePolicy              *certs.CertificateTimePolicy `json:"-" cbor:"-"`
+	NameSource              func() string                `json:"-"`
 	Name                    string
 	AgentPort               uint16
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners

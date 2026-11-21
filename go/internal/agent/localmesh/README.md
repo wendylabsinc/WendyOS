@@ -544,6 +544,19 @@ Application services derive from the same verified manifest directory.
 Internet-sharing overlays and physical LAN service projection retain their own
 policy and runtime layers.
 
+## Application names and direct app paths
+
+The app DNS resolver accepts `device-<uuid>.wendy.internal` and one-label
+`<device-name>.wendy.internal` within the enrolled tenant. UUID names pin a local
+VIP; exact friendly labels merge currently admitted signed device manifests
+and authenticated Cloud roster entries. Conflicting principals fail closed.
+Valid enrolled names retain repeated hyphens; compatibility org-qualified aliases
+keep their legacy normalization. Signed device manifests publish the installed
+friendly label and republish live renames through the durable revision gate.
+Custom DNS resolvers implement [`mesh.ExactResolver`](../mesh/dns.go) to answer
+short friendly names. The UUID form uses the enrolled identity and VIP table.
+All UUID hostname spellings for a device share one VIP allocation.
+
 ## Cloud relay presence
 
 Cloud relay presence checks its TCP source address every ten seconds. If that
