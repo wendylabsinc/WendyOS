@@ -38,6 +38,29 @@ public actor SiteStore {
         return SiteStore(directory: cache, endpoint: endpoint)
     }
 
+    // iOS keeps captures locally. Publish a missing room with its original ID
+    // before alignment, without replacing a room another client already owns.
+    static func prepareAlignmentRoom(_ capture: StoredSite, endpoint: URL) async throws {
+        let store = SiteStore(directory: FileManager.default.temporaryDirectory, endpoint: endpoint)
+        try await store.prepareAlignmentRoom(capture)
+    }
+
+    private func prepareAlignmentRoom(_ capture: StoredSite) async throws {
+        let rooms = try JSONDecoder().decode([RemoteRoom].self, from: await request("v1/rooms"))
+        if let existing = rooms.first(where: { $0.site.id == capture.id }) {
+            guard !existing.removed, existing.site.modelRevision == capture.site.modelRevision else {
+                throw WendyError(message: "The device room changed. Refresh the room before aligning this camera.")
+            }
+            return
+        }
+        try Self.validateModel(capture.modelURL)
+        let model = try Data(contentsOf: capture.modelURL)
+        let map = try capture.visualMapURL.map { try SiteVisualMap.read($0, revision: capture.site.modelRevision, model: model) }
+        let archive = try SiteArchive(site: capture.site, model: model, visualMap: map)
+        let room = RemoteRoom(site: archive.site, revision: 0, model: archive.model, visualMap: archive.visualMap, removed: false)
+        _ = try await request("v1/rooms/" + capture.id.uuidString.lowercased(), method: "PUT", body: JSONEncoder().encode(room))
+    }
+
     private init(directory: URL, endpoint: URL) { self.directory = directory; self.endpoint = endpoint }
 
     private func request(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {

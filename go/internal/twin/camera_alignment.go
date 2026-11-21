@@ -29,12 +29,13 @@ type cameraAlignment struct {
 	readyAt, expires time.Time
 }
 type cameraAlignmentRequest struct {
-	Operation string           `json:"operation"`
-	Token     string           `json:"token,omitempty"`
-	RoomFrame string           `json:"roomFrame,omitempty"`
-	Camera    string           `json:"camera,omitempty"`
-	Automatic bool             `json:"automatic,omitempty"`
-	Frame     twinvision.Frame `json:"frame,omitempty"`
+	ExpectedRevision *uint64          `json:"expectedRevision,omitempty"`
+	Operation        string           `json:"operation"`
+	Token            string           `json:"token,omitempty"`
+	RoomFrame        string           `json:"roomFrame,omitempty"`
+	Camera           string           `json:"camera,omitempty"`
+	Automatic        bool             `json:"automatic,omitempty"`
+	Frame            twinvision.Frame `json:"frame,omitempty"`
 }
 type cameraAlignmentReply struct {
 	PolicyVersion int               `json:"policyVersion"`
@@ -90,6 +91,9 @@ func (s *Server) cameraOperation(ctx context.Context, q cameraAlignmentRequest) 
 				record = v
 				found = true
 			}
+		}
+		if q.ExpectedRevision != nil && *q.ExpectedRevision != record.Revision {
+			return reply, ErrConflict
 		}
 		if q.Automatic {
 			for _, p := range record.SitePoses {

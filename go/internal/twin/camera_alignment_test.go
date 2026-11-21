@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
 	"github.com/wendylabsinc/wendy/go/internal/twinvision"
@@ -225,5 +226,26 @@ func TestObserversCannotReplaceOrRenewOperator(t *testing.T) {
 	}
 	if s.robots["operator"] != session || robot.closes != 0 || robot.polls != 0 || robot.observations != 1 {
 		t.Fatal("observer changed operator control")
+	}
+}
+
+func TestCameraServiceChecksExpectedRevisionBeforeSolving(t *testing.T) {
+	for _, revision := range []uint64{0, 6, 7, 8} {
+		t.Run(fmt.Sprint(revision), func(t *testing.T) {
+			s, m, frame := cameraTestServer(t)
+			reply, err := s.cameraOperation(context.Background(), cameraAlignmentRequest{
+				Operation: "begin", RoomFrame: frame, Camera: "camera", Frame: cameraFrame(1), ExpectedRevision: &revision,
+			})
+			if revision == m.record.Revision {
+				if err != nil || reply.Token == "" {
+					t.Fatalf("current revision: %v, %+v", err, reply)
+				}
+			} else if !errors.Is(err, ErrConflict) || reply.Token != "" || len(s.cameras) != 0 {
+				t.Fatalf("stale revision started alignment: %v, %+v", err, reply)
+			}
+			if m.writes != 0 {
+				t.Fatal("begin wrote metadata")
+			}
+		})
 	}
 }

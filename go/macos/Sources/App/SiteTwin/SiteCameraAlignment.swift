@@ -23,6 +23,7 @@ enum SiteCameraAlignment {
         var roomFrame: String? = nil
         var camera: String? = nil
         var automatic: Bool? = nil
+        var expectedRevision: UInt64? = nil
         var frame: Frame? = nil
     }
     struct Result: Decodable {
@@ -66,7 +67,7 @@ enum SiteCameraAlignment {
         return reply
     }
     static func align(model: AppModel, request: SiteAlignmentRequest, feed: CameraFeed,
-                      automatic: Bool = false, isCurrent: () -> Bool = { true }) async throws -> SiteLocalizationResult {
+                      automatic: Bool = false, expectedRevision: UInt64? = nil, isCurrent: () -> Bool = { true }) async throws -> SiteLocalizationResult {
         let session = request.session, stream = feed.stream, source = request.camera.sourceID
         func check() throws {
             try Task.checkCancellation()
@@ -80,10 +81,12 @@ enum SiteCameraAlignment {
         try check()
         let endpoint = try await GoClient.shared.openApp("dev.wendy.digital-twin", session: session)
         try check()
+        try await SiteStore.prepareAlignmentRoom(request.site, endpoint: endpoint)
+        try check()
         let first = try await freshFrame(feed, check: check)
         let begin = try await send(Command(operation: "begin",
             roomFrame: request.site.id.uuidString + "/" + request.site.site.modelRevision.uuidString,
-            camera: source, automatic: automatic, frame: Frame(first)), to: endpoint)
+            camera: source, automatic: automatic, expectedRevision: expectedRevision, frame: Frame(first)), to: endpoint)
         guard let token = begin.token else { throw SiteLocalizationError.invalidResult }
         do {
             try check()

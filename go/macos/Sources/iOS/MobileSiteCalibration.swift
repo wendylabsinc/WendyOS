@@ -9,13 +9,12 @@ struct MobileSiteCalibration: View {
     let onManualSaved: (SitePoint, SiteManualAlignment) async throws -> Void
     var onBusyChanged: (Bool) -> Void = { _ in }
     @State private var actions = AsyncActions()
-    @State private var engine = SiteLocalizationEngine()
     @State private var lensEngine = ScreenLensCalibration()
     @State private var progress = ScreenLensProgress()
     @State private var lens: SiteCameraLens?
     @State private var result: SiteLocalizationResult?
     @State private var revision: UInt64?
-    @State private var alignmentStream: UInt64 = 0
+    @State private var lensNeedsSave = false
     @State private var busy = false
     private enum Operation { case alignment, calibration }
     @State private var operation = Operation.alignment
@@ -65,10 +64,6 @@ struct MobileSiteCalibration: View {
                         .buttonStyle(.bordered)
                     if let result {
                         Label(String(format: result.lens.measured ? "Aligned · %.2f px" : "Estimated alignment · %.2f px", result.residual), systemImage: "checkmark.circle").foregroundStyle(MobileLensStyle.green)
-                    }
-                    if result != nil, !saved {
-                        Button("Save alignment") { perform(failureTitle: "Could not save alignment") { try await save() } }
-                            .buttonStyle(.borderedProminent)
                     }
                     DisclosureGroup("Improve accuracy (optional)") {
                         VStack(alignment: .leading, spacing: 12) {
@@ -141,7 +136,7 @@ struct MobileSiteCalibration: View {
             }
         }
         .fullScreenCover(isPresented: $phonePattern) {
-            PhoneLensCalibrationView(model: model, feed: feed) { lens = $0; result = nil; saved = false; calibrationMessage = "Lens measured. Retry alignment to apply the improved lens measurement." }
+            PhoneLensCalibrationView(model: model, feed: feed) { lens = $0; lensNeedsSave = true; result = nil; saved = false; calibrationMessage = "Lens measured. Retry alignment to apply the improved lens measurement." }
         }
     }
     private func perform(_ operation: Operation = .alignment, failureTitle: String = "Could not align camera", _ work: @escaping @MainActor () async throws -> Void) {
@@ -165,24 +160,19 @@ struct MobileSiteCalibration: View {
         }
     }
     private func alignAndSave() async throws {
-        guard let revision else { return }
+        guard revision != nil else { return }
         result = nil; saved = false; attemptedAutomatic = true
         alignmentStatus = "Aligning camera…"; alignmentDetail = "Matching live video to the scan. Keep the camera still."; alignmentFailed = false
-        try await SiteCameraAlignment.load(request.site, into: engine)
-        // Retry fresh frames without weakening the geometric or two-frame validation.
-        for attempt in 1...3 {
-            alignmentDetail = "Matching live video to the scan · attempt \(attempt) of 3"
-            do {
-                result = try await SiteCameraAlignment.align(model: model, request: request, feed: feed, engine: engine,
-                    persist: false, lensOverride: lens, expectedRevision: revision)
-                break
-            } catch let error as SiteLocalizationError {
-                guard case .noSolution = error, attempt < 3 else { throw error }
-                try await Task.sleep(for: .seconds(1))
-            }
-        }
-        alignmentStream = feed.stream
-        try await save()
+        // The shared service reads measured lenses from device metadata.
+        if lensNeedsSave { try await persistLens() }
+        let aligned = try await SiteCameraAlignment.align(model: model, request: request, feed: feed,
+            expectedRevision: revision, isCurrent: { current })
+        result = aligned; saved = true
+        await onSaved(aligned)
+        alignmentFailed = false
+        alignmentStatus = aligned.lens.measured ? "Aligned and saved" : "Aligned and saved · estimated"
+        alignmentDetail = "Tap Done to see the viewing area and projected video in the 3D model."
+        try await refreshRevision()
     }
     private func capture() async throws {
         guard let frame = feed.calibrationFrame(), frame.isFresh(at: Date()) else { throw WendyError(message: "Waiting for fresh camera video.") }
@@ -191,7 +181,7 @@ struct MobileSiteCalibration: View {
         progress = try await lensEngine.progress()
         if progress.count >= 12, progress.coverageReady {
             let measured = try await lensEngine.solve(width: frame.width, height: frame.height, codec: frame.codec)
-            lens = measured; result = nil; saved = false
+            lens = measured; lensNeedsSave = true; result = nil; saved = false
             calibrationMessage = "Lens measured. Retry alignment to apply the improved lens measurement."
         } else if previous == progress.revision {
             calibrationMessage = "No calibration view accepted. Show the whole checkerboard, change its angle or position, and try again."
@@ -200,29 +190,22 @@ struct MobileSiteCalibration: View {
         }
     }
     private func save() async throws {
-        guard let revision, current else { throw SiteLocalizationError.invalidImage }
-        if let result {
-            guard feed.running, feed.stream == alignmentStream,
-                  let frame = feed.calibrationFrame(), frame.isFresh(at: Date()),
-                  frame.width == result.lens.width, frame.height == result.lens.height else {
-                throw WendyError(message: "Camera stream changed. Align to the model again before saving.")
-            }
-            try await GoClient.shared.saveCameraAlignment(session: request.session, sourceID: request.camera.sourceID, expectedRevision: revision, result: result)
-            await onSaved(result)
-        } else if let lens, request.site.visualMapURL == nil {
-            try await GoClient.shared.saveCameraLens(session: request.session, sourceID: request.camera.sourceID, expectedRevision: revision, lens: lens)
-        } else { return }
+        guard request.site.visualMapURL == nil else { return }
+        try await persistLens()
         saved = true
-        if result == nil {
-            calibrationMessage = "Lens calibration saved on the device. Model alignment is still needed."
-        } else {
-            alignmentFailed = false
-            alignmentStatus = result?.lens.measured == true ? "Aligned and saved" : "Aligned and saved · estimated"
-            alignmentDetail = "Tap Done to see the viewing area and projected video in the 3D model."
-        }
+        calibrationMessage = "Lens calibration saved on the device. Model alignment is still needed."
+    }
+    private func persistLens() async throws {
+        guard let revision, let lens, current else { throw SiteLocalizationError.invalidImage }
+        try await GoClient.shared.saveCameraLens(session: request.session, sourceID: request.camera.sourceID,
+            expectedRevision: revision, lens: lens)
+        lensNeedsSave = false
+        try await refreshRevision()
+    }
+    private func refreshRevision() async throws {
         let records = try await GoClient.shared.cameraMetadata(session: request.session).filter { $0.sourceID == request.camera.sourceID }
         guard current, records.count == 1 else { throw SiteLocalizationError.invalidResult }
-        self.revision = records[0].revision
+        revision = records[0].revision
     }
 }
 

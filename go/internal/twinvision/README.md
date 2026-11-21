@@ -9,7 +9,9 @@ They do not choose lens candidates, validate poses, or write solved metadata.
 
 1. `begin`: send `camera`, `roomFrame`, and `frame` with width, height, codec,
    sequence, ageMS and base64 gray bytes. The service reads the exact room map
-   and current camera metadata. It returns a token and first-frame result.
+   and current camera metadata. Optional `expectedRevision` rejects metadata
+   changes since the client opened calibration, before solving. It returns a
+   token and first-frame result.
 2. `verify`: send the token and a fresh frame captured at least 800 ms after
    the first solve returned. Format must match and sequence must advance.
    The service fixes the selected lens and validates pose agreement. It returns
