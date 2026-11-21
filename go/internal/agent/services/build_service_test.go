@@ -1117,3 +1117,36 @@ func TestGetBuildCapabilities_AdvertisesMultiTarget(t *testing.T) {
 		t.Fatal("an agent that reads push_targets must advertise it, even with no buildkit")
 	}
 }
+
+func TestSetBuildHostEnabledLocalAdminAndPlaintextTCP(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		ctx     context.Context
+		allowed bool
+	}{
+		{"admin Unix socket", localAdminSocketCtx(), true},
+		{"plaintext TCP", plaintextTCPCtx(), false},
+		{"missing peer", context.Background(), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			svc := NewBuildService(zap.NewNop(), BuildServiceOptions{StateDir: dir, ConfigPath: dir})
+			response, err := svc.SetBuildHostEnabled(test.ctx, &agentpbv2.SetBuildHostEnabledRequest{Enabled: true})
+			if test.allowed {
+				if err != nil || !response.GetEnabled() {
+					t.Fatalf("local admin refused: %v", err)
+				}
+				if _, err := os.Stat(svc.buildHostEnabledPath); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("unexpected result: %v", err)
+				}
+				if _, err := os.Stat(svc.buildHostEnabledPath); !os.IsNotExist(err) {
+					t.Fatal("refused caller changed builder role")
+				}
+			}
+		})
+	}
+}

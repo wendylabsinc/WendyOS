@@ -1,0 +1,35 @@
+.applications-view { display: grid; gap: 22px; }
+.applications-toolbar, .applications-toolbar > div, .applications-tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.applications-toolbar { justify-content: space-between; font-size: 13px; }
+.applications-tools input { background: var(--card); border: 1px solid var(--border); padding: 9px 12px; color: var(--foreground); min-width: 210px; }
+.application-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 22px; }
+.application-card { padding: 24px; overflow: hidden; min-width: 0; }
+.application-card > header { display: flex; align-items: center; gap: 14px; }
+.app-icon { width: 48px; height: 48px; display: grid; place-items: center; background: var(--muted); color: var(--foreground); flex-shrink: 0; }
+.application-card h2 { font-size: 17px; overflow-wrap: anywhere; }
+.application-card header > div:nth-child(2) { min-width: 0; }
+.application-card header > button { margin-left: auto; flex-shrink: 0; }
+.application-card .app-status { margin-top: 5px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.app-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.application-id { color: var(--muted-foreground); font-family: var(--font-mono); font-size: 11px; margin: 18px 0 24px; overflow-wrap: anywhere; }
+.application-stats { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; margin: 18px 0; }
+.application-stats > div { display: grid; gap: 8px; }
+.application-stats span { display: flex; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 12px; }
+.application-stats strong { font-weight: 500; font-size: 26px; font-variant-numeric: tabular-nums; }
+.application-spark { height: 64px; margin: 0 -5px 16px; }
+.application-card footer { display: flex; justify-content: space-between; gap: 10px; color: var(--muted-foreground); font-size: 11px; border-top: 1px solid var(--border); padding-top: 14px; }
+.application-empty { display: grid; justify-items: center; gap: 14px; padding: 60px 20px; color: var(--muted-foreground); text-align: center; }
+.application-empty h2 { font-size: 18px; color: var(--foreground); }
+.app-sheet-actions, .app-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.app-sheet-actions { justify-content: flex-start; margin: 22px 0; }
+.app-detail-section { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--border); }
+.app-detail-section h3 { font-size: 14px; font-weight: 500; }
+.app-detail-section > p { font-size: 12px; margin-top: 12px; }
+.app-sheet-status { font-size: 13px; }
+.application-ports { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; text-align: left; }
+.application-ports th { color: var(--muted-foreground); font-size: 11px; font-weight: 400; }
+.application-ports th, .application-ports td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--border); }
+.application-danger { border-top-color: #8b4741; }
+.application-danger h3 { color: var(--destructive); }
+@media (max-width: 1000px) { .application-grid { grid-template-columns: minmax(0,1fr); } }
+@media (max-width: 600px) { .application-card { padding: 18px; } .applications-tools { width: 100%; } .applications-tools input { width: 100%; } }

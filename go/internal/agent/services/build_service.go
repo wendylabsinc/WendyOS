@@ -257,12 +257,11 @@ func (s *BuildService) builderEnabled() bool {
 // SetBuildHostEnabled turns the builder role on or off, so opting a device in
 // does not require shell access to place a file on it.
 //
-// It requires a USER certificate and refuses asset (device) ones. See the RPC's
-// comment in build_service.proto: without that split the opt-in gate would be
-// decorative, because anything able to call BuildImage could call this first.
+// Network callers require a USER certificate; device certificates remain
+// refused. An admin-entitled Unix-socket caller already has device authority.
 func (s *BuildService) SetBuildHostEnabled(ctx context.Context, req *agentpbv2.SetBuildHostEnabledRequest) (*agentpbv2.SetBuildHostEnabledResponse, error) {
 	actor, err := userIdentityFromContext(ctx, "changing the builder role")
-	if err != nil {
+	if err != nil && !isLocalAdminContext(ctx) {
 		return nil, err
 	}
 
@@ -286,7 +285,8 @@ func (s *BuildService) SetBuildHostEnabled(ctx context.Context, req *agentpbv2.S
 		s.logger.Info("builder role changed",
 			zap.Bool("enabled", req.GetEnabled()),
 			zap.Int32("actorOrg", actor.OrgID),
-			zap.String("actorUser", actor.EntityID))
+			zap.String("actorUser", actor.EntityID),
+			zap.Bool("localAdmin", isLocalAdminContext(ctx)))
 	}
 	return &agentpbv2.SetBuildHostEnabledResponse{Enabled: req.GetEnabled()}, nil
 }
@@ -306,6 +306,11 @@ func (s *BuildService) SetBuildHostEnabled(ctx context.Context, req *agentpbv2.S
 // this service on both. The listener's network is what separates them.
 func onLocalAdminSocket(p *peer.Peer) bool {
 	return p != nil && p.Addr != nil && p.Addr.Network() == "unix"
+}
+
+func isLocalAdminContext(ctx context.Context) bool {
+	p, ok := peer.FromContext(ctx)
+	return ok && onLocalAdminSocket(p)
 }
 
 // userIdentityFromContext admits only a caller presenting a wendy USER

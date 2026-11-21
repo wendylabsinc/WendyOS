@@ -66,9 +66,8 @@ func plaintextTCPCtx() context.Context {
 	return peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 9), Port: 50051}})
 }
 
-// Only the read-only RPCs widen, and only for the local admin socket. Writes
-// still demand a user in this device's tenant, and the plaintext listener is
-// refused everything even though it also carries no certificate.
+// Local admin containers may read and configure their host device. Network
+// callers still need a user in its tenant, including on the plaintext listener.
 func TestLocalMeshAdminCallerMatrix(t *testing.T) {
 	_, snapshot, _ := topologyFixture(t)
 	tenant, device := adminTenant(t), adminDevice(t)
@@ -77,7 +76,7 @@ func TestLocalMeshAdminCallerMatrix(t *testing.T) {
 		ctx         context.Context
 		read, write codes.Code
 	}{
-		{"local admin socket", localAdminSocketCtx(), codes.OK, codes.PermissionDenied},
+		{"local admin socket", localAdminSocketCtx(), codes.OK, codes.OK},
 		{"plaintext TCP", plaintextTCPCtx(), codes.PermissionDenied, codes.PermissionDenied},
 		{"no peer", context.Background(), codes.PermissionDenied, codes.PermissionDenied},
 		{"device certificate", ctxWithIdentity(t, device.Principal()), codes.PermissionDenied, codes.PermissionDenied},
@@ -183,8 +182,8 @@ func TestLocalMeshAdminOverRealLocalSocket(t *testing.T) {
 	if err != nil || topology.GetSelfDeviceId() != device.UUID().String() {
 		t.Fatalf("topology over the local socket: %v %v", topology, err)
 	}
-	if _, err := client.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Nan: proto.Bool(true)}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("configure over the local socket: got %v, want PermissionDenied", err)
+	if _, err := client.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Nan: proto.Bool(true)}); err != nil {
+		t.Fatalf("configure over the local socket: %v", err)
 	}
 }
 

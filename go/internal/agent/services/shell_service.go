@@ -124,7 +124,10 @@ func clientAuditFields(ctx context.Context) []zap.Field {
 	if !ok {
 		return nil
 	}
-	fields := []zap.Field{zap.String("remote", p.Addr.String())}
+	fields := []zap.Field{zap.Bool("localAdmin", onLocalAdminSocket(p))}
+	if p.Addr != nil {
+		fields = append(fields, zap.String("remote", p.Addr.String()))
+	}
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
 		return fields

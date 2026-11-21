@@ -1,0 +1,8 @@
+.device-panel .device-sidebar nav { gap: 18px; padding-bottom: 4px; }
+.device-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.device-sidebar .device-nav-group > h2 { font-family: var(--font-mono); font-size: 10px; font-weight: 400; letter-spacing: .06em; color: #919ba8; margin: 0; padding: 4px 12px 7px; }
+.device-sidebar .device-nav-group > button { display: flex; align-items: center; gap: 11px; padding: 8px 12px; min-height: 36px; text-align: left; border: 0; border-left: 2px solid transparent; background: transparent; border-radius: 0; color: var(--muted-foreground); font-size: 13px; cursor: pointer; }
+.device-sidebar .device-nav-group > button > svg { flex-shrink: 0; }
+.device-sidebar .device-nav-group > button:hover { background: var(--muted); color: var(--foreground); }
+.device-sidebar .device-nav-group > button[aria-current="page"] { border-left-color: var(--foreground); background: var(--muted); color: var(--foreground); }
+.device-panel .top-metrics.overview-metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }

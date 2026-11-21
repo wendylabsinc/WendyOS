@@ -1,0 +1,52 @@
+.network-view { display: grid; gap: 24px; }
+.network-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 450px), 1fr)); gap: 24px; }
+.lan-card { min-width: 0; }
+.lan-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px; }
+.lan-card-heading > div { display: flex; align-items: baseline; gap: 12px; }
+.lan-card-heading h2 { font-size: 16px; font-weight: 500; }
+.interface-name { font-size: 12px; color: var(--muted-foreground); font-family: var(--font-mono); }
+.lan-diagram { display: grid; grid-template-columns: 100px minmax(16px, 1fr) 100px minmax(16px, 1fr) 100px; align-items: start; padding: 18px 32px 32px; }
+.lan-node { display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; font-size: 12px; color: var(--muted-foreground); }
+.lan-node-icon { display: grid; place-items: center; width: 66px; height: 66px; background: var(--background); border: 1px solid var(--border); color: var(--foreground); }
+.lan-node-icon.connected { color: var(--status-good); border-color: #365d4b; background: #1d3028; }
+.lan-link { height: 1px; margin: 33px -16px 0; background: #51876c; position: relative; }
+.lan-link::after { content: ""; width: 5px; height: 5px; background: var(--status-good); position: absolute; top: -2px; left: calc(50% - 2px); }
+.interface-addresses { border-top: 1px solid var(--border); padding: 22px 24px 24px; }
+.interface-addresses h3 { font-size: 12px; font-weight: 500; margin-bottom: 15px; }
+.address-entry { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; font-size: 12px; }
+.address-family { color: var(--muted-foreground); font-size: 10px; font-family: var(--font-mono); }
+.address-entry code { overflow-wrap: anywhere; font-family: var(--font-mono); user-select: all; }
+.device-panel .address-entry .quiet { padding: 5px 8px; font-size: 11px; }
+.address-copy-error { grid-column: 2 / -1; color: var(--muted-foreground); font-size: 11px; }
+.wifi-unavailable { display: flex; align-items: center; gap: 16px; padding: 18px 4px; color: var(--muted-foreground); }
+.wifi-unavailable h2 { font-size: 13px; font-weight: 500; color: var(--foreground); margin-bottom: 5px; }
+.wifi-unavailable p { font-size: 12px; }
+.wireless-summary { display: flex; align-items: center; gap: 20px; padding: 18px 24px 30px; }
+.wireless-icon { display: grid; place-items: center; width: 66px; height: 66px; border: 1px solid var(--border); background: var(--background); }
+.wireless-icon.connected { color: var(--status-good); border-color: #365d4b; background: #1d3028; }
+.wireless-icon.disconnected { color: var(--status-bad); border-color: #70433d; background: #34231f; }
+.wireless-summary strong { font-size: 17px; font-weight: 500; }
+.wireless-summary .connection-state { margin-top: 10px; }
+.wifi-sheet-section { margin-bottom: 24px; }
+.wifi-sheet-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.wifi-sheet-heading h3 { font-size: 14px; font-weight: 500; }
+.wifi-sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.wifi-advanced { margin-top: 24px; }
+.wifi-advanced > summary { font-size: 13px; padding: 10px 0; }
+.wifi-advanced[open] > summary { margin-bottom: 12px; }
+.device-panel .wifi-advanced .operation-row { padding-left: 0; padding-right: 0; }
+.network-empty { display: grid; justify-items: center; gap: 12px; padding: 48px 24px; text-align: center; }
+.network-empty svg { color: var(--muted-foreground); }
+.network-empty h2 { font-size: 16px; }
+.network-empty p { font-size: 12px; }
+@media (max-width: 600px) {
+  .lan-card-heading, .interface-addresses { padding-left: 18px; padding-right: 18px; }
+  .lan-diagram { grid-template-columns: 74px minmax(12px, 1fr) 74px minmax(12px, 1fr) 74px; padding-left: 18px; padding-right: 18px; }
+  .lan-node-icon { width: 56px; height: 56px; }
+  .lan-link { margin-top: 28px; margin-left: -9px; margin-right: -9px; }
+  .lan-node { font-size: 11px; }
+  .address-entry { gap: 8px; grid-template-columns: 30px minmax(0, 1fr) auto; }
+  .wifi-sheet-heading { align-items: flex-start; flex-direction: column; }
+  .wireless-summary .connection-state { width: auto; margin-left: 0; }
+}
+.lan-card-heading .connection-state { width: auto; margin-left: auto; }

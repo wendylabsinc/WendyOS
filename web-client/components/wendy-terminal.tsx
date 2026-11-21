@@ -9,7 +9,7 @@ export default function WendyTerminal({
   device,
   client,
 }: {
-  device: Device;
+  device: Pick<Device, "id" | "name" | "version" | "online">;
   client?: WendyClient;
 }) {
   const target = useRef<HTMLDivElement>(null);

@@ -19,7 +19,10 @@
     "desktop:start": "electron .",
     "desktop:package": "node scripts/desktop.mjs package",
     "desktop:test": "node --test tests/desktop-*.test.mjs",
-    "desktop:check": "tsc --project tsconfig.desktop.json"
+    "desktop:check": "tsc --project tsconfig.desktop.json",
+    "device:build": "npm run build:wasm && vite build --config vite.device.config.ts",
+    "device:package": "node scripts/device-package.mjs",
+    "device:test": "node --test tests/device-*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -33,6 +36,7 @@
     "date-fns": "^4.4.0",
     "drizzle-orm": "0.45.2",
     "embla-carousel-react": "^8.6.0",
+    "geist": "1.9.2",
     "input-otp": "^1.4.2",
     "lucide-react": "^1.31.0",
     "next": "16.4.6",

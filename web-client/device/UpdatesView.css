@@ -1,0 +1,42 @@
+.updates-view { display: grid; gap: 24px; }
+.software-updates-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.software-update-card { min-width: 0; padding: 24px; display: flex; flex-direction: column; }
+.software-update-card > header, .drivers-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.update-card-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.update-card-title > svg { color: var(--muted-foreground); flex-shrink: 0; }
+.update-card-title h2 { font-size: 15px; font-weight: 500; }
+.update-card-title p { color: var(--muted-foreground); font-size: 12px; margin-top: 5px; }
+.update-card-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.software-version { display: grid; gap: 8px; margin: 30px 0 24px; }
+.software-version > span { font-size: 12px; color: var(--muted-foreground); }
+.software-version > strong { font-size: 25px; font-weight: 500; overflow-wrap: anywhere; }
+.software-status { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.software-status.good { color: var(--status-good); }
+.software-status.error { color: var(--status-bad); }
+.software-status > svg { flex-shrink: 0; }
+.update-note { font-size: 12px; line-height: 1.65; color: var(--muted-foreground); margin: 10px 0 0; overflow-wrap: anywhere; }
+.software-update-card > footer, .drivers-panel > footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 20px; margin-top: auto; }
+.software-update-card > footer { padding-top: 28px; }
+.software-update-card > footer > span, .drivers-panel > footer > span { font-size: 11px; color: var(--muted-foreground); }
+.software-update-card > .inline-error { margin-bottom: 18px; }
+.update-download { margin-top: 18px; }
+.update-download progress { display: block; width: 100%; height: 6px; margin-bottom: 9px; accent-color: var(--status-good); }
+.update-download > span { font-size: 11px; color: var(--muted-foreground); }
+.drivers-panel { padding: 24px; }
+.driver-list { margin-top: 20px; }
+.driver-row { display: flex; align-items: center; gap: 16px; padding: 20px 0; border-top: 1px solid var(--border); }
+.driver-icon { display: grid; place-items: center; width: 44px; height: 44px; background: var(--background); border: 1px solid var(--border); color: var(--muted-foreground); flex-shrink: 0; }
+.driver-summary { min-width: 0; flex: 1; }
+.driver-summary h3 { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.driver-summary p { font-size: 11px; color: var(--muted-foreground); margin-top: 5px; overflow-wrap: anywhere; }
+.driver-summary .software-status { margin-top: 6px; font-size: 11px; }
+.drivers-empty { display: grid; justify-items: center; gap: 10px; padding: 38px 20px; text-align: center; color: var(--muted-foreground); }
+.drivers-empty h3 { font-size: 14px; font-weight: 500; color: var(--foreground); }
+.drivers-empty p { font-size: 12px; }
+@media (max-width: 1100px) { .software-updates-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+  .software-update-card, .drivers-panel { padding: 18px; }
+  .software-update-card > header { flex-wrap: wrap; }
+  .software-version > strong { font-size: 22px; }
+  .driver-row { gap: 12px; }
+}

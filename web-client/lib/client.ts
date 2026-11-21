@@ -234,9 +234,10 @@ export class WendyClient {
 }
 
 export function formatBytes(n: number | null) {
-  if (n === null) return "—";
-  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + " GB";
-  return Math.round(n / 1024 ** 2) + " MB";
+  if (n === null || !Number.isFinite(n) || n < 0) return "—";
+  if (n === 0) return "0 B";
+  const unit = Math.min(Math.max(0, Math.floor(Math.log10(n) / 3)), 4);
+  return `${(n / 1000 ** unit).toLocaleString(undefined, { maximumFractionDigits: unit ? 1 : 0 })} ${["B", "KB", "MB", "GB", "TB"][unit]}`;
 }
 export function relativeTime(iso: string) {
   const s = Math.max(

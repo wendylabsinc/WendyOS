@@ -1,0 +1,38 @@
+.connectivity-view { display: grid; gap: 22px; }
+.connectivity-group { padding: 0; }
+.connectivity-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px; }
+.connectivity-group-title { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.connectivity-group-title > svg { flex-shrink: 0; margin-top: 2px; color: var(--muted-foreground); }
+.connectivity-group h2, .enrollment-actions h2 { font-size: 16px; font-weight: 500; }
+.connectivity-group-heading p, .enrollment-actions p { font-size: 12px; line-height: 1.6; color: var(--muted-foreground); margin-top: 6px; }
+.connectivity-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.connectivity-group-body { padding: 0 24px 20px; }
+.connectivity-empty { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted-foreground); padding: 10px 0 4px; }
+.connectivity-item { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 17px 0; }
+.connectivity-item + .connectivity-item { border-top: 1px solid var(--border); }
+.connectivity-item-label { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.connectivity-item h3 { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.connectivity-item p { color: var(--muted-foreground); font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
+.connectivity-state { width: 6px; height: 6px; flex-shrink: 0; border: 1px solid var(--muted-foreground); }
+.connectivity-state[data-connected=true] { background: var(--foreground); border-color: var(--foreground); }
+.enrollment-summary { display: flex; gap: 24px; padding: 30px; }
+.enrollment-icon { display: flex; align-items: center; justify-content: center; width: 64px; height: 64px; background: var(--muted); flex-shrink: 0; }
+.enrollment-eyebrow { font-size: 12px; color: var(--muted-foreground); }
+.enrollment-summary h2 { font-size: 24px; font-weight: 500; margin-top: 8px; }
+.enrollment-summary p { font-size: 13px; line-height: 1.6; color: var(--muted-foreground); margin-top: 10px; }
+.enrollment-host { margin-top: 18px; font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.enrollment-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 24px; }
+.enrollment-actions > div:first-child { max-width: 60ch; }
+.enrollment-identity { display: grid; gap: 16px; padding: 0 24px 22px; font-size: 13px; }
+.enrollment-identity > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 16px; }
+.enrollment-identity dt { color: var(--muted-foreground); }
+.enrollment-identity dd { margin: 0; overflow-wrap: anywhere; }
+.enrollment-advanced { margin: 0 24px 24px; font-size: 12px; }
+.enrollment-advanced code { display: block; margin-top: 12px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .connectivity-group-heading, .connectivity-item, .enrollment-actions { align-items: flex-start; flex-direction: column; }
+  .connectivity-group-heading { padding: 20px; }
+  .connectivity-group-body { padding: 0 20px 18px; }
+  .enrollment-summary { padding: 24px; flex-direction: column; gap: 18px; }
+  .enrollment-summary h2 { font-size: 21px; }
+}
