@@ -302,7 +302,9 @@ xcodebuild -project go/macos/WendyDesktop.xcodeproj \
 ```
 
 For a physical device, select your Apple development team for `WendyMobile` in
-Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
+Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.WendyCompanion`,
+so distribution builds update the existing Wendy Companion App Store app. Its VPN
+extension uses `dev.wendy.WendyCompanion.NetProxy`.
 The device build can also be compile-checked with
 `-destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`; that unsigned
 output cannot be installed on a phone.
@@ -333,7 +335,7 @@ On iOS the broker runs in-process and uses mutually authenticated loopback TLS
 for app-to-extension IPC, avoiding Unix socket path limits. Identity and routing
 history live in the private App Group container. When VPN starts, the app drains
 its broker and the packet tunnel extension owns the shared profile until VPN
-stops. Both targets require the `group.dev.wendy.mobile` App Group and
+stops. Both targets require the `group.dev.wendy.WendyCompanion` App Group and
 `packet-tunnel-provider` entitlement in their provisioning profiles. Existing
 local configuration is copied into the shared container on first launch.
 Account or organization changes invalidate app device connections before
@@ -422,7 +424,9 @@ If iOS requires online development-certificate verification, launch with
 the radios, return to the running app, and copy a file to
 `tmp/wendy-live-mesh-ready` in its app data container over USB to release discovery.
 
-Signing-team selection is local: pass `DEVELOPMENT_TEAM=YOUR_TEAM` to `xcodebuild`.
+The iOS app and VPN extension use Wendy Labs team `3YVC792H3S` and the existing
+Wendy Companion App Store identifiers. For local signing with another team, pass
+`DEVELOPMENT_TEAM=YOUR_TEAM` to `xcodebuild`.
 For a Personal Team without APNs, a local development-only empty entitlement file
 can be supplied with `CODE_SIGN_ENTITLEMENTS=/absolute/path/to/Local.entitlements`;
 notification registration will remain unavailable. Do not commit personal signing
@@ -617,7 +621,7 @@ and does not grant Cloud permission.
 
 The receiver uses `wendycloud.v2.APNSService/RegisterDeviceToken` and
 `UnregisterDeviceToken` through the existing authenticated Cloud connection. It
-passes the app's actual bundle ID (`dev.wendy.desktop` or `dev.wendy.mobile`), token,
+passes the app's actual bundle ID (`dev.wendy.desktop` or `dev.wendy.WendyCompanion`), token,
 and APNs environment; the server derives the recipient from the authenticated
 user. Tokens stay in memory and are requested again at launch. Opt-in preferences
 are scoped to the saved account, Cloud endpoint, and email. The UI reports success
@@ -632,7 +636,7 @@ in the simulator host; use a provisioned device to verify delivery.
 
 The Cloud backend inspected for this change allows only the existing Companion
 app topics. Its APNS registration allowlist must also accept `dev.wendy.desktop`
-and `dev.wendy.mobile`, and its APNs signing key must cover their app IDs. That
+and `dev.wendy.WendyCompanion`, and its APNs signing key must cover their app IDs. That
 server change and deployment are not included in this repository. The app reports
 Cloud rejection instead of using a Companion topic or pretending registration
 succeeded. No test token or mock Cloud grant is registered during verification.

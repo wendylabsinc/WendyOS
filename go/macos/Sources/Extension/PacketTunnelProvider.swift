@@ -16,7 +16,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             try? PropertyListDecoder().decode(VPNConfiguration.self, from: $0)
         }
         #if os(iOS)
-        let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile")?.appendingPathComponent("Wendy", isDirectory: true).path
+        let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.WendyCompanion")?.appendingPathComponent("Wendy", isDirectory: true).path
         guard let shared else {
             completionHandler(failure("VPN requires Wendy's shared app profile.")); return
         }

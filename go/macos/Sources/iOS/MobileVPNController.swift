@@ -3,7 +3,7 @@ import NetworkExtension
 
 @MainActor
 final class VPNController: ObservableObject {
-    static let extensionID = "dev.wendy.mobile.network"
+    static let extensionID = "dev.wendy.WendyCompanion.NetProxy"
     @Published var status = "Off"
     @Published var active = false
     @Published var enabled = false
@@ -11,7 +11,7 @@ final class VPNController: ObservableObject {
     @Published var connectionError: String?
     @Published var routes: [VPNRoute] = []
     var setupIssue: String? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile") == nil
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.WendyCompanion") == nil
             ? "VPN requires a signed build with Network Extension and App Group provisioning." : nil
     }
     private var manager: NETunnelProviderManager?

@@ -112,6 +112,7 @@ struct ThermalCameraFrame {
 struct ThermalCameraDisplay: View {
     @ObservedObject var feed: CameraFeed
     let frame: ThermalCameraFrame
+    var open: (() -> Void)? = nil
     @State private var choosingScale = false
 
     var body: some View {
@@ -143,6 +144,7 @@ struct ThermalCameraDisplay: View {
                     .background(.black.opacity(0.4), in: Capsule())
                     .padding(12)
                 }
+                .modifier(CameraFeedTap(open: open))
                 .overlay(alignment: .topTrailing) {
                     Button { choosingScale = true } label: {
                         Image(systemName: frame.allowScaleOverride ? "slider.horizontal.3" : "info.circle")
@@ -154,6 +156,7 @@ struct ThermalCameraDisplay: View {
                 }
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .popover(isPresented: $choosingScale) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Thermal measurements").font(.headline)

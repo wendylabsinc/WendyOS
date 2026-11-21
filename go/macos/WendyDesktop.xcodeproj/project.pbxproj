@@ -1217,7 +1217,7 @@
 						ProvisioningStyle = Automatic;
 					};
 					4660FE6CC78F07FE7C2A1CD9 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 3YVC792H3S;
 						ProvisioningStyle = Automatic;
 					};
 					5198757F852AB57452928A68 = {
@@ -1234,7 +1234,7 @@
 						ProvisioningStyle = Automatic;
 					};
 					ACDB653814C81DAD375DF0E3 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 3YVC792H3S;
 						ProvisioningStyle = Automatic;
 					};
 					C6BA34DDD78D5B0FE18B873F = {
@@ -1875,6 +1875,8 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_ENTITLEMENTS = Resources/Mobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 20261119184617;
+				DEVELOPMENT_TEAM = 3YVC792H3S;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/include/opencv4";
@@ -1884,13 +1886,13 @@
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Wendy discovers and connects to your nearby devices.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_WendyPushEnvironment = "$(WENDY_PUSH_ENVIRONMENT)";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				MARKETING_VERSION = 2026.11.19;
 				OTHER_LDFLAGS = (
 					"-lresolv",
 					"-lwendydesktop",
@@ -1903,7 +1905,7 @@
 					"-lc++",
 					"-lz",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion;
 				PRODUCT_NAME = WendyMobile;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -1943,7 +1945,7 @@
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
 				OTHER_LDFLAGS = (
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WendyMobile.app/WendyMobile";
@@ -1956,6 +1958,8 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				ARCHS = arm64;
 				CODE_SIGN_ENTITLEMENTS = Resources/MobileNetwork.entitlements;
+				CURRENT_PROJECT_VERSION = 20261119184617;
+				DEVELOPMENT_TEAM = 3YVC792H3S;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = "Resources/MobileNetwork-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -1965,11 +1969,12 @@
 					"@executable_path/../../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				MARKETING_VERSION = 2026.11.19;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lwendyvpn",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.network;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion.NetProxy;
 				PRODUCT_MODULE_NAME = WendyMobileNetwork;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/Shared/VPNBridge.h;
@@ -2089,7 +2094,7 @@
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
 				OTHER_LDFLAGS = (
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WendyMobile.app/WendyMobile";
@@ -2221,6 +2226,8 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				ARCHS = arm64;
 				CODE_SIGN_ENTITLEMENTS = Resources/MobileNetwork.entitlements;
+				CURRENT_PROJECT_VERSION = 20261119184617;
+				DEVELOPMENT_TEAM = 3YVC792H3S;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = "Resources/MobileNetwork-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -2230,11 +2237,12 @@
 					"@executable_path/../../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				MARKETING_VERSION = 2026.11.19;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lwendyvpn",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.network;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion.NetProxy;
 				PRODUCT_MODULE_NAME = WendyMobileNetwork;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/Shared/VPNBridge.h;
@@ -2250,6 +2258,8 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_ENTITLEMENTS = Resources/Mobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 20261119184617;
+				DEVELOPMENT_TEAM = 3YVC792H3S;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/include/opencv4";
@@ -2259,13 +2269,13 @@
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Wendy discovers and connects to your nearby devices.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_WendyPushEnvironment = "$(WENDY_PUSH_ENVIRONMENT)";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				MARKETING_VERSION = 2026.11.19;
 				OTHER_LDFLAGS = (
 					"-lresolv",
 					"-lwendydesktop",
@@ -2278,7 +2288,7 @@
 					"-lc++",
 					"-lz",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion;
 				PRODUCT_NAME = WendyMobile;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -2344,7 +2354,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion.uitests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = WendyMobile;
@@ -2408,7 +2418,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.WendyCompanion.uitests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = WendyMobile;
