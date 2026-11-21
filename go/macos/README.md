@@ -33,6 +33,13 @@ open go/macos/Build/DerivedData/Build/Products/Debug/WendyDesktop.app
 
 The default build is unsigned. Device discovery, cloud access, cameras, and logs work without activating the VPN. macOS will only activate the Network Extension from a properly signed and provisioned app.
 
+The bundled Linux digital twin also requires a running Docker/BuildKit engine.
+`Scripts/bundle-twin.py` builds the camera worker for Linux arm64 and amd64,
+runs the shared native tests, and packages its runtime alongside the Go service.
+The first build compiles OpenCV; later builds reuse Docker's cache. Apple scan
+capture and the Linux worker read the same checksum pin from
+`internal/twinvision/native/opencv.lock` relative to the Go directory.
+
 The build produces native binaries for the build Mac. It links `libwendydesktop.a` into the app and `libwendyvpn.a` into the extension. It also bundles the repository's `wendy` executable for the CLI's detached mesh worker and includes libusb, with no Homebrew runtime dependency. Generated binaries and DerivedData stay in the ignored `Build/` directory.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
@@ -50,6 +57,20 @@ The automatic nearby invitation opens setup. The **+** menu also offers manual d
 The setup sheet remains open when advertisements disappear and automatically opens a fresh encrypted session after a disconnect. Once Cloud may have issued credentials, the app retains that attempt for the same Bluetooth address until the app exits and prevents another issuance attempt. Automatic enrollment checks verify the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
 ## Site models on macOS and iOS
+
+Sites now use the Linux `dev.wendy.digital-twin` app on the selected gateway.
+Deploy it using [the digital twin service guide](../apps/digital-twin/README.md).
+Linux owns persisted room state, robot navigation and rotation searches. Apple
+clients contribute scans and camera measurements, render state and send commands.
+Go2 can start a room without an Apple app; G1 and Go2 ROS nodes can contribute
+registered PointCloud2 observations. An unavailable service is reported rather
+than replaced by a local controller.
+
+On macOS, the **Cameras** list, camera alignment details and **Go2** controls open
+in popovers. Opening a menu keeps the camera preview and bottom controls in place.
+Long lists and robot details scroll inside the popover. Go2's Stop button remains
+available on the bottom bar when a robot is paired; closing its controls retains
+the existing stop behavior.
 
 ### Automatic camera alignment
 
@@ -155,9 +176,10 @@ and visual references as a `.wendysite` file through the system share sheet.
 On the receiving device, use **Sites > Import Model or Site** to open it.
 **Sites > Export Site** saves the same archive to a folder.
 Import that file on the other platform while connected to the same Cloud gateway.
-The file contains no credentials, and importing it creates a separate local copy.
-There is no automatic cross-device site sync. Sites live in Application Support's
-`WendySites` directory, inside the application sandbox on iOS.
+The file contains no credentials, and importing it creates a separate room in the
+Linux service. Clients on the same twin gateway share room state. Existing local
+`WendySites` captures are copied to Linux on first connection without deleting
+the originals. Point-only robot rooms do not have a USDZ archive to export.
 
 On iPhone, the twin fills the workspace. The Cameras button opens a sheet for
 previews, alignment status and camera management. The settings menu holds
@@ -200,7 +222,13 @@ Estimated alignment validates each focal-length candidate before choosing one.
 When the references have enough depth variation, it also refines focal length
 and pose together, keeping the principal point centred and distortion zero.
 Comparable fits that differ by more than 30 cm or 10 degrees are rejected as
-distance-ambiguous. Later attempts re-estimate an assumed lens rather than
+distance-ambiguous. In Digital Twin, automatic alignment shows the best individually
+validated fit as a translucent orange marker and cone labeled **Unsure**. This is
+a temporary single-frame candidate, not a saved alignment. It expires after five
+minutes and clears when the workspace changes or a later attempt fails without
+a candidate. Confirmed alignments and manual placements take precedence. Candidates
+are excluded from camera color projection, people positioning, and site exports.
+Later attempts re-estimate an assumed lens rather than
 locking retries to an earlier guess. A measured lens remains fixed.
 
 Camera markers and viewing cones that intersect a nearby RoomPlan wall are drawn
@@ -677,6 +705,13 @@ specific simulator and refuses a running VM. This pane is excluded from iOS.
 
 ### Wendy Lite devices
 
+On macOS and iOS, Wendy Lite's **Settings > Wendy Mesh** section shows saved
+participation, runtime status, and active links. Use **Enable mesh participation**
+or **Disable mesh participation** to change only the participation switch,
+preserving the device's carrier settings and link limits. Enabling participation
+does not confirm a peer connection; use **Refresh mesh status** to check active
+links. Disabling participation can disconnect a device reached through the mesh.
+
 Nearby discovery includes Wendy Lite boards over LAN and USB. Cloud Lite devices
 connect through the authenticated WendyCom relay. Selecting a Lite device opens
 Cameras, Sensors, Device, Wi-Fi, and Logs. The Sensors pane displays live
@@ -1102,7 +1137,16 @@ Overhead returns above the body top are excluded from navigation obstacles,
 but remain available for localization. The body top is at least 40 cm above
 the measured floor and rises with the odometry base, allowing 10 cm from the
 base to the top. Voxel half-height is included in the vertical overlap check.
-Measured drops still block their entire floor cells. Attachments beyond the
+Measured drops still block their entire floor cells. **Show navigation obstacles**
+is enabled by default on Mac and iOS. Red footprints show the occupied voxel
+areas used by the planner; orange cells show detected drops. The overlay follows
+the confirmed site alignment and updates from each accepted navigation scan,
+including during movement and after a rejected route. It hides when telemetry
+is stale, the connection closes, or alignment is lost. These are floor-projected
+footprints, not reconstructed object heights. Unmarked areas do not establish
+clear floor, and Unitree's accumulated map can retain old obstacles.
+
+Attachments beyond the
 standard body dimensions require a larger envelope. The planner
 retains arrival heading at each search node and checks the actual odometry
 heading during movement. Translation and rotation are separate, walking is
@@ -1114,8 +1158,16 @@ does not change its posture or motion mode.
 
 This is supervised waypoint movement. Unitree's voxel map accumulates observations
 and is not a safety-rated live obstacle sensor. Keep the route clear and remain
-with the robot. The controller stops on stale observations, lost UI activity,
-failed commands or a blocked route. The agent separately expires MOVE after
+with the robot. When an obstacle blocks the route or its stopping area, the
+controller confirms Stop, then searches for a replacement route to the same
+destination in both navigation modes. Detours reserve space for heading
+corrections, the command lease and braking, including beyond bends. A replacement
+can therefore require more room than a footprint-only route. Movement resumes
+on a later control tick only after telemetry and UI freshness pass again. The
+original 30-second deadline and floor policy remain in effect. If planning fails,
+the robot stays stopped and reports that no alternative route was found.
+The controller also stops on stale observations, lost UI activity and failed
+commands. The agent separately expires MOVE after
 500 ms. Tests cover synthetic closed-loop arrival, obstacle/unknown-floor
 rejection, source timestamps, command ordering, failed Stop, and lost leases;
 they do not establish physical navigation performance.
@@ -1126,8 +1178,14 @@ with a live pose but insufficient scan structure. **Not now** keeps passive
 matching active and suppresses further popups for that observation session.
 The popup disappears if the pose is lost, Go2 moves, or its position is aligned.
 There is no **Locate Go2** button. Accepting the popup starts a bounded search:
-match, turn if ambiguous, stop, wait for a fresh view, then match again. If the
-lens has no measurement, the checkerboard sheet comes first. The search stops
+check clearance, turn, stop, wait for a fresh view, then match and turn again if
+ambiguous. A missing camera frame or lens calibration does not block LiDAR-based
+search. A calibrated camera adds visual evidence when available; **Calibrate
+camera** remains available separately. The panel shows sensor waits, clearance
+checks, turn progress and matching without opening Details. A rejected turn
+shows its reason with **Try rotation again** and **Place manually** actions;
+retrying requires accepting the rotation popup again. **Cancel search** stops
+pending and active searches. The search stops
 when a suggestion is available, after a full circle of up to twelve 30-degree turns, after five
 minutes excluding calibration, or on Stop/fault. It never confirms a pose.
 If a full rotation or the time limit produces no match, the panel keeps a
@@ -1231,3 +1289,12 @@ a completed recording, and a failed upload or unavailable sensor. Check cited
 IDs/times against Data, open the recording card, and repeat after disconnecting.
 Queries must report unavailable evidence rather than reuse another device's data.
 Paid model inference and device QA are separate from deterministic backend tests.
+
+### Shared fixed-camera alignment
+
+Room-reference alignment runs through the Linux twin's camera-alignment API.
+Apple clients supply two fresh luminance frames and display the result. The
+service selects the lens, validates pose agreement and saves metadata with a
+revision check. The web example uses the same API and worker. See
+[the alignment contract](../internal/twinvision/README.md) for provenance,
+expiry, replay testing and the remaining robot-localization migration.

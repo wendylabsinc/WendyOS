@@ -145,7 +145,17 @@ private final class SiteLocalizationStorage: @unchecked Sendable {
             if estimated { return WSLocalizeEstimated(handle.pointer, pixels.bindMemory(to: UInt8.self).baseAddress, Int32(width), Int32(height)) }
             return WSLocalize(handle.pointer, pixels.bindMemory(to: UInt8.self).baseAddress, Int32(width), Int32(height), nil)
         }
-        guard output.success != 0 else { throw SiteLocalizationError.noSolution(Int(output.reason), Int(output.matches), Int(output.inliers)) }
+        return try SiteLocalizationResult.decode(output, width: width, height: height, revision: revision, existing: existing)
+    }
+}
+
+extension SiteLocalizationResult {
+    static func decode(_ output: WSLocalization, width: Int, height: Int, revision: UUID,
+                       existing: SiteCameraLens?) throws -> SiteLocalizationResult {
+        let unsure = output.success == 0 && output.reason == 8 && output.fitted_lens == 2
+        guard output.success != 0 || unsure else {
+            throw SiteLocalizationError.noSolution(Int(output.reason), Int(output.matches), Int(output.inliers))
+        }
         var rawTransform = output.world_from_camera, rawDistortion = output.distortion
         let t = withUnsafeBytes(of: &rawTransform) { Array($0.bindMemory(to: Double.self)) }
         let distortion = withUnsafeBytes(of: &rawDistortion) { Array($0.bindMemory(to: Double.self)) }
@@ -155,21 +165,30 @@ private final class SiteLocalizationStorage: @unchecked Sendable {
         let pose = SiteCameraPose(modelRevision: revision, position: SitePoint(x:t[12],y:t[13],z:t[14]),
             rotation: simd_quatd(rotation).normalized.vector, method: 2,
             provenance: (approximate ? "Approximate pose using an assumed pinhole lens. " : "") + "Matched camera image to iPhone LiDAR room references; held-out RMS \(String(format: "%.2f", output.rms)) px", observedAt: now,
-            validUntil: now.addingTimeInterval(7*24*60*60))
+            validUntil: now.addingTimeInterval(unsure ? 300 : 7*24*60*60))
         let fitted = SiteCameraLens(width: width, height: height, fx: output.fx, fy: output.fy, cx: output.cx, cy: output.cy,
             distortionModel: "brown_conrady", distortion: distortion, measured: !approximate,
             note: approximate ? "Estimated pinhole lens from scene matches; centred principal point and zero distortion assumed. FOV and camera position are approximate." : "Joint fit against iPhone LiDAR scene points; square pixels, radial distortion; held-out RMS \(String(format: "%.2f", output.rms)) px",
             captureMode: "JPEG \(width)x\(height)")
         let resultLens = existing ?? fitted
         guard pose.isCurrent(revision: revision, now: now), resultLens.isValid, resultLens.boundaryRays != nil else { throw SiteLocalizationError.invalidResult }
+        if unsure {
+            guard !resultLens.measured, output.inliers >= WS_MIN_ESTIMATED_INLIERS,
+                  output.rms.isFinite, output.rms >= 0, output.rms <= resultLens.alignmentResidualLimit else {
+                throw SiteLocalizationError.invalidResult
+            }
+            throw SiteLocalizationError.unsure(SiteCameraGeometry(pose: pose, lens: resultLens))
+        }
         return SiteLocalizationResult(lens: resultLens, pose: pose, inliers: Int(output.inliers), residual: output.rms, fittedLens: output.fitted_lens != 0)
     }
 }
 
 enum SiteLocalizationError: LocalizedError {
+    case unsure(SiteCameraGeometry)
     case invalidMap, insufficientMap, invalidImage, invalidResult, coordinateMismatch, noSolution(Int, Int, Int)
     var errorDescription: String? {
         switch self {
+        case .unsure: "The camera's distance is uncertain. Different lens estimates fit this view at different positions. No alignment was saved."
         case .invalidMap: "The room’s visual reference map is invalid or belongs to a different model."
         case .insufficientMap: "Not enough visual references. Scan textured objects at different depths in the area the camera sees."
         case .invalidImage: "A fresh camera image is needed to calibrate and align this camera."

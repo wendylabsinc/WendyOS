@@ -111,7 +111,7 @@ func withoutMeshPickerItem(item tui.PickerItem) (tui.PickerItem, bool) {
 	item.Value = &e
 	item.Type = copy.ConnectionTypes()
 	item.Address = copy.Address()
-	item.Hint = lanProbeHint(copy.LAN)
+	item.Hint = ""
 	return item, true
 }
 func reconcileMeshPicker(m devicePickerModel, snapshot sessionbroker.OperatorDirectory) (devicePickerModel, tea.Cmd) {

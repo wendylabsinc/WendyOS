@@ -48,6 +48,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let calibrate: ((StoredSite, SiteCamera) -> Void)?
     let automaticAlignment: ((StoredSite, Bool) -> AnyView)?
     let alignmentStatuses: [String: String]
+    let alignmentCandidates: ((StoredSite) -> [String: SiteCameraGeometry])?
     let colorCapture: (([String]) -> AnyView)?
     let robotSession: UInt64
     let robotGatewayName: String
@@ -56,6 +57,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var fog = SiteFogConfiguration()
     @State private var fogSummary = SiteFogSummary()
     @State private var cameraColorEnabled = false
+    #if os(macOS)
+    @State private var showingCameraDetails = false
+    #endif
     @State private var peopleEnabled = false
     @State private var peopleFloorY: Double?
     @State private var selectingPeopleFloor = false
@@ -82,6 +86,13 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var setupPreviewID: String?
     @State private var placingCamera: UUID?
     @State private var importing = false
+    @State private var contributionTarget: Site?
+    @State private var registeringContribution = false
+    @State private var contributionUsesLiDAR = false
+    @State private var contributionX = "0"
+    @State private var contributionY = "0"
+    @State private var contributionZ = "0"
+    @State private var contributionYaw = "0"
     @State private var exporting = false
     @State private var document: SiteFileDocument?
     @State private var scanning = false
@@ -93,7 +104,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var busy = false
     @State private var error: String?
     @State private var loadError = false
+    #if os(macOS)
+    @State private var camerasExpanded = false
+    #else
     @State private var camerasExpanded = true
+    #endif
     @State private var cameraListHeight: CGFloat?
     @State private var choosingCamera = false
     @State private var cameraToAdd: (camera: SiteCamera, siteID: UUID)?
@@ -115,6 +130,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         calibrate: ((StoredSite, SiteCamera) -> Void)? = nil,
         automaticAlignment: ((StoredSite, Bool) -> AnyView)? = nil,
         alignmentStatuses: [String: String] = [:],
+        alignmentCandidates: ((StoredSite) -> [String: SiteCameraGeometry])? = nil,
         colorCapture: (([String]) -> AnyView)? = nil,
         @ViewBuilder preview: @escaping (String) -> Preview
     ) {
@@ -130,6 +146,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         self.calibrate = calibrate
         self.automaticAlignment = automaticAlignment
         self.alignmentStatuses = alignmentStatuses
+        self.alignmentCandidates = alignmentCandidates
         self.colorCapture = colorCapture
         self.preview = preview
     }
@@ -139,7 +156,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     public var body: some View {
         VStack(spacing: 0) {
             if loading {
-                ProgressView("Opening Sites…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("Preparing Digital Twin on the device…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loadError {
                 ContentUnavailableView {
                     Label("Couldn’t Open Sites", systemImage: "exclamationmark.triangle")
@@ -187,8 +204,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 colorCapture(current.site.cameras.filter { onGateway($0) }.map(\.sourceID))
             }
             if peopleEnabled, !selectingPeopleFloor, placingCamera == nil,
-               let floorY = peopleFloorY, let current {
-                SitePeopleCapture(site: current.site, sources: videoSources(current.site),
+               let floorY = peopleFloorY, let current, let store {
+                SitePeopleCapture(site: current.site, store: store, sources: videoSources(current.site),
                     geometry: cameraGeometry(current.site), floorY: floorY) { tracks, statuses in
                         people = tracks; peopleStatuses = statuses
                     }
@@ -307,6 +324,19 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
             }
         }
+        .alert("Register scan in room", isPresented: $registeringContribution) {
+            TextField("Origin X in metres", text: $contributionX)
+            TextField("Origin height in metres", text: $contributionY)
+            TextField("Origin Z in metres", text: $contributionZ)
+            TextField("Heading in degrees", text: $contributionYaw)
+            Button("Continue") {
+                if contributionUsesLiDAR { scanning = true }
+                else { importing = true }
+            }
+            Button("Cancel", role: .cancel) { contributionTarget = nil }
+        } message: {
+            Text("Enter this scan's origin and heading in the shared room. Only use zero when both scans share the same origin. The Linux service combines the registered geometry.")
+        }
         .fileExporter(
             isPresented: $exporting,
             document: document,
@@ -341,7 +371,17 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 )
             }
         }
-        .task { await load() }
+        .task(id: robotSession) {
+            await load()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { break }
+                if !busy, let store {
+                    do { sites = try await store.list() }
+                    catch { report(error, message: "The Linux digital twin is unavailable.") }
+                }
+            }
+        }
         .task { await actions.run() }
         .sheet(isPresented: $reconstructing) {
             SitePhotoReconstruction { result in
@@ -411,14 +451,33 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
             Divider()
             Button("Import Model or Site", systemImage: "square.and.arrow.down") {
-                importing = true
+                contributionTarget = nil; importing = true
             }
+            Button("New robot space", systemImage: "plus") {
+                    actions.submit {
+                        guard let store else { return }
+                        do {
+                            let created = try await store.createSpace(name: "Robot space")
+                            sites.append(created); selectedSite = created.id
+                        } catch { report(error, message: "The space could not be created on Linux.") }
+                    }
+                }
             if SitePhotoReconstruction.isSupported {
                 Button("Reconstruct from Photos", systemImage: "photo.stack") {
                     reconstructing = true
                 }
             }
             if let current {
+                Button("Contribute model to this room") {
+                    contributionTarget = current.site; contributionUsesLiDAR = false; registeringContribution = true
+                }
+                #if os(iOS)
+                if SiteRoomCapture.isSupported {
+                    Button("Contribute LiDAR to this room") {
+                        contributionTarget = current.site; contributionUsesLiDAR = true; registeringContribution = true
+                    }
+                }
+                #endif
                 if let store {
                     ShareLink(
                         item: SiteShare(store: store, id: current.id, name: current.site.name) { cause in
@@ -438,7 +497,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
             #if os(iOS)
                 if SiteRoomCapture.isSupported {
-                    Button("Scan Room", systemImage: "viewfinder") { alignmentScanCamera = nil; scanning = true }
+                    Button("Scan Room", systemImage: "viewfinder") { contributionTarget = nil; alignmentScanCamera = nil; scanning = true }
                 }
             #endif
             if !removedSites.isEmpty {
@@ -455,10 +514,17 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private var importButtons: some View {
         HStack {
-            Button("Import Model") { importing = true }.buttonStyle(.borderedProminent)
+            Button("New robot space") {
+                actions.submit {
+                    guard let store else { return }
+                    do { let created = try await store.createSpace(name: "Robot space"); sites.append(created); selectedSite = created.id }
+                    catch { report(error, message: "The space could not be created on Linux.") }
+                }
+            }
+            Button("Import Model") { contributionTarget = nil; importing = true }.buttonStyle(.borderedProminent)
             #if os(iOS)
                 if SiteRoomCapture.isSupported {
-                    Button("Scan Room") { alignmentScanCamera = nil; scanning = true }.buttonStyle(.bordered)
+                    Button("Scan Room") { contributionTarget = nil; alignmentScanCamera = nil; scanning = true }.buttonStyle(.bordered)
                 }
             #endif
         }
@@ -489,8 +555,10 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             SiteRobotRenderHost(model: robots) { robotRender in
                 SiteScene(
                     modelURL: current.modelURL,
+                    points: current.points, floorTiles: current.floorTiles, revision: current.revision,
                     site: current.site,
                     cameraGeometry: cameraGeometry(current.site),
+                    cameraCandidates: cameraCandidates(current),
                     colorSources: colorSources(current.site),
                     colorStatus: { cameraColorStatuses = $0 },
                     people: peopleEnabled && !selectingPeopleFloor && placingCamera == nil ? people : [],
@@ -526,6 +594,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     selectRobot: {
                         robots.selected = true; selectedCamera = nil; camerasExpanded = false; showingRobotControls = true
                     },
+                    robotConfirmation: robots.candidates.isEmpty ? nil : { AnyView(SiteRobotPositionConfirmation(model: robots)) },
                     fog: fogConfiguration(current, robot: robotRender),
                     fogSummary: { fogSummary = $0 }
                 )
@@ -620,16 +689,21 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     preview(camera.sourceID)
                         .frame(height: min(200, size.height * 0.3))
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                    DisclosureGroup("Alignment details") {
-                    Text(geometryDescription(camera, now: Date())).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if cameraColorEnabled {
-                        Text(colorStatus(camera)).font(.caption).foregroundStyle(.secondary)
+                    if candidateGeometry(camera, now: Date()) != nil {
+                        Label("Unsure · Candidate position", systemImage: "questionmark.circle")
+                            .font(.callout).foregroundStyle(.orange)
+                        Text("Distance is uncertain. This position has not been saved.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    if let status = alignmentStatuses[camera.sourceID] {
-                        Text(status).font(.caption).foregroundStyle(.secondary)
-                    }
-                    }.font(.caption)
+                    #if os(macOS)
+                    Button("Alignment details", systemImage: "info.circle") { showingCameraDetails.toggle() }
+                        .buttonStyle(.plain).font(.caption)
+                        .popover(isPresented: $showingCameraDetails, arrowEdge: .leading) {
+                            cameraDetails(camera).padding(16).frame(width: 320, alignment: .leading)
+                        }
+                    #else
+                    DisclosureGroup("Alignment details") { cameraDetails(camera) }.font(.caption)
+                    #endif
                     if calibrate != nil {
                         Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                             .buttonStyle(.borderedProminent)
@@ -652,6 +726,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         .accessibilityValue(camerasExpanded ? "Expanded" : "Collapsed")
                     Spacer()
                     Button("Add Camera", systemImage: "plus") {
+                        camerasExpanded = false
                         #if os(iOS)
                         pendingMobileCameraAction = .add; showingMobileCameras = false
                         #else
@@ -661,27 +736,56 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(availableFeeds.isEmpty || gatewayID.isEmpty || busy)
                 }
-                if camerasExpanded {
-                    ScrollView {
-                        cameraControls(current)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraListHeight = $0 }
-                    }
-                    .frame(height: min(cameraListHeight ?? CGFloat(max(1, current.site.cameras.count)) * 100,
-                                       max(75, min(240, size.height * 0.3))))
-                    .transition(.opacity)
-                }
+                #if os(iOS)
+                if camerasExpanded { cameraList(current, size: size) }
+                #endif
             }
         }
         #if os(macOS)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: camerasExpanded)
         .padding(14)
         .frame(width: min(380, max(0, size.width - 32)), alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .popover(isPresented: $camerasExpanded, arrowEdge: .leading) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Cameras").font(.headline)
+                    Spacer()
+                    Button { camerasExpanded = false } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).accessibilityLabel("Close cameras")
+                }
+                cameraList(current, size: size)
+            }
+            .padding(16)
+            .frame(width: 352)
+        }
         #else
         .frame(maxWidth: .infinity, alignment: .leading)
         .transaction { $0.animation = nil }
         #endif
+    }
+
+    private func cameraDetails(_ camera: SiteCamera) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(geometryDescription(camera, now: Date()))
+                .fixedSize(horizontal: false, vertical: true)
+            if cameraColorEnabled {
+                Text(colorStatus(camera)).foregroundStyle(.secondary)
+            }
+            if let status = alignmentStatuses[camera.sourceID] {
+                Text(status).foregroundStyle(.secondary)
+            }
+        }.font(.caption)
+    }
+
+    private func cameraList(_ current: StoredSite, size: CGSize) -> some View {
+        ScrollView {
+            cameraControls(current)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraListHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(cameraListHeight ?? CGFloat(max(1, current.site.cameras.count)) * 100,
+                           max(75, min(240, size.height * 0.3))))
     }
 
     private var availableFeeds: [SiteFeed] {
@@ -711,7 +815,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         let feed = onGateway(camera) ? feeds.first { $0.id == camera.sourceID } : nil
         let label = SiteCameraLabel(name: camera.name, sourceID: camera.sourceID)
         let hasPose = current.map { cameraMetadata(camera)?.pose(in: $0.site, now: now) != nil } ?? false
-        let status = camera.position == nil && !hasPose ? "Not positioned" : (feed == nil ? "Unavailable on this gateway" : (feed?.isReceiving(at: now) == true ? "Receiving video" : "Ready to preview"))
+        let status = camera.position == nil && !hasPose ? (candidateGeometry(camera, now: now) != nil ? "Unsure · Candidate position" : "Not positioned") : (feed == nil ? "Unavailable on this gateway" : (feed?.isReceiving(at: now) == true ? "Receiving video" : "Ready to preview"))
         return HStack(spacing: 10) {
             Button { selectedCamera = camera.id; camerasExpanded = false } label: {
                 HStack(spacing: 10) {
@@ -730,7 +834,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     #if os(iOS)
                     pendingMobileCameraAction = .place(camera.id); showingMobileCameras = false
                     #else
-                    pendingCamera = nil; placingCamera = camera.id
+                    camerasExpanded = false; pendingCamera = nil; placingCamera = camera.id
                     #endif
                 }.disabled(hasPose)
                 Button("Remove from Model", systemImage: "minus.circle", role: .destructive) {
@@ -760,6 +864,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             return
         }
         #endif
+        camerasExpanded = false
         calibrate?(current, camera)
     }
 
@@ -767,6 +872,23 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         guard onGateway(camera) else { return nil }
         let matches = metadata.filter { $0.sourceID == camera.sourceID }
         return matches.count == 1 ? matches.first : nil
+    }
+
+    private func candidateGeometry(_ camera: SiteCamera, now: Date) -> SiteCameraGeometry? {
+        guard let current, placingCamera == nil, !scanning, !busy, !choosingCamera, !importing,
+              onGateway(camera), camera.position == nil,
+              cameraMetadata(camera)?.pose(in: current.site, now: now) == nil,
+              let candidate = alignmentCandidates?(current)[camera.sourceID],
+              candidate.pose.isCurrent(revision: current.site.modelRevision, now: now) else { return nil }
+        return candidate
+    }
+
+    private func cameraCandidates(_ current: StoredSite) -> [UUID: SiteCameraGeometry] {
+        var result: [UUID: SiteCameraGeometry] = [:]
+        for camera in current.site.cameras {
+            result[camera.id] = candidateGeometry(camera, now: Date())
+        }
+        return result
     }
 
     private func cameraGeometry(_ site: Site) -> [UUID: SiteCameraGeometry] {
@@ -779,6 +901,10 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     }
 
     private func geometryDescription(_ camera: SiteCamera, now: Date) -> String {
+        if let candidate = candidateGeometry(camera, now: now),
+           let horizontal = candidate.lens?.horizontalFOV, let vertical = candidate.lens?.verticalFOV {
+            return String(format: "Unsure FOV %.0f° × %.0f°\nCandidate yaw %.0f° · Pitch %.0f°", horizontal, vertical, candidate.pose.yaw, candidate.pose.pitch)
+        }
         guard let site = current?.site, let record = cameraMetadata(camera) else { return "Needs camera alignment and lens calibration" }
         var parts: [String] = []
         if let lens = record.lens, let horizontal = lens.horizontalFOV, let vertical = lens.verticalFOV {
@@ -847,7 +973,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         loadError = false
         defer { loading = false }
         do {
-            let opened = try SiteStore.applicationStore()
+            let opened = try await SiteStore.remoteStore(session: robotSession)
+            try await opened.migrateLocalCaptures()
             sites = try await opened.list()
             removedSites = try await opened.removed()
             store = opened
@@ -871,6 +998,16 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             busy = false
         }
         do {
+            if let target = contributionTarget {
+                defer { contributionTarget = nil }
+                guard let x = Double(contributionX), let y = Double(contributionY), let z = Double(contributionZ),
+                      let yaw = Double(contributionYaw), [x,y,z,yaw].allSatisfy({ $0.isFinite }) else {
+                    throw WendyError(message: "Enter a finite position and heading for the scan.")
+                }
+                try await store.contribute(model: url, to: target, transform: [x,y,z,yaw * .pi / 180])
+                sites = try await store.list()
+                return
+            }
             var created: StoredSite
             if url.pathExtension.lowercased() == "wendysite" {
                 let values = try url.resourceValues(forKeys: [

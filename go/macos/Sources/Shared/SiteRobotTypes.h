@@ -2,6 +2,7 @@
 #define WENDY_SITE_ROBOT_TYPES_H
 #include "UnitreeTypes.h"
 typedef struct { double x, z; } WDSiteRoutePoint;
+typedef struct { double x, z, size, yaw; int32_t drop; } WDSiteRobotHazard;
 typedef struct { double x, z, yaw, floor_y, rms, coverage; } WDSiteRobotCandidate;
 typedef struct { WDStatus status; WDSiteRobotCandidate *items; size_t count; } WDSiteRobotCandidates;
 typedef struct {
@@ -17,6 +18,9 @@ typedef struct {
     size_t route_count;
     double *joints;
     size_t joint_count;
+    WDSiteRobotHazard *hazards;
+    size_t hazard_count;
+    int32_t hazards_ready;
 } WDSiteRobotState;
 WDUnitreeConnection *WDSiteRobotOpen(uint64_t session, char *serial);
 WDSiteRobotState *WDSiteRobotPoll(uint64_t handle);
@@ -34,6 +38,7 @@ void WDSiteRobotCandidatesFree(WDSiteRobotCandidates *value);
 WDStatus *WDSiteRobotConfirmLocalization(uint64_t handle, uint64_t sequence, uint64_t match_sequence, char *frame, int32_t candidate);
 typedef struct { WDStatus status; char *json; } WDSiteRobotFusionResult;
 WDSiteRobotFusionResult *WDSiteRobotFuse(uint64_t handle, uint64_t sequence, char *request);
+WDSiteRobotFusionResult *WDSiteRobotRequest(uint64_t handle, char *request);
 void WDSiteRobotFusionFree(WDSiteRobotFusionResult *value);
 void WDSiteRobotClose(uint64_t handle);
 #endif

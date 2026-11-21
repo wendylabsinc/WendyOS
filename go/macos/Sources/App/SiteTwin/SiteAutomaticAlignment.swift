@@ -26,9 +26,21 @@ struct SiteAutomaticAlignmentContext: Equatable {
     var gatewayAliases: Set<String> = []
 }
 
+/// Temporary display evidence, scoped to the exact workspace that produced it.
+struct SiteAlignmentCandidates {
+    var context: SiteAutomaticAlignmentContext?
+    var values: [String: SiteCameraGeometry] = [:]
+
+    func visible(in context: SiteAutomaticAlignmentContext, at now: Date) -> [String: SiteCameraGeometry] {
+        guard context.enabled, context.session != 0, self.context == context else { return [:] }
+        return values.filter { $0.value.pose.isCurrent(revision: context.site.modelRevision, now: now) }
+    }
+}
+
 @MainActor @Observable
 final class SiteAutomaticAlignment {
     private(set) var statuses: [String: String] = [:]
+    private(set) var candidates = SiteAlignmentCandidates()
     private var generation = UUID()
     private var running = false
 
@@ -36,6 +48,7 @@ final class SiteAutomaticAlignment {
         let token = UUID()
         generation = token
         statuses = [:]
+        candidates = SiteAlignmentCandidates(context: context)
         // A cancelled native solve must finish before another loop starts.
         while running {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
@@ -43,19 +56,15 @@ final class SiteAutomaticAlignment {
         }
         guard context.enabled, context.session != 0, !context.gatewayID.isEmpty, !Task.isCancelled else { return }
         running = true
-        defer { running = false }
+        defer {
+            running = false
+            if generation == token { candidates = SiteAlignmentCandidates() }
+        }
         let cameras = context.site.cameras.filter { SiteGatewayIdentity.matches($0.gatewayID, current: context.gatewayID, aliases: context.gatewayAliases) && $0.position == nil }
         guard !cameras.isEmpty else { return }
         let site = StoredSite(site: context.site, modelURL: context.modelURL, visualMapURL: context.mapURL)
         guard site.visualMapURL != nil else {
             for camera in cameras { statuses[camera.sourceID] = "Automatic alignment needs a room reference scan." }
-            return
-        }
-        let engine = SiteLocalizationEngine()
-        do { try await SiteCameraAlignment.load(site, into: engine) }
-        catch {
-            guard !Task.isCancelled, generation == token else { return }
-            for camera in cameras { statuses[camera.sourceID] = error.localizedDescription }
             return
         }
         var schedule = SiteAlignmentSchedule()
@@ -65,25 +74,34 @@ final class SiteAutomaticAlignment {
                 guard schedule.isDue(camera.sourceID, at: Date()) else { continue }
                 let matches = model.cameraFeeds.filter { $0.camera.stableID == camera.sourceID }
                 guard matches.count == 1, let feed = matches.first, !feed.camera.thermal else {
+                    candidates.values[camera.sourceID] = nil
                     statuses[camera.sourceID] = "Waiting for an available visual camera."
                     _ = schedule.completed(camera.sourceID, success: false, at: Date())
                     continue
                 }
                 if feed.manuallyPaused {
+                    candidates.values[camera.sourceID] = nil
                     statuses[camera.sourceID] = "Automatic alignment paused with the camera."
                     continue
                 }
                 statuses[camera.sourceID] = "Checking camera position…"
                 do {
                     let result = try await align(model: model, feed: feed, site: site, camera: camera,
-                        context: context, token: token, engine: engine)
+                        context: context, token: token)
                     guard !Task.isCancelled, generation == token else { return }
+                    candidates.values[camera.sourceID] = nil
                     statuses[camera.sourceID] = result.lens.measured ? "Position checked automatically" : "Approximate position checked automatically"
                     _ = schedule.completed(camera.sourceID, success: true, at: Date())
                 } catch {
                     guard !Task.isCancelled, generation == token, model.deviceSession == context.session else { return }
                     _ = schedule.completed(camera.sourceID, success: false, at: Date())
-                    statuses[camera.sourceID] = "\(error.localizedDescription) Will retry automatically."
+                    if case SiteLocalizationError.unsure(let candidate) = error {
+                        candidates.values[camera.sourceID] = candidate
+                        statuses[camera.sourceID] = "Unsure candidate found. Distance is uncertain; no alignment was saved. Will retry automatically."
+                    } else {
+                        candidates.values[camera.sourceID] = nil
+                        statuses[camera.sourceID] = "\(error.localizedDescription) Will retry automatically."
+                    }
                 }
             }
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -91,8 +109,7 @@ final class SiteAutomaticAlignment {
     }
 
     private func align(model: AppModel, feed: CameraFeed, site: StoredSite, camera: SiteCamera,
-                       context: SiteAutomaticAlignmentContext, token: UUID,
-                       engine: SiteLocalizationEngine) async throws -> SiteLocalizationResult {
+                       context: SiteAutomaticAlignmentContext, token: UUID) async throws -> SiteLocalizationResult {
         let lease = feed.decoder.calibrationFrames.acquire()
         var ownedStream: UInt64 = 0
         defer {
@@ -102,7 +119,7 @@ final class SiteAutomaticAlignment {
         }
         if !feed.running { ownedStream = await model.playOwnedCamera(feed, inline: true) }
         let request = SiteAlignmentRequest(site: site, camera: camera, gatewayID: context.gatewayID, session: context.session, gatewayAliases: context.gatewayAliases)
-        return try await SiteCameraAlignment.align(model: model, request: request, feed: feed, engine: engine,
+        return try await SiteCameraAlignment.align(model: model, request: request, feed: feed,
             automatic: true, isCurrent: { self.generation == token })
     }
 }
