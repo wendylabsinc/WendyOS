@@ -908,7 +908,7 @@ func TestRobotAgentCapabilityAcceptsTheReportedWendyOSVMContract(t *testing.T) {
 	// Linux for both the kernel and the reported OS hid the rollout failure:
 	// a capable VM agent was rejected before managed provisioning could run.
 	const vmResponse = `{"version":"dev","os":"wendyos","cpuArchitecture":"arm64","deviceType":"vm-arm64","featureset":["go2-virtual-robot"]}`
-	for _, scenario := range []string{"WendyOS VM", "Linux VM", "old WendyOS agent", "physical WendyOS device", "other kernel platform"} {
+	for _, scenario := range []string{"WendyOS VM", "Linux VM", "old WendyOS agent", "physical WendyOS device", "other kernel platform", "x86-64 WendyOS VM", "physical x86-64 device"} {
 		t.Run(scenario, func(t *testing.T) {
 			var info agentpb.GetAgentVersionResponse
 			if err := protojson.Unmarshal([]byte(vmResponse), &info); err != nil {
@@ -927,12 +927,22 @@ func TestRobotAgentCapabilityAcceptsTheReportedWendyOSVMContract(t *testing.T) {
 				info.DeviceType = &deviceType
 			case "other kernel platform":
 				info.Os = "darwin"
+			case "x86-64 WendyOS VM":
+				deviceType := "vm-x86-64"
+				info.DeviceType, info.CpuArchitecture, wantSupport = &deviceType, "amd64", true
+			case "physical x86-64 device":
+				deviceType := "generic-x86-64"
+				info.DeviceType, info.CpuArchitecture = &deviceType, "amd64"
 			}
 			conn := &grpcclient.AgentConnection{SimulatorName: "go2-sim",
 				AgentService: &fakeAgentVersionClient{resp: &info}}
 			err := requireRobotAgentCapability(context.Background(), conn, vm.RobotKindGo2)
 			if (err == nil) != wantSupport {
 				t.Fatalf("reported OS %q, device %q, features %v: %v", info.GetOs(), info.GetDeviceType(), info.GetFeatureset(), err)
+			}
+			var missing *robotAgentCapabilityError
+			if !wantSupport && !errors.As(err, &missing) {
+				t.Fatalf("unsupported agent: %v, want a robotAgentCapabilityError", err)
 			}
 		})
 	}
@@ -1000,5 +1010,26 @@ func TestRobotROSNormalizesHardwareDiscoveryWithoutChangingSource(t *testing.T) 
 	}
 	if cfg.GetROS2Config().DiscoveryScope != "host" || cfg.ResolveROS2ConfigForService("driver").DiscoveryScope != "host" {
 		t.Fatal("source manifest was changed")
+	}
+}
+
+func TestAgentIsWendyOSVM(t *testing.T) {
+	info := func(osName, deviceType string) *agentpb.GetAgentVersionResponse {
+		return &agentpb.GetAgentVersionResponse{Os: osName, DeviceType: &deviceType}
+	}
+	for _, osName := range []string{"wendyos", "linux"} {
+		for _, board := range []string{"vm-arm64", "vm-x86-64"} {
+			if !agentIsWendyOSVM(info(osName, board)) {
+				t.Errorf("%s/%s is not accepted as a WendyOS VM", osName, board)
+			}
+		}
+		for _, board := range []string{"generic-x86-64", "x86_64", "jetson-orin-nano", "vm-x86-64-untrusted", ""} {
+			if agentIsWendyOSVM(info(osName, board)) {
+				t.Errorf("%s/%q is accepted as a WendyOS VM", osName, board)
+			}
+		}
+	}
+	if agentIsWendyOSVM(info("darwin", "vm-x86-64")) || agentIsWendyOSVM(nil) {
+		t.Error("a darwin agent or a nil response is accepted as a WendyOS VM")
 	}
 }

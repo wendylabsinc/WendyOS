@@ -402,3 +402,38 @@ func TestRemoveDeletesTheDiskWhileStillHoldingTheLock(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateRecordsTheArchitecture(t *testing.T) {
+	s := newTestStore(t)
+	createTestVM(t, s, "arm", Meta{})
+	if m, ok := s.ReadMeta("arm"); !ok || m.Arch != ArchARM64 {
+		t.Errorf("ARM64 VM recorded arch %q (read %t), want arm64", m.Arch, ok)
+	}
+	if info, err := os.Stat(s.VarsPath("arm")); err != nil || info.Size() != pflashBytes {
+		t.Errorf("ARM64 variable store: %v, %v; want %d bytes", info, err, pflashBytes)
+	}
+
+	createTestVM(t, s, "x86", Meta{Arch: ArchAMD64})
+	if m, ok := s.ReadMeta("x86"); !ok || m.Arch != ArchAMD64 {
+		t.Errorf("x86-64 VM recorded arch %q (read %t), want amd64", m.Arch, ok)
+	}
+	if _, err := os.Stat(s.VarsPath("x86")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("x86-64 VM has a variable store at create: %v; it is copied from the firmware template at start", err)
+	}
+
+	createTestVM(t, s, "lite", Meta{Profile: "wendy-lite"})
+	if m, ok := s.ReadMeta("lite"); !ok || m.Arch != "" {
+		t.Errorf("Wendy Lite VM recorded arch %q (read %t), want none", m.Arch, ok)
+	}
+}
+
+func TestCreateRejectsAnUnknownArchitecture(t *testing.T) {
+	s := newTestStore(t)
+	err := s.CreateFrom("odd", strings.NewReader("image-bytes"), 11, 1<<20, Meta{Arch: "riscv64"})
+	if err == nil || !strings.Contains(err.Error(), "riscv64") {
+		t.Fatalf("CreateFrom with arch riscv64 = %v, want an error naming riscv64", err)
+	}
+	if _, err := os.Stat(s.Dir("odd")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused create left %s behind: %v", s.Dir("odd"), err)
+	}
+}

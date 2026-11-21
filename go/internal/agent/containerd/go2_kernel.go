@@ -115,7 +115,7 @@ func prepareGo2KernelModules(ctx context.Context, labels map[string]string, spec
 		return fmt.Errorf("verifying managed %s VM identity: %w", robot, err)
 	}
 	if !go2HostIsVM(string(deviceType)) {
-		return fmt.Errorf("managed %s firewall preparation is only supported on WendyOS vm-arm64", robot)
+		return fmt.Errorf("managed %s firewall preparation is only supported on a WendyOS VM", robot)
 	}
 	compressed, err := deps.readFile("/proc/config.gz")
 	if err != nil {
@@ -155,7 +155,7 @@ func prepareGo2KernelModules(ctx context.Context, labels map[string]string, spec
 func go2HostIsVM(content string) bool {
 	content = strings.TrimSpace(content)
 	if !strings.Contains(content, "=") {
-		return content == "vm-arm64"
+		return go2VMBoard(content)
 	}
 	var board, machine string
 	for _, line := range strings.Split(content, "\n") {
@@ -171,7 +171,12 @@ func go2HostIsVM(content string) bool {
 		}
 	}
 	if board != "" {
-		return board == "vm-arm64"
+		return go2VMBoard(board)
 	}
-	return machine == "vm-arm64-wendyos"
+	return machine == "vm-arm64-wendyos" || machine == "vm-x86-64-wendyos"
+}
+
+// go2VMBoard reports whether board is one of the WendyOS VM boards.
+func go2VMBoard(board string) bool {
+	return board == "vm-arm64" || board == "vm-x86-64"
 }

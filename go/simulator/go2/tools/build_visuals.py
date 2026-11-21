@@ -4,7 +4,10 @@
 Install requirements-visuals.txt in the project venv for generation. --check
 requires only the standard library and verifies original and generated hashes.
 Normal builds reproduce visuals.lock.json; --update-lock records an intentional
-new generation. Output OBJ basenames match the original MJCF mesh references.
+new generation. The lock holds one section per build platform, because the
+compiled simplifier's output differs between Linux/aarch64 and Linux/x86_64;
+--update-lock rewrites only the current platform's section. Output OBJ
+basenames match the original MJCF mesh references.
 """
 
 from __future__ import annotations
@@ -37,6 +40,36 @@ ALGORITHM = {
     "max_bounds_change_m": 0.002,
     "bounds_failure": "retain the complete original mesh and normals",
 }
+
+
+SCHEMA_VERSION = 2
+
+
+def current_platform() -> str:
+    return f"{platform.system()}/{platform.machine()}"
+
+
+def platform_section(lock: dict, name: str) -> dict:
+    platforms = lock.get("platforms") or {}
+    if name not in platforms:
+        supported = ", ".join(sorted(platforms)) or "none"
+        raise ValueError(f"No visual lock for platform {name}; locked platforms: {supported}")
+    return platforms[name]
+
+
+def merge_platform(existing: dict | None, header: dict, name: str, section: dict) -> dict:
+    platforms = {}
+    if existing is not None and existing.get("schema_version") == SCHEMA_VERSION:
+        platforms = dict(existing.get("platforms") or {})
+    platforms[name] = section
+    return {**header, "platforms": platforms}
+
+
+def mismatch_message(name: str) -> str:
+    message = "Generation differs from visuals.lock.json; outputs were not replaced"
+    if name == "Linux/x86_64":
+        message += ". The x86-64 visuals are locked for CPUs with AVX2 and FMA; on an older CPU create the simulator with --arch arm64"
+    return message
 
 
 def atomic_write(path: Path, content: bytes) -> None:
@@ -151,18 +184,39 @@ def obj_bytes(points, triangles) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
-def check_outputs(lock: dict, output_dir: Path, asset_dir: Path) -> None:
-    if lock.get("schema_version") != 1 or lock.get("algorithm") != ALGORITHM:
+def check_section(section: dict, output_dir: Path, asset_dir: Path) -> None:
+    for entry in section["files"]:
+        if not valid(destination(output_dir, entry["path"]), entry):
+            raise ValueError(f"Generated visual missing or altered: {entry['path']}")
+        if not valid(destination(asset_dir, entry["input"]["path"]), entry["input"]):
+            raise ValueError(f"Visual input differs: {entry['input']['path']}")
+
+
+def check_outputs(lock: dict, output_dir: Path, asset_dir: Path) -> dict:
+    """Verify outputs offline and return the section they match.
+
+    The current platform's section is used when the lock has one. On another
+    platform (a developer checking a copied tree) any section that matches in
+    full is accepted, since every section is a locked, reviewed generation.
+    """
+    if lock.get("schema_version") != SCHEMA_VERSION or lock.get("algorithm") != ALGORITHM:
         raise ValueError("Visual lock schema or algorithm differs; rebuild intentionally with --update-lock")
     if lock.get("generator_sha256") != sha256(Path(__file__)):
         raise ValueError("Visual generator differs from the lock")
     if lock.get("input_asset_lock_sha256") != sha256(ROOT / "assets.lock.json"):
         raise ValueError("Original asset lock differs from the visual lock")
-    for entry in lock["files"]:
-        if not valid(destination(output_dir, entry["path"]), entry):
-            raise ValueError(f"Generated visual missing or altered: {entry['path']}")
-        if not valid(destination(asset_dir, entry["input"]["path"]), entry["input"]):
-            raise ValueError(f"Visual input differs: {entry['input']['path']}")
+    name = current_platform()
+    platforms = lock.get("platforms") or {}
+    if name in platforms:
+        check_section(platforms[name], output_dir, asset_dir)
+        return platforms[name]
+    for section in platforms.values():
+        try:
+            check_section(section, output_dir, asset_dir)
+        except ValueError:
+            continue
+        return section
+    raise ValueError(f"Generated visuals match no locked platform ({', '.join(sorted(platforms)) or 'none'})")
 
 
 def build(asset_dir: Path, output_dir: Path, lock_path: Path, update_lock: bool) -> dict:
@@ -176,11 +230,10 @@ def build(asset_dir: Path, output_dir: Path, lock_path: Path, update_lock: bool)
     if lock_path.resolve().is_relative_to(asset_dir.resolve()) or lock_path.resolve() == (ROOT / "assets.lock.json").resolve():
         raise ValueError("Visual lock must not overwrite original asset files")
     expected = None if update_lock else json.loads(lock_path.read_text())
-    if expected is not None and (expected.get("algorithm") != ALGORITHM or expected.get("generator_sha256") != sha256(Path(__file__))):
+    if expected is not None and (expected.get("schema_version") != SCHEMA_VERSION or expected.get("algorithm") != ALGORITHM or expected.get("generator_sha256") != sha256(Path(__file__))):
         raise ValueError("Generator or algorithm changed; use --update-lock for an intentional change")
-    generator_platform = f"{platform.system()}/{platform.machine()}"
-    if expected is not None and expected.get("generator_platform") != generator_platform:
-        raise ValueError("Generate the locked visuals in the Linux ARM64 Docker build; native compiler output differs")
+    name = current_platform()
+    expected_section = None if expected is None else platform_section(expected, name)
     sources = verify_inputs(asset_dir)
     entries = {entry["path"]: entry for entry in sources["files"]}
     model = ET.parse(asset_dir / "robot/go2.xml").getroot()
@@ -233,24 +286,26 @@ def build(asset_dir: Path, output_dir: Path, lock_path: Path, update_lock: bool)
         generated.append(result)
         payloads.append((destination(output_dir, filename), data))
         print(f"{filename}: {input_triangles} -> {len(triangles)} triangles", flush=True)
-    manifest = {
-        "schema_version": 1,
+    header = {
+        "schema_version": SCHEMA_VERSION,
         "algorithm": ALGORITHM,
         "generator_sha256": sha256(Path(__file__)),
-        "generator_platform": generator_platform,
         "input_asset_lock_sha256": sha256(ROOT / "assets.lock.json"),
         "physics_model_modified": False,
+    }
+    section = {
         "input_render_triangles": sum(entry["input_triangles"] * entry["render_instances"] for entry in generated),
         "output_render_triangles": sum(entry["triangles"] * entry["render_instances"] for entry in generated),
         "files": generated,
     }
-    if expected is not None and manifest != expected:
-        raise ValueError("Generation differs from visuals.lock.json; outputs were not replaced")
+    if expected is not None and ({key: expected.get(key) for key in header} != header or section != expected_section):
+        raise ValueError(mismatch_message(name))
     for path, data in payloads:
         atomic_write(path, data)
     if update_lock:
-        atomic_write(lock_path, (json.dumps(manifest, indent=2) + "\n").encode())
-    return manifest
+        existing = json.loads(lock_path.read_text()) if lock_path.exists() else None
+        atomic_write(lock_path, (json.dumps(merge_platform(existing, header, name, section), indent=2) + "\n").encode())
+    return section
 
 
 def main() -> int:
@@ -265,11 +320,10 @@ def main() -> int:
         parser.error("--check and --update-lock are mutually exclusive")
     if args.check:
         verify_inputs(args.asset_dir)
-        manifest = json.loads(args.lock.read_text())
-        check_outputs(manifest, args.output_dir, args.asset_dir)
+        section = check_outputs(json.loads(args.lock.read_text()), args.output_dir, args.asset_dir)
     else:
-        manifest = build(args.asset_dir, args.output_dir, args.lock, args.update_lock)
-    print(f"Verified {len(manifest['files'])} visual meshes; rendered triangles {manifest['input_render_triangles']} -> {manifest['output_render_triangles']}")
+        section = build(args.asset_dir, args.output_dir, args.lock, args.update_lock)
+    print(f"Verified {len(section['files'])} visual meshes; rendered triangles {section['input_render_triangles']} -> {section['output_render_triangles']}")
     return 0
 
 

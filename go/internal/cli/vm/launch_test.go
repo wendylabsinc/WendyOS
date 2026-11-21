@@ -391,3 +391,44 @@ func TestARejectedSpecKeepsThePreviousConsoleLog(t *testing.T) {
 		t.Errorf("console.log = %q, want the previous boot's output untouched", got)
 	}
 }
+
+func TestStartDetachedPreparesTheX86VariableStore(t *testing.T) {
+	stubEmulator(t)
+	s := newTestStore(t)
+	createTestVM(t, s, "x86", Meta{Arch: ArchAMD64})
+	template := filepath.Join(t.TempDir(), "OVMF_VARS.fd")
+	want := []byte(strings.Repeat("v", 4096))
+	if err := os.WriteFile(template, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{
+		Name:                 "x86",
+		Arch:                 ArchAMD64,
+		DiskPath:             s.DiskPath("x86"),
+		FirmwareCode:         filepath.Join(t.TempDir(), "OVMF_CODE.fd"),
+		FirmwareVars:         s.VarsPath("x86"),
+		FirmwareVarsTemplate: template,
+		Accel:                AccelTCG,
+		Net:                  NetConfig{Mode: NetUser, AgentPort: 50051, MAC: MACFor("x86")},
+	}
+	st, err := s.StartDetached(spec)
+	if err != nil {
+		t.Fatalf("StartDetached() = %v", err)
+	}
+	t.Cleanup(func() { _ = syscallKill(st.PID) })
+	if got, err := os.ReadFile(s.VarsPath("x86")); err != nil || string(got) != string(want) {
+		t.Fatalf("store after start = %d bytes, %v; want the template", len(got), err)
+	}
+
+	// A second start must not touch the running VM's store.
+	other := []byte(strings.Repeat("o", 4096))
+	if err := os.WriteFile(s.VarsPath("x86"), other, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartDetached(spec); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("second StartDetached() = %v, want ErrAlreadyRunning", err)
+	}
+	if got, _ := os.ReadFile(s.VarsPath("x86")); string(got) != string(other) {
+		t.Fatal("a refused second start rewrote the running VM's variable store")
+	}
+}
