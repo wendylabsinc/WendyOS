@@ -827,7 +827,7 @@ type deployPlan struct {
 	appID, releaseID, digest, name, config, note string
 	desired                                      cloudpb.Running
 	validity                                     time.Duration
-	deviceIDs, tags                              []string          // the selection as given
+	deviceIDs, tags, siteIDs                     []string          // the selection as given
 	devices                                      []string          // every device it resolved to, as shown
 	moves                                        map[string]string // device UUID -> the deployment it moves out of
 }
@@ -854,7 +854,7 @@ func (op *registryOp) deploy(ctx context.Context, p deployPlan) (*cloudpb.Deploy
 	}
 	resp := new(cloudpb.DeploymentChangeResponse)
 	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName, &cloudpb.CreateDeploymentRequest{
-		OrganizationId: op.org, AppReleaseId: p.releaseID, Running: p.desired, TargetDeviceIds: p.deviceIDs, TargetTags: p.tags,
+		OrganizationId: op.org, AppReleaseId: p.releaseID, Running: p.desired, TargetDeviceIds: p.deviceIDs, TargetTags: p.tags, TargetSiteIds: p.siteIDs,
 		Name: p.name, ConfigJson: p.config, Note: p.note, MoveDevices: len(moves) > 0, Validity: durationpb.New(p.validity),
 	}, resp); err != nil {
 		return nil, fmt.Errorf("creating the deployment: %w", err)

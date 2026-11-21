@@ -11,11 +11,12 @@ names its flag.
 
 ```sh
 wendy app deploy                     # asks each question
-wendy app deploy --app <id> --release <version> --tag <tag> --device <name> \
+wendy app deploy --app <id> --release <version> --tag <tag> --site <site> --device <name> \
   --name <deployment> --config NAME=VALUE --run --yes
 wendy app deployment show <app>/<deployment>
 wendy app deployment update <app>/<deployment> --release <version> --config NAME=VALUE \
-  --start|--stop --add-device <name> --remove-device <name> --add-tag <tag> --remove-tag <tag>
+  --start|--stop --add-device <name> --remove-device <name> --add-tag <tag> --remove-tag <tag> \
+  --add-site <site> --remove-site <site>
 wendy app deployment rollback <app>/<deployment> --to <revision>
 wendy app deployment remove <app>/<deployment>
 wendy app deployment resume <app>/<deployment>
@@ -28,6 +29,11 @@ wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device .
   deployment moves only with `--move` (or your confirmation). Progress shows
   each device as running, installed, downloading, waiting or failed, with the
   reason; `--wait` stays until every device is done.
+- The devices are every named device, every device with a chosen tag and
+  every device in a chosen site. They are worked out once, when the
+  deployment or a later revision is made, and the review names each one: a
+  device that joins a tag or site later gets the deployment only with the
+  next revision.
 - **deployment show** shows a deployment and each device's state.
 - **deployment update** changes the release, configuration, run state or
   devices as one new revision. It shows what changes and asks before it
@@ -50,7 +56,7 @@ the machine that created the deployment.
 |------|----------|
 | `--app` | 1 Which app? |
 | `--release` | 2 Which release? (its version or id) |
-| `--device`, `--tag` | 3 Which devices? (repeatable) |
+| `--device`, `--tag`, `--site` | 3 Which devices? (repeatable; a site by name or id) |
 | `--name` | 3 The deployment's name |
 | `--move` | 3 Move devices from another deployment of the app |
 | `--config NAME=VALUE`, `--config-file` | 4 What configuration? The release's defaults otherwise |
