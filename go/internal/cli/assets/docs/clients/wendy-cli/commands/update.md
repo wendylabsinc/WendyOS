@@ -98,6 +98,12 @@ show a short, noninteractive reminder while preserving its original error and
 exit status. An update failure after a successful command also preserves the
 original command's success.
 
+When the popup cannot open in a terminal (an unsupported installation, a CLI
+installed by the Wendy plugin, or a command that failed), the short reminder
+comes back once a day until you update, and **Ask again later...** snoozes it
+too. Scripts, `--json` output and other automated invocations see it once per
+release.
+
 Local MCP servers also check for releases daily while running. Tool responses
 include a prominent update notice once per release per session, repeated after
 24 hours if the server is still outdated. The notice asks the assistant to tell

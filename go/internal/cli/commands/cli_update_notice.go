@@ -90,14 +90,18 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 	}
 
 	// wendy update recognizes no updater for a CLI the Wendy plugin's
-	// launcher installed, so that CLI gets advice once per release and no
-	// update popup (see cliupdate.PluginAdvice).
+	// launcher installed, so that CLI gets advice and no update popup (see
+	// cliupdate.PluginAdvice).
 	managed := pluginManagedCLI()
-	interactive := allowPrompt && !jsonOutput && isInteractiveTerminal() && !managed
-	if interactive && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, time.Now()) {
+	now := time.Now()
+	// A person is reading this terminal, whether or not the popup can open.
+	atTerminal := !jsonOutput && isInteractiveTerminal()
+	interactive := allowPrompt && atTerminal && !managed
+	// "Ask again later" snoozes the plain notice in that terminal too.
+	if atTerminal && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, now) {
 		return false, nil
 	}
-	if !interactive && cfg.CLIUpdateNoticeShown == latest {
+	if !interactive && !cliUpdateNoticeDue(cfg, latest, atTerminal, now) {
 		return false, nil
 	}
 	method := "unknown"
@@ -119,7 +123,7 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 			interactive = false
 		}
 	}
-	if !interactive && cfg.CLIUpdateNoticeShown == latest {
+	if !interactive && !cliUpdateNoticeDue(cfg, latest, atTerminal, now) {
 		return false, nil
 	}
 	advice := "Update with: " + cliupdate.Command(runtime.GOOS)
@@ -131,6 +135,7 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 	if !interactive {
 		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
 			current.CLIUpdateNoticeShown = latest
+			current.CLIUpdateNoticeShownAt = now.UTC().Format(time.RFC3339)
 		})
 		return true, nil
 	}
@@ -157,6 +162,17 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 		return true, nil
 	}
 	return true, applyCLIUpdate(cmd, latest)
+}
+
+// cliUpdateNoticeDue reports whether the plain notice about latest is due.
+// Scripts, agents and --json runs get it once per release. A person at a
+// terminal gets it again each day until they update: one line per release is
+// easy to miss, and nothing else tells them when the popup cannot open.
+func cliUpdateNoticeDue(cfg *config.Config, latest string, atTerminal bool, now time.Time) bool {
+	if cfg.CLIUpdateNoticeShown != latest {
+		return true
+	}
+	return atTerminal && !timestampWithin(cfg.CLIUpdateNoticeShownAt, cliUpdateCheckInterval, now)
 }
 
 // promptDismissed reports a user who closed or interrupted the update dialog,
