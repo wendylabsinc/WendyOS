@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -55,16 +56,27 @@ func NewStore(directory string) (*Store, error) {
 	return &Store{directory: directory}, nil
 }
 func validID(id string) bool { _, e := uuid.Parse(id); return e == nil && len(id) == 36 }
-func (s *Store) path(id string) string {
-	// Keep file operations confined even if a future caller misses ID validation.
-	return filepath.Join(s.directory, filepath.Base(strings.ToLower(id)+".json"))
+
+// Validate the complete filename before joining it to the trusted data directory.
+var roomFilename = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(json|usdz|visual-map)$`)
+
+func (s *Store) path(id, suffix string) (string, error) {
+	if !validID(id) {
+		return "", errors.New("invalid room ID")
+	}
+	name := strings.ToLower(id) + suffix
+	if !roomFilename.MatchString(name) {
+		return "", errors.New("invalid room filename")
+	}
+	return filepath.Join(s.directory, name), nil
 }
 func (s *Store) read(id string) (Room, error) {
 	var r Room
-	if !validID(id) {
-		return r, errors.New("invalid room ID")
+	path, e := s.path(id, ".json")
+	if e != nil {
+		return r, e
 	}
-	b, e := os.ReadFile(s.path(id))
+	b, e := os.ReadFile(path)
 	if e != nil {
 		return r, e
 	}
@@ -80,22 +92,27 @@ func (s *Store) State(id string) (Room, error) {
 	}
 	return r, e
 }
-func (s *Store) asset(id, suffix string) string {
-	return filepath.Join(s.directory, filepath.Base(strings.ToLower(id)+suffix))
-}
 func (s *Store) assets(r Room) (Room, error) {
 	if !validID(r.Site.ID) {
 		return r, errors.New("invalid room ID")
 	}
 	var e error
 	if r.HasModel {
-		r.Model, e = os.ReadFile(s.asset(r.Site.ID, ".usdz"))
+		path, err := s.path(r.Site.ID, ".usdz")
+		if err != nil {
+			return r, err
+		}
+		r.Model, e = os.ReadFile(path)
 		if e != nil {
 			return r, e
 		}
 	}
 	if r.HasVisualMap {
-		r.VisualMap, e = os.ReadFile(s.asset(r.Site.ID, ".visual-map"))
+		path, err := s.path(r.Site.ID, ".visual-map")
+		if err != nil {
+			return r, err
+		}
+		r.VisualMap, e = os.ReadFile(path)
 		if e != nil {
 			return r, e
 		}
@@ -110,8 +127,9 @@ func (s *Store) Get(id string) (Room, error) {
 	return s.assets(r)
 }
 func (s *Store) writeAsset(id, suffix string, data []byte) error {
-	if !validID(id) {
-		return errors.New("invalid room ID")
+	path, e := s.path(id, suffix)
+	if e != nil {
+		return e
 	}
 	f, e := os.CreateTemp(s.directory, ".asset-*")
 	if e != nil {
@@ -128,7 +146,7 @@ func (s *Store) writeAsset(id, suffix string, data []byte) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), s.asset(id, suffix))
+	return os.Rename(f.Name(), path)
 }
 
 func (s *Store) List() ([]Room, error) {
@@ -165,8 +183,9 @@ func (s *Store) List() ([]Room, error) {
 var ErrConflict = errors.New("room changed; refresh before editing")
 
 func (s *Store) write(r Room) error {
-	if !validID(r.Site.ID) {
-		return errors.New("invalid room ID")
+	path, e := s.path(r.Site.ID, ".json")
+	if e != nil {
+		return e
 	}
 	r.FloorTiles = nil
 	r.Model = nil
@@ -190,7 +209,7 @@ func (s *Store) write(r Room) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if e = os.Rename(f.Name(), s.path(r.Site.ID)); e != nil {
+	if e = os.Rename(f.Name(), path); e != nil {
 		return e
 	}
 	d, e := os.Open(s.directory)

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -91,7 +92,7 @@ func TestImmutableAssetsAreSeparateFromMutableRoomState(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	metadata, e := os.ReadFile(s.path(r.Site.ID))
+	metadata, e := os.ReadFile(filepath.Join(dir, r.Site.ID+".json"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -135,6 +136,9 @@ func TestRoomFileHelpersRejectInvalidIDs(t *testing.T) {
 	}
 	for _, id := range []string{"../outside", outside, "", ".", "..", "invalid-id"} {
 		t.Run(id, func(t *testing.T) {
+			if _, err := s.path(id, ".json"); err == nil {
+				t.Fatal("path accepted invalid ID")
+			}
 			r := room()
 			r.Site.ID = id
 			r.HasModel = true
@@ -159,5 +163,54 @@ func TestRoomFileHelpersRejectInvalidIDs(t *testing.T) {
 	entries, err := os.ReadDir(s.directory)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("invalid IDs created files: %v, %v", entries, err)
+	}
+}
+
+func TestRoomPathsValidateCompleteFilename(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "ABCDEF01-2345-6789-ABCD-EF0123456789"
+	for _, suffix := range []string{".json", ".usdz", ".visual-map"} {
+		got, err := s.path(id, suffix)
+		want := filepath.Join(s.directory, strings.ToLower(id)+suffix)
+		if err != nil || got != want {
+			t.Fatalf("path(%q, %q) = %q, %v; want %q", id, suffix, got, err, want)
+		}
+	}
+	for _, suffix := range []string{"", ".txt", ".json/../../outside", "/../outside.usdz", `\..\outside.usdz`, ".json\x00", ".json\n"} {
+		t.Run(suffix, func(t *testing.T) {
+			if _, err := s.path(id, suffix); err == nil {
+				t.Fatal("accepted invalid suffix")
+			}
+			if err := s.writeAsset(id, suffix, []byte("overwrite")); err == nil {
+				t.Fatal("asset write accepted invalid suffix")
+			}
+		})
+	}
+	entries, err := os.ReadDir(s.directory)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid suffixes created files: %v, %v", entries, err)
+	}
+}
+
+func TestUppercaseRoomIDRoundTripsAllFiles(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := room()
+	r.Site.ID = "ABCDEF01-2345-6789-ABCD-EF0123456789"
+	r.Model = []byte("PK\x03\x04model")
+	r.VisualMap = json.RawMessage(`{"points":[]}`)
+	if _, err := s.Put(r); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{r.Site.ID, strings.ToLower(r.Site.ID)} {
+		got, err := s.Get(id)
+		if err != nil || !bytes.Equal(got.Model, r.Model) || !bytes.Equal(got.VisualMap, r.VisualMap) {
+			t.Fatalf("Get(%q) lost assets: %+v, %v", id, got, err)
+		}
 	}
 }
