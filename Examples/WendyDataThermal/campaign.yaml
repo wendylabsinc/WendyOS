@@ -1,0 +1,19 @@
+version: 1
+name: topdon-overheating
+sources:
+  - camera: /dev/video0
+thermal:
+  camera: /dev/video0
+  above_celsius: 80
+  clear_below_celsius: 75
+  for: 2s
+  event: overheating
+capture:
+  buffer: 10s
+  after_trigger: 20s
+  triggers:
+    - event: overheating
+upload:
+  when: manual
+export:
+  annotation: none

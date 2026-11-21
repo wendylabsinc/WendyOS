@@ -242,6 +242,8 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 // triggers; it does not require the configured sensors or network destination
 // to be online at deployment time.
 type Campaign struct {
+	Thermal       *CampaignThermal `json:"thermal,omitempty" yaml:"thermal,omitempty"`
+	ThermalStatus *InferenceStatus `json:"thermal_status,omitempty" yaml:"-"`
 	// Kind is the data document header's kind. A campaign is a collection;
 	// the field exists so ParseCampaign's strict decoding accepts
 	// "kind: collection", and it is never stored or hashed.
@@ -392,6 +394,10 @@ func (c Campaign) planDigestInput() map[string]any {
 		"models":    c.Models,
 		"privacy":   privacy,
 	}
+	// Thermal plans have their own versioned extension; legacy plan digests stay unchanged.
+	if t := c.Thermal; t != nil {
+		plan["thermal"] = map[string]any{"schema": 1, "camera": t.Camera, "mlx90642_url": t.MLX90642URL, "above_celsius": t.AboveCelsius, "clear_below_celsius": t.ClearBelowCelsius, "for": t.For, "event": t.Event}
+	}
 	if c.Notify != nil {
 		// Only the fields this schema version knows. UnknownKeys is deploy-time
 		// state a newer cloud may add and is deliberately excluded, exactly as
@@ -525,6 +531,9 @@ func (c Campaign) validate() error {
 		if strings.TrimSpace(transform.Name) == "" {
 			return fmt.Errorf("privacy[%d].name is required", i)
 		}
+	}
+	if err := c.Thermal.validate(c); err != nil {
+		return err
 	}
 	if err := c.Inference.validate(); err != nil {
 		return err
