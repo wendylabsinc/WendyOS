@@ -83,8 +83,11 @@ process continues using its old binary and tools until restarted. Rerun
 Ordinary commands check for releases in the background. A successful check is
 cached for 24 hours; a failed or cancelled check can retry after one hour. The
 reminder waits at most one second for a background release request, with separate
-bounded installation and cache lookups, so an unavailable release service does
-not hold up your command.
+bounded cache and installation lookups, so an unavailable release service does
+not hold up your command. Identifying the installation can take up to five
+seconds when its package manager is slow to answer; the popup follows. If it
+does not answer in that time, later commands wait at most one second until the
+next day's reminder.
 
 After a successful command in an interactive terminal, a bold popup shows the
 installed and available versions for supported stable installations. Choose

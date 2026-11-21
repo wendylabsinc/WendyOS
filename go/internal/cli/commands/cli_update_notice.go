@@ -106,7 +106,14 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 	}
 	method := "unknown"
 	if interactive {
-		detectCtx, cancelDetect := context.WithTimeout(cmd.Context(), time.Second)
+		// The long wait once a day: after the plain notice has told this
+		// person, a package manager that is still slow must not hold up
+		// every later command.
+		wait := cliUpdateDetectWait
+		if !cliUpdateNoticeDue(cfg, latest, atTerminal, now) {
+			wait = cliUpdateExitWait
+		}
+		detectCtx, cancelDetect := context.WithTimeout(cmd.Context(), wait)
 		plan, detectErr := detectCLIUpdate(detectCtx)
 		cancelDetect()
 		if detectErr != nil {
