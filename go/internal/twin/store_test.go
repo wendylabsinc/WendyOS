@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -118,5 +119,45 @@ func TestImmutableAssetsAreSeparateFromMutableRoomState(t *testing.T) {
 	updated.Model = []byte("PK\x03\x04different")
 	if _, e = restart.Put(updated); e == nil {
 		t.Fatal("silently changed an aligned model")
+	}
+}
+
+func TestRoomFileHelpersRejectInvalidIDs(t *testing.T) {
+	directory := t.TempDir()
+	outside := filepath.Join(directory, "outside.usdz")
+	contents := []byte("unchanged")
+	if err := os.WriteFile(outside, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore(filepath.Join(directory, "rooms"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"../outside", outside, "", ".", "..", "invalid-id"} {
+		t.Run(id, func(t *testing.T) {
+			r := room()
+			r.Site.ID = id
+			r.HasModel = true
+			if _, err := s.read(id); err == nil {
+				t.Fatal("read accepted invalid ID")
+			}
+			if _, err := s.assets(r); err == nil {
+				t.Fatal("assets accepted invalid ID")
+			}
+			if err := s.writeAsset(id, ".usdz", []byte("overwrite")); err == nil {
+				t.Fatal("asset write accepted invalid ID")
+			}
+			if err := s.write(r); err == nil {
+				t.Fatal("metadata write accepted invalid ID")
+			}
+		})
+	}
+	got, err := os.ReadFile(outside)
+	if err != nil || !bytes.Equal(got, contents) {
+		t.Fatalf("outside file changed: %q, %v", got, err)
+	}
+	entries, err := os.ReadDir(s.directory)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid IDs created files: %v, %v", entries, err)
 	}
 }

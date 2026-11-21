@@ -56,7 +56,8 @@ func NewStore(directory string) (*Store, error) {
 }
 func validID(id string) bool { _, e := uuid.Parse(id); return e == nil && len(id) == 36 }
 func (s *Store) path(id string) string {
-	return filepath.Join(s.directory, strings.ToLower(id)+".json")
+	// Keep file operations confined even if a future caller misses ID validation.
+	return filepath.Join(s.directory, filepath.Base(strings.ToLower(id)+".json"))
 }
 func (s *Store) read(id string) (Room, error) {
 	var r Room
@@ -80,9 +81,12 @@ func (s *Store) State(id string) (Room, error) {
 	return r, e
 }
 func (s *Store) asset(id, suffix string) string {
-	return filepath.Join(s.directory, strings.ToLower(id)+suffix)
+	return filepath.Join(s.directory, filepath.Base(strings.ToLower(id)+suffix))
 }
 func (s *Store) assets(r Room) (Room, error) {
+	if !validID(r.Site.ID) {
+		return r, errors.New("invalid room ID")
+	}
 	var e error
 	if r.HasModel {
 		r.Model, e = os.ReadFile(s.asset(r.Site.ID, ".usdz"))
@@ -106,6 +110,9 @@ func (s *Store) Get(id string) (Room, error) {
 	return s.assets(r)
 }
 func (s *Store) writeAsset(id, suffix string, data []byte) error {
+	if !validID(id) {
+		return errors.New("invalid room ID")
+	}
 	f, e := os.CreateTemp(s.directory, ".asset-*")
 	if e != nil {
 		return e
@@ -158,6 +165,9 @@ func (s *Store) List() ([]Room, error) {
 var ErrConflict = errors.New("room changed; refresh before editing")
 
 func (s *Store) write(r Room) error {
+	if !validID(r.Site.ID) {
+		return errors.New("invalid room ID")
+	}
 	r.FloorTiles = nil
 	r.Model = nil
 	r.VisualMap = nil
