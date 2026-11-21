@@ -93,7 +93,7 @@ func checkCLIUpdateIfDue(ctx context.Context) {
 // persistCLIUpdateCheckResult persists one check's outcome by changing only its
 // own fields on the CURRENT config. It used to save the snapshot root
 // loaded at startup, seconds after the command had saved its own changes — a
-// new default device, a fresh pin, a login — and silently revert them. It also
+// fresh pin, a login — and silently revert them. It also
 // holds the auth refresh lock: the HTTP request can overlap an OAuth refresh,
 // and saving a config read before that refresh finished would restore the
 // consumed refresh token and cause wendy-auth to revoke the rotated token

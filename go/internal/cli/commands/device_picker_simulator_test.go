@@ -395,12 +395,12 @@ func TestRunPickerStartSelectsTheVM(t *testing.T) {
 
 func TestSimulatorPickerHintNamesTheNewKeys(t *testing.T) {
 	_, view := simulatorViewFor(t, stoppedVM("sim", ""))
-	for _, want := range []string{"s start", "x stop", "r remove", "c create", "d toggle default"} {
+	for _, want := range []string{"s start", "x stop", "r remove", "c create"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("simulator hint = %q, want %q", view, want)
 		}
 	}
-	for _, gone := range []string{"x clear default", "s stop"} {
+	for _, gone := range []string{"d toggle default", "x clear default", "s stop"} {
 		if strings.Contains(view, gone) {
 			t.Errorf("simulator hint = %q still has %q", view, gone)
 		}

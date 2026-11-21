@@ -142,7 +142,7 @@ currently run natively on macOS, not inside a Linux-style container. Expect
 `Hello from hello-mac!` in the attached logs. Edit the Swift source, then use
 `wendy run --watch` to deploy changes as you save.
 
-If you set the Mac as your default device, omit `--device`:
+If `WENDY_DEVICE` points at the Mac, omit `--device`:
 
 ```bash
 wendy run
