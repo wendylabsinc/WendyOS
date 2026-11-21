@@ -177,6 +177,28 @@ func TestROS2Service_SystemFallbackErrorBoundaries(t *testing.T) {
 	}
 }
 
+func TestROS2Service_PreparationPreservesCancellationStatus(t *testing.T) {
+	for _, system := range []bool{false, true} {
+		for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+			t.Run(fmt.Sprintf("system_%t/%v", system, cause), func(t *testing.T) {
+				runtime := newSystemROS2Runtime()
+				err := fmt.Errorf("extracting layer: %w", cause)
+				if system {
+					runtime.systemErr = err
+				} else {
+					runtime.ensureErr = err
+				}
+				svc := newTestROS2Service(t, runtime, t.TempDir())
+				_, err = svc.ListTopics(context.Background(), &agentpbv2.ListROS2TopicsRequest{})
+				want := status.FromContextError(cause).Code()
+				if status.Code(err) != want || len(runtime.calls) != 0 {
+					t.Fatalf("preparation error = %v, want %v without executing ROS commands", err, want)
+				}
+			})
+		}
+	}
+}
+
 func TestROS2Service_SystemFallbackValidatesDomainBeforeProvisioning(t *testing.T) {
 	for _, domain := range []int32{-1, 233} {
 		t.Run(fmt.Sprint(domain), func(t *testing.T) {
