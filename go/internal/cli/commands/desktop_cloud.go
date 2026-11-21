@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudsession"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	invite "github.com/wendylabsinc/wendy/go/proto/gen/cloudinvitepb"
@@ -22,22 +23,7 @@ import (
 // Every organization operation resolves a specific saved session. Merely selecting
 // another organization never signs a request using the previous tenant's identity.
 func desktopCloudAuth(account, organization string) (*config.AuthConfig, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	selected, ok := cfg.ContextByName(account)
-	if !ok {
-		return nil, failure.Wrap(errors.New("This saved account is no longer available. Sign in again."), failure.AuthenticationRequired, failure.SignIn)
-	}
-	if organization == "" {
-		return selected, nil
-	}
-	if len(selected.Certificates) > 0 && selected.Certificates[0].TenantUUID() == organization {
-		return selected, nil
-	}
-
-	return nil, failure.Wrap(errors.New("Sign in to this organization first, then refresh accounts."), failure.AuthenticationRequired, failure.SignIn)
+	return cloudsession.LoadAccount(account, organization)
 }
 func DesktopOrganizations(ctx context.Context, account string) ([]*pb.Organization, error) {
 	a, e := desktopCloudAuth(account, "")

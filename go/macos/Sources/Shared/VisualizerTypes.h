@@ -33,6 +33,10 @@ void WDVisualExportFree(WDVisualExportResult *value);
 typedef struct { WDStatus status; char *local_path, *reason; double maximum_celsius, duration; int32_t has_maximum; } WDVisualPreviewResult;
 WDVisualPreviewResult *WDVisualPreviewAt(char *selector, char *episode);
 void WDVisualPreviewFree(WDVisualPreviewResult *value);
+typedef struct { WDStatus status; char *json, *local_path; } WDNotificationVideoResult;
+WDNotificationVideoResult *WDNotificationVideoAt(char *selector, char *campaign, char *event_id);
+WDNotificationVideoResult *WDNotificationVideoNear(char *selector, char *campaign, char *event_id, double notification_unix, char *episode_hint);
+void WDNotificationVideoFree(WDNotificationVideoResult *value);
 
 typedef enum { WD_RECORDING_STATUS, WD_RECORDING_START, WD_RECORDING_STOP } WDVisualRecordingAction;
 WDVisualEpisodesResult *WDHomeCampaign(uint64_t session, char *name, int32_t trigger);
