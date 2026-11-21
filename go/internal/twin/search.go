@@ -22,8 +22,6 @@ func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 		return err
 	}
 	input.Reference = room.References[session.serial]
-	// A camera contribution is valid only at its captured pose, not after a turn.
-	input.Visual = nil
 	ctx, cancel := context.WithTimeout(s.Context, 5*time.Minute)
 	session.searchMu.Lock()
 	if q.Sequence <= session.searchRoot {
@@ -86,6 +84,9 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 		sequence++
 		report, err := session.robot.FuseLocalization(sequence, input)
+		// The initial camera hint is checked against fresh paired odometry by
+		// FuseLocalization. Never reuse that captured view after a search turn.
+		input.Visual = nil
 		if err != nil {
 			lastReason = err.Error()
 		} else {

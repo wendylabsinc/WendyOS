@@ -37,10 +37,12 @@ final class SiteRobotMapModel: ObservableObject {
 
     init(observationClient: any SiteRobotObserving = SiteRobotClient.shared,
          turningClient: any SiteRobotTurning = SiteRobotClient.shared,
-         searchClient: any SiteRobotSearching = SiteRobotClient.shared) {
+         searchClient: any SiteRobotSearching = SiteRobotClient.shared,
+         visualMatcher: any RobotVisualMatching = RobotVisualLocalization()) {
         self.observationClient = observationClient
         self.turningClient = turningClient
         self.searchClient = searchClient
+        self.visual = visualMatcher
     }
 
     @Published var robots: [UnitreeRobot] = []
@@ -69,9 +71,9 @@ final class SiteRobotMapModel: ObservableObject {
     @Published private(set) var searchTurns = 0
     @Published private(set) var rotationState: RobotRotationState = .idle
     private var rotationStartPending = false
-    @Published private(set) var measuredLens: SiteCameraLens?
+    @Published private(set) var lensSelection: RobotLensSelection?
     private var lensSession: RobotLensSession?
-    private var visual = RobotVisualLocalization()
+    private let visual: any RobotVisualMatching
     private var savedMap: RobotSavedMap?
     private var siteRevision = UUID()
     private var lastEvidence: UInt64 = 0
@@ -206,7 +208,7 @@ final class SiteRobotMapModel: ObservableObject {
         searchConclusion = nil; searchTurns = 0
         rotationState = .idle; rotationStartPending = false
         showRotationPrompt = false; rotationOffer = RobotRotationOffer()
-        lensSession = nil; lensCalibrating = false; measuredLens = nil; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel(); showLensCalibration = false
+        lensSession = nil; lensCalibrating = false; lensSelection = nil; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel(); showLensCalibration = false
         candidates = []; localizing = false; candidateIndex = 0
         suggestionFreshness = nil
         geometryURL = modelURL; geometryScale = site.metresPerModelUnit
@@ -289,7 +291,12 @@ final class SiteRobotMapModel: ObservableObject {
     }
 
     func acceptCameraFrame(_ frame: CameraCalibrationFrame) {
-        if frame.isFresh(at: Date()), cameraFrame == nil || frame.received > cameraFrame!.received { cameraFrame = frame }
+        guard frame.isFresh(at: Date()), cameraFrame == nil || frame.received > cameraFrame!.received else { return }
+        let mode = RobotCameraMode(frame)
+        if cameraFrame.map({ RobotCameraMode($0) }) != mode {
+            lensSelection = RobotLensSelection.resolve(mode: mode, measured: nil)
+        }
+        cameraFrame = frame
     }
 
     func beginLensCalibration() throws -> RobotLensSession {
@@ -320,7 +327,7 @@ final class SiteRobotMapModel: ObservableObject {
         try await BlockingWork.run(on: .global(qos: .utility)) { try RobotLensStore.save(profile, mode: mode) }
         try Task.checkCancellation()
         _ = try lensCalibrationFrame(token)
-        measuredLens = lens
+        lensSelection = RobotLensSelection(lens: lens, source: .measured)
         visualStatus = "Measured Go2 lens saved. Waiting to match the room."
     }
 
@@ -442,15 +449,17 @@ final class SiteRobotMapModel: ObservableObject {
         automaticPaused = true
         dismissRotationPrompt()
         actionGeneration += 1
-        let request = actionGeneration, h = handle, epoch = generation, f = frame, scale = geometryScale
+        let request = actionGeneration, h = handle, epoch = generation, f = frame, scale = geometryScale, revision = siteRevision
         remoteSearchSequence = request; remoteSearching = false; localizing = true
         searchConclusion = nil; searchTurns = 0; rotationState = .matching(0)
         actions.submit {
             do {
                 let mesh = try await SiteRobotGeometry.semantic(url, scale: scale)
                 guard epoch == self.generation, request == self.actionGeneration else { return }
+                let hint = try await self.cameraHint(model: url, frame: f, revision: revision, request: request, epoch: epoch)
+                guard epoch == self.generation, request == self.actionGeneration else { return }
                 try await self.searchClient.search(h, sequence: request,
-                    request: RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: nil, reference: []))
+                    request: RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: hint, reference: []))
                 if epoch == self.generation, request == self.actionGeneration { self.remoteSearching = true }
             } catch {
                 guard epoch == self.generation, request == self.actionGeneration else { return }
@@ -464,6 +473,74 @@ final class SiteRobotMapModel: ObservableObject {
     func offerRotationRetry() {
         guard canStartRotationSearch else { return }
         startRotationSearch()
+    }
+
+    private func cameraHint(model url: URL, frame f: String, revision: UUID, request: UInt64, epoch: Int,
+                            previous: SiteCameraLens? = nil, recalibrate: Bool = false) async throws -> RobotVisualHint? {
+        try Task.checkCancellation()
+        let robot = serial
+        var hint: RobotVisualHint?
+        if let first = self.cameraFrame, first.isFresh(at: Date()) {
+            do {
+                let mode = RobotCameraMode(first)
+                let profile = try await BlockingWork.run(on: .global(qos: .userInitiated)) {
+                    try RobotLensStore.read(robot: robot, mode: mode)
+                }
+                guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
+                let previous = previous.flatMap { mode.matches($0) ? $0 : nil }
+                let selection = RobotLensSelection.resolve(mode: mode, measured: profile?.lens,
+                                                           previous: previous, recalibrate: recalibrate)
+                let lens = selection?.lens
+                self.lensSelection = selection
+                if self.positionSearch.active && selection == nil {
+                    self.visualStatus = "Matching LiDAR geometry. No lens profile matches this camera mode; calibrate it to add visual measurements."
+                } else {
+                    try await self.visual.load(model: url, frame: f, revision: revision)
+                    guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
+                    let result = try await self.visual.locate(first: first, lens: lens) {
+                        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                        while ContinuousClock.now < deadline {
+                            try Task.checkCancellation()
+                            guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
+                            if let next = self.cameraFrame, next.sequence != first.sequence,
+                               next.received.timeIntervalSince(first.received) >= 0.5, next.isFresh(at: Date()) { return next }
+                            try await Task.sleep(for: .milliseconds(100))
+                        }
+                        throw WendyError(message: "Waiting for a second fresh camera frame.")
+                    }
+                    guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
+                    guard let latest = self.cameraFrame, RobotCameraMode(latest) == mode else {
+                        throw WendyError(message: "The Go2 camera mode changed while matching the room.")
+                    }
+                    hint = result.0
+                    if result.1.measured {
+                        self.lensSelection = RobotLensSelection(lens: result.1, source: .measured)
+                        self.visualStatus = "Calibrated camera pose verified on two frames."
+                    } else if selection?.source == .go2Preset {
+                        self.visualStatus = "Go2 preset matched on two frames; used as supporting evidence."
+                    } else {
+                        self.lensSelection = RobotLensSelection(lens: result.1, source: .estimated)
+                        self.visualStatus = "Estimated camera pose verified on two frames; used as supporting evidence."
+                    }
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch SiteLocalizationError.noSolution(let reason, let matches, let inliers) {
+                let detail: String
+                switch reason {
+                case 1: detail = "Too few shared features were found between this view and the room references."
+                case 3: detail = "Matches occupy too little of the image to verify a position."
+                case 7: detail = "Matches lie on one plane, so this view cannot determine the camera lens."
+                default: detail = "The matches did not pass camera geometry validation."
+                }
+                self.visualStatus = "Camera: \(matches) matches, \(inliers) consistent. \(detail) More room references from Go2's height are needed."
+            }
+            catch { self.visualStatus = "Camera: \(error.localizedDescription)" }
+        } else {
+            self.visualStatus = "No fresh camera reference yet. Matching measured geometry."
+        }
+        try Task.checkCancellation()
+        guard request == actionGeneration, epoch == generation else { throw CancellationError() }
+        return hint
     }
 
     func locate(recalibrate: Bool = false) {
@@ -487,51 +564,9 @@ final class SiteRobotMapModel: ObservableObject {
                 var stored = RobotSavedMap(frame: f, modelDigest: "", robot: robot)
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 self.savedMap = stored; self.referenceCount = stored.surfaces.count
-                var hint: RobotVisualHint?
-                if let first = self.cameraFrame, first.isFresh(at: Date()) {
-                    do {
-                        let mode = RobotCameraMode(first)
-                        let profile = try await BlockingWork.run(on: .global(qos: .userInitiated)) {
-                            try RobotLensStore.read(robot: robot, mode: mode)
-                        }
-                        guard request == self.actionGeneration, epoch == self.generation else { return }
-                        let previous = stored.lens.flatMap { mode.matches($0) ? $0 : nil }
-                        let lens = profile?.lens ?? (previous?.measured == true || !recalibrate ? previous : nil)
-                        self.measuredLens = lens?.measured == true ? lens : nil
-                        if self.positionSearch.active && self.measuredLens == nil {
-                            self.visualStatus = "Matching LiDAR geometry. Calibrate the camera to include visual measurements."
-                        } else {
-                            try await self.visual.load(model: url, frame: f, revision: revision)
-                            let result = try await self.visual.locate(first: first, lens: lens) {
-                                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-                                while ContinuousClock.now < deadline {
-                                    try Task.checkCancellation()
-                                    guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
-                                    if let next = self.cameraFrame, next.sequence != first.sequence,
-                                       next.received.timeIntervalSince(first.received) >= 0.5, next.isFresh(at: Date()) { return next }
-                                    try await Task.sleep(for: .milliseconds(100))
-                                }
-                                throw WendyError(message: "Waiting for a second fresh camera frame.")
-                            }
-                            hint = result.0
-                            if result.1.measured { stored.lens = result.1 }
-                            self.visualStatus = result.1.measured ? "Calibrated camera pose verified on two frames." : "Estimated camera pose verified on two frames; used as supporting evidence."
-                        }
-                    } catch is CancellationError { throw CancellationError() }
-                    catch SiteLocalizationError.noSolution(let reason, let matches, let inliers) {
-                        let detail: String
-                        switch reason {
-                        case 1: detail = "Too few shared features were found between this view and the room references."
-                        case 3: detail = "Matches occupy too little of the image to verify a position."
-                        case 7: detail = "Matches lie on one plane, so this view cannot determine the camera lens."
-                        default: detail = "The matches did not pass camera geometry validation."
-                        }
-                        self.visualStatus = "Camera: \(matches) matches, \(inliers) consistent. \(detail) More room references from Go2's height are needed."
-                    }
-                    catch { self.visualStatus = "Camera: \(error.localizedDescription)" }
-                } else {
-                    self.visualStatus = "No fresh camera reference yet. Matching measured geometry."
-                }
+                let hint = try await self.cameraHint(model: url, frame: f, revision: revision, request: request,
+                                                     epoch: epoch, previous: stored.lens, recalibrate: recalibrate)
+                if self.lensSelection?.source == .measured { stored.lens = self.lensSelection?.lens }
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 self.savedMap = stored
                 if self.reading?.measurementsReady != true {
@@ -925,7 +960,10 @@ struct SiteRobotLocalizationControls: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-        Button("Calibrate camera", systemImage: "camera.aperture") {
+        if let selection = model.lensSelection {
+            Text(selection.label).font(.caption).foregroundStyle(.secondary)
+        }
+        Button(model.lensSelection == nil ? "Calibrate camera" : "Refine camera calibration", systemImage: "camera.aperture") {
             model.showLensCalibration = true
         }
         .buttonStyle(.bordered)

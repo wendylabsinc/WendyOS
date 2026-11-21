@@ -1303,6 +1303,35 @@ revision check. The web example uses the same API and worker. See
 [the alignment contract](../internal/twinvision/README.md) for provenance,
 expiry, replay testing and the remaining robot-localization migration.
 
+## Go2 camera preset
+
+The digital twin uses a built-in lens profile for Go2's raw H.264 1280×720
+front-camera stream. A saved measurement for the same robot and capture mode
+always takes priority. Other resolutions and codecs keep the existing lens
+estimation and manual calibration flow; the preset is never scaled to fit them.
+Use **Refine camera calibration** to measure this robot's lens if matching fails.
+Room position and heading still require fresh observations and room matching.
+
+The preset uses the camera matrix and five Brown-Conrady distortion coefficients
+from [go2_ros2_sdk's 720p calibration](https://github.com/abizovnuralem/go2_ros2_sdk/blob/b440609591a249e7bdd4bbc88e056a3660575447/go2_robot_sdk/calibration/front_camera_720.yaml).
+These are community measurements, not factory calibration for the connected
+robot. They remain marked as assumed, use the native assumed-lens solver, and
+must pass the existing two-frame and LiDAR checks. They are not saved as measured
+calibration. The 1080p file is not bundled because its camera matrix is malformed.
+
+Visual hints use the nominal front-camera mount in
+[Unitree's Go2 URDF](https://github.com/unitreerobotics/unitree_ros/blob/157ff950351e5f535e03c5d85a16b7d594b3dbcc/robots/go2_description/urdf/go2_description.urdf)
+to report the body origin instead of the camera origin. The translation is
+0.32715 m forward, -0.00003 m left, and 0.04297 m up; the fitted rotation maps it
+into the room, including pitch and roll. The robot's firmware already transforms
+its voxel map, so this does not apply another LiDAR mount transform.
+
+The Apple client supplies a verified camera hint to the Linux search's initial
+match when fresh video and room references are available. Linux checks its age
+and paired odometry, then discards it before any search turn. Camera failures
+fall back to LiDAR-only search. This does not add a factory-calibration API.
+Physical lens accuracy and mounting tolerances still need validation on a Go2. The bundled BSD-2-Clause notice is in `Resources/Notices/go2-camera-LICENSE.txt`.
+
 ## Android companion
 
 The native Android companion lives in [`../android`](../android/README.md). It

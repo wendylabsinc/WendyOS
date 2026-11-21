@@ -111,7 +111,14 @@ enum RobotReferenceStore {
 }
 
 @MainActor
-final class RobotVisualLocalization {
+protocol RobotVisualMatching: AnyObject {
+    func load(model: URL, frame: String, revision: UUID) async throws
+    func locate(first: CameraCalibrationFrame, lens: SiteCameraLens?,
+                next: @MainActor () async throws -> CameraCalibrationFrame) async throws -> (RobotVisualHint, SiteCameraLens)
+}
+
+@MainActor
+final class RobotVisualLocalization: RobotVisualMatching {
     private var engine = SiteLocalizationEngine()
     private var loadedFrame = ""
     private var loadedDigest = ""
@@ -159,7 +166,7 @@ final class RobotVisualLocalization {
     func locate(first: CameraCalibrationFrame, lens: SiteCameraLens?, next: @MainActor () async throws -> CameraCalibrationFrame) async throws -> (RobotVisualHint, SiteCameraLens) {
         guard let revision, first.isFresh(at: Date()) else { throw SiteLocalizationError.invalidImage }
         var solution: SiteLocalizationResult
-        do { solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height, revision: revision, lens: lens) }
+        do { solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height, revision: revision, lens: lens, estimated: lens?.measured == false) }
         catch let error as SiteLocalizationError {
             guard case .noSolution = error, lens?.measured != true else { throw error }
             solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height, revision: revision, lens: lens, estimated: true)
@@ -177,9 +184,10 @@ final class RobotVisualLocalization {
         }
         let forward = simd_quatd(vector: verification.pose.rotation).act(SIMD3<Double>(0,0,1))
         guard hypot(forward.x,forward.z) > 0.7 else { throw SiteLocalizationError.invalidResult }
-        // The front camera is a soft position/heading cue. The backend retains
-        // uncertainty for its offset from the body; this is not a body transform.
-        let hint = RobotVisualHint(position: RobotMapPoint(X:b.x,Y:-b.z), yaw:atan2(-forward.z,forward.x),
+        // Convert the nominal Go2 front-camera mount to the body origin. This
+        // remains supporting evidence, verified against LiDAR by the backend.
+        let body = Go2CameraProfile.bodyPosition(camera: verification.pose)
+        let hint = RobotVisualHint(position: RobotMapPoint(X:body.x,Y:-body.z), yaw:atan2(-forward.z,forward.x),
             at:second.received.timeIntervalSince1970, inliers:min(solution.inliers,verification.inliers), residual:max(solution.residual,verification.residual))
         solution.lens.captureMode = "\(second.codec) \(second.width)x\(second.height)"
         return (hint, solution.lens)
@@ -205,7 +213,7 @@ struct RobotLocalizationDiagnostics: View {
                 }
                 Text(model.visualStatus)
                 Text("Saved robot map: \(model.referenceCount) surfaces")
-                if let lens = model.measuredLens { Text("Measured lens · \(lens.captureMode)") }
+                if let selection = model.lensSelection { Text("\(selection.label) · \(selection.lens.captureMode)") }
                 Text("For better visual references, include the room from Go2's camera height during the iPhone scan. Keep fixed desks and cabinets visible across several views.")
             }.font(.caption2).foregroundStyle(.secondary).padding(.top, 4)
         }.font(.caption)

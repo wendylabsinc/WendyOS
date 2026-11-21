@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	"strings"
 	"testing"
 	"time"
@@ -16,12 +17,14 @@ type searchRobot struct {
 	reject            bool
 	stopped           uint64
 	directions        []int
+	visuals           []*sitenav.VisualHint
 }
 
 func (r *searchRobot) Status() twinrobot.SiteRobotSnapshot {
 	return twinrobot.SiteRobotSnapshot{MeasurementsReady: r.ready, LookState: 2, LookDirection: -1}
 }
 func (r *searchRobot) FuseLocalization(sequence uint64, input twinrobot.SiteFusionRequest) (twinrobot.SiteFusionReport, error) {
+	r.visuals = append(r.visuals, input.Visual)
 	if r.matchAfter >= 0 && r.turns >= r.matchAfter {
 		return twinrobot.SiteFusionReport{Candidates: []twinrobot.SiteRobotCandidate{{X: 1}}}, nil
 	}
@@ -80,5 +83,20 @@ func TestLinuxSearchHasBoundedFullRotation(t *testing.T) {
 	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{})
 	if robot.turns != 12 || session.searchState != "failed" || !strings.Contains(session.searchMessage, "Several room positions") || !strings.Contains(string(session.searchReport), `"Accepted":42`) {
 		t.Fatalf("unbounded search: %d %s", robot.turns, session.searchState)
+	}
+}
+
+func TestLinuxSearchUsesCameraHintOnlyBeforeTheFirstTurn(t *testing.T) {
+	robot := &searchRobot{ready: true, matchAfter: 1}
+	session := &robotSession{robot: robot, searchRoot: 1000000}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hint := &sitenav.VisualHint{Position: sitenav.Point{X: 2, Y: 3}, Inliers: 80, Residual: 1}
+	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Frame: "room/frame", Visual: hint})
+	if session.searchState != "complete" || robot.turns != 1 || len(robot.visuals) != 2 {
+		t.Fatalf("search did not match after one turn: state=%s turns=%d matches=%d", session.searchState, robot.turns, len(robot.visuals))
+	}
+	if robot.visuals[0] != hint || robot.visuals[1] != nil {
+		t.Fatalf("camera hint missing initially or reused after turning: %v", robot.visuals)
 	}
 }

@@ -3,6 +3,8 @@ import Foundation
 import ImageIO
 import SwiftUI
 import Testing
+import simd
+import CoreVideo
 @testable import WendyDesktop
 
 private func lensFrame(sequence: UInt64 = 1, received: Date = Date(timeIntervalSince1970: 1000)) -> CameraCalibrationFrame {
@@ -315,6 +317,7 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
     var measurements: Bool
     let rejectTurns: Bool
     var searches: [UInt64] = []
+    var searchRequests: [RobotFusionRequest] = []
     var turns: [UInt64] = []
     var stops: [UInt64] = []
     var progress = SiteRobotClient.RemoteReply(SearchState: "searching", SearchMessage: "Waiting for measurements", SearchTurns: 0)
@@ -330,6 +333,7 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
     func stop(_ handle: UInt64, sequence: UInt64) async { stops.append(sequence) }
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {
         searches.append(sequence)
+        searchRequests.append(request)
         if rejectTurns { throw WendyError(message: "An obstacle or drop overlaps Go2's body during this turn.") }
     }
     func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply { progress }
@@ -338,9 +342,10 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
 
 @MainActor
 private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = false,
+                               visualMatcher: any RobotVisualMatching = RobotVisualLocalization(),
                                _ body: @MainActor (SiteRobotMapModel, RotationTestRobot) async throws -> Void) async throws {
     let robot = RotationTestRobot(measurements: measurements, rejectTurns: rejectTurns)
-    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot)
+    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot, visualMatcher: visualMatcher)
     model.serial = "rotation-test-\(UUID())"
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -437,5 +442,197 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
         model.stop()
         try await Task.sleep(for: .milliseconds(1200))
         #expect(await robot.searches.count == 1)
+    }
+}
+
+
+@Suite struct Go2CameraProfileTests {
+    private func mode(width: Int = 1280, height: Int = 720, codec: String = "H.264") -> RobotCameraMode {
+        var mode = RobotCameraMode(lensFrame())
+        mode.width = width; mode.height = height; mode.codec = codec
+        return mode
+    }
+
+    @Test func presetRetainsDistortionAndIsNeverAMeasurement() throws {
+        let mode = mode()
+        let lens = try #require(Go2CameraProfile.lens(for: mode))
+        #expect(lens.isValid)
+        #expect(!lens.measured)
+        #expect(mode.matches(lens))
+        #expect(lens.boundaryRays?.count == 32)
+        #expect(lens.distortion == [-0.354630, 0.102054, -0.001614, -0.001249, 0])
+        #expect(lens.note.contains(Go2CameraProfile.identifier))
+        // A preset cannot overwrite a measured per-robot calibration file.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(throws: (any Error).self) {
+            try RobotLensStore.save(RobotLensProfile(robot: "go2", lens: lens, measuredAt: .now), mode: mode, root: root)
+        }
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+    }
+
+    @Test func decodedVideoFrameSelectsThePreset() throws {
+        var buffer: CVPixelBuffer?
+        #expect(CVPixelBufferCreate(kCFAllocatorDefault, 1280, 720,
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nil, &buffer) == kCVReturnSuccess)
+        let pixelBuffer = try #require(buffer)
+        let frame = try #require(CameraCalibrationFrame.luma(pixelBuffer, received: .now, sequence: 1))
+        #expect(RobotLensSelection.resolve(mode: RobotCameraMode(frame), measured: nil)?.source == .go2Preset)
+    }
+
+    @Test func unknownModesNeverScaleOrReuseThePreset() {
+        for mode in [mode(width: 1920, height: 1080), mode(width: 640, height: 360),
+                     mode(width: 720, height: 1280), mode(height: 800), mode(codec: "JPEG"), mode(codec: "HEVC")] {
+            #expect(Go2CameraProfile.lens(for: mode) == nil)
+            #expect(RobotLensSelection.resolve(mode: mode, measured: nil) == nil)
+        }
+    }
+
+    @Test func measuredOverrideWinsAndMismatchedMeasurementsDoNotLeak() throws {
+        let mode = mode()
+        var measured = try #require(Go2CameraProfile.lens(for: mode))
+        measured.measured = true; measured.fx = 870; measured.note = "Measured on this robot"
+        let selected = try #require(RobotLensSelection.resolve(mode: mode, measured: measured))
+        #expect(selected.source == .measured)
+        #expect(selected.lens == measured)
+        #expect(RobotLensSelection.resolve(mode: mode, measured: nil, previous: measured)?.source == .measured)
+        measured.captureMode = "JPEG 1280x720"
+        #expect(RobotLensSelection.resolve(mode: mode, measured: measured)?.source == .go2Preset)
+        measured.captureMode = mode.label; measured.fx = .nan
+        #expect(RobotLensSelection.resolve(mode: mode, measured: measured)?.source == .go2Preset)
+        #expect(RobotLensSelection.resolve(mode: mode, measured: nil, recalibrate: true)?.source == .go2Preset)
+    }
+
+    @Test func unsupportedModesKeepTheExistingEstimatedFallback() throws {
+        let mode = mode(width: 640, height: 480)
+        var previous = measuredRobotLens(); previous.measured = false; previous.captureMode = mode.label
+        let selected = try #require(RobotLensSelection.resolve(mode: mode, measured: nil, previous: previous))
+        #expect(selected.source == .estimated)
+        #expect(selected.lens == previous)
+        #expect(RobotLensSelection.resolve(mode: mode, measured: nil, previous: previous, recalibrate: true) == nil)
+    }
+
+    @Test func verifiedPoseDoesNotPromotePresetToMeasuredLens() throws {
+        let lens = try #require(Go2CameraProfile.lens(for: mode()))
+        var output = WSLocalization()
+        output.success = 1; output.fitted_lens = 2; output.inliers = 80; output.rms = 1
+        output.world_from_camera = (1,0,0,0, 0,1,0,0, 0,0,1,0, 1,2,3,1)
+        let result = try SiteLocalizationResult.decode(output, width: 1280, height: 720, revision: UUID(), existing: lens)
+        #expect(result.lens == lens)
+        #expect(!result.lens.measured)
+        #expect(result.pose.provenance.contains("assumed"))
+    }
+
+    @Test func cameraMountIsRemovedInWorldAxesForEveryHeadingAndTilt() {
+        let bodyPosition = SIMD3<Double>(2, 0.4, -3)
+        // Body axes are forward/left/up; camera axes are right/down/forward.
+        let opticalToBody = simd_double3x3(columns: (SIMD3(0,-1,0), SIMD3(0,0,-1), SIMD3(1,0,0)))
+        let mount = SIMD3<Double>(0.32715, -0.00003, 0.04297)
+        for yaw in [0.0, Double.pi / 2, Double.pi, -Double.pi / 2] {
+            for pitch in [-0.2, 0.0, 0.2] {
+                let rotation = simd_quatd(angle: yaw, axis: SIMD3(0,1,0))
+                    * simd_quatd(angle: pitch, axis: SIMD3(1,0,0))
+                    * simd_quatd(angle: 0.1, axis: SIMD3(0,0,1))
+                let cameraPosition = bodyPosition + rotation.act(mount)
+                let pose = SiteCameraPose(modelRevision: nil,
+                    position: SitePoint(x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z),
+                    rotation: (rotation * simd_quatd(opticalToBody)).vector,
+                    method: 2, provenance: "fixture", observedAt: .now, validUntil: .now.addingTimeInterval(60))
+                #expect(simd_distance(Go2CameraProfile.bodyPosition(camera: pose), bodyPosition) < 1e-9)
+            }
+        }
+    }
+
+    @MainActor @Test func changingCameraModeClearsThePresetAndIgnoresStaleFrames() {
+        let model = SiteRobotMapModel()
+        var frame = lensFrame(received: .now)
+        frame.width = 1280; frame.height = 720; frame.codec = "H.264"
+        frame.gray = Data(count: frame.width * frame.height)
+        model.acceptCameraFrame(frame)
+        #expect(model.lensSelection?.source == .go2Preset)
+        var stale = frame; stale.width = 640; stale.received = .distantPast
+        model.acceptCameraFrame(stale)
+        #expect(model.lensSelection?.source == .go2Preset)
+        frame.codec = "JPEG"; frame.received = .now
+        model.acceptCameraFrame(frame)
+        #expect(model.lensSelection == nil)
+    }
+}
+
+
+@MainActor
+private final class PresetTestMatcher: RobotVisualMatching {
+    var receivedLens: SiteCameraLens?
+    var fail = false
+    var onLocate: (() -> Void)?
+    func load(model: URL, frame: String, revision: UUID) async throws {
+        if fail { throw SiteLocalizationError.invalidMap }
+    }
+    func locate(first: CameraCalibrationFrame, lens: SiteCameraLens?,
+                next: @MainActor () async throws -> CameraCalibrationFrame) async throws -> (RobotVisualHint, SiteCameraLens) {
+        receivedLens = lens
+        onLocate?()
+        let lens = try #require(lens)
+        return (RobotVisualHint(position: RobotMapPoint(X: 2, Y: 3), yaw: 0.5,
+                                at: first.received.timeIntervalSince1970, inliers: 80, residual: 1), lens)
+    }
+}
+
+@Suite @MainActor struct Go2PresetSearchTests {
+    private func frame() -> CameraCalibrationFrame {
+        CameraCalibrationFrame(gray: Data(count: 1280 * 720), width: 1280, height: 720,
+                               received: .now, sequence: 1, codec: "H.264")
+    }
+
+    @Test func activeLinuxSearchReceivesPresetCameraEvidence() async throws {
+        let visual = PresetTestMatcher()
+        try await withRotationModel(visualMatcher: visual) { model, robot in
+            model.acceptCameraFrame(frame())
+            model.startRotationSearch()
+            for _ in 0..<200 {
+                if await robot.searches.count == 1 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(visual.receivedLens?.measured == false)
+            #expect(visual.receivedLens?.fx == 864.39938)
+            #expect(model.lensSelection?.source == .go2Preset)
+            let request = try #require(await robot.searchRequests.first)
+            #expect(request.visual?.position.X == 2)
+            #expect(request.visual?.inliers == 80)
+            #expect(await robot.turns.isEmpty)
+        }
+    }
+
+    @Test func failedCameraMatchStillStartsLidarSearchWithoutAHint() async throws {
+        let visual = PresetTestMatcher(); visual.fail = true
+        try await withRotationModel(visualMatcher: visual) { model, robot in
+            model.acceptCameraFrame(frame())
+            model.startRotationSearch()
+            for _ in 0..<200 {
+                if await robot.searches.count == 1 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let request = try #require(await robot.searchRequests.first)
+            #expect(request.visual == nil)
+            #expect(await robot.turns.isEmpty)
+        }
+    }
+
+    @Test func stoppingDuringCameraMatchNeverStartsTheRemoteSearch() async throws {
+        let visual = PresetTestMatcher()
+        try await withRotationModel(visualMatcher: visual) { model, robot in
+            visual.onLocate = { model.stop() }
+            model.acceptCameraFrame(frame())
+            model.startRotationSearch()
+            for _ in 0..<200 {
+                if visual.receivedLens != nil { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(visual.receivedLens != nil)
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(await robot.searches.isEmpty)
+            #expect(!model.localizing)
+            #expect(await robot.turns.isEmpty)
+        }
     }
 }
