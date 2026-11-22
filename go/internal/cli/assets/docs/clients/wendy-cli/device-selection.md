@@ -111,6 +111,9 @@ If the CLI reports that the expected device identity is missing:
   identity before saving the binding.
 - If the device is already enrolled under a different local name, use a name
   with an existing trusted binding or its Cloud selector.
+- If the error says the saved identity names an organization but no device, an
+  older CLI saved it and no connection can satisfy it. Run the
+  `wendy device unpin <name>` command the error prints, then connect again.
 
 Retrying, refreshing client certificates, and synchronizing the device clock
 do not supply a missing device identity. The CLI does not retry this failure
