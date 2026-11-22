@@ -36,6 +36,9 @@ import (
 type cameraShares struct {
 	mu         sync.Mutex
 	containers map[string]*shareContainer // by container ID
+	// Latest module capability observed while opening a share. A later
+	// successful open clears it after a driver update.
+	freshStartUnsupported bool
 	// pending holds the numbers of share nodes being made, so IsShareNode
 	// knows them before their record exists.
 	pending map[int]bool

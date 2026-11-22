@@ -46,6 +46,27 @@ func TestCameraShareReport_UnsharedCameraSaysWhy(t *testing.T) {
 	}
 }
 
+func TestCameraShareReport_UnsupportedFreshStartFallsBackToRealCamera(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.openErr["/dev/video255"] = errShareFreshStartUnsupported
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.drainRemovals()
+	if len(h.records("cv-a")) != 0 || len(h.loop.liveAux()) != 0 {
+		t.Fatal("unsupported module left a share node covering the real camera")
+	}
+	got := h.s.CameraShareReport(context.Background())["/dev/video0"]
+	want := map[string]string{"share_unavailable": errShareFreshStartUnsupported.Error()}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("report = %#v, want %#v", got, want)
+	}
+	delete(h.openErr, "/dev/video255")
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+	got = h.s.CameraShareReport(context.Background())["/dev/video0"]
+	if got["share_unavailable"] != "" || got["share_mode"] == "" {
+		t.Fatalf("successful new module open kept old refusal: %#v", got)
+	}
+}
+
 // Two resolves read the same old camera; the first follows it for every
 // record, so the second finds its record already moved and is still resolved.
 func TestResolveShareCamera_ConcurrentFollowStillResolves(t *testing.T) {

@@ -164,12 +164,10 @@ public struct VideoDevice {
         defer { _ = try? calls.control(fd, WENDY_VIDIOC_STREAMOFF, "VIDIOC_STREAMOFF", &type) }
 
         // Dequeue a filled buffer and read the one it names, not buffer 0:
-        // v4l2loopback hands its buffers out in turn. A shared camera's node
-        // hands a new reader first the newest frame it holds, which was written
-        // before this capture began: the black frame the agent writes when the
-        // last reading session ended. Such a frame is queued again and the next
-        // one taken, at most once per buffer, so a driver whose timestamps say
-        // something else still gives a frame.
+        // v4l2loopback hands its buffers out in turn. Older loopback modules
+        // may retain a frame from before this capture began. Skip those frames
+        // as a compatibility measure, at most once per buffer, so a driver
+        // whose timestamps use a different clock still returns a frame.
         var dqbuf = v4l2_buffer()
         var skipped = 0
         while true {

@@ -3,19 +3,23 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 
 PINS = {
     'upstream_revision': '0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4',
-    'builder_revision': '4828717a29aa3e7d3b183c6683155337957af39f',
+    'builder_revision': '7206daae5b379794fbe36cf978cd77e3c5b0ec71',
     'source_sha256': 'a3e78c9ee061e5ce81b0ea45bb1730ce531b5ece7194f56a47d831ec2d009c2b',
-    'patched_source_sha256': '10d2f6b45304ce6018741f35346f96154319aae2706c1112cd436c9b8e388be2',
-    'recipe_sha256': '8938e74149f7679777a938e58ed8edc9e65ec8f39755867709ee36b5d74a2ffc',
+    'patched_source_sha256': 'b31e15d99523c90198ae34ced701a76887800cfeb3891e144f4f0a29b6c1855b',
+    'recipe_sha256': 'b70285d1b139f1cfa69f3aad0733467c1be373cf88de7abf2583caa3cba57135',
+    'fresh_patch_sha256': 'dcd9abd0b2fbf3d30ab5708165e5d07ca5a40ea17e91ff91ccdf2030d724b9be',
     'patch_sha256': '57d6b61e2335cc3225dd35c667bc2eba58682ff3e611905ce970144d761493e5',
 }
 RECIPE = Path('recipes-kernel/v4l2loopback/v4l2loopback_0.15.4.bb')
 PATCH = RECIPE.parent / 'files/0001-output-completion-queue.patch'
+FRESH_PATCH = RECIPE.parent / 'files/0002-fresh-capture-start.patch'
+PATCHES = (PATCH, FRESH_PATCH)
 
 
 def git(root, *args):
@@ -44,6 +48,7 @@ def validate(source, builder, pins=PINS):
         'source_sha256': sha(source / 'v4l2loopback.c'),
         'recipe_sha256': sha(builder / RECIPE),
         'patch_sha256': sha(builder / PATCH),
+        'fresh_patch_sha256': sha(builder / FRESH_PATCH),
     }
     for key, value in actual.items():
         if value != pins[key]:
@@ -51,9 +56,10 @@ def validate(source, builder, pins=PINS):
     recipe = (builder / RECIPE).read_text()
     if recipe.count('SRCREV = "' + pins['upstream_revision'] + '"') != 1:
         raise ValueError('recipe does not select the verified upstream source')
-    if recipe.count('file://' + PATCH.name) != 1:
-        raise ValueError('recipe does not apply the exact candidate patch')
-    return {**pins, 'source': str(source), 'builder': str(builder), 'patch': str(builder / PATCH)}
+    if re.findall(r'file://([\w.-]+\.patch)', recipe) != [patch.name for patch in PATCHES]:
+        raise ValueError('recipe does not apply the exact candidate patches in order')
+    return {**pins, 'source': str(source), 'builder': str(builder),
+            'patches': [str(builder / patch) for patch in PATCHES]}
 
 
 if __name__ == '__main__':

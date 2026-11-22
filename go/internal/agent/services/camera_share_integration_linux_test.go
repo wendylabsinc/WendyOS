@@ -35,7 +35,7 @@ import (
 // that each app's raw V4L2 reader gets the camera's picture from one capture
 // with no encoder, stamped with the capture time; that one app leaving does
 // not stop the other; that the camera stops with its last reader; and that a
-// new reader is handed black, never the previous session's last picture.
+// new reader waits for a fresh picture, never black or a previous session's frame.
 //
 // What it fakes is the camera listing's view of the fixture: the device list
 // holds only the fixture node, which is listed as a USB camera, and its camera
@@ -272,7 +272,6 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 	// take under a second; the 5 s allow for a hosted runner under -race. A
 	// reader that stalled when A left still yields at most the 2 frames its
 	// buffers held, so this still catches it.
-	stoppedA := monotonicNs()
 	readerA.close()
 	got, problem = readPictures(ctx, []*shareAppReader{readerB}, wantFrames, 5*time.Second, frameBytes)
 	if problem != "" {
@@ -290,53 +289,34 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Step 9: a new reader of A's node is handed black first, stamped after A
-	// stopped, and then the picture from a new capture. Blanks may come before
-	// the picture (the whole ring is black); the previous session's picture,
-	// stamped before A stopped, never does.
-	again := openShareAppReader(t, nodes[containers[0]])
-	restarted := monotonicNs()
-	if err := again.start(); err != nil {
-		t.Fatalf("new reader STREAMON on %s: %v", again.path, err)
-	}
-	blank := blankFrame(mode)
-	stoppedAtMicros := stoppedA / 1000 * 1000 // buffer timestamps have whole microseconds
-	describe := func(frame []byte, ts int64) string {
-		what := describeShareFrame(frame, blank, frameBytes)
-		return fmt.Sprintf("%s stamped %s after A stopped", what, time.Duration(ts-stoppedA))
-	}
-	frame, ts, err := again.next(ctx, 3*time.Second)
-	if err != nil {
-		t.Fatalf("a new reader received no first frame on %s: %v", again.path, err)
-	}
-	if !bytes.Equal(frame, blank) || ts < stoppedAtMicros {
-		t.Fatalf("a new reader received the previous session's last picture: its first frame on %s is %s, want black stamped no earlier than A stopping",
-			again.path, describe(frame, ts))
-	}
-	blanks := 1
-	deadline = time.Now().Add(10 * time.Second)
-	for {
-		frame, ts, err := again.next(ctx, time.Until(deadline))
-		if err != nil {
-			t.Fatalf("a new reader on %s received %d black frames and no picture: %v; hubs: %d; feed: %v", again.path, blanks, err, hubCount(svc), feed.err())
+	// Step 9: reopening a dormant node waits for the next real camera picture.
+	// Neither blank placeholders nor pictures from before STREAMON are valid.
+	for attempt := 0; attempt < 3; attempt++ {
+		again := openShareAppReader(t, nodes[containers[0]])
+		restarted := monotonicNs()
+		if err := again.start(); err != nil {
+			t.Fatalf("new reader STREAMON on %s: %v", again.path, err)
 		}
-		if bytes.Equal(frame, blank) {
-			if ts < stoppedAtMicros {
-				t.Fatalf("a new reader received the previous session's last picture: frame %d on %s is %s", blanks+1, again.path, describe(frame, ts))
-			}
-			blanks++
-			continue
+		frame, ts, err := again.next(ctx, 10*time.Second)
+		if err != nil {
+			t.Fatalf("new reader got no first frame: %v; feed: %v", err, feed.err())
 		}
 		if problem := sharePictureProblem(frame, frameBytes); problem != "" {
-			t.Fatalf("frame on %s does not show the source picture: %s", again.path, problem)
+			t.Fatalf("FRESH_CAPTURE_CONTRACT: first frame on %s was not the source picture: %s", again.path, problem)
 		}
 		if ts < restarted/1000*1000 {
-			t.Fatalf("a new reader received the previous session's last picture: frame %d on %s is %s, before the new reader started", blanks+1, again.path, describe(frame, ts))
+			t.Fatalf("FRESH_CAPTURE_CONTRACT: first frame on %s predates STREAMON by %s", again.path, time.Duration(restarted-ts))
 		}
-		t.Logf("a new reader on %s received %d black frames, then the picture %s after it started", again.path, blanks, time.Duration(ts-restarted))
-		break
+		again.close()
+		deadline = time.Now().Add(3 * time.Second)
+		for hubCount(svc) != 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("camera still running after reopened reader stopped")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
-	again.close()
+	t.Log("FRESH_CAPTURE_FIRST_PICTURE_VERIFIED")
 
 	// Step 10: both containers are removed; their nodes and records go.
 	for _, id := range containers {

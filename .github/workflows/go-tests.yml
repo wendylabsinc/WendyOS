@@ -2,7 +2,17 @@ name: Go Tests
 
 on:
   workflow_call:
+    inputs:
+      media_only:
+        type: boolean
+        default: false
+        description: Run only the Linux media regressions
   workflow_dispatch:
+    inputs:
+      media_only:
+        type: boolean
+        default: false
+        description: Run only the Linux media regressions
 
 concurrency:
   group: go-tests-${{ github.run_id }}
@@ -13,12 +23,15 @@ permissions:
 
 jobs:
   plugin-launcher:
+    if: ${{ !inputs.media_only }}
     uses: ./.github/workflows/plugin-launcher.yml
 
   dependency-security:
+    if: ${{ !inputs.media_only }}
     uses: ./.github/workflows/security.yml
 
   automation-regressions:
+    if: ${{ !inputs.media_only }}
     name: Offline automation regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -45,6 +58,7 @@ jobs:
         run: python .github/scripts/run-eval-regressions.py
 
   shared-grpc-api-contracts:
+    if: ${{ !inputs.media_only }}
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -79,6 +93,7 @@ jobs:
         run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
 
   babel:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Babel tests
@@ -108,6 +123,7 @@ jobs:
         run: go vet ./...
 
   unit-tests:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Race tests
@@ -168,6 +184,7 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   transport-regressions:
+    if: ${{ !inputs.media_only }}
     name: Transport and first-boot regressions
     # Kept out of Race tests, whose budget is bounded at 30 minutes.
     runs-on: ubuntu-24.04
@@ -248,6 +265,7 @@ jobs:
           retention-days: 7
 
   containerd-regressions:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Containerd lifecycle, DNS and resource regressions
@@ -430,6 +448,7 @@ jobs:
           retention-days: 7
 
   linux-install-host:
+    if: ${{ !inputs.media_only }}
     name: Linux install safety
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -515,6 +534,7 @@ jobs:
           retention-days: 7
 
   network-regressions:
+    if: ${{ !inputs.media_only }}
     name: Linux network regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -713,6 +733,7 @@ jobs:
   # These four ran as separate jobs before the shared network job existed. They
   # stay separate so a failure in one cannot skip the others.
   packet-backends:
+    if: ${{ !inputs.media_only }}
     name: Kernel and userspace packet contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -770,6 +791,7 @@ jobs:
           grep -q 'unrouted packet reached carrier: withdrawn' "$RUNNER_TEMP/withdrawal.log"
 
   multicast-interfaces:
+    if: ${{ !inputs.media_only }}
     name: Multicast interface lifecycle
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -815,6 +837,7 @@ jobs:
           grep -q '^--- FAIL: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast-startup-only.log"
 
   operator-policy:
+    if: ${{ !inputs.media_only }}
     name: Mesh operator policy and rollback
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -868,6 +891,7 @@ jobs:
           done
 
   hostname-restart:
+    if: ${{ !inputs.media_only }}
     name: Hostname and mDNS restart
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -896,6 +920,7 @@ jobs:
           grep -q '^--- PASS: TestDeviceNameRestartIntegration ' "$RUNNER_TEMP/hostname-restart.log"
 
   darwin-install-host:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: macOS CLI and device regressions
@@ -952,6 +977,7 @@ jobs:
         run: bash .github/scripts/test-darwin-discovery.sh
 
   native-app-regressions:
+    if: ${{ !inputs.media_only }}
     name: Native app regressions (${{ matrix.platform }})
     runs-on:
       group: wendy-mac
@@ -1053,7 +1079,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: wendylabsinc/WendyOS-Builder
-          ref: 4828717a29aa3e7d3b183c6683155337957af39f
+          ref: 7206daae5b379794fbe36cf978cd77e3c5b0ec71
           path: .ci-loopback-builder
           sparse-checkout: recipes-kernel/v4l2loopback
           persist-credentials: false
@@ -1106,6 +1132,14 @@ jobs:
         run: bash .github/scripts/test-camera-pixels-on-demand.sh
       - name: Share one camera with two apps through kernel nodes and require regression controls
         run: bash .github/scripts/test-camera-sharing.sh
+      - name: Preserve camera sharing and fresh reader evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: camera-sharing-fresh-readers
+          path: ${{ runner.temp }}/wendy-camera-sharing.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Decode native H264 for a late viewer and recording and require regression controls
         run: bash .github/scripts/test-native-h264-parameter-sets.sh
       - name: Require VP8 decoding after lost reads and oversized elements
@@ -1194,6 +1228,7 @@ jobs:
   # These two ran as separate jobs before the shared media job existed. They
   # stay separate so a failure in one cannot skip the other.
   camera-node-regression:
+    if: ${{ !inputs.media_only }}
     name: Camera node removal
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1255,6 +1290,7 @@ jobs:
           fi
 
   gstreamer-regressions:
+    if: ${{ !inputs.media_only }}
     name: GStreamer output and cancellation
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1277,6 +1313,7 @@ jobs:
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
 
   windows:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Windows CLI
@@ -1308,6 +1345,7 @@ jobs:
           go test -c -o /dev/null ./internal/cli/commands
 
   wasm:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Browser WASM
@@ -1352,6 +1390,7 @@ jobs:
         run: go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth ./go/internal/shared/flock -count=1 -timeout 120s
 
   windows-telemetry:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Windows native regressions
@@ -1468,6 +1507,7 @@ jobs:
   # The agent embeds this Python worker and runs it on devices for campaign
   # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
   inference-worker:
+    if: ${{ !inputs.media_only }}
     name: Inference worker tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1519,6 +1559,7 @@ jobs:
           retention-days: 7
 
   workflow-security:
+    if: ${{ !inputs.media_only }}
     name: Workflow security
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1534,6 +1575,7 @@ jobs:
   # The report queries under go/scripts/analytics only run against a real
   # PostgreSQL; without one their tests skip, so nothing else covers them.
   analytics-queries:
+    if: ${{ !inputs.media_only }}
     name: Analytics report queries
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1564,6 +1606,7 @@ jobs:
 
 
   simulator-python310:
+    if: ${{ !inputs.media_only }}
     name: ROS Humble simulator dependencies (${{ matrix.robot }})
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ matrix.robot == 'go2' && 40 || 25 }}
@@ -1676,7 +1719,7 @@ jobs:
     permissions:
       contents: read
     name: Test
-    if: ${{ always() }}
+    if: ${{ always() && !inputs.media_only }}
     needs: [shared-grpc-api-contracts, babel, unit-tests, transport-regressions, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, packet-backends, multicast-interfaces, operator-policy, hostname-restart, plugin-launcher, workflow-security, analytics-queries]
     runs-on: ubuntu-latest
     steps:
@@ -1741,6 +1784,7 @@ jobs:
           test "$WORKFLOW_SECURITY_RESULT" = success
 
   agent-startup:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Agent setup startup
@@ -1785,6 +1829,7 @@ jobs:
           retention-days: 7
 
   vet:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Vet
@@ -1810,6 +1855,7 @@ jobs:
         run: python3 .github/scripts/api-snapshot-smoke.py
 
   shell-tests:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Install script tests

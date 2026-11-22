@@ -25,12 +25,9 @@ import (
 //   - v4l2loopback's client-usage event reports how many readers are
 //     streaming. There is one pending event per subscription (the newest
 //     overwrites), and SEND_INITIAL delivers the current count at subscribe.
-//   - Every new opener starts reading at position 0 of the module's ring. It
-//     jumps to the newest frame only once more frames than buffers have been
-//     written; until then it receives the ring from its oldest slot. So a new
-//     reader can first get an old frame, which is why WriteBlank queues the
-//     black frame once per buffer: whatever slot a reader starts at, it gets
-//     black.
+//   - fresh_start is required: each CAPTURE STREAMON waits for a new producer
+//     frame instead of replaying the ring from an earlier reader. Sharing is
+//     refused on modules without that control; the real camera remains usable.
 
 const (
 	// vidiocSubscribeEvent is _IOW('V', 90, struct v4l2_event_subscription).
@@ -48,6 +45,8 @@ const (
 	vidiocSCtrl = 0xC008561C
 	// v4l2LoopbackCidKeepFormat is V4L2LOOPBACK_CID_BASE+0 ("keep_format").
 	v4l2LoopbackCidKeepFormat = 0x0098f900
+	// Wendy fresh_start starts each reader at the next real producer frame.
+	v4l2LoopbackCidFreshStart = 0x0098f904
 
 	// shareNodeBuffers is how many OUTPUT buffers the writer round-robins.
 	shareNodeBuffers = 2
@@ -91,13 +90,11 @@ func (e *v4l2Event) pending() uint32 { return *(*uint32)(unsafe.Pointer(&e[v4l2E
 //
 // Contract: Counts reports how many readers are streaming (newest value only;
 // the channel closes when the node goes away or the writer is closed).
-// WriteFrame and WriteBlank may be called concurrently with each other and
-// with Close; after Close they fail with an error. Close is idempotent and
+// WriteFrame may be called concurrently with Close; after Close they fail with an error. Close is idempotent and
 // every call returns the first call's result.
 type shareNodeIO interface {
 	Counts() <-chan uint32
 	WriteFrame(data []byte, monoNs int64) error
-	WriteBlank(monoNs int64) error
 	Close() error
 }
 
@@ -106,31 +103,7 @@ var openShareNode = openShareNodeV4L2
 
 var errShareNodeClosed = errors.New("share node writer is closed")
 
-// blankFrames caches blankFrame by mode.
-var blankFrames sync.Map // sharedMode -> []byte
-
-// blankFrame is one black frame in mode. The slice is shared and cached:
-// callers must not modify it.
-func blankFrame(mode sharedMode) []byte {
-	if v, ok := blankFrames.Load(mode); ok {
-		return v.([]byte)
-	}
-	frame := make([]byte, mode.frameBytes())
-	var pattern []byte
-	switch mode.Fourcc {
-	case "YUYV":
-		pattern = []byte{0x10, 0x80, 0x10, 0x80}
-	case "UYVY":
-		pattern = []byte{0x80, 0x10, 0x80, 0x10}
-	}
-	for i := range pattern {
-		for j := i; j < len(frame); j += len(pattern) {
-			frame[j] = pattern[i]
-		}
-	}
-	v, _ := blankFrames.LoadOrStore(mode, frame)
-	return v.([]byte)
-}
+var errShareFreshStartUnsupported = errors.New("the loopback module has no fresh_start support; update the WendyOS camera driver to share cameras")
 
 // shareNodeWriter is the V4L2 implementation of shareNodeIO.
 type shareNodeWriter struct {
@@ -185,7 +158,23 @@ func (w *shareNodeWriter) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
+func (w *shareNodeWriter) requireFreshStart() error {
+	fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 1}
+	if err := w.ioctl(vidiocSCtrl, unsafe.Pointer(&fresh)); err != nil {
+		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTTY) {
+			err = errors.Join(errShareFreshStartUnsupported, err)
+		}
+		return fmt.Errorf("camera sharing unavailable: %s requires the Wendy v4l2loopback fresh_start control: %w", w.path, err)
+	}
+	return nil
+}
+
 func (w *shareNodeWriter) configure() error {
+	// Refuse sharing before allocating or exposing buffers if this module can
+	// replay old frames. The ordinary direct-camera fallback remains available.
+	if err := w.requireFreshStart(); err != nil {
+		return err
+	}
 	mode := w.mode
 
 	var vfmt v4l2Format
@@ -397,22 +386,6 @@ func (w *shareNodeWriter) queueLocked(data []byte, monoNs int64) error {
 		return fmt.Errorf("VIDIOC_QBUF on %s: %w", w.path, err)
 	}
 	w.next = (idx + 1) % len(w.buffers)
-	return nil
-}
-
-// WriteBlank queues the black frame once per ring buffer, all with the same
-// timestamp, under one lock so no real frame can land between them. A new
-// reader may start at any slot of the ring (see the header), so the whole ring
-// must be black.
-func (w *shareNodeWriter) WriteBlank(monoNs int64) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	blank := blankFrame(w.mode)
-	for range max(len(w.buffers), 1) {
-		if err := w.queueLocked(blank, monoNs); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

@@ -5,6 +5,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -87,7 +88,11 @@ func (r *shareTestReader) next(timeout time.Duration) ([]byte, int64) {
 		r.t.Fatalf("reader DQBUF: %v", err)
 	}
 	frame := bytes.Clone(r.bufs[b.index()][:b.bytesUsed()])
-	return frame, b.timestampNanos()
+	stamp := b.timestampNanos()
+	if err := r.ioctl(vidiocQbuf, unsafe.Pointer(&b)); err != nil {
+		r.t.Fatalf("reader requeue: %v", err)
+	}
+	return frame, stamp
 }
 
 // tryNext is next without the failure: ok is false when no frame arrives in
@@ -194,24 +199,26 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 	expectCount(t, counts, 0, "after the reader's STREAMOFF")
 	reader.close()
 
-	const ts2 = int64(223456789_654321_000)
-	if err := w.WriteBlank(ts2); err != nil {
-		t.Fatalf("WriteBlank: %v", err)
-	}
-	late := openShareTestReader(t, path)
-	if err := late.start(); err != nil {
-		t.Fatalf("second reader STREAMON: %v", err)
-	}
-	blank, blankTs := late.next(2 * time.Second)
-	if !bytes.Equal(blank, blankFrame(mode)) {
-		t.Fatal("a new reader's first frame is not the black frame")
-	}
-	if blankTs/1000 != ts2/1000 {
-		t.Fatalf("blank timestamp %d µs, want %d µs", blankTs/1000, ts2/1000)
-	}
-	// The ring is black throughout: the next frame, if any, is not the earlier one.
-	if second, _, ok := late.tryNext(200 * time.Millisecond); ok && !bytes.Equal(second, blankFrame(mode)) {
-		t.Fatal("a new reader's second frame is neither black nor absent (the earlier frame leaked)")
+	// Repeated open/read/close never exposes the previous session's picture.
+	for attempt := 0; attempt < 3; attempt++ {
+		late := openShareTestReader(t, path)
+		if err := late.start(); err != nil {
+			t.Fatalf("new reader STREAMON: %v", err)
+		}
+		expectCount(t, counts, 1, "new reader")
+		late.expectNoFrame(150 * time.Millisecond)
+		fresh := bytes.Repeat([]byte{byte(40 + attempt)}, mode.frameBytes())
+		stamp := ts + int64(attempt+1)*1_000_000
+		if err := w.WriteFrame(fresh, stamp); err != nil {
+			t.Fatal(err)
+		}
+		got, gotStamp := late.next(2 * time.Second)
+		if !bytes.Equal(got, fresh) || gotStamp != stamp {
+			t.Fatal("FRESH_CAPTURE_CONTRACT: first frame was not the new source frame")
+		}
+		late.stop()
+		expectCount(t, counts, 0, "new reader stopped")
+		late.close()
 	}
 
 	if err := w.Close(); err != nil {
@@ -305,7 +312,8 @@ func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
 		t.Fatalf("reader STREAMON while the writer is away: %v", err)
 	}
 
-	// The writer returns (an agent restart) and the same reader gets its frame.
+	reader.expectNoFrame(200 * time.Millisecond)
+	// The writer returns (an agent restart) and the same reader gets its first fresh frame.
 	w2, err := openShareNode(zap.NewNop(), path, mode)
 	if err != nil {
 		t.Fatalf("re-opening the writer: %v", err)
@@ -315,19 +323,155 @@ func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
 	if err := w2.WriteFrame(want, 2_000_000_000); err != nil {
 		t.Fatalf("WriteFrame after re-attach: %v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			t.Fatal("the new frame did not reach the reader within 2s")
-		}
-		frame, _ := reader.next(remaining)
-		if bytes.Equal(frame, want) {
-			return
-		}
-		// Anything else must be the stale last frame from before the restart.
-		if !bytes.Equal(frame, fill(1)) {
-			t.Fatal("reader received a frame that is neither the stale one nor the new one")
+	frame, stamp := reader.next(2 * time.Second)
+	if !bytes.Equal(frame, want) || stamp != 2_000_000_000 {
+		t.Fatal("FRESH_CAPTURE_CONTRACT: first frame after writer restart was stale")
+	}
+}
+
+// Check both readiness and nonblocking DQBUF. A driver must not advertise a
+// retained image, nor silently return it to a caller that skips poll.
+func (r *shareTestReader) expectNoFrame(timeout time.Duration) {
+	r.t.Helper()
+	fds := []unix.PollFd{{Fd: int32(r.fd), Events: unix.POLLIN}}
+	if n, err := unix.Poll(fds, int(timeout.Milliseconds())); err != nil || n != 0 {
+		r.t.Fatalf("FRESH_CAPTURE_CONTRACT: reader became ready before a new frame: n=%d revents=%#x err=%v", n, fds[0].Revents, err)
+	}
+	var b v4l2Buf
+	b.setType(v4l2BufTypeVideoCapture)
+	b.setMemory(v4l2MemoryMmap)
+	if err := r.ioctl(vidiocDqbuf, unsafe.Pointer(&b)); !errors.Is(err, unix.EAGAIN) {
+		r.t.Fatalf("FRESH_CAPTURE_CONTRACT: DQBUF before fresh frame = %v, want EAGAIN", err)
+	}
+}
+
+func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
+	requireShareModule(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	path := createShareFixtureNode(t, ctx, zap.NewNop())
+	mode := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30}
+	w, err := openShareNode(zap.NewNop(), path, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	expectCount(t, w.Counts(), 0, "initial")
+	first := openShareTestReader(t, path)
+	if err := first.start(); err != nil {
+		t.Fatal(err)
+	}
+	expectCount(t, w.Counts(), 1, "first reader")
+	old := bytes.Repeat([]byte{20}, mode.frameBytes())
+	if err := w.WriteFrame(old, 1_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	first.next(time.Second)
+	late := openShareTestReader(t, path)
+	if err := late.start(); err != nil {
+		t.Fatal(err)
+	}
+	expectCount(t, w.Counts(), 2, "late reader")
+	late.expectNoFrame(150 * time.Millisecond)
+	fresh := bytes.Repeat([]byte{60}, mode.frameBytes())
+	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	// A duplicate STREAMON must not discard the frame already waiting.
+	typ := int32(v4l2BufTypeVideoCapture)
+	if err := late.ioctl(vidiocStreamon, unsafe.Pointer(&typ)); err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range []*shareTestReader{first, late} {
+		got, stamp := reader.next(time.Second)
+		if !bytes.Equal(got, fresh) || stamp != 2_000_000_000 {
+			t.Fatal("FRESH_CAPTURE_CONTRACT: late reader got stale pixels")
 		}
 	}
+	late.stop()
+	expectCount(t, w.Counts(), 1, "late reader stopped")
+	if err := w.WriteFrame(old, 3_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := late.ioctl(vidiocStreamon, unsafe.Pointer(&typ)); err != nil {
+		t.Fatal(err)
+	}
+	expectCount(t, w.Counts(), 2, "same descriptor restarted")
+	late.expectNoFrame(150 * time.Millisecond)
+	if err := w.WriteFrame(fresh, 4_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	got, stamp := late.next(time.Second)
+	if !bytes.Equal(got, fresh) || stamp != 4_000_000_000 {
+		t.Fatal("FRESH_CAPTURE_CONTRACT: restarted descriptor got old pixels")
+	}
+	t.Log("FRESH_CAPTURE_READER_EPOCHS_VERIFIED")
+}
+
+func TestShareNode_FreshStartSuppressesSyntheticFrames(t *testing.T) {
+	requireShareModule(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	path := createShareFixtureNode(t, ctx, zap.NewNop())
+	mode := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30}
+	w, err := openShareNode(zap.NewNop(), path, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	writer := w.(*shareNodeWriter)
+	for _, setting := range []v4l2Control{{ID: 0x0098f901, Value: 1}, {ID: 0x0098f902, Value: 100}} {
+		if err := writer.ioctl(vidiocSCtrl, unsafe.Pointer(&setting)); err != nil {
+			t.Fatalf("set synthetic-frame control: %v", err)
+		}
+	}
+	old := bytes.Repeat([]byte{20}, mode.frameBytes())
+	if err := w.WriteFrame(old, 1_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	reader := openShareTestReader(t, path)
+	if err := reader.start(); err != nil {
+		t.Fatal(err)
+	}
+	reader.expectNoFrame(350 * time.Millisecond)
+	fresh := bytes.Repeat([]byte{80}, mode.frameBytes())
+	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	got, stamp := reader.next(time.Second)
+	if !bytes.Equal(got, fresh) || stamp != 2_000_000_000 {
+		t.Fatal("FRESH_CAPTURE_CONTRACT: first frame was a timer repeat or timeout image")
+	}
+	t.Log("FRESH_CAPTURE_TIMERS_VERIFIED")
+}
+
+func TestShareNode_FreshStartForReadIO(t *testing.T) {
+	requireShareModule(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	path := createShareFixtureNode(t, ctx, zap.NewNop())
+	mode := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30}
+	w, err := openShareNode(zap.NewNop(), path, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	old := bytes.Repeat([]byte{20}, mode.frameBytes())
+	if err := w.WriteFrame(old, 1_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	reader := openShareTestReader(t, path)
+	buffer := make([]byte, mode.frameBytes())
+	// read() lazily starts CAPTURE without explicit REQBUFS or STREAMON.
+	if n, err := unix.Read(reader.fd, buffer); n > 0 || !errors.Is(err, unix.EAGAIN) {
+		t.Fatalf("FRESH_CAPTURE_CONTRACT: first read() returned retained data: n=%d err=%v", n, err)
+	}
+	fresh := bytes.Repeat([]byte{90}, mode.frameBytes())
+	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := unix.Read(reader.fd, buffer); err != nil || n != len(fresh) || !bytes.Equal(buffer, fresh) {
+		t.Fatalf("FRESH_CAPTURE_CONTRACT: read() did not return fresh source pixels: n=%d err=%v", n, err)
+	}
+	t.Log("FRESH_CAPTURE_READ_IO_VERIFIED")
 }

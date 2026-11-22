@@ -196,11 +196,13 @@ reason.
   H.264 encoder runs while only apps read.
 - **Apps deployed before the agent update are untouched** until you redeploy
   them. A camera plugged in after a deploy is shared only from the next deploy.
-- **The first frame may be black.** The agent writes a black frame when a
-  session ends, so the next reader never gets the previous session's picture.
-  The node hands that frame to a new reader at once, so an app that opens the
-  camera for each picture gets black every time unless it skips frames
-  timestamped before its `VIDIOC_STREAMON`, as `HelloVideo` does.
+- **Each capture waits for a new camera frame.** Apps that open, read one
+  picture and close receive a real frame, including after an earlier reader
+  stops. The node does not return a black placeholder or replay the previous
+  session's picture. If the camera is unavailable, capture waits for frames.
+  Sharing requires the Wendy v4l2loopback module with `fresh_start` support.
+  On older modules, sharing is unavailable and apps use the real camera
+  directly, with its usual exclusive-access limit.
 - **The frame rate is the camera's.** The node declares the camera's highest
   advertised rate, but the camera may deliver fewer frames: in low light, auto
   exposure lengthens each frame (a Brio 101 in a dark room gave 15 fps instead

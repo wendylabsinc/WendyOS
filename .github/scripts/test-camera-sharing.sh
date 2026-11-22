@@ -32,7 +32,7 @@ trap 'rm -f "$output/"*.test' EXIT
 services=./go/internal/agent/services
 devcover=./go/internal/agent/devcover
 share_test=TestCameraShareTwoReadersDecodeRealFrames
-share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway)
+share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO)
 cover_test=TestCover_BindsSourceInsideTargetNamespaceOnly
 
 python3 - "$output" <<'PY'
@@ -46,6 +46,10 @@ mutations = {
     'sharing-disabled': ('go/internal/agent/services/camera_share_policy.go',
                          'return shareDecision{Shared: true, Mode: mode}',
                          'return shareDecision{Reason: "sharing disabled"}'),
+    # Without fresh_start, reopen exposes the prior session's retained picture.
+    'fresh-start-disabled': ('go/internal/agent/services/camera_share_node.go',
+                             'fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 1}',
+                             'fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 0}'),
     # A cover never enters the container's mount namespace.
     'no-setns': ('go/internal/agent/devcover/cover_linux.go',
                  'unix.Setns(n.fd, unix.CLONE_NEWNS)',
@@ -63,6 +67,7 @@ for name, (path, before, after) in mutations.items():
 PY
 go test -race -tags regression_camera_fixture -c -o "$output/services.test" "$services"
 go test -race -tags regression_camera_fixture -overlay "$output/sharing-disabled.json" -c -o "$output/sharing-disabled.test" "$services"
+go test -race -tags regression_camera_fixture -overlay "$output/fresh-start-disabled.json" -c -o "$output/fresh-start-disabled.test" "$services"
 go test -race -tags regression_camera_fixture -c -o "$output/devcover.test" "$devcover"
 go test -race -tags regression_camera_fixture -overlay "$output/no-setns.json" -c -o "$output/no-setns.test" "$devcover"
 
@@ -105,7 +110,7 @@ require_rejected() {
   grep -qF "$message" "$log" || { echo "Regression rejected $mutation without: $message" >&2; exit 1; }
 }
 
-run_share "$output/services.test" '^Test(CameraShareTwoReadersDecodeRealFrames|ShareNodeWriter_DeclaresModeAndReportsReaders|ShareNode_StaysACameraWhileTheWriterIsAway)$' | tee "$output/normal.log"
+run_share "$output/services.test" '^Test(CameraShareTwoReadersDecodeRealFrames|ShareNodeWriter_DeclaresModeAndReportsReaders|ShareNode_StaysACameraWhileTheWriterIsAway|ShareNode_FreshStartForLateAndRestartedReaders|ShareNode_FreshStartSuppressesSyntheticFrames|ShareNode_FreshStartForReadIO)$' | tee "$output/normal.log"
 require_passed "$output/normal.log" "${share_tests[@]}"
 
 if run_share "$output/sharing-disabled.test" "^${share_test}\$" > "$output/sharing-disabled.log" 2>&1; then
@@ -114,6 +119,14 @@ if run_share "$output/sharing-disabled.test" "^${share_test}\$" > "$output/shari
   exit 1
 fi
 require_rejected "$output/sharing-disabled.log" sharing-disabled "$share_test" 'camera was not shared: sharing disabled'
+
+fresh_test=TestShareNodeWriter_DeclaresModeAndReportsReaders
+if run_share "$output/fresh-start-disabled.test" "^${fresh_test}\$" > "$output/fresh-start-disabled.log" 2>&1; then
+  cat "$output/fresh-start-disabled.log"
+  echo 'Regression did not reject fresh-start-disabled' >&2
+  exit 1
+fi
+require_rejected "$output/fresh-start-disabled.log" fresh-start-disabled "$fresh_test" 'FRESH_CAPTURE_CONTRACT:'
 
 mapfile -t cover_tests < <("$output/devcover.test" -test.list '.*' | grep '^Test')
 if [[ ${#cover_tests[@]} -eq 0 ]]; then

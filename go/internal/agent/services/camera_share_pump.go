@@ -64,13 +64,12 @@ const shareQuickRejoins = 3
 // joins the camera's hub while an app reads the node and leaves when none does.
 // All of its state is owned by Run's goroutine; mu guards only what State reads.
 type sharePump struct {
-	logger  *zap.Logger
-	app     string
-	camera  string
-	node    shareNodeIO
-	mode    sharedMode
-	join    func(ctx context.Context) (shareSubscription, error)
-	adopted bool
+	logger *zap.Logger
+	app    string
+	camera string
+	node   shareNodeIO
+	mode   sharedMode
+	join   func(ctx context.Context) (shareSubscription, error)
 	// onReading, when set, runs each time the pump starts reading for the app
 	// (camera_share.go clears a "took the real camera" note then). It is set
 	// before Run starts and called without mu.
@@ -91,14 +90,12 @@ type sharePump struct {
 	reading bool // the node's latest count is 1
 	sub     shareSubscription
 	frames  <-chan *videoFrame
-	wrote   bool // this session wrote a camera frame
 	dropped bool // the size-mismatch line was logged for this subscription
 	// mismatch is the state detail while the hub's frames are not the node's
 	// mode and are dropped ("" while they match), so the state is set once per
 	// change rather than once per frame.
 	mismatch string
-	attempt  int  // consecutive failures, indexes the backoff
-	first    bool // no count has been seen yet
+	attempt  int // consecutive failures, indexes the backoff
 	// writeLogged: a node write failure was logged for this subscription.
 	// writeFailed: the latest write failed (state is "no frames").
 	writeLogged, writeFailed bool
@@ -109,16 +106,15 @@ type sharePump struct {
 	waiting <-chan struct{}
 }
 
-func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode sharedMode, join func(ctx context.Context) (shareSubscription, error), adopted bool) *sharePump {
+func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode sharedMode, join func(ctx context.Context) (shareSubscription, error)) *sharePump {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &sharePump{
-		logger: logger, app: app, camera: camera, node: node, mode: mode, join: join, adopted: adopted,
+		logger: logger, app: app, camera: camera, node: node, mode: mode, join: join,
 		nowMono: monotonicNs,
 		nowWall: func() int64 { return time.Now().UnixNano() },
 		state:   shareState{Phase: shareIdle},
-		first:   true,
 		nudge:   make(chan struct{}, 1),
 	}
 }
@@ -228,12 +224,6 @@ func (p *sharePump) leftMeanwhile(ctx context.Context, counts <-chan uint32) boo
 
 func (p *sharePump) handleCount(ctx context.Context, n uint32) {
 	want := n > 0
-	if p.first {
-		p.first = false
-		if !want && p.adopted {
-			p.blank()
-		}
-	}
 	if want == p.reading {
 		return
 	}
@@ -378,19 +368,14 @@ func (p *sharePump) write(f *videoFrame) {
 		p.writeFailed, p.mismatch = false, ""
 		p.setState(shareReading, "")
 	}
-	p.wrote = true
 	p.attempt = 0
 	p.quick = 0
 }
 
-// stop is the count going to 0: leave, discard what is queued, and replace a
-// stale last frame with black.
+// stop leaves the capture and discards queued frames. The node starts its next
+// reader at a fresh producer frame, so no synthetic placeholder is published.
 func (p *sharePump) stop() {
 	p.leave()
-	if p.wrote {
-		p.blank()
-	}
-	p.wrote = false
 	p.attempt = 0
 	p.quick = 0
 	p.writeFailed, p.mismatch = false, ""
@@ -415,11 +400,5 @@ func (p *sharePump) leave() {
 		default:
 			return
 		}
-	}
-}
-
-func (p *sharePump) blank() {
-	if err := p.node.WriteBlank(p.nowMono()); err != nil && !errors.Is(err, errShareNodeClosed) {
-		p.logger.Debug(fmt.Sprintf("camera share: %s: blank frame failed: %v", p.app, err))
 	}
 }

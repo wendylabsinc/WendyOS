@@ -248,6 +248,19 @@ func (s *VideoService) endShareCreation(containerID string, c *shareCreation) {
 	}
 }
 
+// openCameraShareNode also records whether listings can offer fresh captures.
+func (s *VideoService) openCameraShareNode(path string, mode sharedMode) (shareNodeIO, error) {
+	node, err := openShareNode(s.logger, path, mode)
+	s.shares.mu.Lock()
+	if errors.Is(err, errShareFreshStartUnsupported) {
+		s.shares.freshStartUnsupported = true
+	} else if err == nil {
+		s.shares.freshStartUnsupported = false
+	}
+	s.shares.mu.Unlock()
+	return node, err
+}
+
 // createCameraShare shares one camera with a container, or logs why not.
 func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, creation *shareCreation) {
 	// The policy goes first, so a camera it refuses (CSI, thermal, depth) is
@@ -283,7 +296,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		return
 	}
 	path := shareNodePath(nr)
-	node, err := openShareNode(s.logger, path, decision.Mode)
+	node, err := s.openCameraShareNode(path, decision.Mode)
 	if err != nil {
 		s.unmakeShareNode(nr, dev.GetName(), made)
 		s.logRealCamera(true, containerID, dev, err.Error())
@@ -832,16 +845,16 @@ func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, nod
 	c.created = time.Now()
 	c.shares = append(c.shares, r)
 	delete(s.shares.pending, r.node)
-	return s.attachSharePumpLocked(containerID, r, node, false), ""
+	return s.attachSharePumpLocked(containerID, r, node), ""
 }
 
 // attachSharePumpLocked gives r its writer and a pump, and returns the function
 // that starts the pump. The pump's context comes from the service's, so it
 // outlives the call that made the share. Callers hold s.shares.mu.
-func (s *VideoService) attachSharePumpLocked(containerID string, r *shareRecord, node shareNodeIO, adopted bool) (start func()) {
+func (s *VideoService) attachSharePumpLocked(containerID string, r *shareRecord, node shareNodeIO) (start func()) {
 	ctx, cancel := context.WithCancel(s.serviceContext())
 	pump := newSharePump(s.logger, containerID, r.cameraName, node, r.mode,
-		func(ctx context.Context) (shareSubscription, error) { return s.joinShare(ctx, r) }, adopted)
+		func(ctx context.Context) (shareSubscription, error) { return s.joinShare(ctx, r) })
 	// Reading for the app again means it reopened the camera: it shares it
 	// now, whatever it took after a replug or a failed start cover.
 	pump.onReading = func() {
@@ -1376,7 +1389,7 @@ func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 	}
 	r.opening = true
 	s.shares.mu.Unlock()
-	node, err := openShareNode(s.logger, path, r.mode)
+	node, err := s.openCameraShareNode(path, r.mode)
 	if err != nil {
 		s.endShareOpening(r)
 		s.noteAdoptFailure(containerID, r, fmt.Sprintf("adopting %s for %s failed: %v; the app's node gets no frames", path, r.cameraName, err))
@@ -1390,7 +1403,7 @@ func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 		return
 	}
 	r.adoptErr = ""
-	start := s.attachSharePumpLocked(containerID, r, node, true)
+	start := s.attachSharePumpLocked(containerID, r, node)
 	s.shares.mu.Unlock()
 	start()
 	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, r.mode))
@@ -2523,7 +2536,7 @@ func (s *VideoService) startShareNode(ctx context.Context, containerID string, r
 		return 0, false, errors.New(reason)
 	}
 	path := shareNodePath(nr)
-	node, err := openShareNode(s.logger, path, r.mode)
+	node, err := s.openCameraShareNode(path, r.mode)
 	if err != nil {
 		s.endShareOpening(r)
 		s.unmakeShareNode(nr, r.cameraName, at)
@@ -2541,7 +2554,7 @@ func (s *VideoService) startShareNode(ctx context.Context, containerID string, r
 	delete(s.shares.pending, nr)
 	var start func()
 	if !s.shares.stopped {
-		start = s.attachSharePumpLocked(containerID, r, node, false)
+		start = s.attachSharePumpLocked(containerID, r, node)
 	}
 	s.shares.mu.Unlock()
 	if start == nil {
@@ -3188,7 +3201,14 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 		if ctx.Err() == nil {
 			if decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) }); ok {
 				if decision.Shared {
-					props[camerashare.KeyMode] = decision.Mode.String()
+					s.shares.mu.Lock()
+					unsupported := s.shares.freshStartUnsupported
+					s.shares.mu.Unlock()
+					if unsupported {
+						props[camerashare.KeyUnavailable] = errShareFreshStartUnsupported.Error()
+					} else {
+						props[camerashare.KeyMode] = decision.Mode.String()
+					}
 				} else {
 					props[camerashare.KeyUnavailable] = decision.Reason
 				}

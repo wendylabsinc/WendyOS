@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -13,35 +12,34 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestBlankFrame_IsBlackInEveryFormat(t *testing.T) {
-	cases := []struct {
-		fourcc string
-		bpl    uint32
-		first4 []byte
-	}{
-		{"YUYV", 1280, []byte{0x10, 0x80, 0x10, 0x80}},
-		{"UYVY", 1280, []byte{0x80, 0x10, 0x80, 0x10}},
-		{"GREY", 640, []byte{0, 0, 0, 0}},
-		{"Y16 ", 1280, []byte{0, 0, 0, 0}},
+// blankFrames caches blankFrame by mode.
+var blankFrames sync.Map // sharedMode -> []byte
+
+// blankFrame is one black frame in mode. The slice is shared and cached:
+// callers must not modify it.
+func blankFrame(mode sharedMode) []byte {
+	if v, ok := blankFrames.Load(mode); ok {
+		return v.([]byte)
 	}
-	for _, c := range cases {
-		mode := sharedMode{Width: 640, Height: 480, Fourcc: c.fourcc, BytesPerLine: c.bpl, FPS: 30}
-		got := blankFrame(mode)
-		if len(got) != mode.frameBytes() {
-			t.Errorf("%s: length %d, want %d", c.fourcc, len(got), mode.frameBytes())
-			continue
-		}
-		if !bytes.Equal(got[:4], c.first4) {
-			t.Errorf("%s: first bytes % x, want % x", c.fourcc, got[:4], c.first4)
-		}
-		if !bytes.Equal(got[len(got)-4:], c.first4) {
-			t.Errorf("%s: last bytes % x, want % x", c.fourcc, got[len(got)-4:], c.first4)
+	frame := make([]byte, mode.frameBytes())
+	var pattern []byte
+	switch mode.Fourcc {
+	case "YUYV":
+		pattern = []byte{0x10, 0x80, 0x10, 0x80}
+	case "UYVY":
+		pattern = []byte{0x80, 0x10, 0x80, 0x10}
+	}
+	for i := range pattern {
+		for j := i; j < len(frame); j += len(pattern) {
+			frame[j] = pattern[i]
 		}
 	}
+	v, _ := blankFrames.LoadOrStore(mode, frame)
+	return v.([]byte)
 }
 
 func TestShareNodeIoctlNumbers(t *testing.T) {
-	if vidiocSCtrl != 0xC008561C || v4l2LoopbackCidKeepFormat != 0x0098f900 || unsafe.Sizeof(v4l2Control{}) != 8 {
+	if vidiocSCtrl != 0xC008561C || v4l2LoopbackCidKeepFormat != 0x0098f900 || v4l2LoopbackCidFreshStart != 0x0098f904 || unsafe.Sizeof(v4l2Control{}) != 8 {
 		t.Fatal("keep_format ioctl constants drifted")
 	}
 	if vidiocSubscribeEvent != 0x4020565A || vidiocDqevent != 0x80885659 ||
@@ -74,7 +72,7 @@ func TestShareNodeCloseIsIdempotentAndConcurrent(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		wg.Add(2)
 		go func() { defer wg.Done(); _ = w.Close() }()
-		go func() { defer wg.Done(); _ = w.WriteBlank(1) }()
+		go func() { defer wg.Done(); _ = w.WriteFrame(make([]byte, mode.frameBytes()), 1) }()
 	}
 	wg.Wait()
 	if err := w.Close(); err != nil {
@@ -226,40 +224,32 @@ func TestPumpShareEvents_ENODEVClosesCounts(t *testing.T) {
 	f.waitExit(t)
 }
 
-func TestShareNodeWriteBlankFillsTheRing(t *testing.T) {
-	mode := sharedMode{Width: 4, Height: 2, Fourcc: "YUYV", BytesPerLine: 8, FPS: 30}
-	var queued []uint32
-	var stamps []int64
-	w := &shareNodeWriter{
-		mode: mode, fd: -1, wakeR: -1, wakeW: -1, done: closedChan(),
-		buffers: [][]byte{make([]byte, mode.frameBytes()), make([]byte, mode.frameBytes())},
-		ioctlFn: func(req uintptr, arg unsafe.Pointer) error {
-			if req == vidiocQbuf {
-				b := (*v4l2Buf)(arg)
-				queued = append(queued, b.index())
-				stamps = append(stamps, b.timestampNanos())
+func TestShareNodeRequiresFreshStart(t *testing.T) {
+	for _, refusal := range []error{nil, unix.EINVAL, unix.ENOTTY} {
+		w := &shareNodeWriter{path: "/dev/video100", ioctlFn: func(req uintptr, arg unsafe.Pointer) error {
+			control := (*v4l2Control)(arg)
+			if req != vidiocSCtrl || control.ID != v4l2LoopbackCidFreshStart || control.Value != 1 {
+				t.Fatalf("wrong freshness control: request %x, control %+v", req, control)
 			}
-			return nil
-		},
-	}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()), 5_000_000); err != nil {
-		t.Fatal(err)
-	}
-	queued, stamps = nil, nil
-	if err := w.WriteBlank(7_000_000); err != nil {
-		t.Fatal(err)
-	}
-	if len(queued) != 2 || queued[0] != 1 || queued[1] != 0 {
-		t.Fatalf("WriteBlank queued buffers %v, want both ring slots starting at 1", queued)
-	}
-	for _, s := range stamps {
-		if s != 7_000_000 {
-			t.Fatalf("blank timestamps %v, want all 7ms", stamps)
+			return refusal
+		}}
+		err := w.requireFreshStart()
+		if !errors.Is(err, refusal) {
+			t.Fatalf("fresh-start refusal = %v, want %v", err, refusal)
 		}
 	}
-	for i, buf := range w.buffers {
-		if !bytes.Equal(buf, blankFrame(mode)) {
-			t.Fatalf("buffer %d is not black", i)
+}
+
+func TestShareNodeUnsupportedFreshStartRefusesBeforeFormatOrBuffers(t *testing.T) {
+	calls := 0
+	w := &shareNodeWriter{path: "/dev/video100", ioctlFn: func(req uintptr, arg unsafe.Pointer) error {
+		calls++
+		if req != vidiocSCtrl || (*v4l2Control)(arg).ID != v4l2LoopbackCidFreshStart {
+			t.Fatal("touched format or buffers before checking freshness support")
 		}
+		return unix.EINVAL
+	}}
+	if err := w.configure(); !errors.Is(err, unix.EINVAL) || calls != 1 {
+		t.Fatalf("unsupported sharing: calls=%d, error=%v", calls, err)
 	}
 }
