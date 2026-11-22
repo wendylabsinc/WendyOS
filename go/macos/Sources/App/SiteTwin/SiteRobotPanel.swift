@@ -792,7 +792,7 @@ struct SiteRobotRotationPrompt: ViewModifier {
             Button("Not now", role: .cancel) { model.dismissRotationPrompt() }
         } message: {
             Text(model.exploreDuringSearch
-                 ? "Go2 will turn and may make up to three 40 cm moves on observed clear floor to gather new views. Keep Go2 in sight and Stop within reach."
+                 ? "Go2 will gather missing views with short turns and up to three 40 cm moves on observed clear floor, stopping when it finds a position match. Keep Go2 in sight and Stop within reach."
                  : "Go2 will check clearance and turn in 30° steps to match its LiDAR observations. Keep Go2 in sight and its turning area clear.")
         }
     }
@@ -950,7 +950,7 @@ struct SiteRobotLocalizationControls: View {
         Toggle("Move between views during discovery", isOn: $model.exploreDuringSearch)
             .font(.caption)
             .disabled(model.localizing || model.reading?.moving == true)
-        Text("Up to three 40 cm moves, with fresh LiDAR and clear observed floor. Turn this off for rotation only.")
+        Text("Fill gaps with up to three 40 cm moves on observed clear floor. Stops when a position match is found. Turn this off for rotation only.")
             .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if let conclusion = model.searchConclusion {
             VStack(alignment: .leading, spacing: 8) {

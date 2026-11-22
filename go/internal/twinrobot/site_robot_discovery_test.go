@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,8 +54,16 @@ func TestDiscoveryRequiresObservedFloorAndStoppingClearance(t *testing.T) {
 			default:
 				r.observed.Grid.Obstacles[cell] = true
 			}
-			if err := r.DiscoveryStep(1, 1); !errors.Is(err, ErrDiscoveryBlocked) || r.moving || len(commands.commands) != 0 {
+			err := r.DiscoveryStep(1, 1)
+			if !errors.Is(err, ErrDiscoveryBlocked) || r.moving || len(commands.commands) != 0 {
 				t.Fatalf("unsafe discovery start: %v", err)
+			}
+			reason := "obstacle or drop"
+			if fault == "unknown-floor" {
+				reason = "not observed all the floor"
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Fatalf("missing %q explanation: %v", reason, err)
 			}
 		})
 	}
@@ -109,6 +118,12 @@ func TestDiscoveryFaultsStopWithoutAnotherMove(t *testing.T) {
 			if r.moving || r.discoveryState != 3 || r.discoveryMove != nil || len(commands.commands) != 1 || commands.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 				t.Fatalf("fault did not stop: state=%d commands=%+v", r.discoveryState, commands.commands)
 			}
+			if fault == "unknown-floor" && !strings.Contains(r.message, "not observed all the floor") {
+				t.Fatalf("missing floor stop reason: %q", r.message)
+			}
+			if fault == "obstacle" && !strings.Contains(r.message, "obstacle or drop") {
+				t.Fatalf("missing obstacle stop reason: %q", r.message)
+			}
 			if fault == "stop-failed" && !r.stopUnconfirmed {
 				t.Fatal("lost unacknowledged stop")
 			}
@@ -145,7 +160,7 @@ func TestDiscoveryBudgetsAndPreviouslyVisitedViews(t *testing.T) {
 			t.Fatal("viewpoint failed")
 		}
 	}
-	if err := r.DiscoveryStep(4, 1); !errors.Is(err, ErrDiscoveryBlocked) {
+	if err := r.DiscoveryStep(4, 1); !errors.Is(err, ErrDiscoveryBlocked) || !strings.Contains(err.Error(), "three-viewpoint") {
 		t.Fatal("exceeded three moves", err)
 	}
 	r, _ = readySiteRobot()
@@ -155,7 +170,7 @@ func TestDiscoveryBudgetsAndPreviouslyVisitedViews(t *testing.T) {
 	r.observed.Pose.Position.X = discoveryDistance
 	r.stepLocked(time.Now())
 	r.observed.Pose.Yaw = math.Pi
-	if err := r.DiscoveryStep(2, 1); !errors.Is(err, ErrDiscoveryBlocked) {
+	if err := r.DiscoveryStep(2, 1); !errors.Is(err, ErrDiscoveryBlocked) || !strings.Contains(err.Error(), "previously visited") {
 		t.Fatal("returned to the original viewpoint", err)
 	}
 	r.poseEpoch++
@@ -192,5 +207,65 @@ func TestDiscoveryClosedLoopReachesASeparatedViewAndStops(t *testing.T) {
 		if commands.commands[len(commands.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 			t.Fatal("missing final STOP")
 		}
+	}
+}
+
+func TestDiscoveryExplainsUnobservedSafetyMarginBeyondUnderBodyAllowance(t *testing.T) {
+	for _, allowance := range []bool{false, true} {
+		r, commands := readySiteRobot()
+		r.allowUnobservedFloor = true
+		r.underBodyAllowance = allowance
+		body := sitenav.Cell{X: 0, Y: 0}
+		margin := sitenav.Cell{X: 0, Y: 2}
+		delete(r.observed.Grid.Floor, body)
+		if allowance {
+			// Under-body permission covers the initial footprint, but cannot
+			// fill the additional drift margin beside the robot.
+			delete(r.observed.Grid.Floor, margin)
+		}
+		err := r.DiscoveryStep(1, 1)
+		if !errors.Is(err, ErrDiscoveryBlocked) || !strings.Contains(err.Error(), "not observed all the floor") {
+			t.Fatalf("allowance=%v: missing floor rejection reason: %v", allowance, err)
+		}
+		if r.moving || len(commands.commands) != 0 {
+			t.Fatal("diagnostic allowed unsafe movement")
+		}
+		if r.observed.Grid.Floor[body] || (allowance && r.observed.Grid.Floor[margin]) {
+			t.Fatal("diagnostic changed observed floor")
+		}
+	}
+	r, _ := readySiteRobot()
+	r.underBodyAllowance = true
+	delete(r.observed.Grid.Floor, sitenav.Cell{})
+	if err := r.DiscoveryStep(1, 1); err != nil {
+		t.Fatalf("initial footprint allowance no longer works: %v", err)
+	}
+}
+
+func TestDiscoveryBlockedDiagnosticsPreserveObstacleAndFloorEvidence(t *testing.T) {
+	r, commands := readySiteRobot()
+	cell := sitenav.Cell{X: 12, Y: 0}
+	r.observed.Grid.Obstacles[cell] = true
+	delete(r.observed.Grid.Floor, cell)
+	err := r.DiscoveryStep(1, 1)
+	if !errors.Is(err, ErrDiscoveryBlocked) || !strings.Contains(err.Error(), "not observed all the floor") {
+		t.Fatalf("missing floor must remain a blocker even if an obstacle is removed: %v", err)
+	}
+	if !r.observed.Grid.Obstacles[cell] || r.observed.Grid.Floor[cell] || r.moving || len(commands.commands) != 0 {
+		t.Fatal("diagnostic mutated observations or commanded motion")
+	}
+	r.observed.Grid.Floor[cell] = true
+	err = r.DiscoveryStep(2, 1)
+	if !errors.Is(err, ErrDiscoveryBlocked) || !strings.Contains(err.Error(), "obstacle or drop") {
+		t.Fatalf("obstacle did not remain blocked after floor became observed: %v", err)
+	}
+}
+
+func TestDiscoveryExplainsRadiusLimit(t *testing.T) {
+	r, commands := readySiteRobot()
+	r.discoveryHistory = discoveryHistory{root: 1, epoch: r.poseEpoch, visited: []sitenav.Point{{X: -1}}}
+	err := r.DiscoveryStep(1, 1)
+	if !errors.Is(err, ErrDiscoveryBlocked) || !strings.Contains(err.Error(), "1.3 m discovery radius") || r.moving || len(commands.commands) != 0 {
+		t.Fatalf("missing bounded-radius rejection: %v", err)
 	}
 }

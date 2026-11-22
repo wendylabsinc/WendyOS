@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
@@ -49,6 +50,18 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 	settledAfter := time.Time{}
 	var lastReport *twinrobot.SiteFusionReport
 	lastReason := "No reliable position match"
+	lastMatchIssue, blockedReason := "", ""
+	blockedAttempts := 0
+	details := func() string {
+		parts := []string{lastReason}
+		if lastMatchIssue != "" {
+			parts = append(parts, lastMatchIssue)
+		}
+		if blockedAttempts > 0 {
+			parts = append(parts, fmt.Sprintf("Nearby moves were blocked at %d headings: %s.", blockedAttempts, blockedReason))
+		}
+		return strings.Join(parts, " ")
+	}
 	finish := func(state, message string, report *twinrobot.SiteFusionReport) {
 		session.searchMu.Lock()
 		defer session.searchMu.Unlock()
@@ -79,10 +92,16 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 	}
 	moves := 0
 	attempted := map[int]bool{}
-	for turn := 0; turn <= 12; {
+	maxTurns := 12
+	if input.Explore {
+		// Inspect each heading at most once; returning to the initial heading
+		// adds no new viewpoint when all translations were blocked.
+		maxTurns = 11
+	}
+	for turn := 0; turn <= maxTurns; {
 		for {
 			if !wait() {
-				fail("Position search ended")
+				fail("Position search ended. " + details())
 				return
 			}
 			state := session.robot.Status()
@@ -95,7 +114,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			}
 		}
 		if ctx.Err() != nil {
-			fail("Position search ended")
+			fail("Position search ended. " + details())
 			return
 		}
 		phase("matching")
@@ -105,17 +124,21 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		// FuseLocalization. Never reuse that captured view after a search turn.
 		input.Visual = nil
 		if err != nil {
-			lastReason = err.Error()
+			lastMatchIssue = err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				lastMatchIssue = "Matching the latest observations exceeded its time budget."
+			}
 		} else {
+			lastMatchIssue = ""
 			lastReport = &report
 			if report.Message != "" {
 				lastReason = report.Message
 			}
 		}
-		log.Printf("localization turn=%d candidates=%d accepted=%d rejected=%d reason=%q", turn, len(report.Candidates), report.Accepted, report.Rejected, lastReason)
+		log.Printf("localization turn=%d candidates=%d accepted=%d rejected=%d reason=%q", turn, len(report.Candidates), report.Accepted, report.Rejected, details())
 		session.searchMu.Lock()
 		if session.searchRoot == root {
-			session.searchMessage = lastReason
+			session.searchMessage = details()
 			if lastReport != nil {
 				session.searchReport, _ = json.Marshal(lastReport)
 			}
@@ -131,14 +154,25 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			finish("complete", report.Message, &report)
 			return
 		}
-		if input.Explore && moves < 3 && turn > 0 && turn < 12 && turn%3 == 0 && !attempted[turn] {
+		// Gather only enough new views to resolve the match. Three completed
+		// translations exhaust discovery; do not follow them with a full spin.
+		if input.Explore && moves == 3 {
+			fail(fmt.Sprintf("No reliable position match after %d turns and %d viewpoint moves. %s", turn, moves, details()))
+			return
+		}
+		if input.Explore && !attempted[turn] {
 			attempted[turn] = true
 			if ctx.Err() != nil {
-				fail("Position search ended")
+				fail("Position search ended. " + details())
 				return
 			}
 			sequence++
 			err := session.robot.DiscoveryStep(sequence, root)
+			if errors.Is(err, twinrobot.ErrDiscoveryBlocked) {
+				blockedAttempts++
+				blockedReason = err.Error()
+				log.Printf("discovery turn=%d move skipped: %v", turn, err)
+			}
 			if err != nil && !errors.Is(err, twinrobot.ErrDiscoveryBlocked) {
 				fail(err.Error())
 				return
@@ -154,7 +188,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 				session.searchMu.Unlock()
 				for {
 					if !wait() {
-						fail("Position search ended")
+						fail("Position search ended. " + details())
 						return
 					}
 					state := session.robot.Status()
@@ -171,12 +205,12 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 				continue // match the translated view before turning again
 			}
 		}
-		if turn == 12 {
-			fail(fmt.Sprintf("No reliable position match after a full rotation and %d viewpoint moves. %s", moves, lastReason))
+		if turn == maxTurns {
+			fail(fmt.Sprintf("No reliable position match after %d turns and %d viewpoint moves. %s", turn, moves, details()))
 			return
 		}
 		if ctx.Err() != nil {
-			fail("Position search ended")
+			fail("Position search ended. " + details())
 			return
 		}
 		phase("turning")
@@ -194,7 +228,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		turn++
 		for {
 			if !wait() {
-				fail("Position search ended")
+				fail("Position search ended. " + details())
 				return
 			}
 			state := session.robot.Status()

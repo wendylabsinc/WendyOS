@@ -1190,9 +1190,9 @@ checks, turn progress and matching without opening Details. A rejected turn
 shows its reason with **Try rotation again** and **Place manually** actions;
 retrying requires accepting the rotation popup again. **Cancel search** stops
 pending and active searches. The search stops
-when a suggestion is available, after a full circle of up to twelve 30-degree turns, after five
+when a suggestion is available, when its viewpoint or turn budget is exhausted, after five
 minutes excluding calibration, or on Stop/fault. It never confirms a pose.
-If a full rotation or the time limit produces no match, the panel keeps a
+If the search budget produces no match, the panel keeps a
 **Search finished without a match** result and stops automatic retries.
 **Try rotation again** asks for confirmation before another search; **Place
 Manually** uses the existing position-and-heading placement flow.
@@ -1335,18 +1335,22 @@ Physical lens accuracy and mounting tolerances still need validation on a Go2. T
 ## Go2 discovery viewpoints
 
 Position search now defaults to **Move between views during discovery** on
-Apple clients. If matching remains ambiguous after 3, 6, or 9 turns, the Linux
-service can move Go2 approximately 40 cm forward before matching again. It tries
-at most three such moves, alongside the existing twelve-turn and five-minute
-limits. Turn the option off for rotation-only discovery. Stop cancels the search
-and any active movement.
+Apple clients. The Linux service matches the current view first. If it remains
+ambiguous, it checks for a clear 40 cm forward move at the current heading,
+including the initial heading. It matches again after each move and stops as
+soon as a candidate is available. It stops after three translated viewpoints
+if matching is still inconclusive. When a move is blocked, it turns 30 degrees
+to check another heading, considering at most twelve distinct headings without
+repeating the initial orientation. Discovery is also limited to five minutes.
+Turn the option off for rotation-only discovery, which retains a twelve-turn
+limit. Stop cancels the search and any active movement.
 
 Each move uses the live odometry frame, since the room transform is not yet
 confirmed. The complete body sweep and stopping distance must fit on observed
 clear floor, with a margin for drift. The hidden-floor allowance can cover the
 fixed departure footprint only. The supervised option that permits unobserved
 floor during ordinary navigation does not apply to discovery moves. Blocked
-viewpoints are skipped; stale sensors, an expired operator lease, unexpected
+viewpoints report why they were skipped; stale sensors, an expired operator lease, unexpected
 drift, a rejected movement command, or an unacknowledged stop end the attempt.
 
 The controller avoids recently visited endpoints and stops before rematching.

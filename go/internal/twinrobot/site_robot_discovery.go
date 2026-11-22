@@ -2,6 +2,7 @@ package twinrobot
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -57,23 +58,23 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 		return errors.New("Go2 odometry changed during discovery. Start a new search.")
 	}
 	if history.starts >= 3 {
-		return ErrDiscoveryBlocked
+		return fmt.Errorf("%w: the search has reached its three-viewpoint movement limit", ErrDiscoveryBlocked)
 	}
 	target := sitenav.Point{X: p.Position.X + math.Cos(p.Yaw)*discoveryDistance, Y: p.Position.Y + math.Sin(p.Yaw)*discoveryDistance}
 	if target.Distance(history.visited[0]) > 1.3 {
-		return ErrDiscoveryBlocked
+		return fmt.Errorf("%w: the next viewpoint would exceed the 1.3 m discovery radius", ErrDiscoveryBlocked)
 	}
 	for _, visited := range history.visited {
 		if target.Distance(visited) < .25 {
-			return ErrDiscoveryBlocked
+			return fmt.Errorf("%w: the next viewpoint is too close to a previously visited position", ErrDiscoveryBlocked)
 		}
 	}
 	var departure *sitenav.Departure
 	if r.underBodyAllowance {
 		departure = &sitenav.Departure{Position: p.Position, Yaw: p.Yaw}
 	}
-	if !discoveryClear(r.observed.Grid.WithDeparture(departure), p.Position, target, p.Yaw) {
-		return ErrDiscoveryBlocked
+	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(departure), p.Position, target, p.Yaw); err != nil {
+		return fmt.Errorf("%w: %v", ErrDiscoveryBlocked, err)
 	}
 	history.starts++
 	r.discoveryMove = &discoveryMove{origin: p.Position, target: target, yaw: p.Yaw, progressAt: now}
@@ -86,12 +87,27 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 	return nil
 }
 
-func discoveryClear(grid sitenav.Grid, start, target sitenav.Point, yaw float64) bool {
+func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw float64) error {
 	// Reserve the whole path plus the 500ms MOVE lease, braking at 0.5m/s²
 	// and tracking tolerance, even though STOP normally arrives at the target.
 	horizon := discoverySpeed*.5 + discoverySpeed*discoverySpeed + .05
 	end := sitenav.Point{X: target.X + math.Cos(yaw)*horizon, Y: target.Y + math.Sin(yaw)*horizon}
-	return grid.SweepWithMargin(start, end, yaw, discoveryMargin)
+	if grid.SweepWithMargin(start, end, yaw, discoveryMargin) {
+		return nil
+	}
+	if !start.Valid() || !end.Valid() || math.IsNaN(yaw) || math.IsInf(yaw, 0) {
+		return errors.New("The movement or stopping area has an invalid map pose.")
+	}
+	// Diagnose only after the real safety check rejected the move. This copy
+	// cannot authorize movement, and leaves the observed grid untouched. When
+	// floor and obstacle evidence both block the sweep, report missing floor;
+	// clearing an obstacle alone would still not make that route traversable.
+	floorOnly := grid
+	floorOnly.Obstacles = nil
+	if !floorOnly.SweepWithMargin(start, end, yaw, discoveryMargin) {
+		return errors.New("LiDAR has not observed all the floor in the movement and stopping area, including the safety margin.")
+	}
+	return errors.New("An obstacle or drop overlaps the movement or stopping area, including the safety margin.")
 }
 
 func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
@@ -123,8 +139,8 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	if progress-move.progress >= .025 {
 		move.progress, move.progressAt = progress, now
 	}
-	if !discoveryClear(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw) {
-		r.message = "Discovery stopped: the path or stopping area is blocked or unobserved."
+	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw); err != nil {
+		r.message = "Discovery stopped: " + err.Error()
 		r.stopLocked()
 		return
 	}
