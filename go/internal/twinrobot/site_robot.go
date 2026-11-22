@@ -136,7 +136,7 @@ func Open(ctx context.Context, conn grpc.ClientConnInterface, serial string) (*S
 	r.lastPosePacket = time.Now()
 	// Video has its own subscription so decoding/backpressure cannot delay
 	// the observations used by the motion watchdog. Both end with this session.
-	r.videoFrames = make(chan []byte, 2)
+	r.videoFrames = make(chan []byte, 8)
 	go r.receiveVideo()
 	go r.receiveObservations(stream)
 	go r.run()
@@ -238,6 +238,7 @@ func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bo
 
 func (r *SiteRobot) receiveVideo() {
 	defer close(r.videoFrames)
+	waitingForKeyframe := false
 	stream, err := r.client.Stream(r.ctx, &pb.UnitreeStreamRequest{Serial: r.serial, Video: true})
 	if err != nil {
 		return
@@ -248,21 +249,37 @@ func (r *SiteRobot) receiveVideo() {
 			return
 		}
 		frame := message.GetVideo().GetAnnexb()
-		if len(frame) == 0 || len(frame) > 8<<20 {
+		if len(frame) == 0 {
 			continue
 		}
+		queueSiteVideo(r.videoFrames, frame, &waitingForKeyframe)
+	}
+}
+
+// The producer is the only writer. A dropped compressed picture invalidates
+// later dependent pictures, so overflow must resume at an IDR, not the next P.
+func queueSiteVideo(frames chan []byte, frame []byte, waitingForKeyframe *bool) {
+	valid := len(frame) <= 8<<20
+	if valid && (!*waitingForKeyframe || unitree.IsH264Keyframe(frame)) {
 		select {
-		case r.videoFrames <- frame:
+		case frames <- frame:
+			*waitingForKeyframe = false
+			return
 		default:
-			select {
-			case <-r.videoFrames:
-			default:
-			}
-			select {
-			case r.videoFrames <- frame:
-			default:
-			}
 		}
+	} else if valid {
+		return
+	}
+	for len(frames) > 0 {
+		select {
+		case <-frames:
+		default:
+		}
+	}
+	*waitingForKeyframe = true
+	if valid && unitree.IsH264Keyframe(frame) {
+		frames <- frame
+		*waitingForKeyframe = false
 	}
 }
 
@@ -277,6 +294,20 @@ func (r *SiteRobot) NextVideo() ([]byte, error) {
 	case frame, ok := <-r.videoFrames:
 		if !ok {
 			return nil, errors.New("Go2 camera stream ended. Reconnect Go2 to reopen it.")
+		}
+		// A remote reader pays an HTTP round trip for each call. Deliver the
+		// contiguous queued access units together instead of falling behind at
+		// one request per picture. Bound both the work and response size.
+		for count := 1; count < cap(r.videoFrames) && len(frame) < 1<<20; count++ {
+			select {
+			case next, open := <-r.videoFrames:
+				if !open {
+					return frame, nil
+				}
+				frame = append(frame, next...)
+			default:
+				return frame, nil
+			}
 		}
 		return frame, nil
 	case <-time.After(250 * time.Millisecond):

@@ -4,6 +4,7 @@ package unitree
 // unitree_webrtc_connect@e0abc5780761539eff89a382a79319e5cf6ad1f4
 // webrtc_datachannel.py, msgs/pub_sub.py and webrtc_video.py.
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media/h264reader"
 	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
 )
 
@@ -21,7 +23,7 @@ const (
 	maxSubscriptionTopics = 32
 	maxBinaryMessage      = 8 << 20
 	topicBuffer           = 256
-	videoBuffer           = 64
+	videoBuffer           = 8
 )
 
 var topicPattern = regexp.MustCompile(`^rt/[A-Za-z0-9_/]{1,120}$`)
@@ -46,9 +48,10 @@ type VideoFrame struct {
 }
 
 type subscriber struct {
-	topics   map[string]bool
-	messages chan TopicMessage
-	video    chan VideoFrame // nil unless video was requested
+	topics             map[string]bool
+	messages           chan TopicMessage
+	video              chan VideoFrame // nil unless video was requested
+	videoNeedsKeyframe bool
 }
 
 // Subscribe starts delivery of the given topics and, optionally, video. The
@@ -187,9 +190,45 @@ func (c *Connection) dispatchVideo(frame VideoFrame) {
 		if s.video == nil {
 			continue
 		}
+		if s.videoNeedsKeyframe {
+			if !IsH264Keyframe(frame.AnnexB) {
+				continue
+			}
+			s.videoNeedsKeyframe = false
+		}
 		select {
 		case s.video <- frame:
 		default:
+			// H.264 pictures depend on earlier pictures. Once a slow reader
+			// loses one, discard its backlog and resume only at a new IDR.
+			for len(s.video) > 0 {
+				select {
+				case <-s.video:
+				default:
+				}
+			}
+			s.videoNeedsKeyframe = !IsH264Keyframe(frame.AnnexB)
+			if s.videoNeedsKeyframe {
+				c.requestKeyframe()
+			} else {
+				s.video <- frame
+			}
+		}
+	}
+}
+
+// IsH264Keyframe reports whether a complete Annex-B access unit contains an
+// independently decodable IDR picture. Parameter sets remain in the original
+// access unit; Pion's existing reader handles both Annex-B start-code sizes.
+func IsH264Keyframe(data []byte) bool {
+	reader, _ := h264reader.NewReader(bytes.NewReader(data))
+	for {
+		nal, err := reader.NextNAL()
+		if err != nil {
+			return false
+		}
+		if nal.UnitType == h264reader.NalUnitTypeCodedSliceIdr {
+			return true
 		}
 	}
 }
