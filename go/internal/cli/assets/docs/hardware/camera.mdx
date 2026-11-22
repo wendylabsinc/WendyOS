@@ -89,6 +89,25 @@ Depth and infrared nodes do not inherit the color feed. Private container
 network namespaces and original raw frames are not supported by this JPEG
 fallback.
 
+## Open a camera from an app while Wendy is using it
+
+A V4L2 camera streams to one process at a time. While Wendy is capturing from a
+camera, an app that opens the same `/dev/videoN` itself fails with
+`Device or resource busy`. Wendy captures from a camera while:
+
+- a `wendy device camera view`, a snapshot or another Wendy viewer is open on it
+- a Wendy Data campaign that records it is armed or recording
+
+To give the camera back to the app, close the view, or switch the campaign off
+with `wendy data campaign disarm <campaign>`. `wendy data campaign arm <campaign>`
+switches it back on.
+
+Starting an app does not make Wendy open a camera that only offers raw or MJPEG
+frames, which covers most USB webcams. A camera that produces H.264 itself is
+different: while an app with the `camera` entitlement runs, Wendy captures that
+camera and feeds its H.264 frames to a separate agent-fed device node, so the
+app should read that node rather than the camera.
+
 ## Wendy Lite cameras
 
 Select a Wendy Lite board in the device picker, or use one saved as your default,
