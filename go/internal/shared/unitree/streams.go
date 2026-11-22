@@ -184,8 +184,8 @@ func (c *Connection) dispatchTopic(topic string, data []byte, isBinary bool) {
 }
 
 func (c *Connection) dispatchVideo(frame VideoFrame) {
+	requestIDR := false
 	c.subMu.Lock()
-	defer c.subMu.Unlock()
 	for s := range c.subscribers {
 		if s.video == nil {
 			continue
@@ -209,11 +209,17 @@ func (c *Connection) dispatchVideo(frame VideoFrame) {
 			}
 			s.videoNeedsKeyframe = !IsH264Keyframe(frame.AnnexB)
 			if s.videoNeedsKeyframe {
-				c.requestKeyframe()
+				requestIDR = true
 			} else {
 				s.video <- frame
 			}
 		}
+	}
+	c.subMu.Unlock()
+	// RTCP writes must not hold up telemetry dispatch or subscription changes.
+	// Several slow viewers need only one recovery request for this picture.
+	if requestIDR {
+		c.requestKeyframe()
 	}
 }
 
