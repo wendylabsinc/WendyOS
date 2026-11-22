@@ -94,6 +94,46 @@ func TestStartDetachedRecordsTheRun(t *testing.T) {
 	}
 }
 
+func TestDetachedVMLockOutlivesLauncher(t *testing.T) {
+	const rootEnv = "WENDY_VM_TEST_LAUNCHER_ROOT"
+	if root := os.Getenv(rootEnv); root != "" {
+		stubEmulator(t)
+		s := &Store{Root: root}
+		if _, err := s.StartDetached(detachableSpec(t, s, "dev")); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	s := newTestStore(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestDetachedVMLockOutlivesLauncher$")
+	cmd.Env = append(os.Environ(), rootEnv+"="+s.Root)
+	output, launchErr := cmd.CombinedOutput()
+	if state, err := s.ReadState("dev"); err == nil && state.PID > 0 {
+		t.Cleanup(func() { _ = syscallKill(state.PID) })
+	}
+	if launchErr != nil {
+		t.Fatalf("launcher: %v\n%s", launchErr, output)
+	}
+	st, err := s.Status("dev")
+	if err != nil || !st.Running || st.State.PID <= 0 {
+		t.Fatalf("Status() after launcher exit = %+v, %v; want running", st, err)
+	}
+	if err := s.Stop("dev", true, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Status("dev")
+	if err != nil || st.Running {
+		t.Fatalf("Status() after Stop() = %+v, %v; want stopped", st, err)
+	}
+}
+
 func TestStartDetachedCreatesAnOwnerOnlyConsoleLog(t *testing.T) {
 	stubEmulator(t)
 	s := newTestStore(t)
