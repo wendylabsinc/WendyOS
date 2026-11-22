@@ -11,7 +11,7 @@ wendy app publish --tag 1.0.0 --oci-layout ./image --platform linux/arm64
 ```
 
 If the app does not exist in Cloud yet, publish first asks the
-[`wendy app create`](create.md) questions (in a terminal) and creates it.
+[`wendy app create`](./create.md) questions (in a terminal) and creates it.
 
 The image carries the project's `wendy.json` as its app definition, and
 the release's default configuration is the `env` object of `wendy.json`.
@@ -23,7 +23,7 @@ Without `--oci-layout` the project's container image is built first. The
 release key is wrapped to this machine's registry key (see
 [`wendy registry key`](../registry/key.md)) and to the Wendy custodian key.
 The command prints the release id and manifest digest that
-[`wendy app deploy`](deploy.md) takes.
+[`wendy app deploy`](./deploy.md) takes.
 
 | Flag | Description |
 |------|-------------|

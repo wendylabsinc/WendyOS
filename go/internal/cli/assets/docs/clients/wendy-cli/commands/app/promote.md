@@ -2,8 +2,8 @@
 
 Turns an app you ran directly with [`wendy run`](../run.md) into a deployed
 release. Promote publishes the image the last `wendy run` of this project
-built, as [`wendy app publish`](publish.md) would, and then asks the
-[`wendy app deploy`](deploy.md) questions with the app, the release and the
+built, as [`wendy app publish`](./publish.md) would, and then asks the
+[`wendy app deploy`](./deploy.md) questions with the app, the release and the
 device already answered.
 
 ```sh
@@ -26,5 +26,5 @@ keep the running container yet.
 | `--tag` | Release tag: the version you give this release, for example `1.0.0`. Asked when missing in a terminal |
 | `--untagged` | Name the release `<git branch>@<manifest digest>` instead of a tag |
 | `--platform` | Platform of the run's image (default `linux/arm64`) |
-| `--name`, `--move`, `--config`, `--config-file`, `--run`, `--install-only`, `--keep-trying`, `--note`, `--yes`, `--wait` | The remaining deploy questions, as in [`wendy app deploy`](deploy.md) |
+| `--name`, `--move`, `--config`, `--config-file`, `--run`, `--install-only`, `--keep-trying`, `--note`, `--yes`, `--wait` | The remaining deploy questions, as in [`wendy app deploy`](./deploy.md) |
 | `--cloud-grpc` | Cloud gRPC endpoint of the session to use |

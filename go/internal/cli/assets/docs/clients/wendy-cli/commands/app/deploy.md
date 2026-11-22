@@ -1,6 +1,6 @@
 # `wendy app deploy`, `deployment`, `rotate`
 
-Deploys a release published with [`wendy app publish`](publish.md) to devices
+Deploys a release published with [`wendy app publish`](./publish.md) to devices
 through Wendy Cloud. It asks the same questions, in the same order, as the
 dashboard's "Deploy an app": which app, which release, which devices (and the
 deployment's name), what configuration, and whether it should run now. Then
