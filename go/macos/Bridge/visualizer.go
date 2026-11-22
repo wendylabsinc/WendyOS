@@ -15,6 +15,47 @@ import (
 	"unsafe"
 )
 
+//export WDNotificationVideoAt
+func WDNotificationVideoAt(selector, campaign, eventID *C.char) *C.WDNotificationVideoResult {
+	return WDNotificationVideoNear(selector, campaign, eventID, 0, nil)
+}
+
+//export WDNotificationVideoNear
+func WDNotificationVideoNear(selector, campaign, eventID *C.char, notificationUnix C.double, hint *C.char) *C.WDNotificationVideoResult {
+	p := alloc[C.WDNotificationVideoResult](1)
+	result, err := desktop.NotificationVideoNear(C.GoString(selector), C.GoString(campaign), C.GoString(eventID), float64(notificationUnix), C.GoString(hint))
+	p.status = status(err)
+	if err != nil || result.Episode == nil {
+		return p
+	}
+	row := result.Episode
+	raw, err := json.Marshal(map[string]any{"id": row.GetId(), "name": row.GetName(), "state": row.GetState(),
+		"started": float64(row.GetStartedUnixNanos()) / 1e9, "bytes": row.GetSizeBytes(),
+		"timings": result.Timings, "duration": result.Preview.Duration, "maximumCelsius": result.Preview.MaximumCelsius})
+	if err != nil {
+		_ = os.Remove(result.Preview.Path)
+		p.status = status(err)
+		return p
+	}
+	p.json = C.CString(string(raw))
+	p.local_path = C.CString(result.Preview.Path)
+	return p
+}
+
+//export WDNotificationVideoFree
+func WDNotificationVideoFree(p *C.WDNotificationVideoResult) {
+	if p == nil {
+		return
+	}
+	if p.local_path != nil {
+		_ = os.Remove(C.GoString(p.local_path))
+	}
+	free(p.local_path)
+	free(p.json)
+	free(p.status.message)
+	free(p)
+}
+
 //export WDVisualEpisodes
 func WDVisualEpisodes(session C.uint64_t) *C.WDVisualEpisodesResult {
 	p := alloc[C.WDVisualEpisodesResult](1)
