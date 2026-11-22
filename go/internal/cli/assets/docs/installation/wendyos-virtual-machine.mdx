@@ -64,6 +64,20 @@ PC. `qemu-system-aarch64` names the guest architecture, not a host requirement.
 </Tab>
 </Tabs>
 
+An x86-64 guest (`wendy vm create --arch amd64`, below) needs the x86-64
+emulator and its UEFI firmware instead. Homebrew's `qemu` includes both. On
+Debian or Ubuntu:
+
+```sh
+sudo apt install qemu-system-x86 ovmf
+```
+
+On Fedora:
+
+```sh
+sudo dnf install qemu-system-x86 edk2-ovmf
+```
+
 If QEMU or its firmware is missing, Wendy offers to install it through Homebrew
 on macOS, WinGet on Windows, or apt-get or dnf on Linux. On Linux the install runs
 `sudo`, so Wendy always asks first, even with `--yes`. Without an interactive
@@ -176,6 +190,15 @@ To pin a version, or to run a VM from an image you built yourself:
 wendy vm create dev --version 0.19.0
 wendy vm create dev --image ./wendyos-image-vm-arm64-wendyos.rootfs.wic
 ```
+
+To create an x86-64 guest instead of an ARM64 one:
+
+```sh
+wendy vm create dev --arch amd64
+```
+
+On an x86-64 Linux PC the x86-64 guest is accelerated, and apps for it build
+natively. A local `--image` is treated as ARM64 unless `--arch` is given.
 
 </Step>
 <Step>

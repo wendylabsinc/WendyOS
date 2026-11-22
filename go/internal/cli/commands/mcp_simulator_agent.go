@@ -45,6 +45,11 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 	if err != nil {
 		return nil, err
 	}
+	meta, _ := store.ReadMeta(name)
+	if !meta.Arch.Valid() {
+		return nil, fmt.Errorf("simulator %q records guest architecture %q, which this version of wendy cannot update", name, meta.Arch)
+	}
+	arch := meta.GuestArch()
 	unlock, err := lockRobotProvision(ctx, store, name)
 	if err != nil {
 		return nil, err
@@ -69,7 +74,7 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 		return nil, err
 	}
 	defer conn.Close()
-	if err := verifySimulatorUpdateTarget(conn, info, name); err != nil {
+	if err := verifySimulatorUpdateTarget(conn, info, name, arch); err != nil {
 		return nil, err
 	}
 	result := &wendymcp.SimulatorAgentUpdate{Name: name, Device: "vm:" + name, Version: info.GetVersion()}
@@ -98,7 +103,7 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 		if err != nil {
 			return nil, err
 		}
-		if err := verifySimulatorUpdateTarget(fresh, version, name); err != nil {
+		if err := verifySimulatorUpdateTarget(fresh, version, name, arch); err != nil {
 			_ = fresh.Close()
 			return nil, err
 		}
@@ -126,11 +131,16 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 	return result, nil
 }
 
-func verifySimulatorUpdateTarget(conn *grpcclient.AgentConnection, info *agentpb.GetAgentVersionResponse, name string) error {
-	if conn == nil || conn.SimulatorName != name || info == nil ||
-		(info.GetOs() != "linux" && info.GetOs() != "wendyos") ||
-		info.GetDeviceType() != "vm-arm64" || info.GetCpuArchitecture() != "arm64" {
-		return fmt.Errorf("agent update requires the verified ARM64 WendyOS VM %q", name)
+// verifySimulatorUpdateTarget requires the agent to be the named VM's, on the
+// board and CPU architecture the VM was created with, before an agent built
+// for that architecture is pushed to it.
+func verifySimulatorUpdateTarget(conn *grpcclient.AgentConnection, info *agentpb.GetAgentVersionResponse, name string, arch vm.Arch) error {
+	if arch == "" {
+		arch = vm.ArchARM64
+	}
+	if conn == nil || conn.SimulatorName != name || !agentIsWendyOSVM(info) ||
+		info.GetDeviceType() != arch.BoardID() || info.GetCpuArchitecture() != string(arch) {
+		return fmt.Errorf("agent update requires the verified WendyOS VM %q", name)
 	}
 	return nil
 }
