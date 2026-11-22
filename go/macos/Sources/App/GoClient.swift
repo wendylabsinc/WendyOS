@@ -279,7 +279,7 @@ final class GoClient: Sendable {
         defer { WDCamerasFree(pointer) }
         try check(pointer.pointee.status)
         return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
-            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0, stableID: string($0.stable_id))
+            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0, stableID: string($0.stable_id), rosTopic: optionalString($0.topic), isROS2: $0.ros2 != 0)
         }
     }
     private static func readVPN(_ pointer: UnsafeMutablePointer<WDVPNResult>?) throws -> VPNConfiguration {
@@ -394,6 +394,8 @@ struct Camera: Identifiable, Hashable {
     var path: String?
     var thermal = false
     var stableID = ""
+    var rosTopic: String?
+    var isROS2 = false
     var orderKey: String { !stableID.isEmpty ? stableID : path ?? String(id) }
 }
 struct VPNRouteSelection { let selector: String; let name: String }
