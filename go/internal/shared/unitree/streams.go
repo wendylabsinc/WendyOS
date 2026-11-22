@@ -74,6 +74,7 @@ func (c *Connection) Subscribe(topics []string, video bool) (<-chan TopicMessage
 	}
 	if video {
 		s.video = make(chan VideoFrame, videoBuffer)
+		s.videoNeedsKeyframe = true
 	}
 	if !c.Connected() {
 		return nil, nil, nil, errors.New("Go2 is not connected")
@@ -103,9 +104,11 @@ func (c *Connection) Subscribe(topics []string, video bool) (<-chan TopicMessage
 		if c.videoRefs == 1 {
 			err = errors.Join(err, c.send("vid", "on"))
 		}
-		c.requestKeyframe()
 	}
 	c.subMu.Unlock()
+	if video {
+		c.requestKeyframe()
+	}
 
 	cancel := func() { c.unsubscribe(s) }
 	if err != nil {
@@ -183,15 +186,27 @@ func (c *Connection) dispatchTopic(topic string, data []byte, isBinary bool) {
 	}
 }
 
-func (c *Connection) dispatchVideo(frame VideoFrame) {
+func (c *Connection) dispatchVideo(frame VideoFrame, lostReference bool) {
 	requestIDR := false
 	c.subMu.Lock()
 	for s := range c.subscribers {
 		if s.video == nil {
 			continue
 		}
+		if lostReference {
+			// SampleBuilder discarded RTP data before this picture. Every
+			// decoder has lost the same reference, even without queue pressure.
+			for len(s.video) > 0 {
+				select {
+				case <-s.video:
+				default:
+				}
+			}
+			s.videoNeedsKeyframe = true
+		}
 		if s.videoNeedsKeyframe {
 			if !IsH264Keyframe(frame.AnnexB) {
+				requestIDR = requestIDR || lostReference
 				continue
 			}
 			s.videoNeedsKeyframe = false
@@ -290,7 +305,7 @@ func (c *Connection) onTrack(track *webrtc.TrackRemote) {
 		}
 		builder.Push(packet)
 		for sample := builder.Pop(); sample != nil; sample = builder.Pop() {
-			c.dispatchVideo(VideoFrame{AnnexB: sample.Data, RTPTimestamp: sample.PacketTimestamp, Received: time.Now()})
+			c.dispatchVideo(VideoFrame{AnnexB: sample.Data, RTPTimestamp: sample.PacketTimestamp, Received: time.Now()}, sample.PrevDroppedPackets > 0)
 		}
 	}
 }
