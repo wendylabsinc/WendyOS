@@ -393,34 +393,42 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
         }
         #if os(iOS)
-            .fullScreenCover(isPresented: $scanning, onDismiss: {
-                alignmentScanCamera = nil
-                scanPresentationActive = false
-                if let pendingAlignment {
-                    self.pendingAlignment = nil
-                    calibrate?(pendingAlignment.0, pendingAlignment.1)
-                }
-            }) {
-                SiteRoomCapture(requiresVisualReferences: alignmentScanCamera != nil) { result in
-                    let alignmentCamera = alignmentScanCamera
-                    alignmentScanCamera = nil
-                    scanning = false
-                    switch result {
-                    case .success(let url):
-                        actions.submit {
-                            await importModel(url, scoped: false, alignmentCamera: alignmentCamera)
-                            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-                        }
-                    case .failure(let cause):
-                        report(
-                            cause,
-                            message: "The room scan could not be saved. Scan the room again."
-                        )
-                    }
-                }.onAppear { scanPresentationActive = true }
+            .fullScreenCover(isPresented: $scanning, onDismiss: dismissRoomScan) {
+                roomScan
             }
         #endif
     }
+
+    #if os(iOS)
+    private var roomScan: some View {
+        SiteRoomCapture(requiresVisualReferences: alignmentScanCamera != nil, completion: completeRoomScan)
+            .onAppear { scanPresentationActive = true }
+    }
+
+    private func dismissRoomScan() {
+        alignmentScanCamera = nil
+        scanPresentationActive = false
+        if let pendingAlignment {
+            self.pendingAlignment = nil
+            calibrate?(pendingAlignment.0, pendingAlignment.1)
+        }
+    }
+
+    private func completeRoomScan(_ result: Result<URL, Error>) {
+        let alignmentCamera = alignmentScanCamera
+        alignmentScanCamera = nil
+        scanning = false
+        switch result {
+        case .success(let url):
+            actions.submit {
+                await importModel(url, scoped: false, alignmentCamera: alignmentCamera)
+                try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+            }
+        case .failure(let cause):
+            report(cause, message: "The room scan could not be saved. Scan the room again.")
+        }
+    }
+    #endif
 
     private func switchSite(_ offset: Int) {
         guard sites.count > 1 else { return }
