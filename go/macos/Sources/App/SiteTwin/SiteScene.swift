@@ -105,6 +105,12 @@ public struct SiteScene: View {
                 refreshDate: context.date
             )
             .accessibilityLabel("3D model of \(site.name)")
+        .overlay(alignment: .topLeading) {
+            if robot?.scanIsProvisional == true, robot?.scan.isEmpty == false {
+                Label("Provisional LiDAR fit · position unconfirmed", systemImage: "exclamationmark.triangle")
+                    .font(.caption).padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(12)
+            }
+        }
         .overlay {
             GeometryReader { geometry in
                 if let point = robotProjection.point, let robotConfirmation {
@@ -428,7 +434,7 @@ private struct SceneSurface {
             if lastRobot?.hazards != state.hazards {
                 SiteRobotHazardRenderer.update(hazardsRoot, hazards: state.hazards)
             }
-            scanRoot.isHidden = state.scan.isEmpty
+            scanRoot.isHidden = state.scan.isEmpty || (!state.fresh && !state.scanIsProvisional) || state.placing
             if lastRobot?.scan != state.scan {
                 scanRoot.childNodes.forEach { $0.removeFromParentNode() }
                 for kind in 0...3 {

@@ -51,14 +51,18 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 	var lastReport *twinrobot.SiteFusionReport
 	lastReason := "No reliable position match"
 	lastMatchIssue, blockedReason := "", ""
-	blockedAttempts := 0
+	blockedHeadings := map[int]bool{}
 	details := func() string {
 		parts := []string{lastReason}
 		if lastMatchIssue != "" {
 			parts = append(parts, lastMatchIssue)
 		}
-		if blockedAttempts > 0 {
-			parts = append(parts, fmt.Sprintf("Nearby moves were blocked at %d headings: %s.", blockedAttempts, blockedReason))
+		if len(blockedHeadings) > 0 {
+			heading := "headings"
+			if len(blockedHeadings) == 1 {
+				heading = "heading"
+			}
+			parts = append(parts, fmt.Sprintf("Nearby moves were blocked at %d %s: %s.", len(blockedHeadings), heading, strings.TrimSuffix(blockedReason, ".")))
 		}
 		return strings.Join(parts, " ")
 	}
@@ -82,7 +86,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			return true
 		}
 	}
-	fail := func(message string) { session.robot.Stop(root + 999999); finish("failed", message, lastReport) }
+	fail := func(message string) {
+		log.Printf("localization stopped: %s", message)
+		session.robot.Stop(root + 999999)
+		finish("failed", message, lastReport)
+	}
 	phase := func(value string) {
 		session.searchMu.Lock()
 		defer session.searchMu.Unlock()
@@ -92,12 +100,31 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 	}
 	moves := 0
 	attempted := map[int]bool{}
+	waitingForScan := false
+	recoveringMotion := false
+	var scanAfter int64
+	awaitObservations := func(turn int, message string, retryMove bool) {
+		waitingForScan = true
+		scanAfter = session.robot.Status().ScanReceivedUnixNanos
+		settledAfter = time.Now().Add(2 * time.Second)
+		if retryMove {
+			delete(attempted, turn)
+		}
+		log.Printf("localization waiting turn=%d moves=%d: %s", turn, moves, message)
+		session.searchMu.Lock()
+		defer session.searchMu.Unlock()
+		if session.searchRoot == root {
+			session.searchPhase = "waiting"
+			session.searchMessage = message
+		}
+	}
 	maxTurns := 12
 	if input.Explore {
 		// Inspect each heading at most once; returning to the initial heading
 		// adds no new viewpoint when all translations were blocked.
 		maxTurns = 11
 	}
+searchLoop:
 	for turn := 0; turn <= maxTurns; {
 		for {
 			if !wait() {
@@ -109,7 +136,14 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 				fail(state.Message)
 				return
 			}
-			if state.MeasurementsReady && !state.Moving && !time.Now().Before(settledAfter) {
+			if recoveringMotion && !state.MotionRecoveryAllowed {
+				fail("Discovery cannot resume automatically after control or Stop confirmation was lost.")
+				return
+			}
+			if state.MeasurementsReady && !state.Moving && !time.Now().Before(settledAfter) &&
+				(!waitingForScan || state.ScanReceivedUnixNanos > scanAfter) {
+				waitingForScan = false
+				recoveringMotion = false
 				break
 			}
 		}
@@ -146,6 +180,15 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		session.searchMu.Unlock()
 		if err == nil && len(report.Candidates) > 0 {
 			session.pendingMu.Lock()
+			// A reset or newer request can finish while matching is in flight.
+			// Never publish a candidate from the discarded alignment afterward.
+			if ctx.Err() != nil || sequence <= session.pendingSequence {
+				session.pendingMu.Unlock()
+				if ctx.Err() != nil {
+					fail("Position search ended. " + details())
+				}
+				return
+			}
 			session.pending = report
 			session.pendingFrame = input.Frame
 			session.pendingSequence = sequence
@@ -154,11 +197,15 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			finish("complete", report.Message, &report)
 			return
 		}
-		// Gather only enough new views to resolve the match. Three completed
-		// translations exhaust discovery; do not follow them with a full spin.
+		if report.WaitingForObservations {
+			awaitObservations(turn, report.Message, false)
+			continue
+		}
+		// Exhausting motion never starts another spin. Keep matching fresh
+		// measurements at rest for the remainder of this bounded session.
 		if input.Explore && moves == 3 {
-			fail(fmt.Sprintf("No reliable position match after %d turns and %d viewpoint moves. %s", turn, moves, details()))
-			return
+			awaitObservations(turn, "Movement limit reached. Checking new observations while Go2 stays still.", false)
+			continue
 		}
 		if input.Explore && !attempted[turn] {
 			attempted[turn] = true
@@ -168,8 +215,12 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			}
 			sequence++
 			err := session.robot.DiscoveryStep(sequence, root)
+			if errors.Is(err, twinrobot.ErrObservationUnavailable) {
+				awaitObservations(turn, err.Error(), true)
+				continue
+			}
 			if errors.Is(err, twinrobot.ErrDiscoveryBlocked) {
-				blockedAttempts++
+				blockedHeadings[turn] = true
 				blockedReason = err.Error()
 				log.Printf("discovery turn=%d move skipped: %v", turn, err)
 			}
@@ -193,6 +244,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 					}
 					state := session.robot.Status()
 					if state.Disconnected || state.DiscoveryState == 3 {
+						if !state.Disconnected && state.MotionRecoveryAllowed {
+							recoveringMotion = true
+							awaitObservations(turn, state.Message, true)
+							continue searchLoop
+						}
 						fail(state.Message)
 						return
 					}
@@ -206,8 +262,12 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			}
 		}
 		if turn == maxTurns {
-			fail(fmt.Sprintf("No reliable position match after %d turns and %d viewpoint moves. %s", turn, moves, details()))
-			return
+			message := "Checking new observations while Go2 stays still. " + lastReason
+			if input.Explore && blockedReason != "" {
+				message = "Waiting for observed clear floor before another nearby move."
+			}
+			awaitObservations(turn, message, input.Explore)
+			continue
 		}
 		if ctx.Err() != nil {
 			fail("Position search ended. " + details())
@@ -216,6 +276,10 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		phase("turning")
 		sequence++
 		if err = session.robot.Look(sequence, direction); err != nil {
+			if errors.Is(err, twinrobot.ErrObservationUnavailable) || errors.Is(err, twinrobot.ErrDiscoveryBlocked) {
+				awaitObservations(turn, err.Error(), input.Explore)
+				continue
+			}
 			fail(err.Error())
 			return
 		}
@@ -233,6 +297,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			}
 			state := session.robot.Status()
 			if state.LookState == 3 || state.Disconnected {
+				if !state.Disconnected && state.MotionRecoveryAllowed {
+					recoveringMotion = true
+					awaitObservations(turn, state.Message, true)
+					continue searchLoop
+				}
 				fail(state.Message)
 				return
 			}

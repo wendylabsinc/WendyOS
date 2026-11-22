@@ -111,6 +111,7 @@ func (r *SiteRobot) ConfirmLocalization(sequence, matchSequence uint64, frame st
 	r.floorY = c.floorY
 	r.preview = nil
 	r.localizations = nil
+	r.clearMotionFailureLocked()
 	r.message = "LiDAR position confirmed."
 	return nil
 }

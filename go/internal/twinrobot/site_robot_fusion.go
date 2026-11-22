@@ -116,6 +116,9 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	if !sameLocalizationPose(pose, r.observed.Pose) {
 		return report, errors.New("Go2 moved during matching. Retrying with the new observations is required.")
 	}
+	// Waiting, failed, stale, or superseded passive matches must not erase
+	// the motion fault. Only completed matching acknowledges that result.
+	r.clearMotionFailureLocked()
 	if r.fusionFrame != request.Frame || r.fusionEpoch != epoch {
 		r.fusionTracker = sitenav.PoseTracker{}
 		r.fusionFrame = request.Frame

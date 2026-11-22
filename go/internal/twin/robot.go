@@ -14,6 +14,7 @@ type robotControl interface {
 	Close()
 	ReleaseOperator()
 	Stop(uint64)
+	ResetLocalization(uint64, string) error
 	StartRoomFromOdometry(uint64, string) error
 	Align(uint64, string, float64, float64, float64, float64) error
 	Destination(uint64, string, float64, float64, bool) error

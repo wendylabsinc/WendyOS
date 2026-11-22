@@ -14,7 +14,8 @@ const discoveryDistance = .4
 const discoverySpeed = sitenav.WalkingSpeed
 const discoveryMargin = .12 // lateral drift plus the footprint swept by 0.1 rad yaw drift
 
-// A blocked viewpoint is optional; a sensor, command or movement fault ends the search.
+// ErrDiscoveryBlocked identifies preflight clearance loss for a viewpoint or
+// look turn. A search can wait for new measurements and recheck the full path.
 var ErrDiscoveryBlocked = errors.New("no observed clear floor for a new viewpoint")
 
 type discoveryMove struct {
@@ -47,7 +48,7 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 		return errors.New("The map is no longer active.")
 	}
 	if err := r.observed.Ready(now); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrObservationUnavailable, err)
 	}
 	p := r.observed.Pose
 	if r.discoveryHistory.root != root || len(r.discoveryHistory.visited) == 0 {
@@ -76,6 +77,7 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(departure), p.Position, target, p.Yaw); err != nil {
 		return fmt.Errorf("%w: %v", ErrDiscoveryBlocked, err)
 	}
+	r.clearMotionFailureLocked()
 	history.starts++
 	r.discoveryMove = &discoveryMove{origin: p.Position, target: target, yaw: p.Yaw, progressAt: now}
 	r.discoveryState = 1
@@ -141,7 +143,7 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	}
 	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw); err != nil {
 		r.message = "Discovery stopped: " + err.Error()
-		r.stopLocked()
+		r.stopForObservationLossLocked()
 		return
 	}
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, discoverySpeed, 0); err != nil {

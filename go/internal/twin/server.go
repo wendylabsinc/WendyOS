@@ -212,7 +212,7 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 	robot := session.robot
 
 	switch q.Operation {
-	case "align", "destination", "localize", "confirm":
+	case "align", "destination", "localize", "confirm", "reset-localization":
 		if _, e := s.Store.Frame(q.Frame); e != nil {
 			respond(w, nil, e)
 			return
@@ -226,7 +226,7 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	q.Sequence *= stride
 	q.MatchSequence *= stride
-	if q.Operation != "poll" && q.Operation != "video" && q.Operation != "search-poll" {
+	if q.Operation != "poll" && q.Operation != "video" && q.Operation != "search-poll" && q.Operation != "reset-localization" {
 		session.searchMu.Lock()
 		if session.searchCancel != nil {
 			session.searchCancel()
@@ -256,6 +256,11 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	case "stop":
 		robot.Stop(q.Sequence)
+	case "reset-localization":
+		err = s.resetLocalization(session, q)
+		if err == nil {
+			out.SearchMessage = "Position cleared. Find Go2 again."
+		}
 	case "start-room":
 		room := Room{Site: Site{Version: 1, ID: uuid.NewString(), Name: "Go2 " + session.serial, ModelRevision: uuid.NewString(), MetresPerModelUnit: 1, Cameras: []json.RawMessage{}}}
 		err = robot.StartRoomFromOdometry(q.Sequence, room.Site.ID+"/"+room.Site.ModelRevision)

@@ -323,6 +323,17 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
     var opens = 0
     var closed: [UInt64] = []
     private var failPoll = false
+    var observationRevision: UInt64 = 1
+    var fusions: [UInt64] = []
+    var resets: [UInt64] = []
+    var aligned = false
+    var rejectReset = false
+    var fusionHasCandidate = true
+    private var holdFusion = false
+    private var fusionContinuation: CheckedContinuation<Void, Never>?
+    private var holdStatus = false
+    private var statusContinuation: CheckedContinuation<Void, Never>?
+    var statusPending = false
     var progress = SiteRobotClient.RemoteReply(SearchState: "searching", SearchMessage: "Waiting for measurements", SearchTurns: 0)
     init(measurements: Bool, rejectTurns: Bool) { self.measurements = measurements; self.rejectTurns = rejectTurns }
     func open(session: UInt64, serial: String) async throws -> UInt64 { opens += 1; return UInt64(41 + opens) }
@@ -330,9 +341,30 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
     func failNextPoll() { failPoll = true }
     func poll(_ handle: UInt64) async throws -> SiteRobotReading {
         if failPoll { failPoll = false; throw WendyError(message: "The connection was interrupted.") }
-        return SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: false, moving: progress.SearchTurns > 0,
+        return SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: aligned, moving: progress.SearchState == "searching" && progress.SearchTurns > 0,
             arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: false, measurementsReady: measurements,
-            underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, route: [], joints: [])
+            underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, observationRevision: observationRevision, route: [], joints: [])
+    }
+    func setAligned(_ value: Bool) { aligned = value }
+    func setRejectReset(_ value: Bool) { rejectReset = value }
+    func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws {
+        resets.append(sequence)
+        if rejectReset { throw WendyError(message: "Go2 did not confirm Stop.") }
+        // Deliberately retain the old reading until the next poll: restart
+        // must not wait for aligned=false to arrive before issuing search.
+    }
+    func setObservationRevision(_ revision: UInt64) { observationRevision = revision }
+    func failSearch(_ message: String = "Live LiDAR and odometry.") {
+        progress.SearchState = "failed"; progress.SearchMessage = message
+    }
+    func configureFusion(candidate: Bool, hold: Bool = false) { fusionHasCandidate = candidate; holdFusion = hold }
+    func releaseFusion() { holdFusion = false; fusionContinuation?.resume(); fusionContinuation = nil }
+    func fuse(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws -> RobotFusionReport {
+        fusions.append(sequence)
+        if holdFusion { await withCheckedContinuation { fusionContinuation = $0 } }
+        return RobotFusionReport(message: fusionHasCandidate ? "Position matched" : "No position match yet", candidates: fusionHasCandidate ? [.init(X: 1, Z: 2, Yaw: 0, FloorY: 0, RMS: 0.1, Coverage: 0.8)] : [],
+            tracking: .init(independentViews: 1, novelFraction: 1, selected: 0, message: ""), Accepted: 10, Rejected: 0,
+            waitingForObservations: false, visualUsed: false, observationRevision: observationRevision)
     }
     func look(_ handle: UInt64, sequence: UInt64, direction: Int32) async throws { turns.append(sequence) }
     func stop(_ handle: UInt64, sequence: UInt64) async { stops.append(sequence) }
@@ -341,7 +373,17 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
         searchRequests.append(request)
         if rejectTurns { throw WendyError(message: "An obstacle or drop overlaps Go2's body during this turn.") }
     }
-    func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply { progress }
+    func holdNextFailedStatus() { holdStatus = true }
+    func releaseStatus() { statusContinuation?.resume(); statusContinuation = nil }
+    func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply {
+        if holdStatus {
+            holdStatus = false; statusPending = true
+            await withCheckedContinuation { statusContinuation = $0 }
+            statusPending = false
+            return .init(SearchState: "failed", SearchMessage: "Previous search failed", SearchTurns: 0)
+        }
+        return progress
+    }
     func publish(turns: Int, moves: Int? = nil, phase: String? = nil) {
         progress.SearchTurns = turns; progress.SearchMoves = moves; progress.SearchPhase = phase
     }
@@ -447,7 +489,7 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
             if model.rotationState.canRetry { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(model.rotationState.title == "Rotation stopped")
+        #expect(model.rotationState.title == "Discovery stopped")
         #expect(model.rotationState.detail?.contains("obstacle") == true)
         #expect(model.canStartRotationSearch)
         try await Task.sleep(for: .milliseconds(300))
@@ -698,6 +740,41 @@ private final class PresetTestMatcher: RobotVisualMatching {
         }
     }
 
+    @Test func waitingForClearViewRemainsActiveAndResumesTheExistingSearch() async throws {
+        try await withRotationModel { model, robot in
+            model.startRotationSearch()
+            for _ in 0..<100 {
+                if await robot.searches.count == 1 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            await robot.publish(turns: 3, moves: 1, phase: "waiting")
+            for _ in 0..<100 {
+                if model.rotationState == .waitingForClearView { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.rotationState == .waitingForClearView)
+            #expect(model.rotationState.title == "Waiting for a clear view")
+            #expect(model.rotationState.detail == "Checking fresh LiDAR and floor coverage. Discovery resumes when safe.")
+            #expect(!model.rotationState.canRetry)
+            #expect(model.localizing)
+            #expect(model.error == nil)
+            await robot.publish(turns: 3, moves: 2, phase: "advancing")
+            for _ in 0..<100 {
+                if model.rotationState == .advancing(2) { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.rotationState == .advancing(2))
+            #expect(await robot.searches.count == 1)
+            #expect(await robot.turns.isEmpty)
+            model.stop()
+            await robot.publish(turns: 3, moves: 2, phase: "waiting")
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(model.rotationState == .idle)
+            #expect(!model.localizing)
+            #expect(await robot.searches.count == 1)
+        }
+    }
+
     @Test func rotationOnlyPreferenceDoesNotRequestTranslation() async throws {
         try await withRotationModel { model, robot in
             model.exploreDuringSearch = false
@@ -741,4 +818,135 @@ private final class PresetTestMatcher: RobotVisualMatching {
     model.accept(reading)
     #expect(model.statusLabel == "Go2 disconnected")
     #expect(model.statusMessage(showsDetails: false) == reading.message)
+}
+
+
+@MainActor @Test func failedDiscoveryRecoversFromFreshObservationsWithoutRestartingMotion() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.failSearch()
+        for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.error?.contains("Live LiDAR") == false)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await robot.fusions.isEmpty)
+        await robot.setObservationRevision(2)
+        for _ in 0..<200 { if !model.candidates.isEmpty { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.candidates.count == 1)
+        #expect(model.error == nil)
+        #expect(model.rotationState == .idle)
+        #expect(await robot.fusions.count == 1)
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+    }
+}
+
+@MainActor @Test func passiveDiscoveryRecoveryIsBoundedAndNeverRetriesTheSameObservation() async throws {
+    try await withRotationModel { model, robot in
+        await robot.configureFusion(candidate: false)
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.failSearch("Discovery stopped: LiDAR became stale.")
+        for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
+        for revision in 2...5 {
+            await robot.setObservationRevision(UInt64(revision))
+            try await Task.sleep(for: .milliseconds(1200))
+            #expect(await robot.fusions.count == min(revision - 1, 3))
+        }
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await robot.fusions.count == 3)
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+        #expect(model.rotationState.canRetry)
+    }
+}
+
+@MainActor @Test func stopDiscardsPendingPassiveRecoveryAndCancelsFutureAttempts() async throws {
+    try await withRotationModel { model, robot in
+        await robot.configureFusion(candidate: true, hold: true)
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.failSearch()
+        for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.setObservationRevision(2)
+        for _ in 0..<200 { if await robot.fusions.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try #require(await robot.fusions.count == 1)
+        model.stop()
+        await robot.releaseFusion()
+        await robot.setObservationRevision(3)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(model.candidates.isEmpty)
+        #expect(model.rotationState == .idle)
+        #expect(await robot.fusions.count == 1)
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.stops.count == 1)
+    }
+}
+
+@MainActor @Test func explicitDiscoveryRetryClearsPreviousErrorImmediately() async throws {
+    try await withRotationModel(rejectTurns: true) { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try #require(model.error != nil)
+        model.offerRotationRetry()
+        #expect(model.error == nil)
+        #expect(model.localizing)
+    }
+}
+
+
+@MainActor @Test func restartDiscoveryCanReplaceWrongConfirmedPositionAndPendingCandidate() async throws {
+    try await withRotationModel { model, robot in
+        await robot.setAligned(true)
+        for _ in 0..<100 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.canStartRotationSearch)
+        model.candidates = [.init(position: SitePoint(x: 2, y: 0, z: 3), yaw: 0, rms: 0.1, coverage: 0.8)]
+        #expect(model.canRestartDiscovery)
+        model.restartDiscovery()
+        #expect(model.candidates.isEmpty)
+        for _ in 0..<200 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        let resets = await robot.resets
+        let searches = await robot.searches
+        #expect(resets.count == 1)
+        #expect(searches.count == 1)
+        if let reset = resets.first, let search = searches.first { #expect(search > reset) }
+        #expect(model.error == nil)
+    }
+}
+
+@MainActor @Test func restartDiscoveryDoesNotSearchAfterResetStopFailure() async throws {
+    try await withRotationModel { model, robot in
+        await robot.setRejectReset(true)
+        model.restartDiscovery()
+        for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.error == "Go2 did not confirm Stop.")
+        #expect(await robot.resets.count == 1)
+        #expect(await robot.searches.isEmpty)
+        #expect(await robot.turns.isEmpty)
+    }
+}
+
+
+@MainActor @Test func staleFailedSearchStatusCannotOverrideStopOrNewSearch() async throws {
+    for retry in [false, true] {
+        try await withRotationModel { model, robot in
+            await robot.holdNextFailedStatus()
+            model.startRotationSearch()
+            for _ in 0..<100 { if await robot.statusPending { break }; try await Task.sleep(for: .milliseconds(10)) }
+            try #require(await robot.statusPending)
+            model.stop()
+            if retry {
+                model.startRotationSearch()
+                for _ in 0..<100 { if await robot.searches.count == 2 { break }; try await Task.sleep(for: .milliseconds(10)) }
+            }
+            await robot.releaseStatus()
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(model.error == nil)
+            #expect(!model.rotationState.canRetry)
+            #expect(model.localizing == retry)
+            #expect(await robot.searches.count == (retry ? 2 : 1))
+            #expect(await robot.fusions.isEmpty)
+            if !retry { #expect(model.rotationState == .idle) }
+        }
+    }
 }

@@ -2,6 +2,7 @@ package twinrobot
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -47,7 +48,7 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 		return errors.New("The map is no longer active.")
 	}
 	if err := r.observed.Ready(now); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrObservationUnavailable, err)
 	}
 	p := r.observed.Pose
 	var departure *sitenav.Departure
@@ -63,10 +64,11 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	target := p.Yaw + float64(direction)*lookAngle
 	if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, target+float64(direction)*lookStopMargin) {
 		if r.allowUnobservedFloor {
-			return errors.New("An obstacle or drop overlaps Go2's body during this turn.")
+			return fmt.Errorf("%w: An obstacle or drop overlaps Go2's body during this turn.", ErrDiscoveryBlocked)
 		}
-		return errors.New("Go2's body would cross an obstacle, drop or unobserved floor during this turn.")
+		return fmt.Errorf("%w: Go2's body would cross an obstacle, drop or unobserved floor during this turn.", ErrDiscoveryBlocked)
 	}
+	r.clearMotionFailureLocked()
 	r.lookState = 1
 	r.lookDirection = direction
 	r.lookTurn = &siteLookTurn{origin: p.Position, startYaw: p.Yaw, targetYaw: target, direction: float64(direction), progressYaw: p.Yaw, progressAt: now}
@@ -112,7 +114,7 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 		if !r.allowUnobservedFloor {
 			r.message = "Look turn stopped: the scan marks blocked or unobserved floor in the turning footprint."
 		}
-		r.stopLocked()
+		r.stopForObservationLossLocked()
 		return
 	}
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, 0, turn.direction*lookSpeed); err != nil {

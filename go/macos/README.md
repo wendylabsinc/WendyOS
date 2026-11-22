@@ -1338,7 +1338,7 @@ Position search now defaults to **Move between views during discovery** on
 Apple clients. The Linux service matches the current view first. If it remains
 ambiguous, it checks for a clear 40 cm forward move at the current heading,
 including the initial heading. It matches again after each move and stops as
-soon as a candidate is available. It stops after three translated viewpoints
+soon as a candidate is available. It stops moving after three attempted viewpoints
 if matching is still inconclusive. When a move is blocked, it turns 30 degrees
 to check another heading, considering at most twelve distinct headings without
 repeating the initial orientation. Discovery is also limited to five minutes.
@@ -1350,19 +1350,43 @@ confirmed. The complete body sweep and stopping distance must fit on observed
 clear floor, with a margin for drift. The hidden-floor allowance can cover the
 fixed departure footprint only. The supervised option that permits unobserved
 floor during ordinary navigation does not apply to discovery moves. Blocked
-viewpoints report why they were skipped; stale sensors, an expired operator lease, unexpected
-drift, a rejected movement command, or an unacknowledged stop end the attempt.
+viewpoints report why they were skipped. Temporary sensor or clearance loss
+stops motion and waits for a newly accepted scan before checking again, at most
+once every two seconds. The original five-minute session and movement budgets
+remain in force. Once the turn or movement budget is exhausted, discovery
+continues checking observations without starting another rotation. A blocked
+forward move can be retried at the current heading if movement budget remains.
+An expired operator lease, unexpected drift, a rejected movement command, or an
+unacknowledged Stop ends motion recovery.
 
 The controller avoids recently visited endpoints and stops before rematching.
 New scans must contain new geometry to count as independent evidence. Merely
 moving or replaying an accumulated map does not increase confidence. Camera
 hints from earlier viewpoints are discarded. A candidate position still needs
 confirmation before normal site navigation.
+The room view hides rejected scan-fit hypotheses. An explicit scan preview
+requires a usable candidate and is labeled as unconfirmed in the viewport;
+confirmed scans and previously saved room contributions remain available.
+
+If discovery stops, the original motion fault remains visible when healthy
+telemetry resumes. The client can try up to three passive matches on distinct,
+fresh observations while Go2 is stationary. These retries never restart motion.
+Stop or an explicit new search cancels passive recovery.
+
+**Restart discovery** is also available after choosing a position. It stops Go2,
+discards the current alignment and that robot's saved localization references
+for the room, then starts a new search. Other robots' references and the room
+model are retained. A failed Stop prevents the reset and new search.
+The twin robot endpoint accepts the additive `reset-localization` operation
+with `Frame` and `Sequence`; obsolete requests cannot reset a newer search.
 
 The robot search request adds optional `Fusion.explore`, defaulting to false
 when omitted. Search replies add `SearchMoves` and `SearchPhase`; phases are
-`matching`, `turning`, `advancing`, and `settling`. The robot snapshot adds
+`matching`, `turning`, `advancing`, `settling`, and `waiting`. The robot snapshot adds
 `DiscoveryState` with idle, advancing, completed, and aborted values 0–3.
+`MotionRecoveryAllowed` identifies temporary aborted motion with an acknowledged
+Stop; `ScanReceivedUnixNanos` identifies newly accepted LiDAR packets, including
+floor changes that leave the wall geometry unchanged.
 Existing clients keep rotation-only searches; Apple clients tolerate older
 servers that omit the new status fields. Physical walking and braking accuracy
 still require validation on a Go2.

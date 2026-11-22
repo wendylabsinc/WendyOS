@@ -13,6 +13,11 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
+// ErrObservationUnavailable identifies a preflight sensor wait, never a motion fault.
+var ErrObservationUnavailable = errors.New("robot observations are temporarily unavailable")
+
+const stopUnconfirmedMessage = "Stop was not acknowledged. Use the Go2 controller to verify it has stopped."
+
 type SiteRobotSnapshot struct {
 	Disconnected                                         bool
 	LookDirection                                        int
@@ -27,6 +32,8 @@ type SiteRobotSnapshot struct {
 	AllowUnobservedFloor                                 bool
 	X, Z, Yaw, FloorY                                    float64
 	ObservationRevision                                  uint64
+	ScanReceivedUnixNanos                                int64
+	MotionRecoveryAllowed                                bool
 	Route                                                []sitenav.Point // site X, -Z
 	Joints                                               []float64
 	Hazards                                              []SiteRobotHazard
@@ -72,6 +79,8 @@ type SiteRobot struct {
 	lookDirection                   int
 	started, heartbeat              time.Time
 	message                         string
+	motionFailure                   string
+	motionRecoveryAllowed           bool
 	controlWarning                  string
 	closed                          bool
 	streamDisconnected              bool
@@ -173,6 +182,7 @@ func (r *SiteRobot) prepareDirectMovement(ctx context.Context) {
 	// Stop explicitly before probing the new configuration command.
 	if _, err := r.client.Command(ctx, &pb.UnitreeCommandRequest{Serial: r.serial, Command: pb.UnitreeCommand_UNITREE_COMMAND_STOP}); err != nil {
 		r.stopUnconfirmed = true
+		r.motionRecoveryAllowed = false
 		return
 	}
 	if _, err := r.client.Command(ctx, &pb.UnitreeCommandRequest{Serial: r.serial,
@@ -204,10 +214,10 @@ func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bo
 	if err == nil && topic == sitenav.CloudTopic && r.moving {
 		if navErr := r.observed.Ready(now); navErr != nil {
 			r.message = navErr.Error()
-			r.stopLocked()
+			r.stopForObservationLossLocked()
 		}
 	}
-	if err == nil && topic == sitenav.CloudTopic && !r.moving && len(r.preview) == 0 && !r.stopUnconfirmed {
+	if err == nil && topic == sitenav.CloudTopic && !r.moving && len(r.preview) == 0 && !r.stopUnconfirmed && r.motionFailure == "" {
 		r.message = "Live LiDAR and odometry."
 	}
 	if err != nil && topic != sitenav.JointTopic {
@@ -231,7 +241,11 @@ func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bo
 			r.observed.ClearCloud("Waiting for a new LiDAR packet after Go2's pose changed.")
 		}
 		if r.moving {
-			r.stopLocked()
+			if topic == sitenav.CloudTopic || topic == sitenav.PoseTopic && sitenav.TransientPoseError(err) {
+				r.stopForObservationLossLocked()
+			} else {
+				r.stopLocked()
+			}
 		}
 	}
 }
@@ -378,9 +392,46 @@ func (r *SiteRobot) command(command pb.UnitreeCommand, forward, turn float64) er
 	}
 	return err
 }
+
+// A new accepted operation acknowledges the previous terminal motion result.
+// Telemetry alone must never acknowledge a failure that the search has not read.
+func (r *SiteRobot) clearMotionFailureLocked() {
+	r.motionRecoveryAllowed = false
+	if r.motionFailure == "" {
+		return
+	}
+	r.motionFailure = ""
+	if r.lookState == 3 {
+		r.lookState = 0
+	}
+	if r.discoveryState == 3 {
+		r.discoveryState = 0
+	}
+	r.message = "Checking robot observations."
+}
+
+// Only observation/clearance stops may be retried by an existing search. This
+// does not restart motion: each later command must pass all live safety checks.
+func (r *SiteRobot) stopForObservationLossLocked() {
+	active := r.lookTurn != nil || r.discoveryMove != nil
+	if err := r.stopLocked(); err == nil && active && !r.closed && r.ctx.Err() == nil && time.Since(r.heartbeat) <= 600*time.Millisecond {
+		r.motionRecoveryAllowed = true
+	}
+}
+
 func (r *SiteRobot) stopLocked() error {
-	// Persist diagnostics only after the stop request has finished.
-	defer r.flushCommandFaults()
+	lookActive, discoveryActive := r.lookTurn != nil, r.discoveryMove != nil
+	if lookActive || discoveryActive {
+		r.motionRecoveryAllowed = false
+	}
+	// Latch the final reason, including an unacknowledged STOP, before a
+	// later telemetry packet or readiness message can replace r.message.
+	defer func() {
+		if lookActive && r.lookState == 3 || discoveryActive && r.discoveryState == 3 {
+			r.motionFailure = r.message
+		}
+		r.flushCommandFaults()
+	}()
 	r.moving = false
 	r.forwardOrigin = nil
 	if r.lookTurn != nil && r.lookState != 2 {
@@ -395,8 +446,15 @@ func (r *SiteRobot) stopLocked() error {
 	r.route = nil
 	r.preview = nil
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
-		r.message = "Stop was not acknowledged. Use the Go2 controller to verify it has stopped."
+		r.message = stopUnconfirmedMessage
 		r.stopUnconfirmed = true
+		r.motionRecoveryAllowed = false
+		if lookActive {
+			r.lookState = 3
+		}
+		if discoveryActive {
+			r.discoveryState = 3
+		}
 		return errors.New(r.message)
 	}
 	r.stopUnconfirmed = false
@@ -404,6 +462,7 @@ func (r *SiteRobot) stopLocked() error {
 }
 func (r *SiteRobot) stepLocked(now time.Time) {
 	var fault error
+	observationLoss := false
 	switch {
 	case r.ctx.Err() != nil || r.closed:
 		fault = errors.New("Robot connection closed.")
@@ -415,10 +474,15 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		fault = errors.New("Align Go2 with this site again.")
 	default:
 		fault = r.observed.Ready(now)
+		observationLoss = fault != nil
 	}
 	if fault != nil {
 		r.message = fault.Error()
-		r.stopLocked()
+		if observationLoss {
+			r.stopForObservationLossLocked()
+		} else {
+			r.stopLocked()
+		}
 		return
 	}
 	if r.discoveryMove != nil {
@@ -514,6 +578,7 @@ func (r *SiteRobot) Align(sequence uint64, frame string, x, z, floor, yaw float6
 	r.frame = frame
 	r.floorY = floor
 	r.preview = nil
+	r.clearMotionFailureLocked()
 	r.message = "Aligned to this site using robot odometry."
 	return nil
 }
@@ -568,6 +633,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 	r.routeOrigin = r.observed.Pose.Position
 	r.forwardOrigin = nil
 	r.goal = goal
+	r.clearMotionFailureLocked()
 	r.message = "Route ready"
 	if move {
 		r.route = append([]sitenav.Point(nil), path[1:]...)
@@ -584,6 +650,7 @@ func (r *SiteRobot) Stop(sequence uint64) {
 		return
 	}
 	r.commandSequence = sequence
+	r.motionRecoveryAllowed = false
 	r.message = "Stopped"
 	r.stopLocked()
 }
@@ -677,6 +744,9 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
+	if now.Sub(r.heartbeat) > 600*time.Millisecond {
+		r.motionRecoveryAllowed = false
+	}
 	if renew {
 		r.heartbeat = now
 	}
@@ -699,6 +769,11 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	s.DiscoveryState = r.discoveryState
 	s.LookDirection = r.lookDirection
 	s.ObservationRevision = r.observed.Surfaces.Fingerprint()
+	if !r.observed.CloudAt.IsZero() {
+		s.ScanReceivedUnixNanos = r.observed.CloudAt.UnixNano()
+	}
+	s.MotionRecoveryAllowed = r.motionRecoveryAllowed && !r.stopUnconfirmed && !r.moving &&
+		(r.lookState == 3 || r.discoveryState == 3) && now.Sub(r.heartbeat) <= 600*time.Millisecond
 	s.ArrivalTiming = r.observed.AllowArrivalTime
 	s.UsingArrivalTiming = r.observed.UsingArrivalTime
 	s.TimingUnavailable = r.observed.TimingUnavailable
@@ -732,6 +807,11 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 		if err := r.observed.LocalizationReady(now); err != nil {
 			s.Message = err.Error()
 		}
+	}
+	if r.stopUnconfirmed {
+		s.Message = stopUnconfirmedMessage
+	} else if r.motionFailure != "" && (r.lookState == 3 || r.discoveryState == 3) {
+		s.Message = r.motionFailure
 	}
 	if s.Pose && s.Aligned {
 		p := r.alignment.ToSite(r.observed.Pose.Position)

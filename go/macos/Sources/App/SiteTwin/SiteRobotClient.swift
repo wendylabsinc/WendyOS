@@ -44,6 +44,8 @@ protocol SiteRobotTurning: Sendable {
 }
 
 protocol SiteRobotSearching: Sendable {
+    func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws
+    func fuse(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws -> RobotFusionReport
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws
     func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply
 }
@@ -61,6 +63,10 @@ final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSear
         var SearchMoves: Int?
         var SearchPhase: String?
         var Fusion: RobotFusionReport?
+    }
+    func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws {
+        struct Command: Encodable { var Operation = "reset-localization"; var Sequence: UInt64; var Frame: String }
+        _ = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Frame: frame)))
     }
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {
         struct Command: Encodable { var Operation = "search"; var Sequence: UInt64; var Fusion: RobotFusionRequest }

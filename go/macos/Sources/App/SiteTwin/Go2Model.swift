@@ -14,6 +14,7 @@ public struct SiteRobotRenderState: Equatable {
     var destination: SitePoint?
     var placing = false
     var scan: [RobotScanPoint] = []
+    var scanIsProvisional = false
     var hazards: [SiteRobotHazard] = []
 }
 

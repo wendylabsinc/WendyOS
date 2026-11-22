@@ -106,3 +106,60 @@ import Testing
     let heading = Go2Model.heading(.pi / 2).act(SIMD3<Float>(1, 0, 0))
     #expect(simd_distance(heading, SIMD3<Float>(0, 0, -1)) < 0.0001)
 }
+
+
+@MainActor @Test func scanPreviewNeedsPosition() {
+    let model = SiteRobotMapModel()
+    model.showScan = true
+    model.fusionReport = RobotFusionReport(message: "Provisional fit", candidates: [],
+        tracking: .init(independentViews: 1, novelFraction: 1, selected: 0, message: ""),
+        overlay: [.init(X: 4, Y: 1, Z: 2, Class: 0)], Accepted: 10, Rejected: 0,
+        waitingForObservations: false, visualUsed: false, observationRevision: 1)
+    var reading = SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: false, moving: false,
+        arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: true, measurementsReady: true,
+        underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, route: [], joints: [])
+    model.accept(reading)
+    #expect(!model.canShowScanFit)
+    #expect(model.render.scan.isEmpty)
+    // The explicit scan toggle can preview an actual candidate, but it must
+    // remain labeled as provisional even if an older alignment is retained.
+    model.candidates = [.init(position: .init(x: 4, y: 0, z: 2), yaw: 0, rms: 0.1, coverage: 0.8)]
+    #expect(model.render.scan.count == 1)
+    #expect(model.render.scanIsProvisional)
+    #expect(!model.render.fresh)
+    reading.aligned = true
+    model.accept(reading)
+    #expect(model.render.scan.count == 1)
+    #expect(model.render.scanIsProvisional)
+    model.showScan = false
+    #expect(model.render.scan.isEmpty)
+    #expect(!model.render.scanIsProvisional)
+    model.showScan = true
+    model.candidates = []
+    #expect(!model.render.scanIsProvisional)
+    #expect(model.canShowScanFit)
+    #expect(model.render.scan.count == 1)
+    model.fusionReport?.tracking.selected = -1
+    #expect(model.render.scan.isEmpty) // A new failed fit cannot use an old alignment.
+    model.fusionReport?.tracking.selected = 0
+    model.placing = true
+    #expect(model.render.scan.isEmpty)
+    model.placing = false
+    reading.aligned = false
+    model.accept(reading)
+    #expect(model.render.scan.isEmpty)
+    reading.aligned = true; reading.disconnected = true
+    model.accept(reading)
+    #expect(model.render.scan.isEmpty)
+}
+
+@MainActor @Test func unalignedRobotDoesNotHidePersistedRoomContributions() {
+    let model = SiteRobotMapModel()
+    let persisted = [SitePoint(x: 1, y: 0, z: 2)]
+    let floor = [SitePoint(x: 1, y: 0, z: 2), SitePoint(x: 2, y: 0, z: 2), SitePoint(x: 1, y: 0, z: 3)]
+    let scene = SiteScene(modelURL: URL(fileURLWithPath: "/tmp/room.usdz"), points: persisted, floorTiles: floor,
+        revision: 3, site: Site(name: "Shared room"), placingCamera: nil, select: { _ in }, place: { _, _ in }, robot: model.render)
+    #expect(model.render.scan.isEmpty)
+    #expect(scene.points == persisted)
+    #expect(scene.floorTiles == floor)
+}

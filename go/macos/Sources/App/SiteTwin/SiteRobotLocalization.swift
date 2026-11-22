@@ -208,9 +208,13 @@ struct RobotLocalizationDiagnostics: View {
                         Text("Best fit: \(best.architecture) wall · \(best.furniture) furniture · \(best.reference) saved matches")
                         Text("\(best.directions) supported surface directions · Camera constraint: \(report.visualUsed ? "verified" : "unavailable")")
                     }
-                    Toggle("Show provisional scan fit", isOn: $model.showScan)
-                    Text("Green: walls · Orange: furniture · Blue: saved scan · Gray: rejected or unmatched")
-                    if report.tracking.selected < 0 { Text("This overlay is a hypothesis. Go2's position is not confirmed.").foregroundStyle(.orange) }
+                    Toggle("Show scan fit", isOn: $model.showScan)
+                        .disabled(!model.canShowScanFit)
+                    if model.canShowScanFit {
+                        Text("Green: walls · Orange: furniture · Blue: saved scan · Gray: rejected or unmatched")
+                    } else {
+                        Text("Scan points stay hidden until a position is suggested or confirmed.")
+                    }
                 }
                 Text(model.visualStatus)
                 Text("Saved robot map: \(model.referenceCount) surfaces")
@@ -244,7 +248,7 @@ struct RobotRotationOffer {
 }
 
 enum RobotRotationState: Equatable {
-    case idle, waitingForMeasurements
+    case idle, waitingForMeasurements, waitingForClearView
     case checking(Int), turning(Int), matching(Int), advancing(Int), settling(Int)
     case stopped(String)
 
@@ -252,6 +256,7 @@ enum RobotRotationState: Equatable {
         switch self {
         case .idle: nil
         case .waitingForMeasurements: "Waiting for sensors"
+        case .waitingForClearView: "Waiting for a clear view"
         case .checking: "Checking space to turn"
         case .turning: "Looking around"
         case .matching: "Finding Go2 in the room"
@@ -265,6 +270,7 @@ enum RobotRotationState: Equatable {
         switch self {
         case .idle: nil
         case .waitingForMeasurements: "Go2 will stay still until fresh LiDAR and odometry arrive, then continue automatically."
+        case .waitingForClearView: "Checking fresh LiDAR and floor coverage. Discovery resumes when safe."
         case .checking(let turn): "Checking clearance for turn \(turn) of 12."
         case .turning(let turn): "Turn \(turn) of 12. Keep Go2 in sight and its turning area clear."
         case .matching(let turn): "Comparing the view after turn \(turn) of 12 with your room."
