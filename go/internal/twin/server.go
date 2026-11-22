@@ -183,7 +183,11 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 				previous.searchCancel()
 			}
 			previous.searchMu.Unlock()
+			// Drain any mapping sample captured by the old operator before a new
+			// session can reset that robot's persisted localization history.
+			previous.pendingMu.Lock()
 			previous.robot.Close()
+			previous.pendingMu.Unlock()
 		}
 
 		var robot *twinrobot.SiteRobot
@@ -348,22 +352,30 @@ func (s *Server) RunMapping() {
 			}
 			s.mu.Unlock()
 			for _, v := range sessions {
-				frame, seq, vertices := v.robot.MappingSample()
-				if len(vertices) == 0 {
-					continue
-				}
-				for _, room := range rooms {
-					// Apple frame keys include both site ID and model revision.
-					if !strings.EqualFold(frame, room.Site.ID+"/"+room.Site.ModelRevision) {
-						continue
-					}
-					points := make([]Point, len(vertices))
-					for i, p := range vertices {
-						points[i] = Point{p.X, p.Y, p.Z}
-					}
-					_ = s.Store.Contribute(room.Site.ID, Contribution{Source: "go2:" + v.serial, Sequence: seq, ModelRevision: room.Site.ModelRevision, Points: points})
-				}
+				s.contributeMapping(v, rooms)
 			}
 		}
+	}
+}
+
+func (s *Server) contributeMapping(session *robotSession, rooms []Room) {
+	// Reset holds this same lock across STOP, alignment invalidation and room
+	// cleanup. A sample captured using the old alignment must finish before that
+	// cleanup, never reappear afterward as a newly accepted contribution.
+	session.pendingMu.Lock()
+	defer session.pendingMu.Unlock()
+	frame, seq, vertices := session.robot.MappingSample()
+	if len(vertices) == 0 {
+		return
+	}
+	for _, room := range rooms {
+		if !strings.EqualFold(frame, room.Site.ID+"/"+room.Site.ModelRevision) {
+			continue
+		}
+		points := make([]Point, len(vertices))
+		for i, p := range vertices {
+			points[i] = Point{p.X, p.Y, p.Z}
+		}
+		_ = s.Store.Contribute(room.Site.ID, Contribution{Source: "go2:" + session.serial, Sequence: seq, ModelRevision: room.Site.ModelRevision, Points: points})
 	}
 }

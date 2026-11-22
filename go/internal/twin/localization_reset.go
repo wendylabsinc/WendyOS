@@ -59,10 +59,21 @@ func (s *Store) resetLocalization(frame, serial string, reset func() error) erro
 	if err := reset(); err != nil {
 		return err
 	}
-	if _, exists := r.References[serial]; !exists {
+	_, changed := r.References[serial]
+	delete(r.References, serial)
+	// Legacy rooms retain only a merged point cloud, without per-point source
+	// attribution. It is safe to remove the wrong pose's history only when this
+	// robot is its sole contributor; mixed-source history must remain intact.
+	source := "go2:" + serial
+	if _, exists := r.Sources[source]; exists && len(r.Sources) == 1 {
+		r.Points = nil
+		r.FloorTiles = nil
+		delete(r.Sources, source)
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
-	delete(r.References, serial)
 	r.Revision++
 	return s.write(r)
 }

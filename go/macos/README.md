@@ -1375,8 +1375,10 @@ Stop or an explicit new search cancels passive recovery.
 
 **Restart discovery** is also available after choosing a position. It stops Go2,
 discards the current alignment and that robot's saved localization references
-for the room, then starts a new search. Other robots' references and the room
-model are retained. A failed Stop prevents the reset and new search.
+for the room, then starts a new search. If that robot is the only contributor,
+its saved point cloud and derived floor tiles are also removed. Mixed-source
+historical geometry is retained because legacy points have no source attribution.
+Other robots' references and the room model are retained. A failed Stop prevents the reset and new search.
 The twin robot endpoint accepts the additive `reset-localization` operation
 with `Frame` and `Sequence`; obsolete requests cannot reset a newer search.
 
