@@ -22,6 +22,7 @@
 		0A7047CC4FA2C5F58264C38D /* DeviceOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB4ECB73A974D1CD7FE6DE57 /* DeviceOverview.swift */; };
 		0ADED3D12131FEB083901F77 /* InstallHardwareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF0F54AFF335D44D9766EEF /* InstallHardwareView.swift */; };
 		0B38C2B58CFE6F0240546689 /* MobileSiteRealityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81E3C4300F1E2222E4ECCA7F /* MobileSiteRealityView.swift */; };
+		0C26213570590504DB81CE13 /* SiteRobotHazards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D36152E204290965912BE5 /* SiteRobotHazards.swift */; };
 		0C9DE9CE4C60F228AE998EAE /* CampaignEventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */; };
 		0E941602585C6FD0784BBC99 /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
 		0EAC09E60BB332D21E0B19E0 /* SiteCameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B8A9451F3CCE3202F92697 /* SiteCameraPicker.swift */; };
@@ -208,6 +209,7 @@
 		9BD1857BEA9C23C5DD3B5D17 /* MobileDeviceApps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414F5BCA328D3D1A4C0A5537 /* MobileDeviceApps.swift */; };
 		9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */; };
 		A0816368E809449ABE7348D1 /* VisualRecognition.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D63AE3C5E01CE28F9A89C0EE /* VisualRecognition.cpp */; };
+		A0F2E9783DA73B448260B202 /* SiteRobotHazards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D36152E204290965912BE5 /* SiteRobotHazards.swift */; };
 		A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */; };
 		A13C1FEA6CDC52F709271853 /* CloudManagementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D780434FF5B2190F955252 /* CloudManagementClient.swift */; };
 		A145DCEDD3D2194650AFCD76 /* SiteScanCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = C38BD757A6ABC31AF0C8562C /* SiteScanCoordinates.swift */; };
@@ -280,6 +282,7 @@
 		CBD2403F787423BA3A541EAE /* SiteFogOfWar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */; };
 		CE67DE62A6448DF4CFB0416C /* WendyMobileNetwork.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 56198895936025F0A68D94CF /* WendyMobileNetwork.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CEE58765B62B95A1902EE62E /* LiteDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9769FE92218D369CAE4C7B1 /* LiteDeviceView.swift */; };
+		CF7B25CD87AA4249EC3FCABC /* SiteRobotHazardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */; };
 		D0E481DF826074F1875DAFDD /* SiteCameraColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFC744729F358EB031585D5 /* SiteCameraColor.swift */; };
 		D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */; };
 		D2D83E7D232E0FD0DC79BDD6 /* SiteRobotGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */; };
@@ -466,6 +469,7 @@
 		40A7543FFAE45034DB228D85 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformServices.swift; sourceTree = "<group>"; };
 		414F5BCA328D3D1A4C0A5537 /* MobileDeviceApps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDeviceApps.swift; sourceTree = "<group>"; };
 		4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDeviceCardView.swift; sourceTree = "<group>"; };
+		42D36152E204290965912BE5 /* SiteRobotHazards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotHazards.swift; sourceTree = "<group>"; };
 		453C94DF8A0078EC17B2D427 /* SiteVisualMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteVisualMap.swift; sourceTree = "<group>"; };
 		4749AF6EB1435827581A9E20 /* SetupConnectivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupConnectivityTests.swift; sourceTree = "<group>"; };
 		47D54A45314391201FF3B935 /* MobileCameraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCameraTests.swift; sourceTree = "<group>"; };
@@ -505,6 +509,7 @@
 		6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotGeometry.swift; sourceTree = "<group>"; };
 		6F4F738C2194C259334DFA81 /* MobileHomeWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileHomeWidgets.swift; sourceTree = "<group>"; };
 		6F559A36FB62C81768A4EC94 /* VPNController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNController.swift; sourceTree = "<group>"; };
+		6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotHazardTests.swift; sourceTree = "<group>"; };
 		6FA84112CE73CAEC643E214E /* SitePeopleTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePeopleTracking.swift; sourceTree = "<group>"; };
 		70C401F859DE05580E5140F4 /* WendyMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WendyMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		71147C6CE8E18CA4930B9052 /* DeviceManagementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceManagementTests.swift; sourceTree = "<group>"; };
@@ -844,6 +849,7 @@
 				86688E5547A234D7615F2455 /* SiteFogTests.swift */,
 				5958890C690A885A313B8C83 /* SitePeopleTrackingTests.swift */,
 				99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */,
+				6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */,
 				4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */,
 				C8C3E32837C8B119C15C3627 /* SiteTwinTests.swift */,
 				73F8A73277DE33706D2B45EA /* ThermalCameraTests.swift */,
@@ -930,6 +936,7 @@
 				F2B8E82B3B1B4139C89D7CAF /* SitePhotoReconstruction.swift */,
 				02EB82B6FACB20593A314081 /* SiteRobotClient.swift */,
 				6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */,
+				42D36152E204290965912BE5 /* SiteRobotHazards.swift */,
 				557F8A0DEA867210FC8AADCE /* SiteRobotLocalization.swift */,
 				325187846ED881AA053327DA /* SiteRobotPanel.swift */,
 				A0FD78A95A6F8642DAC85357 /* SiteRoomCapture.swift */,
@@ -1077,6 +1084,7 @@
 				209D21119114C7AA7E05231F /* Resources */,
 				6D7121C93D71657CC7F87022 /* Frameworks */,
 				909500749C5D68A886F0DA6E /* Embed System Extensions */,
+				AB47633B92BDCC06CA96E26C /* Bundle Linux Digital Twin */,
 				DB3261F0211CC6D0CC288FB1 /* Embed CLI worker */,
 			);
 			buildRules = (
@@ -1103,6 +1111,7 @@
 				EBBB8D69F4EFBAB44E8201CB /* Resources */,
 				0336A322467CA6A7F3A5A69E /* Frameworks */,
 				368C6EA5B37C33FBC0D9C7B6 /* Embed Foundation Extensions */,
+				E51B3D360151867262632E83 /* Bundle Linux Digital Twin */,
 			);
 			buildRules = (
 			);
@@ -1437,6 +1446,25 @@
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nAPP_ROOT=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\nREPO_ROOT=\"$(cd \"$APP_ROOT/../..\" && pwd)\"\nmkdir -p \"$APP_ROOT/Build\"\n# Xcode can invoke both targets concurrently. Serialize archive replacement.\nexec /usr/bin/perl -MFcntl=:flock -e 'open(my $lock, \">>\", $ARGV[0]) or die $!; flock($lock, LOCK_EX) or die $!; shift @ARGV; system(@ARGV); exit($? >> 8)' \"$APP_ROOT/Build/.lock\" /bin/bash \"$APP_ROOT/Scripts/build-go-locked.sh\" \"$APP_ROOT\" \"$REPO_ROOT\"\n";
 		};
+		AB47633B92BDCC06CA96E26C /* Bundle Linux Digital Twin */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Linux Digital Twin";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/bundle-twin.py\"";
+		};
 		B90D43C111DAB8334E2A4D12 /* Build visual recognition */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1474,6 +1502,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nmkdir -p \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"\nFRAMEWORKS=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$FRAMEWORKS\"\n# Sign new inodes before replacing the installed files. Overwriting a running\n# executable/library in place can invalidate macOS's cached code signature.\nCLI=\"$(mktemp \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/.wendy.XXXXXX\")\"\nUSB=\"$(mktemp \"$FRAMEWORKS/.libusb.XXXXXX\")\"\ntrap 'rm -f \"$CLI\" \"$USB\"' EXIT\ninstall -m 755 \"$SRCROOT/Build/wendy\" \"$CLI\"\ninstall -m 755 \"$SRCROOT/Build/libusb-1.0.dylib\" \"$USB\"\nUSB_DEPENDENCY=\"$(otool -L \"$CLI\" | awk '/libusb.*dylib/{print $1; exit}')\"\nif [[ -n \"$USB_DEPENDENCY\" ]]; then\n  install_name_tool -change \"$USB_DEPENDENCY\" '@executable_path/../Frameworks/libusb-1.0.dylib' \"$CLI\"\nfi\nif [[ \"${CODE_SIGNING_ALLOWED:-NO}\" == YES && -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]]; then\n  codesign --force --options runtime --timestamp=none --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$USB\"\n  codesign --force --options runtime --timestamp=none --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$CLI\"\nelse\n  codesign --force --sign - \"$USB\"\n  codesign --force --sign - \"$CLI\"\nfi\nmv -f \"$USB\" \"$FRAMEWORKS/libusb-1.0.dylib\"\nmv -f \"$CLI\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/wendy\"\n";
+		};
+		E51B3D360151867262632E83 /* Bundle Linux Digital Twin */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Linux Digital Twin";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/bundle-twin.py\"";
 		};
 		F5F4DB3247A8B8885274DDD4 /* Build mobile VPN backend */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1522,6 +1569,7 @@
 				02D7725C91B17BB9DA8CC191 /* SiteFogTests.swift in Sources */,
 				DA56924A4C743A950A9768A5 /* SitePeopleTrackingTests.swift in Sources */,
 				A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */,
+				CF7B25CD87AA4249EC3FCABC /* SiteRobotHazardTests.swift in Sources */,
 				8829846641717B1154A66533 /* SiteRobotLocalizationTests.swift in Sources */,
 				418E98B787B336FCB956DFD5 /* SiteTwinTests.swift in Sources */,
 				94CB09115FCB6B4AFCB6F0C5 /* ThermalCameraTests.swift in Sources */,
@@ -1654,6 +1702,7 @@
 				C2BE74D5495048FCF105EDA3 /* SiteReferenceCapture.swift in Sources */,
 				D6032CBE6D896CD6A5BB9C99 /* SiteRobotClient.swift in Sources */,
 				C0AE509A4FD404191F002C8A /* SiteRobotGeometry.swift in Sources */,
+				0C26213570590504DB81CE13 /* SiteRobotHazards.swift in Sources */,
 				3DDFC907A8890ADC5C590545 /* SiteRobotLocalization.swift in Sources */,
 				79ACB5A28575C17B0CF8FCE6 /* SiteRobotPanel.swift in Sources */,
 				F8AD9AED45472BA4CC8AD062 /* SiteRoomCapture.swift in Sources */,
@@ -1811,6 +1860,7 @@
 				0241B66CD1765EBCC8719BE3 /* SitePhotoReconstruction.swift in Sources */,
 				F7A2875A123CFD53A077310A /* SiteRobotClient.swift in Sources */,
 				D2D83E7D232E0FD0DC79BDD6 /* SiteRobotGeometry.swift in Sources */,
+				A0F2E9783DA73B448260B202 /* SiteRobotHazards.swift in Sources */,
 				283EDB831778E1FAE64ED3FF /* SiteRobotLocalization.swift in Sources */,
 				4E16DD99AA51C9D3FA3CA9B3 /* SiteRobotPanel.swift in Sources */,
 				1E44FCF701782E2337236E5C /* SiteRoomCapture.swift in Sources */,

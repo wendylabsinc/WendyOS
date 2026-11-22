@@ -23,3 +23,12 @@ func WDOpenAppFree(p *C.WDOpenAppResult) {
 	free(p.status.message)
 	free(p)
 }
+
+//export WDOpenTwin
+func WDOpenTwin(session C.uint64_t, directory *C.char) *C.WDOpenAppResult {
+	url, err := desktop.OpenTwin(uint64(session), C.GoString(directory))
+	p := alloc[C.WDOpenAppResult](1)
+	p.status = status(err)
+	p.url = C.CString(url)
+	return p
+}

@@ -27,3 +27,7 @@ Offline installation models render with Three.js 0.172.0 (MIT,
 three-LICENSE.txt) and Google's Draco decoder (Apache 2.0,
 draco-LICENSE.txt). The model provenance and hardware references are in
 Install3D/README.md in the app resources.
+
+The Go2 front-camera preset uses the camera matrix and distortion coefficients
+from RoboVerse's go2_ros2_sdk, under BSD-2-Clause. See go2-camera-LICENSE.txt.
+Source: https://github.com/abizovnuralem/go2_ros2_sdk/blob/b440609591a249e7bdd4bbc88e056a3660575447/go2_robot_sdk/calibration/front_camera_720.yaml

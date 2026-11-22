@@ -3196,9 +3196,28 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("exec in container %q: %w", appName, err)
 	}
-	defer func() { _, _ = proc.Delete(ctx, containerd.WithProcessKill) }()
+	return runExecProcess(ctx, proc, tty, resize, 5*time.Second)
+}
 
-	statusC, err := proc.Wait(ctx)
+// runExecProcess owns the exec from creation through deletion. The stream's
+// cancellation ends the command, but must not cancel the RPCs that kill and
+// remove it. WithoutCancel preserves the containerd namespace and tracing values.
+func runExecProcess(ctx context.Context, proc containerd.Process, tty bool, resize <-chan [2]uint32, cleanupTimeout time.Duration) (int, error) {
+	baseCtx := context.WithoutCancel(ctx)
+	waitCtx, cancelWait := context.WithCancel(baseCtx)
+	defer cancelWait()
+	defer func() {
+		if pio := proc.IO(); pio != nil {
+			pio.Cancel()
+		}
+		cleanupCtx, cancel := context.WithTimeout(baseCtx, cleanupTimeout)
+		defer cancel()
+		_, _ = proc.Delete(cleanupCtx, containerd.WithProcessKill)
+	}()
+
+	// A Wait bound to ctx can report cancellation while the process is still
+	// running. Keep observing real exit until cleanup finishes instead.
+	statusC, err := proc.Wait(waitCtx)
 	if err != nil {
 		return -1, fmt.Errorf("waiting on exec: %w", err)
 	}
@@ -3207,27 +3226,50 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	}
 
 	if tty && resize != nil {
-		// proc.Resize takes (width=cols, height=rows). The initial size was sent
-		// by the handler as the first resize frame.
 		go func() {
-			for sz := range resize {
-				_ = proc.Resize(ctx, sz[1], sz[0])
+			for {
+				select {
+				case <-waitCtx.Done():
+					return
+				case sz, ok := <-resize:
+					if !ok {
+						return
+					}
+					// Resize takes width (columns), then height (rows).
+					_ = proc.Resize(ctx, sz[1], sz[0])
+				}
 			}
 		}()
 	}
 
 	select {
-	case st := <-statusC:
-		// Block until containerd's stdout/stderr copy goroutines have drained so
-		// the caller can send its final frame (e.g. an exit code) only after the
-		// last output byte, not racing in-flight output.
-		if pio := proc.IO(); pio != nil {
-			pio.Wait()
+	case st, ok := <-statusC:
+		if !ok {
+			return -1, fmt.Errorf("exec exit status stream closed without a status")
 		}
-		return int(st.ExitCode()), st.Error()
+		if err := st.Error(); err != nil {
+			return -1, err
+		}
+		// Preserve all output before returning an exit code. If the client
+		// disconnects during the drain, cleanup cancels the FIFO readers.
+		if pio := proc.IO(); pio != nil {
+			drained := make(chan struct{})
+			go func() { pio.Wait(); close(drained) }()
+			select {
+			case <-drained:
+			case <-ctx.Done():
+				return -1, ctx.Err()
+			}
+		}
+		return int(st.ExitCode()), nil
 	case <-ctx.Done():
-		_ = proc.Kill(ctx, syscall.SIGKILL)
-		<-statusC
+		cleanupCtx, cancel := context.WithTimeout(baseCtx, cleanupTimeout)
+		defer cancel()
+		_ = proc.Kill(cleanupCtx, syscall.SIGKILL)
+		select {
+		case <-statusC:
+		case <-cleanupCtx.Done():
+		}
 		return -1, ctx.Err()
 	}
 }
