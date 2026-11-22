@@ -21,6 +21,7 @@ SUITES = (
     "swift_e2e_gate_test.py",
     "ci_execution_test.py",
     "macos_ci_setup_test.py",
+    "mac_release_launch_test.py",
     "native_app_test.py",
     "twin_bundle_test.py",
     "prerelease_gates_test.py",
