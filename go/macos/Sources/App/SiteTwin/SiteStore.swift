@@ -17,10 +17,13 @@ public actor SiteStore {
     public static let maximumModelBytes = 128 * 1024 * 1024
     private let directory: URL
     private let endpoint: URL?
+    private let fetch: @Sendable (URLRequest) async throws -> (Data, URLResponse)
     private var remoteRooms: [UUID: RemoteRoom] = [:]
     private var rendered: [UUID: StoredSite] = [:]
 
     private struct RemoteRoom: Codable {
+        var hasModel: Bool? = nil
+        var hasVisualMap: Bool? = nil
         var site: Site
         var revision: UInt64
         var model: Data?
@@ -32,10 +35,17 @@ public actor SiteStore {
         var references: [String: [RobotObservedSurface]]?
     }
 
-    public static func remoteStore(session: UInt64) async throws -> SiteStore {
+    public static func remoteStore(session: UInt64, gatewayID: String) async throws -> SiteStore {
+        guard !gatewayID.isEmpty else { throw SiteError.invalidSite }
         let endpoint = try await GoClient.shared.openApp("dev.wendy.digital-twin", session: session)
-        let cache = FileManager.default.temporaryDirectory.appendingPathComponent("WendyTwin-" + UUID().uuidString)
+        let base = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let cache = Self.remoteCacheDirectory(base: base, gatewayID: gatewayID)
         return SiteStore(directory: cache, endpoint: endpoint)
+    }
+
+    static func remoteCacheDirectory(base: URL, gatewayID: String) -> URL {
+        base.appendingPathComponent("WendyTwin", isDirectory: true)
+            .appendingPathComponent(SiteVisualMap.digest(Data(gatewayID.utf8)), isDirectory: true)
     }
 
     // iOS keeps captures locally. Publish a missing room with its original ID
@@ -61,7 +71,10 @@ public actor SiteStore {
         _ = try await request("v1/rooms/" + capture.id.uuidString.lowercased(), method: "PUT", body: JSONEncoder().encode(room))
     }
 
-    private init(directory: URL, endpoint: URL) { self.directory = directory; self.endpoint = endpoint }
+    init(directory: URL, endpoint: URL,
+         fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }) {
+        self.directory = directory; self.endpoint = endpoint; self.fetch = fetch
+    }
 
     private func request(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         guard let endpoint else { throw SiteError.missingSite }
@@ -70,7 +83,7 @@ public actor SiteStore {
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await fetch(request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw WendyError(message: "The Linux digital twin rejected the request. Refresh the room before retrying. " + String(decoding: data.prefix(1024), as: UTF8.self))
         }
@@ -91,22 +104,75 @@ public actor SiteStore {
 
     private func remoteLoad(_ id: UUID) async throws -> StoredSite {
         let previous = remoteRooms[id]
-        let suffix = previous == nil ? "" : "/state"
-        var room = try JSONDecoder().decode(RemoteRoom.self, from: await request("v1/rooms/" + id.uuidString.lowercased() + suffix))
-        if let previous, previous.site.modelRevision == room.site.modelRevision {
+        let path = "v1/rooms/" + id.uuidString.lowercased()
+        var room = try JSONDecoder().decode(RemoteRoom.self, from: await request(path + "/state"))
+        guard room.site.id == id else { throw SiteError.invalidSite }
+        if let previous, previous.site.modelRevision == room.site.modelRevision,
+           previous.hasModel == room.hasModel, previous.hasVisualMap == room.hasVisualMap {
             room.model = previous.model; room.visualMap = previous.visualMap
+        } else if let assets = try? readCachedAssets(room) {
+            room.model = assets.model; room.visualMap = assets.visualMap
+        } else {
+            room = try JSONDecoder().decode(RemoteRoom.self, from: await request(path))
+            guard room.site.id == id else { throw SiteError.invalidSite }
         }
         return try cache(room)
     }
 
+    private struct CachedAssets: Codable {
+        var modelRevision: UUID
+        var modelDigest: String?
+        var visualMapDigest: String?
+    }
+
+    private func assetFolder(_ site: Site) -> URL {
+        directory.appendingPathComponent(site.id.uuidString).appendingPathComponent(site.modelRevision.uuidString)
+    }
+
+    private func readCachedAssets(_ room: RemoteRoom) throws -> (model: Data?, visualMap: SiteVisualMap?) {
+        guard let hasModel = room.hasModel, let hasMap = room.hasVisualMap else { throw SiteError.invalidSite }
+        if !hasModel && !hasMap { return (nil, nil) }
+        let folder = assetFolder(room.site)
+        let metadata = try readCacheFile(folder.appendingPathComponent("assets.json"), maximumBytes: 4096)
+        let manifest = try JSONDecoder().decode(CachedAssets.self, from: metadata)
+        guard manifest.modelRevision == room.site.modelRevision,
+              hasModel == (manifest.modelDigest != nil), hasMap == (manifest.visualMapDigest != nil) else { throw SiteError.invalidSite }
+        var model: Data?
+        if hasModel {
+            let url = folder.appendingPathComponent("model.usdz")
+            let data = try readCacheFile(url, maximumBytes: Self.maximumModelBytes)
+            guard SiteVisualMap.digest(data) == manifest.modelDigest else { throw SiteError.invalidModel }
+            try Self.validateModel(url)
+            model = data
+        }
+        var map: SiteVisualMap?
+        if hasMap {
+            let data = try readCacheFile(folder.appendingPathComponent("visual-map.json"), maximumBytes: SiteVisualMap.maximumBytes)
+            guard SiteVisualMap.digest(data) == manifest.visualMapDigest, let model else { throw SiteError.invalidSite }
+            let value = try JSONDecoder().decode(SiteVisualMap.self, from: data)
+            try value.validate(modelRevision: room.site.modelRevision, model: model)
+            map = value
+        }
+        return (model, map)
+    }
+
+    private func readCacheFile(_ url: URL, maximumBytes: Int) throws -> Data {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, size <= maximumBytes else { throw SiteError.invalidSite }
+        return try Data(contentsOf: url)
+    }
+
     private func cache(_ room: RemoteRoom) throws -> StoredSite {
         try room.site.validate()
-        let folder = directory.appendingPathComponent(room.site.id.uuidString).appendingPathComponent(room.site.modelRevision.uuidString)
+        guard room.hasModel != true || room.model != nil,
+              room.hasVisualMap != true || room.visualMap != nil else { throw SiteError.invalidSite }
+        let folder = assetFolder(room.site)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let model: URL
         if let bytes = room.model {
             model = folder.appendingPathComponent("model.usdz")
-            if !FileManager.default.fileExists(atPath: model.path) { try bytes.write(to: model, options: .atomic) }
+            if (try? Data(contentsOf: model)) != bytes { try bytes.write(to: model, options: .atomic) }
             try Self.validateModel(model)
         } else {
             model = folder.appendingPathComponent("model.scn")
@@ -115,10 +181,19 @@ public actor SiteStore {
         // A render cache only. Linux owns merging and retaining observations.
         try JSONEncoder().encode(room.points ?? []).write(to: folder.appendingPathComponent("points.json"), options: .atomic)
         var map: URL?
+        var mapDigest: String?
         if let visualMap = room.visualMap {
-            map = folder.appendingPathComponent("visual-map.json")
-            try JSONEncoder().encode(visualMap).write(to: map!, options: .atomic)
+            guard let bytes = room.model else { throw SiteError.invalidSite }
+            try visualMap.validate(modelRevision: room.site.modelRevision, model: bytes)
+            let mapURL = folder.appendingPathComponent("visual-map.json")
+            map = mapURL
+            let data = try JSONEncoder().encode(visualMap)
+            mapDigest = SiteVisualMap.digest(data)
+            if (try? Data(contentsOf: mapURL)) != data { try data.write(to: mapURL, options: .atomic) }
         }
+        let manifest = CachedAssets(modelRevision: room.site.modelRevision,
+                                    modelDigest: room.model.map(SiteVisualMap.digest), visualMapDigest: mapDigest)
+        try JSONEncoder().encode(manifest).write(to: folder.appendingPathComponent("assets.json"), options: .atomic)
         remoteRooms[room.site.id] = room
         let stored = StoredSite(site: room.site, modelURL: model, visualMapURL: map, points: room.points ?? [], floorTiles: room.floorTiles ?? [], revision: room.revision)
         rendered[room.site.id] = stored
@@ -211,7 +286,10 @@ public actor SiteStore {
     }
 
 
-    public init(directory: URL) { self.directory = directory; self.endpoint = nil }
+    public init(directory: URL) {
+        self.directory = directory; self.endpoint = nil
+        self.fetch = { try await URLSession.shared.data(for: $0) }
+    }
 
     public static func applicationStore() throws -> SiteStore {
         let base = try FileManager.default.url(

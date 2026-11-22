@@ -101,6 +101,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var pendingAlignment: (StoredSite, SiteCamera)?
     @State private var reconstructing = false
     @State private var loading = true
+    @State private var loadID = UUID()
     @State private var busy = false
     @State private var error: String?
     @State private var loadError = false
@@ -156,7 +157,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     public var body: some View {
         VStack(spacing: 0) {
             if loading {
-                ProgressView("Preparing Digital Twin on the device…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("Loading Digital Twin…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loadError {
                 ContentUnavailableView {
                     Label("Couldn’t Open Sites", systemImage: "exclamationmark.triangle")
@@ -371,17 +372,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 )
             }
         }
-        .task(id: robotSession) {
-            await load()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { break }
-                if !busy, let store {
-                    do { sites = try await store.list() }
-                    catch { report(error, message: "The Linux digital twin is unavailable.") }
-                }
-            }
-        }
+        .task(id: "\(robotSession)/\(gatewayID)") { await loadAndPoll() }
         .task { await actions.run() }
         .sheet(isPresented: $reconstructing) {
             SitePhotoReconstruction { result in
@@ -968,18 +959,47 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         } catch { report(error, message: "The capture could not be restored. Try again.") }
     }
 
+    private func loadAndPoll() async {
+        guard !gatewayID.isEmpty else { return }
+        await load()
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { break }
+            if !busy, !loading, let store {
+                let attempt = loadID
+                do {
+                    let refreshed = try await store.list()
+                    guard !Task.isCancelled else { return }
+                    guard loadID == attempt else { continue }
+                    sites = refreshed
+                } catch {
+                    if loadID == attempt { report(error, message: "The Linux digital twin is unavailable.") }
+                }
+            }
+        }
+    }
+
     private func load() async {
+        let attempt = UUID()
+        loadID = attempt
         loading = true
         loadError = false
-        defer { loading = false }
+        store = nil
+        sites = []; removedSites = []
+        defer { if loadID == attempt { loading = false } }
         do {
-            let opened = try await SiteStore.remoteStore(session: robotSession)
+            let opened = try await SiteStore.remoteStore(session: robotSession, gatewayID: gatewayID)
             try await opened.migrateLocalCaptures()
-            sites = try await opened.list()
-            removedSites = try await opened.removed()
+            let loadedSites = try await opened.list()
+            let loadedRemoved = try await opened.removed()
+            try Task.checkCancellation()
+            guard loadID == attempt else { return }
+            sites = loadedSites
+            removedSites = loadedRemoved
             store = opened
-            if selectedSite == nil { selectedSite = sites.first?.id }
+            if !sites.contains(where: { $0.id == selectedSite }) { selectedSite = sites.first?.id }
         } catch {
+            guard loadID == attempt, !Task.isCancelled, !isCancelledSiteOperation(error) else { return }
             loadError = true
             report(
                 error,
@@ -1095,7 +1115,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         }
     }
     private func report(_ cause: any Error, message: String, loading: Bool = false) {
-        if cause is CancellationError { return }
+        guard !Task.isCancelled, !isCancelledSiteOperation(cause) else { return }
         underlyingError = cause
         error = message
         if let onFailure {
@@ -1107,6 +1127,14 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         }
     }
 
+}
+
+// Leaving the workspace can cancel either Swift work, a URLSession request,
+// or the Go bridge. None is a failure to present over the newly selected tab.
+func isCancelledSiteOperation(_ error: any Error) -> Bool {
+    error is CancellationError
+        || (error as? URLError)?.code == .cancelled
+        || (error as? WendyError)?.code == .cancelled
 }
 
 private struct SiteFileDocument: FileDocument {
