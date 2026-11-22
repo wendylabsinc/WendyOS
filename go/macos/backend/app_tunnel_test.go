@@ -1,0 +1,101 @@
+package backend
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"math/big"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+)
+
+func appTunnelTestConnection(t *testing.T, expiry time.Time) *grpcclient.AgentConnection {
+	t.Helper()
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-24 * time.Hour), NotAfter: expiry}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, pub, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &grpcclient.AgentConnection{CertInfo: &config.CertificateInfo{PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}}
+}
+
+func TestAppTunnelRenewsOnceForConcurrentThermalRequests(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	old := appTunnelTestConnection(t, time.Now().Add(-time.Hour))
+	var stale, refresh, fresh atomic.Int32
+	old.RegistryDialer = func(context.Context, int) (net.Conn, error) { stale.Add(1); return nil, nil }
+	next := appTunnelTestConnection(t, time.Now().Add(time.Hour))
+	next.RegistryDialer = func(context.Context, int) (net.Conn, error) { fresh.Add(1); return nil, nil }
+	dial := renewingAppTunnel(ctx, "cloud://same-device", old, func(c context.Context, s string) (*grpcclient.AgentConnection, error) {
+		if c != ctx || s != "cloud://same-device" {
+			t.Error("lost original scope or device")
+		}
+		refresh.Add(1)
+		return next, nil
+	})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := dial(ctx, 18842); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if stale.Load() != 0 || refresh.Load() != 1 || fresh.Load() != 4 {
+		t.Fatalf("stale=%d refresh=%d fresh=%d", stale.Load(), refresh.Load(), fresh.Load())
+	}
+	cancel()
+	if _, err := dial(context.Background(), 18842); !errors.Is(err, context.Canceled) {
+		t.Fatalf("closed forward: %v", err)
+	}
+}
+
+func TestAppTunnelKeepsValidConnectionAndPropagatesSignInFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	valid := appTunnelTestConnection(t, time.Now().Add(time.Hour))
+	var calls atomic.Int32
+	valid.RegistryDialer = func(context.Context, int) (net.Conn, error) { calls.Add(1); return nil, nil }
+	refusal := errors.New("invalid_grant: sign in again")
+	var renewals atomic.Int32
+	reconnect := func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		renewals.Add(1)
+		return nil, refusal
+	}
+	dial := renewingAppTunnel(ctx, "cloud://same-device", valid, reconnect)
+	if _, err := dial(ctx, 18842); err != nil {
+		t.Fatal(err)
+	}
+	if renewals.Load() != 0 || calls.Load() != 1 {
+		t.Fatal("reconnected a valid tunnel")
+	}
+	expired := appTunnelTestConnection(t, time.Now().Add(-time.Minute))
+	expired.RegistryDialer = valid.RegistryDialer
+	dial = renewingAppTunnel(ctx, "cloud://same-device", expired, reconnect)
+	if _, err := dial(ctx, 18842); !errors.Is(err, refusal) {
+		t.Fatalf("hid sign-in failure: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("used stale tunnel after renewal refusal")
+	}
+	if !appTunnelCertificateDue(appTunnelTestConnection(t, time.Now().Add(30*time.Second)), time.Now()) {
+		t.Fatal("missed near expiry")
+	}
+}
