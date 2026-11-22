@@ -71,7 +71,9 @@ func (d *SetupDispatcher) Dispatch(ctx context.Context, cmd *agentpb.BluetoothCo
 		return errResp("Device is not available for setup")
 	}
 	switch c := cmd.Command.(type) {
-	case *agentpb.BluetoothCommand_WifiList, *agentpb.BluetoothCommand_WifiStatus, *agentpb.BluetoothCommand_WifiConnect:
+	case *agentpb.BluetoothCommand_WifiList:
+		return ssidsOnly(d.wifi.Dispatch(ctx, cmd))
+	case *agentpb.BluetoothCommand_WifiStatus, *agentpb.BluetoothCommand_WifiConnect:
 		return d.wifi.Dispatch(ctx, cmd)
 	case *agentpb.BluetoothCommand_SetupEnroll:
 		r := c.SetupEnroll
@@ -86,4 +88,14 @@ func (d *SetupDispatcher) Dispatch(ctx context.Context, cmd *agentpb.BluetoothCo
 	default:
 		return errResp("Command unavailable during setup")
 	}
+}
+
+// ssidsOnly reduces a Wi-Fi list to network names. Setup answers any nearby
+// peer, and any other field lets it tell a saved network from a scanned one.
+func ssidsOnly(resp *agentpb.BluetoothResponse) *agentpb.BluetoothResponse {
+	list := resp.GetWifiList()
+	for i, n := range list.GetNetworks() {
+		list.Networks[i] = &agentpb.WifiNetworkInfo{Ssid: n.GetSsid()}
+	}
+	return resp
 }
