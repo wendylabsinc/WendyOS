@@ -272,6 +272,18 @@ func TestMJPEGCameraPixelsAndEncoderOnDemand(t *testing.T) {
 // Nothing at 96 or above is touched: those are the agent's camera bands.
 func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logger) string {
 	t.Helper()
+	return createFixtureNode(t, ctx, logger, false)
+}
+
+// createShareFixtureNode is createPixelsFixtureNode with the production share
+// node shape: announce_all_caps=1, as Loopback.EnsureShareNode creates it.
+func createShareFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logger) string {
+	t.Helper()
+	return createFixtureNode(t, ctx, logger, true)
+}
+
+func createFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logger, share bool) string {
+	t.Helper()
 	nr := -1
 	for candidate := 90; candidate >= 64; candidate-- {
 		_, devErr := os.Lstat(fmt.Sprintf("/dev/video%d", candidate))
@@ -292,7 +304,11 @@ func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logg
 		return err == nil && strings.TrimSpace(string(name)) == label
 	}
 	loopback := ipcam.NewLoopback(ctx, logger, nil, nil, nil)
-	if err := loopback.EnsureAuxNode(ctx, nr, label); err != nil {
+	ensure := loopback.EnsureAuxNode
+	if share {
+		ensure = loopback.EnsureShareNode
+	}
+	if err := ensure(ctx, nr, label); err != nil {
 		t.Fatalf("creating %s: %v", path, err)
 	}
 	// EnsureAuxNode accepts a node someone else created meanwhile; the label
@@ -300,11 +316,13 @@ func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logg
 	if !ours() {
 		t.Fatalf("%s is not the node this test created (label %q)", path, label)
 	}
+	createdAt := time.Now()
 	t.Cleanup(func() {
 		if !ours() {
 			t.Errorf("%s changed label before removal; leaving it", path)
 			return
 		}
+		waitForUdevBeforeRemoval(t, nr, createdAt)
 		loopback.RemoveAuxNode(nr)
 		deadline := time.Now().Add(2 * time.Second)
 		for {
@@ -331,6 +349,35 @@ func createPixelsFixtureNode(t *testing.T, ctx context.Context, logger *zap.Logg
 	}
 	t.Logf("created %s (%s)", path, label)
 	return path
+}
+
+// waitForUdevBeforeRemoval holds a fixture node back from CTL_REMOVE until udev
+// has processed its add event and at least 500 ms have passed since creation.
+//
+// v4l2loopback 0.15.4's CTL_REMOVE checks only open_count under the control
+// mutex, while open() does not take that mutex, so an open racing the removal
+// can succeed on a device that is then freed. udev's v4l_id probe (opened
+// about 6-7 ms after CTL_ADD, held for tens of microseconds) and WirePlumber
+// both open new nodes in exactly that window; on a Jetson the freed node's
+// close was a NULL dereference that reset the board. Bounded at 5 s.
+func waitForUdevBeforeRemoval(t *testing.T, nr int, createdAt time.Time) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	if udevadm, err := exec.LookPath("udevadm"); err == nil {
+		_ = exec.Command(udevadm, "settle", "-t", "5").Run()
+	}
+	if devNum, err := os.ReadFile(fmt.Sprintf("/sys/class/video4linux/video%d/dev", nr)); err == nil {
+		data := "/run/udev/data/c" + strings.TrimSpace(string(devNum))
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(data); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if wait := 500*time.Millisecond - time.Since(createdAt); wait > 0 {
+		time.Sleep(wait)
+	}
 }
 
 // mjpegFeed writes the fixture's JPEG frames into the node.

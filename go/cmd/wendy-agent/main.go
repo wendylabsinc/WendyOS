@@ -536,6 +536,9 @@ func main() {
 		logger.Warn("loading camera DHCP configuration failed", zap.Error(err))
 	}
 	dataSvc.SetVideoService(videoSvc)
+	// The hardware listing skips camera share nodes and says how each camera
+	// is shared.
+	hwDiscoverer.SetCameraShareReporter(videoSvc)
 	// Arm pre-roll for campaigns deployed in a previous agent lifetime so their
 	// next trigger opens BEFORE the trigger instant, not only campaigns deployed
 	// during this run.
@@ -589,6 +592,10 @@ func main() {
 	// client miss (e.g. a container's task crash-exiting on its own).
 	if ctrdClient != nil {
 		ctrdClient.SetCameraLoopbackProvider(videoSvc)
+		// The camera share manager rides the same syncs: the first adopts the
+		// share nodes of apps that kept running through an agent restart, and
+		// drops those of containers deleted while the agent was down.
+		ctrdClient.SetCameraShareProvider(videoSvc)
 		ctrdClient.SyncCameraLoopbacks(ctx)
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
 	}

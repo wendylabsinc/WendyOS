@@ -19,9 +19,11 @@ const (
 	// uncompressed frames to give (MJPEG or native H.264 capture, a network
 	// camera, one shared through PipeWire). The message names the cause.
 	RawUnavailable = "RAW_UNAVAILABLE"
-	// CameraProducerRestarted: an episode capture with explicit campaign
-	// parameters restarted the camera producer, so this stream ended rather
-	// than being spliced onto a different sequence parameter set mid-timeline.
+	// CameraProducerRestarted: the agent restarted the camera producer (an
+	// episode capture with explicit campaign parameters took it over, or an app
+	// started sharing the camera at its shared mode), so this stream ended
+	// rather than being spliced onto a different sequence parameter set
+	// mid-timeline. The message names the cause.
 	// It is the one case where a live viewer's stream is ended by the agent,
 	// and it is recoverable: reconnecting joins the replacement stream.
 	CameraProducerRestarted = "CAMERA_PRODUCER_RESTARTED"
