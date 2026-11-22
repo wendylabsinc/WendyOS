@@ -62,7 +62,7 @@ func runDataStatus(ctx context.Context, client agentpbv2.DataServiceClient, out 
 // above them. --json is the Episodes response, with in_progress filled from
 // Status when the agent's Episodes response predates that field; the note that
 // says so goes to errOut there, so stdout stays one JSON document.
-func runDataEpisodes(ctx context.Context, client agentpbv2.DataServiceClient, out, errOut io.Writer, asJSON bool, now time.Time) error {
+func runDataEpisodes(ctx context.Context, client agentpbv2.DataServiceClient, out, errOut io.Writer, asJSON bool, device string, now time.Time) error {
 	response, err := client.Episodes(ctx, &agentpbv2.DataEpisodesRequest{})
 	if err != nil {
 		return err
@@ -74,7 +74,7 @@ func runDataEpisodes(ctx context.Context, client agentpbv2.DataServiceClient, ou
 		}
 		return encodeEpisodesJSON(out, response)
 	}
-	return writeDataEpisodes(out, response, now, note)
+	return writeDataEpisodes(out, response, now, note, device)
 }
 
 // encodeEpisodesJSON writes the Episodes response in the --json dialect, with
@@ -213,10 +213,14 @@ func inProgressTrigger(episode *agentpbv2.DataEpisode) string {
 // progress the table has its original four columns. With no episode of either
 // kind it prints a sentence, because a header with no rows under it reads like
 // a listing that failed.
-func writeDataEpisodes(out io.Writer, response *agentpbv2.DataEpisodesResponse, now time.Time, note string) error {
+func writeDataEpisodes(out io.Writer, response *agentpbv2.DataEpisodesResponse, now time.Time, note, device string) error {
 	open := response.GetInProgress()
 	if len(open) == 0 && len(response.GetEpisodes()) == 0 {
-		message := "No episodes on this device yet. Record one with 'wendy data record'."
+		hint := "Record one with 'wendy data record'."
+		if device != "" {
+			hint = "Record one with the command below.\n  wendy data record --device " + shellQuoteArg(device)
+		}
+		message := "No episodes on this device yet. " + hint
 		if note != "" {
 			message += "\n\n" + note
 		}

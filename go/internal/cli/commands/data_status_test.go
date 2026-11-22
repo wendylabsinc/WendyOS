@@ -80,7 +80,7 @@ func TestEpisodesListsRecordingsInProgressFirst(t *testing.T) {
 		InProgress: []*agentpbv2.DataEpisode{recordingEpisode(), campaignEpisode("draining")},
 	}}
 	var out, errOut bytes.Buffer
-	if err := runDataEpisodes(context.Background(), client, &out, &errOut, false, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), client, &out, &errOut, false, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	if client.statusCalls != 0 {
@@ -119,7 +119,7 @@ func TestEpisodesWithNothingInProgressKeepsFourColumns(t *testing.T) {
 		statusErr: status.Error(codes.Unavailable, "connection reset"),
 	}
 	var out bytes.Buffer
-	if err := runDataEpisodes(context.Background(), client, &out, &out, false, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), client, &out, &out, false, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	if client.statusCalls != 0 {
@@ -139,11 +139,22 @@ func TestEpisodesWithNoEpisodesSaysSo(t *testing.T) {
 	const sentence = "No episodes on this device yet. Record one with 'wendy data record'.\n"
 	for name, test := range map[string]struct {
 		client *statusDataClient
+		device string
 		want   string
 	}{
 		"current agent": {
 			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}},
 			want:   sentence,
+		},
+		"selected device": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}},
+			device: "robot.local",
+			want:   "No episodes on this device yet. Record one with the command below.\n  wendy data record --device robot.local\n",
+		},
+		"quote selected device": {
+			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}},
+			device: "vm:robot lab",
+			want:   "No episodes on this device yet. Record one with the command below.\n  wendy data record --device 'vm:robot lab'\n",
 		},
 		"older agent with nothing recording": {
 			client: &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{}, status: &agentpbv2.DataStatusResponse{}},
@@ -156,7 +167,7 @@ func TestEpisodesWithNoEpisodesSaysSo(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			if err := runDataEpisodes(context.Background(), test.client, &out, &errOut, false, statusTestNow); err != nil {
+			if err := runDataEpisodes(context.Background(), test.client, &out, &errOut, false, test.device, statusTestNow); err != nil {
 				t.Fatal(err)
 			}
 			if out.String() != test.want {
@@ -176,7 +187,7 @@ func TestEpisodesWithOnlyARecordingInProgressKeepsTheTable(t *testing.T) {
 		InProgress: []*agentpbv2.DataEpisode{recordingEpisode()}, ReportsInProgress: true,
 	}}
 	var out bytes.Buffer
-	if err := runDataEpisodes(context.Background(), client, &out, &out, false, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), client, &out, &out, false, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	rows := tableRows(t, out.String())
@@ -200,7 +211,7 @@ func TestEpisodesFromAnOlderAgent(t *testing.T) {
 		}},
 	}
 	var out bytes.Buffer
-	if err := runDataEpisodes(context.Background(), client, &out, &out, false, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), client, &out, &out, false, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	rows := tableRows(t, out.String())
@@ -223,7 +234,7 @@ func TestEpisodesWhenTheAgentHasNoStatus(t *testing.T) {
 		statusErr: status.Error(codes.Unimplemented, "unknown method Status"),
 	}
 	var out, errOut bytes.Buffer
-	if err := runDataEpisodes(context.Background(), client, &out, &errOut, false, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), client, &out, &errOut, false, "", statusTestNow); err != nil {
 		t.Fatalf("an agent without Status must still list its episodes: %v", err)
 	}
 	if !strings.Contains(out.String(), "earlier") || !strings.Contains(out.String(), noInProgressReportNote) {
@@ -301,7 +312,7 @@ func TestEpisodesJSONWritesEmptyListsAsArrays(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			if err := runDataEpisodes(context.Background(), test.client, &out, &errOut, true, statusTestNow); err != nil {
+			if err := runDataEpisodes(context.Background(), test.client, &out, &errOut, true, "", statusTestNow); err != nil {
 				t.Fatal(err)
 			}
 			if out.String() != test.want+"\n" {
@@ -327,7 +338,7 @@ func TestEpisodesJSONOnlyAddsAField(t *testing.T) {
 
 	idle := &statusDataClient{episodes: &agentpbv2.DataEpisodesResponse{Episodes: []*agentpbv2.DataEpisode{finalizedEpisode()}, ReportsInProgress: true}}
 	var out, errOut bytes.Buffer
-	if err := runDataEpisodes(context.Background(), idle, &out, &errOut, true, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), idle, &out, &errOut, true, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	var legacyFields, idleFields map[string]json.RawMessage
@@ -346,7 +357,7 @@ func TestEpisodesJSONOnlyAddsAField(t *testing.T) {
 		InProgress: []*agentpbv2.DataEpisode{recordingEpisode()},
 	}}
 	out.Reset()
-	if err := runDataEpisodes(context.Background(), busy, &out, &errOut, true, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), busy, &out, &errOut, true, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	var decoded struct {
@@ -384,7 +395,7 @@ func TestEpisodesJSONFromAnOlderAgentKeepsStdoutJSON(t *testing.T) {
 		status:   &agentpbv2.DataStatusResponse{Active: &agentpbv2.DataEpisode{Id: "ep", State: "recording"}},
 	}
 	var out, errOut bytes.Buffer
-	if err := runDataEpisodes(context.Background(), client, &out, &errOut, true, statusTestNow); err != nil {
+	if err := runDataEpisodes(context.Background(), client, &out, &errOut, true, "", statusTestNow); err != nil {
 		t.Fatal(err)
 	}
 	if !json.Valid(out.Bytes()) || !strings.Contains(out.String(), `"in_progress":[{"id":"ep","state":"recording"}]`) {

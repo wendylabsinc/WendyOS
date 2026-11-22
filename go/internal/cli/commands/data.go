@@ -317,7 +317,7 @@ func newDataStopCmd() *cobra.Command {
 func newDataEpisodesCmd() *cobra.Command {
 	return &cobra.Command{Use: "episodes", Short: "List episodes, with recordings in progress first", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return withDataClient(cmd.Context(), func(c agentpbv2.DataServiceClient) error {
-			return runDataEpisodes(cmd.Context(), c, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput, time.Now())
+			return runDataEpisodes(cmd.Context(), c, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput, deviceFlag, time.Now())
 		})
 	}}
 }
