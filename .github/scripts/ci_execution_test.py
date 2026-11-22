@@ -115,7 +115,7 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
     def test_automation_gate_is_part_of_required_test_without_an_opt_in(self):
         config = workflow("go-tests.yml")
         job = config["jobs"]["automation-regressions"]
-        self.assertNotIn("if", job)
+        self.assertEqual(job.get("if"), "${{ !inputs.media_only }}")
         self.assertFalse(any("if" in step for step in job["steps"]))
         self.assertIn("workflow_call", config["on"])
         self.assertNotIn("pull_request", config["on"])

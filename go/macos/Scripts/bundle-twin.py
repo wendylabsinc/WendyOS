@@ -20,7 +20,28 @@ destination = Path(os.environ['TARGET_BUILD_DIR']) / os.environ['UNLOCALIZED_RES
 destination.mkdir(parents=True, exist_ok=True)
 with (cache / '.lock').open('w') as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
-    for arch in ('arm64', 'amd64'):
+    architectures = (os.environ['WENDY_TWIN_BUILD_ARCH'],) if os.environ.get('WENDY_TWIN_BUILD_ARCH') else ('arm64', 'amd64')
+    for arch in architectures:
+        if arch not in ('arm64', 'amd64'):
+            raise ValueError('Unsupported Linux architecture: ' + arch)
+        # CI builds both native Linux runtimes on Linux runners. Apple builds
+        # consume those same-run artifacts without needing a Docker daemon.
+        if os.environ.get('WENDY_TWIN_BUNDLE_DIR'):
+            source = Path(os.environ['WENDY_TWIN_BUNDLE_DIR'])
+            layer = (source / (arch + '.tar.gz')).read_bytes()
+            metadata = json.loads((source / (arch + '.json')).read_text())
+            raw = gzip.decompress(layer)
+            if (metadata['digest'] != 'sha256:' + hashlib.sha256(layer).hexdigest()
+                    or metadata['diffID'] != 'sha256:' + hashlib.sha256(raw).hexdigest()
+                    or metadata['size'] != len(layer)
+                    or metadata['imageConfig']['architecture'] != arch
+                    or metadata['imageConfig']['os'] != 'linux'
+                    or metadata['imageConfig']['rootfs']['diff_ids'] != [metadata['diffID']]):
+                raise ValueError('Invalid prebuilt Linux twin bundle: ' + arch)
+            for suffix in ('.tar.gz', '.json'):
+                shutil.copyfile(source / (arch + suffix), destination / (arch + suffix))
+            print('Bundled prebuilt Linux twin', arch, len(layer), 'bytes')
+            continue
         binary = cache / ('wendy-twin-' + arch)
         env = dict(os.environ, CGO_ENABLED='0', GOOS='linux', GOARCH=arch)
         subprocess.run(['go', 'build', '-trimpath', '-buildvcs=false', '-ldflags=-s -w -buildid=',

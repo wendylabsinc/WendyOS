@@ -51,7 +51,27 @@ class PrereleaseGatesTests(unittest.TestCase):
         job = checks['jobs']['shared-grpc-api-contracts']
         self.assertEqual(job['name'], 'Shared gRPC API contracts')
         self.assertNotIn('if', job)
-        self.assertEqual(job, workflow('go-tests.yml')['jobs']['shared-grpc-api-contracts'])
+        release_job = dict(workflow('go-tests.yml')['jobs']['shared-grpc-api-contracts'])
+        self.assertEqual(release_job.pop('if'), '${{ !inputs.media_only }}')
+        self.assertEqual(job, release_job)
+
+    def test_binary_sboms_wait_for_signed_windows_archives(self):
+        jobs = workflow('build.yml')['jobs']
+        self.assertIn('package-windows', jobs['sbom-binaries']['needs'])
+        self.assertNotIn('sbom-binaries', jobs['package-windows']['needs'])
+        signed = next(step for step in jobs['package-windows']['steps']
+                      if step.get('name') == 'Upload signed zip')
+        self.assertEqual(signed['with']['overwrite'], 'true')
+
+    def test_media_only_is_opt_in_and_never_used_by_release(self):
+        go = workflow('go-tests.yml')
+        for event in ('workflow_call', 'workflow_dispatch'):
+            media = go['on'][event]['inputs']['media_only']
+            self.assertEqual(media['type'], 'boolean')
+            self.assertEqual(media['default'], 'false')
+        release = workflow('build.yml')['jobs']['validate-go']
+        self.assertNotIn('media_only', release.get('with', {}))
+        self.assertEqual(go['jobs']['test']['if'], '${{ always() && !inputs.media_only }}')
 
     def test_gate_executes_and_rejects_every_unsuccessful_suite(self):
         gate = workflow('build.yml')['jobs']['pre-release-checks']
