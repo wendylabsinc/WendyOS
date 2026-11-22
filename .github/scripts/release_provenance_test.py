@@ -150,7 +150,7 @@ class ReleaseProvenanceWorkflowTests(unittest.TestCase):
         self.assertNotIn('pull_request', events)
         self.assertIn('.github/workflows/**', build_events['push']['paths'])
         job = ci['jobs']['automation-regressions']
-        self.assertNotIn('if', job)
+        self.assertEqual(job.get('if'), '${{ !inputs.media_only }}')
         self.assertTrue(any('run-automation-regressions.py' in s.get('run', '') for s in job['steps']))
         driver = (ROOT / '.github/scripts/run-automation-regressions.py').read_text()
         for suite in ['tag-built-commit_test.py', 'release_provenance_test.py']:

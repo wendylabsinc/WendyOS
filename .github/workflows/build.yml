@@ -756,10 +756,9 @@ jobs:
   sbom-binaries:
     name: SBOM+attest (${{ matrix.artifact-name }})
     runs-on: ubuntu-latest
-    # build-cli-linux produces the wendy-cli-linux-* archives; without it in
-    # needs, those matrix entries race the upload and fail with "Artifact not
-    # found".
-    needs: [determine-version, build, build-cli-linux, build-go-macos]
+    # Wait for Windows signing to replace the unsigned archives, so each SBOM
+    # attests the released bytes and never races the artifact replacement.
+    needs: [determine-version, build, build-cli-linux, build-go-macos, package-windows]
     permissions:
       contents: read
       id-token: write

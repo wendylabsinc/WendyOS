@@ -639,12 +639,26 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 	if err != nil {
 		return nil, err
 	}
+	s.scheduleAutoStop(campaign.Name, episode.GetId(), campaign.AfterTriggerDuration())
+	return episode, nil
+}
+
+// A trigger can be delayed after startCapture releases the campaign lock. Do
+// not let that stale trigger replace the timer belonging to a newer episode.
+func (s *DataService) scheduleAutoStop(key, episodeID string, after time.Duration) {
+	lock := s.keyLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	session, ok := s.manager.ActiveSession(key)
+	if !ok || session.ID != episodeID {
+		return
+	}
 	timerContext, cancel := context.WithCancel(context.Background())
 	s.captureMu.Lock()
-	if previous := s.autoStopCancel[campaign.Name]; previous != nil {
+	if previous := s.autoStopCancel[key]; previous != nil {
 		previous()
 	}
-	s.autoStopCancel[campaign.Name] = cancel
+	s.autoStopCancel[key] = cancel
 	s.captureMu.Unlock()
 	go func(episodeID string, after time.Duration) {
 		timer := time.NewTimer(after)
@@ -653,10 +667,9 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		case <-timerContext.Done():
 			return
 		case <-timer.C:
-			s.stopCaptureIfCurrent(context.Background(), campaign.Name, episodeID)
+			s.stopCaptureIfCurrent(context.Background(), key, episodeID)
 		}
-	}(episode.GetId(), campaign.AfterTriggerDuration())
-	return episode, nil
+	}(episodeID, after)
 }
 
 func (s *DataService) observeApplicationRecord(_ string, record data.ApplicationRecord) {

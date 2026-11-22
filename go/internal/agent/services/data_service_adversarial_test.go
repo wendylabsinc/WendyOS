@@ -177,6 +177,40 @@ func TestStopPrefersAdHocThenRefusesAmbiguousCampaigns(t *testing.T) {
 	}
 }
 
+// Reproduce a trigger resuming after its episode was stopped and replaced.
+func TestStaleAutoStopRegistrationPreservesCurrentTimer(t *testing.T) {
+	manager, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewDataService(manager)
+	deployTestCampaign(t, service, "timer-race", "1h")
+	trigger := func() *agentpbv2.DataEpisode {
+		t.Helper()
+		episode, err := service.CampaignTrigger(context.Background(), &agentpbv2.DataCampaignTriggerRequest{Name: "timer-race"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return episode
+	}
+	first := trigger()
+	if _, err := service.stopCapture(context.Background(), "timer-race"); err != nil {
+		t.Fatal(err)
+	}
+	second := trigger()
+	t.Cleanup(func() { _, _ = service.stopCapture(context.Background(), "timer-race") })
+	service.scheduleAutoStop("timer-race", second.GetId(), 20*time.Millisecond)
+	service.scheduleAutoStop("timer-race", first.GetId(), time.Hour)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(manager.ActiveEpisodeKeys()) == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stale trigger cancelled the current episode's auto-stop timer")
+}
+
 func TestServiceConcurrentTriggerRecordAndStopStress(t *testing.T) {
 	manager, err := data.NewManager(t.TempDir())
 	if err != nil {

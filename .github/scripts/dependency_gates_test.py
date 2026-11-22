@@ -44,7 +44,7 @@ class DependencyGatesTests(unittest.TestCase):
                 self.assertNotIn("pull_request", child["on"])
                 self.assertNotIn("push", child["on"])
                 self.assertEqual(parent["jobs"][job]["uses"], "./.github/workflows/" + filename)
-                self.assertNotIn("if", parent["jobs"][job])
+                self.assertEqual(parent["jobs"][job].get("if"), "${{ !inputs.media_only }}")
                 self.assertNotIn("continue-on-error", parent["jobs"][job])
                 self.assertIn(job, parent["jobs"]["test"]["needs"])
                 result_name = job.replace("-", "_").upper() + "_RESULT"
@@ -66,7 +66,7 @@ class DependencyGatesTests(unittest.TestCase):
         jobs = workflow("go-tests.yml")["jobs"]
         scan = jobs["dependency-security"]
         self.assertEqual(scan["uses"], "./.github/workflows/security.yml")
-        self.assertNotIn("if", scan)
+        self.assertEqual(scan.get("if"), "${{ !inputs.media_only }}")
         self.assertNotIn("continue-on-error", scan)
         self.assertIn("dependency-security", jobs["test"]["needs"])
         gate = jobs["test"]["steps"][0]
