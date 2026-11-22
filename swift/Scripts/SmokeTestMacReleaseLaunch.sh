@@ -19,7 +19,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The app can hand itself to launchd or defer to another running instance, so
+# show which copies ran and what the app logged before reporting a failure.
+diagnose() {
+  {
+    echo "WendyAgentMac processes:"
+    pgrep -ilf WendyAgentMac || echo "  none"
+    echo "WendyAgentMac log since launch:"
+    log show --style compact --info --start "$launched_at" --predicate "subsystem == \"$BUNDLE_ID\"" 2>&1 || true
+  } >&2
+}
+
 cleanup
+launched_at=$(date '+%Y-%m-%d %H:%M:%S')
 open -n -g "$APP_PATH"
 
 for _ in {1..20}; do
@@ -30,10 +42,12 @@ for _ in {1..20}; do
       exit 0
     fi
     echo "WendyAgentMac exited immediately after launch" >&2
+    diagnose
     exit 1
   fi
   sleep 1
 done
 
 echo "WendyAgentMac did not launch within 20 seconds" >&2
+diagnose
 exit 1
