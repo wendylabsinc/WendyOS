@@ -10,12 +10,10 @@ case "$1" in
     ;;
   ios)
     # Select an installed iOS >=26 runtime, without depending on runner device names.
-    # Take the first iPhone with a phone-shaped screen: the UI tests expect a
-    # phone layout with a tab bar, which a foldable such as iPhone Duo (about
-    # 1.45:1 unfolded) does not show. Fall back to the first iPhone if no device
-    # type profile gives a screen size.
+    # List the iPhone device types, since the UI tests depend on the layout of
+    # the one chosen.
     read -r runtime device_type < <(xcrun simctl list runtimes --json | python3 -c '
-import json, os, plistlib, sys
+import json, sys
 available = [r for r in json.load(sys.stdin)["runtimes"]
              if r["isAvailable"] and not r.get("isInternal", False)
              and ".iOS-" in r["identifier"] and int(r["version"].split(".")[0]) >= 26]
@@ -23,20 +21,8 @@ assert available, "No supported iOS simulator runtime is installed"
 runtime = max(available, key=lambda r: tuple(map(int, r["version"].split("."))))
 phones = [d for d in runtime["supportedDeviceTypes"] if d["productFamily"] == "iPhone"]
 assert phones, "The iOS simulator runtime supports no iPhone"
-def screen(device):
-    try:
-        with open(os.path.join(device["bundlePath"], "Contents/Resources/profile.plist"), "rb") as f:
-            profile = plistlib.load(f)
-        return int(profile["mainScreenWidth"]), int(profile["mainScreenHeight"])
-    except (KeyError, OSError, TypeError, ValueError, plistlib.InvalidFileException):
-        return None
-def phone_shaped(device):
-    size = screen(device)
-    return size is not None and max(size) >= 1.9 * min(size)
-for device in phones:
-    print("iPhone device type:", device["name"], screen(device), file=sys.stderr)
-phone = next((d for d in phones if phone_shaped(d)), phones[0])
-print(runtime["identifier"], phone["identifier"])
+print("iPhone device types:", ", ".join(d["name"] for d in phones), file=sys.stderr)
+print(runtime["identifier"], phones[0]["identifier"])
 ')
     echo "iOS simulator: $device_type on $runtime"
     device=$(xcrun simctl create 'Wendy regression tests' "$device_type" "$runtime")
