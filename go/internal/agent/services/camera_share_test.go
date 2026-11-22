@@ -116,17 +116,18 @@ type csHarness struct {
 	logs  *observer.ObservedLogs
 	clock *csClock
 
-	mu        sync.Mutex
-	cams      map[string]csCamera // by base
-	opened    []*csNode
-	openErr   map[string]error
-	openHook  func(path string)
-	events    []string
-	probed    []string // paths hasVideoCapture or capturePixelFormats saw
-	udev      func(nr int) bool
-	held      map[string][]deviceHolder // by path
-	holderErr error                     // the holder scan fails with it
-	removedAt map[int]time.Time         // fake time of each node's RemoveAuxNode
+	mu            sync.Mutex
+	cams          map[string]csCamera // by base
+	opened        []*csNode
+	openErr       map[string]error
+	freshStartErr map[string]error
+	openHook      func(path string)
+	events        []string
+	probed        []string // paths hasVideoCapture or capturePixelFormats saw
+	udev          func(nr int) bool
+	held          map[string][]deviceHolder // by path
+	holderErr     error                     // the holder scan fails with it
+	removedAt     map[int]time.Time         // fake time of each node's RemoveAuxNode
 
 	// Covering (Task 9). Each fake namespace stands for one pid, with the
 	// inode 1000+pid; the agent's own is csAgentNS, init's csInitNS.
@@ -217,7 +218,8 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	t.Helper()
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
 	h := &csHarness{t: t, s: s, loop: s.loopback.(*fakeLoopback), cams: map[string]csCamera{}, openErr: map[string]error{},
-		clock: &csClock{now: time.Unix(1_000_000, 0)}, held: map[string][]deviceHolder{}, removedAt: map[int]time.Time{},
+		freshStartErr: map[string]error{},
+		clock:         &csClock{now: time.Unix(1_000_000, 0)}, held: map[string][]deviceHolder{}, removedAt: map[int]time.Time{},
 		namespaces: map[*devcover.Namespace]uint32{}, coverErr: map[string]error{}, covered: true,
 		watcher: &csWatcher{ready: make(chan struct{})}}
 	for _, c := range cams {
@@ -231,10 +233,15 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 		h.mu.Unlock()
 	}
 
-	prevPath, prevOpen := cameraSharesPath, openShareNode
+	prevPath, prevOpen, prevFreshStart := cameraSharesPath, openShareNode, checkShareNodeFreshStart
 	prevClock, prevUdev, prevHolders := shareRemovalClock, shareNodeUdevDone, shareNodeHolders
 	cameraSharesPath = filepath.Join(t.TempDir(), "camera-shares.json")
 	openShareNode = h.open
+	checkShareNodeFreshStart = func(path string) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.freshStartErr[path]
+	}
 	shareRemovalClock = h.clock
 	shareNodeUdevDone = func(nr int) bool {
 		h.mu.Lock()
@@ -315,6 +322,7 @@ func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	}
 	t.Cleanup(func() {
 		cameraSharesPath, openShareNode = prevPath, prevOpen
+		checkShareNodeFreshStart = prevFreshStart
 		shareRemovalClock, shareNodeUdevDone, shareNodeHolders = prevClock, prevUdev, prevHolders
 		coverPath, openNamespace, coveredPath, namespaceInode, closeNamespace = prevCover, prevOpenNS, prevCovered, prevInode, prevCloseNS
 		deviceHolders, watchDevices, hostMountNSInodes = prevDevHolders, prevWatch, prevHostNS
@@ -872,10 +880,12 @@ func TestSyncCameraShares_AdoptsNodesAfterAgentRestart(t *testing.T) {
 		t.Errorf("adoption made or removed nodes: share %v, aux %d, removed %v, allocated %v",
 			h.loop.shareCalls(), h.loop.auxCreatedCount(), h.loop.removedAux(), h.loop.allocations())
 	}
-	// An adopted pump blanks an idle node once.
+	// Idle adoption publishes no placeholder frame. A second count is a
+	// barrier: the pump finished handling the first before accepting it.
 	nodes[0].send(t, 0)
-	if e := nodes[0].next(t); e.kind != "blank" {
-		t.Errorf("first write on the adopted idle node = %q, want blank", e.kind)
+	nodes[0].send(t, 0)
+	if events := nodes[0].all(); len(events) != 0 {
+		t.Errorf("idle adopted node wrote synthetic frames: %+v", events)
 	}
 
 	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true, PID: 4242}})
@@ -2184,6 +2194,59 @@ func TestCoverCameraShares_CoversEachSharedCameraAtItsCurrentPath(t *testing.T) 
 	}
 	if errs := h.s.CoverCameraShares(context.Background(), "cv-none", 77); len(errs) != 0 || h.nsOpens(77) != 0 {
 		t.Errorf("a container that shares nothing: errors %v, %d namespaces opened", errs, h.nsOpens(77))
+	}
+}
+
+func TestCoverCameraShares_RetainedNodeRequiresVerifiedFreshStart(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		controlErr error
+		adopt      bool
+	}{
+		{name: "verified before writer adoption"},
+		{name: "unsupported after failed adoption", controlErr: errShareFreshStartUnsupported, adopt: true},
+		{name: "disabled on retained node", controlErr: errors.New("fresh_start is disabled")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
+				csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
+			h.loop.addLiveAux(254, "Brio 101")
+			h.s.loadCameraShares()
+			h.mu.Lock()
+			h.freshStartErr["/dev/video254"] = tc.controlErr
+			h.openErr["/dev/video254"] = tc.controlErr
+			h.mu.Unlock()
+			if tc.adopt {
+				h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true, PID: 4242}})
+				if events := h.eventLog(); !slices.Contains(events, "open /dev/video254") || h.opensOf("/dev/video254") != 0 {
+					t.Fatal("expected failed writer adoption without an opened writer")
+				}
+			}
+			errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242)
+			if tc.controlErr == nil {
+				if len(errs) != 0 {
+					t.Fatalf("verified retained node refused: %v", errs)
+				}
+				want := []csCover{{pid: 4242, src: "/dev/video254", dst: "/dev/video0"}}
+				if got := coversWithout(h.coverList()); !reflect.DeepEqual(got, want) {
+					t.Errorf("covers = %+v, want %+v", got, want)
+				}
+				if h.opensOf("/dev/video254") != 0 {
+					t.Error("cover claimed the writer before adoption")
+				}
+			} else {
+				if len(errs) != 1 || !errors.Is(errs[0], errShareFreshStartUnverified) || !errors.Is(errs[0], tc.controlErr) {
+					t.Fatalf("errors = %v, want unverified freshness with %v", errs, tc.controlErr)
+				}
+				if got := h.coverList(); len(got) != 0 {
+					t.Errorf("unverified retained node covered the real camera: %+v", got)
+				}
+			}
+			if len(h.loop.shareCalls()) != 0 || h.loop.auxCreatedCount() != 0 || len(h.loop.removedAux()) != 0 || len(h.loop.allocations()) != 0 {
+				t.Error("checking a retained node created, removed, or allocated nodes")
+			}
+		})
 	}
 }
 

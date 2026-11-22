@@ -43,6 +43,8 @@ const (
 
 	// vidiocSCtrl is _IOWR('V', 28, struct v4l2_control), 8 bytes.
 	vidiocSCtrl = 0xC008561C
+	// vidiocGCtrl is _IOWR('V', 27, struct v4l2_control), 8 bytes.
+	vidiocGCtrl = 0xC008561B
 	// v4l2LoopbackCidKeepFormat is V4L2LOOPBACK_CID_BASE+0 ("keep_format").
 	v4l2LoopbackCidKeepFormat = 0x0098f900
 	// Wendy fresh_start starts each reader at the next real producer frame.
@@ -101,9 +103,13 @@ type shareNodeIO interface {
 // openShareNode is a variable so the pump's tests can substitute a fake.
 var openShareNode = openShareNodeV4L2
 
+// A retained node can be checked without claiming its OUTPUT format/buffers.
+var checkShareNodeFreshStart = checkShareNodeFreshStartV4L2
+
 var errShareNodeClosed = errors.New("share node writer is closed")
 
 var errShareFreshStartUnsupported = errors.New("the loopback module has no fresh_start support; update the WendyOS camera driver to share cameras")
+var errShareFreshStartUnverified = errors.New("retained camera node cannot guarantee a fresh first frame")
 
 // shareNodeWriter is the V4L2 implementation of shareNodeIO.
 type shareNodeWriter struct {
@@ -165,6 +171,30 @@ func (w *shareNodeWriter) requireFreshStart() error {
 			err = errors.Join(errShareFreshStartUnsupported, err)
 		}
 		return fmt.Errorf("camera sharing unavailable: %s requires the Wendy v4l2loopback fresh_start control: %w", w.path, err)
+	}
+	return nil
+}
+
+func checkShareNodeFreshStartV4L2(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("opening retained share node %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+	w := &shareNodeWriter{path: path, fd: fd}
+	return w.checkFreshStart()
+}
+
+func (w *shareNodeWriter) checkFreshStart() error {
+	fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart}
+	if err := w.ioctl(vidiocGCtrl, unsafe.Pointer(&fresh)); err != nil {
+		if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTTY) {
+			err = errors.Join(errShareFreshStartUnsupported, err)
+		}
+		return fmt.Errorf("checking fresh_start on %s: %w", w.path, err)
+	}
+	if fresh.Value != 1 {
+		return fmt.Errorf("fresh_start is disabled on %s; its camera-sharing writer must reconnect before this node can be used", w.path)
 	}
 	return nil
 }

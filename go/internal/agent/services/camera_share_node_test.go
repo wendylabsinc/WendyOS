@@ -253,3 +253,34 @@ func TestShareNodeUnsupportedFreshStartRefusesBeforeFormatOrBuffers(t *testing.T
 		t.Fatalf("unsupported sharing: calls=%d, error=%v", calls, err)
 	}
 }
+
+func TestRetainedShareNodeChecksFreshStartWithoutClaimingWriter(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		value           int32
+		err             error
+		wantUnsupported bool
+	}{
+		{name: "enabled", value: 1},
+		{name: "disabled"},
+		{name: "unsupported", err: unix.EINVAL, wantUnsupported: true},
+		{name: "no ioctl", err: unix.ENOTTY, wantUnsupported: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			w := &shareNodeWriter{path: "/dev/video254", ioctlFn: func(req uintptr, arg unsafe.Pointer) error {
+				calls++
+				control := (*v4l2Control)(arg)
+				if req != vidiocGCtrl || control.ID != v4l2LoopbackCidFreshStart {
+					t.Fatal("retained-node check modified controls, format or buffers")
+				}
+				control.Value = tc.value
+				return tc.err
+			}}
+			err := w.checkFreshStart()
+			if calls != 1 || (err == nil) != (tc.err == nil && tc.value == 1) || errors.Is(err, errShareFreshStartUnsupported) != tc.wantUnsupported {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+		})
+	}
+}

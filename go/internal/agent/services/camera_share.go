@@ -251,6 +251,11 @@ func (s *VideoService) endShareCreation(containerID string, c *shareCreation) {
 // openCameraShareNode also records whether listings can offer fresh captures.
 func (s *VideoService) openCameraShareNode(path string, mode sharedMode) (shareNodeIO, error) {
 	node, err := openShareNode(s.logger, path, mode)
+	s.noteFreshStartSupport(err)
+	return node, err
+}
+
+func (s *VideoService) noteFreshStartSupport(err error) {
 	s.shares.mu.Lock()
 	if errors.Is(err, errShareFreshStartUnsupported) {
 		s.shares.freshStartUnsupported = true
@@ -258,7 +263,6 @@ func (s *VideoService) openCameraShareNode(path string, mode sharedMode) (shareN
 		s.shares.freshStartUnsupported = false
 	}
 	s.shares.mu.Unlock()
-	return node, err
 }
 
 // createCameraShare shares one camera with a container, or logs why not.
@@ -2454,7 +2458,8 @@ func (s *VideoService) reportStartCover(ctx context.Context, run *startCoverRun)
 // shareNodeToCover returns the path of r's node when that node is r's own
 // share node, the only node a cover may put over a camera: r's writer holds
 // it, or no start is making r's node and the node there is still the share
-// node made for r (nodeIsShareFor). After a reboot the number may hold another
+// node made for r (nodeIsShareFor) with fresh_start verified. After a reboot
+// the number may hold another
 // node, a two-plane node say, whose stream must never stand in for the app's
 // camera; while a node is being made, the number may not be its yet
 // (errShareNodeMaking).
@@ -2477,6 +2482,14 @@ func (s *VideoService) shareNodeNumberToCover(r *shareRecord) (int, error) {
 		return 0, errShareNodeMaking
 	}
 	if got, ok := s.shareNodeNumber(r); ok {
+		// Identity alone cannot establish freshness for a node retained from
+		// an older agent. A read-only control query preserves its current
+		// reader/writer ownership while proving that fresh starts are enabled.
+		err := checkShareNodeFreshStart(shareNodePath(got))
+		s.noteFreshStartSupport(err)
+		if err != nil {
+			return 0, fmt.Errorf("%w: %w", errShareFreshStartUnverified, err)
+		}
 		return got, nil
 	}
 	return 0, fmt.Errorf("its node %s is gone or is now another node", shareNodePath(nr))
@@ -2504,7 +2517,7 @@ func (s *VideoService) startShareNode(ctx context.Context, containerID string, r
 		return 0, false, errors.New("the agent has no v4l2loopback node manager")
 	}
 	nr, err = s.shareNodeNumberToCover(r)
-	if err == nil || errors.Is(err, errShareNodeMaking) {
+	if err == nil || errors.Is(err, errShareNodeMaking) || errors.Is(err, errShareFreshStartUnverified) {
 		return nr, false, err
 	}
 
