@@ -5,7 +5,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/twin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -22,8 +21,8 @@ func main() {
 			log.Fatal(err)
 		}
 		defer conn.Close()
-		go func() { io.Copy(conn, os.Stdin); conn.(*net.TCPConn).CloseWrite() }()
-		io.Copy(os.Stdout, conn)
+		go func() { copyProxyStream(conn, os.Stdin); conn.(*net.TCPConn).CloseWrite() }()
+		copyProxyStream(os.Stdout, conn)
 		return
 	}
 
