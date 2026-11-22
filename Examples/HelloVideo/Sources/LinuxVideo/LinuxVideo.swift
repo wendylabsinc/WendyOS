@@ -27,6 +27,26 @@ public let V4L2_PIX_FMT_YUYV: UInt32 = 0x5659_5559  // 'YUYV'
 // public let VIDIOC_STREAMON: UInt = 0x4004_5614  // _IOW('V', 20, int)
 // public let VIDIOC_STREAMOFF: UInt = 0x4004_5615  // _IOW('V', 21, int)
 
+/// One captured YUYV frame and the size the camera actually gave.
+///
+/// A shared camera ignores the requested size and gives its own, so the
+/// buffer must be read with these values, not the ones asked for.
+public struct CapturedFrame {
+    public let data: Data
+    public let width: UInt32
+    public let height: UInt32
+    public let bytesPerLine: UInt32
+}
+
+/// Orders video node names (`video0`, `video2`, `video10`) by their number,
+/// so the camera's own path comes before the extra nodes next to it.
+public func videoNodesInNumberOrder(_ names: [String]) -> [String] {
+    func number(_ name: String) -> Int {
+        Int(name.drop(while: { !$0.isNumber })) ?? Int.max
+    }
+    return names.sorted { (number($0), $0) < (number($1), $1) }
+}
+
 /// A structure representing a V4L2 video device
 public struct VideoDevice {
     /// The device path (e.g., "/dev/video0")
@@ -58,14 +78,16 @@ public struct VideoDevice {
     /// - Parameters:
     ///   - width: The desired frame width
     ///   - height: The desired frame height
-    /// - Returns: The captured frame data
-    public func captureFrame(width: UInt32 = 640, height: UInt32 = 480) throws -> Data {
-        // Open the device
-        let fd = open(path, O_RDWR)
-        if fd < 0 {
-            throw VideoError.deviceOpenFailed(path: path, errno: errno)
-        }
-        defer { close(fd) }
+    /// - Returns: The frame and the width, height and bytes per line the
+    ///   camera gave, which can differ from the ones asked for
+    public func captureFrame(width: UInt32 = 640, height: UInt32 = 480) throws -> CapturedFrame {
+        try captureFrame(width: width, height: height, calls: SystemV4L2Calls())
+    }
+
+    /// `captureFrame` through `calls`, which tests replace with a fake driver.
+    func captureFrame(width: UInt32, height: UInt32, calls: some V4L2Calls) throws -> CapturedFrame {
+        let fd = try calls.openDevice(path)
+        defer { calls.closeDevice(fd) }
 
         // Set up format
         var format = v4l2_format()
@@ -78,105 +100,116 @@ public struct VideoDevice {
         format.fmt.pix.sizeimage = width * height * 2
         // format.fmt.pix.colorspace = V4L2_COLORSPACE_SRGB.rawValue
 
-        print("Set format")
+        try calls.control(fd, WENDY_VIDIOC_S_FMT, "VIDIOC_S_FMT", &format)
 
-        // Set format
-        var result = ioctl(fd, UInt(WENDY_VIDIOC_S_FMT), &format)
-        if result < 0 {
-            throw VideoError.ioctlFailed(command: "VIDIOC_S_FMT", errno: errno)
+        guard format.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV else {
+            throw VideoError.unsupportedOperation(
+                message: "Camera gave pixel format 0x\(String(format.fmt.pix.pixelformat, radix: 16)), not YUYV"
+            )
         }
+        // The driver may change the size; use what it gave.
+        let width = format.fmt.pix.width
+        let height = format.fmt.pix.height
+        let bytesPerLine =
+            format.fmt.pix.bytesperline >= width * 2 ? format.fmt.pix.bytesperline : width * 2
+        let frameSize = max(format.fmt.pix.sizeimage, bytesPerLine * height)
 
-        print("Set format")
-
-        // Request buffers
+        // Request buffers. The driver decides how many: v4l2loopback (a shared
+        // camera's node) gives a reader as many as its writer uses, whatever is
+        // asked for.
         var reqbuf = v4l2_requestbuffers()
-        reqbuf.count = 1
+        reqbuf.count = 2
         reqbuf.memory = V4L2_MEMORY_MMAP
         reqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-
-        result = ioctl(fd, UInt(WENDY_VIDIOC_REQBUFS), &reqbuf)
-        if result < 0 {
-            throw VideoError.ioctlFailed(command: "VIDIOC_REQBUFS", errno: errno)
+        try calls.control(fd, WENDY_VIDIOC_REQBUFS, "VIDIOC_REQBUFS", &reqbuf)
+        guard reqbuf.count > 0 else {
+            throw VideoError.unsupportedOperation(message: "VIDIOC_REQBUFS on \(path) gave no buffers")
         }
 
-        print("Requested buffers")
-
-        // Init buffers
-        var buffer = v4l2_buffer()
-        buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-        buffer.memory = V4L2_MEMORY_MMAP
-        buffer.index = 0
-        buffer.length = width * height * 2
-        result = ioctl(fd, UInt(WENDY_VIDIOC_QUERYBUF), &buffer)
-        if result < 0 {
-            throw VideoError.ioctlFailed(command: "VIDIOC_QUERYBUF", errno: errno)
+        // Map every buffer at the length and offset VIDIOC_QUERYBUF gives for
+        // it. They must not be read from a struct passed to VIDIOC_QBUF: a driver
+        // need not fill those fields in. uvcvideo does, but v4l2loopback leaves
+        // them 0, and mmap of 0 bytes fails with EINVAL.
+        var mapped: [(address: UnsafeMutableRawPointer, length: Int)] = []
+        defer {
+            for buffer in mapped {
+                calls.unmap(buffer.address, length: buffer.length)
+            }
+        }
+        for index in 0..<reqbuf.count {
+            var query = v4l2_buffer()
+            query.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+            query.memory = V4L2_MEMORY_MMAP
+            query.index = index
+            try calls.control(fd, WENDY_VIDIOC_QUERYBUF, "VIDIOC_QUERYBUF", &query)
+            let length = Int(query.length)
+            let address = try calls.map(fd, index: index, length: length, offset: Int(query.m.offset))
+            mapped.append((address, length))
         }
 
-        buffer = v4l2_buffer()
-        buffer.memory = V4L2_MEMORY_MMAP
-        buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-        buffer.index = 0
-
-        result = ioctl(fd, UInt(WENDY_VIDIOC_QBUF), &buffer)
-        if result < 0 {
-            throw VideoError.ioctlFailed(command: "VIDIOC_QBUF", errno: errno)
+        // Queue every buffer: the driver may fill and hand back any of them.
+        for index in 0..<reqbuf.count {
+            var queue = v4l2_buffer()
+            queue.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+            queue.memory = V4L2_MEMORY_MMAP
+            queue.index = index
+            try calls.control(fd, WENDY_VIDIOC_QBUF, "VIDIOC_QBUF", &queue)
         }
 
-        print("Query buffer")
-
-        // Start streaming
         var type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-        result = ioctl(fd, UInt(WENDY_VIDIOC_STREAMON), &type)
-        if result < 0 {
-            throw VideoError.ioctlFailed(command: "VIDIOC_STREAMON", errno: errno)
-        }
+        let streamStart = calls.monotonicNanoseconds()
+        try calls.control(fd, WENDY_VIDIOC_STREAMON, "VIDIOC_STREAMON", &type)
+        // The frame is copied out before this runs, so a failure here costs
+        // nothing worth reporting.
+        defer { _ = try? calls.control(fd, WENDY_VIDIOC_STREAMOFF, "VIDIOC_STREAMOFF", &type) }
 
-        print("Started streaming")
-
-        // Map the buffer
-        guard
-            let data = mmap(
-                nil,
-                Int(buffer.length),
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                fd,
-                Int(buffer.m.offset)
-            ),
-            data != MAP_FAILED
-        else {
-            throw VideoError.unsupportedOperation(message: "Failed to map buffer")
-        }
-
-        defer { munmap(data, Int(buffer.length)) }
-
-        print("Mapped buffer")
-
-        // Dequeue buffer
+        // Dequeue a filled buffer and read the one it names, not buffer 0:
+        // v4l2loopback hands its buffers out in turn. Older loopback modules
+        // may retain a frame from before this capture began. Skip those frames
+        // as a compatibility measure, at most once per buffer, so a driver
+        // whose timestamps use a different clock still returns a frame.
         var dqbuf = v4l2_buffer()
-        dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-        dqbuf.memory = V4L2_MEMORY_MMAP
-        result = ioctl(fd, UInt(WENDY_VIDIOC_DQBUF), &dqbuf)
-        if result < 0 {
-            print(errno)
-            throw VideoError.ioctlFailed(command: "VIDIOC_DQBUF", errno: errno)
+        var skipped = 0
+        while true {
+            guard try calls.waitForFrame(fd, milliseconds: frameTimeoutMilliseconds) else {
+                throw VideoError.noFrame(path: path, milliseconds: frameTimeoutMilliseconds)
+            }
+            dqbuf = v4l2_buffer()
+            dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+            dqbuf.memory = V4L2_MEMORY_MMAP
+            try calls.control(fd, WENDY_VIDIOC_DQBUF, "VIDIOC_DQBUF", &dqbuf)
+            guard Int(dqbuf.index) < mapped.count else {
+                throw VideoError.invalidData(
+                    message: "VIDIOC_DQBUF on \(path) returned buffer \(dqbuf.index); \(mapped.count) were mapped"
+                )
+            }
+            guard skipped < mapped.count, capturedBefore(dqbuf, streamStart) else {
+                break
+            }
+            skipped += 1
+            var again = v4l2_buffer()
+            again.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+            again.memory = V4L2_MEMORY_MMAP
+            again.index = dqbuf.index
+            try calls.control(fd, WENDY_VIDIOC_QBUF, "VIDIOC_QBUF", &again)
         }
+        let buffer = mapped[Int(dqbuf.index)]
 
-        print("Grabbing data")
-        let imageData = Data(bytes: data, count: Int(buffer.length))
-
-        print("Stop streaming")
-
-        // Stop streaming
-        result = ioctl(fd, UInt(WENDY_VIDIOC_STREAMOFF), &type)
-        if result < 0 {
-            print(errno)
-            throw VideoError.ioctlFailed(command: "VIDIOC_STREAMOFF", errno: errno)
+        let usedBytes = min(Int(dqbuf.bytesused), buffer.length, Int(frameSize))
+        let neededBytes = Int(bytesPerLine) * Int(height - 1) + Int(width) * 2
+        guard usedBytes >= neededBytes else {
+            throw VideoError.invalidData(
+                message: "Short frame: \(usedBytes) bytes, \(width)x\(height) needs \(neededBytes)"
+            )
         }
+        let imageData = Data(bytes: buffer.address, count: usedBytes)
 
-        // Copy the frame data
-        print("Returning frame data")
-        return imageData
+        return CapturedFrame(
+            data: imageData,
+            width: width,
+            height: height,
+            bytesPerLine: bytesPerLine
+        )
     }
 
     /// Capture a frame and convert it to RGB format
@@ -190,11 +223,14 @@ public struct VideoDevice {
         compression: Double = 0.0,
         writer: inout some JPEG.Bytestream.Destination
     ) async throws {
-        let yuyvSRGBData = try captureFrame(width: width, height: height)
+        let frame = try captureFrame(width: width, height: height)
+        let width = frame.width
+        let height = frame.height
         let rgbData = try yuyvSRGBToRGB(
-            yuyvSRGBData: yuyvSRGBData,
+            yuyvSRGBData: frame.data,
             width: Int(width),
-            height: Int(height)
+            height: Int(height),
+            bytesPerLine: Int(frame.bytesPerLine)
         )
 
         let layout = JPEG.Layout<JPEG.Common>(
@@ -230,12 +266,128 @@ public struct VideoDevice {
     }
 }
 
+/// How long a capture waits for a frame. A shared camera starts when an app
+/// begins reading, which takes about a second.
+let frameTimeoutMilliseconds: Int32 = 10_000
+
+/// The V4L2_BUF_FLAG_TIMESTAMP_* type bits of a buffer's flags, and the two
+/// types whose timestamps are CLOCK_MONOTONIC times: the driver's own
+/// (uvcvideo), and the writer's, copied (v4l2loopback; the agent writes
+/// CLOCK_MONOTONIC times).
+let timestampTypeMask: UInt32 = 0xE000
+let timestampMonotonic: UInt32 = 0x2000
+let timestampCopy: UInt32 = 0x4000
+
+/// Whether a dequeued buffer holds a frame from before `start` (CLOCK_MONOTONIC
+/// nanoseconds). A buffer whose timestamps are of another kind never is.
+func capturedBefore(_ buffer: v4l2_buffer, _ start: Int64) -> Bool {
+    let kind = buffer.flags & timestampTypeMask
+    guard kind == timestampMonotonic || kind == timestampCopy else {
+        return false
+    }
+    let nanoseconds = Int64(buffer.timestamp.tv_sec) * 1_000_000_000 + Int64(buffer.timestamp.tv_usec) * 1_000
+    return nanoseconds < start
+}
+
 /// Errors that can occur when working with V4L2 devices
 public enum VideoError: Error {
     case deviceOpenFailed(path: String, errno: Int32)
     case ioctlFailed(command: String, errno: Int32)
+    case mapFailed(index: UInt32, length: Int, offset: Int, errno: Int32)
+    case noFrame(path: String, milliseconds: Int32)
     case unsupportedOperation(message: String)
     case invalidData(message: String)
+}
+
+extension VideoError: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .deviceOpenFailed(let path, let errno):
+            return "opening \(path) failed: \(errnoDescription(errno))"
+        case .ioctlFailed(let command, let errno):
+            return "\(command) failed: \(errnoDescription(errno))"
+        case .mapFailed(let index, let length, let offset, let errno):
+            return "mapping buffer \(index) (\(length) bytes at offset \(offset)) failed: \(errnoDescription(errno))"
+        case .noFrame(let path, let milliseconds):
+            return "no frame from \(path) within \(Double(milliseconds) / 1000) s"
+        case .unsupportedOperation(let message), .invalidData(let message):
+            return message
+        }
+    }
+}
+
+/// "Invalid argument (errno 22)".
+func errnoDescription(_ errno: Int32) -> String {
+    "\(String(cString: strerror(errno))) (errno \(errno))"
+}
+
+/// The system calls a capture makes. `SystemV4L2Calls` makes the real ones;
+/// tests stand in a driver.
+protocol V4L2Calls {
+    /// Opens the device read-write.
+    func openDevice(_ path: String) throws -> Int32
+    /// Runs the ioctl `request` (named `name` in errors) on `argument`.
+    func control(_ fd: Int32, _ request: UInt32, _ name: String, _ argument: UnsafeMutableRawPointer) throws
+    /// Maps buffer `index`, `length` bytes at `offset`, shared and read-write.
+    func map(_ fd: Int32, index: UInt32, length: Int, offset: Int) throws -> UnsafeMutableRawPointer
+    func unmap(_ address: UnsafeMutableRawPointer, length: Int)
+    /// Waits up to `milliseconds` for a filled buffer; false when none came.
+    func waitForFrame(_ fd: Int32, milliseconds: Int32) throws -> Bool
+    /// CLOCK_MONOTONIC, in nanoseconds.
+    func monotonicNanoseconds() -> Int64
+    func closeDevice(_ fd: Int32)
+}
+
+struct SystemV4L2Calls: V4L2Calls {
+    func openDevice(_ path: String) throws -> Int32 {
+        let fd = open(path, O_RDWR)
+        if fd < 0 {
+            throw VideoError.deviceOpenFailed(path: path, errno: errno)
+        }
+        return fd
+    }
+
+    func control(_ fd: Int32, _ request: UInt32, _ name: String, _ argument: UnsafeMutableRawPointer) throws {
+        if ioctl(fd, UInt(request), argument) < 0 {
+            throw VideoError.ioctlFailed(command: name, errno: errno)
+        }
+    }
+
+    func map(_ fd: Int32, index: UInt32, length: Int, offset: Int) throws -> UnsafeMutableRawPointer {
+        guard let address = mmap(nil, length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, offset),
+            address != MAP_FAILED
+        else {
+            throw VideoError.mapFailed(index: index, length: length, offset: offset, errno: errno)
+        }
+        return address
+    }
+
+    func unmap(_ address: UnsafeMutableRawPointer, length: Int) {
+        munmap(address, length)
+    }
+
+    func waitForFrame(_ fd: Int32, milliseconds: Int32) throws -> Bool {
+        var request = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        while true {
+            let ready = poll(&request, 1, milliseconds)
+            if ready >= 0 {
+                return ready > 0
+            }
+            if errno != EINTR {
+                throw VideoError.ioctlFailed(command: "poll", errno: errno)
+            }
+        }
+    }
+
+    func monotonicNanoseconds() -> Int64 {
+        var now = timespec()
+        clock_gettime(CLOCK_MONOTONIC, &now)
+        return Int64(now.tv_sec) * 1_000_000_000 + Int64(now.tv_nsec)
+    }
+
+    func closeDevice(_ fd: Int32) {
+        close(fd)
+    }
 }
 
 /// A class providing access to V4L2 video devices
@@ -254,12 +406,13 @@ public class VideoDeviceManager {
             let contents = try fileManager.contentsOfDirectory(atPath: devDir)
 
             // Filter for video device nodes (video0, video1, etc.)
-            let videoDevices = contents.filter {
-                $0.hasPrefix("video")
-                    && CharacterSet.decimalDigits.contains(
-                        $0.last?.unicodeScalars.first ?? Unicode.Scalar(0)
-                    )
-            }
+            let videoDevices = videoNodesInNumberOrder(
+                contents.filter {
+                    $0.hasPrefix("video")
+                        && CharacterSet.decimalDigits.contains(
+                            $0.last?.unicodeScalars.first ?? Unicode.Scalar(0)
+                        )
+                })
 
             // Try to open each device and query its capabilities
             for deviceName in videoDevices {
@@ -398,8 +551,15 @@ private func yuvToRGB(y: UInt8, u: UInt8, v: UInt8) -> (r: UInt8, g: UInt8, b: U
 ///   - yuyvSRGBData: Raw YUYV SRGB frame data
 ///   - width: Frame width
 ///   - height: Frame height
+///   - bytesPerLine: Bytes per row in the buffer; defaults to `width * 2`
 /// - Returns: RGB data (3 bytes per pixel)
-public func yuyvSRGBToRGB(yuyvSRGBData: Data, width: Int, height: Int) throws -> [JPEG.RGB] {
+public func yuyvSRGBToRGB(
+    yuyvSRGBData: Data,
+    width: Int,
+    height: Int,
+    bytesPerLine: Int? = nil
+) throws -> [JPEG.RGB] {
+    let bytesPerLine = bytesPerLine ?? width * 2
     guard yuyvSRGBData.count % 4 == 0 else {
         throw VideoError.invalidData(message: "Width must be even")
     }
@@ -412,7 +572,7 @@ public func yuyvSRGBToRGB(yuyvSRGBData: Data, width: Int, height: Int) throws ->
     // Process two pixels at a time (4 bytes YUYV -> 6 bytes RGB)
     for y in 0..<height {
         for x in stride(from: 0, to: width, by: 2) {
-            let index = (y * width + x) * 2
+            let index = y * bytesPerLine + x * 2
             guard index + 3 < yuyvSRGBData.count else { break }
 
             // Extract YUYV values for two pixels

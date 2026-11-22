@@ -14,6 +14,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudsession"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -230,16 +231,7 @@ func (r *deployRelease) outcome(deployErr error) error {
 }
 
 func withCloud(ctx context.Context, auth *config.AuthConfig, call func(context.Context, grpc.ClientConnInterface) error) error {
-	conn, err := dialCloudGRPC(auth)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-	ctx, err = cloudContext(ctx, auth)
-	if err != nil {
-		return err
-	}
-	return call(ctx, conn)
+	return cloudsession.With(ctx, auth, ensureOAuthAccessToken, call)
 }
 
 type deployReleaseKey struct{}

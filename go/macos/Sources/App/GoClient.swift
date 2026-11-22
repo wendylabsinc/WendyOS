@@ -38,6 +38,7 @@ struct WendyError: LocalizedError, Sendable, Equatable, ExpressibleByStringLiter
 final class GoClient: Sendable {
     static let shared = GoClient()
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
+    private let appRequests = DispatchQueue(label: "dev.wendy.desktop.apps", qos: .userInitiated, attributes: .concurrent)
     private let accountReads = DispatchQueue(label: "dev.wendy.desktop.accounts", qos: .userInitiated)
     private let discoveryReads = DispatchQueue(label: "dev.wendy.desktop.discovery", qos: .utility)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
@@ -99,7 +100,7 @@ final class GoClient: Sendable {
                     appropriateFor: nil, create: true
                 ).appendingPathComponent("Wendy", isDirectory: true)
                 directory = FileManager.default.containerURL(
-                    forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile"
+                    forSecurityApplicationGroupIdentifier: "group.dev.wendy.WendyCompanion"
                 )?.appendingPathComponent("Wendy", isDirectory: true) ?? legacy
                 if directory != legacy && !FileManager.default.fileExists(atPath: directory.path)
                     && FileManager.default.fileExists(atPath: legacy.path) {
@@ -162,11 +163,18 @@ final class GoClient: Sendable {
     }
 
     func disconnect() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDDisconnect()) } }
-    func apps() async throws -> [DeviceApp] { try await perform { try Self.readApps(WDApps()) } }
+    func apps() async throws -> [DeviceApp] { try await BlockingWork.run(on: appRequests) { try Self.readApps(WDApps()) } }
     func openApp(_ app: String, session: UInt64) async throws -> URL {
         try await perform {
             try Self.withCString(app) {
-                guard let result = WDOpenApp($0, session) else { throw WendyError(message: "Missing app URL result.") }
+                let opened: UnsafeMutablePointer<WDOpenAppResult>?
+                if app == "dev.wendy.digital-twin" {
+                    guard let bundle = Bundle.main.resourceURL?.appendingPathComponent("DigitalTwin") else {
+                        throw WendyError(message: "This app is missing its Digital Twin service.")
+                    }
+                    opened = try Self.withCString(bundle.path) { WDOpenTwin(session, $0) }
+                } else { opened = WDOpenApp($0, session) }
+                guard let result = opened else { throw WendyError(message: "Missing app URL result.") }
                 defer { WDOpenAppFree(result) }
                 try Self.check(result.pointee.status)
                 guard let url = URL(string: Self.string(result.pointee.url)), url.scheme == "http", url.host != nil else {
@@ -177,10 +185,10 @@ final class GoClient: Sendable {
         }
     }
     func startApp(_ app: String, session: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStartApp($0, session)) } }
+        try await BlockingWork.run(on: appRequests) { try Self.withCString(app) { try Self.finish(WDStartApp($0, session)) } }
     }
     func stopApp(_ app: String, session: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStopApp($0, session)) } }
+        try await BlockingWork.run(on: appRequests) { try Self.withCString(app) { try Self.finish(WDStopApp($0, session)) } }
     }
     func deleteApp(_ app: String, session: UInt64) async throws {
         try await perform { try Self.withCString(app) { try Self.finish(WDDeleteApp($0, session)) } }

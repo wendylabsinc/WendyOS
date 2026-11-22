@@ -420,6 +420,7 @@ func main() {
 	agentUpdateSvc := services.NewAgentUpdateService(logger, installer)
 	agentUpdateSvc.PrimeExecPath()
 	osUpdateSvc := services.NewOSUpdateService(logger, installer)
+	powerSvc := services.NewPowerService(logger, installer)
 	driverSvc := services.NewDriverService(logger)
 	// Before anything reads the store: devices updated from an older agent still
 	// have add-ons in the pre-keyed flat layout.
@@ -535,6 +536,9 @@ func main() {
 		logger.Warn("loading camera DHCP configuration failed", zap.Error(err))
 	}
 	dataSvc.SetVideoService(videoSvc)
+	// The hardware listing skips camera share nodes and says how each camera
+	// is shared.
+	hwDiscoverer.SetCameraShareReporter(videoSvc)
 	// Arm pre-roll for campaigns deployed in a previous agent lifetime so their
 	// next trigger opens BEFORE the trigger instant, not only campaigns deployed
 	// during this run.
@@ -588,6 +592,10 @@ func main() {
 	// client miss (e.g. a container's task crash-exiting on its own).
 	if ctrdClient != nil {
 		ctrdClient.SetCameraLoopbackProvider(videoSvc)
+		// The camera share manager rides the same syncs: the first adopts the
+		// share nodes of apps that kept running through an agent restart, and
+		// drops those of containers deleted while the agent was down.
+		ctrdClient.SetCameraShareProvider(videoSvc)
 		ctrdClient.SyncCameraLoopbacks(ctx)
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
 	}
@@ -946,6 +954,11 @@ func main() {
 		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
 		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
 		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
+		// Reboot follows the same access policy as OS updates, which already
+		// reboot the device: available before enrollment, over mTLS afterward,
+		// and through the local admin socket. Device credentials are refused
+		// by the RPC policy's exact-method allowlist.
+		agentpbv2.RegisterWendyPowerServiceServer(srv, powerSvc)
 		// Driver management follows the same access policy as OS updates:
 		// available before enrollment, over mTLS afterward, and through the
 		// local admin socket. The store and apply path require Linux.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
@@ -41,6 +42,8 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	deviceRPCSession        atomic.Pointer[deviceRPCSession]
+	previews                cameraPreviews
 	osUpdate                mobileOSRun
 	recordings              recordingReads
 	gallery                 galleryConnections
@@ -152,6 +155,7 @@ func (b *Backend) stopCameras() {
 	}
 }
 func (b *Backend) disconnect() {
+	b.deviceRPCSession.Store(nil)
 	b.cameraDevices = nil
 	b.logStream = 0
 	if b.chatEnvironment != nil {
@@ -197,9 +201,11 @@ func (b *Backend) disconnect() {
 }
 
 // Public operations serialize access to the CLI connection and configuration.
-func (b *Backend) begin() (context.Context, func()) {
+func (b *Backend) begin() (context.Context, func()) { return b.beginWithTimeout(65 * time.Second) }
+
+func (b *Backend) beginWithTimeout(timeout time.Duration) (context.Context, func()) {
 	b.mu.Lock()
-	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	b.operationMu.Lock()
 	b.operationCancel = cancel
 	b.operationMu.Unlock()
@@ -402,6 +408,7 @@ func (b *Backend) ConnectTargetRequest(selector string, forgetIdentity bool, req
 	b.conn, b.lite = conn, lite
 	b.deviceSelector = selector
 	b.life, b.stop = targetCtx, targetCancel
+	b.publishDeviceRPCSession()
 	committed = true
 	session := b.session
 	b.connectMu.Unlock()
@@ -486,6 +493,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.previewsReset(true)
 	b.recordings.setActive(false)
 	b.tunnelSession.SetActive(false)
 	b.resetNearbyDiscovery(true)
@@ -508,12 +516,11 @@ func (b *Backend) Shutdown() error {
 	return meshErr
 }
 func (b *Backend) Apps() ([]*pb.AppContainer, error) {
-	ctx, done := b.begin()
-	defer done()
-	conn, err := b.connection(0)
+	ctx, conn, done, err := b.deviceRPC(0)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return listDesktopApps(ctx, conn)
 }
 

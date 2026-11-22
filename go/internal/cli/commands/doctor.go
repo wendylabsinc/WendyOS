@@ -51,7 +51,7 @@ type doctorDeps struct {
 	readJSON func(string, any) error
 	lookPath func(string) (string, error)
 	run      func(context.Context, string, ...string) error
-	firmware func(string, string) error
+	firmware func(vm.Arch, string, string) error
 	validate func(context.Context, wendymcp.ProjectValidationOptions) (*wendymcp.ProjectValidation, error)
 	probe    func(context.Context, string) doctorTargetEvidence
 }
@@ -65,7 +65,10 @@ func defaultDoctorDeps() doctorDeps {
 			cmd.WaitDelay = 250 * time.Millisecond
 			return cmd.Run()
 		},
-		firmware: func(goos, prefix string) error { _, err := vm.FindFirmware(goos, prefix); return err },
+		firmware: func(arch vm.Arch, goos, prefix string) error {
+			_, err := vm.FindFirmware(arch, goos, prefix)
+			return err
+		},
 		validate: validateMCPProject, probe: doctorProbeTarget,
 	}
 }
@@ -218,22 +221,49 @@ func collectDoctorReport(ctx context.Context, d doctorDeps, project, selected st
 			out.add(check.id, "pass", dockerRequired, check.id+"_available", "The read-only Docker check succeeded.", "")
 		}
 	}
-	doctorExecutableCheck(&out, d, "qemu-system-aarch64", qemuRequired, "Install QEMU and ARM64 UEFI firmware before using a WendyOS VM.")
-	qemuPath, _ := d.lookPath("qemu-system-aarch64")
+	guest := doctorGuestArch(d, configDir, selected)
+	label := guest.Label()
+	doctorExecutableCheck(&out, d, guest.QEMUBinary(), qemuRequired, "Install QEMU and "+label+" UEFI firmware before using a WendyOS VM.")
+	qemuPath, _ := d.lookPath(guest.QEMUBinary())
 	prefix := ""
 	if qemuPath != "" {
 		prefix = filepath.Dir(filepath.Dir(qemuPath))
 	}
-	if err := d.firmware(runtime.GOOS, prefix); err != nil {
-		out.add("qemu_firmware", "fail", qemuRequired, "firmware_missing", "ARM64 UEFI firmware was not found.", "Install QEMU with its ARM64 UEFI firmware; doctor does not install packages.")
+	if err := d.firmware(guest, runtime.GOOS, prefix); err != nil {
+		out.add("qemu_firmware", "fail", qemuRequired, "firmware_missing", label+" UEFI firmware was not found.", "Install QEMU with its "+label+" UEFI firmware; doctor does not install packages.")
 	} else {
-		out.add("qemu_firmware", "pass", qemuRequired, "firmware_available", "ARM64 UEFI firmware is available.", "")
+		out.add("qemu_firmware", "pass", qemuRequired, "firmware_available", label+" UEFI firmware is available.", "")
 	}
 	doctorCheckTarget(ctx, &out, d, configDir, selected)
 	if ctx.Err() != nil {
 		out.add("diagnostics", "fail", true, "diagnostic_timeout", "The diagnostic deadline was reached.", "Retry with a longer --timeout, up to one minute.")
 	}
 	return out
+}
+
+// doctorGuestArch is the architecture whose emulator and firmware matter: the
+// selected VM's recorded one, else the host's default. It reads meta.json
+// through deps.readJSON only, never the store, which may take locks.
+func doctorGuestArch(d doctorDeps, configDir, selected string) vm.Arch {
+	name, ok := strings.CutPrefix(selected, "vm:")
+	if ok && configDir != "" && vm.ValidName(name) == nil {
+		var meta vm.Meta
+		if d.readJSON(filepath.Join(configDir, "vms", name, "meta.json"), &meta) == nil {
+			if meta.Arch == "" && !vm.IsLiteProfile(meta.Profile) {
+				// An older CLI may have dropped arch from meta.json.
+				var sidecar struct {
+					Arch vm.Arch `json:"arch"`
+				}
+				if d.readJSON(filepath.Join(configDir, "vms", name, vm.GuestArchFile), &sidecar) == nil {
+					meta.Arch = sidecar.Arch
+				}
+			}
+			if meta.Arch.Valid() {
+				return meta.GuestArch()
+			}
+		}
+	}
+	return defaultGuestArchFn()
 }
 
 func doctorExecutableCheck(out *doctorReport, d doctorDeps, name string, required bool, fix string) {

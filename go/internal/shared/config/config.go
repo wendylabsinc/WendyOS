@@ -40,6 +40,9 @@ type Config struct {
 	// update notice has already been printed, so scripts and agents see it
 	// once per release instead of after every command.
 	CLIUpdateNoticeShown string `json:"cliUpdateNoticeShown,omitempty"`
+	// CLIUpdateNoticeShownAt is when that notice was last printed, RFC3339. A
+	// person at a terminal sees it again a day later, until they update.
+	CLIUpdateNoticeShownAt string `json:"cliUpdateNoticeShownAt,omitempty"`
 	// CLIUpdatePromptVersion is no longer read; it is still written so older
 	// CLIs, whose snooze applied to this release only, honor a deferral.
 	CLIUpdatePromptVersion string `json:"cliUpdatePromptVersion,omitempty"`

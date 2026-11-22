@@ -67,7 +67,7 @@ func (t *embeddedChatTools) Close() error {
 }
 
 func bundledChatTools(ctx context.Context, selector string) (desktopChatTools, error) {
-	if runtime.GOOS == "ios" {
+	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
 		srv, closeServer, err := commands.DesktopEmbeddedMCP(ctx)
 		if err != nil {
 			return nil, err

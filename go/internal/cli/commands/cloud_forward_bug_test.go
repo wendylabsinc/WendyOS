@@ -60,8 +60,8 @@ func (h *halfCloseConn) CloseWrite() {
 	h.mu.Unlock()
 }
 
-// TestServeTunnelConn_HalfCloseDataLoss verifies that the relay waits for
-// both relay directions before returning.
+// TestServeTunnelConn_HalfCloseDataLoss verifies that the relay keeps the
+// return path open after the client finishes sending.
 //
 // Root cause (fixed): serveTunnelConn waited on <-done only ONCE, but done
 // has capacity 2. When the client finished sending, the client->tunnel
@@ -69,7 +69,8 @@ func (h *halfCloseConn) CloseWrite() {
 // <-done, triggering deferred closes that killed the tunnel->client relay
 // before the backend response arrived. Result: 0-byte responses.
 //
-// Fix: wait for BOTH goroutines with two <-done receives.
+// Fix: the client->tunnel copy ending does not end the relay. Only the
+// tunnel->client copy ending does, or ctx.
 func TestServeTunnelConn_HalfCloseDataLoss(t *testing.T) {
 	const payload = "hello from backend"
 

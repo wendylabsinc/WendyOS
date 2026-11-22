@@ -21,6 +21,14 @@ const cliUpdateCheckInterval = 24 * time.Hour
 const cliUpdateRetryInterval = time.Hour
 const cliUpdateExitWait = time.Second
 
+// cliUpdateDetectWait bounds how long a finished command waits to learn which
+// installer owns this CLI before it opens the update popup. Homebrew answers
+// "brew info" in about half a second on a fast Mac and in well over a second
+// on a slower one. With a one-second wait those people never saw the popup,
+// only one plain line per release. A lookup that fails even so gets only
+// cliUpdateExitWait for the rest of that day (see showCLIUpdateNotice).
+const cliUpdateDetectWait = 5 * time.Second
+
 var pendingCLIUpdate struct {
 	sync.Mutex
 	done   chan struct{}

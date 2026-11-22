@@ -17,6 +17,7 @@
     "unenroll",
     "rename",
     "power-mode",
+    "reboot",
     "setup",
     "push-agent",
     "telemetry-stream",

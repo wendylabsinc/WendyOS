@@ -1,0 +1,45 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// Unitree connections run on the selected agent. Secrets are accepted only over
+// the authenticated agent transport and are never returned by this service.
+service WendyUnitreeService {
+  rpc DiscoverUnitreeRobots(DiscoverUnitreeRobotsRequest) returns (DiscoverUnitreeRobotsResponse);
+  rpc ListUnitreePairings(ListUnitreePairingsRequest) returns (ListUnitreePairingsResponse);
+  rpc PairUnitree(PairUnitreeRequest) returns (PairUnitreeResponse);
+  rpc ForgetUnitree(ForgetUnitreeRequest) returns (ForgetUnitreeResponse);
+}
+
+message UnitreeRobot {
+  string serial = 1;
+  string name = 2;
+  string address = 3;
+  bool paired = 4;
+  // True only while the WebRTC data channel is open and protocol validation
+  // has completed. Legacy firmware does not authenticate the robot's identity.
+  bool connected = 5;
+}
+message DiscoverUnitreeRobotsRequest {
+  // Account serials allow matching standard mDNS advertisements to a robot.
+  repeated string known_serials = 1;
+}
+message DiscoverUnitreeRobotsResponse { repeated UnitreeRobot robots = 1; }
+message ListUnitreePairingsRequest {}
+message ListUnitreePairingsResponse { repeated UnitreeRobot robots = 1; }
+message PairUnitreeRequest {
+  string serial = 1;
+  string name = 2;
+  // An IPv4 address reachable from the agent, without a port or URL scheme.
+  string address = 3;
+  // Empty when reconnecting an existing pairing with its saved key.
+  string encryption_key = 4;
+  // Compatibility field: empty, or the fixed non-secret marker
+  // "unitree-account-flow" for initial unkeyed legacy pairing; the agent
+  // rejects any other value. Never the Unitree cloud bearer token, and not a
+  // proof of account ownership. Never persisted or forwarded to the robot.
+  string token = 5;
+}
+message PairUnitreeResponse { UnitreeRobot robot = 1; }
+message ForgetUnitreeRequest { string serial = 1; }
+message ForgetUnitreeResponse {}

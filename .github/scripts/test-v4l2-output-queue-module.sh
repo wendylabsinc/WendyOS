@@ -73,10 +73,15 @@ if [[ -d /sys/module/v4l2loopback ]]; then
   echo 'Original module remained loaded.' >&2
   exit 1
 fi
-patch="$builder/recipes-kernel/v4l2loopback/files/0001-output-completion-queue.patch"
 make -C "$source" clean > "$output/clean.log" 2>&1
-git -C "$source" apply --check "$patch"
-git -C "$source" apply "$patch"
+python3 - "$source" "$output/provenance.json" <<'PYAPPLY'
+import json, subprocess, sys
+source, provenance = sys.argv[1:]
+# Apply every reviewed recipe patch in its declared order, never a CI-only fix.
+for patch in json.load(open(provenance))['patches']:
+    subprocess.run(['git', '-C', source, 'apply', '--check', patch], check=True)
+    subprocess.run(['git', '-C', source, 'apply', patch], check=True)
+PYAPPLY
 python3 - "$source/v4l2loopback.c" "$output/provenance.json" <<'PY'
 import hashlib,json,sys
 from pathlib import Path

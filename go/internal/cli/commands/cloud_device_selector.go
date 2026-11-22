@@ -301,7 +301,7 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 			provider := providers.ProviderForKey("wendy-lite")
 			return &SelectedDevice{External: &external, Provider: provider, Selector: device, PinKey: device}, true, nil
 		}
-		client, err := connectOperatorMeshSelector(ctx, device)
+		client, err := connectDesktopMeshAgent(ctx, device)
 		if err != nil {
 			return nil, true, err
 		}

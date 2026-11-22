@@ -21,12 +21,12 @@ type reply struct {
 // reply and logs every call, one per line, to the returned log file.
 func writeFakeNMCLI(t *testing.T, replies ...reply) (path, callLog string) {
 	t.Helper()
-	dir := t.TempDir()
-	path = filepath.Join(dir, "nmcli")
-	callLog = filepath.Join(dir, "calls.log")
+	return writeNMCLIScript(t, replyArms(replies...))
+}
 
+// replyArms renders replies as shell case arms for writeNMCLIScript.
+func replyArms(replies ...reply) string {
 	var b strings.Builder
-	b.WriteString("#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shQuote(callLog) + "\ncase \"$*\" in\n")
 	for _, r := range replies {
 		pattern := shQuote(r.args)
 		if r.prefix {
@@ -34,12 +34,7 @@ func writeFakeNMCLI(t *testing.T, replies ...reply) (path, callLog string) {
 		}
 		fmt.Fprintf(&b, "%s)\n\tprintf '%%s' %s\n\texit %d ;;\n", pattern, shQuote(r.out), r.code)
 	}
-	b.WriteString("esac\necho \"unexpected nmcli call: $*\" >&2\nexit 1\n")
-
-	if err := os.WriteFile(path, []byte(b.String()), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return path, callLog
+	return b.String()
 }
 
 // writeNMCLIScript writes an nmcli stand-in from shell case arms, which can use

@@ -2667,7 +2667,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// A saved binding too old to name a device (organization only) must
 		// never turn into a plaintext attempt or a first-contact connection.
 		// A device with no saved binding at all is dialled below.
-		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
+		refusal := orgOnlyBindingError{key: target.refusalKey()}
+		return nil, refusal, refusal
 	}
 	candidates := target.dialCandidates()
 	walk := &mtlsWalk{target: target, tlsDebug: os.Getenv("WENDY_TLS_DEBUG") != ""}

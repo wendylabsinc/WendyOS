@@ -6,6 +6,69 @@ struct `'wendy device apps start'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     Starting a stopped prebuilt HTTP service with --detach confirms the app
+     and its saved restart policy. Its endpoint responds from a different
+     process instance while retaining the same app identity and payload version.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `restarts a prebuilt HTTP app as a new responding process`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                let original = try await app.response(cli)
+                try await app.stop(cli, expectedVersion: nil)
+                try await app.start(cli)
+                let restarted = try await app.response(cli)
+                #expect(restarted.instance != original.instance)
+                try await app.requireState(cli, "RUNNING", expectedVersion: nil)
+            }
+        }
+    }
+
+    /**
+     An explicitly named application that is absent from the device fails
+     without inventing success or changing the inventory of deployed apps.
+     The diagnostic identifies the requested app so the caller can correct it.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `rejects a missing application and preserves deployed app state`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
+                try await cli.sh("\(app.command) device apps start \(app.app) --detach") { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stderr.contains(app.app))
+                    #expect(result.stdout.isEmpty)
+                }
+                let after = try await app.inventory(cli)
+                #expect(!after.contains { $0.name == app.app })
+            }
+        }
+    }
+
+    /**
+     Starting a stopped HTTP app with `--detach` acknowledges the named app,
+     saves the `unless-stopped` restart policy, and runs the deployed version.
+     Its HTTP response identifies a new process instance of the same app.
+     */
+    @Test(
+        .enabled(if: httpAppTestsEnabled),
+        .disabled(
+            "Fixture blocked: Jetson build host has no BuildKit and the CLI host has no container builder; validate a supported builder path before enabling"
+        )
+    )
+    func `restarts the stopped HTTP app with a new responding process`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withApp(cli: cli) { app in
+                let original = try await app.response(cli)
+                try await app.stop(cli)
+                try await app.start(cli)
+                let restarted = try await app.response(cli)
+                #expect(restarted.instance != original.instance)
+                try await app.requireState(cli, "RUNNING")
+            }
+        }
+    }
+
+    /**
      Displays usage for `wendy device apps start`. The output includes the
      command synopsis, local flags, inherited global flags, and concise
      descriptions. Help exits successfully, writes to stdout, emits no

@@ -3,10 +3,8 @@ package commands
 import (
 	"context"
 	"errors"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -165,21 +163,6 @@ func TestDevicePickerChoiceIsEmptyWhenQuittingToLogIn(t *testing.T) {
 	m.hasChosen, m.action = true, devicePickerLogin
 	if _, ok := m.choice(); ok {
 		t.Error("choice() reported a selection while quitting to log in")
-	}
-}
-
-func TestSimulatorBootTimeoutScalesWithAcceleration(t *testing.T) {
-	// An emulated boot takes minutes, so the budget must not be a
-	// hardware-sized one; an accelerated host should not wait that long.
-	got := simulatorBootTimeout()
-	if vm.AccelFor(runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
-		if got < 2*time.Minute {
-			t.Errorf("simulatorBootTimeout() = %v, too short for an emulated boot", got)
-		}
-		return
-	}
-	if got > time.Minute+30*time.Second {
-		t.Errorf("simulatorBootTimeout() = %v, longer than an accelerated boot needs", got)
 	}
 }
 

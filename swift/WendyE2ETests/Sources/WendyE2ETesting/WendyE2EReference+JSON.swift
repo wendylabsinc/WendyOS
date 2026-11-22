@@ -85,6 +85,8 @@ private struct JSONEntry: Encodable {
     var documentation: String
     var sourceLocation: WendyE2EReference.SourceLocation?
     var isDisabled: Bool?
+    var availability: WendyE2EReference.Availability?
+    var availabilityReason: String?
 
     init(
         _ entry: WendyE2EReference.Entry,
@@ -97,7 +99,12 @@ private struct JSONEntry: Encodable {
         )
         self.documentation = entry.documentation
         self.sourceLocation = options.includeSourceLocations ? entry.sourceLocation : nil
-        self.isDisabled = options.includeDisabledState ? entry.isDisabled : nil
+        // A legacy false would falsely imply enabled for conditional entries.
+        self.isDisabled =
+            options.includeDisabledState && entry.availability != .conditional
+            ? entry.isDisabled : nil
+        self.availability = options.includeDisabledState ? entry.availability : nil
+        self.availabilityReason = options.includeDisabledState ? entry.availabilityReason : nil
     }
 }
 

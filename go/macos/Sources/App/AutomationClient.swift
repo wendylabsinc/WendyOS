@@ -57,8 +57,13 @@ struct CampaignDraft {
 }
 
 extension GoClient {
+    // Discovery can take seconds. Each source type drains on its own queue so
+    // navigating away never holds up another source or ordinary device controls.
+    private static let sensorScans = DispatchQueue(label: "dev.wendy.desktop.pairing.sensors", qos: .utility)
+    private static let cameraScans = DispatchQueue(label: "dev.wendy.desktop.pairing.cameras", qos: .utility)
+
     func pairings(session: UInt64, kind: PairingKind) async throws -> PairingSnapshot {
-        try await perform {
+        try await BlockingWork.run(on: kind == .lite ? Self.sensorScans : Self.cameraScans) {
             guard let p = WDPairings(session, kind.bridge) else { throw WendyError(message: "Missing pairing result.") }
             defer { WDPairingsFree(p) }
             try Self.check(p.pointee.status)

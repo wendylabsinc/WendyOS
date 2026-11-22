@@ -31,7 +31,7 @@ func main() {
 		record["mode"] = info.Mode().String()
 		record["size"] = info.Size()
 	}
-	found, lookupErr := vm.FindQEMU(runtime.GOOS)
+	found, lookupErr := vm.FindQEMU(vm.ArchARM64, runtime.GOOS)
 	record["found"] = found
 	if lookupErr != nil {
 		record["lookup_error"] = lookupErr.Error()

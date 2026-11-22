@@ -146,7 +146,7 @@ func newCameraListCmd() *cobra.Command {
 				devices = resp.GetDevices()
 			}
 
-			return renderCameraList(cmd.OutOrStdout(), devices, all)
+			return renderCameraList(cmd.OutOrStdout(), devices, all, cameraShareRows(ctx, conn))
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Run a discovery round on the device before listing")
@@ -161,7 +161,10 @@ func newCameraListCmd() *cobra.Command {
 // Network cameras without a login are left out unless all is set: discovery
 // finds every ONVIF camera on the networks the device is on, and on a shared
 // LAN most belong to someone else. The table says how many it hid.
-func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool) error {
+//
+// shares maps a device path to the agent's camera-sharing properties; nil, or
+// rows without the share keys (an older agent), leave every status as it was.
+func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool, shares map[string]map[string]string) error {
 	hidden := 0
 	if !all {
 		devices, hidden = withoutUnpairedCameras(devices)
@@ -189,12 +192,36 @@ func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool) err
 			transportLabel(d.GetTransport()),
 			d.GetName(),
 			cameraWhere(d),
-			cameraStatus(d),
+			cameraStatus(d, shares),
 		})
 	}
 	fmt.Fprint(w, tui.RenderTable(headers, rows))
 	printHiddenCamerasHint(w, hidden)
 	return nil
+}
+
+// cameraShareRows asks the agent for its camera capability rows and returns
+// their properties by device path. Sharing is extra detail, so a failed call
+// or an agent without the call returns nil and the list shows today's status.
+// JSON output carries no status column, so it makes no call.
+func cameraShareRows(ctx context.Context, conn *grpcclient.AgentConnection) map[string]map[string]string {
+	if jsonOutput {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	category := "camera"
+	resp, err := conn.AgentService.ListHardwareCapabilities(ctx, &agentpb.ListHardwareCapabilitiesRequest{CategoryFilter: &category})
+	if err != nil {
+		return nil
+	}
+	rows := make(map[string]map[string]string)
+	for _, c := range resp.GetCapabilities() {
+		if c.GetDevicePath() != "" {
+			rows[c.GetDevicePath()] = c.GetProperties()
+		}
+	}
+	return rows
 }
 
 // withoutUnpairedCameras drops network cameras that have no stored login and
@@ -579,20 +606,23 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 }
 
 // cameraRejoinDelay is how long the viewer waits before rejoining a camera
-// whose producer an episode capture restarted. It is a pause, not a backoff:
+// whose producer the agent restarted (for an episode capture, or for an app
+// that started sharing the camera). It is a pause, not a backoff:
 // the replacement producer is started by the agent as part of the same
 // takeover, so the camera is normally back within one pipeline start. The wait
 // only keeps the client from arriving before the new hub exists.
 const cameraRejoinDelay = 500 * time.Millisecond
 
 // cameraRejoinAttempts bounds the rejoins one `camera view` will make. A
-// takeover is a rare event driven by a campaign trigger; a stream that keeps
-// being restarted is a device busy recording, and saying so beats reconnecting
+// takeover is a rare event (a campaign trigger, or an app starting to share
+// the camera); a stream that keeps being restarted means something on the
+// device keeps taking the camera over, and saying so beats reconnecting
 // forever in a loop the operator has to notice and break.
 const cameraRejoinAttempts = 5
 
 // streamCameraRejoiningRestarts plays a camera stream, rejoining when the
-// agent ends it because an episode capture restarted the producer.
+// agent ends it because it restarted the producer: an episode capture took the
+// camera over, or an app started sharing it. The agent's message names which.
 //
 // The agent's capture policy takes a camera over only from viewers that
 // asserted no stream parameters, and `wendy camera view` with no --width,
@@ -618,10 +648,11 @@ func streamCameraRejoiningRestarts(ctx context.Context, open func() (videoStream
 			return ctx.Err()
 		}
 		if attempt+1 >= cameraRejoinAttempts {
-			return fmt.Errorf("camera producer was restarted by episode capture %d times; the device is busy recording: %w",
+			return fmt.Errorf("camera producer was restarted %d times in a row; something on the device keeps taking the camera over "+
+				"(a recording, or an app starting to share it), so try again later: %w",
 				cameraRejoinAttempts, err)
 		}
-		cliLogln("Camera producer restarted by an episode capture; rejoining the new stream...")
+		cliLogln("The agent restarted the camera producer; rejoining the new stream...")
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
