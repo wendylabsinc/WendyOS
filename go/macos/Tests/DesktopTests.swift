@@ -469,9 +469,13 @@ final class DesktopTests: XCTestCase {
         cameras.pointee.items = allocate(WDCamera.self)
         cameras.pointee.count = 1
         cameras.pointee.items.pointee.name = strdup("Camera zero")
+        cameras.pointee.items.pointee.topic = strdup("/thermal/exact/temperature")
+        cameras.pointee.items.pointee.ros2 = 1
         let values = try GoClient.readCameras(cameras) // Consumes and frees C result.
         XCTAssertEqual(values.first?.id, 0)
         XCTAssertEqual(values.first?.name, "Camera zero")
+        XCTAssertEqual(values.first?.rosTopic, "/thermal/exact/temperature")
+        XCTAssertEqual(values.first?.isROS2, true)
 
         let apps = allocate(WDAppsResult.self)
         apps.pointee.count = 1
