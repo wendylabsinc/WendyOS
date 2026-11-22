@@ -17,9 +17,11 @@ Hardware references:
 
 - https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/howto.html#force-recovery-mode
 - https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/orin_nano/docs/jetson_orin_nano_devkit_carrier_board_specification_sp.pdf
-- https://github.com/qualcomm-linux/qcom-linux-skills/blob/main/skills/qcom-flash-qdl/references/entering-edl.md
+- https://dragonwingdocs.qualcomm.com/Linux/devices/iq8275-evk/update-software/flash-using-qualcomm-launcher
+- https://dragonwingdocs.qualcomm.com/Linux/devices/iq9075-evk/update-software/flash-using-qualcomm-launcher
 
-The production IQ-9075 uses SW2-3; the production IQ-8275 uses S2-8. Beta EVKs
+The production IQ-9075 and IQ-8275 use DIP switch 3, identified as SW2-3
+in Qualcomm's flashing guides. Beta EVKs
 use different switches and require their revision's hardware guide. Do not reuse
 the IQ-9075 mesh as an IQ-8275 location reference.
 

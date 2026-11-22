@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -2764,6 +2766,9 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 	// Try the given port first (covers explicit tunnel ports that already point
 	// at the mTLS port), then fall back to port+1 (the normal case where
 	// discovery returns the plaintext port and mTLS is port+1).
+	// A target that requires mTLS keeps both rungs: a probe can mark a row as
+	// mTLS while it still carries the plaintext port from an advertisement that
+	// lags the agent's enrollment. Only the plaintext rung is withheld from it.
 	mtlsAddrs := []string{cand, hostPort(host, port+1)}
 	for addrIdx, mtlsAddr := range mtlsAddrs {
 		if err := ctx.Err(); err != nil {
@@ -2916,7 +2921,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// A saved binding too old to name a device (organization only) must
 		// never turn into a plaintext attempt or a first-contact connection.
 		// A device with no saved binding at all is dialled below.
-		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
+		refusal := orgOnlyBindingError{key: target.refusalKey()}
+		return nil, refusal, refusal
 	}
 	candidates := target.dialCandidates()
 	walk := &mtlsWalk{target: target, tlsDebug: os.Getenv("WENDY_TLS_DEBUG") != ""}
@@ -3008,6 +3014,9 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		}
 		return nil, walk.lastMTLSErr, pinnedRefusalError(failure, tenant, allCerts, time.Now())
 	}
+	if target.RequiresMTLS {
+		return nil, walk.lastMTLSErr, provisionedAgentConnectError(walk.lastMTLSErr)
+	}
 	// The plaintext rung stays on the primary address rather than walking the
 	// candidates. grpc.NewClient is lazy, so a plaintext "success" against a dead
 	// address is indistinguishable from one against a live address until the
@@ -3024,6 +3033,16 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
 	state, err := deviceProvisioning(probeCtx, conn)
 	cancel()
+	if _, cleaningUp := resetcleanup.Cause(err); cleaningUp {
+		// The device was reset and cannot finish removing what its previous
+		// enrollment left on the host. It is unenrolled, so the setup port is
+		// all it serves, and it withholds its enrollment state until the
+		// cleanup succeeds. Refusing it here would leave no way to read its
+		// logs, update its agent or reboot it, which is how it recovers. The
+		// trust is the same as for NotProvisioned: the device's own word.
+		conn.NoSavedIdentity = true
+		return conn, walk.lastMTLSErr, nil
+	}
 	if err != nil {
 		conn.Close()
 		return nil, walk.lastMTLSErr, err
@@ -3301,21 +3320,19 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	arch := resp.GetCpuArchitecture()
 	osName := resp.GetOs()
 
-	if err := performAgentUpdate(ctx, conn, osName, arch, false); err != nil {
+	sha, err := performAgentUpdate(ctx, conn, osName, arch, false)
+	if err != nil {
 		fmt.Fprintf(terminaloutput.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
 		return conn, nil
 	}
 
 	conn.Close()
 
-	fmt.Fprintf(terminaloutput.Stderr, "Waiting for agent to restart...")
-	newConn, err := reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		fmt.Fprintf(terminaloutput.Stderr, " failed.\n")
-		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	fmt.Fprintf(terminaloutput.Stderr, "Waiting for agent to restart...\n")
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, conn)
 	}
-	fmt.Fprintf(terminaloutput.Stderr, " ready.\n")
-	return newConn, nil
+	return confirmAgentAfterRestart(ctx, resp.GetSupervision() != nil, reconnect, sha, terminaloutput.Stderr)
 }
 
 // checkAndOfferUpdateFn is a seam over checkAndOfferUpdate. It exists for tests
@@ -3325,16 +3342,17 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 var checkAndOfferUpdateFn = checkAndOfferUpdate
 
 // performAgentUpdate downloads the latest release for the given osName/arch and
-// uploads it to conn. Pass nightly=true to fetch the latest prerelease instead
-// of stable. The agent will restart after this returns successfully.
-func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, osName, arch string, nightly bool) error {
+// uploads it to conn, returning its sha256. Pass nightly=true to fetch the
+// latest prerelease instead of stable. The agent will restart after this
+// returns successfully.
+func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, osName, arch string, nightly bool) (string, error) {
 	if arch == "" {
-		return fmt.Errorf("device did not report CPU architecture")
+		return "", fmt.Errorf("device did not report CPU architecture")
 	}
 	fmt.Fprintf(terminaloutput.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
 	binaryData, resolvedVer, source, err := resolveAgentArtifact(osName, arch, nightly)
 	if err != nil {
-		return fmt.Errorf("resolving agent binary: %w", err)
+		return "", fmt.Errorf("resolving agent binary: %w", err)
 	}
 	fmt.Fprintf(terminaloutput.Stderr, "Downloaded agent %s (from %s)\n", resolvedVer, source)
 
@@ -3342,7 +3360,7 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 	sha256Hash := hex.EncodeToString(h[:])
 
 	fmt.Fprintf(terminaloutput.Stderr, "Uploading to device...\n")
-	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+	return sha256Hash, deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
 }
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers
@@ -3607,6 +3625,7 @@ type resolveConfig struct {
 	sameTargetFallback       defaultDeviceSameTargetFallback
 	readOnlyMonitoring       bool
 	enrollmentTrustRecovery  bool
+	knownCloudLookup         *knownCloudLookup
 }
 
 var (
@@ -3733,21 +3752,33 @@ func ExcludeProviders(keys ...string) resolveOption {
 // (issue #1171). This is the single funnel every command uses to obtain a
 // device, so the clock fix applies to info, run, deploy, ros2 bag, etc.
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
-	sel, err := resolveTargetInner(ctx, opts...)
+	known := &knownCloudLookup{}
+	innerOpts := append(slices.Clip(opts), recordKnownCloudLookup(known))
+	resolve := func() (*SelectedDevice, error) {
+		known.err = nil
+		return resolveTargetInner(ctx, innerOpts...)
+	}
+	sel, err := resolve()
 	for range 2 {
 		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
 		if !retry {
 			err = confirmErr
 			break
 		}
-		sel, err = resolveTargetInner(ctx, opts...)
+		sel, err = resolve()
 	}
 	if err != nil {
 		device := resolveOptionsDevice(opts)
 		if device == "" {
 			device = deviceFlag
 		}
-		if conn, cloudErr, attempted := connectUnresolvedCloudName(ctx, device, err, opts...); attempted {
+		if known.err != nil {
+			// Cloud already failed to reach this pinned name before the local
+			// path ran. Its answer names the next useful action.
+			if localMissDefersToCloud(ctx, device, err) {
+				err = &cloudNameResolutionError{known.err}
+			}
+		} else if conn, cloudErr, attempted := connectUnresolvedCloudName(ctx, device, err, opts...); attempted {
 			err = cloudErr
 			if err == nil {
 				sel = &SelectedDevice{Agent: conn}
@@ -3850,6 +3881,15 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		if p := providers.ProviderForKey(device); p != nil {
 			return explicitProviderDevice(ctx, p)
 		}
+	}
+
+	if selected, matched, err := connectKnownCloudName(ctx, device, cfg); matched {
+		if err == nil && isDefault {
+			noteImplicitDevice(device, implicitDefaultDevice)
+		}
+		return selected, err
+	} else if err != nil && cfg.knownCloudLookup != nil {
+		cfg.knownCloudLookup.err = err
 	}
 
 	// Check if the device flag matches a discovered device ID (e.g.
@@ -4396,7 +4436,9 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 			}},
 		}
 		if port := dev.ConnectionInfo["serialPort"]; port != "" {
-			if dev.ConnectionInfo["needsInstall"] == "true" {
+			// A busy port has no identity either; key it the same way so the
+			// row is replaced once the board can be opened and identifies itself.
+			if dev.ConnectionInfo["needsInstall"] == "true" || dev.ConnectionInfo["busy"] == "true" {
 				item.DedupKey = unflashedLiteDedupKey(port)
 				// The branch sets no SortKey, so ordering falls back to the
 				// dedup key; pin it to the name to keep the row's position.
@@ -4727,7 +4769,6 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 				cliLogln("Connecting to %s via Wendy Cloud relay...", choice.CloudV2.GetName())
 				return cloudLiteSelectedDevice(cloudAuth, choice.CloudV2, selector)
 			}
-			cliLogln("Connecting to %s via cloud tunnel...", choice.CloudV2.GetName())
 			conn, err := connectCloudAssetV2(ctx, cloudAuth, choice.CloudV2, dm.cloud.brokerURL)
 			if err != nil {
 				return nil, err
@@ -4738,7 +4779,6 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		if err != nil {
 			return nil, err
 		}
-		cliLogln("Connecting to %s via cloud tunnel...", choice.Cloud.GetName())
 		conn, err := connectCloudAsset(ctx, cloudAuth, choice.Cloud, dm.cloud.brokerURL)
 		if err != nil {
 			return nil, err

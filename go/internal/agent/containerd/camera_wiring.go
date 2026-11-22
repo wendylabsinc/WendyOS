@@ -6,6 +6,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/errdefs"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
@@ -56,6 +57,7 @@ type containerCameraInfo struct {
 	name    string
 	labels  map[string]string
 	running bool
+	pid     uint32 // the task's pid, for a running task only
 }
 
 // cameraConsumerNames returns the names of containers that currently count
@@ -140,12 +142,15 @@ func shouldEnsureCameraNodes(appCfg *appconfig.AppConfig) bool {
 // interval (RunCameraLoopbackSync), which also catches crash-exits the
 // lifecycle nudges cannot see.
 //
-// Entirely best-effort: a nil provider is a silent no-op, and any error from
-// the provider is logged, never returned — a camera loopback problem must
-// never break container management (why callers invoke this via `go` and
+// The same listing feeds the camera share manager (syncCameraShares): every
+// container labelled "shared", running or not, with a running task's pid.
+//
+// Entirely best-effort: with neither provider it is a silent no-op, and any
+// error from a provider is logged, never returned — a camera loopback problem
+// must never break container management (why callers invoke this via `go` and
 // discard nothing, since there is nothing to discard).
 func (c *Client) SyncCameraLoopbacks(ctx context.Context) {
-	if c.cameraLoopbackProvider == nil {
+	if c.cameraLoopbackProvider == nil && c.cameraShareProvider == nil {
 		return
 	}
 	ctx = c.withNamespace(ctx)
@@ -156,29 +161,45 @@ func (c *Client) SyncCameraLoopbacks(ctx context.Context) {
 		return
 	}
 
-	infos := make([]containerCameraInfo, 0, len(ctrs))
+	infos, complete := c.cameraInfos(ctx, ctrs)
+
+	if c.cameraLoopbackProvider != nil {
+		if err := c.cameraLoopbackProvider.EnsureCameraNodes(ctx); err != nil {
+			c.logger.Warn("camera loopback sync: ensuring camera nodes failed", zap.Error(err))
+		}
+		c.cameraLoopbackProvider.SetCameraContainerConsumers(ctx, cameraConsumerNames(infos))
+		c.cameraLoopbackProvider.SetTwoPlaneContainerConsumers(ctx, twoPlaneConsumerNames(infos))
+	}
+	c.syncCameraShares(ctx, infos, complete)
+}
+
+// cameraInfos reads each listed container's labels and task state. complete
+// is false when a container that still exists could not be read; one deleted
+// since the listing is simply left out, since it is gone either way.
+func (c *Client) cameraInfos(ctx context.Context, ctrs []containerd.Container) (infos []containerCameraInfo, complete bool) {
+	infos = make([]containerCameraInfo, 0, len(ctrs))
+	complete = true
 	for _, ctr := range ctrs {
 		info, err := ctr.Info(ctx)
+		if errdefs.IsNotFound(err) {
+			continue
+		}
 		if err != nil {
 			c.logger.Warn("camera loopback sync: reading container failed", zap.String("id", ctr.ID()), zap.Error(err))
+			complete = false
 			continue
 		}
 		running := false
+		var pid uint32
 		if task, terr := ctr.Task(ctx, nil); terr == nil {
 			if st, serr := task.Status(ctx); serr == nil && st.Status == containerd.Running {
 				running = true
+				pid = task.Pid()
 			}
 		}
-		infos = append(infos, containerCameraInfo{name: ctr.ID(), labels: info.Labels, running: running})
+		infos = append(infos, containerCameraInfo{name: ctr.ID(), labels: info.Labels, running: running, pid: pid})
 	}
-
-	names := cameraConsumerNames(infos)
-
-	if err := c.cameraLoopbackProvider.EnsureCameraNodes(ctx); err != nil {
-		c.logger.Warn("camera loopback sync: ensuring camera nodes failed", zap.Error(err))
-	}
-	c.cameraLoopbackProvider.SetCameraContainerConsumers(ctx, names)
-	c.cameraLoopbackProvider.SetTwoPlaneContainerConsumers(ctx, twoPlaneConsumerNames(infos))
+	return infos, complete
 }
 
 // RunCameraLoopbackSync runs SyncCameraLoopbacks on a fixed interval until ctx

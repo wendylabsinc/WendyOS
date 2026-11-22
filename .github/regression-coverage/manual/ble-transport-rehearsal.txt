@@ -1,0 +1,147 @@
+Physical BLE transport acceptance for audit 1903
+
+Every case is not_run until a named operator attaches the observations below.
+Generation does not scan, connect, request permissions, change pairing, start
+PowerShell/WinRT, reset a radio or operate a peripheral. The physical supervisor
+is a separate explicit command. Reserve exact host @HOST@ on @PLATFORM@ and
+peripheral serial @SERIAL@. Do not use a robot with active actuators or a shared
+production board. This procedure performs no provisioning writes or credential
+reads. Its GATT status subscription changes only that connection's notification
+state. The only physical mutation is the separately authorized power interruption
+of the reserved peripheral.
+
+Scope and unsupported paths
+
+Linux uses actual BlueZ GATT; macOS uses actual CoreBluetooth GATT and its native
+callbacks. The physical probe establishes public device identity, subscribes to
+Wendy Lite's existing provisioning-status characteristic without sending any
+provisioning command, waits quietly, then observes two outstanding notifications
+being released by the physical disconnect. It reconnects to the same public device
+ID after the operator restores power. This does not prove L2CAP/TLS, write requests,
+controller tuning, long-range PHY or mesh roaming. Those have separate acceptance.
+
+Windows central/GATT/L2CAP is explicitly unimplemented in ble_windows.go. Do not
+mark that transport tested, invent a WinRT GATT implementation or treat the normal
+'use a LAN connection instead' refusal as a successful BLE connection. The Windows
+case starts the actual production PowerShell 5.1 WinRT advertisement watcher twice,
+requires the exact reserved MAC and Lite info service in each fresh watcher, and
+joins each owned watcher and both pipe readers before proceeding. It proves real
+scan restart/cleanup only. The Mac native offline callback executable covers six
+blocked C operations and three notification waiters without a radio; its successful
+result is not a substitute for physical CoreBluetooth delivery.
+
+Prepare exact source, host and peripheral
+
+1. Inventory source_commit and firmware_source_commit as full 40-character SHAs;
+   probe_binary, cli_binary, firmware_binary, identity_record, build_record,
+   authorization_record, permission_record, recovery_record as local nonempty files;
+   trial as an independent random 32-character lowercase hexadecimal nonce. host contains
+   platform (darwin/linux/windows), identity, owner, os_version, adapter_identity,
+   radio_firmware and permission_record description. peripheral contains serial,
+   device_id, board_model, owner, power_connection, recovery_record description,
+   address and gatt_profile:"wendy-lite-info-and-provisioning-status".
+
+2. Independently bind the printed board/USB serial and firmware digest to its
+   public Lite device ID, actual radio address and observed GATT service layout.
+   A name, RSSI or OS-cached advertisement alone is not identity. CoreBluetooth uses
+   its host-specific peripheral UUID @ADDRESS@; Linux and Windows use the observed
+   uppercase MAC. Record privacy-address behavior and stop if it changes. Reserve
+   a quiet RF setup and disconnect other clients so the one-connection Lite limit
+   cannot interfere. Record the actual adapter hardware/driver/firmware, host OS
+   build, source-to-binary build log, firmware provenance and board recovery steps.
+   Never dump Keychain, Bluetooth keys, Wi-Fi passwords or enrollment files.
+
+3. Build the probe from the exact reviewed checkout on the intended host. This
+   compiles but must not execute any physical test:
+     macOS/Linux: go test -c -o OWNED_OUTPUT/gatt-physical.test ./go/internal/shared/ble/central
+     Windows: go test -c -o OWNED_OUTPUT/scan-physical.test.exe ./go/internal/shared/ble/scan
+   Put that binary's path in probe_binary and retain its hash and build log in the
+   inventory. Candidate CLI/firmware hashes identify the release under acceptance;
+   the probe runs the candidate transport source directly, not the CLI command
+   parser. Confirm its source SHA matches the candidate release before crediting
+   the result. The generator hashes the transport and probe sources separately.
+
+4. Generate on the intended host platform in a new private output directory:
+     python3 ble-transport-rehearsal.py inventory.json NEW_PRIVATE_OUTPUT
+   Keep the checkout and output paths intact: the supervisor verifies every source,
+   generated plan/helper and artifact hash before starting. A rebuild, another
+   firmware, another host or a changed identity requires a new reviewed inventory.
+   No result is inferred from generation. Review all hardware cases as not_run.
+
+5. Before launching, the human must authorize scanning and the one reserved board's
+   temporary power loss. On macOS, record the actual terminal/probe signing identity
+   and Bluetooth permission state. Only the human may grant a prompted permission;
+   do not reset TCC databases, disable SIP or change system privacy policy. Denial
+   must terminate with an error and no accepted physical marker. Existing denied
+   permission may be recorded without changing it. Do not claim denial tested if
+   it was not observed. On Windows, use the actual Windows PowerShell 5.1 required
+   by production WinRT projection, not a PowerShell 7 substitute; record OS privacy
+   permissions and the signed host/tool provenance. Linux must use the intended
+   adapter with existing normal-user BlueZ access; do not run the test as root or
+   reconfigure the host bus/radio. Record any missing prerequisite as pending.
+
+macOS/Linux actual disconnect and reconnect
+
+6. Run the exact generated command with a foreground terminal and serial observer.
+   The supervisor delegates Unix process ownership to the existing bounded group
+   guardian. The selected test is @TEST@. Preserve stdout/stderr and exit status.
+   It first reads the real Lite public device-ID characteristic, subscribes to the
+   actual status characteristic and requires a quiet one-second timeout. Any
+   unexpected notification, identity mismatch, subscription failure or disconnected
+   baseline fails. It does not send SSID/password/connect/clear-credentials commands.
+
+7. Wait for PHYSICAL_BLE_WAIT_READY with trial @TRIAL@. Both notification operations
+   have begun and remained quiet for one second. Within five seconds the owner
+   removes power only from the reserved peripheral, using its recorded connector.
+   Record the actual power event and host disconnect callback timestamps. Do not
+   disable the host adapter or remove another USB device. Both pending calls must
+   return disconnected within fifteen seconds of readiness, not their twenty-second
+   notification timeout. The probe joins both before releasing the native handle.
+   A quiet timeout, unrelated error, one waiter left alive or process crash fails.
+
+8. Only after PHYSICAL_BLE_DISCONNECTED, restore power to the same peripheral.
+   Confirm its serial console identity, firmware and resumed advertisement. Within
+   sixty seconds write the exact fresh restore nonce using the generated command
+   at the bottom. Never precreate that acknowledgment, reuse another trial or
+   acknowledge an unobserved restore. The probe opens a new connection, rediscovers
+   services and reads the same public device ID. It must print
+   PHYSICAL_BLE_GATT_VERIFIED and exit 0. The completed.nonce file is written only
+   after that sequence; its existence alone cannot prove the operator's physical
+   identity, authorization or timing records. Retain all of them together.
+
+Windows actual WinRT discovery lifecycle
+
+9. The generated supervisor creates a kill-on-close Windows Job Object, starts
+   only the exact probe binary, assigns it to that job, then writes a fresh nonce
+   permitting WinRT startup. The Go test cannot launch PowerShell before assignment.
+   The helper imports only the reviewed Job class; it performs no Wintun, network,
+   driver, route, firewall, registry or privilege operations. A failed assignment,
+   interruption or timeout drains this exact job and never kills a process by name.
+
+10. Keep the reserved peripheral advertising. Each of two fresh production WinRT
+    watchers has twenty-five seconds to report its exact MAC and Lite info service.
+    A cached result from the previous watcher cannot satisfy the second one's empty
+    initial map. After Close, the probe requires the actual watcher exit record,
+    which production emits only after stdout/stderr readers and cmd.Wait finish.
+    Require both PHYSICAL_BLE_WINRT_CYCLE records and PHYSICAL_BLE_WINRT_VERIFIED,
+    exit 0 and the exact completed nonce. An empty scan, an unavailable radio, a
+    missing service UUID or a surviving owned process fails. This proves scan
+    restart; no physical GATT disconnect acceptance exists on Windows.
+
+Cleanup and evidence
+
+11. The Unix guardian bounds the physical probe to 250 seconds; Windows supervises
+    its probe for 100 seconds and retains its Job handle until all owned descendants
+    drain. A signal, unknown exit, missing completed nonce, changed artifact or
+    failed cleanup is a failure, never a passing skip. Keep uncertain evidence and
+    do not launch a replacement probe until the owned process tree has drained.
+    Restore only the reserved peripheral's original power state and leave host
+    adapters, other clients and permissions unchanged unless the owner explicitly
+    authorized a permission change. Do not forget/remove bonds or reset devices.
+
+12. Preserve exact hashes/source revisions, host/adapter/peripheral records, actual
+    permission outcome, physical event timestamps, every attempt's logs/exit and
+    cleanup observations. Only then remove this trial's output and acknowledgment
+    files. Do not reuse the plan directory: the supervisor refuses existing nonce
+    files. All unperformed OS/radio combinations remain not_run. Unsupported Windows
+    GATT/L2CAP, physical writes, pairing, TLS and mesh cases remain separate gaps.

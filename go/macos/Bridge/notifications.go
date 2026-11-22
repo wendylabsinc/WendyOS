@@ -6,6 +6,7 @@ package main
 import "C"
 import "unsafe"
 import "fmt"
+import cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 
 //export WDCampaignNotifications
 func WDCampaignNotifications(session C.uint64_t) *C.WDCampaignNotificationsResult {
@@ -47,6 +48,19 @@ func WDPushRegistration(account *C.char, token *C.uint8_t, count C.size_t, topic
 //export WDInbox
 func WDInbox(account *C.char) *C.WDInboxResult {
 	rows, err := desktop.Inbox(C.GoString(account))
+	return inboxResult(rows, err)
+}
+
+//export WDNotification
+func WDNotification(account, organization, id *C.char) *C.WDInboxResult {
+	row, err := desktop.Notification(C.GoString(account), C.GoString(organization), C.GoString(id))
+	if err != nil {
+		return inboxResult(nil, err)
+	}
+	return inboxResult([]*cloudpb.Notification{row}, nil)
+}
+
+func inboxResult(rows []*cloudpb.Notification, err error) *C.WDInboxResult {
 	p := alloc[C.WDInboxResult](1)
 	*p = C.WDInboxResult{status: status(err), count: C.size_t(len(rows)), items: alloc[C.WDInboxNotification](len(rows))}
 	for i, row := range rows {
@@ -54,7 +68,8 @@ func WDInbox(account *C.char) *C.WDInboxResult {
 		if id == "" {
 			id = fmt.Sprintf("legacy:%s:%s:%s", row.GetCreatedAt().AsTime().String(), row.GetTitle(), row.GetBody())
 		}
-		unsafe.Slice(p.items, len(rows))[i] = C.WDInboxNotification{id: C.CString(id), title: C.CString(row.GetTitle()), body: C.CString(row.GetBody()), created_at: C.double(float64(row.GetCreatedAt().AsTime().UnixMilli()) / 1000)}
+		fields := row.GetMetadata().GetFields()
+		unsafe.Slice(p.items, len(rows))[i] = C.WDInboxNotification{id: C.CString(id), title: C.CString(row.GetTitle()), body: C.CString(row.GetBody()), organization_id: C.CString(row.GetOrganizationId()), deep_link: C.CString(row.GetDeepLink()), recording_event_id: C.CString(fields["recording_event_id"].GetStringValue()), recording_campaign: C.CString(fields["recording_campaign"].GetStringValue()), created_at: C.double(float64(row.GetCreatedAt().AsTime().UnixMilli()) / 1000)}
 	}
 	return p
 }
@@ -68,6 +83,10 @@ func WDInboxFree(p *C.WDInboxResult) {
 		free(row.id)
 		free(row.title)
 		free(row.body)
+		free(row.organization_id)
+		free(row.deep_link)
+		free(row.recording_event_id)
+		free(row.recording_campaign)
 	}
 	free(p.items)
 	free(p.status.message)

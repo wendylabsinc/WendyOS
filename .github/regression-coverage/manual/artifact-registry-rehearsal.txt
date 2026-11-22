@@ -1,0 +1,224 @@
+Audits 2504/2521: exact Artifact Registry upload and native repository consumption
+
+This procedure leaves all external cases not_run until executed by the repository
+owner. Preparation hashes local files only. The consumer downloads packages using
+native APT/DNF, checks exact bytes and package metadata, and retains evidence. It
+does not install a package or mutate system repositories, IAM, VMs or services.
+No new CI job is needed. Existing native 2352 install/upgrade/removal results must
+already cover precisely these candidate bytes; this procedure binds repository
+retrieval to those results. It does not claim an online service-upgrade journey.
+
+Original scope
+PR2521 (cf3e5d6df) already forced `_rpmformat 4` and checked the produced six-byte
+RPM lead edabeedb0300. PR2504 (5626af09e) pinned Ubuntu 24 packaging after GCP rejected
+newer-produced RPMs. Neither establishes acceptance just because rpm can read the
+file. The current shared build-linux-packages.sh and real native guest tests cover
+format and package transactions. External upload/index/download remains distinct.
+
+1. Select a real release candidate and evidence
+Use the exact full source commit, completed build.yml run URL and native package
+job artifacts linux-packages-{deb,rpm}-{amd64,arm64}. Each contains wendy and
+wendy-agent. Download via the approved GitHub artifact/release mechanism, retain
+artifact IDs/digests and release attestation verification, and hash all eight
+package files. Do not repackage or rename the version to make an upload pass.
+Use the existing native package guest evidence for these exact hashes, including
+normal result.json with the embedded manifest, and retain its original stopped
+upgrade negative-control results too. A result for another source or package hash
+cannot qualify this release. In a release run these are the package-linux outputs
+before attestation. Existing successful PR test binaries are not release artifacts.
+
+On a native metadata host, record exact package names/versions/architectures:
+  dpkg-deb -f PACKAGE.deb Package Version Architecture
+  rpm -qp --qf '%{NAME}\n%{VERSION}-%{RELEASE}\n%{ARCH}\n' PACKAGE.rpm
+Do not infer RPM version from the Git tag: packaging replaces version hyphens
+with underscores and includes its release field. The generator requires all
+eight release items and checks their hashes against native normal-transaction
+proofs. It refuses RPMs without the expected 3.0 lead before producing uploads.
+
+2. Reserve the external context before any upload
+The owner chooses one of two contexts and records who approved the exact project,
+repository resource names, version/hashes, credentials role and cleanup authority.
+Credentials must stay out of inventory, command logs, archives and Git.
+
+For an already authorized stable release, use mode=authorized-release, location
+us-central1 and repositories wendy-apt/wendy-yum. Use only the ordinary existing
+publish-linux-repos job in that exact build.yml release run. It performs the real
+APT and YUM uploads after native packaging. Do not dispatch a new production
+release, repeat uploads, change version, or create an external service just to
+collect evidence. The generated plan emits no manual uploads in this mode.
+Save that job's exact artifact selection, successful gcloud operations and log URL.
+
+For a separately owner-reserved trial, use mode=reserved and fresh repository
+names wendy-audit-TRIAL_FIRST16-apt and wendy-audit-TRIAL_FIRST16-yum in an approved
+project/location. The owner can create these standard private repositories using:
+  gcloud artifacts repositories create REPO --project=PROJECT --location=LOCATION --repository-format=apt
+  gcloud artifacts repositories create REPO --project=PROJECT --location=LOCATION --repository-format=yum
+Apply repository-scoped roles/artifactregistry.writer to the approved uploader
+and roles/artifactregistry.reader to the consumer VM service account through the
+owner's IAM process. Do not grant project-wide writer access, create long-lived
+service-account keys, enable public access, or reuse unrelated repositories.
+Keep the actual creation/describe/IAM review records. An existing repository with
+the same name must be investigated, not silently adopted or deleted.
+
+In either context inspect `gcloud artifacts repositories describe REPO` with the
+explicit project/location. Require the exact full resource, APT/YUM format and
+STANDARD_REPOSITORY mode, expected owner, and no remote/virtual upstream that can
+mask a failed upload. Keep both describe JSON responses. The generated describe
+and settings commands use explicit resources and have a 600s local guardian bound.
+No credentials are read or used during plan generation.
+
+3. Qualify four disposable native consumer VMs
+Use owner-reserved Compute Engine VMs, one each for deb-amd64, deb-arm64,
+rpm-amd64 and rpm-arm64. Record project, zone, immutable instance ID, exact image
+resource/version and responsible owner. The two DEB VMs use a supported Ubuntu
+or Debian image and the real Artifact Registry APT transport. The two RPM VMs
+use a supported Enterprise Linux image with DNF4, dnf-plugins-core's download
+command and the matching dnf-plugin-artifact-registry package. DNF5 and emulation
+are outside this qualified consumer script. Provisioning is an explicit owner
+operation, never an automatic side effect of the tests. Select actual available
+image versions/native machine types; do not invent an arm64 image identifier.
+
+Use a dedicated VM service account with reader access only to the selected
+repositories and the required cloud-platform access scope. Configure the native
+Artifact Registry clients using Google's current supported distro instructions:
+  https://docs.cloud.google.com/artifact-registry/docs/os-packages/debian/configure
+  https://docs.cloud.google.com/artifact-registry/docs/os-packages/rpm/configure
+For GCE, the helpers use the VM service account. Do not export an OAuth token or
+copy personal gcloud/ADC credentials to the guest. Complete client/plugin setup
+before capturing the boot/OS/tool identities; an unsupported helper/distro is a
+qualification failure, not a reason to turn off authentication or use curl alone.
+The owner reviews the exact output of the generated `gcloud beta artifacts
+print-settings apt|yum` commands; do not execute remote text blindly.
+
+The consumer creates its own repository files, caches and lists under a fresh
+output path. Its APT signed-by key is the reviewed Artifact Registry regional
+repository keyring; acquire it from the official LOCATION-apt.pkg.dev signing-key
+endpoint, convert with gpg --dearmor in a private output, and retain its observed
+fingerprint/hash and provenance. No system keyring is changed by the consumer.
+YUM metadata GPG validation is unsupported by Artifact Registry; its documented
+HTTPS configuration uses repo_gpgcheck=0. This procedure additionally checks all
+downloaded bytes against exact approved release SHA256 and native package proof.
+It does not call that a package-signature verification.
+
+As the reserved unprivileged guest user, record:
+  cat /proc/sys/kernel/random/boot_id
+  sha256sum /etc/os-release
+  uname -m
+  systemd-detect-virt --vm
+  systemd-detect-virt --container
+  sha256sum /usr/bin/apt-get /usr/bin/dpkg-deb       # DEB guest
+  sha256sum /usr/bin/dnf /usr/bin/rpm               # RPM guest
+  dnf --version                                  # RPM guest must be 4.x
+The container check must report none with exit 1; the VM check must succeed.
+Observe instance/id, instance/zone and project/project-id through the authenticated
+GCE metadata protocol with Metadata-Flavor:Google, and independently match them
+to the owner's VM reservation. The consumer rechecks these against its plan and
+ignores proxy variables for metadata. Never run it on the developer host.
+Reserve sufficient private disk for two package files plus metadata, at least 2 GiB.
+
+4. Prepare the local inventory and plan
+Inventory fields:
+  trial: fresh 32 lowercase hex
+  source_commit: exact 40 lowercase hex
+  release_run: https://github.com/wendylabsinc/WendyOS/actions/runs/ACTUAL_ID
+  target: {mode: reserved|authorized-release, project: ACTUAL_PROJECT,
+           location: ACTUAL_LOCATION, apt: EXACT_APT_REPO, yum: EXACT_YUM_REPO}
+  records: {authorization: FILE, release_provenance: FILE,
+            repository_identity: FILE, guest_reservation: FILE, cleanup: FILE}
+  apt_keyring: REVIEWED_LOCAL_GPG_FILE
+  apt_keyring_sha256: its actual 64 hex digest
+  packages: eight objects, each {format: deb|rpm, architecture: amd64|arm64,
+            name: wendy|wendy-agent, version: EXACT_NATIVE_VERSION, path: PACKAGE,
+            sha256: ACTUAL_DIGEST, native_result: MATCHING_NORMAL_RESULT_JSON}
+  guests: four keys deb-amd64, deb-arm64, rpm-amd64, rpm-arm64, each containing
+          {instance_id: OBSERVED_DECIMAL_ID, project: ACTUAL_PROJECT, zone: ZONE,
+           boot_id: OBSERVED_UUID, os_release_sha256: DIGEST,
+           client_sha256: APT_OR_DNF_DIGEST, metadata_tool_sha256: DPKG_OR_RPM_DIGEST}
+
+Use actual JSON string/array/object syntax. All FILE entries are nonempty local
+evidence paths. Run from the candidate checkout:
+  python3 .github/regression-coverage/manual/artifact-registry-rehearsal.py prepare INVENTORY NEW_PLAN
+Inspect plan.json, commands.json and prepared-files.json. There are no image or
+package payload copies in the plan; references remain hash-bound to local release
+files. The output contains the consumer, guardian, reviewed keyring and this guide.
+The generator does not call gcloud, package clients, network services or guests.
+
+5. Execute the authorized upload and collect receipts
+Rehash original candidate files before and after the upload. In reserved mode,
+execute each generated upload-N argv exactly once from the approved uploader
+environment. Capture stdout, stderr, command, start/end time, exit status and
+operation/service response, indexed by the exact source file hash. A timeout or
+ambiguous response is unknown; inspect the service before deciding any retry.
+In authorized-release mode retain the existing publish job's actual corresponding
+evidence instead. Repository existence, RPM lead, a valid local file, or a green
+unrelated release cannot substitute for successful candidate uploads.
+Check the exact expected package versions become indexed in each target; retain
+the native consumer's metadata output. Do not upload a deliberately incompatible
+RPM to a production repository as a negative control.
+
+6. Consume through actual native repository clients
+Copy the prepared directory to each reserved guest without changing file bytes.
+Independently compare prepared-files.json to the uploader's retained copy, and
+verify every file hash before execution. No candidate package files should be
+present in the new consumer output or cache. Execute as the admitted non-root user:
+  python3 PLAN/guardian.py --timeout 900 -- python3 PLAN/acceptance.py consume PLAN/plan.json GUEST_KEY --confirm-trial TRIAL --output NEW_GUEST_OUTPUT
+The outer guardian owns the complete command group; each native client operation also has a 300s bound and 30s network timeout.
+The fresh APT lists/sourceparts or DNF reposdir/cache expose only the selected
+repository. Exact version and native architecture selectors prevent accidentally
+testing the latest release or another repository's package. Download success must
+be followed by an exact hash set and native metadata match for both packages.
+Unknown or duplicate/extra files, hash/version/architecture mismatch, changed guest
+identity or client bytes fail. A cached package is not accepted as new evidence.
+
+Keep result.json, metadata.log, download.log, source/client configs, actual package
+files/hashes and the guest's final identity. Each result must say passed and retain
+the same plan SHA. It deliberately leaves external_acceptance pending_upload_review:
+only an independent owner can join the actual upload receipt, candidate provenance,
+repository identity and all four consumer outputs. Per-architecture omissions stay
+pending. The exact-byte native 2352 results establish install/upgrade behavior of
+those bytes; fetching packages alone does not establish a newly executed install.
+
+7. Preserve evidence and retire only owned resources
+Hash and archive the private plan, actual receipts and all four guest results.
+Review logs for credentials before sharing; no model/media/package assets enter
+Git. Test failures retain output directories for diagnosis. The consumer never
+cleans an unknown directory or alters a system package database.
+The owner retires the four exact reserved VMs via the approved VM cleanup record.
+Only in reserved mode, after exported evidence is verified, describe each exact
+nonce-named repository again and delete that resource through the owner's change
+process. Keep deletion receipts. Never delete production wendy-apt/wendy-yum,
+unrelated packages, IAM bindings or caches. Uncertain operation state stays unknown.
+
+Source references (commands checked 2026-11-13)
+https://docs.cloud.google.com/sdk/gcloud/reference/artifacts/apt/upload
+https://docs.cloud.google.com/sdk/gcloud/reference/artifacts/yum/upload
+https://docs.cloud.google.com/sdk/gcloud/reference/artifacts/repositories/create
+https://docs.cloud.google.com/sdk/gcloud/reference/beta/artifacts/print-settings/apt
+https://docs.cloud.google.com/sdk/gcloud/reference/beta/artifacts/print-settings/yum
+https://dnf-plugins-core.readthedocs.io/en/latest/download.html
+
+Existing release-job acceptance alternative
+------------------------------------------
+The existing publish-linux-repos job now runs
+.github/scripts/publish-linux-repositories.py in its unchanged stable-release
+publication context. It preserves each native candidate's identity, byte hash,
+upload exit status and upload-log hash. After all eight uploads succeed, fresh
+APT and DNF4 configurations fetch the exact CLI/Agent versions for amd64 and
+arm64 and require the downloaded bytes to match those receipts. A wrong-hash
+control must fail. The job uses the existing action's short-lived WIF credentials
+with Google's real transport helpers; it does not provision a new identity.
+
+The native x86_64 clients run in owned pinned containers and select both package
+architectures. This is repository metadata/download evidence, not ARM execution
+or a second installation/upgrade test. The existing native installed-package
+gates retain responsibility for actual installation and service lifecycle.
+No Wendy package is installed in the release acceptance containers or host.
+
+The required result is repository-consumer-evidence/result.json with status
+passed, eight successful upload receipts, four successful consumer results and
+proven removal of both owned containers. The evidence includes candidate/source,
+helper and key hashes and native client/dependency versions. Credentials, caches
+and downloaded package copies are not uploaded as evidence. The job's existing
+if/needs conditions still govern publication; preparing this check does not run
+or authorize a release. Until an actual authorized release produces these
+receipts, external Artifact Registry acceptance remains pending.

@@ -146,7 +146,7 @@ final class ThermalCameraTests: XCTestCase {
         feed.start(stream: 1)
         XCTAssertFalse(feed.shouldAutoStart(at: Date()))
         XCTAssertTrue(feed.shouldAutoStart(at: Date().addingTimeInterval(16)))
-        feed.fail("Startup interrupted", stream: 1)
+        feed.fail(WendyError(message: "Startup interrupted", code: .networkUnavailable, remedy: .retry), stream: 1)
         XCTAssertTrue(feed.shouldAutoStart(at: Date().addingTimeInterval(3)))
         feed.pause(manually: true)
         XCTAssertFalse(feed.shouldAutoStart(at: Date().addingTimeInterval(60)))

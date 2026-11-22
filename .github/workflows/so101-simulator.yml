@@ -1,16 +1,23 @@
 name: SO-101 simulator
 on:
+  # PRs run this only for the runtime image and the desktop viewer. Go-only
+  # changes to the VM, MCP and command packages are covered by the PR Go unit
+  # tests, and the whole workflow runs before every pre-release.
   pull_request:
     paths:
       - 'go/simulator/so101/**'
-      - 'go/internal/cli/vm/**'
-      - 'go/internal/agent/services/go2_feature*'
-      - 'go/internal/cli/commands/vm*'
-      - 'go/internal/cli/mcp/**'
+      - 'go/simulator/go2/go2_sim/**'
       - 'web-client/desktop/**'
       - 'web-client/tsconfig.desktop.json'
+      - 'web-client/tsconfig.json'
+      - 'web-client/tests/**'
+      - 'web-client/scripts/**'
+      - 'web-client/package.json'
+      - 'web-client/package-lock.json'
       - 'web-client/electron/**'
       - '.github/workflows/so101-simulator.yml'
+      - '.github/scripts/fixtures/so101-http-lifecycle.md'
+  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,7 +36,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -49,12 +56,12 @@ jobs:
           docker run --rm --cpus 2 --memory 2g \
             -e SO101_RENDER_TEST=1 -e PYTHONPATH=/opt/wendy-so101 \
             -v "$PWD/go/simulator/so101/tests:/tests:ro" \
-            so101-ci sh -c 'pip install --no-cache-dir pytest==8.4.2 httpx==0.28.1 && pytest -q -p no:cacheprovider /tests'
+            so101-ci sh -c 'pip install --no-cache-dir pytest==8.4.2 httpx==0.28.1 && pytest -q -p no:cacheprovider /tests && python /tests/check_http_control.py'
   viewer:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.4'
       - run: npm ci --ignore-scripts --omit=optional && npm run desktop:check && npm run desktop:test

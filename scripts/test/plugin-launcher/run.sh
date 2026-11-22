@@ -522,6 +522,13 @@ test_pin_rejects_a_non_release_tag() {
 # --- runner --------------------------------------------------------------------
 
 ORIG_PATH=$PATH
+# macOS can expose a python3 shim even when no working interpreter is installed.
+# Check execution before running cases that need the HTTP fixture server.
+if ! python3 -c 'import http.server'; then
+  echo "Launcher tests require a working python3 with http.server; install Python and put it on PATH." >&2
+  exit 1
+fi
+
 run_case() {
   CASE_FAILED=0
   setup

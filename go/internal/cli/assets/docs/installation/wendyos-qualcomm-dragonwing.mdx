@@ -37,14 +37,16 @@ Prefer to follow along with video? Watch the setup on either board.
   <Step>
     ### Set the EDL switch
 
-    Start with the board powered off. Push **SW2-3**, the third switch on the four-position SW2 DIP switch, up to **ON**.
+    Start with the board powered off. Find the four DIP switches numbered **1, 2, 3 and 4** in the **MODE** bank. Push **only switch 3** up toward the printed **ON** marking. Leave switches **1, 2 and 4** unchanged.
 
-    <Figure src="/images/installation/dragonwing-edl-switch-on.webp" alt="Close-up of a red four-position DIP switch with switch 3 pushed up to ON" caption="SW2-3 set to ON. Switches 1, 2 and 4 stay down." />
+    Qualcomm calls this switch **SW2-3** in its documentation. **SW2** is the bank's reference name; **3** is the individual switch number. It does **not** mean switches 2 and 3, and you do not need to find an SW2 label on the board.
+
+    <Figure src="/images/installation/dragonwing-edl-switch-on.webp" alt="Close-up of a red four-position DIP switch with switch 3 pushed up to ON" caption="Only DIP switch 3 is set to ON. Switches 1, 2 and 4 stay unchanged." />
 
     This selects EDL mode, which is how the board accepts a new image over USB. It is a switch, not a button, so it stays set until you move it back.
 
     <Callout type="info" title="Board revisions name this switch differently">
-      `wendy install` prints a switch name before it writes anything: SW2-3 for the IQ9 and S2-8 for the IQ8. Beta kits use S5-4. The IQ8 in these photos uses SW2-3, as Qualcomm's current guides for the [IQ-8275 EVK](https://dragonwingdocs.qualcomm.com/Linux/devices/iq8275-evk/update-software/flash-using-qualcomm-launcher) and [IQ-9075 EVK](https://dragonwingdocs.qualcomm.com/Linux/devices/iq9075-evk/update-software/flash-using-qualcomm-launcher) do. If the name the installer prints is not on your board, use the EDL switch from Qualcomm's guide for your revision.
+      Qualcomm's current guides for the [IQ-8275 EVK](https://dragonwingdocs.qualcomm.com/Linux/devices/iq8275-evk/update-software/flash-using-qualcomm-launcher) and [IQ-9075 EVK](https://dragonwingdocs.qualcomm.com/Linux/devices/iq9075-evk/update-software/flash-using-qualcomm-launcher) both identify the EDL switch as SW2-3, DIP switch 3. Beta kits use S5-4. If your board's switch bank differs, follow Qualcomm's guide for your revision.
     </Callout>
   </Step>
 
@@ -91,9 +93,9 @@ Prefer to follow along with video? Watch the setup on either board.
   <Step>
     ### Set the switch back and power-cycle
 
-    When the installer reports success, turn the power off, push **SW2-3** back down to **OFF**, and turn the power on again.
+    When the installer reports success, turn the power off, push **only DIP switch 3** back down to **OFF**, leaving switches 1, 2 and 4 unchanged, and turn the power on again.
 
-    <Figure src="/images/installation/dragonwing-edl-switch-off.webp" alt="Close-up of a red four-position DIP switch with all four switches down" caption="SW2-3 back to OFF after the flash." />
+    <Figure src="/images/installation/dragonwing-edl-switch-off.webp" alt="Close-up of a red four-position DIP switch with all four switches down" caption="DIP switch 3 back to OFF after the flash." />
 
     If the switch is left ON, the board boots into EDL mode again instead of WendyOS.
   </Step>
@@ -123,8 +125,8 @@ Prefer to follow along with video? Watch the setup on either board.
 
 ## If the flash does not finish
 
-- **Nothing was written.** The board is unchanged and still boots what it had. Set SW2-3 back to OFF and power-cycle, or leave it ON and run the command again.
-- **The flash stopped partway.** The board may not boot. Leave SW2-3 ON, power-cycle the board to re-enter EDL mode, and run the same command again.
+- **Nothing was written.** The board is unchanged and still boots what it had. Set only DIP switch 3 back to OFF and power-cycle, or leave it ON and run the command again.
+- **The flash stopped partway.** The board may not boot. Leave DIP switch 3 ON, power-cycle the board to re-enter EDL mode, and run the same command again.
 - **More than one board is in EDL mode.** Disconnect all but the one you are flashing. Boards in EDL mode share one USB ID, so Wendy cannot tell them apart until it reads the chip ID.
 
 The installer prints the path of the full flash log when it ends.

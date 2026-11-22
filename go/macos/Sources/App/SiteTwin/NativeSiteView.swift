@@ -20,13 +20,19 @@ struct NativeSiteView: View {
         SiteWorkspace(gatewayID: gatewayID, gatewayAliases: gateway.aliases, feeds: feeds, metadata: displayMetadata, notices: notices,
                       robotSession: model.deviceSession, robotGatewayName: model.connected?.title ?? "this gateway", controls: {
             Button("Pair cameras", systemImage: "plus") { pairing = true }
-        }, onFailure: { error, _ in model.alert = error.localizedDescription }, calibrate: { site, camera in
+        }, onFailure: { error, _ in model.alertFailure = WendyError(error) }, calibrate: { site, camera in
             alignment = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gatewayID, session: model.deviceSession, gatewayAliases: gateway.aliases)
         }, automaticAlignment: { site, editing in
             AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID, gatewayAliases: gateway.aliases,
                 enabled: scenePhase == .active && alignment == nil && !pairing && !editing,
                 worker: automaticAlignment))
-        }, alignmentStatuses: scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], colorCapture: { sourceIDs in
+        }, alignmentStatuses: scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], alignmentCandidates: { site in
+            automaticAlignment.candidates.visible(in: SiteAutomaticAlignmentContext(
+                site: site.site, modelURL: site.modelURL, mapURL: site.visualMapURL,
+                gatewayID: gatewayID, session: model.deviceSession,
+                enabled: scenePhase == .active && alignment == nil && !pairing,
+                gatewayAliases: gateway.aliases), at: Date())
+        }, colorCapture: { sourceIDs in
             AnyView(SiteCameraColorCapture(model: model, sourceIDs: sourceIDs))
         }) { sourceID in
             if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == sourceID }) {
@@ -191,7 +197,7 @@ struct SiteGatewayIdentity: Equatable {
     }
 }
 
-private struct SiteCameraPreview: View {
+struct SiteCameraPreview: View {
     @State private var ownedStream: UInt64 = 0
     @ObservedObject var model: AppModel
     @ObservedObject var feed: CameraFeed
@@ -231,7 +237,7 @@ private struct SiteCameraPreview: View {
 }
 
 /// A twin owns its color subscriptions independently of the selected preview.
-private struct SiteCameraColorCapture: View {
+struct SiteCameraColorCapture: View {
     @ObservedObject var model: AppModel
     let sourceIDs: [String]
     var body: some View {

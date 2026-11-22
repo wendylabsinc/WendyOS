@@ -66,3 +66,42 @@ func TestVisualRecordingUsesSelectedSessionAndSources(t *testing.T) {
 		t.Fatalf("stop failed: %+v %v", stopped, err)
 	}
 }
+
+type homeCampaignClient struct {
+	pb.DataServiceClient
+	request *pb.DataCampaignTriggerRequest
+	rows    []*pb.DataEpisode
+}
+
+func (c *homeCampaignClient) CampaignTrigger(_ context.Context, r *pb.DataCampaignTriggerRequest, _ ...grpc.CallOption) (*pb.DataEpisode, error) {
+	c.request = r
+	return &pb.DataEpisode{Id: "new-clip", CampaignName: r.Name, State: "recording"}, nil
+}
+func (c *homeCampaignClient) Status(context.Context, *pb.DataStatusRequest, ...grpc.CallOption) (*pb.DataStatusResponse, error) {
+	return &pb.DataStatusResponse{Active: &pb.DataEpisode{Id: "manual"}, InProgress: c.rows}, nil
+}
+func TestHomeCampaignScopesStatusAndTriggerToSessionAndCampaign(t *testing.T) {
+	client := &homeCampaignClient{rows: []*pb.DataEpisode{{Id: "mine", CampaignName: "person", State: "recording"}, {Id: "other", CampaignName: "motion"}}}
+	b := New()
+	b.session = 7
+	b.conn = &grpcclient.AgentConnection{DataService: client}
+	for _, session := range []uint64{0, 6} {
+		if _, err := b.HomeCampaign(session, "person", true); err == nil {
+			t.Fatal("accepted stale campaign session")
+		}
+	}
+	if client.request != nil {
+		t.Fatal("triggered on stale device")
+	}
+	rows, err := b.HomeCampaign(7, "person", false)
+	if err != nil || len(rows) != 1 || rows[0].Id != "mine" {
+		t.Fatalf("wrong campaign status: %+v, %v", rows, err)
+	}
+	rows, err = b.HomeCampaign(7, "person", true)
+	if err != nil || len(rows) != 1 || rows[0].Id != "new-clip" || client.request.Name != "person" || client.request.Reason != "manual" {
+		t.Fatalf("wrong campaign trigger: %+v %v", rows, err)
+	}
+	if _, err := b.HomeCampaign(7, "", true); err == nil {
+		t.Fatal("accepted empty campaign")
+	}
+}

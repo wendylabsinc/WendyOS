@@ -32,7 +32,7 @@ func doctorTestDeps(t *testing.T) doctorDeps {
 		},
 		lookPath: func(name string) (string, error) { return "/private/bin/" + name, nil },
 		run:      func(context.Context, string, ...string) error { return nil },
-		firmware: func(string, string) error { return nil },
+		firmware: func(vm.Arch, string, string) error { return nil },
 		validate: func(context.Context, wendymcp.ProjectValidationOptions) (*wendymcp.ProjectValidation, error) {
 			return &wendymcp.ProjectValidation{Valid: true, BuildType: "docker"}, nil
 		},
@@ -76,7 +76,7 @@ func TestDoctorReportNeverCopiesPrivateDiagnostics(t *testing.T) {
 	secret := "private-secret-token"
 	d.readJSON = func(string, any) error { return errors.New(secret + " unreadable /private/config.json") }
 	d.run = func(context.Context, string, ...string) error { return errors.New(secret + " daemon output") }
-	d.firmware = func(string, string) error { return errors.New(secret + " /private/firmware") }
+	d.firmware = func(vm.Arch, string, string) error { return errors.New(secret + " /private/firmware") }
 	d.validate = func(context.Context, wendymcp.ProjectValidationOptions) (*wendymcp.ProjectValidation, error) {
 		return &wendymcp.ProjectValidation{
 			Valid: false, ProjectPath: "/private/source", AppID: secret, BuildType: secret,
@@ -105,7 +105,7 @@ func TestDoctorReportNeverCopiesPrivateDiagnostics(t *testing.T) {
 func TestDoctorOptionalContextDoesNotFail(t *testing.T) {
 	d := doctorTestDeps(t)
 	d.lookPath = func(string) (string, error) { return "", os.ErrNotExist }
-	d.firmware = func(string, string) error { return os.ErrNotExist }
+	d.firmware = func(vm.Arch, string, string) error { return os.ErrNotExist }
 	d.probe = func(context.Context, string) doctorTargetEvidence {
 		t.Fatal("must not scan without target")
 		return doctorTargetEvidence{}
@@ -479,5 +479,87 @@ func TestDoctorRealRootLeavesFreshInstallationUntouched(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("doctor changed fresh installation state: %v %v", entries, err)
+	}
+}
+
+func TestDoctorChecksTheEmulatorForTheSelectedVMsArchitecture(t *testing.T) {
+	for _, tc := range []struct {
+		name, meta  string
+		selected    string
+		def, want   vm.Arch
+		wantBinary  string
+		wantMessage string
+	}{
+		{"x86-64 VM", `{"name":"x1","arch":"amd64"}`, "vm:x1", vm.ArchARM64, vm.ArchAMD64, "qemu-system-x86_64", "x86-64 UEFI firmware"},
+		{"VM without arch", `{"name":"x1"}`, "vm:x1", vm.ArchAMD64, vm.ArchARM64, "qemu-system-aarch64", "ARM64 UEFI firmware"},
+		{"no VM selected", "", "", vm.ArchARM64, vm.ArchARM64, "qemu-system-aarch64", "ARM64 UEFI firmware"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubDefaultGuestArch(t, tc.def)
+			d := doctorTestDeps(t)
+			home, _ := d.homeDir()
+			var read []string
+			d.readJSON = func(path string, v any) error {
+				read = append(read, path)
+				if tc.meta != "" && path == filepath.Join(home, ".wendy", "vms", "x1", "meta.json") {
+					return json.Unmarshal([]byte(tc.meta), v)
+				}
+				return os.ErrNotExist
+			}
+			var looked []string
+			d.lookPath = func(name string) (string, error) { looked = append(looked, name); return "/private/bin/" + name, nil }
+			var firmwareArch vm.Arch
+			d.firmware = func(arch vm.Arch, _, _ string) error { firmwareArch = arch; return os.ErrNotExist }
+			args := []string{}
+			if tc.selected != "" {
+				args = append(args, "--device", tc.selected)
+			}
+			report, _, _ := doctorExecute(t, d, args...)
+			if !slices.Contains(looked, tc.wantBinary) {
+				t.Errorf("looked up %v, want %s", looked, tc.wantBinary)
+			}
+			if firmwareArch != tc.want {
+				t.Errorf("firmware checked for %q, want %q", firmwareArch, tc.want)
+			}
+			check := doctorFindCheck(t, report, "qemu_firmware")
+			if !strings.Contains(check.Message, tc.wantMessage) || !strings.Contains(check.Remediation, tc.wantMessage) {
+				t.Errorf("firmware check = %+v, want it to name %q", check, tc.wantMessage)
+			}
+			for _, path := range read {
+				if strings.Contains(path, ".lock") || strings.HasSuffix(path, "run.lock") {
+					t.Errorf("doctor read a lock file: %s", path)
+				}
+			}
+		})
+	}
+}
+
+// An older CLI may have dropped arch from meta.json; doctor reads the
+// guest-arch.json sidecar the VM was created with, through deps.readJSON.
+func TestDoctorFallsBackToTheRecordedGuestArch(t *testing.T) {
+	stubDefaultGuestArch(t, vm.ArchARM64)
+	d := doctorTestDeps(t)
+	home, _ := d.homeDir()
+	dir := filepath.Join(home, ".wendy", "vms", "x1")
+	d.readJSON = func(path string, v any) error {
+		switch path {
+		case filepath.Join(dir, "meta.json"):
+			return json.Unmarshal([]byte(`{"name":"x1"}`), v)
+		case filepath.Join(dir, "guest-arch.json"):
+			return json.Unmarshal([]byte(`{"arch":"amd64"}`), v)
+		}
+		return os.ErrNotExist
+	}
+	var looked []string
+	d.lookPath = func(name string) (string, error) { looked = append(looked, name); return "/private/bin/" + name, nil }
+	doctorExecute(t, d, "--device", "vm:x1")
+	if !slices.Contains(looked, "qemu-system-x86_64") {
+		t.Errorf("looked up %v, want qemu-system-x86_64 from the sidecar", looked)
+	}
+}
+
+func TestDoctorFirmwareLabelDoesNotNameOneGuest(t *testing.T) {
+	if label := doctorCheckLabel("qemu_firmware"); strings.Contains(label, "ARM64") || strings.Contains(label, "x86") {
+		t.Errorf("firmware check label %q names one guest architecture; the check follows the VM's", label)
 	}
 }

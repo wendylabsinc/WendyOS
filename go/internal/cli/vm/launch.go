@@ -42,11 +42,16 @@ func (s *Store) StartDetached(spec Spec) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	// The parent always drops its copy: the lock must end up held by QEMU
-	// alone, so that QEMU's death is what frees it. Bare, and deliberately so --
-	// nothing is written through a lock handle, and a close error here would
-	// otherwise report a failure for a VM that started perfectly well.
-	defer func() { _ = lock.Close() }()
+	// Keep the parent's copy through child cleanup. Releasing it at return and
+	// reacquiring it after Wait leaves a gap where Stop can report success
+	// before the cleanup lock makes Status report the VM as running again.
+	// If the launcher exits first, QEMU still owns its inherited descriptor.
+	lockTransferred := false
+	defer func() {
+		if !lockTransferred {
+			_ = lock.Close()
+		}
+	}()
 	serial, err := s.ReadSerial(spec.Name)
 	if err != nil {
 		return State{}, err
@@ -66,6 +71,9 @@ func (s *Store) StartDetached(spec Spec) (State, error) {
 		if err != nil {
 			return State{}, err
 		}
+	}
+	if err := ensureVarsStore(spec); err != nil {
+		return State{}, err
 	}
 	args, err := spec.Args()
 	if err != nil {
@@ -126,35 +134,17 @@ func (s *Store) StartDetached(spec Spec) (State, error) {
 		return State{}, err
 	}
 
-	// Reap the child if this process outlives it, and clear the record so a
-	// long-lived CLI notices a VM that died mid-deploy. When the CLI exits
-	// first the VM is simply orphaned to init, which is the intent.
+	// Clear the record before releasing the original lock, so a stop or new
+	// start cannot race cleanup. Close rather than unlock: a descendant could
+	// still own an inherited copy of the emulator's descriptor.
+	lockTransferred = true
 	go func() {
+		defer lock.Close()
 		_ = cmd.Wait()
-		s.clearStateForPID(spec.Name, st.PID)
+		s.clearStateForPIDLocked(spec.Name, st.PID)
 	}()
 
 	return st, nil
-}
-
-// clearStateForPID removes the run record only while it still describes pid.
-// A second run may have started and written its own record by the time this
-// process reaps its child, and deleting that would report the live VM as
-// merely "starting", with no address.
-func (s *Store) clearStateForPID(name string, pid int) {
-	// A PID comparison alone races a new start between ReadState and Remove.
-	// Serialize both operations against writers using the same run lock.
-	f, err := os.OpenFile(s.LockPath(name), os.O_RDWR, 0600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	locked, err := tryLockFile(f)
-	if err != nil || !locked {
-		return
-	}
-	defer unlockFile(f)
-	s.clearStateForPIDLocked(name, pid)
 }
 
 // The caller owns the exclusive run lock, including through Remove.
@@ -297,6 +287,9 @@ func (s *Store) RunForeground(ctx context.Context, spec Spec, stdin io.Reader, s
 		if err != nil {
 			return err
 		}
+	}
+	if err := ensureVarsStore(spec); err != nil {
+		return err
 	}
 	args, err := spec.Args()
 	if err != nil {

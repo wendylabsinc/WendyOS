@@ -103,7 +103,8 @@ is cached for 24 hours; a failed or cancelled check can retry after one hour.
 After a successful command in an interactive terminal, a popup offers
 **Download now** or **Ask again later...**. Asking later snoozes all update
 prompts for 24 hours. Non-interactive and `--json` invocations print notices to
-stderr without prompting.
+stderr without prompting, once per release. In a terminal where the popup cannot
+open, the notice repeats once a day until you update.
 
 Accepted updates use the installation's owning package manager. For Homebrew
 stable, the commands are `brew update` and `brew upgrade wendylabsinc/tap/wendy`.

@@ -21,9 +21,9 @@ func robotAgentUpdateTestConnection(t *testing.T, kind string) (*vm.Store, *grpc
 	info.Version, info.CpuArchitecture, info.Featureset = "2026.09.16-025644", "arm64", nil
 	previousUpdate := robotAgentUpdateFn
 	t.Cleanup(func() { robotAgentUpdateFn = previousUpdate })
-	robotAgentUpdateFn = func(context.Context, *grpcclient.AgentConnection, string, string, bool) error {
+	robotAgentUpdateFn = func(context.Context, *grpcclient.AgentConnection, string, string, bool) (string, error) {
 		t.Fatal("unexpected agent update")
-		return nil
+		return "", nil
 	}
 	return store, conn
 }
@@ -52,16 +52,16 @@ func TestRobotAgentUpdatePromptAcceptanceReconnectsAndContinues(t *testing.T) {
 				unlock()
 				return true
 			})
-			robotAgentUpdateFn = func(ctx context.Context, got *grpcclient.AgentConnection, osName, arch string, nightly bool) error {
+			robotAgentUpdateFn = func(ctx context.Context, got *grpcclient.AgentConnection, osName, arch string, nightly bool) (string, error) {
 				updates++
 				if got != conn || osName != "wendyos" || arch != "arm64" || nightly || ctx.Err() != nil {
 					t.Fatalf("wrong update target or platform: %p, %s/%s, nightly=%t", got, osName, arch, nightly)
 				}
 				if kind == vm.RobotKindRosmasterR2 {
 					// A restart may drop the upload stream before its ack arrives.
-					return errAgentUpdateUnconfirmed
+					return "", errAgentUpdateUnconfirmed
 				}
-				return nil
+				return "", nil
 			}
 			conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
 				reconnects++
@@ -167,12 +167,12 @@ func TestRobotAgentUpdatePromptStopsOnFailureWithoutRetryingUpdate(t *testing.T)
 			failure := errors.New(scenario)
 			closed := &recordingCloser{}
 			conn.ExtraClosers = []io.Closer{closed}
-			robotAgentUpdateFn = func(context.Context, *grpcclient.AgentConnection, string, string, bool) error {
+			robotAgentUpdateFn = func(context.Context, *grpcclient.AgentConnection, string, string, bool) (string, error) {
 				updates++
 				if scenario == "upload failure" {
-					return failure
+					return "", failure
 				}
-				return nil
+				return "", nil
 			}
 			next := &grpcclient.AgentConnection{SimulatorName: conn.SimulatorName, Addr: conn.Addr, AgentService: conn.AgentService}
 			conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
@@ -207,5 +207,28 @@ func TestRobotAgentUpdatePromptStopsOnFailureWithoutRetryingUpdate(t *testing.T)
 				t.Fatalf("unexpected retry or cleanup: prompts=%d, updates=%d, reconnects=%d, closed=%t", prompts, updates, reconnects, closed.closed)
 			}
 		})
+	}
+}
+
+func TestRobotAgentUpdateIsOfferedOnTheX86VM(t *testing.T) {
+	_, conn := robotAgentUpdateTestConnection(t, vm.RobotKindG1)
+	info := conn.AgentService.(*fakeAgentVersionClient).resp
+	deviceType := "vm-x86-64"
+	info.DeviceType, info.CpuArchitecture = &deviceType, "amd64"
+	prompts := 0
+	robotUpdatePromptTestSetup(t, true, func(string) bool { prompts++; return true })
+	stop := errors.New("update attempted")
+	var gotOS, gotArch string
+	var gotNightly bool
+	robotAgentUpdateFn = func(_ context.Context, _ *grpcclient.AgentConnection, osName, arch string, nightly bool) (string, error) {
+		gotOS, gotArch, gotNightly = osName, arch, nightly
+		return "", stop
+	}
+	_, err := reconcileSimulatorRobotWithAgentUpdate(context.Background(), conn)
+	if !errors.Is(err, stop) || prompts != 1 {
+		t.Fatalf("x86-64 VM without robot support: err=%v prompts=%d, want the update offered", err, prompts)
+	}
+	if gotOS != "wendyos" || gotArch != "amd64" || gotNightly {
+		t.Errorf("update target = %s/%s nightly=%t, want wendyos/amd64 stable", gotOS, gotArch, gotNightly)
 	}
 }

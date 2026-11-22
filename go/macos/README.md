@@ -33,6 +33,13 @@ open go/macos/Build/DerivedData/Build/Products/Debug/WendyDesktop.app
 
 The default build is unsigned. Device discovery, cloud access, cameras, and logs work without activating the VPN. macOS will only activate the Network Extension from a properly signed and provisioned app.
 
+The bundled Linux digital twin also requires a running Docker/BuildKit engine.
+`Scripts/bundle-twin.py` builds the camera worker for Linux arm64 and amd64,
+runs the shared native tests, and packages its runtime alongside the Go service.
+The first build compiles OpenCV; later builds reuse Docker's cache. Apple scan
+capture and the Linux worker read the same checksum pin from
+`internal/twinvision/native/opencv.lock` relative to the Go directory.
+
 The build produces native binaries for the build Mac. It links `libwendydesktop.a` into the app and `libwendyvpn.a` into the extension. It also bundles the repository's `wendy` executable for the CLI's detached mesh worker and includes libusb, with no Homebrew runtime dependency. Generated binaries and DerivedData stay in the ignored `Build/` directory.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
@@ -50,6 +57,20 @@ The automatic nearby invitation opens setup. The **+** menu also offers manual d
 The setup sheet remains open when advertisements disappear and automatically opens a fresh encrypted session after a disconnect. Once Cloud may have issued credentials, the app retains that attempt for the same Bluetooth address until the app exits and prevents another issuance attempt. Automatic enrollment checks verify the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
 ## Site models on macOS and iOS
+
+Sites now use the Linux `dev.wendy.digital-twin` app on the selected gateway.
+Deploy it using [the digital twin service guide](../apps/digital-twin/README.md).
+Linux owns persisted room state, robot navigation and rotation searches. Apple
+clients contribute scans and camera measurements, render state and send commands.
+Go2 can start a room without an Apple app; G1 and Go2 ROS nodes can contribute
+registered PointCloud2 observations. An unavailable service is reported rather
+than replaced by a local controller.
+
+On macOS, the **Cameras** list, camera alignment details and **Go2** controls open
+in popovers. Opening a menu keeps the camera preview and bottom controls in place.
+Long lists and robot details scroll inside the popover. Go2's Stop button remains
+available on the bottom bar when a robot is paired; closing its controls retains
+the existing stop behavior.
 
 ### Automatic camera alignment
 
@@ -155,9 +176,10 @@ and visual references as a `.wendysite` file through the system share sheet.
 On the receiving device, use **Sites > Import Model or Site** to open it.
 **Sites > Export Site** saves the same archive to a folder.
 Import that file on the other platform while connected to the same Cloud gateway.
-The file contains no credentials, and importing it creates a separate local copy.
-There is no automatic cross-device site sync. Sites live in Application Support's
-`WendySites` directory, inside the application sandbox on iOS.
+The file contains no credentials, and importing it creates a separate room in the
+Linux service. Clients on the same twin gateway share room state. Existing local
+`WendySites` captures are copied to Linux on first connection without deleting
+the originals. Point-only robot rooms do not have a USDZ archive to export.
 
 On iPhone, the twin fills the workspace. The Cameras button opens a sheet for
 previews, alignment status and camera management. The settings menu holds
@@ -200,7 +222,13 @@ Estimated alignment validates each focal-length candidate before choosing one.
 When the references have enough depth variation, it also refines focal length
 and pose together, keeping the principal point centred and distortion zero.
 Comparable fits that differ by more than 30 cm or 10 degrees are rejected as
-distance-ambiguous. Later attempts re-estimate an assumed lens rather than
+distance-ambiguous. In Digital Twin, automatic alignment shows the best individually
+validated fit as a translucent orange marker and cone labeled **Unsure**. This is
+a temporary single-frame candidate, not a saved alignment. It expires after five
+minutes and clears when the workspace changes or a later attempt fails without
+a candidate. Confirmed alignments and manual placements take precedence. Candidates
+are excluded from camera color projection, people positioning, and site exports.
+Later attempts re-estimate an assumed lens rather than
 locking retries to an earlier guess. A measured lens remains fixed.
 
 Camera markers and viewing cones that intersect a nearby RoomPlan wall are drawn
@@ -267,7 +295,7 @@ left in the board. It includes the docs' bundled videos, an Orin Nano J14 pin di
 and board-specific Dragonwing switch instructions for both entering EDL and returning to normal boot.
 Offline 3D guides reuse the existing Orin Nano, Raspberry Pi 5, and IQ-9075 assets with
 camera presets, connector highlights, a J14 jumper overlay, and the modeled SW2-3 actuator.
-IQ-8275 retains its own S2-8 diagram; the IQ-9075 model is not presented as an IQ-8275.
+IQ-8275 retains its own DIP switch 3 diagram; the IQ-9075 model is not presented as an IQ-8275.
 The pin diagram follows NVIDIA's Orin Nano carrier specification SP-11324-001 v1.3,
 figure 1-4 and table 3-4. Custom carriers need their vendor's instructions.
 
@@ -302,7 +330,9 @@ xcodebuild -project go/macos/WendyDesktop.xcodeproj \
 ```
 
 For a physical device, select your Apple development team for `WendyMobile` in
-Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
+Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.WendyCompanion`,
+so distribution builds update the existing Wendy Companion App Store app. Its VPN
+extension uses `dev.wendy.WendyCompanion.NetProxy`.
 The device build can also be compile-checked with
 `-destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`; that unsigned
 output cannot be installed on a phone.
@@ -333,7 +363,7 @@ On iOS the broker runs in-process and uses mutually authenticated loopback TLS
 for app-to-extension IPC, avoiding Unix socket path limits. Identity and routing
 history live in the private App Group container. When VPN starts, the app drains
 its broker and the packet tunnel extension owns the shared profile until VPN
-stops. Both targets require the `group.dev.wendy.mobile` App Group and
+stops. Both targets require the `group.dev.wendy.WendyCompanion` App Group and
 `packet-tunnel-provider` entitlement in their provisioning profiles. Existing
 local configuration is copied into the shared container on first launch.
 Account or organization changes invalidate app device connections before
@@ -422,7 +452,9 @@ If iOS requires online development-certificate verification, launch with
 the radios, return to the running app, and copy a file to
 `tmp/wendy-live-mesh-ready` in its app data container over USB to release discovery.
 
-Signing-team selection is local: pass `DEVELOPMENT_TEAM=YOUR_TEAM` to `xcodebuild`.
+The iOS app and VPN extension use Wendy Labs team `3YVC792H3S` and the existing
+Wendy Companion App Store identifiers. For local signing with another team, pass
+`DEVELOPMENT_TEAM=YOUR_TEAM` to `xcodebuild`.
 For a Personal Team without APNs, a local development-only empty entitlement file
 can be supplied with `CODE_SIGN_ENTITLEMENTS=/absolute/path/to/Local.entitlements`;
 notification registration will remain unavailable. Do not commit personal signing
@@ -617,7 +649,7 @@ and does not grant Cloud permission.
 
 The receiver uses `wendycloud.v2.APNSService/RegisterDeviceToken` and
 `UnregisterDeviceToken` through the existing authenticated Cloud connection. It
-passes the app's actual bundle ID (`dev.wendy.desktop` or `dev.wendy.mobile`), token,
+passes the app's actual bundle ID (`dev.wendy.desktop` or `dev.wendy.WendyCompanion`), token,
 and APNs environment; the server derives the recipient from the authenticated
 user. Tokens stay in memory and are requested again at launch. Opt-in preferences
 are scoped to the saved account, Cloud endpoint, and email. The UI reports success
@@ -632,7 +664,7 @@ in the simulator host; use a provisioned device to verify delivery.
 
 The Cloud backend inspected for this change allows only the existing Companion
 app topics. Its APNS registration allowlist must also accept `dev.wendy.desktop`
-and `dev.wendy.mobile`, and its APNs signing key must cover their app IDs. That
+and `dev.wendy.WendyCompanion`, and its APNs signing key must cover their app IDs. That
 server change and deployment are not included in this repository. The app reports
 Cloud rejection instead of using a Companion topic or pretending registration
 succeeded. No test token or mock Cloud grant is registered during verification.
@@ -676,6 +708,13 @@ Linux device panes do not implement the Lite protocol. Deletion confirms the
 specific simulator and refuses a running VM. This pane is excluded from iOS.
 
 ### Wendy Lite devices
+
+On macOS and iOS, Wendy Lite's **Settings > Wendy Mesh** section shows saved
+participation, runtime status, and active links. Use **Enable mesh participation**
+or **Disable mesh participation** to change only the participation switch,
+preserving the device's carrier settings and link limits. Enabling participation
+does not confirm a peer connection; use **Refresh mesh status** to check active
+links. Disabling participation can disconnect a device reached through the mesh.
 
 Nearby discovery includes Wendy Lite boards over LAN and USB. Cloud Lite devices
 connect through the authenticated WendyCom relay. Selecting a Lite device opens
@@ -1102,7 +1141,16 @@ Overhead returns above the body top are excluded from navigation obstacles,
 but remain available for localization. The body top is at least 40 cm above
 the measured floor and rises with the odometry base, allowing 10 cm from the
 base to the top. Voxel half-height is included in the vertical overlap check.
-Measured drops still block their entire floor cells. Attachments beyond the
+Measured drops still block their entire floor cells. **Show navigation obstacles**
+is enabled by default on Mac and iOS. Red footprints show the occupied voxel
+areas used by the planner; orange cells show detected drops. The overlay follows
+the confirmed site alignment and updates from each accepted navigation scan,
+including during movement and after a rejected route. It hides when telemetry
+is stale, the connection closes, or alignment is lost. These are floor-projected
+footprints, not reconstructed object heights. Unmarked areas do not establish
+clear floor, and Unitree's accumulated map can retain old obstacles.
+
+Attachments beyond the
 standard body dimensions require a larger envelope. The planner
 retains arrival heading at each search node and checks the actual odometry
 heading during movement. Translation and rotation are separate, walking is
@@ -1114,8 +1162,16 @@ does not change its posture or motion mode.
 
 This is supervised waypoint movement. Unitree's voxel map accumulates observations
 and is not a safety-rated live obstacle sensor. Keep the route clear and remain
-with the robot. The controller stops on stale observations, lost UI activity,
-failed commands or a blocked route. The agent separately expires MOVE after
+with the robot. When an obstacle blocks the route or its stopping area, the
+controller confirms Stop, then searches for a replacement route to the same
+destination in both navigation modes. Detours reserve space for heading
+corrections, the command lease and braking, including beyond bends. A replacement
+can therefore require more room than a footprint-only route. Movement resumes
+on a later control tick only after telemetry and UI freshness pass again. The
+original 30-second deadline and floor policy remain in effect. If planning fails,
+the robot stays stopped and reports that no alternative route was found.
+The controller also stops on stale observations, lost UI activity and failed
+commands. The agent separately expires MOVE after
 500 ms. Tests cover synthetic closed-loop arrival, obstacle/unknown-floor
 rejection, source timestamps, command ordering, failed Stop, and lost leases;
 they do not establish physical navigation performance.
@@ -1126,11 +1182,17 @@ with a live pose but insufficient scan structure. **Not now** keeps passive
 matching active and suppresses further popups for that observation session.
 The popup disappears if the pose is lost, Go2 moves, or its position is aligned.
 There is no **Locate Go2** button. Accepting the popup starts a bounded search:
-match, turn if ambiguous, stop, wait for a fresh view, then match again. If the
-lens has no measurement, the checkerboard sheet comes first. The search stops
-when a suggestion is available, after a full circle of up to twelve 30-degree turns, after five
+check clearance, turn, stop, wait for a fresh view, then match and turn again if
+ambiguous. A missing camera frame or lens calibration does not block LiDAR-based
+search. A calibrated camera adds visual evidence when available; **Calibrate
+camera** remains available separately. The panel shows sensor waits, clearance
+checks, turn progress and matching without opening Details. A rejected turn
+shows its reason with **Try rotation again** and **Place manually** actions;
+retrying requires accepting the rotation popup again. **Cancel search** stops
+pending and active searches. The search stops
+when a suggestion is available, when its viewpoint or turn budget is exhausted, after five
 minutes excluding calibration, or on Stop/fault. It never confirms a pose.
-If a full rotation or the time limit produces no match, the panel keeps a
+If the search budget produces no match, the panel keeps a
 **Search finished without a match** result and stops automatic retries.
 **Try rotation again** asks for confirmation before another search; **Place
 Manually** uses the existing position-and-heading placement flow.
@@ -1192,3 +1254,148 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+### Asking chat about recorded activity
+
+Native iOS and macOS chat can query data on the device where the conversation
+started. These read-only queries work with either local or Cloud inference.
+Cloud inference sends the requested evidence to the selected model provider.
+
+| Ask | Evidence used |
+| --- | --- |
+| What happened recently? When was a person last detected? | Retained events, model attributes, event IDs and observation times |
+| Show the recording around that event | Recording index, trigger and timeline, with an Open recording card |
+| Was there more activity than yesterday? Which source was busiest? | Counts from one retained event snapshot, with explicit comparison windows |
+| Did CPU, memory or temperature spike? | Recorded numeric channels and bounded summaries, if captured |
+| Did the app crash? What did it log? | Recorded application streams and events; current app/log tools are identified separately |
+| What was the robot doing? | Supported recorded ROS messages and ROS logs; unsupported payloads remain unknown |
+| Was the camera offline? Are samples missing? | Current source health and the selected episode's counts, losses and clock evidence |
+| Was the campaign armed all night? | Current state and recording evidence; a complete arming history is not available |
+| Where is the recording? Has it uploaded? When will it be deleted? | Local episode and upload workflow, retention policy and warnings; no invented expiry |
+| Why didn't I get an alert? | Notification intents, current inference errors and optional Cloud permission lookup |
+
+Event and notification journals retain at most 512 entries. Empty results do not
+prove nothing happened; comparisons describe retained occurrences rather than
+unique people or all activity. Recording searches page through the local index;
+failed manifest reads and missing Cloud-only/deleted episodes remain explicit.
+Sample queries verify downloaded hashes, read at most 8 MiB per file and 16 MiB
+total, and decode at most 20,000 samples. They do not interpret video or audio.
+Notification intent and permission are not proof of recipient delivery.
+
+Backend regression tests:
+
+```sh
+go test ./go/macos/backend -run 'TestChatData|TestVisualROSLog' -count=1
+```
+
+For device QA, ask the questions above against a known campaign with a detection,
+a completed recording, and a failed upload or unavailable sensor. Check cited
+IDs/times against Data, open the recording card, and repeat after disconnecting.
+Queries must report unavailable evidence rather than reuse another device's data.
+Paid model inference and device QA are separate from deterministic backend tests.
+
+### Shared fixed-camera alignment
+
+Room-reference alignment runs through the Linux twin's camera-alignment API.
+Apple clients supply two fresh luminance frames and display the result. The
+service selects the lens, validates pose agreement and saves metadata with a
+revision check. The web example uses the same API and worker. See
+[the alignment contract](../internal/twinvision/README.md) for provenance,
+expiry, replay testing and the remaining robot-localization migration.
+
+## Go2 camera preset
+
+The digital twin uses a built-in lens profile for Go2's raw H.264 1280×720
+front-camera stream. A saved measurement for the same robot and capture mode
+always takes priority. Other resolutions and codecs keep the existing lens
+estimation and manual calibration flow; the preset is never scaled to fit them.
+Use **Refine camera calibration** to measure this robot's lens if matching fails.
+Room position and heading still require fresh observations and room matching.
+
+The preset uses the camera matrix and five Brown-Conrady distortion coefficients
+from [go2_ros2_sdk's 720p calibration](https://github.com/abizovnuralem/go2_ros2_sdk/blob/b440609591a249e7bdd4bbc88e056a3660575447/go2_robot_sdk/calibration/front_camera_720.yaml).
+These are community measurements, not factory calibration for the connected
+robot. They remain marked as assumed, use the native assumed-lens solver, and
+must pass the existing two-frame and LiDAR checks. They are not saved as measured
+calibration. The 1080p file is not bundled because its camera matrix is malformed.
+
+Visual hints use the nominal front-camera mount in
+[Unitree's Go2 URDF](https://github.com/unitreerobotics/unitree_ros/blob/157ff950351e5f535e03c5d85a16b7d594b3dbcc/robots/go2_description/urdf/go2_description.urdf)
+to report the body origin instead of the camera origin. The translation is
+0.32715 m forward, -0.00003 m left, and 0.04297 m up; the fitted rotation maps it
+into the room, including pitch and roll. The robot's firmware already transforms
+its voxel map, so this does not apply another LiDAR mount transform.
+
+The Apple client supplies a verified camera hint to the Linux search's initial
+match when fresh video and room references are available. Linux checks its age
+and paired odometry, then discards it before any search turn. Camera failures
+fall back to LiDAR-only search. This does not add a factory-calibration API.
+Physical lens accuracy and mounting tolerances still need validation on a Go2. The bundled BSD-2-Clause notice is in `Resources/Notices/go2-camera-LICENSE.txt`.
+
+## Go2 discovery viewpoints
+
+Position search now defaults to **Move between views during discovery** on
+Apple clients. The Linux service matches the current view first. If it remains
+ambiguous, it checks for a clear 40 cm forward move at the current heading,
+including the initial heading. It matches again after each move and stops as
+soon as a candidate is available. It stops moving after three attempted viewpoints
+if matching is still inconclusive. When a move is blocked, it turns 30 degrees
+to check another heading, considering at most twelve distinct headings without
+repeating the initial orientation. Discovery is also limited to five minutes.
+Turn the option off for rotation-only discovery, which retains a twelve-turn
+limit. Stop cancels the search and any active movement.
+
+Each move uses the live odometry frame, since the room transform is not yet
+confirmed. The complete body sweep and stopping distance must fit on observed
+clear floor, with a margin for drift. The hidden-floor allowance can cover the
+fixed departure footprint only. The supervised option that permits unobserved
+floor during ordinary navigation does not apply to discovery moves. Blocked
+viewpoints report why they were skipped. Temporary sensor or clearance loss
+stops motion and waits for a newly accepted scan before checking again, at most
+once every two seconds. The original five-minute session and movement budgets
+remain in force. Once the turn or movement budget is exhausted, discovery
+continues checking observations without starting another rotation. A blocked
+forward move can be retried at the current heading if movement budget remains.
+An expired operator lease, unexpected drift, a rejected movement command, or an
+unacknowledged Stop ends motion recovery.
+
+The controller avoids recently visited endpoints and stops before rematching.
+New scans must contain new geometry to count as independent evidence. Merely
+moving or replaying an accumulated map does not increase confidence. Camera
+hints from earlier viewpoints are discarded. A candidate position still needs
+confirmation before normal site navigation.
+The room view hides rejected scan-fit hypotheses. An explicit scan preview
+requires a usable candidate and is labeled as unconfirmed in the viewport;
+confirmed scans and previously saved room contributions remain available.
+
+If discovery stops, the original motion fault remains visible when healthy
+telemetry resumes. The client can try up to three passive matches on distinct,
+fresh observations while Go2 is stationary. These retries never restart motion.
+Stop or an explicit new search cancels passive recovery.
+
+**Restart discovery** is also available after choosing a position. It stops Go2,
+discards the current alignment and that robot's saved localization references
+for the room, then starts a new search. If that robot is the only contributor,
+its saved point cloud and derived floor tiles are also removed. Mixed-source
+historical geometry is retained because legacy points have no source attribution.
+Other robots' references and the room model are retained. A failed Stop prevents the reset and new search.
+The twin robot endpoint accepts the additive `reset-localization` operation
+with `Frame` and `Sequence`; obsolete requests cannot reset a newer search.
+
+The robot search request adds optional `Fusion.explore`, defaulting to false
+when omitted. Search replies add `SearchMoves` and `SearchPhase`; phases are
+`matching`, `turning`, `advancing`, `settling`, and `waiting`. The robot snapshot adds
+`DiscoveryState` with idle, advancing, completed, and aborted values 0–3.
+`MotionRecoveryAllowed` identifies temporary aborted motion with an acknowledged
+Stop; `ScanReceivedUnixNanos` identifies newly accepted LiDAR packets, including
+floor changes that leave the wall geometry unchanged.
+Existing clients keep rotation-only searches; Apple clients tolerate older
+servers that omit the new status fields. Physical walking and braking accuracy
+still require validation on a Go2.
+
+## Android companion
+
+The native Android companion lives in [`../android`](../android/README.md). It
+shares this app's Go backend and has its own Kotlin/Compose UI and Android
+NSD, Bluetooth, camera and VPN adapters. Its README documents build instructions,
+validation and the remaining differences from the Apple apps.

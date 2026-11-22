@@ -19,6 +19,7 @@
     "unenroll",
     "rename",
     "power-mode",
+    "reboot",
     "setup",
     "push-agent",
     "get-default",

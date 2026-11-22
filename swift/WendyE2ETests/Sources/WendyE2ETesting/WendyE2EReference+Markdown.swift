@@ -40,7 +40,7 @@ extension WendyE2EReference {
         markdown.append("# \(document.title)")
         appendParagraph(document.overview, to: &markdown)
         appendMetadata(
-            isDisabled: nil,
+            availability: nil,
             sourceLocation: document.sourceLocation,
             options: options,
             to: &markdown
@@ -57,7 +57,8 @@ extension WendyE2EReference {
                 )
                 markdown.append("### \(title)")
                 appendMetadata(
-                    isDisabled: entry.isDisabled,
+                    availability: entry.availability,
+                    availabilityReason: entry.availabilityReason,
                     sourceLocation: entry.sourceLocation,
                     options: options,
                     to: &markdown
@@ -87,14 +88,15 @@ private func appendParagraph(_ paragraph: String, to markdown: inout [String]) {
 }
 
 private func appendMetadata(
-    isDisabled: Bool?,
+    availability: WendyE2EReference.Availability?,
+    availabilityReason: String? = nil,
     sourceLocation: WendyE2EReference.SourceLocation,
     options: WendyE2EReference.RenderOptions,
     to markdown: inout [String]
 ) {
     var metadata: [String] = []
-    if options.includeDisabledState, let isDisabled {
-        metadata.append(isDisabled ? "disabled" : "enabled")
+    if options.includeDisabledState, let availability {
+        metadata.append(availability.rawValue)
     }
     if options.includeSourceLocations {
         metadata.append("`\(sourceLocation.path):\(sourceLocation.line)`")
@@ -106,5 +108,14 @@ private func appendMetadata(
 
     markdown.append("")
     markdown.append("_\(metadata.joined(separator: " · "))_")
+    if options.includeDisabledState, let availabilityReason {
+        let availabilityReason = availabilityReason.components(separatedBy: .newlines).joined(
+            separator: " "
+        )
+        let longestRun =
+            availabilityReason.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
+        let delimiter = String(repeating: "`", count: longestRun + 1)
+        markdown.append("Availability traits: \(delimiter) \(availabilityReason) \(delimiter)")
+    }
     markdown.append("")
 }

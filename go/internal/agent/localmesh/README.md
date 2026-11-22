@@ -398,6 +398,12 @@ Replacement or timeout discards it,
 and successful chain completion still requires normal signature, lease and
 replay verification. Invalid signatures and overlong certificate lifetimes
 outside that transition, or after replacement verification, remain fatal.
+The one other exception is a signature mismatch, or an issue date before the
+current leaf's validity, at a revision below the origin's admitted replay floor,
+as a neighbour relays after a fresh-key renewal. It would be refused as stale
+even if it passed both checks, so it is dropped without closing the carrier; it
+stays unverified, changes no state and gets no receipt. At the current or a
+newer revision both failures remain fatal.
 
 ## Control and payload flow
 

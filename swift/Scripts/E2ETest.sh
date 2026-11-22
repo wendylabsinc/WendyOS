@@ -50,6 +50,8 @@ CLI_REPO_DIR="${WENDY_E2E_CLI_REPO_DIR:-}"
 CLI_BIN_DIR="${WENDY_E2E_CLI_BIN_DIR:-}"
 CLI_AUTH_CONFIG_EXPLICIT="${WENDY_E2E_CLI_AUTH_CONFIG_PATH:-}"
 CLI_AUTH_CONFIG_PATH="$CLI_AUTH_CONFIG_EXPLICIT"
+CLI_DEVICE_CACHE_FIXTURE="${WENDY_E2E_CLI_DEVICE_CACHE_FIXTURE:-}"
+CLI_DEVICE_CACHE_PATH=""
 CLI_USER="${WENDY_E2E_CLI_USER:-}"
 CLI_ADDRESS="${WENDY_E2E_CLI_ADDRESS:-}"
 CLI_OS="${WENDY_E2E_CLI_OS:-}"
@@ -179,6 +181,9 @@ Options:
   --cli-bin-dir DIR     Directory where the built wendy CLI is written.
   --cli-auth-config PATH
                         CLI auth fixture config copied into authenticated tests.
+  --device-cache-fixture PATH
+                        Reuse a target-only address fixture; prepare it if absent.
+                        Requires --device-address and --isolation per-test.
   --cli-user USER       Optional SSH user for the CLI machine.
   --cli-address HOST    Optional address for the CLI machine.
   --cli-os OS           Optional OS override for the CLI machine.
@@ -212,6 +217,7 @@ Environment:
   WENDY_E2E_CLI_REPO_DIR              wendy-agent repo root on the CLI machine.
   WENDY_E2E_CLI_BIN_DIR               Directory where the built wendy CLI is written.
   WENDY_E2E_CLI_AUTH_CONFIG_PATH      CLI auth fixture config copied into authenticated tests.
+  WENDY_E2E_CLI_DEVICE_CACHE_FIXTURE  Prepared address fixture on the CLI machine (opt-in).
   WENDY_E2E_CLI_USER                  Optional SSH user for the CLI machine.
   WENDY_E2E_CLI_ADDRESS               Optional address for the CLI machine.
   WENDY_E2E_CLI_OS                    Optional OS override for the CLI machine.
@@ -261,6 +267,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cli-auth-config)
       CLI_AUTH_CONFIG_PATH="$2"
+      shift 2
+      ;;
+    --device-cache-fixture)
+      CLI_DEVICE_CACHE_FIXTURE="$2"
       shift 2
       ;;
     --cli-user)
@@ -390,6 +400,15 @@ PARALLEL="$(normalize_bool "WENDY_E2E_PARALLEL" "$PARALLEL")"
 TEST_TIMEOUT_SECONDS="$(normalize_timeout_seconds "WENDY_E2E_TEST_TIMEOUT_SECONDS" "$TEST_TIMEOUT_SECONDS")"
 VERBOSE="$(normalize_bool "WENDY_E2E_VERBOSE" "$VERBOSE")"
 MANAGED_AGENT="$(normalize_bool "WENDY_E2E_MANAGED_AGENT" "$MANAGED_AGENT")"
+
+if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" && ( -z "$DEVICE_ADDRESS" || "$ISOLATION" != "per-test" || "$MANAGED_AGENT" == "true" ) ]]; then
+  echo "ERROR: --device-cache-fixture requires an explicit --device-address, --isolation per-test and --no-managed-agent." >&2
+  exit 64
+fi
+if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" && -n "${WENDY_AGENT_SOCKET:-}" ]]; then
+  echo "ERROR: unset WENDY_AGENT_SOCKET when using an explicit device cache fixture." >&2
+  exit 64
+fi
 
 if [[ "$PARALLEL" == "true" && "$ISOLATION" != "per-test" ]]; then
   echo "ERROR: --parallel requires --isolation per-test." >&2
@@ -571,7 +590,17 @@ resolve_cli_auth_config_path() {
 }
 
 preflight_cli_auth_fixture() {
-  if [[ -z "$AGENT_ADDRESS" ]]; then
+  if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" ]]; then
+    echo "==> Checking device address hints against the saved target binding"
+    CLI_DEVICE_CACHE_PATH="$CLI_RUN_DIR/device-cache.json"
+    local cache_command
+    cache_command="python3 $(shell_quote "$CLI_REPO_DIR/swift/Scripts/E2EDeviceCache.py") --cli $(shell_quote "$CLI_BIN_DIR/wendy") --auth-config $(shell_quote "$CLI_AUTH_CONFIG_PATH") --target $(shell_quote "$DEVICE_ADDRESS") --fixture $(shell_quote "$CLI_DEVICE_CACHE_FIXTURE") --output $(shell_quote "$CLI_DEVICE_CACHE_PATH")"
+    if ! AGENT_INFO_JSON="$(run_cli_command "$cache_command")"; then
+      echo "ERROR: CLI device cache fixture cannot validate $DEVICE_ADDRESS." >&2
+      exit 1
+    fi
+    return
+  elif [[ -z "$AGENT_ADDRESS" ]]; then
     return
   fi
 
@@ -882,6 +911,9 @@ start_managed_agent() {
 }
 
 stop_managed_agent() {
+  if [[ "$MANAGED_AGENT" != "true" ]]; then
+    return
+  fi
   if managed_agent_is_macos; then
     local quit_log="$RUN_DIR/managed-agent/quit.log"
     if ! "$REPO_DIR/swift/Scripts/Quit.sh" >"$quit_log" 2>&1; then
@@ -1190,6 +1222,9 @@ fi
 CLI_AUTH_CONFIG_PATH="$(resolve_cli_auth_config_path)"
 if [[ -z "$CLI_ADDRESS" ]]; then
   CLI_AUTH_CONFIG_PATH="$(expand_local_path "$CLI_AUTH_CONFIG_PATH")"
+  if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" ]]; then
+    CLI_DEVICE_CACHE_FIXTURE="$(expand_local_path "$CLI_DEVICE_CACHE_FIXTURE")"
+  fi
 fi
 prepare_managed_agent_auth_fixture
 
@@ -1207,6 +1242,7 @@ SWIFT_TEST_ENV=(
   "WENDY_E2E_CLI_REPO_DIR=$CLI_REPO_DIR"
   "WENDY_E2E_CLI_BIN_DIR=$CLI_BIN_DIR"
   "WENDY_E2E_CLI_AUTH_CONFIG_PATH=$CLI_AUTH_CONFIG_PATH"
+  "WENDY_E2E_CLI_DEVICE_CACHE_PATH=$CLI_DEVICE_CACHE_PATH"
   "WENDY_E2E_CLI_USER=$CLI_USER"
   "WENDY_E2E_CLI_ADDRESS=$CLI_ADDRESS"
   "WENDY_E2E_AGENT_RUN_DIR=$AGENT_RUN_DIR"
@@ -1220,6 +1256,7 @@ SWIFT_TEST_ENV=(
   "WENDY_E2E_ISOLATION=$ISOLATION"
   "WENDY_E2E_PARALLEL=$PARALLEL"
   "WENDY_E2E_VERBOSE=$VERBOSE"
+  "WENDY_E2E_TEST_TIMEOUT_SECONDS=$TEST_TIMEOUT_SECONDS"
 )
 echo "==> Running Swift E2E tests"
 echo "    Package:  $PACKAGE_DIR"

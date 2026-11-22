@@ -8,9 +8,16 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,5 +137,89 @@ func TestOnlineUpdateRejectsChecksumAndWrongArchitecture(t *testing.T) {
 	archive, _ := onlineFixture(t)
 	if _, err := onlineAgentBinary(archive, "arm64"); err == nil {
 		t.Fatal("wrong architecture accepted")
+	}
+}
+
+func TestOnlineUpdateUnderTheSupervisorStagesInTheInbox(t *testing.T) {
+	env := superviseForTest(t, nil)
+	svc, _, executable, restarted := onlineServiceFixture(t, false)
+	if _, err := svc.CheckOnlineUpdate(context.Background(), &pb.CheckOnlineUpdateRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("192.168.1.18"), Port: 50000}})
+	if _, err := svc.StartOnlineUpdate(ctx, &pb.StartOnlineUpdateRequest{Version: "2.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-restarted:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("not restarted: %v", svc.online.snapshot())
+	}
+	if raw, _ := os.ReadFile(executable); string(raw) != "original" {
+		t.Fatal("the running agent was overwritten instead of being handed to the supervisor")
+	}
+	_, want := onlineFixture(t)
+	sum := sha256.Sum256(want)
+	sha := hex.EncodeToString(sum[:])
+	data, err := os.ReadFile(filepath.Join(env.inbox, sha+".json"))
+	if err != nil {
+		t.Fatalf("no inbox entry for the release: %v", err)
+	}
+	var in supervisor.Incoming
+	if err := json.Unmarshal(data, &in); err != nil {
+		t.Fatal(err)
+	}
+	// The device downloads it itself: the app that asked need not come back.
+	if !in.Explicit || in.RemoteVia != "" {
+		t.Fatalf("want an explicit upload judged by local checks, got %+v", in)
+	}
+	if len(env.checked) != 1 || !env.held[0] {
+		t.Fatalf("the supervisor must check the release, with the update mark held, before the restart: %v %v", env.checked, env.held)
+	}
+}
+
+func TestOnlineUpdateAsksForTheCloudWhileConnected(t *testing.T) {
+	env := superviseForTest(t, nil)
+	if err := interceptor.MarkRemoteSeen(supervisorMarkDir, supervisor.ViaCloud); err != nil {
+		t.Fatal(err)
+	}
+	svc, _, _, restarted := onlineServiceFixture(t, false)
+	if _, err := svc.CheckOnlineUpdate(context.Background(), &pb.CheckOnlineUpdateRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartOnlineUpdate(context.Background(), &pb.StartOnlineUpdateRequest{Version: "2.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-restarted:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("not restarted: %v", svc.online.snapshot())
+	}
+	_, want := onlineFixture(t)
+	sum := sha256.Sum256(want)
+	data, err := os.ReadFile(filepath.Join(env.inbox, hex.EncodeToString(sum[:])+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in supervisor.Incoming
+	json.Unmarshal(data, &in)
+	if in.RemoteVia != supervisor.ViaCloud {
+		t.Fatalf("a cloud-connected device must keep its cloud access: want remote_via cloud, got %+v", in)
+	}
+}
+
+func TestOnlineUpdateIsRefusedDuringATrial(t *testing.T) {
+	superviseForTest(t, nil)
+	writeSupervisorStatus(t, supervisor.Status{Role: supervisor.RoleTrial, PID: os.Getpid()})
+	svc, calls, executable, _ := onlineServiceFixture(t, false)
+	if _, err := svc.CheckOnlineUpdate(context.Background(), &pb.CheckOnlineUpdateRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.StartOnlineUpdate(context.Background(), &pb.StartOnlineUpdateRequest{Version: "2.0.0"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("want FailedPrecondition, got %v", err)
+	}
+	if raw, _ := os.ReadFile(executable); string(raw) != "original" || calls.Load() != 0 {
+		t.Fatal("a refused update must not download or install anything")
 	}
 }

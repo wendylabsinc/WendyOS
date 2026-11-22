@@ -37,14 +37,22 @@ type Engine struct {
 	packets        chan []byte
 	internet       net.Conn
 	internetWrites chan []byte
+	dnsFallback    func(context.Context, []byte) ([]byte, error)
 }
 
 func NewEngine(cfg Config) (*Engine, error) {
+	return NewEngineWithDNSFallback(cfg, nil)
+}
+
+// NewEngineWithDNSFallback lets platforms without split DNS resolve public
+// names through their system resolver. Private device names stay in the mesh.
+// The callback must honor cancellation or impose its own bounded timeout.
+func NewEngineWithDNSFallback(cfg Config, fallback func(context.Context, []byte) ([]byte, error)) (*Engine, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{cfg: cfg, ctx: ctx, cancel: cancel, packets: make(chan []byte, 256), internetWrites: make(chan []byte, 128)}
+	e := &Engine{cfg: cfg, ctx: ctx, cancel: cancel, packets: make(chan []byte, 256), internetWrites: make(chan []byte, 128), dnsFallback: fallback}
 	e.stack = stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol}})
 	e.link = channel.New(256, 1400, "")
 	fail := func(err tcpip.Error) (*Engine, error) { e.Close(); return nil, errors.New(err.String()) }
@@ -124,7 +132,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 			defer func() { <-udpSlots }()
 			defer conn.Close()
 			timeout := 3 * time.Second
-			if cfg.Internet != nil {
+			if cfg.Internet != nil || fallback != nil {
 				timeout = 12 * time.Second
 			}
 			conn.SetDeadline(time.Now().Add(timeout))

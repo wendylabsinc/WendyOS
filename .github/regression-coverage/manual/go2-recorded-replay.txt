@@ -1,0 +1,133 @@
+Recorded Go2 CDR replay on an owner-confirmed disposable Linux VM
+
+This completes the recorded_service_replay step of go2-camera-rehearsal.txt.
+It does not replace that procedure's physical publisher, serial, firmware and
+fresh challenge review. A checksum identifies bytes; it does not authenticate
+an unauthenticated DDS publisher. Generated test streams never qualify as a
+physical firmware corpus. Keep every recording and decoded video outside Git.
+
+1. Preserve the successful recorder's complete raw-recording directory and its
+   exact sealed plan.json. Never edit recording.json, rename/drop samples, repair
+   timestamps, substitute another plan, or concatenate recordings. The supported
+   corpus has 30–1800 bounded little-endian CDR samples of the original 360p
+   Annex-B H264 layout. Receipt timestamps must strictly advance over 1–35 seconds.
+   A format change, partial capture, ambiguous publisher or missing provenance
+   remains pending. Decoding must yield at least 30 frames and 20 distinct frames.
+   Preserve the physical challenge notes and prior native/container acceptance
+   alongside this corpus; the replay does not certify those observations.
+
+2. On the machine holding the plan's original saved provenance, create a private
+   copy containing only those exact hash-matched records. Set the two paths:
+
+     export GO2_PLAN=/absolute/path/to/plan.json
+     export GO2_PROVENANCE=/absolute/path/to/new-provenance
+     python3 - <<'PY'
+     import hashlib,json,os,shutil
+     from pathlib import Path
+     plan=json.loads(Path(os.environ['GO2_PLAN']).read_text())
+     out=Path(os.environ['GO2_PROVENANCE']);out.mkdir(mode=0o700)
+     records={'firmware_record':plan['firmware_record'],**plan['records']}
+     for name,record in records.items():
+         assert name in {'firmware_record','device_info','installed_agent','camera_list','kernel_module','ros_interfaces','baseline_apps','recovery'}
+         source=Path(record['path'])
+         assert source.is_file() and not source.is_symlink()
+         assert hashlib.sha256(source.read_bytes()).hexdigest()==record['sha256'],name
+         shutil.copyfile(source,out/name)
+     PY
+
+   Transfer the sealed plan, this provenance directory and raw-recording to the
+   reserved VM through the owner's existing approved file-transfer mechanism.
+   Verify their hashes after transfer. Do not upload binaries/credentials/whole
+   device state to a public artifact store. A missing original file must be
+   recovered from the owner; never create a replacement observation.
+
+3. Use a fresh operator-owned disposable Linux VM with no robot connection,
+   passed-through devices, production workload or host-directory write mounts.
+   The VM must already have the owner-installed v4l2loopback 0.15.4 module, its
+   /dev/v4l2loopback control node, and an unused /dev/video128. This script does
+   not install/load/unload modules, create a VM or alter a host service. If the
+   approved VM lacks those prerequisites, stop and have its owner prepare it
+   using the reviewed module source. Never run this on the physical companion.
+
+   Required tools are the checkout's Go version, Python3, sudo, util-linux
+   unshare, systemd-detect-virt, containerd/ctr, runc, statically linked busybox,
+   and GStreamer h264parse,avdec_h264,videoconvert,fdsrc,fdsink. The existing
+   fixture creates a temporary private containerd daemon; no system daemon is
+   stopped or reconfigured. Reserve at least 2 GiB free for transient test binaries
+   and evidence in addition to Go build cache and the bounded recording.
+
+   Independently confirm the VM in its hypervisor inventory and local console.
+   Preserve the VM name/owner, hypervisor record and these read-only observations:
+
+     systemd-detect-virt --vm
+     systemd-detect-virt --container
+     cat /proc/sys/kernel/random/boot_id
+     sudo -n cat /sys/class/dmi/id/product_uuid
+     uname -a
+     cat /sys/module/v4l2loopback/version
+     test -c /dev/v4l2loopback && test ! -e /dev/video128 && test ! -L /dev/video128
+
+   The container probe must report none/exit 1. Supported explicit VM kinds are
+   kvm,qemu,vmware,oracle,microsoft,xen,parallels; a physical host, container,
+   unavailable detector, empty/placeholder identity or unsupported VM stays pending.
+   Enter the observed boot_id and product_uuid explicitly at step5 after checking
+   them against this VM. A reboot invalidates this confirmation. Do not fabricate
+   GITHUB_ACTIONS or RUNNER_ENVIRONMENT to bypass admission.
+
+4. Use an owner-reviewed checkout containing test-go2-recorded-replay.py. Record
+   git rev-parse HEAD and its clean status. As the ordinary VM user, prepare a
+   new private directory without accessing any device:
+
+     python3 .github/scripts/test-go2-recorded-replay.py prepare \
+       --archive /absolute/path/to/raw-recording \
+       --plan /absolute/path/to/plan.json \
+       --provenance /absolute/path/to/new-provenance \
+       --confirm-robot-serial EXACT_SERIAL_FROM_REVIEWED_PLAN \
+       --output /absolute/path/to/new-prepared-replay
+
+   Preparation verifies copied bytes again, all sample hashes/lengths/layouts,
+   the sealed plan hash, exact robot and target identities, recorded camera
+   inventory, ordered receipt times and all eight provenance hashes. It rejects
+   unexpected archive members, symlinks, duplicate JSON keys and interrupted
+   recordings. The original corpus is not modified. Physical acceptance stays
+   not_run even when this mechanical validation passes.
+
+5. Run the explicit VM entrypoint as its ordinary user, with noninteractive sudo
+   already authorized by the VM owner for this disposable environment:
+
+     python3 .github/scripts/test-go2-recorded-replay.py run \
+       --prepared /absolute/path/to/new-prepared-replay \
+       --confirm-robot-serial EXACT_SERIAL_FROM_REVIEWED_PLAN \
+       --confirm-vm-boot-id EXACT_BOOT_UUID_CONFIRMED_ABOVE \
+       --confirm-vm-product-uuid EXACT_PRODUCT_UUID_CONFIRMED_ABOVE
+
+   The entrypoint checks VM identity before compilation and again at kernel
+   mutation/cleanup boundaries. It runs the unchanged CDR bytes through the
+   production parser and V4L2 writer, then captures with the production native
+   service outside and inside an actual camera-entitled OCI task. It independently
+   decodes the original H264 source and each capture to 640x360 RGB frame hashes.
+   All captured content must match the recording in order, with at least 6 decoded
+   frames and 3 distinct frames per capture; bounded drops/repeated kernel buffers
+   are permitted. Real long-GOP corruption or insufficient decodable output fails,
+   rather than substituting generated keyframes or relaxing the comparison.
+
+   Require exit 0, replay_passed:true and normal plus all three controls in the new
+   run-*/evidence.json. The normal log must contain three
+   GO2_RECORDED_CAPTURE_VERIFIED markers and
+   GO2_RECORDED_KERNEL_CONTAINER_VERIFIED. Historical CDR layout, wrong kernel
+   pixel format and missing camera annotation controls must each fail their
+   specific assertion. A timeout, skipped test, prerequisite/compile error or
+   generic process failure does not count as a rejected regression.
+
+6. Preserve run logs/evidence, replay.json, the exact corpus/plan/provenance and
+   source hashes privately with the physical challenge review. Namespace drain
+   must complete and cleanup must report removal of only this run's exact-label
+   video128. Confirm video128 is absent afterward. If shutdown is interrupted or
+   ownership/drain cannot be proved, the entrypoint retains its resources and
+   records failure. Do not broadly delete nodes or kill host processes; return
+   the disposable VM to its owner for disposal and retain the evidence.
+
+   Only then may a human mark recorded_service_replay passed with these evidence
+   paths. Other physical cases retain their own outcomes. This test does not
+   cover physical DDS discovery, the live camera Manager's scheduling, another
+   firmware format, another robot, or robot actuation.

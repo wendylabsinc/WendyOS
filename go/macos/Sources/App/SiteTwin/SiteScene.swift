@@ -7,8 +7,13 @@ import SwiftUI
 public struct SiteScene: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let modelURL: URL
+    let points: [SitePoint]
+    let floorTiles: [SitePoint]
+    let revision: UInt64
     let site: Site
+    let showCameraCoverage: Bool
     let cameraGeometry: [UUID: SiteCameraGeometry]
+    let cameraCandidates: [UUID: SiteCameraGeometry]
     let colorSources: [UUID: SiteCameraColorSource]
     let colorStatus: ([UUID: String]) -> Void
     let people: [SitePersonTrack]
@@ -22,11 +27,18 @@ public struct SiteScene: View {
     let selectRobot: () -> Void
     let fog: SiteFogConfiguration
     let fogSummary: (SiteFogSummary) -> Void
+    let robotConfirmation: (() -> AnyView)?
+    @State private var robotProjection = SiteRobotScreenProjection()
 
     public init(
         modelURL: URL,
+        points: [SitePoint] = [],
+        floorTiles: [SitePoint] = [],
+        revision: UInt64 = 0,
         site: Site,
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
+        showCameraCoverage: Bool = true,
+        cameraCandidates: [UUID: SiteCameraGeometry] = [:],
         colorSources: [UUID: SiteCameraColorSource] = [:],
         colorStatus: @escaping ([UUID: String]) -> Void = { _ in },
         people: [SitePersonTrack] = [],
@@ -38,12 +50,16 @@ public struct SiteScene: View {
         robot: SiteRobotRenderState? = nil,
         robotPoint: @escaping (SitePoint, Bool) -> Void = { _, _ in },
         selectRobot: @escaping () -> Void = {},
+        robotConfirmation: (() -> AnyView)? = nil,
         fog: SiteFogConfiguration = .init(),
         fogSummary: @escaping (SiteFogSummary) -> Void = { _ in }
     ) {
         self.modelURL = modelURL
+        self.points = points; self.floorTiles = floorTiles; self.revision = revision
         self.site = site
+        self.showCameraCoverage = showCameraCoverage
         self.cameraGeometry = cameraGeometry
+        self.cameraCandidates = cameraCandidates
         self.colorSources = colorSources
         self.colorStatus = colorStatus
         self.people = people
@@ -55,16 +71,20 @@ public struct SiteScene: View {
         self.robot = robot
         self.robotPoint = robotPoint
         self.selectRobot = selectRobot
+        self.robotConfirmation = robotConfirmation
         self.fog = fog
         self.fogSummary = fogSummary
     }
 
     public var body: some View {
-        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty && people.isEmpty)) { context in
+        TimelineView(.animation(minimumInterval: 0.25, paused: robot == nil && !fog.enabled && colorSources.isEmpty && people.isEmpty && cameraCandidates.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
+                points: points, floorTiles: floorTiles, revision: revision,
                 site: site,
                 cameraGeometry: cameraGeometry,
+                showCameraCoverage: showCameraCoverage,
+                cameraCandidates: cameraCandidates,
                 colorSources: colorSources,
                 colorStatus: colorStatus,
                 people: people,
@@ -77,11 +97,34 @@ public struct SiteScene: View {
                 robot: robot,
                 robotPoint: robotPoint,
                 selectRobot: selectRobot,
+                robotScreenPosition: { point in
+                    robotProjection.point = point
+                },
                 fog: fog,
                 fogSummary: fogSummary,
                 refreshDate: context.date
             )
             .accessibilityLabel("3D model of \(site.name)")
+        .overlay(alignment: .topLeading) {
+            if robot?.scanIsProvisional == true, robot?.scan.isEmpty == false {
+                Label("Provisional LiDAR fit · position unconfirmed", systemImage: "exclamationmark.triangle")
+                    .font(.caption).padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(12)
+            }
+        }
+        .overlay {
+            GeometryReader { geometry in
+                if let point = robotProjection.point, let robotConfirmation {
+                    robotConfirmation()
+                        .frame(width: 250)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.secondary.opacity(0.3)))
+                        .shadow(radius: 8, y: 3)
+                        .position(x: min(max(point.x, 145), max(145, geometry.size.width - 145)),
+                                  y: min(max(point.y - 110, 90), max(90, geometry.size.height - 90)))
+                }
+            }
+        }
         }
         .task(id: colorSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString }) {
             let leases = colorSources.values.map { ($0, $0.acquire()) }
@@ -93,10 +136,19 @@ public struct SiteScene: View {
     }
 }
 
+@MainActor private final class SiteRobotScreenProjection {
+    var point: CGPoint?
+}
+
 private struct SceneSurface {
     var modelURL: URL
+    var points: [SitePoint]
+    var floorTiles: [SitePoint]
+    var revision: UInt64
     var site: Site
     var cameraGeometry: [UUID: SiteCameraGeometry]
+    var showCameraCoverage: Bool
+    var cameraCandidates: [UUID: SiteCameraGeometry]
     var colorSources: [UUID: SiteCameraColorSource]
     var colorStatus: ([UUID: String]) -> Void
     var people: [SitePersonTrack]
@@ -109,6 +161,7 @@ private struct SceneSurface {
     var robot: SiteRobotRenderState?
     var robotPoint: (SitePoint, Bool) -> Void
     var selectRobot: () -> Void
+    var robotScreenPosition: (CGPoint?) -> Void
     var fog: SiteFogConfiguration
     var fogSummary: (SiteFogSummary) -> Void
     // Forces a native-view update even when telemetry stops arriving.
@@ -121,15 +174,25 @@ private struct SceneSurface {
         var peopleRoot = SCNNode()
         var personMarkers: [UUID: SitePersonMarker] = [:]
         var model = SCNNode()
+        var contributionNode = SCNNode()
+        var contributionRevision: UInt64?
+        var hadContribution = false
         weak var view: SCNView?
         var needsFraming = true
         var robotRoot = SCNNode()
         var scanRoot = SCNNode()
+        var hazardsRoot = SCNNode()
         var robotModel = SCNNode()
         var orders = SCNNode()
         var selection = SCNNode()
+        #if os(iOS)
+        var draggedCamera: UUID?
+        var dragPoint: SitePoint?
+        #endif
         var lastCameras: [SiteCamera]?
+        var lastShowCameraCoverage = true
         var lastCameraGeometry: [UUID: SiteCameraGeometry] = [:]
+        var lastCameraCandidates: [UUID: SiteCameraGeometry] = [:]
         var lastMarkerScale: Float?
         var lastRobot: SiteRobotRenderState?
         let fogRenderer = SiteFogRenderer()
@@ -153,6 +216,9 @@ private struct SceneSurface {
                     )
                     let scene = SCNScene()
                     model = imported.rootNode.clone()
+                    contributionNode = SCNNode()
+                    contributionRevision = nil; hadContribution = false
+                    model.addChildNode(contributionNode)
                     scene.rootNode.addChildNode(model)
                     markers = SCNNode()
                     scene.rootNode.addChildNode(markers)
@@ -174,8 +240,12 @@ private struct SceneSurface {
                     scanRoot = SCNNode()
                     scanRoot.name = "localization:scan"
                     scene.rootNode.addChildNode(scanRoot)
+                    hazardsRoot = SCNNode()
+                    hazardsRoot.name = "navigation:hazards"
+                    scene.rootNode.addChildNode(hazardsRoot)
                     lastCameras = nil
                     lastCameraGeometry = [:]
+                    lastCameraCandidates = [:]
                     lastRobot = nil
                     view.scene = scene
                     loadedURL = parent.modelURL
@@ -190,8 +260,34 @@ private struct SceneSurface {
                     return
                 }
             }
+            if contributionRevision != parent.revision {
+                if !hadContribution && !parent.points.isEmpty && parent.modelURL.pathExtension == "scn" { needsFraming = true }
+                hadContribution = !parent.points.isEmpty
+                contributionNode.childNodes.forEach { $0.removeFromParentNode() }
+                let vertices = parent.points.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                if !vertices.isEmpty {
+                    let source = SCNGeometrySource(vertices: vertices)
+                    let element = SCNGeometryElement(indices: Array(0..<UInt32(vertices.count)), primitiveType: .point)
+                    element.pointSize = 4; element.minimumPointScreenSpaceRadius = 2; element.maximumPointScreenSpaceRadius = 6
+                    let geometry = SCNGeometry(sources: [source], elements: [element])
+                    geometry.firstMaterial?.diffuse.contents = platformAccent
+                    contributionNode.addChildNode(SCNNode(geometry: geometry))
+                }
+                if !parent.floorTiles.isEmpty {
+                    let vertices = parent.floorTiles.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                    let source = SCNGeometrySource(vertices: vertices)
+                    let element = SCNGeometryElement(indices: Array(0..<UInt32(vertices.count)), primitiveType: .triangles)
+                    let geometry = SCNGeometry(sources: [source], elements: [element])
+                    geometry.firstMaterial?.diffuse.contents = platformAccent
+                    geometry.firstMaterial?.transparency = 0.25
+                    geometry.firstMaterial?.isDoubleSided = true
+                    contributionNode.addChildNode(SCNNode(geometry: geometry))
+                }
+                contributionRevision = parent.revision
+            }
             let scale = Float(parent.site.metresPerModelUnit)
             model.scale = SCNVector3(scale, scale, scale)
+            contributionNode.scale = SCNVector3(1/scale, 1/scale, 1/scale)
             frameOverviewIfNeeded()
             updateRobot()
             updatePeople()
@@ -235,28 +331,51 @@ private struct SceneSurface {
             let currentGeometry = parent.cameraGeometry.filter {
                 $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
             }
-            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry || lastMarkerScale != scale else { return }
+            let currentCandidates = parent.cameraCandidates.filter {
+                $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
+            }
+            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry
+                    || lastShowCameraCoverage != parent.showCameraCoverage || lastCameraCandidates != currentCandidates || lastMarkerScale != scale else { return }
             lastCameras = parent.site.cameras
+            lastShowCameraCoverage = parent.showCameraCoverage
             lastCameraGeometry = currentGeometry
+            lastCameraCandidates = currentCandidates
             lastMarkerScale = scale
             SCNTransaction.flush()
             markers.childNodes.forEach { $0.removeFromParentNode() }
             for camera in parent.site.cameras {
-                let reported = parent.cameraGeometry[camera.id]
-                let current = reported?.pose.isCurrent(revision: parent.site.modelRevision, now: Date()) == true ? reported : nil
+                let candidate = camera.position == nil && currentGeometry[camera.id] == nil ? currentCandidates[camera.id] : nil
+                let unsure = candidate != nil
+                let current = currentGeometry[camera.id] ?? candidate
                 guard let position = current?.pose.position ?? camera.position else { continue }
                 let geometry = SCNSphere(radius: 0.08)
-                geometry.firstMaterial?.diffuse.contents = platformAccent
+                geometry.firstMaterial?.diffuse.contents = unsure ? platformEstimated : platformAccent
                 geometry.firstMaterial?.lightingModel = .constant
                 let node = SCNNode(geometry: geometry)
                 node.name = "sensor:\(camera.id.uuidString)"
                 node.position = SCNVector3(position.x, position.y, position.z)
-                if let current {
+                if let current, !unsure {
                     node.simdPosition = SiteCameraWallPlacement.displayPosition(
                         node.simdPosition, forward: SIMD3<Float>(current.pose.forward), in: model)
                 }
                 markers.addChildNode(node)
-                if let current, let rays = current.lens?.boundaryRays {
+                if unsure {
+                    node.opacity = 0.65
+                    let text = SCNText(string: "Unsure", extrusionDepth: 0)
+                    text.font = .systemFont(ofSize: 12, weight: .semibold)
+                    text.flatness = 0.2
+                    text.firstMaterial?.diffuse.contents = platformEstimated
+                    text.firstMaterial?.lightingModel = .constant
+                    let label = SCNNode(geometry: text)
+                    label.name = node.name
+                    let (low, high) = text.boundingBox
+                    label.pivot = SCNMatrix4MakeTranslation((low.x + high.x) / 2, low.y, 0)
+                    label.scale = SCNVector3(0.015, 0.015, 0.015)
+                    label.position = SCNVector3(0, 0.16, 0)
+                    label.constraints = [SCNBillboardConstraint()]
+                    node.addChildNode(label)
+                }
+                if parent.showCameraCoverage, let current, let rays = current.lens?.boundaryRays {
                     // Two metres is a drawing length, not sensor range or visible
                     // coverage. Surface occlusion and detection range are unknown.
                     var vertices = [SCNVector3(0, 0, 0)]
@@ -309,8 +428,13 @@ private struct SceneSurface {
         }
 
         private func updateRobot() {
-            guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; return }
-            scanRoot.isHidden = state.scan.isEmpty
+            guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; hazardsRoot.isHidden = true; return }
+            hazardsRoot.isHidden = state.hazards.isEmpty || !state.fresh || state.placing ||
+                !SiteRobotHazardRenderer.isFresh(receivedAt: state.receivedAt, now: .now)
+            if lastRobot?.hazards != state.hazards {
+                SiteRobotHazardRenderer.update(hazardsRoot, hazards: state.hazards)
+            }
+            scanRoot.isHidden = state.scan.isEmpty || (!state.fresh && !state.scanIsProvisional) || state.placing
             if lastRobot?.scan != state.scan {
                 scanRoot.childNodes.forEach { $0.removeFromParentNode() }
                 for kind in 0...3 {
@@ -340,13 +464,24 @@ private struct SceneSurface {
             robotRoot.isHidden = state.position == nil
             if let position = state.position {
                 SCNTransaction.begin()
-                SCNTransaction.animationDuration = state.fresh && lastRobot?.fresh == true ? 0.1 : 0
+                // Telemetry already supplies sampled poses. Implicit Euler-angle
+                // interpolation can cross the long arc when yaw wraps.
+                SCNTransaction.disableActions = true
                 robotRoot.position = SCNVector3(position.x, position.y, position.z)
-                robotRoot.eulerAngles = SCNVector3(0, state.yaw, 0)
+                robotRoot.simdOrientation = Go2Model.heading(state.yaw)
                 robotModel.opacity = state.fresh ? 1 : 0.45
                 Go2Model.pose(robotModel, joints: state.joints)
                 SCNTransaction.commit()
             }
+            if let view, let position = state.position {
+                let projected = view.projectPoint(SCNVector3(position.x, position.y + 0.4, position.z))
+                #if os(macOS)
+                let screenY = view.bounds.height - CGFloat(projected.y)
+                #else
+                let screenY = CGFloat(projected.y)
+                #endif
+                parent.robotScreenPosition((0...1).contains(projected.z) ? CGPoint(x: CGFloat(projected.x), y: screenY) : nil)
+            } else { parent.robotScreenPosition(nil) }
             selection.isHidden = !state.selected
             selection.geometry?.firstMaterial?.diffuse.contents = state.fresh ? platformAccent : platformEstimated
             selection.geometry?.firstMaterial?.emission.contents = state.fresh ? platformAccent : platformEstimated
@@ -429,8 +564,13 @@ private struct SceneSurface {
             {
                 parent.select(id)
             } else if parent.robot?.selected == true,
-                      let hit = hits.first(where: { isDescendant($0.node, of: model) }),
-                      abs(hit.worldNormal.y) > 0.85 {
+                      let floor = parent.robot?.position?.y,
+                      let hit = hits.first(where: {
+                          isDescendant($0.node, of: model) &&
+                          $0.node.geometry?.elements.contains(where: { $0.primitiveType == .triangles }) == true &&
+                          abs($0.worldNormal.y) > 0.85 &&
+                          abs(Double($0.worldCoordinates.y) - floor) < 0.15
+                      }) {
                 let p = hit.worldCoordinates
                 parent.robotPoint(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)), immediate)
             }
@@ -446,6 +586,29 @@ private struct SceneSurface {
         }
 
         #if os(iOS)
+            @objc func dragCamera(_ gesture: UILongPressGestureRecognizer) {
+                guard let view else { return }
+                let hits = view.hitTest(gesture.location(in: view), options: [.searchMode: SCNHitTestSearchMode.all.rawValue])
+                switch gesture.state {
+                case .began:
+                    guard parent.placingCamera == nil,
+                          let name = hits.first?.node.name, name.hasPrefix("sensor:"),
+                          let id = UUID(uuidString: String(name.dropFirst(7))) else { return }
+                    draggedCamera = id; dragPoint = nil; view.allowsCameraControl = false
+                case .changed:
+                    guard let id = draggedCamera, let hit = hits.first(where: { isDescendant($0.node, of: model) }) else { return }
+                    let p = hit.worldCoordinates
+                    dragPoint = SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z))
+                    markers.childNode(withName: "sensor:" + id.uuidString, recursively: true)?.worldPosition = p
+                case .ended, .cancelled, .failed:
+                    let id = draggedCamera, point = dragPoint
+                    draggedCamera = nil; dragPoint = nil; view.allowsCameraControl = true
+                    lastCameras = nil
+                    if gesture.state == .ended, let id, let point { parent.place(id, point) }
+                    else { update(parent, view: view) }
+                default: break
+                }
+            }
             @objc func clicked(_ gesture: UITapGestureRecognizer) {
                 tap(at: gesture.location(in: view))
             }
@@ -503,6 +666,13 @@ enum SiteCameraWallPlacement {
 }
 
 #if os(iOS)
+    extension SceneSurface.Coordinator: UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let view, parent.placingCamera == nil else { return false }
+            let hit = view.hitTest(gestureRecognizer.location(in: view), options: nil).first
+            return hit?.node.name?.hasPrefix("sensor:") == true
+        }
+    }
     private var platformAccent: UIColor { .systemGreen }
     private var platformEstimated: UIColor { .systemOrange }
     extension SceneSurface: UIViewRepresentable {
@@ -517,6 +687,10 @@ enum SiteCameraWallPlacement {
                     action: #selector(Coordinator.clicked)
                 )
             )
+            let drag = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.dragCamera))
+            drag.minimumPressDuration = 0.35
+            drag.delegate = context.coordinator
+            view.addGestureRecognizer(drag)
             context.coordinator.update(self, view: view)
             return view
         }

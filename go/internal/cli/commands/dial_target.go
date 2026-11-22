@@ -32,6 +32,8 @@ type dialTarget struct {
 	// there are several. It stays the single "primary" address so every caller
 	// and diagnostic that only ever wanted one address keeps working.
 	Addr string
+	// A discovered endpoint explicitly advertising mTLS has no plaintext rung.
+	RequiresMTLS bool
 	// Candidates are every address this dial may try, in the order to try them
 	// (see orderDialCandidates: IPv4, then routable IPv6, then link-local/ULA).
 	// Empty means "just Addr" — read it through dialCandidates, never directly.
@@ -613,6 +615,31 @@ func (e missingLoginError) Error() string {
 func (e missingLoginError) NextSteps() []string { return []string{missingLoginStep} }
 
 func (e missingLoginError) Unwrap() error { return e.refusal }
+
+// orgOnlyBindingError refuses a device whose saved binding names an
+// organization but no device. Older CLIs saved these. No certificate can
+// satisfy one, so the device stays refused until the binding is cleared: say
+// which one it is and how, rather than only that an identity is required.
+type orgOnlyBindingError struct {
+	// key is the name the binding is saved under, which `wendy device unpin`
+	// has to be handed to clear it.
+	key string
+}
+
+func (e orgOnlyBindingError) step() string {
+	return "Clear the saved identity, then connect again: wendy device unpin " + shellQuoteArg(e.key)
+}
+
+func (e orgOnlyBindingError) Error() string {
+	return fmt.Sprintf("The identity this CLI saved for %q names an organization but no device, so it cannot verify the device that answers.\n  ", e.key) + e.step()
+}
+
+// NextSteps exposes the unpin step the message ends with to JSON mode.
+func (e orgOnlyBindingError) NextSteps() []string { return []string{e.step()} }
+
+// Is keeps the refusal a missing expected identity: recovery, the Cloud name
+// fallback and the unauthenticated-transport guard all stop on that sentinel.
+func (e orgOnlyBindingError) Is(target error) bool { return target == certs.ErrExpectedDeviceIdentity }
 
 // blocksUnauthenticatedFallback reports whether err forbids reaching this device
 // over a transport that enforces nothing — today the picker's Bluetooth

@@ -79,7 +79,14 @@ agents reject the new inference fields.
 
 One shared model handles the campaign's cameras in turn, scoring each camera's
 latest decoded frame at up to `rate` frames per second. Throughput depends on
-compute and camera count. Old frames are discarded, so this is sampled detection;
+compute and camera count: `inference_status.throughput` in campaign inspect
+reports the rate the model achieves, and `model_too_slow` when it cannot reach
+`rate`. The agent publishes the same figures as OpenTelemetry metrics
+(`inference.rate.requested`, `inference.rate.achieved`,
+`inference.model.too_slow`, `inference.frame.duration_ms` and
+`inference.frames.scored`), which
+`wendy --device <device> device telemetry-stream --metrics` prints as JSON
+lines. Old frames are discarded, so this is sampled detection;
 brief appearances between scored frames can be missed. Encoded-stream overflow
 resets the affected decoder instead of feeding it a corrupted splice.
 
