@@ -38,6 +38,7 @@ struct WendyError: LocalizedError, Sendable, Equatable, ExpressibleByStringLiter
 final class GoClient: Sendable {
     static let shared = GoClient()
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
+    private let appRequests = DispatchQueue(label: "dev.wendy.desktop.apps", qos: .userInitiated, attributes: .concurrent)
     private let accountReads = DispatchQueue(label: "dev.wendy.desktop.accounts", qos: .userInitiated)
     private let discoveryReads = DispatchQueue(label: "dev.wendy.desktop.discovery", qos: .utility)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
@@ -162,7 +163,7 @@ final class GoClient: Sendable {
     }
 
     func disconnect() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDDisconnect()) } }
-    func apps() async throws -> [DeviceApp] { try await perform { try Self.readApps(WDApps()) } }
+    func apps() async throws -> [DeviceApp] { try await BlockingWork.run(on: appRequests) { try Self.readApps(WDApps()) } }
     func openApp(_ app: String, session: UInt64) async throws -> URL {
         try await perform {
             try Self.withCString(app) {
@@ -184,10 +185,10 @@ final class GoClient: Sendable {
         }
     }
     func startApp(_ app: String, session: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStartApp($0, session)) } }
+        try await BlockingWork.run(on: appRequests) { try Self.withCString(app) { try Self.finish(WDStartApp($0, session)) } }
     }
     func stopApp(_ app: String, session: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStopApp($0, session)) } }
+        try await BlockingWork.run(on: appRequests) { try Self.withCString(app) { try Self.finish(WDStopApp($0, session)) } }
     }
     func deleteApp(_ app: String, session: UInt64) async throws {
         try await perform { try Self.withCString(app) { try Self.finish(WDDeleteApp($0, session)) } }

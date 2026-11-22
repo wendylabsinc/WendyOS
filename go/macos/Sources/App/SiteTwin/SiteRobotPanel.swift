@@ -121,7 +121,15 @@ final class SiteRobotMapModel: ObservableObject {
         if reading?.pose == true, reading?.aligned != true {
             return reading?.scanReady == true ? "Position not confirmed" : "Waiting for room landmarks"
         }
-        return reading?.pose == true ? "Live pose · navigation unavailable" : "Waiting for telemetry"
+        return reading?.pose == true ? "Live pose · navigation unavailable" : "Waiting for Go2 position data"
+    }
+
+    func statusMessage(showsDetails: Bool) -> String? {
+        guard rotationState == .idle,
+              showsDetails || reading?.pose == false || reading?.disconnected == true,
+              let message = reading?.message, !message.isEmpty,
+              message != "Live LiDAR and odometry.", message != "Route ready", message != statusLabel else { return nil }
+        return message
     }
 
     func setArrivalTiming(_ enabled: Bool) {
@@ -216,6 +224,9 @@ final class SiteRobotMapModel: ObservableObject {
         geometryURL = modelURL; geometryScale = site.metresPerModelUnit
         siteRevision = site.modelRevision; fusionReport = nil; savedMap = nil; cameraFrame = nil; cameraDecoder = nil; referenceCount = 0; lastEvidence = 0
         scheduleAutomaticLocalization()
+        // Reconnect telemetry without restarting a search or movement interrupted
+        // by the lost connection. The user can explicitly locate again.
+        if recovering { automaticPaused = true }
         frame = "\(site.id.uuidString)/\(site.modelRevision.uuidString)"
         guard active, session != 0, !serial.isEmpty else { return false }
         connecting = true
@@ -266,7 +277,7 @@ final class SiteRobotMapModel: ObservableObject {
         } catch {
             if epoch == generation, !Task.isCancelled {
                 self.error = error.localizedDescription
-                retry = recovering
+                retry = owned != 0 || recovering
             }
         }
         if owned != 0 { await observationClient.close(owned) }
@@ -798,8 +809,7 @@ struct SiteRobotStatus: View {
                 if model.connecting { ProgressView().controlSize(.small) }
             }
             RobotRotationFeedback(model: model)
-            if showsDetails, model.rotationState == .idle, let message = model.reading?.message, !message.isEmpty,
-               message != "Live LiDAR and odometry.", message != "Route ready", message != model.statusLabel {
+            if let message = model.statusMessage(showsDetails: showsDetails) {
                 Text(message).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -320,12 +320,17 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
     var searchRequests: [RobotFusionRequest] = []
     var turns: [UInt64] = []
     var stops: [UInt64] = []
+    var opens = 0
+    var closed: [UInt64] = []
+    private var failPoll = false
     var progress = SiteRobotClient.RemoteReply(SearchState: "searching", SearchMessage: "Waiting for measurements", SearchTurns: 0)
     init(measurements: Bool, rejectTurns: Bool) { self.measurements = measurements; self.rejectTurns = rejectTurns }
-    func open(session: UInt64, serial: String) async throws -> UInt64 { 42 }
-    func close(_ handle: UInt64) async {}
+    func open(session: UInt64, serial: String) async throws -> UInt64 { opens += 1; return UInt64(41 + opens) }
+    func close(_ handle: UInt64) async { closed.append(handle) }
+    func failNextPoll() { failPoll = true }
     func poll(_ handle: UInt64) async throws -> SiteRobotReading {
-        SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: false, moving: progress.SearchTurns > 0,
+        if failPoll { failPoll = false; throw WendyError(message: "The connection was interrupted.") }
+        return SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: false, moving: progress.SearchTurns > 0,
             arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: false, measurementsReady: measurements,
             underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, route: [], joints: [])
     }
@@ -366,6 +371,32 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
         }
         try #require(model.canStartRotationSearch)
         try await body(model, robot)
+    }
+}
+
+@MainActor @Test func robotTelemetryRecoversFromPollingErrorWithoutRestartingMovement() async throws {
+    try await withRotationModel { model, robot in
+        await robot.failNextPoll()
+        for _ in 0..<250 {
+            if await robot.opens == 2, model.reading?.pose == true { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await robot.opens == 2)
+        #expect(await robot.closed == [42])
+        #expect(model.handle == 43)
+        #expect(model.reading?.pose == true)
+        #expect(model.error == nil)
+        // Automatic localization normally starts after one second. Recovery
+        // must keep telemetry flowing without restarting that movement.
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await robot.searches.isEmpty)
+        #expect(await robot.turns.isEmpty)
+        model.startRotationSearch()
+        for _ in 0..<100 {
+            if await robot.searches.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await robot.searches.count == 1)
     }
 }
 
@@ -685,4 +716,29 @@ private final class PresetTestMatcher: RobotVisualMatching {
         let reply = try JSONDecoder().decode(SiteRobotClient.RemoteReply.self, from: data)
         #expect(reply.SearchMoves == nil && reply.SearchPhase == nil)
     }
+}
+
+@MainActor
+@Test func robotStatusNamesMissingPositionAndKeepsFailureVisibleWhenCollapsed() {
+    let model = SiteRobotMapModel()
+    #expect(model.statusLabel == "Waiting for Go2 position data")
+    var reading = SiteRobotReading(message: "Waiting for odometry from Go2.", pose: false, ready: false, aligned: false, moving: false,
+        arrivalTiming: false, usingArrivalTiming: false, timingUnavailable: false, scanReady: false, measurementsReady: false,
+        underBodyAllowance: false, x: 0, z: 0, yaw: 0, floorY: 0, route: [], joints: [])
+    model.accept(reading)
+    #expect(model.statusLabel == "Waiting for Go2 position data")
+    #expect(model.statusMessage(showsDetails: false) == reading.message)
+
+    reading.pose = true
+    reading.message = "Waiting for more room landmarks."
+    model.accept(reading)
+    #expect(model.statusLabel == "Waiting for room landmarks")
+    #expect(model.statusMessage(showsDetails: false) == nil)
+    #expect(model.statusMessage(showsDetails: true) == reading.message)
+
+    reading.disconnected = true
+    reading.message = "Go2 connection was interrupted."
+    model.accept(reading)
+    #expect(model.statusLabel == "Go2 disconnected")
+    #expect(model.statusMessage(showsDetails: false) == reading.message)
 }

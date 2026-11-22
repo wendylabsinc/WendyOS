@@ -58,11 +58,14 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/camera-alignment", s.cameraRequest)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
-	mux.HandleFunc("GET /v1/rooms", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.List(); respond(w, v, e) })
-	mux.HandleFunc("GET /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.Get(r.PathValue("id")); respond(w, v, e) })
+	mux.HandleFunc("GET /v1/rooms", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.List(); respondRoom(w, r, v, e) })
+	mux.HandleFunc("GET /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.Store.Get(r.PathValue("id"))
+		respondRoom(w, r, v, e)
+	})
 	mux.HandleFunc("GET /v1/rooms/{id}/state", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.Store.State(r.PathValue("id"))
-		respond(w, v, e)
+		respondRoom(w, r, v, e)
 	})
 	mux.HandleFunc("PUT /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var v Room
