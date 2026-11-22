@@ -339,6 +339,9 @@ jobs:
     runs-on:
       group: wendy-mac
       labels: [self-hosted, macOS, ARM64]
+    env:
+      # Keep release binaries compatible with the Homebrew tap's baseline.
+      MACOSX_DEPLOYMENT_TARGET: '26.0'
     needs: [determine-version]
     # Attest SLSA build provenance in the job that produces the archive, so the
     # provenance reflects the actual build environment (not a downstream job).
@@ -376,17 +379,8 @@ jobs:
           CGO_ENABLED: '1'
         run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
 
-      - name: Install libusb
-        run: |
-          set -euo pipefail
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          echo "/usr/local/bin" >> "$GITHUB_PATH"
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          brew list libusb >/dev/null 2>&1 || brew install libusb
-
-      # build-wendy.sh links libusb statically and fails the build if a dynamic
-      # libusb dependency sneaks in — a plain `go build` would produce a binary
-      # that only runs on Macs with Homebrew libusb installed.
+      # Build libusb for the same deployment target as the CLI. The runner's
+      # Homebrew archive may require symbols only available on its newer OS.
       - name: Build
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -394,8 +388,7 @@ jobs:
         run: |
           ARTIFACT="${{ matrix.artifact-name }}"
           mkdir -p "${ARTIFACT}"
-          # build-wendy.sh cds into go/, so the output path is relative to go/.
-          go/scripts/build-wendy.sh "../${ARTIFACT}/wendy"
+          bash .github/scripts/build-macos-release-cli.sh "${ARTIFACT}/wendy"
           # libusb is statically linked (LGPL-2.1): ship its attribution/license.
           cp NOTICE "${ARTIFACT}/NOTICE"
 
