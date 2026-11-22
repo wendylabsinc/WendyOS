@@ -40,9 +40,7 @@ wendy ALL=(root) NOPASSWD: /usr/bin/env WENDY_E2E_DISKIMAGE\=1 /Users/wendy/acti
 ```
 
 Adjust the executable path for each runner's `RUNNER_TEMP`, which is
-`<work folder>/_temp`. A runner configured with the work folder
-`/Users/wendy/_work` needs `/Users/wendy/_work/_temp/install.test` instead.
-Keep the rule out of the main `/etc/sudoers`. When several rules match, sudo
+`<work folder>/_temp`. Keep the rule out of the main `/etc/sudoers`. When several rules match, sudo
 uses the last one, and macOS's `%admin ALL = (ALL) ALL` line still asks an
 administrator account for a password if the rule is placed above it. The
 drop-in directory is read at the end of that file. Validate with
