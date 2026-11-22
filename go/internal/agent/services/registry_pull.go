@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -167,12 +168,18 @@ func pullFailed(reason string, err error) error {
 // errStreamCut is a GetBlob stream that ended before the blob did.
 var errStreamCut = errors.New("blob stream ended before the blob")
 
+// dialDeviceArtifacts reaches the registry, not the postbox host: release
+// data is served only by the registry, with the same device mTLS.
 func dialDeviceArtifacts(cloudURL, certPEM, keyPEM, chainPEM string) (cloudpbv2.DeviceArtifactServiceClient, io.Closer, error) {
-	conn, closer, err := dialDeviceCloud(cloudURL, certPEM, keyPEM, chainPEM)
+	endpoint, err := cloudrelay.RegistryEndpoint(cloudURL, os.Getenv("WENDY_REGISTRY"))
 	if err != nil {
 		return nil, nil, err
 	}
-	return cloudpbv2.NewDeviceArtifactServiceClient(conn), closer, nil
+	conn, err := cloudrelay.DialCloud(endpoint, certPEM, chainPEM, []byte(keyPEM))
+	if err != nil {
+		return nil, nil, err
+	}
+	return cloudpbv2.NewDeviceArtifactServiceClient(conn), conn, nil
 }
 
 // checkAssignment runs the checks that need no download (the containerd

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +33,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -404,29 +404,12 @@ func newRegistryOp(ctx context.Context, conn grpc.ClientConnInterface, auth *con
 	}, nil
 }
 
-// registryEnv overrides the registry's address (host:port).
-const registryEnv = "WENDY_REGISTRY"
-
-// registryAddress is the registry's own address: WENDY_REGISTRY, or
-// registry.<domain>:443 next to the session's api.<domain> (sem: the registry
-// is its own service at registry.<env>).
-func registryAddress(cloudGRPC string) (string, error) {
-	if addr := os.Getenv(registryEnv); addr != "" {
-		return addr, nil
-	}
-	host, _, err := net.SplitHostPort(cloudGRPC)
-	if domain, ok := strings.CutPrefix(host, "api."); err == nil && ok && domain != "" {
-		return net.JoinHostPort("registry."+domain, "443"), nil
-	}
-	return "", fmt.Errorf("no registry address is known for %s; set %s to the registry's host:port", cloudGRPC, registryEnv)
-}
-
 // dialRegistry connects to the registry with the operator's certificate,
 // chain and key in the TLS handshake (operator mTLS), like cloud.
 // ponytail: the connection lives until the CLI exits; close it if a long-lived
 // caller appears.
 var dialRegistry = func(auth *config.AuthConfig) (grpc.ClientConnInterface, error) {
-	addr, err := registryAddress(auth.CloudGRPC)
+	addr, err := cloudrelay.RegistryEndpoint(auth.CloudGRPC, os.Getenv("WENDY_REGISTRY"))
 	if err != nil {
 		return nil, err
 	}

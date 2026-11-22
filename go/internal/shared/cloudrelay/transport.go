@@ -81,6 +81,26 @@ func CanonicalAPIHost(host string) string {
 	return host
 }
 
+// RegistryEndpoint is the Cloud registry's host:port, which operators push to
+// and devices pull from: override (WENDY_REGISTRY) when set, else the
+// "registry." sibling of the stack's API host (one static name per
+// environment: api.dev.wendy.sh -> registry.dev.wendy.sh, api.wendy.dev ->
+// registry.wendy.dev).
+func RegistryEndpoint(cloud, override string) (string, error) {
+	if override != "" {
+		return target(override)
+	}
+	t, err := target(cloud)
+	if err != nil {
+		return "", err
+	}
+	host, _, _ := net.SplitHostPort(t)
+	if domain, ok := strings.CutPrefix(CanonicalAPIHost(host), "api."); ok && domain != "" {
+		return net.JoinHostPort("registry."+domain, "443"), nil
+	}
+	return "", fmt.Errorf("no registry address is known for %s; set WENDY_REGISTRY to the registry's host:port", host)
+}
+
 // LiteBrokerHost selects the Lite device relay hostname for a Cloud endpoint.
 // Its TLS port is configured independently from the Cloud API port.
 func LiteBrokerHost(cloud string) (string, error) {

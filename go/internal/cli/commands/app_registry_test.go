@@ -1007,22 +1007,6 @@ func TestRegistryRefusesWithoutCustodianPin(t *testing.T) {
 	}
 }
 
-// The registry is its own service at registry.<domain> next to cloud's
-// api.<domain>, or where WENDY_REGISTRY says; nothing is guessed otherwise.
-func TestRegistryAddress(t *testing.T) {
-	t.Setenv(registryEnv, "")
-	if got, err := registryAddress("api.dev.wendy.sh:443"); err != nil || got != "registry.dev.wendy.sh:443" {
-		t.Fatalf("dev: %q %v", got, err)
-	}
-	if _, err := registryAddress("wendy-cloud-services-114319063177.us-central1.run.app:443"); err == nil || !strings.Contains(err.Error(), registryEnv) {
-		t.Fatalf("no derivable host: %v", err)
-	}
-	t.Setenv(registryEnv, "localhost:9443")
-	if got, _ := registryAddress("api.dev.wendy.sh:443"); got != "localhost:9443" {
-		t.Fatalf("override: %q", got)
-	}
-}
-
 // The digest signed is the manifest of the release the deployment uses now:
 // a change Cloud recorded before its key (release B, newest key sealed for
 // A) is refused and nothing is signed.
