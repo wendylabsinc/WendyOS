@@ -336,9 +336,11 @@ jobs:
 
   build-go-macos:
     name: ${{ matrix.artifact-name }}
-    runs-on:
-      group: wendy-mac
-      labels: [self-hosted, macOS, ARM64]
+    # Match the Homebrew tap's macOS baseline. A newer self-hosted Mac can
+    # contribute static libusb symbols that do not exist on macOS 26.
+    runs-on: macos-26
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '26.0'
     needs: [determine-version]
     # Attest SLSA build provenance in the job that produces the archive, so the
     # provenance reflects the actual build environment (not a downstream job).
