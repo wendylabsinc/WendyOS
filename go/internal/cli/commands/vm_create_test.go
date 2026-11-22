@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -261,17 +262,28 @@ func TestVMCreateRecordsTheArchitecture(t *testing.T) {
 	const hint = "Treating the local image as ARM64; pass --arch amd64 for an x86-64 image."
 
 	var out strings.Builder
-	if err := createVMContext(context.Background(), &out, "x86", image, "", 1, false, 0, "amd64"); err != nil {
-		t.Fatal(err)
-	}
-	if m, _ := store.ReadMeta("x86"); m.Arch != vm.ArchAMD64 {
-		t.Errorf("--arch amd64 recorded %q", m.Arch)
-	}
-	if _, err := os.Stat(store.VarsPath("x86")); !os.IsNotExist(err) {
-		t.Errorf("x86-64 VM has a variable store at create: %v", err)
-	}
-	if strings.Contains(out.String(), hint) {
-		t.Errorf("explicit --arch printed the local-image hint: %q", out.String())
+	err := createVMContext(context.Background(), &out, "x86", image, "", 1, false, 0, "amd64")
+	if runtime.GOOS == "windows" {
+		// Native Windows runs only the ARM64 guest; TestResolveCreateArch pins the message.
+		if err == nil {
+			t.Error("--arch amd64 created a VM on native Windows")
+		}
+		if _, statErr := os.Stat(store.MetaPath("x86")); !os.IsNotExist(statErr) {
+			t.Errorf("a refused --arch amd64 create wrote metadata: %v", statErr)
+		}
+	} else {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m, _ := store.ReadMeta("x86"); m.Arch != vm.ArchAMD64 {
+			t.Errorf("--arch amd64 recorded %q", m.Arch)
+		}
+		if _, err := os.Stat(store.VarsPath("x86")); !os.IsNotExist(err) {
+			t.Errorf("x86-64 VM has a variable store at create: %v", err)
+		}
+		if strings.Contains(out.String(), hint) {
+			t.Errorf("explicit --arch printed the local-image hint: %q", out.String())
+		}
 	}
 
 	out.Reset()

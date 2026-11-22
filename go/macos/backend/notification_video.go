@@ -89,7 +89,7 @@ func readNotificationVideoNear(ctx context.Context, client pb.DataServiceClient,
 	}
 	if match.episode == nil {
 		stageStart := time.Now()
-		index, err := recordingEpisodeIndex(ctx, client)
+		index, err := recordingEpisodeIndex(ctx, client, false)
 		timings.IndexSeconds = time.Since(stageStart).Seconds()
 		if err != nil {
 			return NotificationVideo{}, err
