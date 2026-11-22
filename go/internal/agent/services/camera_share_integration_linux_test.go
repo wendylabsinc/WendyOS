@@ -241,14 +241,24 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		t.Fatalf("camera is running with no reader: %d hubs", n)
 	}
 
-	// Step 5: one raw reader per node, at the same time.
+	// Step 5: app B joins while app A is already receiving the source. Each
+	// app owns a separate capture node, backed by the same physical capture.
 	readerA := openShareAppReader(t, nodes[containers[0]])
 	readerB := openShareAppReader(t, nodes[containers[1]])
 	for _, r := range []*shareAppReader{readerA, readerB} {
+		started := monotonicNs()
 		if err := r.start(); err != nil {
 			t.Fatalf("reader STREAMON on %s: %v", r.path, err)
 		}
+		frame, stamp, err := r.next(ctx, 10*time.Second)
+		if err != nil {
+			t.Fatalf("first source frame on %s: %v", r.path, err)
+		}
+		if problem := sharePictureProblem(frame, frameBytes); problem != "" || stamp < started/1000*1000 {
+			t.Fatalf("FRESH_CAPTURE_CONTRACT: app's first frame on %s is not fresh source pixels: %s timestamp=%d start=%d", r.path, problem, stamp, started)
+		}
 	}
+
 	const wantFrames = 10
 	got, problem := readPictures(ctx, []*shareAppReader{readerA, readerB}, wantFrames, 10*time.Second, frameBytes)
 	if problem != "" {

@@ -367,11 +367,16 @@ func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.next(time.Second)
+	// The driver grants one CAPTURE owner per node. Concurrent apps use
+	// separate share nodes; here a late opener replaces the previous reader.
+	first.stop()
+	expectCount(t, w.Counts(), 0, "first reader stopped")
+	first.close()
 	late := openShareTestReader(t, path)
 	if err := late.start(); err != nil {
 		t.Fatal(err)
 	}
-	expectCount(t, w.Counts(), 2, "late reader")
+	expectCount(t, w.Counts(), 1, "late reader")
 	late.expectNoFrame(150 * time.Millisecond)
 	fresh := bytes.Repeat([]byte{60}, mode.frameBytes())
 	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
@@ -382,26 +387,24 @@ func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
 	if err := late.ioctl(vidiocStreamon, unsafe.Pointer(&typ)); err != nil {
 		t.Fatal(err)
 	}
-	for _, reader := range []*shareTestReader{first, late} {
-		got, stamp := reader.next(time.Second)
-		if !bytes.Equal(got, fresh) || stamp != 2_000_000_000 {
-			t.Fatal("FRESH_CAPTURE_CONTRACT: late reader got stale pixels")
-		}
+	got, stamp := late.next(time.Second)
+	if !bytes.Equal(got, fresh) || stamp != 2_000_000_000 {
+		t.Fatal("FRESH_CAPTURE_CONTRACT: late reader got stale pixels")
 	}
 	late.stop()
-	expectCount(t, w.Counts(), 1, "late reader stopped")
+	expectCount(t, w.Counts(), 0, "late reader stopped")
 	if err := w.WriteFrame(old, 3_000_000_000); err != nil {
 		t.Fatal(err)
 	}
 	if err := late.ioctl(vidiocStreamon, unsafe.Pointer(&typ)); err != nil {
 		t.Fatal(err)
 	}
-	expectCount(t, w.Counts(), 2, "same descriptor restarted")
+	expectCount(t, w.Counts(), 1, "same descriptor restarted")
 	late.expectNoFrame(150 * time.Millisecond)
 	if err := w.WriteFrame(fresh, 4_000_000_000); err != nil {
 		t.Fatal(err)
 	}
-	got, stamp := late.next(time.Second)
+	got, stamp = late.next(time.Second)
 	if !bytes.Equal(got, fresh) || stamp != 4_000_000_000 {
 		t.Fatal("FRESH_CAPTURE_CONTRACT: restarted descriptor got old pixels")
 	}
