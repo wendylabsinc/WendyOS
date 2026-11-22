@@ -1,7 +1,7 @@
 #ifndef WENDY_VISUALIZER_TYPES_H
 #define WENDY_VISUALIZER_TYPES_H
 
-typedef struct { char *id, *name, *state; int64_t started_ns, size_bytes; } WDVisualEpisode;
+typedef struct { char *id, *name, *state; int64_t started_ns, size_bytes; char *media_files_json; } WDVisualEpisode;
 typedef struct { WDStatus status; WDVisualEpisode *items; size_t count; } WDVisualEpisodesResult;
 typedef struct { char *id, *name, *kind, *detail; } WDVisualTrack;
 // local_path is owned by the result and removed on free. Move the file to
