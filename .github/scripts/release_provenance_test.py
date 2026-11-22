@@ -80,7 +80,15 @@ class ReleaseProvenanceWorkflowTests(unittest.TestCase):
                 elif mutation == 'remove-permission':
                     del job['permissions']['id-token']
                 else:
-                    bad['jobs']['release']['needs'].remove('package-windows')
+                    # Remove every incoming edge. SBOM generation also waits
+                    # for signing, so removing only release's direct edge still
+                    # leaves this producer in the release dependency graph.
+                    for dependent in bad['jobs'].values():
+                        needs = dependent.get('needs', [])
+                        if isinstance(needs, str):
+                            needs = [needs]
+                        if 'package-windows' in needs:
+                            dependent['needs'] = [name for name in needs if name != 'package-windows']
                 with self.assertRaises(AssertionError):
                     assert_provenance(self, bad)
 
