@@ -1686,11 +1686,17 @@ type LifecycleSettings struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The plan's limit, every field set. Read-only: set by the platform and the
 	// subscription (the lower wins), never by the organization.
-	PlanLimit     *LifecyclePolicy `protobuf:"bytes,1,opt,name=plan_limit,json=planLimit,proto3" json:"plan_limit,omitempty"`
+	PlanLimit *LifecyclePolicy `protobuf:"bytes,1,opt,name=plan_limit,json=planLimit,proto3" json:"plan_limit,omitempty"`
+	// The organization's own stored default. A field unset follows
+	// platform_default.
 	DefaultPolicy *LifecyclePolicy `protobuf:"bytes,2,opt,name=default_policy,json=defaultPolicy,proto3" json:"default_policy,omitempty"`
 	PerAppLimit   *LifecyclePolicy `protobuf:"bytes,3,opt,name=per_app_limit,json=perAppLimit,proto3" json:"per_app_limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The platform's default policy, every field set. Applies to each field
+	// left unset in default_policy. Read-only: set by the platform, never by
+	// the organization; for display only.
+	PlatformDefault *LifecyclePolicy `protobuf:"bytes,4,opt,name=platform_default,json=platformDefault,proto3" json:"platform_default,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *LifecycleSettings) Reset() {
@@ -1740,6 +1746,13 @@ func (x *LifecycleSettings) GetDefaultPolicy() *LifecyclePolicy {
 func (x *LifecycleSettings) GetPerAppLimit() *LifecyclePolicy {
 	if x != nil {
 		return x.PerAppLimit
+	}
+	return nil
+}
+
+func (x *LifecycleSettings) GetPlatformDefault() *LifecyclePolicy {
+	if x != nil {
+		return x.PlatformDefault
 	}
 	return nil
 }
@@ -1879,12 +1892,13 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x1bSetLifecycleSettingsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12E\n" +
 	"\x0edefault_policy\x18\x02 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\rdefaultPolicy\x12B\n" +
-	"\rper_app_limit\x18\x03 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\vperAppLimit\"\xdd\x01\n" +
+	"\rper_app_limit\x18\x03 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\vperAppLimit\"\xa8\x02\n" +
 	"\x11LifecycleSettings\x12=\n" +
 	"\n" +
 	"plan_limit\x18\x01 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\tplanLimit\x12E\n" +
 	"\x0edefault_policy\x18\x02 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\rdefaultPolicy\x12B\n" +
-	"\rper_app_limit\x18\x03 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\vperAppLimit*\xd6\x01\n" +
+	"\rper_app_limit\x18\x03 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\vperAppLimit\x12I\n" +
+	"\x10platform_default\x18\x04 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\x0fplatformDefault*\xd6\x01\n" +
 	"\x10OrganizationRole\x12!\n" +
 	"\x1dORGANIZATION_ROLE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ORGANIZATION_ROLE_OWNER\x10\x01\x12\x1b\n" +
@@ -1977,41 +1991,42 @@ var file_wendycloud_v2_organizations_proto_depIdxs = []int32{
 	29, // 17: wendycloud.v2.LifecycleSettings.plan_limit:type_name -> wendycloud.v2.LifecyclePolicy
 	29, // 18: wendycloud.v2.LifecycleSettings.default_policy:type_name -> wendycloud.v2.LifecyclePolicy
 	29, // 19: wendycloud.v2.LifecycleSettings.per_app_limit:type_name -> wendycloud.v2.LifecyclePolicy
-	3,  // 20: wendycloud.v2.OrganizationService.CreateOrganization:input_type -> wendycloud.v2.CreateOrganizationRequest
-	4,  // 21: wendycloud.v2.OrganizationService.GetOrganization:input_type -> wendycloud.v2.GetOrganizationRequest
-	30, // 22: wendycloud.v2.OrganizationService.UpdateOrganization:input_type -> wendycloud.v2.SignedRequest
-	6,  // 23: wendycloud.v2.OrganizationService.DeleteOrganization:input_type -> wendycloud.v2.DeleteOrganizationRequest
-	8,  // 24: wendycloud.v2.OrganizationService.ListOrganizations:input_type -> wendycloud.v2.ListOrganizationsRequest
-	30, // 25: wendycloud.v2.OrganizationService.AddMember:input_type -> wendycloud.v2.SignedRequest
-	30, // 26: wendycloud.v2.OrganizationService.AddMembersByEmails:input_type -> wendycloud.v2.SignedRequest
-	30, // 27: wendycloud.v2.OrganizationService.UpdateMemberRole:input_type -> wendycloud.v2.SignedRequest
-	30, // 28: wendycloud.v2.OrganizationService.RemoveMember:input_type -> wendycloud.v2.SignedRequest
-	30, // 29: wendycloud.v2.OrganizationService.RevokeAllCredentials:input_type -> wendycloud.v2.SignedRequest
-	16, // 30: wendycloud.v2.OrganizationService.ListMembers:input_type -> wendycloud.v2.ListMembersRequest
-	30, // 31: wendycloud.v2.OrganizationService.TransferOwnership:input_type -> wendycloud.v2.SignedRequest
-	30, // 32: wendycloud.v2.OrganizationService.SetMemberDefaults:input_type -> wendycloud.v2.SignedRequest
-	25, // 33: wendycloud.v2.OrganizationService.GetLifecycleSettings:input_type -> wendycloud.v2.GetLifecycleSettingsRequest
-	30, // 34: wendycloud.v2.OrganizationService.SetLifecycleSettings:input_type -> wendycloud.v2.SignedRequest
-	1,  // 35: wendycloud.v2.OrganizationService.CreateOrganization:output_type -> wendycloud.v2.Organization
-	1,  // 36: wendycloud.v2.OrganizationService.GetOrganization:output_type -> wendycloud.v2.Organization
-	1,  // 37: wendycloud.v2.OrganizationService.UpdateOrganization:output_type -> wendycloud.v2.Organization
-	7,  // 38: wendycloud.v2.OrganizationService.DeleteOrganization:output_type -> wendycloud.v2.DeleteOrganizationResponse
-	9,  // 39: wendycloud.v2.OrganizationService.ListOrganizations:output_type -> wendycloud.v2.ListOrganizationsResponse
-	2,  // 40: wendycloud.v2.OrganizationService.AddMember:output_type -> wendycloud.v2.OrganizationMember
-	21, // 41: wendycloud.v2.OrganizationService.AddMembersByEmails:output_type -> wendycloud.v2.AddMembersByEmailsResponse
-	2,  // 42: wendycloud.v2.OrganizationService.UpdateMemberRole:output_type -> wendycloud.v2.OrganizationMember
-	13, // 43: wendycloud.v2.OrganizationService.RemoveMember:output_type -> wendycloud.v2.RemoveMemberResponse
-	15, // 44: wendycloud.v2.OrganizationService.RevokeAllCredentials:output_type -> wendycloud.v2.RevokeAllCredentialsResponse
-	17, // 45: wendycloud.v2.OrganizationService.ListMembers:output_type -> wendycloud.v2.ListMembersResponse
-	24, // 46: wendycloud.v2.OrganizationService.TransferOwnership:output_type -> wendycloud.v2.TransferOwnershipResponse
-	1,  // 47: wendycloud.v2.OrganizationService.SetMemberDefaults:output_type -> wendycloud.v2.Organization
-	27, // 48: wendycloud.v2.OrganizationService.GetLifecycleSettings:output_type -> wendycloud.v2.LifecycleSettings
-	27, // 49: wendycloud.v2.OrganizationService.SetLifecycleSettings:output_type -> wendycloud.v2.LifecycleSettings
-	35, // [35:50] is the sub-list for method output_type
-	20, // [20:35] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	29, // 20: wendycloud.v2.LifecycleSettings.platform_default:type_name -> wendycloud.v2.LifecyclePolicy
+	3,  // 21: wendycloud.v2.OrganizationService.CreateOrganization:input_type -> wendycloud.v2.CreateOrganizationRequest
+	4,  // 22: wendycloud.v2.OrganizationService.GetOrganization:input_type -> wendycloud.v2.GetOrganizationRequest
+	30, // 23: wendycloud.v2.OrganizationService.UpdateOrganization:input_type -> wendycloud.v2.SignedRequest
+	6,  // 24: wendycloud.v2.OrganizationService.DeleteOrganization:input_type -> wendycloud.v2.DeleteOrganizationRequest
+	8,  // 25: wendycloud.v2.OrganizationService.ListOrganizations:input_type -> wendycloud.v2.ListOrganizationsRequest
+	30, // 26: wendycloud.v2.OrganizationService.AddMember:input_type -> wendycloud.v2.SignedRequest
+	30, // 27: wendycloud.v2.OrganizationService.AddMembersByEmails:input_type -> wendycloud.v2.SignedRequest
+	30, // 28: wendycloud.v2.OrganizationService.UpdateMemberRole:input_type -> wendycloud.v2.SignedRequest
+	30, // 29: wendycloud.v2.OrganizationService.RemoveMember:input_type -> wendycloud.v2.SignedRequest
+	30, // 30: wendycloud.v2.OrganizationService.RevokeAllCredentials:input_type -> wendycloud.v2.SignedRequest
+	16, // 31: wendycloud.v2.OrganizationService.ListMembers:input_type -> wendycloud.v2.ListMembersRequest
+	30, // 32: wendycloud.v2.OrganizationService.TransferOwnership:input_type -> wendycloud.v2.SignedRequest
+	30, // 33: wendycloud.v2.OrganizationService.SetMemberDefaults:input_type -> wendycloud.v2.SignedRequest
+	25, // 34: wendycloud.v2.OrganizationService.GetLifecycleSettings:input_type -> wendycloud.v2.GetLifecycleSettingsRequest
+	30, // 35: wendycloud.v2.OrganizationService.SetLifecycleSettings:input_type -> wendycloud.v2.SignedRequest
+	1,  // 36: wendycloud.v2.OrganizationService.CreateOrganization:output_type -> wendycloud.v2.Organization
+	1,  // 37: wendycloud.v2.OrganizationService.GetOrganization:output_type -> wendycloud.v2.Organization
+	1,  // 38: wendycloud.v2.OrganizationService.UpdateOrganization:output_type -> wendycloud.v2.Organization
+	7,  // 39: wendycloud.v2.OrganizationService.DeleteOrganization:output_type -> wendycloud.v2.DeleteOrganizationResponse
+	9,  // 40: wendycloud.v2.OrganizationService.ListOrganizations:output_type -> wendycloud.v2.ListOrganizationsResponse
+	2,  // 41: wendycloud.v2.OrganizationService.AddMember:output_type -> wendycloud.v2.OrganizationMember
+	21, // 42: wendycloud.v2.OrganizationService.AddMembersByEmails:output_type -> wendycloud.v2.AddMembersByEmailsResponse
+	2,  // 43: wendycloud.v2.OrganizationService.UpdateMemberRole:output_type -> wendycloud.v2.OrganizationMember
+	13, // 44: wendycloud.v2.OrganizationService.RemoveMember:output_type -> wendycloud.v2.RemoveMemberResponse
+	15, // 45: wendycloud.v2.OrganizationService.RevokeAllCredentials:output_type -> wendycloud.v2.RevokeAllCredentialsResponse
+	17, // 46: wendycloud.v2.OrganizationService.ListMembers:output_type -> wendycloud.v2.ListMembersResponse
+	24, // 47: wendycloud.v2.OrganizationService.TransferOwnership:output_type -> wendycloud.v2.TransferOwnershipResponse
+	1,  // 48: wendycloud.v2.OrganizationService.SetMemberDefaults:output_type -> wendycloud.v2.Organization
+	27, // 49: wendycloud.v2.OrganizationService.GetLifecycleSettings:output_type -> wendycloud.v2.LifecycleSettings
+	27, // 50: wendycloud.v2.OrganizationService.SetLifecycleSettings:output_type -> wendycloud.v2.LifecycleSettings
+	36, // [36:51] is the sub-list for method output_type
+	21, // [21:36] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_organizations_proto_init() }
