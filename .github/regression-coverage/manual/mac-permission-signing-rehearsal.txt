@@ -43,8 +43,9 @@ substitutes for behavior. Keep review images/video outside Git.
    before open-installed. Record the new PID, birth time, executable path and
    code signature. Require the process remains alive for at least 30 seconds and
    serves the generated local-info request through the isolated CLI profile; a successful `open`/spctl alone is
-   not AMFI launch proof. Never use the repository SmokeTestMacReleaseLaunch.sh
-   on a shared account: its bundle-ID quit behavior is broader than this plan.
+   not AMFI launch proof. The CI SmokeTestMacReleaseLaunch.sh observes only the
+   candidate bundle's lifetime; it does not replace this reserved-machine
+   acceptance procedure or its local-info readiness check.
 
 3. 2243/2004 real unanswered Location request.
    Open the actual menu item 'Welcome & Permissions…' in the pinned app. Leave

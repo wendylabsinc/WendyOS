@@ -9,45 +9,68 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_PATH="$1"
 BUNDLE_ID="sh.wendy.WendyAgentMac"
+WORK_DIR=$(mktemp -d)
+OBSERVER="$WORK_DIR/app-process"
 
 is_running() {
-  [[ "$(osascript -e "application id \"$BUNDLE_ID\" is running" 2>/dev/null || true)" == "true" ]]
+  "$OBSERVER" running "$APP_PATH"
+}
+
+stop_candidate() {
+  "$OBSERVER" quit "$APP_PATH"
+  for _ in {1..10}; do
+    if ! is_running; then return 0; fi
+    sleep 1
+  done
+  echo "Packaged app did not stop: $APP_PATH" >&2
+  return 1
 }
 
 cleanup() {
-  "$SCRIPT_DIR/Quit.sh" >/dev/null 2>&1 || true
+  if [[ -x "$OBSERVER" ]]; then stop_candidate >/dev/null 2>&1 || true; fi
+  rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
+xcrun swiftc "$SCRIPT_DIR/MacReleaseAppProcess.swift" -o "$OBSERVER"
 
 # The app can hand itself to launchd or defer to another running instance, so
 # show which copies ran and what the app logged before reporting a failure.
 diagnose() {
   {
     echo "WendyAgentMac processes:"
-    pgrep -ilf WendyAgentMac || echo "  none"
+    "$OBSERVER" diagnose "$APP_PATH"
     echo "WendyAgentMac log since launch:"
     log show --style compact --info --start "$launched_at" --predicate "subsystem == \"$BUNDLE_ID\"" 2>&1 || true
   } >&2
 }
 
-cleanup
+stop_candidate
+if ! "$OBSERVER" exclusive "$APP_PATH"; then
+  echo "Another WendyAgentMac bundle is running; use an idle runner for release validation." >&2
+  "$OBSERVER" diagnose "$APP_PATH" >&2
+  exit 1
+fi
 launched_at=$(date '+%Y-%m-%d %H:%M:%S')
 open -n -g "$APP_PATH"
 
-for _ in {1..20}; do
+# A successful launch may briefly disappear while it hands off to launchd.
+# Require three consecutive observations of this bundle, allowing that handoff
+# to finish rather than treating its first process's exit as an app crash.
+stable=0
+for _ in {1..60}; do
   if is_running; then
-    sleep 3
-    if is_running; then
+    stable=$((stable + 1))
+    if ((stable >= 4)); then
+      stop_candidate
       echo "Validated packaged macOS app launch: $APP_PATH"
       exit 0
     fi
-    echo "WendyAgentMac exited immediately after launch" >&2
-    diagnose
-    exit 1
+  else
+    stable=0
   fi
   sleep 1
 done
 
-echo "WendyAgentMac did not launch within 20 seconds" >&2
+echo "Packaged WendyAgentMac did not remain running within 60 seconds: $APP_PATH" >&2
 diagnose
 exit 1
