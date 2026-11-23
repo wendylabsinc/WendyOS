@@ -1161,6 +1161,7 @@ func main() {
 	agentSvc.SetRestartFunc(agentRestart.Schedule)
 	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
 	var localMeshAppClient *meshsession.Client
+	var reloadLocalMeshIssuers func()
 	// currentAppRoutes reads the live node view at call time, never a view
 	// saved at dial start. It reports no routes once appClient's runtime has
 	// been replaced or stopped, so a late recheck fails closed.
@@ -1224,11 +1225,17 @@ func main() {
 			logger.Error("wendy net identity unavailable", zap.Error(err))
 			return
 		}
-		if bundle := provisioningSvc.LitePeerIssuers(); bundle != "" {
-			if err := credentials.SetLiteIssuerChain(bundle, chainPEM, clock.Base); err != nil {
-				logger.Warn("wendy net Lite issuers unavailable", zap.Error(err))
+		updateIssuers := func() {
+			if bundle := provisioningSvc.LitePeerIssuers(); bundle != "" {
+				if err := credentials.SetLiteIssuerChain(bundle, chainPEM, meshTimePolicy.BaseTime(meshTimePolicy.WallTime())); err != nil {
+					logger.Warn("wendy net Lite issuers unavailable", zap.Error(err))
+				}
 			}
 		}
+		localMeshMu.Lock()
+		reloadLocalMeshIssuers = updateIssuers
+		updateIssuers()
+		localMeshMu.Unlock()
 		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy, credentials); err != nil {
 			logger.Error("wendy net native agent TLS ingress unavailable", zap.Error(err))
 			return
@@ -1711,7 +1718,7 @@ func main() {
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
 		localMeshMu.Lock()
-		localMeshSnapshot, localMeshAppClient = nil, nil
+		localMeshSnapshot, localMeshAppClient, reloadLocalMeshIssuers = nil, nil, nil
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
@@ -1751,8 +1758,11 @@ func main() {
 		agentRestart.Schedule()
 	})
 	go provisioningSvc.RunLiteIssuerRefresh(ctx, func() {
-		logger.Info("Wendy Net Lite issuer set updated — restarting agent")
-		agentRestart.Schedule()
+		localMeshMu.Lock()
+		defer localMeshMu.Unlock()
+		if reloadLocalMeshIssuers != nil {
+			reloadLocalMeshIssuers()
+		}
 	})
 
 	if accessPolicy.AllowsNetwork {

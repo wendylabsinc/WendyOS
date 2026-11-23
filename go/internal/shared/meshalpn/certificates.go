@@ -20,6 +20,7 @@ const maxCandidateCertificates = 16
 // add roots or replace the TLS caller's principal, time or certificate policy.
 type Certificates struct {
 	recovery                    *Recovery
+	certificateClock            func() time.Time
 	certificate                 tls.Certificate
 	anchors                     map[Fingerprint]bool
 	mu                          sync.Mutex
@@ -83,15 +84,33 @@ func NewCertificates(certificate tls.Certificate, roots []*x509.Certificate) *Ce
 	return material
 }
 
+// SetCertificateClock configures the local certificate clock. Call before use.
+func (m *Certificates) SetCertificateClock(now func() time.Time) {
+	m.certificateClock = now
+}
+
+func (m *Certificates) certificateNow() time.Time {
+	if m.certificateClock != nil {
+		return m.certificateClock()
+	}
+	return time.Now()
+}
+
 func (m *Certificates) snapshot(now time.Time) []*x509.Certificate {
+	certificates, _ := m.snapshotWithLite(now)
+	return certificates
+}
+
+func (m *Certificates) snapshotWithLite(now time.Time) ([]*x509.Certificate, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reap(now)
 	result := append([]*x509.Certificate(nil), m.own...)
-	if m.validLiteIssuers(now) {
+	lite := m.validLiteIssuers(now)
+	if lite {
 		result = append(result, m.liteIssuers...)
 	}
-	return append(result, m.cached...)
+	return append(result, m.cached...), lite
 }
 
 func (m *Certificates) reap(now time.Time) {
@@ -114,8 +133,11 @@ func (m *Certificates) Remember(chain [][]byte, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reap(now)
-	known := make(map[Fingerprint]bool, len(m.own)+len(m.cached))
+	known := make(map[Fingerprint]bool, len(m.own)+len(m.liteIssuers)+len(m.cached))
 	for _, cert := range m.own {
+		known[Hash(cert.Raw)] = true
+	}
+	for _, cert := range m.liteIssuers {
 		known[Hash(cert.Raw)] = true
 	}
 	for _, cert := range m.cached {

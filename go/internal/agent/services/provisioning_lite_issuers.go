@@ -75,7 +75,6 @@ func (s *ProvisioningService) RunLiteIssuerRefresh(ctx context.Context, onUpdate
 		}
 		if updated {
 			onUpdated()
-			return
 		}
 		select {
 		case <-ctx.Done():

@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"strings"
-	"time"
 )
 
 // ClientProtocols offers root-first fingerprints and cached CA availability.
@@ -16,16 +15,17 @@ func (c *Certificates) ClientProtocols(protocols ...string) []string {
 	if c.recoveryState().active() {
 		return append([]string(nil), protocols...)
 	}
-	return c.clientProtocols(c.snapshot(time.Now()), protocols...)
+	known, lite := c.snapshotWithLite(c.certificateNow())
+	return c.clientProtocols(known, lite, protocols...)
 }
-func (c *Certificates) clientProtocols(known []*x509.Certificate, protocols ...string) []string {
+func (c *Certificates) clientProtocols(known []*x509.Certificate, lite bool, protocols ...string) []string {
 	cached := make([]Fingerprint, 0, len(known))
 	for _, cert := range known {
 		cached = append(cached, Hash(cert.Raw))
 	}
 	var result []string
 	for _, protocol := range protocols {
-		if c.acceptsLite(time.Now()) {
+		if lite {
 			if issuer, ok := certificateIssuer(c.certificate, known); ok {
 				result = append(result, leafOffer(protocol, regularClient, issuer))
 			}
@@ -44,20 +44,26 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 	}
 	loan := &handshakeIssuers{available: available}
 	loan.configureTickets(config)
+	var peerErr error
 	chainVerify := config.VerifyPeerCertificate
 	if chainVerify != nil {
 		config.VerifyPeerCertificate = func(raw [][]byte, verified [][]*x509.Certificate) error {
-			err := chainVerify(c.candidatesFrom(raw, loan.available), verified)
-			if err != nil {
-				c.recoveryState().failed(err, hinted)
-				loan.available = nil
-			}
-			return err
+			// TLS calls VerifyConnection after this callback. Only that hook
+			// can tell which protocol actually negotiated chain shortening.
+			peerErr = chainVerify(c.candidatesFrom(raw, loan.available), verified)
+			return nil
 		}
 	}
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		defer func() { loan.available = nil }()
+		_, prefix := Decode(state.NegotiatedProtocol)
+		_, kind, _ := decodeLeafOffer(state.NegotiatedProtocol)
+		shortened := hinted && (len(prefix) > 0 || kind != 0)
+		if peerErr != nil {
+			c.recoveryState().failed(peerErr, shortened)
+			return peerErr
+		}
 		raw := make([][]byte, len(state.PeerCertificates))
 		for i, cert := range state.PeerCertificates {
 			raw[i] = cert.Raw
@@ -74,7 +80,7 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		}
 		if previous != nil {
 			if err := previous(augmented); err != nil {
-				c.recoveryState().failed(err, hinted)
+				c.recoveryState().failed(err, shortened)
 				return err
 			}
 		}
@@ -83,7 +89,7 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 			loan.dependencies = append(loan.dependencies, Hash(der))
 		}
 		loan.protocol = state.NegotiatedProtocol
-		c.Remember(complete, time.Now())
+		c.Remember(complete, c.certificateNow())
 		return nil
 	}
 }
@@ -103,10 +109,10 @@ func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bo
 // selection state must not be shared by cached TLS configs or concurrent dials.
 func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) {
 	if c != nil {
-		available := c.snapshot(time.Now())
+		available, lite := c.snapshotWithLite(c.certificateNow())
 		hinted := !c.recoveryState().active()
 		if hinted {
-			config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, protocols...), available)
+			config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, lite, protocols...), available)
 			hinted = false
 			for _, protocol := range config.NextProtos {
 				_, hashes := Decode(protocol)
@@ -194,16 +200,13 @@ func (c *Certificates) ConfigureServer(config *tls.Config) {
 			}
 		}
 		known := make(map[Fingerprint]bool)
-		var available []*x509.Certificate
-		if c != nil {
-			available = c.snapshot(time.Now())
-			for _, cert := range available {
-				known[Hash(cert.Raw)] = true
-			}
+		available, lite := c.snapshotWithLite(c.certificateNow())
+		for _, cert := range available {
+			known[Hash(cert.Raw)] = true
 		}
 		cooldown := c.recoveryState().active()
-		if !cooldown {
-			if protocol := c.liteServerOffer(selected.NextProtos, hello.SupportedProtos, available, time.Now()); protocol != "" {
+		if !cooldown && lite {
+			if protocol := c.liteServerOffer(selected.NextProtos, hello.SupportedProtos, available); protocol != "" {
 				result := selected.Clone()
 				result.GetConfigForClient = nil
 				result.NextProtos = []string{protocol}

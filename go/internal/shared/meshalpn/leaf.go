@@ -72,12 +72,6 @@ func (m *Certificates) SetLiteIssuers(issuers []*x509.Certificate, notBefore, no
 	m.liteNotBefore, m.liteNotAfter = notBefore, notAfter
 }
 
-func (m *Certificates) acceptsLite(now time.Time) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.validLiteIssuers(now)
-}
-
 func (m *Certificates) validLiteIssuers(now time.Time) bool {
 	return len(m.liteIssuers) != 0 && !now.Before(m.liteNotBefore) && now.Before(m.liteNotAfter)
 }
@@ -93,10 +87,7 @@ func (m *Certificates) LiteCandidates(wire [][]byte, now time.Time) [][]byte {
 	return m.candidatesFrom(wire, m.liteIssuers)
 }
 
-func (m *Certificates) liteServerOffer(protocols, offered []string, available []*x509.Certificate, now time.Time) string {
-	if !m.acceptsLite(now) {
-		return ""
-	}
+func (m *Certificates) liteServerOffer(protocols, offered []string, available []*x509.Certificate) string {
 	issuer, ok := certificateIssuer(m.certificate, available)
 	if !ok {
 		return ""

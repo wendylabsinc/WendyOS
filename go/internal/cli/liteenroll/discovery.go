@@ -20,26 +20,26 @@ import (
 // Only authenticated CA-discovery content and verified TLS trust anchors are
 // provisioned; unverified peer certificates never become roots.
 func DiscoverTrust(ctx context.Context, cfg *litepb.WendyConfEnrollment, endpoint string) (*http.Client, error) {
-	return DiscoverTrustForProfile(ctx, cfg, endpoint, TrustProfile{})
+	return DiscoverTrustForProfile(ctx, cfg, endpoint, TrustProfile{}, nil)
 }
 
 // DiscoverTrustForProfile additionally checks the discovered CA algorithms
 // against the selected board's advertised verifier.
-func DiscoverTrustForProfile(ctx context.Context, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile) (*http.Client, error) {
+func DiscoverTrustForProfile(ctx context.Context, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile, reportMeshTrustIssue func(error)) (*http.Client, error) {
 	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return fmt.Errorf("CA discovery redirects are not allowed")
 	}}
-	if err := discoverTrustForProfile(ctx, client, cfg, endpoint, profile); err != nil {
+	if err := discoverTrustForProfile(ctx, client, cfg, endpoint, profile, reportMeshTrustIssue); err != nil {
 		return nil, err
 	}
 	return trustHTTPClient(cfg.HttpsRoots)
 }
 
 func discoverTrust(ctx context.Context, client *http.Client, cfg *litepb.WendyConfEnrollment, endpoint string) error {
-	return discoverTrustForProfile(ctx, client, cfg, endpoint, TrustProfile{})
+	return discoverTrustForProfile(ctx, client, cfg, endpoint, TrustProfile{}, nil)
 }
 
-func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile) error {
+func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile, reportMeshTrustIssue func(error)) error {
 	for _, bundle := range []struct {
 		name string
 		data []byte
@@ -165,10 +165,15 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 				if err != nil {
 					return err
 				}
-				meshRoots, intermediates, err :=
+				meshRoots, intermediates, meshErr :=
 					discoverMeshTrust(ctx, client, u, cfg.TenantId, profile, discovered, deviceRoots)
-				if err == nil && validateTrustBundleForProfile(meshRoots, profile) == nil {
+				if meshErr == nil {
+					meshErr = validateTrustBundleForProfile(meshRoots, profile)
+				}
+				if meshErr == nil {
 					deviceRoots, cfg.LiteDeviceIntermediates = meshRoots, intermediates
+				} else if reportMeshTrustIssue != nil {
+					reportMeshTrustIssue(meshErr)
 				}
 			}
 		} else {

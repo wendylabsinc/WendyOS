@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/liteenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -66,7 +65,7 @@ func (a *operatorAttachment) open(ctx context.Context) (*operatorAttachmentState
 	options := operatormesh.Options{StateDirectory: a.directory, Certificate: certificate}
 	if pkiEndpoint != "" {
 		discovery, cancel := context.WithTimeout(ctx, 2*time.Second)
-		options.LiteIssuerChain, _ = liteenroll.DiscoverLiteDeviceCAChain(discovery, pkiEndpoint, certificate.TenantUUID())
+		options.LiteIssuerChain, _ = operatormesh.LiteIssuers(discovery, a.directory, pkiEndpoint, certificate)
 		cancel()
 	}
 	options.ReportCarrierFailure = operatorCarrierReporter(ctx)

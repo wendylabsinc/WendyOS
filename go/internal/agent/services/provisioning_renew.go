@@ -142,6 +142,14 @@ func (s *ProvisioningService) RenewIfDue(ctx context.Context, now time.Time) (bo
 		return false, fmt.Errorf("no pki-core renew endpoint derivable from %q; set %s", directory, renewEndpointEnv)
 	}
 
+	// Fetch the optional issuer material before asking PKI to issue an
+	// identity. Once the response arrives, only local validation and durable
+	// writes stand between us and a recoverable renewal.
+	tenant, issuerEndpoint := liteIssuerEndpoint(directory)
+	var liteBundle string
+	if issuerEndpoint != nil {
+		liteBundle, _ = fetchLiteIssuers(ctx, issuerEndpoint)
+	}
 	newKey, err := certs.GenerateMLDSAKeyPair()
 	if err != nil {
 		return false, err
@@ -163,11 +171,8 @@ func (s *ProvisioningService) RenewIfDue(ctx context.Context, now time.Time) (bo
 	if err != nil {
 		return false, err
 	}
-	var liteBundle string
-	if tenant, endpoint := liteIssuerEndpoint(directory); endpoint != nil {
-		if fetched, fetchErr := fetchLiteIssuers(ctx, endpoint); fetchErr == nil {
-			liteBundle, _ = validatedLiteIssuers(fetched, newChain, tenant)
-		}
+	if liteBundle != "" {
+		liteBundle, _ = validatedLiteIssuers(liteBundle, newChain, tenant)
 	}
 	if err := s.commitRenewal(certPEM, newLeaf, newChain, liteBundle, []byte(newKey)); err != nil {
 		return false, err

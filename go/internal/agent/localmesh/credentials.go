@@ -158,6 +158,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		primaryRoots = append(primaryRoots, root)
 	}
 	material := meshalpn.NewCertificates(cert, primaryRoots)
+	material.SetCertificateClock(func() time.Time { return clockPolicy.BaseTime(clockPolicy.WallTime()) })
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
 		now = certificateWallTime(policy, now)
 		if len(chain) == 0 || len(chain) > 16 {
