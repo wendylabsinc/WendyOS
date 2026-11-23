@@ -12,6 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  agent-tls-interop:
+    uses: ./.github/workflows/agent-tls-interop.yml
+
   shared-grpc-api-contracts:
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
