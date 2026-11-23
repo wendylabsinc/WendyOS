@@ -793,7 +793,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		if err != nil {
 			return err
 		}
-		return installOrin(ctx, t234InstallOptions{
+		return installOrinRestartable(ctx, t234InstallOptions{
 			DeviceType: selected, DeviceName: device.Name, Version: selectedVersion,
 			Storage: storage, Artifact: artifact, Force: force, WiFi: wifi,
 			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, Nightly: nightly,
