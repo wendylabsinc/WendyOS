@@ -23,9 +23,10 @@ type localInstallAgent struct {
 // local --binary, or the latest release for the image's channel and CPU, so a
 // nightly image is not handed an older stable agent.
 type agentSeed struct {
-	local   *localInstallAgent
-	nightly bool
-	arch    string
+	local     *localInstallAgent
+	nightly   bool
+	arch      string
+	ownerKeys []byte // preEnrollOptions.ownerKeys
 }
 
 // seedArtifactFn is a variable so tests can stub the download.
