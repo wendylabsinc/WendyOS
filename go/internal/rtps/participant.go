@@ -700,12 +700,22 @@ func (p *Participant) handleHeartbeat(prefix GUIDPrefix, s Submessage, src *net.
 	}
 	p.ackCount[key]++
 	count := p.ackCount[key]
+	locators := append([]Locator(nil), p.peers[prefix]...)
 	p.mu.Unlock()
 
 	ack := buildAcknack(entitySEDPPubReader, entitySEDPPubWriter, base, hb.LastSN, count)
 	dgram := buildMessage(p.prefix, buildInfoDst(prefix), ack)
-	if src != nil {
-		p.sendTo(src, dgram)
+	// Fast DDS may transmit from an ephemeral output socket that does not
+	// receive discovery traffic. Reply to the listening locators learned from
+	// SPDP, rather than assuming the UDP source port is a listening port.
+	for _, locator := range locators {
+		if addr, ok := locator.UDPAddr(); ok && p.sendTo(addr, dgram) {
+			p.statAcksSent.Add(1)
+		}
+	}
+	// A heartbeat can arrive before SPDP; retain source-address replies until
+	// the peer advertises its discovery listeners.
+	if len(locators) == 0 && src != nil && p.sendTo(src, dgram) {
 		p.statAcksSent.Add(1)
 	}
 }

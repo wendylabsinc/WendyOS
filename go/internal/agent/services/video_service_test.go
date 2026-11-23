@@ -297,7 +297,7 @@ func TestEncoderSegment_ByteStreamCapsOnlyForX264WithoutH264Parse(t *testing.T) 
 	}{
 		{"x264enc", false, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
 		{"x264enc", true, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
-		{"v4l2h264enc", false, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
+		{"v4l2h264enc", false, "videoconvert ! videoscale ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
 		{"vaapih264enc", false, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
 	} {
 		if got := encoderSegment(tc.encoder, tc.hasH264Parse, 30); got != tc.want {
