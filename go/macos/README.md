@@ -1399,3 +1399,27 @@ The native Android companion lives in [`../android`](../android/README.md). It
 shares this app's Go backend and has its own Kotlin/Compose UI and Android
 NSD, Bluetooth, camera and VPN adapters. Its README documents build instructions,
 validation and the remaining differences from the Apple apps.
+
+## Automatic Go2 room alignment
+
+After a confirmed LiDAR match or manual placement in an imported room, the Linux
+service refits fresh LiDAR surfaces to the room once per second. Manual placement
+sends the room geometry with the alignment request. Matching runs outside the
+motion watchdog lock and has a 500 ms computation budget. It searches within
+50 cm and 0.20 radians of the current alignment; accepted corrections must stay
+inside 45 cm and 0.18 radians and have broad architectural support in independent
+directions. Parallel walls, fragile matches, competing fits and stale observations
+do not change the alignment. This is local drift correction, not global recovery
+from a wrong initial room or a restarted odometry frame.
+
+The same correction applies to the robot, hazards and LiDAR overlay. An active
+route keeps its site destination, acknowledges STOP, and replans against fresh
+navigation evidence. Refitting never renews the operator lease, extends travel or
+time limits, clears a motion fault, or starts movement. A reset, newer command,
+changed model, pose epoch or alignment invalidates an in-flight fit.
+
+For imported rooms, each Go2 accumulated scan replaces that robot's previous
+rendering contribution so old alignments do not leave ghost walls. Source layers
+preserve other contributors. Old single-source rooms migrate automatically;
+legacy mixed-source points remain because their original ownership is unknown.
+Robot-created rooms without imported geometry retain their accumulated history.
