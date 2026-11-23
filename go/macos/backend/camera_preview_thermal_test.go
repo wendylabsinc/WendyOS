@@ -17,7 +17,8 @@ func TestPreviewThermalReaderBoundsAndRedirects(t *testing.T) {
 	}{
 		{"valid", `{"sensors":[]}`, 200, true},
 		{"malformed", `<html>error</html>`, 200, false},
-		{"oversized", `{"sensors":[],"padding":"` + strings.Repeat("x", 262144) + `"}`, 200, false},
+		{"multiple sources", `{"sensors":[],"padding":"` + strings.Repeat("x", 262144) + `"}`, 200, true},
+		{"oversized", `{"sensors":[],"padding":"` + strings.Repeat("x", 1_048_576) + `"}`, 200, false},
 		{"failure", `{"sensors":[]}`, 503, false},
 		{"redirect", ``, 302, false},
 	}

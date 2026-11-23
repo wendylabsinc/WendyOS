@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// PreviewThermalFrames reads all four channels from the address
+// PreviewThermalFrames reads the paired thermal channels from the address
 // PreviewOpenApp returns: the app forward for mesh and Cloud connections,
 // plain HTTP to the device for a direct LAN connection. Callers cannot supply
 // a URL, port, app identity or redirect target.
@@ -43,12 +43,12 @@ func readPreviewThermal(ctx context.Context, address string) (json.RawMessage, e
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("thermal viewer returned HTTP %d", res.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, 262145))
+	data, err := io.ReadAll(io.LimitReader(res.Body, 1_048_577))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > 262144 {
-		return nil, errors.New("thermal response exceeds 256 KiB")
+	if len(data) > 1_048_576 {
+		return nil, errors.New("thermal response exceeds 1 MiB")
 	}
 	if !json.Valid(data) {
 		return nil, errors.New("thermal viewer returned invalid JSON")

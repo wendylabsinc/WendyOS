@@ -95,3 +95,22 @@ func TestGalleryMediaReadsManifestWithoutDownloadingEvents(t *testing.T) {
 		t.Fatal("accepted mismatched manifest")
 	}
 }
+
+func TestGalleryContentMimeIsAuthoritativeAndPathsIdentifyStatistics(t *testing.T) {
+	for _, tc := range []struct {
+		file data.File
+		want []string
+	}{
+		{data.File{Path: "misleading.mp4", MediaType: "audio/wav"}, []string{"Audio"}},
+		{data.File{Path: "capture.bin", MediaType: " Video/MP4 ; codecs=avc1"}, []string{"Video"}},
+		{data.File{Path: "telemetry.jsonl", MediaType: "application/x-ndjson"}, []string{"Device stats"}},
+		{data.File{Path: "other.jsonl", MediaType: "application/x-ndjson"}, []string{}},
+		{data.File{Path: "capture.MP4", MediaType: "application/octet-stream"}, []string{"Video"}},
+		{data.File{Path: "capture.mp4", MediaType: "application/json"}, []string{}},
+	} {
+		got := galleryContentKinds(data.Manifest{Files: []data.File{tc.file}})
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%+v: got %v want %v", tc.file, got, tc.want)
+		}
+	}
+}

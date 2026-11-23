@@ -29,6 +29,8 @@ class WendyApplication : Application() {
     @Volatile var visible = false
     override fun onCreate() { super.onCreate(); NativeBridge.attach(PlatformServices(this)) }
     val backend by lazy { Backend(this) }
+    private val runtimeScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
+    val mobileRuntime by lazy { MobileRuntime(runtimeScope) { active, account, organization -> backend.call("SetMobileState", active, account, organization); Unit } }
 }
 
 fun Any?.obj(): JSONObject = this as? JSONObject ?: JSONObject()

@@ -92,7 +92,9 @@ func New() *Client {
 		"PreviewPlay": b.PreviewPlay, "PreviewPoll": b.PreviewPoll,
 		"PreviewCancel": b.PreviewCancel, "PreviewClose": b.PreviewClose,
 		"PreviewApps": b.PreviewApps, "ThermalFrames": b.PreviewThermalFrames,
-		"GalleryMetadata": b.GalleryMetadataAt,
+		"PreviewSensorPairings": b.PreviewSensorPairings,
+		"GalleryMetadata":       b.GalleryMetadataAt, "GalleryMedia": b.GalleryMediaAt,
+		"RecordingMediaLibrary": b.RecordingMediaLibrary,
 		"Inbox": func(account string) (any, error) {
 			ctx, cancel := cloudContext()
 			defer cancel()
