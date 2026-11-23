@@ -31,9 +31,25 @@ type nameTakenError string
 
 func (e nameTakenError) Error() string { return string(e) }
 
-func takenNameMessage(name string) string {
-	return name + " is already used by another device in your organization."
+// takenNameMessage puts the organization mid-sentence, so a name ending in a
+// full stop ("Wendy Labs, Inc.") never doubles it.
+func takenNameMessage(name, org string) string {
+	// The organization's name is free text from Cloud; keep control characters out of the terminal.
+	if org = strings.TrimSpace(tui.StripControl(org)); org == "" {
+		org = "your organization"
+	}
+	return "Another device in " + org + " already uses " + name + "."
 }
+
+// takenInOrgError names the organization that refused a name, for a call that
+// learns it only while making the request.
+type takenInOrgError struct {
+	org string
+	err error
+}
+
+func (e *takenInOrgError) Error() string { return e.err.Error() }
+func (e *takenInOrgError) Unwrap() error { return e.err }
 
 // suggestFreeName offers the first of name-2 … name-9 that fits maxLen and is
 // not taken, or "" when none does.
@@ -96,6 +112,7 @@ type nameRetry struct {
 	noTTYHint   string
 	validate    tui.ValidateFunc
 	maxLen      int
+	org         string // display name; "" says "your organization"
 }
 
 // retryTakenDeviceName retries enroll while Cloud refuses *name as taken,
@@ -105,11 +122,15 @@ func retryTakenDeviceName(name *string, r nameRetry, enroll func(string) error) 
 	refused := map[string]bool{}
 	err := enroll(*name)
 	for errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
+		org := r.org
+		if named := (*takenInOrgError)(nil); errors.As(err, &named) && named.org != "" {
+			org = named.org
+		}
 		if !r.interactive {
-			return nameTakenError(takenNameMessage(*name) + " " + r.noTTYHint)
+			return nameTakenError(takenNameMessage(*name, org) + " " + r.noTTYHint)
 		}
 		refused[strings.ToLower(*name)] = true
-		fmt.Fprintln(os.Stdout, tui.ErrorMessage(takenNameMessage(*name)))
+		fmt.Fprintln(os.Stdout, tui.ErrorMessage(takenNameMessage(*name, org)))
 		suggestion := suggestFreeName(base, r.maxLen, func(n string) bool { return refused[strings.ToLower(n)] })
 		next, perr := promptDeviceNameDefault("Device name", "(Ctrl+C to stop)", suggestion, r.validate)
 		if perr != nil {

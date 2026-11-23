@@ -109,7 +109,8 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if !challenge.GetUuidEnrollmentSupported() {
 		return errLiteUUIDUnsupported
 	}
-	name, err = enrollmentName(identity.Name, name, newNameChecker(ctx, auth))
+	org := cachedCloudOrganizationName(auth)
+	name, err = enrollmentName(identity.Name, name, newNameChecker(ctx, auth), org)
 	if err != nil {
 		return err
 	}
@@ -194,7 +195,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	// A refused name leaves cfg, its signed time and the board's challenge as
 	// they were, so the retry reuses them.
 	var asset string
-	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen}
+	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen, org: org}
 	err = retryTakenDeviceName(&name, retry, func(n string) error {
 		mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
 		defer cancel()

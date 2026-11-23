@@ -262,7 +262,7 @@ func TestLiteInstallChecksGivenNameBeforeFlashing(t *testing.T) {
 	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native",
 		discovery.SerialPortInfo{Port: "/dev/ttyACM0"}, wifiCLIOptions{NoWifi: true}, "brave-dolphin",
 		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"})
-	want := "brave-dolphin is already used by another device in your organization. Pass a different --device-name."
+	want := "Another device in your organization already uses brave-dolphin. Pass a different --device-name."
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q before anything is flashed", err, want)
 	}

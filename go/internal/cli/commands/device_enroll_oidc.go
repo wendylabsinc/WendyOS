@@ -40,7 +40,8 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
 		return nil, "", err
 	}
-	name, err := enrollmentDeviceName(conn, name, newNameChecker(ctx, auth))
+	org := cachedCloudOrganizationName(auth)
+	name, err := enrollmentDeviceName(conn, name, newNameChecker(ctx, auth), org)
 	if err != nil {
 		return nil, "", err
 	}
@@ -79,7 +80,7 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 
 	fmt.Printf("Enrolling %s with PKI...\n", name)
 	var assetID string
-	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen}
+	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen, org: org}
 	err = retryTakenDeviceName(&name, retry, func(name string) (err error) {
 		cfg, assetID, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 		return err

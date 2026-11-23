@@ -202,7 +202,8 @@ func cloudRenameAssetV2(ctx context.Context, conn *grpcclient.AgentConnection, c
 	if err := cloudrequest.Invoke(rpcctx, cloudConn, auth, cloudpbv2.AssetService_UpdateAsset_FullMethodName,
 		&cloudpbv2.UpdateAssetRequest{Id: asset.GetId(), Name: &name}, &cloudpbv2.Asset{}); err != nil {
 		if status.Code(err) == codes.AlreadyExists {
-			return "", fmt.Errorf("renaming asset %s: %w: %w", asset.GetId(), cloudenroll.ErrDeviceNameTaken, err)
+			return "", &takenInOrgError{org: cachedCloudOrganizationName(auth),
+				err: fmt.Errorf("renaming asset %s: %w: %w", asset.GetId(), cloudenroll.ErrDeviceNameTaken, err)}
 		}
 		return "", fmt.Errorf("renaming asset %s: %w", asset.GetId(), err)
 	}

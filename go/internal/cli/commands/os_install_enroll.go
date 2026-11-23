@@ -262,7 +262,7 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 // again, and the new name is written back to *deviceName.
 func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acmeEnrollmentBake, error) {
 	var state *acmeEnrollmentBake
-	retry := nameRetry{interactive: p.interactive, noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen}
+	retry := nameRetry{interactive: p.interactive, noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen, org: cachedCloudOrganizationName(p.auth)}
 	enrollErr := retryTakenDeviceName(deviceName, retry, func(name string) (err error) {
 		state, err = preEnrollACMEFn(ctx, p.auth, name)
 		return err

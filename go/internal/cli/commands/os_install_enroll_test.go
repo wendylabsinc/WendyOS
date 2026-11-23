@@ -583,7 +583,7 @@ func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
 	if name != "hackathon-display-2" || len(out) == 0 || fmt.Sprint(*tried) != "[hackathon-display hackathon-display-2]" {
 		t.Fatalf("name %q, tried %v", name, *tried)
 	}
-	if !strings.Contains(stdout, "hackathon-display is already used by another device in your organization.") || strings.Contains(stdout, "rpc error") {
+	if !strings.Contains(stdout, "Another device in your organization already uses hackathon-display.") || strings.Contains(stdout, "rpc error") {
 		t.Fatalf("output:\n%s", stdout)
 	}
 }
@@ -595,7 +595,7 @@ func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
 	takenFirst(t, "hackathon-display")
 	name := "hackathon-display"
 	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}}, &name)
-	want := "hackathon-display is already used by another device in your organization. Pass a different --device-name."
+	want := "Another device in your organization already uses hackathon-display. Pass a different --device-name."
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v", err)
 	}
@@ -647,7 +647,7 @@ func TestInstallNamePromptRejectsTakenName(t *testing.T) {
 	setInteractive(t, true)
 	promptDeviceName = func(_, _ string, validate tui.ValidateFunc) (string, error) {
 		err := validate("brave-dolphin")
-		if want := "brave-dolphin is already used by another device in your organization. Try another name."; err == nil || err.Error() != want {
+		if want := "Another device in your organization already uses brave-dolphin. Try another name."; err == nil || err.Error() != want {
 			t.Fatalf("validate(taken) = %v; want %q", err, want)
 		}
 		if err := validate("otter-one"); err != nil {
@@ -664,11 +664,12 @@ func TestInstallNamePromptRejectsTakenName(t *testing.T) {
 func TestInstallTakenFlagNameFailsWithoutTerminal(t *testing.T) {
 	stubEnrollPrompts(t) // the reservation fails the test if reached
 	saveOneSession(t)
+	config.SetOrganizationName("prod.example.com:443", "7", "Wendy Labs, Inc.")
 	stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
 	setInteractive(t, false)
 	name := "brave-dolphin"
 	_, err := resolveProvisioningJSON(context.Background(), preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, &name)
-	want := "brave-dolphin is already used by another device in your organization. Pass a different --device-name."
+	want := "Another device in Wendy Labs, Inc. already uses brave-dolphin. Pass a different --device-name."
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}
@@ -689,7 +690,7 @@ func TestInstallTakenFlagNameAsksWithSuggestion(t *testing.T) {
 	out := captureStdout(t, func() {
 		name, err = resolveInstallDeviceName(context.Background(), "brave-dolphin", &config.AuthConfig{}, true)
 	})
-	if err != nil || name != "brave-dolphin-3" || !strings.Contains(out, "brave-dolphin is already used by another device in your organization.") {
+	if err != nil || name != "brave-dolphin-3" || !strings.Contains(out, "Another device in your organization already uses brave-dolphin.") {
 		t.Fatalf("name %q, err %v, output %q", name, err, out)
 	}
 }

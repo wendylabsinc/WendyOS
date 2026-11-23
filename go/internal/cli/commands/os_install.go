@@ -2856,6 +2856,7 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 		return resolveDeviceName(flagName)
 	}
 	taken := newNameChecker(ctx, auth)
+	org := cachedCloudOrganizationName(auth)
 	interactive := isInteractiveTerminal()
 	suggestion := ""
 	if flagName != "" {
@@ -2866,9 +2867,9 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 			return flagName, nil
 		}
 		if !interactive {
-			return "", nameTakenError(takenNameMessage(flagName) + " " + noTTYHintInstall)
+			return "", nameTakenError(takenNameMessage(flagName, org) + " " + noTTYHintInstall)
 		}
-		fmt.Println(tui.ErrorMessage(takenNameMessage(flagName)))
+		fmt.Println(tui.ErrorMessage(takenNameMessage(flagName, org)))
 		suggestion = suggestFreeName(flagName, maxDeviceNameLen, taken)
 	} else if !interactive {
 		if required {
@@ -2888,7 +2889,7 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 			return err
 		}
 		if n = strings.TrimSpace(n); n != "" && taken(n) {
-			return nameTakenError(takenNameMessage(n) + " Try another name.")
+			return nameTakenError(takenNameMessage(n, org) + " Try another name.")
 		}
 		return nil
 	}

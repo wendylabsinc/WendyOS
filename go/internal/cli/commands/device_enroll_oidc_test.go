@@ -557,20 +557,20 @@ func TestEnrollmentNameTakenDefaultSuggestsFree(t *testing.T) {
 	var name string
 	var err error
 	out := captureStdout(t, func() {
-		name, err = enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"))
+		name, err = enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"), "")
 	})
 	if err != nil || name != "wendyos-orin-nano-bk-2" {
 		t.Fatalf("name %q, err %v; want the suggested free name", name, err)
 	}
-	if !strings.Contains(out, "wendyos-orin-nano-bk is already used by another device in your organization.") {
+	if !strings.Contains(out, "Another device in your organization already uses wendyos-orin-nano-bk.") {
 		t.Fatalf("output %q; want the taken message", out)
 	}
 }
 
 func TestEnrollmentNameTakenDefaultNoTerminal(t *testing.T) {
 	setInteractive(t, false)
-	_, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"))
-	want := "wendyos-orin-nano-bk is already used by another device in your organization. Pass a different --name."
+	_, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"), "Wendy Labs, Inc.")
+	want := "Another device in Wendy Labs, Inc. already uses wendyos-orin-nano-bk. Pass a different --name."
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}
@@ -578,7 +578,7 @@ func TestEnrollmentNameTakenDefaultNoTerminal(t *testing.T) {
 
 func TestEnrollmentNameFreeDefaultUnchanged(t *testing.T) {
 	setInteractive(t, false)
-	name, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf())
+	name, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf(), "")
 	if err != nil || name != "wendyos-orin-nano-bk" {
 		t.Fatalf("name %q, err %v", name, err)
 	}
@@ -614,7 +614,7 @@ func TestOIDCEnrollAlreadyEnrolledIsNotANameProblem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _, err := runEnrollDeviceIdentity(ctx, conn, auth, "", 0)
-	if err == nil || !strings.Contains(err.Error(), "already enrolled") || strings.Contains(err.Error(), "already used") {
+	if err == nil || !strings.Contains(err.Error(), "already enrolled") || strings.Contains(err.Error(), "already uses") {
 		t.Fatalf("got %v; want the already-enrolled refusal", err)
 	}
 }

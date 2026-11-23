@@ -845,20 +845,20 @@ func defaultEnrollmentName(host string) string {
 	return strings.ToLower(strings.TrimSuffix(h, ".local"))
 }
 
-func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string, taken func(string) bool) (string, error) {
-	return enrollmentName(conn.Host, name, taken)
+func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string, taken func(string) bool, org string) (string, error) {
+	return enrollmentName(conn.Host, name, taken, org)
 }
 
 // enrollmentName falls back to the device's own name for a blank one, unless
 // another device in the organization holds it.
-func enrollmentName(host, name string, taken func(string) bool) (string, error) {
+func enrollmentName(host, name string, taken func(string) bool, org string) (string, error) {
 	if name == "" {
 		defaultName := defaultEnrollmentName(host)
 		if defaultName != "" && taken(defaultName) {
 			if !isInteractiveTerminal() {
-				return "", nameTakenError(takenNameMessage(defaultName) + " " + noTTYHintEnroll)
+				return "", nameTakenError(takenNameMessage(defaultName, org) + " " + noTTYHintEnroll)
 			}
-			fmt.Println(tui.ErrorMessage(takenNameMessage(defaultName)))
+			fmt.Println(tui.ErrorMessage(takenNameMessage(defaultName, org)))
 			defaultName = suggestFreeName(defaultName, maxHostnameLen, taken)
 		}
 		if !isInteractiveTerminal() {
@@ -929,7 +929,7 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 	}
 
 	// Legacy sessions cannot list the organization's devices; Cloud's own check decides.
-	name, err := enrollmentDeviceName(conn, name, func(string) bool { return false })
+	name, err := enrollmentDeviceName(conn, name, func(string) bool { return false }, "")
 	if err != nil {
 		return nil, "", err
 	}

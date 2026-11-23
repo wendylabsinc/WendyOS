@@ -164,6 +164,7 @@ func startV2RenameDevice(t *testing.T, cloud *renameCloudV2, principal string) {
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = addr
 	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+	config.SetOrganizationName(addr, auth.OrganizationKey(), "Benjamin Lab")
 	startUDSAgentServing(t, renameAgent{log: cloud.log}, func(s *grpc.Server) {
 		agentpb.RegisterWendyProvisioningServiceServer(s, renameProvisioningV1{prov: &agentpb.ProvisionedResponse{CloudHost: addr}})
 		if principal != "" {
@@ -310,7 +311,7 @@ func TestResolveRenameNameFromArg(t *testing.T) {
 	}
 }
 
-const renameTakenNoTerminal = "living-room is already used by another device in your organization. Nothing was changed.\n  Choose another name:  wendy device rename <new-name>"
+const renameTakenNoTerminal = "Another device in Benjamin Lab already uses living-room. Nothing was changed.\n  Choose another name:  wendy device rename <new-name>"
 
 func TestDeviceRenameTakenNameAsksAgain(t *testing.T) {
 	log := &renameLog{}
