@@ -1,6 +1,6 @@
 ---
 title: Mac (beta)
-description: Deploy and debug native macOS apps on Apple Silicon Mac targets with the Wendy CLI.
+description: Deploy and debug native macOS apps and Linux container apps on Apple Silicon Mac targets with the Wendy CLI.
 ---
 
 <Callout type="warn">
@@ -9,7 +9,7 @@ description: Deploy and debug native macOS apps on Apple Silicon Mac targets wit
 
 ## Overview
 
-Headless Mac turns any Apple Silicon Mac into a Wendy target: install Wendy Agent, point the CLI at it, and deploy native macOS apps with `wendy run` — same as a Jetson or Pi. Apps run as native macOS processes (not Linux containers), making it a fit for headless Mac mini/Studio servers, mixed WendyOS + Mac fleets, and Core ML / Metal / Neural Engine apps.
+Headless Mac turns any Apple Silicon Mac into a Wendy target: install Wendy Agent, point the CLI at it, and deploy apps with `wendy run` — same as a Jetson or Pi. Native macOS apps (`platform: "darwin"`) run as macOS processes, making it a fit for headless Mac mini/Studio servers, mixed WendyOS + Mac fleets, and Core ML / Metal / Neural Engine apps. Linux container apps (Dockerfile/Containerfile, Python, Compose, multi-service `wendy.json`) run through Apple `container` or Docker on the Mac; see [Headless Mac — supported project types](/docs/clients/wendy-cli/commands/run#headless-mac--supported-project-types).
 
 ## Requirements
 
@@ -137,8 +137,7 @@ wendy run --device 127.0.0.1:50051
 <CliShot flow="run" step="deploy" alt="The wendy run command building a native macOS app and deploying it to a Mac target" />
 
 The CLI builds the app on the Mac development machine, syncs the build output
-to Wendy Agent for Mac, and starts it as a native macOS process. These apps
-currently run natively on macOS, not inside a Linux-style container. Expect
+to Wendy Agent for Mac, and starts it as a native macOS process. Expect
 `Hello from hello-mac!` in the attached logs. Edit the Swift source, then use
 `wendy run --watch` to deploy changes as you save.
 
@@ -162,8 +161,8 @@ restarts. The embedded arm64 kernel and initramfs add approximately 132 MB
 uncompressed to the app bundle.
 
 This service only solves and caches Linux image builds. It does not run Wendy
-applications: native Mac apps continue to run as macOS processes, and Apple
-`container` remains the Mac application runtime. Starting the service alone
+applications: native Mac apps run as macOS processes, and Linux container apps
+run through Apple `container` or Docker. Starting the service alone
 does not change CLI builder selection; choose the BuildKit builder explicitly
 when using CLI versions that support it.
 
@@ -226,7 +225,8 @@ uses Swift string storage, which cannot be reliably zeroed after use.
 - Apple Silicon Mac targets running macOS 15 or later
 - Enrolling the Mac in Wendy Cloud on **macOS 26 or later**. Sign in with `wendy cloud login`, then run `wendy device enroll`. On macOS 15 you can run local apps, but must update macOS before enrolling.
 - Installing Headless Mac with Homebrew or the release zip
-- Deploying native SwiftPM macOS apps with `wendy run`
+- Deploying native SwiftPM and Xcode macOS apps with `wendy run`
+- Deploying Linux container apps (Dockerfile/Containerfile, Python, Compose, multi-service `wendy.json`) with `wendy run`. The agent pushes the image into its embedded registry and runs it through Apple `container` when installed, otherwise Docker (Docker Desktop or OrbStack); without either, the push fails with a message asking you to install one. Only `network` and `persist` entitlements apply; hardware entitlements are ignored.
 - Discovering Mac targets over Bonjour/mDNS
 - Setting the Mac as your default Wendy device
 - Listing and viewing the Mac's cameras with `wendy device camera`, before or after enrollment
@@ -236,7 +236,7 @@ uses Swift string storage, which cannot be reliably zeroed after use.
 ## Not supported
 
 - Intel Macs
-- Linux containers as the Mac application runtime — the Local Build Service builds images but does not run Wendy apps
+- Hardware entitlements (`gpu`, `npu`, `bluetooth`, `audio`, `video`, `camera`, `usb`, `i2c`, `gpio`) for Linux container apps — the containers run in a Linux VM
 - Wi-Fi remote provisioning — configure Wi-Fi through macOS network settings
 - Bluetooth, audio, and GPU hardware APIs via Wendy
 - Wendy camera APIs inside your app — use native hardware SDKs (AVFoundation, etc.) directly

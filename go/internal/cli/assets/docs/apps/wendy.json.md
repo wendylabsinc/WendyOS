@@ -41,14 +41,14 @@ Target platform. One of:
 | `linux` | Linux edge device; the device architecture is inferred |
 | `wendyos` | Compatibility alias for `linux`; passed to container builders as `linux` |
 | `wendy-lite` | ESP32 target for native ESP-IDF or WASM apps |
-| `darwin` | Native macOS app running through Headless Mac |
+| `darwin` | Native macOS app running through Headless Mac; Linux values also work on a Mac target (see below) |
 | `linux/arm64`, `linux/amd64`, etc. | Explicit Linux architecture target |
 
 Use `"linux"` for WendyOS/Linux container targets. Omit to target the default Linux platform. Existing `"wendyos"` configs are accepted as an alias and resolve to `linux` before Docker or Apple Container builds.
 
-Use `"darwin"` for native macOS targets managed by [Headless Mac](/docs/installation/wendy-agent-macos). The CLI builds the app on a Mac development machine, syncs the build output to the Mac agent, and launches it as a native macOS process. Darwin apps run natively and non-containerized; they do not use the WendyOS Linux container runtime.
+Use `"darwin"` for native macOS apps on a [Headless Mac](/docs/installation/wendy-agent-macos) target. The CLI builds the app on a Mac development machine, syncs the build output to the Mac agent, and launches it as a native macOS process. Darwin apps run natively and non-containerized; they do not use a Linux container runtime.
 
-> **Headless Mac:** If the selected target is Headless Mac, `wendy run` rejects any `platform` value that does not resolve to `darwin` (for example, `linux/arm64` or `wendyos`). Set `platform: "darwin"` and use a native SwiftPM or Xcode project.
+> **Headless Mac:** A Mac target accepts `"darwin"` and the Linux values (`"linux"`, `"linux/<arch>"`, `"wendyos"`). With a Linux value the app is built as a container image, pushed to the registry embedded in the Mac agent, and run through Apple `container` or Docker on the Mac. Any other `platform` value is rejected as a project/target mismatch before any build. See [Headless Mac — supported project types](/docs/clients/wendy-cli/commands/run#headless-mac--supported-project-types).
 
 Minimal SwiftPM/Linux container configuration:
 
