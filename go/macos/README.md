@@ -44,6 +44,52 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
 
+## Publish the macOS app
+
+The [macOS app release workflow](../../.github/workflows/macos-app.yml) builds
+`WendyDesktop.app` for Apple Silicon and macOS 26 or later. It builds both Linux
+digital-twin runtimes from the same commit, signs the app, bundled CLI, libusb and
+VPN extension, then notarizes and staples the app. Publication requires signature,
+staple and Gatekeeper verification. This follows Apple's
+[notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
+
+Configure these repository or organization Actions secrets:
+
+| Secret | Value |
+| --- | --- |
+| `DEVELOPER_ID_CERTIFICATE` | Base64 Developer ID Application certificate, using the existing agent release format. |
+| `DEVELOPER_ID_KEY` | Base64 private key for that certificate, importable without a password, as in the agent release. |
+| `WENDY_DESKTOP_MAC_PROVISIONING_PROFILE` | Base64 Developer ID profile for `dev.wendy.desktop`, with System Extension, packet-tunnel system-extension and production push capabilities. |
+| `WENDY_DESKTOP_NETWORK_PROVISIONING_PROFILE` | Base64 Developer ID profile for `dev.wendy.desktop.network`, with the packet-tunnel system-extension capability. |
+| `NOTARY_APPLE_ID` | Apple account used for notarization. |
+| `NOTARY_TEAM_ID` | Apple team that owns the certificate and both profiles. |
+| `NOTARY_PASSWORD` | App-specific password for the Apple account. |
+
+The certificate and notary secrets are shared with the agent release. The two
+desktop profiles must match the desktop bundle IDs, not the agent bundle IDs.
+Encode profile files with `base64 -i profile.provisionprofile | pbcopy`.
+The workflow imports credentials into a temporary keychain and removes them at
+the end of the job.
+
+After merging the workflow, tag the commit to release:
+
+```sh
+git tag macos-v0.1.0 <commit>
+git push origin macos-v0.1.0
+```
+
+Alternatively, run **macOS app release** in Actions with an existing
+`macos-vX.Y.Z` tag. Both triggers build the tagged commit. The tag supplies the
+app version; the workflow run number supplies the app and extension build number.
+The workflow publishes `wendy-macos-arm64-X.Y.Z.zip` and its `.sha256` checksum
+as a GitHub release. It does not change the repository's latest release.
+The ZIP contains `WendyDesktop.app`, ready to move into `/Applications`.
+
+Existing releases are never overwritten. If uploading or publishing fails after
+the draft is created, inspect and remove that incomplete draft before rerunning.
+Notarization diagnostics remain available as an Actions artifact. A failed
+notarization, staple or Gatekeeper check prevents publication.
+
 ## Nearby setup and enrollment
 
 Connected devices show their Wendy Cloud enrollment status in device Settings. An unenrolled WendyOS device offers **Enroll device**, where you explicitly choose a saved organization account and device name, or sign in to another organization. Enrollment uses that account without changing the global account selection and checks the resulting device organization before reporting success. Failed status reads remain unknown. Wendy Lite offers Bluetooth enrollment from its Settings tab.
@@ -1336,8 +1382,10 @@ Physical lens accuracy and mounting tolerances still need validation on a Go2. T
 
 Position search now defaults to **Move between views during discovery** on
 Apple clients. The Linux service matches the current view first. If it remains
-ambiguous, it checks for a clear 40 cm forward move at the current heading,
-including the initial heading. It matches again after each move and stops as
+ambiguous, a local trajectory planner samples nearby viewpoints 30–60 cm away
+at the current heading and up to 90 degrees to either side. It turns toward a
+reachable viewpoint before advancing, instead of requiring a fixed forward move.
+It matches again after each move and stops as
 soon as a candidate is available. It stops moving after three attempted viewpoints
 if matching is still inconclusive. When a move is blocked, it turns 30 degrees
 to check another heading, considering at most twelve distinct headings without
@@ -1346,8 +1394,11 @@ Turn the option off for rotation-only discovery, which retains a twelve-turn
 limit. Stop cancels the search and any active movement.
 
 Each move uses the live odometry frame, since the room transform is not yet
-confirmed. The complete body sweep and stopping distance must fit on observed
-clear floor, with a margin for drift. The hidden-floor allowance can cover the
+confirmed. The body sweep uses a 10 cm drift margin. Before every command,
+the target segment and stopping horizon from the current pose must fit on
+observed clear floor. The check does not add a second stopping distance beyond
+the viewpoint. Turning includes its own stopping sweep. Each viewpoint attempt
+is limited to twelve seconds and stops after two seconds without progress. The hidden-floor allowance can cover the
 fixed departure footprint only. The supervised option that permits unobserved
 floor during ordinary navigation does not apply to discovery moves. Blocked
 viewpoints report why they were skipped. Temporary sensor or clearance loss

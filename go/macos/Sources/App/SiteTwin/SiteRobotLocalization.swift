@@ -274,7 +274,7 @@ enum RobotRotationState: Equatable {
         case .checking(let turn): "Checking clearance for turn \(turn) of 12."
         case .turning(let turn): "Turn \(turn) of 12. Keep Go2 in sight and its turning area clear."
         case .matching(let turn): "Comparing the view after turn \(turn) of 12 with your room."
-        case .advancing(let move): "Viewpoint move \(move) of 3. Go2 moves about 40 cm on observed clear floor."
+        case .advancing(let move): "Viewpoint move \(move) of 3. Go2 chooses a clear nearby viewpoint, turning as needed."
         case .settling(let move): "Stopped after viewpoint move \(move) of 3. Waiting for fresh LiDAR before matching."
         case .stopped(let reason): reason
         }

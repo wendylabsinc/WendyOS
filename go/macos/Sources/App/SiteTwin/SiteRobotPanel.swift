@@ -304,6 +304,7 @@ final class SiteRobotMapModel: ObservableObject {
         if owned != 0 { await observationClient.close(owned) }
         if epoch == generation {
             handle = 0; connecting = false; telemetry.reading = nil; reading = nil; showRotationPrompt = false
+            remoteSearching = false; localizing = false
             positionSearch.cancel(); awaitingLook = false; rematchAfterLook = false
             candidates = []; localizing = false; destination = nil; fusionReport = nil
             rotationState = .idle; rotationStartPending = false
@@ -503,9 +504,23 @@ final class SiteRobotMapModel: ObservableObject {
         rotationOffer.dismiss()
     }
 
+    var canReconnectRobot: Bool {
+        !serial.isEmpty && !connecting && (handle == 0 || reading?.disconnected == true)
+    }
+
+    func reconnectRobot() {
+        guard canReconnectRobot else { return }
+        // Restore telemetry only. A lost session must not restart motion.
+        automaticPaused = true; passiveRecoveryRemaining = 0
+        actionGeneration += 1
+        remoteSearching = false; localizing = false; positionSearch.cancel()
+        rotationState = .idle; searchConclusion = nil; error = nil
+        reconnectGeneration += 1
+    }
+
     var canRestartDiscovery: Bool {
         handle != 0 && geometryURL != nil && reading?.pose == true && reading?.disconnected != true && reading?.moving != true &&
-        !localizing && !lensCalibrating && !showLensCalibration
+        !lensCalibrating && !showLensCalibration
     }
 
     func restartDiscovery() {
@@ -875,7 +890,7 @@ struct SiteRobotRotationPrompt: ViewModifier {
             Button("Not now", role: .cancel) { model.dismissRotationPrompt() }
         } message: {
             Text(model.exploreDuringSearch
-                 ? "Go2 will gather missing views with short turns and up to three 40 cm moves on observed clear floor, stopping when it finds a position match. Keep Go2 in sight and Stop within reach."
+                 ? "Go2 will turn and navigate to up to three nearby viewpoints on observed clear floor, stopping when it finds a position match. Keep Go2 in sight and Stop within reach."
                  : "Go2 will check clearance and turn in 30° steps to match its LiDAR observations. Keep Go2 in sight and its turning area clear.")
         }
     }
@@ -899,6 +914,11 @@ struct SiteRobotStatus: View {
             if model.rotationState == .idle, let error = model.error, !error.isEmpty {
                 Text(error).font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if model.canReconnectRobot {
+                Button("Reconnect Go2", systemImage: "arrow.clockwise") { model.reconnectRobot() }
+                    .buttonStyle(.bordered)
+                    .help("Restore live robot data. Discovery and movement stay stopped until you start them.")
             }
             if model.handle != 0 { SiteRobotObstacleStatus(model: model) }
         }.sheet(isPresented: $model.showLensCalibration) { RobotLensCalibrationView(model: model) }
@@ -1033,7 +1053,7 @@ struct SiteRobotLocalizationControls: View {
         Toggle("Move between views during discovery", isOn: $model.exploreDuringSearch)
             .font(.caption)
             .disabled(model.localizing || model.reading?.moving == true)
-        Text("Fill gaps with up to three 40 cm moves on observed clear floor. Stops when a position match is found. Turn this off for rotation only.")
+        Text("Fill gaps by navigating to up to three nearby viewpoints on observed clear floor. Stops when a position match is found. Turn this off for rotation only.")
             .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if let conclusion = model.searchConclusion {
             VStack(alignment: .leading, spacing: 8) {

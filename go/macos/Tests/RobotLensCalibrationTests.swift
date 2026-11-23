@@ -950,3 +950,38 @@ private final class PresetTestMatcher: RobotVisualMatching {
         }
     }
 }
+
+
+@MainActor @Test func restartDiscoveryCanReplaceAnActiveStationarySearch() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try #require(model.localizing)
+        try #require(model.reading?.moving == false)
+        #expect(model.canRestartDiscovery)
+        model.restartDiscovery()
+        for _ in 0..<100 { if await robot.searches.count == 2 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await robot.resets.count == 1)
+        #expect(await robot.searches.count == 2)
+        #expect(model.error == nil)
+    }
+}
+
+@MainActor @Test func reconnectRobotRequestsTelemetryWithoutStartingDiscovery() async throws {
+    let robot = RotationTestRobot(measurements: true, rejectTurns: false)
+    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot)
+    model.serial = "reconnect-test"
+    model.localizing = true
+    model.error = "The robot session expired."
+    #expect(model.canReconnectRobot)
+    model.reconnectRobot()
+    #expect(model.reconnectGeneration == 1)
+    #expect(!model.localizing)
+    #expect(model.rotationState == .idle)
+    #expect(model.error == nil)
+    #expect(await robot.searches.isEmpty)
+    #expect(await robot.turns.isEmpty)
+    model.connecting = true
+    model.reconnectRobot()
+    #expect(model.reconnectGeneration == 1)
+}
