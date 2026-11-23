@@ -94,7 +94,36 @@ func main() { sample.Branch(os.Args[1] == "covered") }
             with self.subTest(source=source):
                 before, after = diff.go_lines(self.repo, [{"Path": "before.go", "Source": BASE},
                                                          {"Path": "after.go", "Source": source}])
-                self.assertEqual(diff.changed_executable_lines(before, after), set())
+                edits = [{"removedLines": list(range(1, len(before["Lines"])+1)),
+                          "addedLines": list(range(1, len(after["Lines"])+1))}]
+                self.assertEqual(diff.changed_executable_lines(before, after, edits), set())
+
+    def test_added_duplicate_uncalled_body_remains_zero_hit_changed_code(self):
+        self.file.write_text(BASE.replace("func Branch", "func Added") + "\n" + BASE.split("\n", 1)[1])
+        result = self.compare(self.build())  # The real CLI invokes Branch only.
+        self.assertEqual(result["status"], "collected")
+        self.assertEqual(result["statements"], 5)
+        self.assertEqual(result["covered"], 0)
+        self.assertEqual(result["percent"], 0)
+
+    def test_raw_literal_interior_lines_select_their_uncovered_block(self):
+        source = '''package sample
+func Branch(covered bool) int {
+    if covered { return 1 }
+    value := `first
+original
+last`
+    return len(value)
+}
+'''
+        self.file.write_text(source)
+        self.base = self.commit()
+        self.file.write_text(source.replace("original", "changed"))
+        result = self.compare(self.build())
+        self.assertEqual(result["status"], "collected")
+        self.assertEqual(result["statements"], 2)
+        self.assertEqual(result["covered"], 0)
+        self.assertEqual(result["percent"], 0)
 
     def test_comment_change_does_not_select_a_separate_block_beside_real_change(self):
         self.file.write_text(BASE.replace("value := 1", "value := 1 // extra comment").replace("return 0", "return 8"))

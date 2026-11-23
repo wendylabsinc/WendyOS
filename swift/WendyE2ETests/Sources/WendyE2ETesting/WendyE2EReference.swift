@@ -48,6 +48,7 @@ public enum WendyE2EReference {
         public var declarationSource = ""
         public var declarationStartLine = 0
         public var declarationEndLine = 0
+        public var inheritedSuiteTraitRange: ClosedRange<Int>?
         public var change: Change?
 
         /// Compatibility view: true only for unconditional disabling traits.

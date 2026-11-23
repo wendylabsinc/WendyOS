@@ -21,6 +21,8 @@ struct ReferenceSourceParser {
     private var pendingSuiteDocumentation: String?
     private var suiteAvailability = StaticAvailability()
     private var pendingSuiteAvailability = StaticAvailability()
+    private var suiteTraitRange: ClosedRange<Int>?
+    private var pendingSuiteTraitRange: ClosedRange<Int>?
     private var pendingTest: PendingTest?
     private var currentDocument: WendyE2EReference.Document?
     private var currentSections: [WendyE2EReference.Section] = []
@@ -49,10 +51,12 @@ struct ReferenceSourceParser {
             }
 
             if code.hasPrefix("@Suite") {
+                let startLine = index + 1
                 pendingSuiteDocumentation = pendingDocumentation ?? ""
                 pendingDocumentation = nil
                 pendingDocumentationLine = nil
                 pendingSuiteAvailability = parseAttributeAvailability()
+                pendingSuiteTraitRange = startLine...max(startLine, index)
                 continue
             }
 
@@ -66,7 +70,9 @@ struct ReferenceSourceParser {
                 )
                 currentSections = []
                 suiteAvailability = pendingSuiteAvailability
+                suiteTraitRange = pendingSuiteTraitRange
                 pendingSuiteAvailability = StaticAvailability()
+                pendingSuiteTraitRange = nil
                 pendingSuiteDocumentation = nil
                 index += 1
                 continue
@@ -151,6 +157,7 @@ struct ReferenceSourceParser {
             ) ?? "")
         entry.declarationStartLine = pendingTest.startLine + 1
         entry.declarationEndLine = index
+        entry.inheritedSuiteTraitRange = suiteTraitRange
 
         if currentSections.isEmpty {
             currentSections.append(WendyE2EReference.Section(title: "Overview"))

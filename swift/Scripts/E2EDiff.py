@@ -8,7 +8,6 @@ Coverage counts whole intersecting Go blocks, never individual changed lines.
 
 import argparse
 import codecs
-import difflib
 import hashlib
 import json
 import os
@@ -60,8 +59,8 @@ func main() {
             }
             for _, span := range spans {
                 if pos >= span[0] && pos < span[1] {
-                    eligible[line] = true
                     for n := line; n <= line+strings.Count(literal, "\n"); n++ {
+                        eligible[n] = true
                         out.Lines[n-1] = append(out.Lines[n-1], spelling)
                     }
                     break
@@ -128,7 +127,7 @@ def checked_patch(repo, patch, base, current):
             old_path = header[2:]
         old = (blob(repo, base, old_path) or "").splitlines()
         new = (blob(repo, current, path) or "").splitlines()
-        added, removed = set(), set()
+        added, removed, edits = set(), set(), []
         lines = part.splitlines()
         i = 0
         while i < len(lines):
@@ -139,6 +138,7 @@ def checked_patch(repo, patch, base, current):
             old_start, old_count, new_start, new_count = match.groups()
             a, b = int(old_start), int(new_start)
             old_end, new_end = a + int(old_count or 1), b + int(new_count or 1)
+            edit = {"addedLines": [], "removedLines": []}
             while i < len(lines) and not lines[i].startswith("@@ "):
                 line = lines[i]
                 i += 1
@@ -146,19 +146,29 @@ def checked_patch(repo, patch, base, current):
                     continue
                 if not line or line[0] not in " +-":
                     raise ValueError("Malformed diff hunk: " + path)
+                if line[0] == " " and (edit["addedLines"] or edit["removedLines"]):
+                    edits.append(edit)
+                    edit = {"addedLines": [], "removedLines": []}
                 if line[0] in " -":
                     if a < 1 or a > len(old) or old[a-1] != line[1:]:
                         raise ValueError("Diff does not match the base revision: " + path)
-                    if line[0] == "-": removed.add(a)
+                    if line[0] == "-":
+                        removed.add(a)
+                        edit["removedLines"].append(a)
                     a += 1
                 if line[0] in " +":
                     if b < 1 or b > len(new) or new[b-1] != line[1:]:
                         raise ValueError("Diff does not match the source revision: " + path)
-                    if line[0] == "+": added.add(b)
+                    if line[0] == "+":
+                        added.add(b)
+                        edit["addedLines"].append(b)
                     b += 1
             if a != old_end or b != new_end:
                 raise ValueError("Incorrect diff hunk counts: " + path)
-        selected[path] = {"oldPath": old_path, "addedLines": sorted(added), "removedLines": sorted(removed)}
+            if edit["addedLines"] or edit["removedLines"]:
+                edits.append(edit)
+        selected[path] = {"oldPath": old_path, "addedLines": sorted(added),
+                          "removedLines": sorted(removed), "edits": edits}
     return paths, selected
 
 
@@ -197,17 +207,18 @@ def go_lines(repo, inputs):
         return json.loads(command("go", "run", str(helper), cwd=repo, input=json.dumps(inputs)))
 
 
-def changed_executable_lines(before, after):
-    # Compare non-comment token lines, so blank/comment-only changes inside a
-    # covered block cannot select it. Whole-file token equality also ignores
-    # pure renames and formatting-only changes (including line wrapping).
-    old = [(i + 1, tuple(v)) for i, v in enumerate(before["Lines"]) if v]
-    new = [(i + 1, tuple(v)) for i, v in enumerate(after["Lines"]) if v]
-    if [t for _, ts in old for t in ts] == [t for _, ts in new for t in ts]:
-        return set()
-    matcher = difflib.SequenceMatcher(a=[v for _, v in old], b=[v for _, v in new], autojunk=False)
-    changed = {new[i][0] for op, _, _, start, end in matcher.get_opcodes()
-               if op != "equal" for i in range(start, end)}
+def changed_executable_lines(before, after, edits):
+    # Only pair removed/added tokens within the SAME contiguous literal edit.
+    # Context or equal code in another declaration cannot cancel added code.
+    changed = set()
+    for edit in edits:
+        old = [tuple(before["Lines"][n-1]) for n in edit["removedLines"] if before["Lines"][n-1]]
+        new = [(n, tuple(after["Lines"][n-1])) for n in edit["addedLines"] if after["Lines"][n-1]]
+        if [t for ts in old for t in ts] == [t for _, ts in new for t in ts]:
+            continue  # comments/blank/formatting only, including line wrapping
+        for i, (line, tokens) in enumerate(new):
+            if len(old) != len(new) or tokens != old[i]:
+                changed.add(line)
     return changed & set(after["Executable"])
 
 
@@ -228,7 +239,7 @@ def compare(repo, run, base, current, patch):
     renamed = renamed_paths(repo, base, current)
     provenance = {"baseRevision": base, "sourceRevision": current, "sourceID": source["sourceID"],
                   "patchSHA256": hashlib.sha256(patch.encode()).hexdigest(), "paths": paths}
-    result = {"provenance": provenance, "files": [], "granularity": "Statements in intersecting Go coverage blocks; each block counted once"}
+    result = {"provenance": provenance, "files": [], "granularity": "Statements in Go blocks intersecting edited executable lines; each block counted once"}
     inputs, selected = [], []
     for path in paths:
         if not path.endswith((".go", ".swift")):
@@ -238,14 +249,15 @@ def compare(repo, run, base, current, patch):
         if path.startswith("swift/WendyE2ETests/Tests/WendyE2ETests/") and path.endswith(".swift"):
             result["files"].append({"path": path, "oldPath": old_path, "baseSource": before,
                                     "sourceFilePath": path.removeprefix("swift/WendyE2ETests/"),
-                                    "source": after, **selected_lines[path]})
+                                    "source": after, "addedLines": selected_lines[path]["addedLines"],
+                                    "removedLines": selected_lines[path]["removedLines"]})
         if after is None or not production_go(repo, path, after, current, source):
             continue
         inputs.extend([{"Path": old_path, "Source": before or "package missing\n"}, {"Path": path, "Source": after}])
         selected.append(path)
     parsed = go_lines(repo, inputs) if inputs else []
-    changed = {p: changed_executable_lines(parsed[i*2], parsed[i*2+1])
-               & set(selected_lines[p]["addedLines"]) for i, p in enumerate(selected)}
+    changed = {p: changed_executable_lines(parsed[i*2], parsed[i*2+1], selected_lines[p]["edits"])
+               for i, p in enumerate(selected)}
     changed = {p: lines for p, lines in changed.items() if lines}
     profile = run / "coverage/coverage.out"
     provenance["profileSHA256"] = hashlib.sha256(profile.read_bytes()).hexdigest() if profile.exists() else None

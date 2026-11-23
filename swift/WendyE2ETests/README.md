@@ -184,8 +184,9 @@ separate from product E2E assertions): `python3 Scripts/E2ECoverage_test.py -v`.
 
 The overall Go total remains the run's source union. A second, informational
 number reports statements in coverage blocks touched by added/modified executable
-Go tokens. A block counts once even when several changed lines or hunks touch it;
+Go lines, identified using tokens. A block counts once even when several changed lines or hunks touch it;
 this is **block granularity**, not an exact count of only the changed statements.
+Several blocks on one edited physical line can contribute.
 Comments, blank/formatting-only changes, removed statements, pure renames,
 `_test.go`, Go `testdata`, generated sources (standard header or
 `linguist-generated` attribute), and the test-only coverage hooks are excluded.

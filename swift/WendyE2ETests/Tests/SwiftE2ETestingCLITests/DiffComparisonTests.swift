@@ -29,7 +29,13 @@ struct `diff comparison rendering` {
         )
     }
 
-    private func comparison(at root: URL, source: URL, selected: [Int]) throws -> URL {
+    private func comparison(
+        at root: URL,
+        source: URL,
+        selected: [Int],
+        baseSource: String? = nil,
+        currentSource: String? = nil
+    ) throws -> URL {
         let file = root.appendingPathComponent("diff.json")
         let data: [String: Any] = [
             "status": "not-applicable",
@@ -43,7 +49,8 @@ struct `diff comparison rendering` {
                 [
                     "path": source.lastPathComponent, "oldPath": source.lastPathComponent,
                     "sourceFilePath": "Tests/" + source.lastPathComponent,
-                    "baseSource": before, "source": after, "addedLines": selected,
+                    "baseSource": baseSource ?? before, "source": currentSource ?? after,
+                    "addedLines": selected,
                     "removedLines": [],
                 ] as [String: Any]
             ],
@@ -150,5 +157,88 @@ struct `diff comparison rendering` {
         #expect(marked.flatMap(\.sections).flatMap(\.entries).allSatisfy { $0.change == nil })
         try (after + "// wrong source\n").write(to: source, atomically: true, encoding: .utf8)
         #expect(throws: (any Error).self) { try diff.annotate([], at: source.path) }
+    }
+
+    @Test
+    func `selected inherited suite traits modify specs while omitted trait hunks do not`() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("ExampleTests.swift")
+        let base = before.replacingOccurrences(
+            of: "@Suite",
+            with: "@Suite(.disabled(\"maintenance\"))"
+        )
+        try before.write(to: source, atomically: true, encoding: .utf8)
+        let url = try comparison(
+            at: root,
+            source: source,
+            selected: [1],
+            baseSource: base,
+            currentSource: before
+        )
+        let diff = try E2EDiffComparison(at: url)
+        let marked = try diff.annotate(
+            WendyE2EReference.parseFile(at: source.path),
+            at: source.path
+        )
+        #expect(
+            marked.flatMap(\.sections).flatMap(\.entries).map(\.change) == [.modified, .modified]
+        )
+        #expect(
+            WendyE2EReference.renderHTML(marked).components(separatedBy: "<code>MODIFIED</code>")
+                .count == 3
+        )
+        let omitted = try comparison(
+            at: root,
+            source: source,
+            selected: [],
+            baseSource: base,
+            currentSource: before
+        )
+        let unchanged = try E2EDiffComparison(at: omitted).annotate(
+            WendyE2EReference.parseFile(at: source.path),
+            at: source.path
+        )
+        #expect(unchanged.flatMap(\.sections).flatMap(\.entries).allSatisfy { $0.change == nil })
+        try after.write(to: source, atomically: true, encoding: .utf8)
+        let onlySuite = try comparison(at: root, source: source, selected: [1], baseSource: base)
+        let filtered = try E2EDiffComparison(at: onlySuite).annotate(
+            WendyE2EReference.parseFile(at: source.path),
+            at: source.path
+        )
+        #expect(
+            filtered.flatMap(\.sections).flatMap(\.entries).map(\.change) == [
+                .modified, .modified, nil,
+            ]
+        )
+    }
+
+    @Test
+    func `explicit and automatic report comparisons reject the same mismatched run revision`()
+        throws
+    {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attempt = root.appendingPathComponent("attempts/local/0001")
+        let coverage = attempt.appendingPathComponent("coverage")
+        try FileManager.default.createDirectory(at: coverage, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("ExampleTests.swift")
+        try after.write(to: source, atomically: true, encoding: .utf8)
+        let input = try comparison(at: root, source: source, selected: [6])
+        let automatic = coverage.appendingPathComponent("diff.json")
+        try FileManager.default.copyItem(at: input, to: automatic)
+        func setRevision(_ character: String) throws {
+            try JSONSerialization.data(withJSONObject: [
+                "git": ["commit": String(repeating: character, count: 40)]
+            ])
+            .write(to: attempt.appendingPathComponent("attempt.json"))
+        }
+        try setRevision("e")
+        #expect(throws: (any Error).self) { try e2eRunComparison(at: root, explicit: nil) }
+        #expect(throws: (any Error).self) { try e2eRunComparison(at: root, explicit: input.path) }
+        try setRevision("b")
+        #expect(try e2eRunComparison(at: root, explicit: nil) != nil)
+        #expect(try e2eRunComparison(at: root, explicit: input.path) != nil)
     }
 }

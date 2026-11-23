@@ -80,11 +80,14 @@ struct E2EDiffComparison: Decodable {
                         .sections.flatMap(\.entries).first { $0.title == entry.title }
                     let selected =
                         file.addedLines.contains {
-                            entry.declarationStartLine <= $0 && $0 <= entry.declarationEndLine
+                            (entry.declarationStartLine <= $0 && $0 <= entry.declarationEndLine)
+                                || (old != nil
+                                    && entry.inheritedSuiteTraitRange?.contains($0) == true)
                         }
                         || file.removedLines.contains { line in
                             old.map {
-                                $0.declarationStartLine <= line && line <= $0.declarationEndLine
+                                ($0.declarationStartLine <= line && line <= $0.declarationEndLine)
+                                    || $0.inheritedSuiteTraitRange?.contains(line) == true
                             } ?? false
                         }
                     if !selected { entry.change = nil }
@@ -97,24 +100,33 @@ struct E2EDiffComparison: Decodable {
 }
 
 func e2eRunComparison(at runURL: URL, explicit: String?) throws -> E2EDiffComparison? {
-    if let explicit { return try E2EDiffComparison(at: URL(fileURLWithPath: explicit)) }
     let attempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
-    guard attempts.count == 1, let attempt = attempts.first else { return nil }
-    let url = attempt.appendingPathComponent("coverage/diff.json")
-    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-    // Unavailable comparison data is shown by the total's label, without badges.
-    let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-    guard object?["provenance"] != nil else { return nil }
+    let url: URL
+    if let explicit {
+        url = URL(fileURLWithPath: explicit)
+    } else {
+        guard attempts.count == 1, let attempt = attempts.first else { return nil }
+        url = attempt.appendingPathComponent("coverage/diff.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        // Unavailable comparison data is shown by the total's label, without badges.
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        guard object?["provenance"] != nil else { return nil }
+    }
     let comparison = try E2EDiffComparison(at: url)
-    let info =
-        try JSONSerialization.jsonObject(
-            with: Data(contentsOf: attempt.appendingPathComponent("attempt.json"))
-        ) as? [String: Any]
-    guard let metadata = info, let source = metadata["git"] as? [String: Any],
-        let commit = source["commit"] as? String,
-        commit == comparison.provenance?.sourceRevision
-    else {
-        throw ValidationError("Spec comparison revision differs from the run attempt")
+    guard !attempts.isEmpty else {
+        throw ValidationError("Spec comparison requires a matching run attempt")
+    }
+    for attempt in attempts {
+        let info =
+            try JSONSerialization.jsonObject(
+                with: Data(contentsOf: attempt.appendingPathComponent("attempt.json"))
+            ) as? [String: Any]
+        guard let source = info?["git"] as? [String: Any],
+            let commit = source["commit"] as? String,
+            commit == comparison.provenance?.sourceRevision
+        else {
+            throw ValidationError("Spec comparison revision differs from the run attempt")
+        }
     }
     return comparison
 }
