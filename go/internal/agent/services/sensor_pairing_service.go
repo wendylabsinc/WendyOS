@@ -214,6 +214,17 @@ func (s *SensorPairingService) refusedBySource(ctx context.Context, p mcusource.
 	return nil
 }
 
+func requireSensorPairingTenant(principal string, scope certs.Scope) error {
+	if principal == "" {
+		return nil
+	}
+	identity, _ := certs.ParsePrincipal(principal) // SensorPairing.Validate checked the principal.
+	if !identity.Scope().Matches(scope) {
+		return status.Error(codes.PermissionDenied, "sensor source must belong to this device's tenant")
+	}
+	return nil
+}
+
 func (s *SensorPairingService) AddSensorPairing(ctx context.Context, req *agentpbv2.AddSensorPairingRequest) (*agentpbv2.AddSensorPairingResponse, error) {
 	scope := s.agentScope()
 	p := mcusource.SensorPairing{
@@ -227,14 +238,19 @@ func (s *SensorPairingService) AddSensorPairing(ctx context.Context, req *agentp
 	if err := p.Validate(); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if p.SourcePrincipalURI != "" {
-		identity, _ := certs.ParsePrincipal(p.SourcePrincipalURI)
-		if !identity.Scope().Matches(scope) {
-			return nil, status.Error(codes.PermissionDenied, "sensor source must belong to this device's tenant")
-		}
+	if err := requireSensorPairingTenant(p.SourcePrincipalURI, scope); err != nil {
+		return nil, err
 	}
 	if err := s.refusedBySource(ctx, p, req.SourceAddress); err != nil {
 		return nil, err
+	}
+	if p.SourcePrincipalURI != "" {
+		// Enrollment can change while the network probe is in flight.
+		scope = s.agentScope()
+		if err := requireSensorPairingTenant(p.SourcePrincipalURI, scope); err != nil {
+			return nil, err
+		}
+		p.OrgID = scope.OrgID
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()

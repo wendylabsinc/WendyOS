@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -181,5 +182,37 @@ func TestAddSensorPairingDoesNotSaveWhenRequestIsCanceledDuringProbe(t *testing.
 	err := addProbedPairing(svc, ctx, "")
 	if status.Code(err) != codes.Canceled || len(store.List()) != 0 || *starts != 0 {
 		t.Fatalf("err = %v, saved = %d, started = %d", err, len(store.List()), *starts)
+	}
+}
+
+func TestAddSensorPairingRechecksTenantAfterProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		scope    certs.Scope
+		probeErr error
+	}{
+		{"tenant changed", certs.Scope{TenantUUID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}, nil},
+		{"enrollment cleared", certs.Scope{}, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := certs.Scope{TenantUUID: probeTenant}
+			path := filepath.Join(t.TempDir(), "pairings.json")
+			store := mcusource.NewPairingStore(path)
+			starts := 0
+			svc := services.NewSensorPairingService(zap.NewNop(), store, func() certs.Scope { return scope },
+				func(mcusource.SensorPairing, string) { starts++ }, nil, nil)
+			svc.SetPairingProbe(func(context.Context, mcusource.SensorPairing, string) error {
+				scope = tc.scope
+				return tc.probeErr
+			})
+
+			err := addProbedPairing(svc, t.Context(), "192.168.100.49:5054")
+			if status.Code(err) != codes.PermissionDenied || len(store.List()) != 0 || starts != 0 {
+				t.Fatalf("err = %v, saved = %d, started = %d; want the changed tenant to block the pairing", err, len(store.List()), starts)
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected no on-disk pairing store, stat error = %v", err)
+			}
+		})
 	}
 }
