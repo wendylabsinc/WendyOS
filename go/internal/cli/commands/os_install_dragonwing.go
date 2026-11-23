@@ -406,7 +406,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	// Resolve what the flash will write up front, as Thor does: the prompts
 	// must run before the flash UI takes over the terminal, and a bad flag
 	// should abort before the board is written.
-	creds, err := resolveWiFiCredentialsList(wifi)
+	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}

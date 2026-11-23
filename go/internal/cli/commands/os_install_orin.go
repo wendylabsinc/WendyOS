@@ -83,7 +83,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 
-	creds, err := resolveWiFiCredentialsList(opts.WiFi)
+	creds, err := resolveFirstBootWiFi(opts.WiFi)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,6 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Recovered %s %s with WendyOS %s; the Jetson will reboot after the final LUN is released.", opts.DeviceName, strings.ToUpper(opts.Storage), opts.Version)))
-	printFirstBootVerification(opts.DeviceType, opts.Version)
 	return nil
 }
 

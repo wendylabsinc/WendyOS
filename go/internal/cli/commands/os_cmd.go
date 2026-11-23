@@ -589,7 +589,7 @@ func artifactURLPath(filePath string) string {
 // true). No version picker is shown — the version is chosen automatically.
 // storageMedium is the device's reported medium, which picks the NVMe variant.
 func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
-	fmt.Println("Fetching available devices...")
+	installNote(os.Stdout, "Fetching available devices...")
 
 	devices, err := getAvailableDevices()
 	if err != nil {

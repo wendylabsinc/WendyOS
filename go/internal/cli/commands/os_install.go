@@ -301,17 +301,20 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	if err != nil {
 		return err
 	}
-	noteImageFit(fit, layout, *targetDrive)
 
 	activationStep(ctx, "flash", map[string]string{"target_selected": "true"})
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
-	fmt.Println(elevationHint())
+	if hint := elevationHint(); hint != "" {
+		installNote(os.Stdout, "%s", hint)
+	}
 	if err := unmountBeforeWrite(*targetDrive); err != nil {
 		return err
 	}
+	// This mode has no progress bar; say what the long write is doing.
+	installNote(os.Stdout, "Writing image to %s...", targetDrive.DevicePath)
 	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, fit, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
+	installDone(os.Stdout, "Image written")
 	if agent != nil {
 		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agentSeed{local: agent})
 		var ejectErr error
@@ -334,7 +337,9 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	}
 
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
-	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
+	fmt.Println()
+	installResult(os.Stdout, fmt.Sprintf("Installed image on %s.", targetDrive.Name))
+	installNext(os.Stdout, "put the drive in the board, power it on, then run", "wendy discover")
 	return nil
 }
 
@@ -389,7 +394,7 @@ func isFlashBundleDeviceType(deviceType string) bool {
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
 // an interactive picker. Returns the selected device key and its deviceInfo.
 func pickLinuxDevice() (string, deviceInfo, error) {
-	fmt.Println("Fetching available devices...")
+	installNote(os.Stdout, "Fetching available devices...")
 
 	devices, err := getAvailableDevices()
 	if err != nil {
@@ -503,7 +508,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts, agent)
 	}
-	fmt.Println("Fetching available devices...")
+	installNote(os.Stdout, "Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest — the per-PR manifest when --pr is
 	// set, otherwise the standard release manifest.
@@ -804,7 +809,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		// recommending full recovery would be wrong there — the version has
 		// no flashpack to recover with.
 		if ver.InstallMode == "recovery" {
-			fmt.Fprintln(os.Stderr, tui.WarningMessage("Rootfs-only imaging does not update Jetson QSPI boot firmware; use full recovery to guarantee matching boot firmware and rootfs."))
+			installWarn(os.Stderr, "Rootfs only: Jetson boot firmware (QSPI) is not updated. Use full recovery to update it.")
 		}
 		storageOverride, err = chooseT234RootfsOnlyStorage(selected, storageOverride)
 		if err != nil {
@@ -961,7 +966,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return fmt.Errorf("drive %s not found", flagDrive)
 		}
 	} else {
-		fmt.Println()
 		selectedDrive, err := pickExternalDrive(ctx)
 		if err != nil {
 			return err
@@ -1021,7 +1025,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	if err != nil {
 		return err
 	}
-	noteImageFit(fit, layout, targetDrive)
 
 	if err := unmountBeforeWrite(targetDrive); err != nil {
 		return err
@@ -1029,7 +1032,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	activationStep(ctx, "flash", nil)
 	// Step 6: Write image to drive with progress bar.
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 	if seekableZst != "" || bmapPath != "" {
 		// a bmap failure falls back and its reason is printed then; suppress the TUI error render
@@ -1078,10 +1080,8 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		var writeErr error
 		switch {
 		case seekableZst != "":
-			fmt.Println("Using seekable block map for faster flashing.")
 			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, fit, progress)
 		case bmapPath != "":
-			fmt.Println("Using block map for faster flashing.")
 			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, fit, progress)
 		default:
 			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, fit, progress)
@@ -1181,6 +1181,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
+	installDone(os.Stdout, "Image written")
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
 	activationStep(ctx, "provision", nil)
 	hasProvisioningData := agent != nil || provisioningRequired(provCreds, provDeviceName, provisioningJSON)
@@ -1197,9 +1198,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		if hasProvisioningData {
 			return errors.Join(fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name), ejectDisk(targetDrive))
 		}
-		fmt.Println("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
+		fmt.Println()
+		installWarn(os.Stdout, "First-boot settings can't be written on this platform. The device will run the agent in the image and update it after first boot.")
 	} else {
-		fmt.Printf("\nWriting provisioning data to config partition...\n")
 		// A provisioning failure is not a flash failure: the OS image already
 		// landed on the drive above. provisionConfigWithRetry warns and offers
 		// an interactive retry rather than aborting, so the user knows the
@@ -1220,9 +1221,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
-	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
-	fmt.Println("You can now insert the drive into your device and power it on.")
-	printFirstBootVerification(deviceKey, imgInfo.Version)
+	fmt.Println()
+	installResult(os.Stdout, fmt.Sprintf("Installed WendyOS %s on %s.", imgInfo.Version, targetDrive.Name))
+	installNext(os.Stdout, "put the drive in the board, power it on, then run", "wendy discover")
 	return nil
 }
 
@@ -1281,21 +1282,21 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		}
 		switch {
 		case zerr != nil:
-			fmt.Printf("Note: could not fetch seekable image (%v); flashing the full image.\n", zerr)
+			installNote(os.Stdout, "could not fetch seekable image (%v); flashing the full image.", zerr)
 		case berr != nil:
-			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", berr)
+			installNote(os.Stdout, "cannot resolve block-map cache path (%v); flashing the full image.", berr)
 		default:
 			var parsed *Bmap
 			if derr := downloadBmap(img.BmapURL, bmapCandidate); derr != nil {
 				// A block map an earlier run cached will do if it is for an image
 				// of this size; the write still checks every range's checksum.
 				if parsed = cachedBmapFor(bmapCandidate, zstPath); parsed != nil {
-					fmt.Printf("Note: could not fetch block map (%v); using the cached copy.\n", derr)
+					installNote(os.Stdout, "could not fetch block map (%v); using the cached copy.", derr)
 				} else {
-					fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+					installNote(os.Stdout, "could not fetch block map (%v); flashing the full image.", derr)
 				}
 			} else if b, perr := parseBmap(readFileOrNil(bmapCandidate)); perr != nil {
-				fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
+				installNote(os.Stdout, "block map unusable (%v); flashing the full image.", perr)
 			} else {
 				parsed = b
 			}
@@ -1308,7 +1309,7 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		// --no-bmap, or no block map published: a cached .zst is still the image.
 		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil {
 			if info, err := os.Stat(cached); err == nil && info.Size() > 0 {
-				fmt.Printf("Using cached seekable image (%s)\n", cached)
+				installDone(os.Stdout, "Image ready", "(cached)")
 				localZst = cached
 			}
 		}
@@ -1326,7 +1327,7 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 			src.stream = stream
 			return src, nil
 		}
-		fmt.Printf("Note: could not open %s (%v); flashing the full image.\n", localZst, err)
+		installNote(os.Stdout, "could not open %s (%v); flashing the full image.", localZst, err)
 	}
 	stream, err := openOSImageStream(deviceKey, img)
 	if err != nil {
@@ -1336,13 +1337,13 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 	if !noBmap && img.BmapURL != "" {
 		candidate, derr := osCachedBmapPath(deviceKey, version, storage)
 		if derr != nil {
-			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", derr)
+			installNote(os.Stdout, "cannot resolve block-map cache path (%v); flashing the full image.", derr)
 		} else if derr := downloadBmap(img.BmapURL, candidate); derr != nil {
-			fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+			installNote(os.Stdout, "could not fetch block map (%v); flashing the full image.", derr)
 		} else if parsed, perr := parseBmap(readFileOrNil(candidate)); perr != nil {
-			fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
+			installNote(os.Stdout, "block map unusable (%v); flashing the full image.", perr)
 		} else if stream.uncompressedSize > 0 && parsed.ImageSize != stream.uncompressedSize {
-			fmt.Printf("Note: block map is for a %d-byte image but this image is %d bytes; flashing the full image.\n", parsed.ImageSize, stream.uncompressedSize)
+			installNote(os.Stdout, "block map is for a %d-byte image but this image is %d bytes; flashing the full image.", parsed.ImageSize, stream.uncompressedSize)
 		} else {
 			src.bmapPath = candidate
 			src.imageSize = parsed.ImageSize
@@ -1868,7 +1869,7 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 		return "", err
 	}
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached seekable image (%s)\n", cached)
+		installDone(os.Stdout, "Image ready", "(cached)")
 		return cached, nil
 	}
 	downloadPath, err := downloadOSImage(&imageInfo{DownloadURL: zstURL, Version: version})
@@ -1880,6 +1881,7 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching seekable image: %w", err)
 	}
+	installDone(os.Stdout, "Image downloaded")
 	return cached, nil
 }
 
@@ -1953,7 +1955,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		return "", err
 	}
 	if info, statErr := os.Stat(imgCached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached image (%s)\n", imgCached)
+		installDone(os.Stdout, "Image ready", "(cached)")
 		return imgCached, nil
 	}
 
@@ -1964,7 +1966,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 			return "", zipErr
 		}
 		if info, statErr := os.Stat(zipCached); statErr == nil && info.Size() > 0 {
-			fmt.Printf("Using cached image (%s)\n", zipCached)
+			installDone(os.Stdout, "Image ready", "(cached)")
 			return zipCached, nil
 		}
 		// Cache miss: download zip, rename to zip cache path.
@@ -1977,6 +1979,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 			os.Remove(downloadPath)
 			return "", fmt.Errorf("caching image: %w", renameErr)
 		}
+		installDone(os.Stdout, "Image downloaded")
 		return zipCached, nil
 	}
 
@@ -1990,6 +1993,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching image: %w", err)
 	}
+	installDone(os.Stdout, "Image downloaded")
 	return imgCached, nil
 }
 
@@ -2648,10 +2652,10 @@ func promptAddOneCredential(index int) (c wendyconf.WifiCredential, added bool, 
 		}
 		if useKeychain {
 			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
-				fmt.Println("Using saved password from keychain.")
+				installNote(os.Stdout, "Using saved password from keychain.")
 				c.Password = pw
 			} else {
-				fmt.Println("Password not available from keychain.")
+				installNote(os.Stdout, "Password not available from keychain.")
 			}
 		}
 	}
@@ -2704,7 +2708,6 @@ func resolveDeviceName(flagName string) (string, error) {
 		return "", nil
 	}
 
-	fmt.Println()
 	name, err := promptDeviceName(
 		"Device name",
 		fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; empty = auto-generate)", maxDeviceNameLen),
@@ -2818,7 +2821,33 @@ func confirmEraseDrive(d drive, force bool) error {
 		fmt.Println("Cancelled.")
 		return ErrUserCancelled
 	}
+	if !force {
+		printAnswer(alsoOnPromptTerminal(os.Stdout), fmt.Sprintf("Erase %s (%s)?", d.DevicePath, eraseDriveLabel(d)), "yes", true)
+	}
 	return nil
+}
+
+// eraseDriveLabel names the drive and its size for the answered erase question.
+func eraseDriveLabel(d drive) string {
+	if d.SizeBytes > 0 {
+		return d.Name + ", " + formatBytes(d.SizeBytes)
+	}
+	return d.Name
+}
+
+// resolveFirstBootWiFi resolves first-boot Wi-Fi and, when it was asked,
+// leaves the answer on screen.
+func resolveFirstBootWiFi(wifi wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
+	asked := !wifi.chosen() && isInteractiveTerminal()
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err == nil && asked {
+		answer := "none"
+		if len(creds) > 0 {
+			answer = strings.Join(wifiSummaryNames(creds), ", ")
+		}
+		printAnswer(alsoOnPromptTerminal(os.Stdout), "Wi-Fi", answer, false)
+	}
+	return creds, err
 }
 
 // diskInstallSettled is what installLinuxImage writes, settled before the download.
@@ -2864,10 +2893,12 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 	} else if storageOverride == "" && d.MediaFixed && storage == "nvme" {
 		// Auto-detected an SSD enclosure. Surface the inference and the override
 		// so a surprising choice is at least visible and reversible.
-		fmt.Printf("Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).\n", d.DevicePath)
+		installNote(os.Stdout, "Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).", d.DevicePath)
 	}
 
-	fmt.Printf("\nPreparing %s %s image...\n", device.Name, version)
+	fmt.Println()
+	installHeader(os.Stdout, device.Name, version, d.DevicePath, installImageDetail(d, storage))
+	fmt.Println()
 	var imgInfo *imageInfo
 	var err error
 	if rootfsOnly && ver.InstallMode == "recovery" {
@@ -2888,6 +2919,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 	if err != nil {
 		return diskInstallSettled{}, err
 	}
+	fmt.Println() // the work starts a new stage
 	// Reserving the name in Cloud waits for the erase confirm, so a declined
 	// install leaves nothing reserved and its retry can use the same name.
 	provisioningJSON, err := mintProvisioningJSON(ctx, plan, &name)
@@ -2901,7 +2933,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 // pre-enroll, and shows it before asking to erase d, so nothing that changes
 // the result is asked afterwards. The returned plan is minted only after this.
 func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
-	creds, err := resolveWiFiCredentialsList(wifi)
+	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -3055,7 +3087,8 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 	// again by identity: while set, d's device path is not known to be ours.
 	relocate := false
 
-	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
+	installNote(os.Stdout, "Writing first-boot settings...")
+	agentVersion, err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
 	// skip ends the loop when the user declines a retry.
 	skip := func() (drive, bool, error) {
 		if requested {
@@ -3068,13 +3101,15 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 		notApplied, stillMounted := splitStillMounted(err)
 		if notApplied == nil {
 			// Only the unmount failed; the caller reports the mount.
-			fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
+			installDone(os.Stdout, "First-boot settings written", firstBootWrittenDetail(agentVersion))
 			return d, !relocate, stillMounted
 		}
 		if requested {
-			fmt.Printf("\nWarning: could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
+			fmt.Println()
+			installWarn(os.Stdout, "Could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v", err)
 		} else {
-			fmt.Printf("\nWarning: could not pre-configure the agent on the config partition: %v\n", err)
+			fmt.Println()
+			installWarn(os.Stdout, "Could not pre-configure the agent on the config partition: %v", err)
 		}
 		fmt.Println("The OS image itself was written successfully — the device will still boot, run the agent baked into the image, and fetch updates after first boot.")
 
@@ -3136,26 +3171,23 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 			}
 			d, relocate = found, false
 		}
-		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
+		agentVersion, err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
 	}
-	fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
+	installDone(os.Stdout, "First-boot settings written", firstBootWrittenDetail(agentVersion))
 	return d, true, nil
 }
 
-// provisionConfigPartition seeds the local agent or downloads the latest one for the image's channel.
-func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, seed agentSeed) error {
+// provisionConfigPartition seeds the local agent or downloads the latest one
+// for the image's channel, and returns the seeded agent's version.
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, seed agentSeed) (string, error) {
 	if agent := seed.local; agent != nil {
-		fmt.Printf("Using local wendy-agent %s (%s)\n", agent.path, agent.arch)
-		return writeConfigPartition(d, configAgent{data: agent.data, local: true}, creds, deviceName, provisioningJSON)
+		return "local", writeConfigPartition(d, configAgent{data: agent.data, local: true}, creds, deviceName, provisioningJSON)
 	}
-	fmt.Printf("Downloading wendy-agent for device...\n")
 	agentBinary, agentVer, err := seedAgent(seed)
 	if err != nil {
-		return fmt.Errorf("resolving agent binary: %w", err)
+		return "", fmt.Errorf("resolving agent binary: %w", err)
 	}
-	fmt.Printf("Using wendy-agent %s\n", agentVer)
-
-	return writeConfigPartition(d, configAgent{data: agentBinary}, creds, deviceName, provisioningJSON)
+	return agentVer, writeConfigPartition(d, configAgent{data: agentBinary}, creds, deviceName, provisioningJSON)
 }
 
 // maxFlashAttempts bounds installESP32Firmware's retry loop so a permanently
@@ -3215,7 +3247,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	autoDiscoverPort := serialDevice.Port == ""
 	interactive := !jsonOutput && isInteractiveTerminal()
 	if autoDiscoverPort {
-		fmt.Println("\nScanning for ESP32 devices...")
+		fmt.Println()
+		installNote(os.Stdout, "Scanning for ESP32 devices...")
 
 		// A device that's rebooting on its own can drop off and reappear on
 		// the USB bus as it re-enumerates, so a single scan can miss it.
@@ -3251,7 +3284,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 
 	wifi.MaxNetworks = liteMaxWiFiNetworks
-	provCreds, err := resolveWiFiCredentialsList(wifi)
+	provCreds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}
@@ -3296,7 +3329,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 	fmt.Println(esp32InstallCandidateMessage(serialDevice))
 
-	fmt.Println("Fetching latest Wendy Lite firmware...")
+	installNote(os.Stdout, "Fetching latest Wendy Lite firmware...")
 	firmwareID, err := WendyLiteFirmwareID(board)
 	if err != nil {
 		return err
@@ -3305,7 +3338,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if err != nil {
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
-	fmt.Printf("Found firmware: %s v%s\n", asset.Name, asset.Version)
+	installNote(os.Stdout, "Found firmware: %s v%s", asset.Name, asset.Version)
 
 	// Reuse a cached download from a previous run when one exists; otherwise
 	// download with a progress bar. The cached file persists across runs and
@@ -3414,12 +3447,13 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
-	fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", asset.Version)
-	fmt.Println("The device will reboot automatically.")
+	var enroll func() error
 	if enrollmentAuth != nil {
-		return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, provDeviceName, asset.Version, interactive)
+		enroll = func() error {
+			return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, provDeviceName, asset.Version, interactive)
+		}
 	}
-	return nil
+	return finishLiteInstall(os.Stdout, asset.Version, enroll)
 }
 
 func esp32InstallCandidateMessage(device discovery.SerialPortInfo) string {
