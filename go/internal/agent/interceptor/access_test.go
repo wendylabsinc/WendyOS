@@ -2,9 +2,7 @@ package interceptor
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
+	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -77,7 +75,7 @@ func TestKeylessSetIsTheAppsSet(t *testing.T) {
 
 func spkiOf(t *testing.T) []byte {
 	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +169,26 @@ func TestClosedAuthorizer(t *testing.T) {
 		{"admin socket cannot enroll", socket, bg, enroll, false},
 	})
 
+	// Each of these reaches root (an unsigned agent or OS image, a kernel
+	// module, MCU firmware, the privileged build host), so only the owner may
+	// call it: not an operator key, and not an admin app's socket.
+	for _, m := range []string{
+		"/wendy.agent.services.v1.WendyAgentService/UpdateAgent",
+		"/wendy.agent.services.v1.WendyAgentService/UpdateOS",
+		"/wendy.agent.services.v2.WendyAgentUpdateService/StartOnlineUpdate",
+		"/wendy.agent.services.v2.WendyAgentUpdateService/UpdateAgent",
+		"/wendy.agent.services.v2.WendyArduinoMcuService/FlashSketch",
+		"/wendy.agent.services.v2.WendyBuildService/SetBuildHostEnabled",
+		"/wendy.agent.services.v2.WendyDriverService/InstallDriver",
+		"/wendy.agent.services.v2.WendyOSUpdateService/UpdateOS",
+	} {
+		run([]tc{
+			{"operator: " + m, keyAuthz, keyCtx(opKey), m, false},
+			{"admin socket: " + m, socket, bg, m, false},
+			{"owner: " + m, keyAuthz, keyCtx(ownerKey), m, true},
+		})
+	}
+
 	if err := keys.SetKeylessApps(true, o.Fingerprint()); err != nil {
 		t.Fatal(err)
 	}
@@ -180,12 +198,21 @@ func TestClosedAuthorizer(t *testing.T) {
 		{"keyless on: no shell", keyless, bg, shell, false},
 		{"keyless on: no root hook", keyless, hook(bg), startApp, false},
 	})
-	ctx, err := keyless.authorize(bg, startApp)
-	if err != nil || !trustedkeys.Keyless(ctx) {
-		t.Fatalf("keyless call not marked keyless: %v", err)
-	}
-	ctx, err = keyAuthz.authorize(keyCtx(opKey), startApp)
-	if err != nil || trustedkeys.Keyless(ctx) {
-		t.Fatalf("keyed call marked keyless: %v", err)
+	// The deploy path refuses entitlements by this role (build needs owner).
+	for _, c := range []struct {
+		name string
+		a    *ClosedAuthorizer
+		ctx  context.Context
+		want trustedkeys.Role
+	}{
+		{"keyless", keyless, bg, trustedkeys.RoleNone},
+		{"operator key", keyAuthz, keyCtx(opKey), trustedkeys.RoleOperator},
+		{"admin socket", socket, bg, trustedkeys.RoleOperator},
+		{"owner key", keyAuthz, keyCtx(ownerKey), trustedkeys.RoleOwner},
+	} {
+		ctx, err := c.a.authorize(c.ctx, startApp)
+		if role, ok := trustedkeys.CallerRole(ctx); err != nil || !ok || role != c.want {
+			t.Errorf("%s: caller role %v (marked %v, err %v), want %v", c.name, role, ok, err, c.want)
+		}
 	}
 }

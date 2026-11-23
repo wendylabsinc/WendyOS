@@ -12,6 +12,7 @@ package trustedkeys
 import (
 	"bytes"
 	"context"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -135,10 +136,30 @@ func ParsePublicKey(b []byte) ([]byte, error) {
 		}
 		der = block.Bytes
 	}
-	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
-		return nil, fmt.Errorf("the public key could not be read (%v); send a PEM or DER SubjectPublicKeyInfo", err)
+	if err := checkKey(der); err != nil {
+		return nil, err
 	}
 	return der, nil
+}
+
+// checkKey accepts only ML-DSA-65, the algorithm of the CLI's local key: no
+// classical key is a fallback (ML-DSA first, no silent downgrade).
+func checkKey(der []byte) error {
+	pub, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return fmt.Errorf("the public key could not be read (%v); send a PEM or DER SubjectPublicKeyInfo", err)
+	}
+	if k, ok := pub.(*mldsa.PublicKey); !ok || k.Parameters() != mldsa.MLDSA65() {
+		return fmt.Errorf("the key is %s; trusted keys must be ML-DSA-65, the key `wendy auth local-key show` prints", keyAlgorithm(pub))
+	}
+	return nil
+}
+
+func keyAlgorithm(pub any) string {
+	if k, ok := pub.(*mldsa.PublicKey); ok {
+		return k.Parameters().String()
+	}
+	return fmt.Sprintf("%T", pub)
 }
 
 // Open loads path. A missing file is an Open device. A file that exists but
@@ -255,24 +276,12 @@ func (s *Store) List() []Entry {
 	return append([]Entry(nil), s.file.Keys...)
 }
 
-// Floor is the latest added_at: a lower bound for the device clock when
-// checking a client certificate's NotBefore on a device without an RTC.
-func (s *Store) Floor() time.Time {
-	var floor time.Time
-	for _, e := range s.List() {
-		if e.AddedAt.After(floor) {
-			floor = e.AddedAt
-		}
-	}
-	return floor
-}
-
 func newEntry(spki []byte, role Role, label, addedBy string, now time.Time) (Entry, error) {
 	if role == RoleNone {
 		return Entry{}, errors.New("a role is required: owner, operator or viewer")
 	}
-	if _, err := x509.ParsePKIXPublicKey(spki); err != nil {
-		return Entry{}, fmt.Errorf("the public key could not be read (%v); send a PEM or DER SubjectPublicKeyInfo", err)
+	if err := checkKey(spki); err != nil {
+		return Entry{}, err
 	}
 	return Entry{
 		PublicKey: string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki})),
@@ -422,16 +431,18 @@ func (s *Store) write(f *fileFormat) error {
 	return nil
 }
 
-type keylessKey struct{}
+type callerRoleKey struct{}
 
-// WithKeyless marks ctx as a call admitted without a key (the keyless apps
-// set), so the deploy path can refuse what that set must not grant.
-func WithKeyless(ctx context.Context) context.Context {
-	return context.WithValue(ctx, keylessKey{}, true)
+// WithCallerRole marks ctx as a call a Closed device admitted with role
+// (RoleNone: without a key), so the deploy path can refuse what that role
+// must not grant.
+func WithCallerRole(ctx context.Context, role Role) context.Context {
+	return context.WithValue(ctx, callerRoleKey{}, role)
 }
 
-// Keyless reports whether ctx is a call admitted without a key.
-func Keyless(ctx context.Context) bool {
-	v, _ := ctx.Value(keylessKey{}).(bool)
-	return v
+// CallerRole returns the role a Closed device admitted the call with; ok is
+// false on Open and Enrolled devices, which check no roles.
+func CallerRole(ctx context.Context) (role Role, ok bool) {
+	role, ok = ctx.Value(callerRoleKey{}).(Role)
+	return role, ok
 }

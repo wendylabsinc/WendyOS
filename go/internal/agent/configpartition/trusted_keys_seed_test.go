@@ -2,9 +2,7 @@ package configpartition
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
+	"crypto/mldsa"
 	"crypto/x509"
 	"os"
 	"path/filepath"
@@ -18,11 +16,11 @@ import (
 
 func testSeed(t *testing.T) ([]byte, []byte) {
 	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}
-	spki, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+	spki, err := x509.MarshalPKIXPublicKey(k.Public())
 	if err != nil {
 		t.Fatal(err)
 	}

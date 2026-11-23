@@ -107,12 +107,11 @@ func (a *ClosedAuthorizer) authorize(ctx context.Context, method string) (contex
 		if !keylessMethods[method] || !a.Keys.KeylessApps() {
 			return nil, a.deny(ctx, method, c, errNeedKey)
 		}
-		ctx = trustedkeys.WithKeyless(ctx)
 	case c.Role < min:
 		return nil, a.deny(ctx, method, c, status.Errorf(codes.PermissionDenied,
 			"this needs the %s role and your key has %s; ask the device's owner for a higher role", min, c.Role))
 	}
-	return context.WithValue(ctx, callerKey{}, c), nil
+	return trustedkeys.WithCallerRole(context.WithValue(ctx, callerKey{}, c), c.Role), nil
 }
 
 func (a *ClosedAuthorizer) identify(ctx context.Context) (Caller, error) {
