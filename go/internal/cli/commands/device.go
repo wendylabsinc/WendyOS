@@ -274,6 +274,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			defer target.Close()
 
 			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion, gpuArch, npuVendor string
+			// Empty on agents predating the fields, on images without a build
+			// stamp, and on the BLE/provider paths.
+			var build osBuild
 			var diskUsedBytes, diskTotalBytes *int64
 			var memTotalBytes int64
 			var cpuCount uint32
@@ -317,6 +320,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				agentVersion = resp.GetVersion()
 				osName = resp.GetOs()
 				osVersion = resp.GetOsVersion()
+				build = osBuildOf(resp)
 				cpuArch = resp.GetCpuArchitecture()
 				deviceType = resp.GetDeviceType()
 				storageMedium = resp.GetStorageMedium()
@@ -377,6 +381,13 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					"deviceType":      deviceType,
 					"cliVersion":      version.Version,
 					"hasGpu":          hasGPU,
+				}
+				// As the device reports them; absent rather than empty.
+				if build.label != "" {
+					out["osBuild"] = build.label
+				}
+				if build.commit != "" {
+					out["osCommit"] = build.commit
 				}
 				if organization != nil {
 					out["organization"] = nil
@@ -493,7 +504,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			if organization != nil {
 				fmt.Printf("%s %s\n", tui.Dim("Organization:"), tui.Value(organization.label()))
 			}
-			fmt.Printf("%s %s\n", tui.Dim("OS:"), tui.Value(osName+" "+osVersion))
+			fmt.Printf("%s %s\n", tui.Dim("OS:"), tui.Value(osName+" "+osVersionWithBuild(osVersion, build)))
 			fmt.Printf("%s %s\n", tui.Dim("Architecture:"), tui.Value(cpuArch))
 			if cpuCount > 0 {
 				fmt.Printf("%s %s\n", tui.Dim("CPU Cores:"), tui.Value(fmt.Sprintf("%d", cpuCount)))
@@ -2442,6 +2453,8 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 	preUpdateOSVersion := preUpdateVersion.GetOsVersion()
 
 	var otaURL string
+	// The build label of a --pr image, checked once the device is back.
+	var wantBuild string
 	if artifactURLOverride != "" {
 		// Explicit artifact: apply it as-is, no manifest lookup or version
 		// comparison (mirrors `os update --artifact-url`). Still refuse a
@@ -2547,6 +2560,11 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 			}
 		}
 		otaURL = u
+		if prNumber > 0 {
+			// The PR manifest names its image by the label the image is
+			// stamped with ("pr-<N>").
+			wantBuild = latestVer
+		}
 	}
 
 	if osUpdateThroughCloud(ctx, conn) {
@@ -2558,6 +2576,7 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 	}
 	baseline := readOSUpdateBaseline(ctx, conn)
 	baseline.preVersion = preUpdateOSVersion
+	baseline.wantBuild = wantBuild
 	recordCleared, err := applyOSUpdate(ctx, conn, otaURL)
 	baseline.recordCleared = recordCleared
 	if err != nil {

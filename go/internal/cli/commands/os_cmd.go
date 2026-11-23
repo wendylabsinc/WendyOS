@@ -190,6 +190,66 @@ func osAlreadyCurrent(currentOSVersion, latestVersion string, nightly bool) bool
 		!nightly && version.CompareVersions(latestVersion, normalized) <= 0
 }
 
+// osBuild is the build stamp a device reports for the WendyOS image it runs.
+// The OS version names only the release an image is based on, so a nightly
+// and an image built from a pull request report the same version as that
+// release; the stamp tells them apart. Both parts are empty for an agent
+// that predates the fields and for an image without a stamp.
+type osBuild struct {
+	// "pr-<N>", "nightly-<timestamp>", or the release version.
+	label string
+	// The Builder commit the image was built from, as a full hash.
+	commit string
+}
+
+func osBuildOf(versionResp *agentpb.GetAgentVersionResponse) osBuild {
+	return osBuild{label: versionResp.GetOsBuild(), commit: versionResp.GetOsCommit()}
+}
+
+// osVersionWithBuild names the build beside the OS version, as in
+// "WendyOS-0.21.0 (pr-343, a1b2c3d)". A release is stamped with its own
+// version, which adds nothing, so it stays "WendyOS-0.21.0", as does a device
+// that reports no build.
+func osVersionWithBuild(osVersion string, build osBuild) string {
+	if build.label != "" && build.label == strings.TrimPrefix(osVersion, "WendyOS-") {
+		return osVersion
+	}
+	var parts []string
+	if build.label != "" {
+		parts = append(parts, build.label)
+	}
+	if commit := build.commit; commit != "" {
+		if len(commit) > 7 {
+			commit = commit[:7]
+		}
+		parts = append(parts, commit)
+	}
+	if len(parts) == 0 {
+		return osVersion
+	}
+	return osVersion + " (" + strings.Join(parts, ", ") + ")"
+}
+
+// checkRequestedOSBuild compares the build a device reports after an update
+// with the build that was asked for. want is empty when no particular build
+// was asked for, and nothing is checked. It returns a line to print, empty
+// when there is nothing to add, and an error when the device runs another
+// build. A device that reports no build is not an error: its agent may
+// predate the report, and the update's own outcome stands.
+func checkRequestedOSBuild(want string, running osBuild) (string, error) {
+	switch {
+	case want == "" || running.label == want:
+		return "", nil
+	case running.label == "":
+		return fmt.Sprintf("Could not confirm that the device is running build %s: the device did not report its OS build. "+
+			"Its agent may be too old to report it. The build is on the device's boot screen and in /etc/issue.", want), nil
+	default:
+		return fmt.Sprintf("The device is not running build %s: it reports build %s. "+
+				"Check `wendy os update-status` for the slot it booted.", want, running.label),
+			errors.New("device is not running the requested OS build")
+	}
+}
+
 // osUpdateShouldSkipAlreadyCurrent reports whether `os update`'s auto-detect
 // path should treat the device as already up to date and skip flashing. It
 // never short-circuits for --pr requests (prNumber > 0): a PR's resolved
@@ -320,7 +380,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 			// detecting a post-reboot rollback.
 			preUpdateOSVersion := versionResp.GetOsVersion()
 			if preUpdateOSVersion != "" {
-				fmt.Printf("Current OS version: %s\n", preUpdateOSVersion)
+				fmt.Printf("Current OS version: %s\n", osVersionWithBuild(preUpdateOSVersion, osBuildOf(versionResp)))
 			}
 
 			// Only set when the manifest resolved the target; a local artifact or
@@ -449,6 +509,11 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 
 			baseline := readOSUpdateBaseline(ctx, conn)
 			baseline.preVersion = preUpdateOSVersion
+			if prNumber > 0 {
+				// The PR manifest names its image by the label the image is
+				// stamped with ("pr-<N>").
+				baseline.wantBuild = targetVersion
+			}
 			recordCleared, err := applyOSUpdate(ctx, conn, artifactURL)
 			baseline.recordCleared = recordCleared
 			if err != nil {
@@ -757,6 +822,11 @@ type osUpdateBaseline struct {
 	preVersion    string
 	resultAtUnix  int64
 	bootedSlot    string
+	// The build label of the image a --pr update asked for ("pr-343"). A PR
+	// image has the version of the release it is based on, so only the build
+	// the device reports afterwards shows that it runs. Empty for any other
+	// update: nothing is checked.
+	wantBuild string
 }
 
 // The agent's engine probe can take ten seconds. Leave room for the RPC
@@ -789,6 +859,7 @@ func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnectio
 	var resp *agentpb.GetOSUpdateStatusResponse
 	var rpcErr error
 	var postUpdateOSVersion string
+	var postUpdateOSBuild osBuild
 
 	// The agent can answer GetAgentVersion before its boot health gate has
 	// committed and written the update result. Wait for that result, not just
@@ -800,12 +871,12 @@ func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnectio
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		conn, err := dialOSUpdateAgent(callCtx, prior)
 		cancel()
-		postUpdateOSVersion = ""
+		postUpdateOSVersion, postUpdateOSBuild = "", osBuild{}
 		if err == nil {
 			resp, rpcErr = readOSUpdateStatus(ctx, conn)
 			versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
 			if ver, verErr := conn.AgentService.GetAgentVersion(versionCtx, &agentpb.GetAgentVersionRequest{}); verErr == nil {
-				postUpdateOSVersion = ver.GetOsVersion()
+				postUpdateOSVersion, postUpdateOSBuild = ver.GetOsVersion(), osBuildOf(ver)
 			}
 			versionCancel()
 			conn.Close()
@@ -833,8 +904,15 @@ func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnectio
 		}
 	}
 
-	msg, outcomeErr := evaluateOSUpdateOutcomeSince(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, baseline, time.Now())
+	msg, outcomeErr := evaluateOSUpdateOutcomeSince(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, postUpdateOSBuild, baseline, time.Now())
 	fmt.Println(msg)
+	// A failed update has already said what the device fell back to.
+	if outcomeErr == nil {
+		var note string
+		if note, outcomeErr = checkRequestedOSBuild(baseline.wantBuild, postUpdateOSBuild); note != "" {
+			fmt.Println(note)
+		}
+	}
 	reportDriverAddonsAfterUpdate(ctx, prior)
 	return outcomeErr
 }
@@ -938,19 +1016,19 @@ func verifiedUBootCommit(engine *agentpb.OSUpdateEngineStatus) bool {
 }
 
 func evaluateOSUpdateOutcomeSince(resp *agentpb.GetOSUpdateStatusResponse, rpcErr error,
-	preVersion, postVersion string, baseline osUpdateBaseline, now time.Time) (string, error) {
+	preVersion, postVersion string, postBuild osBuild, baseline osUpdateBaseline, now time.Time) (string, error) {
 	// A fresh terminal result, including rollback and commit failure, always
 	// takes precedence over a slot snapshot.
 	if rpcErr == nil && usableOSUpdateOutcomeSince(resp, now, baseline) {
-		return evaluateOSUpdateOutcome(resp, nil, preVersion, postVersion, baseline.recordCleared, now)
+		return evaluateOSUpdateOutcome(resp, nil, preVersion, postVersion, postBuild, baseline.recordCleared, now)
 	}
 	if verifiedSameVersionSlotSwitch(resp, rpcErr, preVersion, postVersion, baseline) {
 		return fmt.Sprintf("Update verified by A/B slot switch: slot %s is booted with no pending update; device is running %s.",
-			resp.GetEngineStatus().GetCurrentSlot(), postVersion), nil
+			resp.GetEngineStatus().GetCurrentSlot(), osVersionWithBuild(postVersion, postBuild)), nil
 	}
 	// The previous attempt's record cannot prove this update. Preserve the
 	// existing version-only fallback, which fails closed for same-version OSes.
-	return evaluateOSUpdateOutcome(nil, rpcErr, preVersion, postVersion, false, now)
+	return evaluateOSUpdateOutcome(nil, rpcErr, preVersion, postVersion, postBuild, false, now)
 }
 
 func usableOSUpdateOutcome(resp *agentpb.GetOSUpdateStatusResponse, now time.Time) bool {
@@ -961,12 +1039,14 @@ func usableOSUpdateOutcome(resp *agentpb.GetOSUpdateStatusResponse, now time.Tim
 
 // evaluateOSUpdateOutcome turns the device's update-status report (or the
 // failure to obtain one) into a user-facing message and an error when the
-// update failed or a same-version result cannot be verified. Pure function,
-// unit-tested.
+// update failed or a same-version result cannot be verified. postUpdateOSBuild
+// is only named beside the running version; the verdict rests on the versions
+// and the record. Pure function, unit-tested.
 func evaluateOSUpdateOutcome(
 	resp *agentpb.GetOSUpdateStatusResponse,
 	rpcErr error,
 	preUpdateOSVersion, postUpdateOSVersion string,
+	postUpdateOSBuild osBuild,
 	recordCleared bool,
 	now time.Time,
 ) (string, error) {
@@ -989,14 +1069,14 @@ func evaluateOSUpdateOutcome(
 		case postUpdateOSVersion == preUpdateOSVersion:
 			return fmt.Sprintf("The device is running %s, but the update outcome could not be verified. "+
 				"Images can share an OS version; check `wendy os update-status` for the committed slot or rollback details.",
-				postUpdateOSVersion), errors.New("OS update outcome unverified; unchanged version cannot distinguish commit from rollback")
+				osVersionWithBuild(postUpdateOSVersion, postUpdateOSBuild)), errors.New("OS update outcome unverified; unchanged version cannot distinguish commit from rollback")
 		default:
 			healthDetail := "A fresh post-update health result was not available; check `wendy os update-status` for the committed slot and health details."
 			if status.Code(rpcErr) == codes.Unimplemented {
 				healthDetail = "Post-update health verification is not supported by this device's agent."
 			}
 			return fmt.Sprintf("Update applied; device is now running %s. "+
-				"(%s)", postUpdateOSVersion, healthDetail), nil
+				"(%s)", osVersionWithBuild(postUpdateOSVersion, postUpdateOSBuild), healthDetail), nil
 		}
 	}
 
@@ -1030,14 +1110,14 @@ func evaluateOSUpdateOutcome(
 		if postUpdateOSVersion != "" && resp.GetNewOsVersion() != "" && postUpdateOSVersion != resp.GetNewOsVersion() {
 			return fmt.Sprintf("Warning: the device reports a committed update to %s but is running %s — "+
 					"the status may belong to an earlier update. Check the device with `wendy status`.",
-					resp.GetNewOsVersion(), postUpdateOSVersion),
+					resp.GetNewOsVersion(), osVersionWithBuild(postUpdateOSVersion, postUpdateOSBuild)),
 				errors.New("OS update status does not match the running OS version")
 		}
 		runningVersion := postUpdateOSVersion
 		if runningVersion == "" {
 			runningVersion = resp.GetNewOsVersion()
 		}
-		return fmt.Sprintf("Update verified: critical services healthy. Device is running %s.", runningVersion), nil
+		return fmt.Sprintf("Update verified: critical services healthy. Device is running %s.", osVersionWithBuild(runningVersion, postUpdateOSBuild)), nil
 
 	case agentpb.GetOSUpdateStatusResponse_OUTCOME_ROLLED_BACK:
 		var b strings.Builder

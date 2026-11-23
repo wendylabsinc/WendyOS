@@ -19,6 +19,176 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
+func TestOSVersionWithBuild(t *testing.T) {
+	const sha = "4db3514d8971c00739d0831ae04ee6f663e09484"
+	for _, tc := range []struct {
+		name    string
+		version string
+		build   osBuild
+		want    string
+	}{
+		{"pull request image", "WendyOS-0.21.0", osBuild{"pr-375", sha}, "WendyOS-0.21.0 (pr-375, 4db3514)"},
+		{"nightly image", "WendyOS-0.21.0", osBuild{"nightly-20261121T165425", sha}, "WendyOS-0.21.0 (nightly-20261121T165425, 4db3514)"},
+		{"release image repeats its version", "WendyOS-0.21.0", osBuild{"0.21.0", sha}, "WendyOS-0.21.0"},
+		{"image built outside CI", "WendyOS-0.21.0", osBuild{"0.21.0", ""}, "WendyOS-0.21.0"},
+		{"label of another version", "WendyOS-0.21.0", osBuild{"0.20.2", sha}, "WendyOS-0.21.0 (0.20.2, 4db3514)"},
+		{"label only", "WendyOS-0.21.0", osBuild{"pr-375", ""}, "WendyOS-0.21.0 (pr-375)"},
+		{"commit only", "WendyOS-0.21.0", osBuild{"", sha}, "WendyOS-0.21.0 (4db3514)"},
+		{"short commit is kept whole", "WendyOS-0.21.0", osBuild{"pr-375", "4db35"}, "WendyOS-0.21.0 (pr-375, 4db35)"},
+		{"no build reported", "WendyOS-0.21.0", osBuild{}, "WendyOS-0.21.0"},
+		{"no version reported", "", osBuild{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := osVersionWithBuild(tc.version, tc.build); got != tc.want {
+				t.Fatalf("osVersionWithBuild(%q, %+v) = %q, want %q", tc.version, tc.build, got, tc.want)
+			}
+		})
+	}
+}
+
+// osBuildAgentClient answers the two calls the post-update report makes.
+type osBuildAgentClient struct {
+	agentpb.WendyAgentServiceClient
+	version *agentpb.GetAgentVersionResponse
+	result  *agentpb.GetOSUpdateStatusResponse
+}
+
+func (c *osBuildAgentClient) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest, ...grpc.CallOption) (*agentpb.GetAgentVersionResponse, error) {
+	return c.version, nil
+}
+
+func (c *osBuildAgentClient) GetOSUpdateStatus(context.Context, *agentpb.GetOSUpdateStatusRequest, ...grpc.CallOption) (*agentpb.GetOSUpdateStatusResponse, error) {
+	return c.result, nil
+}
+
+// A PR image reports the version of the release it is based on, so the update
+// report has to name the build, and a --pr update has to check it.
+func TestOSUpdateOutcomeNamesTheBuild(t *testing.T) {
+	const (
+		osVersion = "WendyOS-0.21.0"
+		sha       = "4db3514d8971c00739d0831ae04ee6f663e09484"
+		verified  = "Update verified: critical services healthy. Device is running WendyOS-0.21.0"
+	)
+	committed := func() *agentpb.GetOSUpdateStatusResponse {
+		return &agentpb.GetOSUpdateStatusResponse{
+			HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+			OldOsVersion: osVersion, NewOsVersion: osVersion, CreatedAtUnix: time.Now().Unix(),
+		}
+	}
+	rolledBack := committed()
+	rolledBack.Outcome = agentpb.GetOSUpdateStatusResponse_OUTCOME_ROLLED_BACK
+	// No health record, but the updater shows the other slot booted and clean.
+	slotSwitch := &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{
+		CurrentSlot: "B",
+		Slots: []*agentpb.OSUpdateEngineStatus_Slot{
+			{Slot: "A"},
+			{Slot: "B", Booted: true, RootfsHealth: "normal"},
+		},
+	}}
+	for _, tc := range []struct {
+		name      string
+		wantBuild string // the build a --pr update asked for; "" otherwise
+		build     osBuild
+		result    *agentpb.GetOSUpdateStatusResponse
+		wantErr   string
+		wantOut   []string
+		notOut    []string
+		exactOut  string
+	}{
+		{
+			name: "requested PR build is running", wantBuild: "pr-375", build: osBuild{"pr-375", sha}, result: committed(),
+			exactOut: verified + " (pr-375, 4db3514).\n",
+		},
+		{
+			name: "another build is running", wantBuild: "pr-375", build: osBuild{"nightly-20261121T165425", sha}, result: committed(),
+			wantErr: "not running the requested OS build",
+			wantOut: []string{
+				verified + " (nightly-20261121T165425, 4db3514).\n",
+				"The device is not running build pr-375: it reports build nightly-20261121T165425.",
+			},
+		},
+		{
+			name: "release is running where a PR build was asked for", wantBuild: "pr-375", build: osBuild{"0.21.0", sha}, result: committed(),
+			wantErr: "not running the requested OS build",
+			wantOut: []string{verified + ".\n", "The device is not running build pr-375: it reports build 0.21.0."},
+		},
+		{
+			name: "device reports no build", wantBuild: "pr-375", result: committed(),
+			wantOut: []string{
+				verified + ".\n",
+				"Could not confirm that the device is running build pr-375: the device did not report its OS build.",
+				"agent may be too old",
+			},
+		},
+		{
+			name: "PR build verified by slot switch", wantBuild: "pr-375", build: osBuild{"pr-375", sha}, result: slotSwitch,
+			exactOut: "Update verified by A/B slot switch: slot B is booted with no pending update; device is running WendyOS-0.21.0 (pr-375, 4db3514).\n",
+		},
+		{
+			name: "rolled back PR update is reported once", wantBuild: "pr-375", build: osBuild{"0.21.0", sha}, result: rolledBack,
+			wantErr: "rolled back",
+			wantOut: []string{"rolled back to WendyOS-0.21.0"},
+			notOut:  []string{"pr-375", "OS build"},
+		},
+		{
+			name: "nightly update names its build", build: osBuild{"nightly-20261121T165425", sha}, result: committed(),
+			exactOut: verified + " (nightly-20261121T165425, 4db3514).\n",
+		},
+		{
+			name: "release update reads as before", build: osBuild{"0.21.0", sha}, result: committed(),
+			exactOut: verified + ".\n",
+		},
+		{
+			name: "agent that reports no build reads as before", result: committed(),
+			exactOut: verified + ".\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := osVersion
+			version := &agentpb.GetAgentVersionResponse{OsVersion: &v}
+			if tc.build.label != "" {
+				version.OsBuild = &tc.build.label
+			}
+			if tc.build.commit != "" {
+				version.OsCommit = &tc.build.commit
+			}
+			prior := &grpcclient.AgentConnection{
+				Host: "device.invalid",
+				Reconnect: func(context.Context) (*grpcclient.AgentConnection, error) {
+					return &grpcclient.AgentConnection{
+						AgentService:  &osBuildAgentClient{version: version, result: tc.result},
+						DriverService: &osReconnectDriverClient{},
+					}, nil
+				},
+			}
+			baseline := osUpdateBaseline{preVersion: osVersion, recordCleared: true, bootedSlot: "A", wantBuild: tc.wantBuild}
+			var err error
+			out := captureStdout(t, func() {
+				err = reportOSUpdateOutcome(context.Background(), prior, osVersion, baseline)
+			})
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("error = %v, want none; output:\n%s", err, out)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("error = %v, want %q; output:\n%s", err, tc.wantErr, out)
+			}
+			if tc.exactOut != "" && out != tc.exactOut {
+				t.Errorf("output:\n%s\nwant exactly:\n%s", out, tc.exactOut)
+			}
+			for _, want := range tc.wantOut {
+				if !strings.Contains(out, want) {
+					t.Errorf("output is missing %q:\n%s", want, out)
+				}
+			}
+			for _, unwanted := range tc.notOut {
+				if strings.Contains(out, unwanted) {
+					t.Errorf("output must not mention %q:\n%s", unwanted, out)
+				}
+			}
+		})
+	}
+}
+
 func TestOSAlreadyCurrent(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -944,7 +1114,7 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			msg, err := evaluateOSUpdateOutcome(tc.resp, tc.rpcErr, tc.preVer, tc.postVer, tc.recordCleared, now)
+			msg, err := evaluateOSUpdateOutcome(tc.resp, tc.rpcErr, tc.preVer, tc.postVer, osBuild{}, tc.recordCleared, now)
 			if tc.wantErr && err == nil {
 				t.Fatalf("error = nil, want non-nil; msg = %q", msg)
 			}
@@ -1067,7 +1237,7 @@ func TestEvaluateOSUpdateOutcomeSinceSameVersionSlotSwitch(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			msg, err := evaluateOSUpdateOutcomeSince(tc.resp, tc.rpcErr, version, version, tc.baseline, now)
+			msg, err := evaluateOSUpdateOutcomeSince(tc.resp, tc.rpcErr, version, version, osBuild{}, tc.baseline, now)
 			if (err == nil) != tc.wantOK || !strings.Contains(strings.ToLower(msg+" "+errorText(err)), strings.ToLower(tc.wantString)) {
 				t.Fatalf("message=%q error=%v; want success=%v and text %q", msg, err, tc.wantOK, tc.wantString)
 			}
