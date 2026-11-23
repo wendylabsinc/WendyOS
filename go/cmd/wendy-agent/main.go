@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
@@ -62,6 +63,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
@@ -390,6 +392,25 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath, timesyncMgr)
+
+	// Access shape of a device that is not enrolled: Open (no trusted-keys
+	// file, today's behaviour) or Closed (only trusted keys get in). Enrolled
+	// devices keep the file unused, so unenrolling returns them to Closed. A
+	// file that cannot be used refuses the start instead of leaving the
+	// device Open.
+	accessKeys, err := trustedkeys.Open(filepath.Join(configPath, trustedkeys.FileName))
+	if err != nil {
+		logger.Fatal("refusing to start: the device access file is unusable; fix it, or remove it to reopen the device", zap.Error(err))
+	}
+	// closedAccess is set once enrollment is known: Closed = not enrolled and
+	// the file present. restartForAccess is set once the agent restart exists;
+	// a change of shape restarts into the new listeners.
+	closedAccess := false
+	var restartForAccess func()
+	accessSvc := services.NewAccessService(logger, accessKeys, func() bool {
+		_, _, _, enrolled := provisioningSvc.ProvisioningInfo()
+		return enrolled
+	}, func() { restartForAccess() })
 	deliveryRegistryAddress, err := accessPolicy.RegistryAddress(os.Getenv("WENDY_REGISTRY_ADDR"))
 	var deliveryPrefix string
 	if err != nil {
@@ -722,7 +743,11 @@ func main() {
 			return
 		}
 
-		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig, registry.WithDeliveryAuthorization(deliverySource, orgMode))
+		options := []registry.Option{registry.WithDeliveryAuthorization(deliverySource, orgMode)}
+		if closedAccess {
+			options = append(options, registry.WithTrustedKeys(accessKeys))
+		}
+		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig, options...)
 		if err != nil {
 			logger.Warn("Failed to start embedded dev registry (image push will be unavailable)", zap.Error(err))
 			return
@@ -971,6 +996,7 @@ func main() {
 		agentpbv2.RegisterWendyAudioServiceServer(srv, audioSvcV2)
 		agentpbv2.RegisterWendyTelemetryServiceServer(srv, telemetrySvcV2)
 		agentpbv2.RegisterDataServiceServer(srv, dataSvc)
+		agentpbv2.RegisterWendyAccessServiceServer(srv, accessSvc)
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyLocalMeshAdminServiceServer(srv, localMeshAdmin)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
@@ -1150,6 +1176,11 @@ func main() {
 		keyData[i] = 0
 	}
 	alreadyProvisioned := certPEM != "" && keyPEM != ""
+	closedAccess = !alreadyProvisioned && accessKeys.Closed()
+	accessShape := configpartition.AccessOpen
+	if closedAccess {
+		accessShape = configpartition.AccessClosed
+	}
 	appUDPMessages := udpmessage.NewManager()
 	defer appUDPMessages.Close()
 	wg.Add(1)
@@ -1158,6 +1189,7 @@ func main() {
 	// An update restarts the agent without the shutdown at the end of main, so
 	// its restart stops Wendy Net itself. Set before any server is serving.
 	agentRestart := newAgentRestart(logger, &localMeshLife)
+	restartForAccess = agentRestart.Schedule
 	agentSvc.SetRestartFunc(agentRestart.Schedule)
 	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
 	var localMeshAppClient *meshsession.Client
@@ -1491,6 +1523,46 @@ func main() {
 		advertiseProvisionedMeshIdentity(logger, mtlsPortNum, provisioningSvc)
 		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 	}
+	// Closed: callers prove a trusted key over TLS on the mTLS port.
+	var closedCertPEM, closedKeyPEM string
+	if closedAccess {
+		closedCertPEM, closedKeyPEM, err = mtls.ClosedServerIdentity(configPath, time.Now())
+		if err != nil {
+			logger.Fatal("refusing to start: cannot make the closed-device TLS identity", zap.Error(err))
+		}
+		tlsConfig, err := mtls.NewTrustedKeyTLSConfig(closedCertPEM, closedKeyPEM, accessKeys, trustedkeys.RoleViewer)
+		if err != nil {
+			logger.Fatal("refusing to start: cannot build the closed-device TLS config", zap.Error(err))
+		}
+		authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedKeyListener, Keys: accessKeys}
+		srv := grpc.NewServer(append(remoteSeenOptions(),
+			grpc.Creds(credentials.NewTLS(tlsConfig)),
+			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
+			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+			grpc.ChainUnaryInterceptor(authz.Unary()),
+			grpc.ChainStreamInterceptor(authz.Stream()),
+			grpc.InitialWindowSize(8*1024*1024),
+			grpc.InitialConnWindowSize(16*1024*1024),
+		)...)
+		registerAuthenticatedServices(srv)
+		mustMapEveryMethod(logger, srv)
+		lis, err := listenForAccess(accessPolicy, strconv.Itoa(mtlsPortNum))
+		if err != nil {
+			logger.Fatal("Failed to listen on the closed-device TLS port", zap.Int("port", mtlsPortNum), zap.Error(err))
+		}
+		mtlsMu.Lock()
+		mtlsServer = srv // stopped at shutdown with the other servers
+		mtlsMu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			logger.Info("closed device: trusted-key TLS server listening",
+				zap.Int("port", mtlsPortNum), zap.Int("keys", len(accessKeys.List())), zap.Bool("keyless_apps", accessKeys.KeylessApps()))
+			if err := srv.Serve(lis); err != nil {
+				logger.Error("closed-device TLS server error", zap.Error(err))
+			}
+		}()
+	}
 
 	// Advertise the device's Ethernet addresses so hosts can prefer the cable.
 	wg.Add(1)
@@ -1502,9 +1574,18 @@ func main() {
 	// Start the embedded dev container registry (Linux only, best-effort).
 	// If already provisioned, start immediately with HTTPS; otherwise HTTP until provisioned.
 	if runtime.GOOS == "linux" && ctrdErr == nil {
-		if alreadyProvisioned {
+		switch {
+		case alreadyProvisioned:
 			startRegistry(registryTLSConfig(certPEM, chainPEM, keyPEM))
-		} else {
+		case closedAccess && !accessKeys.KeylessApps():
+			// Pushes need a trusted key with the operator role.
+			if cfg, err := mtls.NewTrustedKeyTLSConfig(closedCertPEM, closedKeyPEM, accessKeys, trustedkeys.RoleOperator); err != nil {
+				logger.Error("Failed to build the closed-device registry TLS config", zap.Error(err))
+			} else {
+				startRegistry(cfg)
+			}
+		default:
+			// Open, or Closed with the keyless apps set on.
 			startRegistry(nil)
 		}
 	}
@@ -1515,7 +1596,14 @@ func main() {
 	// remains active for on-device containers with the admin entitlement.
 	var agentServer *grpc.Server
 	if !alreadyProvisioned {
-		agentServer = grpc.NewServer(append(remoteSeenOptions(),
+		// Closed: the plaintext port answers GetAccess, and the keyless apps
+		// set when the owner switched it on; everything else is refused.
+		plainOpts := remoteSeenOptions()
+		if closedAccess {
+			authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedKeylessListener, Keys: accessKeys}
+			plainOpts = append(plainOpts, grpc.ChainUnaryInterceptor(authz.Unary()), grpc.ChainStreamInterceptor(authz.Stream()))
+		}
+		agentServer = grpc.NewServer(append(plainOpts,
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 			grpc.InitialWindowSize(8*1024*1024),
@@ -1531,6 +1619,9 @@ func main() {
 			}),
 		)...)
 		registerAllServices(agentServer)
+		if closedAccess {
+			mustMapEveryMethod(logger, agentServer)
+		}
 
 		agentLis, err := listenForAccess(accessPolicy, agentPort)
 		if err != nil {
@@ -1541,7 +1632,7 @@ func main() {
 		// binding the setup listener, including when stored enrollment has
 		// lost its key or certificate. This only changes discovery metadata;
 		// the enrollment record is retained for recovery.
-		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)
+		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum, accessShape)
 
 		wg.Add(1)
 		go func() {
@@ -1587,15 +1678,25 @@ func main() {
 				}
 			}()
 		}
-		localSocketServer = grpc.NewServer(
+		// Closed: admin-entitled apps act as operator, so an app cannot manage
+		// keys, change the shape or enroll the device.
+		var socketOpts []grpc.ServerOption
+		if closedAccess {
+			authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedAdminSocket, Keys: accessKeys}
+			socketOpts = append(socketOpts, grpc.ChainUnaryInterceptor(authz.Unary()), grpc.ChainStreamInterceptor(authz.Stream()))
+		}
+		localSocketServer = grpc.NewServer(append(socketOpts,
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
-		)
+		)...)
 		registerAllServices(localSocketServer)
 		// Generic samples are available only to explicitly trusted local apps.
 		agentpbv2.RegisterWendySensorServiceServer(localSocketServer, genericSensorFeed)
 		agentpbv2.RegisterWendyUnitreeServiceServer(localSocketServer, unitreeSvc)
 		agentpbv2.RegisterWendyUnitreeRobotServiceServer(localSocketServer, unitreeRobotSvc)
+		if closedAccess {
+			mustMapEveryMethod(logger, localSocketServer)
+		}
 
 		// oci.AdminAgentSocketHostPath is the single source of truth for this
 		// path: the admin entitlement bind-mounts its parent directory into
@@ -1634,6 +1735,13 @@ func main() {
 			}
 		}()
 		keyPEM := string(keyData)
+		if closedAccess {
+			// The closed-device TLS server holds the mTLS port. Restart into
+			// the Enrolled shape after the enrollment RPC has answered.
+			logger.Info("Closed device enrolled; restarting agent into the enrolled shape")
+			agentRestart.Schedule()
+			return
+		}
 		cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
 		if activeProvisioningIdentity.Changed(certPEM, chainPEM, keyPEM, orgID, assetID) {
 			// The persisted identity is already durable. Let the provisioning RPC
@@ -1731,7 +1839,13 @@ func main() {
 		return errors.Join(deliveryErr, meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
 	}
 	provisioningSvc.OnUnprovisioned = func() {
-		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)
+		// The keys file outlives enrollment: a device closed before it was
+		// enrolled is Closed again.
+		unenrolledShape := configpartition.AccessOpen
+		if accessKeys.Closed() {
+			unenrolledShape = configpartition.AccessClosed
+		}
+		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum, unenrolledShape)
 		logger.Info("Device unprovisioned — restarting agent into unprovisioned mode")
 		os.Exit(0)
 	}
@@ -1746,7 +1860,9 @@ func main() {
 		agentRestart.Schedule()
 	})
 
-	if accessPolicy.AllowsNetwork {
+	// BLE setup (Wi-Fi and enrollment without any key) stays off on a Closed
+	// device: enrolling it is the owner's decision.
+	if accessPolicy.AllowsNetwork && !closedAccess {
 		go bluetooth.StartBLESetup(ctx, logger, bluetooth.NewSetupDispatcher(provisioningSvcV2, networkMgr))
 	}
 
@@ -2265,5 +2381,14 @@ func remoteSeenOptions() []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(interceptor.UnaryRemoteSeen(supervisor.RemoteSeenDir)),
 		grpc.ChainStreamInterceptor(interceptor.StreamRemoteSeen(supervisor.RemoteSeenDir)),
+	}
+}
+
+// mustMapEveryMethod refuses to start a Closed device listener that serves a
+// call without a role: it would be denied to everyone, so it is a missing
+// role decision, not a working call.
+func mustMapEveryMethod(logger *zap.Logger, srv *grpc.Server) {
+	if unmapped := interceptor.Unmapped(srv); len(unmapped) > 0 {
+		logger.Fatal("refusing to start: agent calls without a role in the access table", zap.Strings("methods", unmapped))
 	}
 }
