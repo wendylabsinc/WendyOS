@@ -164,7 +164,6 @@ private fun SitesHome(model: WendyModel, store: SitesStore, alert: (String) -> U
                             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreHoriz, "Options for ${link.name}") }
                             DropdownMenu(menu, onDismissRequest = { menu = false }) {
                                 DropdownMenuItem(text = { Text("Rename") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) }, onClick = { menu = false; renaming = true })
-                                DropdownMenuItem(text = { Text("Save to device") }, leadingIcon = { Icon(Icons.Outlined.Upload, null) }, onClick = { menu = false; nav.push("Save to device") { SiteDeviceModelsPage(model, store, site.id, link) } })
                                 DropdownMenuItem(text = { Text("Make default") }, leadingIcon = { Icon(Icons.Outlined.Check, null) }, onClick = { menu = false; perform { store.setDefault(link.id, site.id) } })
                             }
                         }
@@ -175,8 +174,6 @@ private fun SitesHome(model: WendyModel, store: SitesStore, alert: (String) -> U
                     LensDivider()
                 }
                 LensRow("Add a 3D model", "", Icons.Outlined.Add) { nav.push("Add a 3D model") { AddSiteModelPage(store, site.id) } }
-                LensDivider()
-                LensRow("Load from device", "", Icons.Outlined.Download) { nav.push("Load from device") { SiteDeviceModelsPage(model, store, site.id, null) } }
             }
         }
         site.primaryModel?.let { link -> item(key = "live") { SiteLiveCameras(model, store, site, link) } }
@@ -378,90 +375,6 @@ internal fun readBounded(input: java.io.InputStream, limit: Long): ByteArray {
     return out.toByteArray()
 }
 
-/** Saved site models on a device: save this model there, or load one into the site (iOS MobileSiteDeviceModels). */
-@Composable
-private fun SiteDeviceModelsPage(model: WendyModel, store: SitesStore, siteID: String, saving: SiteModelLink?) {
-    val nav = LocalNavigator.current
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var device by remember { mutableStateOf<Device?>(null) }
-    var session by remember { mutableLongStateOf(0L) }
-    var remote by remember { mutableStateOf(emptyList<org.json.JSONObject>()) }
-    var busy by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var search by remember { mutableStateOf("") }
-    val account = model.account; val organization = model.organization
-    fun online(d: Device) = siteStatus(model, d) in setOf("Online", "Connected", "Nearby")
-    fun connect(target: Device) {
-        device = target; busy = true; error = null; message = null; session = 0; remote = emptyList()
-        scope.launch {
-            try {
-                if (!model.connectAndWait(target)) { error = model.detailError ?: "Could not connect to this device."; return@launch }
-                val captured = model.session
-                val values = model.backend.call("SiteModels", captured, "list", "", "", "").items()
-                if (model.session == captured && account == model.account && organization == model.organization) { remote = values; session = captured }
-            } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { busy = false }
-        }
-    }
-    fun transfer(item: org.json.JSONObject?) {
-        val target = device
-        if (session == 0L || model.session != session || target == null) { error = "Reconnect to the device and try again."; return }
-        busy = true; error = null
-        scope.launch {
-            val file = File(context.cacheDir, UUID.randomUUID().toString() + ".wendysite")
-            try {
-                if (saving != null) {
-                    withContext(Dispatchers.IO) { file.writeBytes(store.models.archive(saving.id).data()) }
-                    model.backend.call("SiteModels", session, "save", file.absolutePath, saving.name, "")
-                    if (account == model.account && organization == model.organization) message = "Saved to ${target.title}"
-                } else if (item != null) {
-                    model.backend.call("SiteModels", session, "load", file.absolutePath, "", item.text("id"))
-                    val bytes = withContext(Dispatchers.IO) { file.readBytes() }
-                    if (account != model.account || organization != model.organization) return@launch
-                    withContext(Dispatchers.Default) { store.addModel(item.text("name").ifEmpty { "3D model" }, bytes, siteID) }
-                    nav.pop()
-                }
-            } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { file.delete(); busy = false }
-        }
-    }
-    val devices = (model.nearbyDevices + model.cloudDevices).distinctBy { recordingDeviceID(it) }.filter { search.isBlank() || it.title.contains(search.trim(), true) }
-        .sortedWith(compareByDescending<Device> { online(it) }.thenBy { it.title.lowercase() })
-    PageColumn(Modifier.background(sitesBackground)) {
-        val chosen = device
-        if (chosen != null) {
-            formSection("Device") {
-                LabeledRow(chosen.title, if (session == 0L) "Connecting" else "Connected")
-                ActionRow("Change device", enabled = !busy) { device = null; session = 0; remote = emptyList(); error = null }
-            }
-            if (saving != null) formSection(footer = "Saves the 3D model, placements and scan references. The copy on your phone is kept.") {
-                ActionRow("Save model to device", Icons.Outlined.Upload, enabled = !busy && session != 0L && message == null) { transfer(null) }
-            } else if (session != 0L) formSection("Saved models") {
-                remote.forEach { item ->
-                    Column(Modifier.fillMaxWidth().clickable(enabled = !busy) { transfer(item) }.padding(vertical = 8.dp)) {
-                        Text(item.text("name").ifEmpty { "3D model" }); SecondaryText(formatBytes(item.number("size")))
-                    }
-                }
-                if (remote.isEmpty() && !busy && error == null) SecondaryText("No models saved on this device")
-                ActionRow("Refresh", enabled = !busy) { connect(chosen) }
-            }
-        } else {
-            item { OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth(), placeholder = { Text("Search devices") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, singleLine = true) }
-            formSection("Choose a device") {
-                devices.forEach { item ->
-                    Row(Modifier.fillMaxWidth().clickable(enabled = online(item) && !busy) { connect(item) }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(8.dp).background(if (online(item)) LensStyle.green else LensStyle.offline, CircleShape))
-                        Column { Text(item.title); SecondaryText(siteStatus(model, item)) }
-                    }
-                }
-            }
-        }
-        if (busy) item { LoadingRow(if (saving == null) "Loading models…" else "Preparing or saving model…") }
-        message?.let { item { Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { Icon(Icons.Outlined.CheckCircle, null, tint = LensStyle.accent); Text(it, color = LensStyle.accent) } } }
-        error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
-    }
-}
-
 /** Loads one saved model's geometry for the viewer and placement pages. */
 @Composable
 internal fun rememberSiteModel(store: SiteModelStore, modelID: String, refresh: Int = 0): Triple<StoredSite?, SiteGeometry?, String?> {
@@ -508,9 +421,6 @@ private fun SiteModelViewer(model: WendyModel, store: SitesStore, siteID: String
                 error != null -> EmptyMessage("Model unavailable", error, Icons.Outlined.ViewInAr)
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LensLoading("Loading model…") }
             }
-        }
-        Surface(color = MaterialTheme.colorScheme.surface) {
-            LensButton("Save to device", primary = true, enabled = saved != null, modifier = Modifier.fillMaxWidth().padding(16.dp)) { nav.push("Save to device") { SiteDeviceModelsPage(model, store, siteID, link) } }
         }
     }
 }
