@@ -12,7 +12,9 @@ import (
 )
 
 const (
-	appTunnelSetupTimeout = 10 * time.Second
+	// Leave time for direct PKI renewal, OAuth reissuance and discovery.
+	// OpenApp still bounds its own wait to ten seconds.
+	appTunnelSetupTimeout = time.Minute
 	appTunnelRetryDelay   = 5 * time.Second
 )
 
