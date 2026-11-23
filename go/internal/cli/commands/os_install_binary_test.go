@@ -214,7 +214,7 @@ func TestSeedAgentFollowsTheImage(t *testing.T) {
 	t.Cleanup(func() { seedArtifactFn = orig })
 	var gotOS, gotArch string
 	var gotNightly bool
-	seedArtifactFn = func(osName, arch string, nightly bool) ([]byte, string, string, error) {
+	seedArtifactFn = func(_ context.Context, osName, arch string, nightly bool) ([]byte, string, string, error) {
 		gotOS, gotArch, gotNightly = osName, arch, nightly
 		return []byte("agent"), "2026.11.05-114424", "gcs", nil
 	}
@@ -235,7 +235,7 @@ func TestResolveSeedAgentDownloadsTheImagesChannel(t *testing.T) {
 	orig := seedArtifactFn
 	t.Cleanup(func() { seedArtifactFn = orig })
 	var asked bool
-	seedArtifactFn = func(_, arch string, nightly bool) ([]byte, string, string, error) {
+	seedArtifactFn = func(_ context.Context, _, arch string, nightly bool) ([]byte, string, string, error) {
 		asked = nightly && arch == "arm64"
 		return []byte("agent"), "2026.11.05-114424", "gcs", nil
 	}

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -34,6 +35,7 @@ func TestDriverUploadOverIsolatedConnection(t *testing.T) {
 	digest := sha256.Sum256(payload)
 	for _, stage := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stage=%v", stage), func(t *testing.T) {
+			refuseTransferDeadlines(t) // the stage deadline is for the device's part
 			dir := t.TempDir()
 			t.Setenv("TMPDIR", dir)
 			requests := 0
@@ -105,6 +107,7 @@ func TestDriverUploadKeepsDirectDownloadForNetworkedDevice(t *testing.T) {
 func TestDriverUploadDownloadFailuresDoNotInstall(t *testing.T) {
 	for _, failure := range []string{"missing digest", "checksum", "HTTP", "truncated", "cancelled"} {
 		t.Run(failure, func(t *testing.T) {
+			useTestDownloadPolicy(t, 200*time.Millisecond) // a truncated body is retried before it fails
 			dir := t.TempDir()
 			t.Setenv("TMPDIR", dir)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

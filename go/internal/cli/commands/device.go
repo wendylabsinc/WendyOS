@@ -2328,20 +2328,14 @@ func fetchAgentRelease(nightly bool) (*githubReleaseFull, error) {
 // downloadReleaseAssetBytes downloads asset and returns its raw bytes,
 // unmodified. Callers that need the extracted linux ELF (rather than the raw
 // tarball) call extractAgentFromTarGz on the result themselves.
-func downloadReleaseAssetBytes(asset githubReleaseAsset) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
-
-	resp, err := client.Get(asset.BrowserDownloadURL)
-	if err != nil {
+// The transfer has no deadline: it follows imageDownloadPolicy, like an OS
+// image. Every attempt asks GitHub again, so it gets a fresh CDN URL.
+func downloadReleaseAssetBytes(ctx context.Context, asset githubReleaseAsset) ([]byte, error) {
+	var raw downloadBuffer
+	if err := downloadResumable(ctx, asset.BrowserDownloadURL, &raw, 0, nil); err != nil {
 		return nil, fmt.Errorf("downloading asset: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
+	return raw, nil
 }
 
 // reconnectAgentAfterRestart re-establishes a connection to the SAME device
@@ -2790,7 +2784,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 						fmt.Println(tui.InfoMessage(fmt.Sprintf("Fetching latest %s agent for %s...", releaseType, agentPlatformLabel(osName, arch))))
 					}
 					var actualAgentVersion string
-					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(osName, arch, nightly)
+					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(ctx, osName, arch, nightly)
 					if err != nil {
 						return fmt.Errorf("resolving agent binary: %w", err)
 					}

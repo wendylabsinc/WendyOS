@@ -3350,7 +3350,7 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 		return "", fmt.Errorf("device did not report CPU architecture")
 	}
 	fmt.Fprintf(terminaloutput.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
-	binaryData, resolvedVer, source, err := resolveAgentArtifact(osName, arch, nightly)
+	binaryData, resolvedVer, source, err := resolveAgentArtifact(ctx, osName, arch, nightly)
 	if err != nil {
 		return "", fmt.Errorf("resolving agent binary: %w", err)
 	}

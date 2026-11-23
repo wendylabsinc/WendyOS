@@ -1239,7 +1239,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 		}
 		osName := versionResp.GetOs()
 
-		binaryData, actualVer, _, err := resolveAgentArtifact(osName, arch, false)
+		binaryData, actualVer, _, err := resolveAgentArtifact(ctx, osName, arch, false)
 		if err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent binary: %w", err)}

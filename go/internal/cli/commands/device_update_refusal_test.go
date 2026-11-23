@@ -108,7 +108,7 @@ func runDeviceUpdate(t *testing.T, agent *refusingAgent, json bool, args ...stri
 		return &SelectedDevice{Agent: c}, nil
 	}
 	resolveAgentVersionFn = func(bool) (string, string, error) { return refusalRelease, "test", nil }
-	resolveAgentArtifactFn = func(string, string, bool) ([]byte, string, string, error) {
+	resolveAgentArtifactFn = func(context.Context, string, string, bool) ([]byte, string, string, error) {
 		return []byte("release agent"), refusalRelease, "test", nil
 	}
 	var run deviceUpdateRun

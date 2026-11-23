@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -62,7 +63,7 @@ func TestResolveFirmware_CacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := resolveFirmware(asset)
+	got, err := resolveFirmware(context.Background(), asset)
 	if err != nil {
 		t.Fatalf("resolveFirmware: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestDownloadFirmwareInto(t *testing.T) {
 
 	dir := t.TempDir()
 	var lastDownloaded, lastTotal int64
-	path, err := downloadFirmwareInto(asset, dir, func(downloaded, total int64) {
+	path, err := downloadFirmwareInto(context.Background(), asset, dir, func(downloaded, total int64) {
 		lastDownloaded, lastTotal = downloaded, total
 	})
 	if err != nil {
