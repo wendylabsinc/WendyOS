@@ -112,6 +112,54 @@ func TestDiscoverModel_UpdateReturnsDelayedCmd(t *testing.T) {
 	}
 }
 
+func TestDiscoverRefreshKeepsSelectedDeviceWhenRowsMove(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.LANDevices = []models.LANDevice{
+		{ID: "first", DisplayName: "Robot", Hostname: "first.local"},
+		{ID: "selected", DisplayName: "Robot", Hostname: "selected.local"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+
+	m.collection.LANDevices = append(m.collection.LANDevices,
+		models.LANDevice{ID: "new", DisplayName: "Alpha", Hostname: "alpha.local"})
+	m.refreshTable()
+
+	if cursor := m.table.Cursor(); cursor != 2 || m.tableItems[cursor].lanKey != "selected" {
+		t.Fatalf("cursor = %d, want the selected device at row 2", cursor)
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceWhenMarkerColumnChanges(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.USBDevices = []models.USBDevice{
+		{DisplayName: "First", SerialNumber: "first", USBVersion: "3.0"},
+		{DisplayName: "Selected", SerialNumber: "selected", USBVersion: "3.0"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+	columnsWithoutMarker := len(m.table.Columns())
+
+	m.collection.LANDevices = []models.LANDevice{{ID: "lan", DisplayName: "LAN", Hostname: "lan.local", IsMTLS: true}}
+	m.refreshTable()
+	if columns := len(m.table.Columns()); columns != columnsWithoutMarker+1 {
+		t.Fatalf("columns = %d, want a marker column added to %d columns", columns, columnsWithoutMarker)
+	}
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].info.Name != "Selected" {
+		t.Errorf("cursor = %d, want the selected USB device at row 1 after the marker appeared", cursor)
+	}
+
+	m.table.SetCursor(1)
+	m.collection.LANDevices = nil
+	m.refreshTable()
+	if columns := len(m.table.Columns()); columns != columnsWithoutMarker {
+		t.Fatalf("columns = %d, want %d after the marker disappeared", columns, columnsWithoutMarker)
+	}
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].info.Name != "Selected" {
+		t.Errorf("cursor = %d, want the selected USB device at row 1 after the marker disappeared", cursor)
+	}
+}
+
 func TestDiscoverModel_UpdateRampsRescanIntervals(t *testing.T) {
 	t.Setenv("WENDY_DISCOVER_USB_INTERVAL", "3s")
 

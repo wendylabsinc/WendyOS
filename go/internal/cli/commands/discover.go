@@ -517,9 +517,10 @@ type discoverDeviceInfo struct {
 }
 
 type discoverTableItem struct {
-	picker  tui.PickerItem
-	info    discoverDeviceInfo
-	lanName string
+	picker       tui.PickerItem
+	info         discoverDeviceInfo
+	selectionKey string
+	lanName      string
 	// lanKey is discoverycache.Key(ID, DisplayName) for this row's LAN
 	// device — the same identity upsertLANDevice merges rows by. It is the
 	// map key into m.probe, kept distinct from lanName (which stays a plain
@@ -1115,6 +1116,14 @@ func (m discoverModel) bleWarningLine() string {
 }
 
 func (m *discoverModel) refreshTable() {
+	previousCursor := m.table.Cursor()
+	var selectedKey string
+	if previousCursor >= 0 && previousCursor < len(m.tableItems) {
+		key := m.tableItems[previousCursor].selectionKey
+		if discoverRowIndex(m.tableItems, key) == previousCursor {
+			selectedKey = key
+		}
+	}
 	m.tableItems = discoverTableItems(m.collection)
 	// Stamp each LAN row with its probe state (and the current spinner frame
 	// while connecting) so the Agent/OS columns animate / show the error glyph.
@@ -1140,8 +1149,14 @@ func (m *discoverModel) refreshTable() {
 	}
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
-	if len(rows) > 0 && m.table.Cursor() < 0 {
-		m.table.SetCursor(0)
+	if len(rows) > 0 {
+		cursor := discoverRowIndex(m.tableItems, selectedKey)
+		if cursor < 0 {
+			cursor = min(max(previousCursor, 0), len(rows)-1)
+		}
+		if cursor != m.table.Cursor() {
+			m.table.SetCursor(cursor)
+		}
 	}
 	m.table.SetWidth(tui.PickerTableWidth(m.table.Columns()))
 	height := m.windowHeight
@@ -1149,6 +1164,23 @@ func (m *discoverModel) refreshTable() {
 		height = max(1, height-tui.PickerHintHeight(pickerItems, m.windowWidth, "  ⚠  "))
 	}
 	m.table.SetHeight(tui.PickerTableHeight(len(rows), height))
+}
+
+// An absent or ambiguous identity falls back to the previous row position.
+func discoverRowIndex(items []discoverTableItem, key string) int {
+	if key == "" {
+		return -1
+	}
+	found := -1
+	for i, item := range items {
+		if item.selectionKey == key {
+			if found >= 0 {
+				return -1
+			}
+			found = i
+		}
+	}
+	return found
 }
 
 // selectedHint returns the hint for the highlighted table row, e.g. the
@@ -1555,7 +1587,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			continue
 		}
 		deviceType := "USB"
+		var selectionKey string
+		if d.SerialNumber != "" {
+			selectionKey = "usb-serial:" + d.VendorID + ":" + d.ProductID + ":" + d.SerialNumber
+		} else if d.NetworkInterface != "" {
+			selectionKey = "usb-interface:" + d.NetworkInterface
+		}
 		items = append(items, discoverTableItem{
+			selectionKey: selectionKey,
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1607,6 +1646,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			probe = tui.ProbeFailed
 		}
 		items = append(items, discoverTableItem{
+			selectionKey: discoverMergedSelectionKey(d, lanKey),
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1642,6 +1682,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		const deviceType = "Simulator"
 		address := preferredLANAddress(d)
 		items = append(items, discoverTableItem{
+			selectionKey: "simulator:" + d.ID,
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1669,6 +1710,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		addr := externalProviderAddress(d.ProviderKey, d.ID)
 		deviceType := externalProviderDisplayName(d.ProviderKey)
 		items = append(items, discoverTableItem{
+			selectionKey: "provider:" + d.ProviderKey + ":" + d.ID,
 			picker: tui.PickerItem{
 				Name:    discovery.SanitiseDisplayName(d.DisplayName),
 				Type:    deviceType,
@@ -1695,6 +1737,28 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 	})
 
 	return items
+}
+
+func discoverMergedSelectionKey(device models.DiscoveredDevice, lanKey string) string {
+	switch {
+	case lanKey != "":
+		return "lan:" + lanKey
+	case len(device.Externals) > 0:
+		// Merged provider rows are Wendy Lite boards. Use the same identity
+		// that groups their USB, LAN and BLE sightings.
+		external := device.Externals[0]
+		if id := external.LiteDedupID(); id != "" {
+			return "lite:" + id
+		}
+		return "lite-connection:" + external.ID
+	case device.Mesh != nil:
+		return "mesh:" + device.Mesh.Principal
+	case device.Bluetooth != nil:
+		if id := firstNonEmpty(device.Bluetooth.ID, device.Bluetooth.Address); id != "" {
+			return "ble:" + id
+		}
+	}
+	return ""
 }
 
 func discoverPickerItems(items []discoverTableItem) []tui.PickerItem {
