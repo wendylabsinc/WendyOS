@@ -33,7 +33,8 @@ func appTunnelTestConnection(t *testing.T, expiry time.Time) *grpcclient.AgentCo
 }
 
 func TestAppTunnelRenewsOnceForConcurrentThermalRequests(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	type scopeKey struct{}
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), scopeKey{}, "original"))
 	defer cancel()
 	old := appTunnelTestConnection(t, time.Now().Add(-time.Hour))
 	var stale, refresh, fresh atomic.Int32
@@ -41,8 +42,11 @@ func TestAppTunnelRenewsOnceForConcurrentThermalRequests(t *testing.T) {
 	next := appTunnelTestConnection(t, time.Now().Add(time.Hour))
 	next.RegistryDialer = func(context.Context, int) (net.Conn, error) { fresh.Add(1); return nil, nil }
 	dial := renewingAppTunnel(ctx, "cloud://same-device", old, func(c context.Context, s string) (*grpcclient.AgentConnection, error) {
-		if c != ctx || s != "cloud://same-device" {
+		if c.Value(scopeKey{}) != "original" || s != "cloud://same-device" {
 			t.Error("lost original scope or device")
+		}
+		if deadline, ok := c.Deadline(); !ok || time.Until(deadline) > appTunnelSetupTimeout {
+			t.Error("renewal setup is missing a bounded deadline")
 		}
 		refresh.Add(1)
 		return next, nil
@@ -108,5 +112,55 @@ func TestAppTunnelCertificateDueWithTrailingDER(t *testing.T) {
 	conn.CertInfo.PemCertificate = string(pem.EncodeToMemory(block))
 	if !appTunnelCertificateDue(conn, now) {
 		t.Fatal("missed expiry on a stored leaf with trailing ASN.1 data")
+	}
+}
+
+func TestAppTunnelCanceledWaiterLeavesSharedRenewalRunning(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	old := appTunnelTestConnection(t, time.Now().Add(-time.Hour))
+	next := appTunnelTestConnection(t, time.Now().Add(time.Hour))
+	next.RegistryDialer = func(context.Context, int) (net.Conn, error) { return nil, nil }
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var attempts atomic.Int32
+	dial := renewingAppTunnel(ctx, "cloud://same-device", old, func(setup context.Context, _ string) (*grpcclient.AgentConnection, error) {
+		if attempts.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-setup.Done():
+			return nil, setup.Err()
+		case <-release:
+			return next, nil
+		}
+	})
+	request, stop := context.WithCancel(ctx)
+	defer stop()
+	first := make(chan error, 1)
+	go func() {
+		_, err := dial(request, 18842)
+		first <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("renewal did not start")
+	}
+	stop()
+	select {
+	case err := <-first:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled waiter returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled waiter blocked on shared renewal")
+	}
+	close(release)
+	if _, err := dial(ctx, 18842); err != nil {
+		t.Fatal(err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("made %d attempts, want one shared renewal", got)
 	}
 }
