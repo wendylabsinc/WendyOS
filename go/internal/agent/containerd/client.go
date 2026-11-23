@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"io"
 	"net"
 	"net/netip"
@@ -1571,6 +1572,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 
+	if err := keylessEntitlementError(ctx, &entCfg); err != nil {
+		return err
+	}
 	if err := localoci.ApplyEntitlements(spec, &entCfg, opts); err != nil {
 		return fmt.Errorf("applying entitlements: %w", err)
 	}
@@ -6108,4 +6112,20 @@ func ensureDataSockets(provider AppDataSocketProvider, appID, service string, en
 		return "", fmt.Errorf("agent does not support recording streams")
 	}
 	return p.EnsureStreams(appID, service, streams)
+}
+
+// keylessEntitlementError refuses, for an app deployed without a key on a
+// Closed device, the entitlements that would hand it more than the keyless
+// set: admin mounts the agent's local socket and build is
+// privileged-equivalent.
+func keylessEntitlementError(ctx context.Context, cfg *appconfig.AppConfig) error {
+	if !trustedkeys.Keyless(ctx) {
+		return nil
+	}
+	for _, e := range []string{appconfig.EntitlementAdmin, appconfig.EntitlementBuild} {
+		if cfg.HasEntitlement(e) {
+			return fmt.Errorf("apps deployed without a key cannot use the %s entitlement; remove it from wendy.json or deploy with a trusted key", e)
+		}
+	}
+	return nil
 }

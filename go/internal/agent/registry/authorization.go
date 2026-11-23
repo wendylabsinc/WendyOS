@@ -11,6 +11,7 @@ import (
 	digest "github.com/opencontainers/go-digest"
 	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/shared/builddelivery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"google.golang.org/grpc/credentials"
@@ -386,4 +387,31 @@ func newAuthorizedRegistry(backend ociregistry.Interface) ociregistry.Interface 
 		return backend.PushManifest(ctx, repo, tag, data, kind)
 	}
 	return f
+}
+
+// trustedKeyMiddleware admits a Closed device's pushes: over TLS a key with
+// the operator role or higher, checked per request so a removed key stops at
+// once; over plain HTTP only while the owner has the keyless apps set on.
+func trustedKeyMiddleware(keys *trustedkeys.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS == nil {
+				if !keys.KeylessApps() {
+					_ = ociregistry.WriteError(w, ociregistry.ErrUnauthorized)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+			if len(r.TLS.PeerCertificates) == 0 {
+				_ = ociregistry.WriteError(w, ociregistry.ErrUnauthorized)
+				return
+			}
+			if role, _ := keys.Lookup(r.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo); role < trustedkeys.RoleOperator {
+				_ = ociregistry.WriteError(w, ociregistry.ErrDenied)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
