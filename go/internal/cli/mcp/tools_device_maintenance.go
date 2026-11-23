@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,10 +28,10 @@ func (s *mcpServer) registerDeviceMaintenanceTools(srv *server.MCPServer) {
 	logs = append(logs, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("device_os_logs", logs...), s.handleDeviceOSLogs)
 	update := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Update only the connected device's agent, then verify its running version or hash and reconnect. May interrupt the agent connection. OS updates are separate."),
+		mcpgo.WithDescription("Update only the connected device's agent, then verify its running version or hash and reconnect. On a device with the agent supervisor it also waits for the supervisor to approve or reject the new agent (usually about 15 seconds, at most about 7 minutes). May interrupt the agent connection. OS updates are separate."),
 		mcpgo.WithBoolean("nightly", mcpgo.DefaultBool(false)),
 		mcpgo.WithString("binary_path", mcpgo.Description("Optional local agent binary or macOS agent bundle; otherwise download the release")),
-		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300)),
+		mcpgo.WithInteger("timeout_seconds", mcpgo.Description("Covers the download, the upload and the device's verdict; pass 600 to also wait out a hung new agent's rejection"), mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300)),
 	}
 	update = append(update, destructive()...)
 	update = append(update, openWorld()...)
@@ -172,7 +173,11 @@ func (s *mcpServer) handleDeviceUpdateAgent(ctx context.Context, req mcpgo.CallT
 	output, truncated, runErr := runner(updateCtx, args, target, 16384)
 	result := map[string]any{"target": target, "os_update": "not_requested", "output_truncated": truncated}
 	response, parseErr := parseAgentUpdateResult(output)
-	if runErr != nil || updateCtx.Err() != nil || parseErr != nil {
+	var rejected *agentUpdateRejected
+	if errors.As(parseErr, &rejected) {
+		// The device's agent supervisor refused the new agent and fell back.
+		result["status"], result["version"], result["message"] = "rejected", rejected.version, rejected.message
+	} else if runErr != nil || updateCtx.Err() != nil || parseErr != nil {
 		result["status"], result["output"] = "unconfirmed", strings.TrimSpace(output)
 		result["error_code"] = string(errCodeInternal)
 		if updateCtx.Err() != nil {
@@ -231,12 +236,24 @@ func (s *mcpServer) handleDeviceUpdateAgent(ctx context.Context, req mcpgo.CallT
 
 type agentUpdateResult struct{ Status, Version, Message string }
 
+// agentUpdateRejected is the CLI's "rejected" object: the device's agent
+// supervisor refused the new agent and went back to the previous one.
+type agentUpdateRejected struct{ message, version string }
+
+func (e *agentUpdateRejected) Error() string { return e.message }
+
 func parseAgentUpdateResult(output string) (*agentUpdateResult, error) {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		var result agentUpdateResult
-		if json.Unmarshal([]byte(lines[i]), &result) == nil && (result.Status == "success" || result.Status == "up-to-date") {
+		if json.Unmarshal([]byte(lines[i]), &result) != nil {
+			continue
+		}
+		switch result.Status {
+		case "success", "up-to-date":
 			return &result, nil
+		case "rejected":
+			return nil, &agentUpdateRejected{message: result.Message, version: result.Version}
 		}
 	}
 	return nil, fmt.Errorf("agent updater returned no verified result")

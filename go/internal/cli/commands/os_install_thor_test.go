@@ -46,12 +46,12 @@ func TestPackagedUdevRulesAndPlugdevGroup(t *testing.T) {
 	}
 }
 
-// The Linux access message is one sentence with one next step, and never asks
-// the user to create a group or write a rule.
-func TestLinuxUSBAccessStep(t *testing.T) {
+// The Linux access remedy still never asks the user to create a group or write
+// a rule; only its prose and command placement change.
+func TestLinuxUSBAccessHint(t *testing.T) {
 	for _, packaged := range []bool{true, false} {
-		got := linuxUSBAccessStep("Jetson", packaged)
-		for _, bad := range []string{"groupadd", "udev", "tee", "\n"} {
+		got, _ := linuxUSBAccessHint("Jetson", packaged)
+		for _, bad := range []string{"groupadd", "udev", "tee"} {
 			if strings.Contains(got, bad) {
 				t.Errorf("packaged=%v: must not contain %q: %q", packaged, bad, got)
 			}
@@ -60,10 +60,10 @@ func TestLinuxUSBAccessStep(t *testing.T) {
 			t.Errorf("packaged=%v: should offer sudo: %q", packaged, got)
 		}
 	}
-	if got := linuxUSBAccessStep("Jetson", true); !strings.Contains(got, "usermod -aG plugdev $USER") {
+	if _, got := linuxUSBAccessHint("Jetson", true); !strings.Contains(got, "usermod -aG plugdev $USER") {
 		t.Errorf("packaged: should say how to join plugdev: %q", got)
 	}
-	if got := linuxUSBAccessStep("Jetson", false); !strings.Contains(got, cliupdate.InstallCommand("linux")) {
+	if _, got := linuxUSBAccessHint("Jetson", false); !strings.Contains(got, cliupdate.InstallCommand("linux")) {
 		t.Errorf("unpackaged: should say how to install the package: %q", got)
 	}
 }
@@ -72,7 +72,7 @@ func TestUsbAccessHintLines(t *testing.T) {
 	// macOS: a claim-time seize denial. The device enumerated, so the guidance must
 	// point at the two fixes that work — running as root and re-entering recovery —
 	// not the Linux udev rule.
-	mac := strings.ToLower(strings.Join(usbAccessHintLines("darwin"), "\n"))
+	mac := strings.ToLower(strings.Join(usbAccessHintLines("darwin", false), "\n"))
 	if !strings.Contains(mac, "sudo") {
 		t.Errorf("darwin hint should mention sudo, got:\n%s", mac)
 	}
@@ -83,8 +83,8 @@ func TestUsbAccessHintLines(t *testing.T) {
 		t.Errorf("darwin hint should not mention Linux udev rules, got:\n%s", mac)
 	}
 
-	lin := strings.Join(usbAccessHintLines("linux"), "\n")
-	if want := linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")); !strings.Contains(lin, want) {
+	lin := strings.Join(usbAccessHintLines("linux", wendyPackagedRule("70-wendy-jetson.rules")), "\n")
+	if want, _ := linuxUSBAccessHint("Jetson", wendyPackagedRule("70-wendy-jetson.rules")); !strings.Contains(lin, want) {
 		t.Errorf("linux hint should be the one-sentence step %q, got:\n%s", want, lin)
 	}
 }

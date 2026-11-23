@@ -133,11 +133,45 @@ func (s *VideoService) ensureTwoPlaneForLocalCameras(ctx context.Context) {
 			// tear down the camera pipeline forever, producing nothing.
 			continue
 		}
+		if !s.cameraMayProduceH264(dev.GetPath()) {
+			// Only a camera's own H.264 arrives as whole access units (see
+			// frameBindableToLoopback); anything else reaches the hub through an
+			// encoder as a byte stream and is refused at its first frame. Learning
+			// that by joining the capture meant opening the camera every time an
+			// app holding the camera entitlement started, and for as long as that
+			// took the app's own open of the camera failed with "Device or
+			// resource busy". The driver lists a camera's formats without the
+			// camera being claimed, so the answer costs the app nothing.
+			s.logger.Info("two-plane: camera does not produce H.264 itself; leaving it to apps",
+				zap.String("source", sourceID))
+			s.noteTwoPlaneRefusal(sourceID)
+			continue
+		}
 		if err := s.ensureTwoPlaneNode(ctx, sourceID, dev.GetId()); err != nil {
 			s.logger.Warn("two-plane: starting data path failed",
 				zap.String("source", sourceID), zap.Error(err))
 		}
 	}
+}
+
+// cameraMayProduceH264 reports whether a camera could feed the two-plane path:
+// false only when the driver lists the camera's formats and H.264 is not among
+// them. A driver that will not list them has not said no, so that camera still
+// gets the one attempt it always had.
+func (s *VideoService) cameraMayProduceH264(path string) bool {
+	if s.capturePixelFormats == nil {
+		return true
+	}
+	formats, known := s.capturePixelFormats(path)
+	if !known {
+		return true
+	}
+	for _, format := range formats {
+		if format == v4l2PixFmtH264 {
+			return true
+		}
+	}
+	return false
 }
 
 // consumerFingerprint reduces a set of container IDs to one comparable string,

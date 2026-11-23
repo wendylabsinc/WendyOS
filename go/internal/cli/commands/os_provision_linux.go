@@ -26,10 +26,10 @@ var (
 )
 
 // writeConfigPartition finds, mounts, populates, and unmounts the FAT32 config
-// partition on d after a dd write. agentBinary is the arm64 agent binary
+// partition on d after a dd write. agent is the agent binary for /config
 // content. creds and deviceName are written to wendy.conf when non-empty. A
 // failed unmount is a *configStillMountedError: the drive is not safe to remove yet.
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
+func writeConfigPartition(d drive, agent configAgent, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
 	rescanPartitionTable(d)
 
 	tmpDir, err := os.MkdirTemp("", "wendyos-config-*")
@@ -59,7 +59,7 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 		return err
 	}
 
-	writeErr := writeConfigFiles(tmpDir, agentBinary, creds, deviceName, provisioningJSON)
+	writeErr := writeConfigFiles(tmpDir, agent, creds, deviceName, provisioningJSON)
 	unmountErr := releaseMount(tmpDir, func() ([]byte, error) {
 		return exec.Command("sudo", "umount", tmpDir).CombinedOutput()
 	}, time.Sleep)

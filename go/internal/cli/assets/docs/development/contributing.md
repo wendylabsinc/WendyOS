@@ -36,14 +36,14 @@ The docs-review workflow runs on every pull request targeting `main` and posts a
 
 ### Security Review Workflow (`.github/workflows/security-review.yml`)
 
-A dedicated **AI Security Review** workflow runs on every pull request targeting `main` and posts a structured security and compliance report as a PR comment.
+A dedicated **AI Security Review** workflow runs on pull requests targeting `main` that carry the `review: security` label, and posts a structured security and compliance report as a PR comment. Dependabot pull requests run its dependency policy check without the label.
 
 #### Trigger
 
 ```yaml
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
 ```
 

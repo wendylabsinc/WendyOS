@@ -134,6 +134,20 @@ final class RecordingSpeedTests: XCTestCase {
         XCTAssertTrue(catalog.reads.isEmpty, "Removed targets must not remain accessible from cached inventory")
     }
 
+    @MainActor func testHomeLoadCannotDiscardVisibleGalleryRead() async {
+        let fixture = RecordingSpeedFixture()
+        await fixture.configure(delay: .milliseconds(100))
+        let catalog = RecordingCatalog(fetch: { await fixture.fetch($0) }, details: { await fixture.loadDetails($0, $1) })
+        let target = target
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await catalog.load([target], refresh: 0, priority: "board") }
+            while await fixture.counts().0 == 0 { await Task.yield() }
+            await catalog.load([], refresh: 0, priority: nil, consumer: "home.widgets", retaining: [target])
+        }
+        XCTAssertNotNil(catalog.reads["board"]?.library)
+        XCTAssertFalse(catalog.loading)
+    }
+
     @MainActor func testCanceledIndexCannotPublishIntoNewGeneration() async {
         let fixture = RecordingSpeedFixture()
         await fixture.configure(delay: .milliseconds(100))

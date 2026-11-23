@@ -1,14 +1,14 @@
 import SwiftUI
 
 private enum DeviceSegment: String, CaseIterable { case apps = "Apps", cameras = "Cameras", data = "Data", location = "Location", settings = "Settings" }
-private enum DeviceTool: String, Identifiable { case metrics = "App activity", twin = "Digital Twin", campaigns = "Campaigns", update = "Agent update", management = "Device management"
+private enum DeviceTool: String, Identifiable { case metrics = "App activity", twin = "Digital Twin", campaigns = "Campaigns", update = "Agent update", info = "Device info", management = "Device management"
     var id: Self { self }
 }
 
 struct MobileDeviceView: View {
     @EnvironmentObject private var model: AppModel
     let device: Device
-    let openRecordings: () -> Void
+    @State private var showingRecordings = false
     @State private var showingAppearance = false
     @State private var segment = DeviceSegment.apps
     @State private var update: DeviceUpdateSnapshot?
@@ -37,7 +37,7 @@ struct MobileDeviceView: View {
                             case .apps: MobileAppsList(model: model, device: device)
                             case .data:
                                 MobileRecordingSection(model: model, recent: true)
-                                Button(action: openRecordings) {
+                                Button { showingRecordings = true } label: {
                                     LensRow(title: "All recordings", subtitle: "", symbol: "cylinder.split.1x2")
                                 }.buttonStyle(.plain).background(MobileLensStyle.card, in: .rect(cornerRadius: 22))
                             case .location:
@@ -57,6 +57,9 @@ struct MobileDeviceView: View {
             } else { connectionState }
         }.background(MobileLensStyle.background)
             .navigationTitle(device.title).navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingRecordings) {
+                MobileDeviceRecordingBrowser(model: model, device: device)
+            }
             .sheet(isPresented: $showingAppearance) {
                 let key = DeviceAppearanceStore.key(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization, device: device)
                 MobileDeviceAppearanceEditor(device: device, key: key).id(key)
@@ -77,7 +80,9 @@ struct MobileDeviceView: View {
                         if ready && !model.connectedLite {
                             Button("Logs", systemImage: "text.alignleft", action: openLogs)
                                 .accessibilityIdentifier("devices.detail.logs")
-                            Button(updateTitle, systemImage: "info.circle") { tool = .update }
+                            Button(updateTitle, systemImage: "info.circle") {
+                                tool = update?.available == true || update?.busy == true ? .update : .info
+                            }
                             Button("App activity", systemImage: "waveform.path.ecg") { tool = .metrics }
                             Button("Digital Twin", systemImage: "cube.transparent") { tool = .twin }
                             Button("Campaigns", systemImage: "record.circle") { tool = .campaigns }
@@ -108,7 +113,8 @@ struct MobileDeviceView: View {
                     case .twin: NativeSiteView(model: model)
                     case .campaigns: CampaignsView(session: model.deviceSession, deviceName: device.title, openClip: { clip = $0 }, showEventLog: { showEvents = true })
                     case .management: DeviceManagementView(session: model.deviceSession, deviceName: device.title)
-                    case .update: DeviceInfoView(session: model.deviceSession, deviceName: device.title)
+                    case .update: DeviceAgentUpdateView(session: model.deviceSession, deviceName: device.title)
+                    case .info: DeviceInfoView(session: model.deviceSession, deviceName: device.title)
                     }
                 } else { connectionState }
             }
@@ -127,7 +133,7 @@ struct MobileDeviceView: View {
             if update.phase == "downloading", let fraction = update.downloadFraction { return "Downloading \(Int(fraction * 100))%" }
             return update.phase == "installing" ? "Installing…" : "Reconnecting…"
         }
-        return update.available ? "Update" : "Device info"
+        return update.available ? "Agent update" : "Device info"
     }
     private func openLogs() { model.logApp = ""; showLogs = true }
     private var header: some View {

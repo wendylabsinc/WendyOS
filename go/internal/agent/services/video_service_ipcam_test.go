@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -45,13 +46,35 @@ type fakeLoopback struct {
 	removed            []uint32
 	shutdownCalled     bool
 
-	// Auxiliary-node state backs the two-plane camera data path. auxNext is the
-	// number the next allocation hands out; auxErr forces the band-exhausted
-	// path; auxCreated and auxRemoved record the calls.
-	auxNext    int
+	// Auxiliary-node state backs the two-plane camera data path and camera
+	// share nodes. aux holds the nodes that exist, by number, with their label:
+	// allocation hands out the highest free number in 200-255, as the real
+	// module does, so a removed number is reused. auxErr forces the
+	// band-exhausted path; shareErr fails EnsureShareNode. auxCreated,
+	// shareMade, auxRemoved and allocated record the calls; onRemove, when set,
+	// runs inside RemoveAuxNode.
+	aux        map[int]string
 	auxErr     error
+	shareErr   error
 	auxCreated []int
+	shareMade  []auxCall
 	auxRemoved []int
+	allocated  []int
+	onRemove   func(nr int)
+	// refuseRemove makes RemoveAuxNode leave the node, as the driver does
+	// (EBUSY) when something opened it.
+	refuseRemove bool
+	// noEntry holds the nodes in aux (the kernel's) whose /dev entry is gone,
+	// and staleEntry the numbers with a /dev entry but no node (one the agent
+	// made again with mknod, which the kernel does not remove with its node).
+	// NodePath and the allocator stat /dev, as the real ones do.
+	noEntry, staleEntry map[int]bool
+}
+
+// auxCall is one node creation: its number and label.
+type auxCall struct {
+	nr    int
+	label string
 }
 
 func newFakeLoopback() *fakeLoopback {
@@ -59,27 +82,64 @@ func newFakeLoopback() *fakeLoopback {
 		nodePaths:    make(map[uint32]string),
 		acquireCount: make(map[uint32]int),
 		releaseCount: make(map[uint32]int),
+		aux:          make(map[int]string),
 	}
 }
 
 func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
+	return f.AllocateAuxNodeNumberSkipping(nil)
+}
+
+func (f *fakeLoopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
+	// skip runs without the lock, as the real allocator's does: a caller's
+	// skip may look at this fake's nodes (the share manager's sysfs check).
+	skipped := map[int]bool{}
+	if skip != nil {
+		for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+			skipped[nr] = skip(nr)
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.auxErr != nil {
 		return 0, f.auxErr
 	}
-	if f.auxNext == 0 {
-		f.auxNext = 255
+	for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+		if skipped[nr] {
+			continue
+		}
+		if f.hasEntryLocked(nr) {
+			continue
+		}
+		if _, ok := f.nodePaths[uint32(nr)]; ok {
+			continue
+		}
+		f.allocated = append(f.allocated, nr)
+		return nr, nil
 	}
-	nr := f.auxNext
-	f.auxNext--
-	return nr, nil
+	return 0, ipcam.ErrBandExhausted
 }
 
-func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, _ string) error {
+func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, label string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxCreated = append(f.auxCreated, nr)
+	if _, ok := f.aux[nr]; !ok {
+		f.aux[nr] = label
+	}
+	return nil
+}
+
+func (f *fakeLoopback) EnsureShareNode(_ context.Context, nr int, label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareMade = append(f.shareMade, auxCall{nr, label})
+	if f.shareErr != nil {
+		return f.shareErr
+	}
+	if _, ok := f.aux[nr]; !ok {
+		f.aux[nr] = label
+	}
 	return nil
 }
 
@@ -87,6 +147,57 @@ func (f *fakeLoopback) RemoveAuxNode(nr int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxRemoved = append(f.auxRemoved, nr)
+	if !f.refuseRemove {
+		delete(f.aux, nr)
+		delete(f.noEntry, nr)
+	}
+	if f.onRemove != nil {
+		f.onRemove(nr)
+	}
+}
+
+// addLiveAux puts a node in place, as one left by an earlier agent.
+func (f *fakeLoopback) addLiveAux(nr int, label string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.aux[nr] = label
+}
+
+// liveAux lists the auxiliary and share nodes that exist, in order.
+func (f *fakeLoopback) liveAux() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]int, 0, len(f.aux))
+	for nr := range f.aux {
+		out = append(out, nr)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func (f *fakeLoopback) auxLabel(nr int) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	label, ok := f.aux[nr]
+	return label, ok
+}
+
+func (f *fakeLoopback) shareCalls() []auxCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]auxCall(nil), f.shareMade...)
+}
+
+func (f *fakeLoopback) removedAux() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.auxRemoved...)
+}
+
+func (f *fakeLoopback) allocations() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.allocated...)
 }
 
 func (f *fakeLoopback) Available() error {
@@ -114,8 +225,62 @@ func (f *fakeLoopback) EnsureNode(_ context.Context, id uint32, _ string) error 
 func (f *fakeLoopback) NodePath(camID uint32) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	path, ok := f.nodePaths[camID]
-	return path, ok
+	if path, ok := f.nodePaths[camID]; ok {
+		return path, true
+	}
+	if f.hasEntryLocked(int(camID)) {
+		return fmt.Sprintf("/dev/video%d", camID), true
+	}
+	return "", false
+}
+
+// setEntry makes /dev/video<nr> (present true) or takes it away. An entry
+// made for a number with no node is stale.
+func (f *fakeLoopback) setEntry(nr int, present bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.noEntry == nil {
+		f.noEntry, f.staleEntry = make(map[int]bool), make(map[int]bool)
+	}
+	_, node := f.aux[nr]
+	switch {
+	case present && node:
+		delete(f.noEntry, nr)
+	case present:
+		f.staleEntry[nr] = true
+	default:
+		delete(f.staleEntry, nr)
+		if node {
+			f.noEntry[nr] = true
+		}
+	}
+}
+
+// vanishKeepingEntry takes node nr away and leaves its /dev entry behind, as
+// happens to an entry the agent made again with mknod.
+func (f *fakeLoopback) vanishKeepingEntry(nr int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.noEntry == nil {
+		f.noEntry, f.staleEntry = make(map[int]bool), make(map[int]bool)
+	}
+	if _, node := f.aux[nr]; node && !f.noEntry[nr] {
+		f.staleEntry[nr] = true
+	}
+	delete(f.aux, nr)
+	delete(f.noEntry, nr)
+}
+
+// hasEntry reports whether /dev/video<nr> exists.
+func (f *fakeLoopback) hasEntry(nr int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hasEntryLocked(nr)
+}
+
+func (f *fakeLoopback) hasEntryLocked(nr int) bool {
+	_, node := f.aux[nr]
+	return (node && !f.noEntry[nr]) || f.staleEntry[nr]
 }
 
 func (f *fakeLoopback) AcquireView(camID uint32) func() {

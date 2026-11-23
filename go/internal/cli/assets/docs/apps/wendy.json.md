@@ -228,7 +228,7 @@ An Arduino sketch for the board's microcontroller (Arduino UNO Q). `wendy run` c
 
 ### `resources`
 
-Optional CPU, memory, and process-count ceilings the agent enforces on the container via cgroups. Edge devices are resource-constrained and often run several apps side by side, so capping a service keeps one busy or leaky app from starving its neighbours. Every field is optional. Omitting `memory` or `cpus` leaves that resource **unbounded** (the historical behaviour), so adding `resources` is backward compatible. `pids` is the exception: when omitted, a conservative default ceiling (4096) is applied as a fork-bomb guard — set it explicitly to raise or lower that ceiling.
+Optional CPU, memory, and process-count ceilings the agent enforces on the container via cgroups. Edge devices are resource-constrained and often run several apps side by side, so capping a service keeps one busy or leaky app from starving its neighbours. Every field is optional. Omitting `memory` or `cpus` sets no limit of its own for that resource (the historical behaviour), so adding `resources` is backward compatible. `pids` is the exception: when omitted, a conservative default ceiling (4096) is applied as a fork-bomb guard — set it explicitly to raise or lower that ceiling. Apps also share one host memory budget on most devices; see [Host memory protection](#host-memory-protection).
 
 ```json
 {
@@ -260,6 +260,14 @@ For multi-service apps, set `resources` at the top level as the default and/or p
 ```
 
 Here `web` inherits the full app-level limits (`1Gi`, `pids: 512`). `worker` uses its own `256Mi` and `0.5` cores, and still **inherits** the app-level `pids: 512` it did not override.
+
+#### Host memory protection
+
+On cgroup v2 devices with a memory controller and at least about 512 MiB of RAM, apps share a hard memory limit. Wendy reserves 768 MiB plus 3% of RAM for the host, capped at half the total RAM. Apps and ROS 2 helpers share the rest. Set `resources.memory` to limit an individual container.
+
+To change the reserve, write a size such as `768Mi` to `/etc/wendy-agent/host-memory-reserve`, or `off` to disable it. Invalid values fall back to the default. Changes apply at the next app start or agent restart. Increasing the reserve can kill running app processes if their memory use exceeds the new limit.
+
+Restart existing apps after an agent update to apply the shared limit. When apps reach it, the kernel may kill a process in any app. GPU memory counts toward the limit on Jetson Orin, but not on Thor.
 
 ### `env`
 
@@ -432,12 +440,14 @@ Camera / V4L2 device access.
 
 ```json
 { "type": "camera" }
+{ "type": "camera", "mode": "direct" }
 { "type": "camera", "allowlist": ["/dev/video0"] }
 { "type": "camera", "user": "admin", "password": "secret" }
 ```
 
 | Field | Description |
 |-------|-------------|
+| `mode` | Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares. |
 | `allowlist` | Restrict access to specific device paths. Omit to allow all cameras. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |

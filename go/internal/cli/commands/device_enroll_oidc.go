@@ -57,6 +57,9 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
 		return nil, err
 	}
+	if err := cloudenroll.CheckDeviceInternet(ctx, conn.Conn, cfg.DirectoryURL); err != nil {
+		return nil, err
+	}
 	agent := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
 	hw, err := cloudenroll.ReadHardware(ctx, conn.Conn)
 	if err != nil {
@@ -91,10 +94,10 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return nil, fmt.Errorf("Cloud registered asset %s, but this agent does not support direct PKI enrollment; update the agent (the device name is now reserved in Cloud)", assetID)
+		return nil, reservedEnrollmentError(auth, assetID, fmt.Errorf("Cloud registered asset %s, but this agent does not support direct PKI enrollment; update the agent (the device name is now reserved in Cloud)", assetID))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("Cloud registered asset %s, but device PKI enrollment failed (the device name is now reserved in Cloud): %w", assetID, err)
+		return nil, reservedEnrollmentError(auth, assetID, fmt.Errorf("Cloud registered asset %s, but device PKI enrollment failed (the device name is now reserved in Cloud): %w", assetID, err))
 	}
 	expected, _ := cfg.PrincipalURI()
 	if resp.GetPrincipalUri() != expected {
@@ -103,4 +106,26 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 	fmt.Printf("Device enrolled (name: %s, identity: %s, asset: %s).\n", name, resp.GetPrincipalUri(), assetID)
 	identity, err := certs.ParseDevicePrincipal(expected)
 	return &identity, err
+}
+
+// reservedEnrollmentError attaches the command that removes the asset Cloud
+// reserved for an enrollment the device then failed. The EAB is single-use and
+// gone with this process, so the reservation cannot be resumed, and a retry
+// under the same name is refused as taken until the asset is removed.
+func reservedEnrollmentError(auth *config.AuthConfig, assetID string, err error) error {
+	return withNextSteps(err, "Remove the reserved asset before enrolling again: wendy cloud device unenroll --device "+shellQuoteArg(reservedAssetSelector(auth, assetID)))
+}
+
+// reservedAssetSelector names the asset together with its Cloud endpoint and
+// tenant, so the removal reaches the session that reserved it whichever
+// sign-in is current. An asset that cannot be scoped is named by its ID.
+func reservedAssetSelector(auth *config.AuthConfig, assetID string) string {
+	if auth == nil || len(auth.Certificates) == 0 {
+		return assetID
+	}
+	scoped := (cloudDeviceSelector{Endpoint: auth.CloudGRPC, TenantUUID: auth.Certificates[0].TenantUUID(), AssetUUID: assetID}).String()
+	if selector, ok, err := parseCloudDeviceSelector(scoped); !ok || err != nil || selector.TenantUUID == "" {
+		return assetID
+	}
+	return scoped
 }

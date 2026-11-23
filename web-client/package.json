@@ -35,7 +35,7 @@
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^1.31.0",
-    "next": "16.4.1",
+    "next": "16.4.6",
     "next-themes": "^0.4.6",
     "node-pty": "^1.1.0",
     "radix-ui": "^1.6.7",
@@ -75,5 +75,8 @@
     "wrangler": "4.160.1"
   },
   "type": "module",
-  "main": "electron/main.mjs"
+  "main": "electron/main.mjs",
+  "overrides": {
+    "picomatch": "npm:@ryotsu/picomatch@4.0.7-a"
+  }
 }

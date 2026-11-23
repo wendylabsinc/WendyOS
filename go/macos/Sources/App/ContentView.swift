@@ -12,11 +12,6 @@ struct ContentView: View {
     @State private var showingActivity = false
     @State private var showingSimulators = false
     @StateObject private var simulators = SimulatorModel()
-    @FocusedValue(\.simulatorRefresh) private var simulatorRefresh
-    @State private var refreshingPane = false
-    @FocusedValue(\.organizationRefresh) private var organizationRefresh
-    @FocusedValue(\.devicePaneRefresh) private var devicePaneRefresh
-    @FocusedValue(\.fleetRefresh) private var fleetRefresh
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var searchFocused: Bool
     @FocusState private var deviceTabsFocused: Bool
@@ -212,25 +207,9 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem { VPNToolbarControls(model: model, vpn: model.vpn) }
             ToolbarItemGroup {
-                Button {
-                    if showingSimulators { simulatorRefresh?.perform() }
-                    else if showingSites { fleetRefresh?.perform() }
-                    else if showingOrganization { organizationRefresh?.perform() }
-                    else if ["campaigns", "pairing", "chat", "data", "settings"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
-                    else {
-                        refreshingPane = true
-                        actions.submit {
-                            defer { refreshingPane = false }
-                            if model.connected != nil { await model.refreshDetails() }
-                            else if deviceSource == "cloud" { await model.refreshCloud() }
-                            else { await model.refreshNearby() }
-                        }
-                    }
-                } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .help(showingSimulators ? "Refresh simulators" : showingSites ? "Refresh fleet" : showingOrganization ? "Refresh organization" : model.connected != nil ? "Refresh device" : "Refresh devices")
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(!showingSimulators && !showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
-                    .disabled(showingSimulators ? simulatorRefresh?.enabled != true : showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data", "settings"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
+                DesktopPaneRefreshButton(model: model, actions: actions,
+                                         showingSimulators: showingSimulators, showingSites: showingSites,
+                                         showingOrganization: showingOrganization, tab: tab, deviceSource: deviceSource)
                 Menu {
                     Button { showingNearbySetup = true } label: {
                         Label("Set up nearby device…", systemImage: "antenna.radiowaves.left.and.right")

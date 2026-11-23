@@ -194,3 +194,19 @@ func TestFailureMetadataSurvivesStatusAndEvents(t *testing.T) {
 		t.Fatal("event lost metadata or diagnostics")
 	}
 }
+
+func TestCameraROSIdentitySurvivesBridge(t *testing.T) {
+	input := []*pb.VideoDevice{
+		{Id: 128, Name: "Renamed sensor", Transport: pb.VideoTransport_VIDEO_TRANSPORT_ROS2, Topic: "/thermal/exact/temperature", StableId: "ros2:identity"},
+		{Id: 2, Name: "ROS 2 misleading name", Topic: "/thermal/exact/temperature"},
+	}
+	result := cameras(input, nil)
+	defer WDCamerasFree(result)
+	rows := unsafe.Slice(result.items, int(result.count))
+	if rows[0].ros2 != 1 || cstring(unsafe.Pointer(rows[0].topic)) != input[0].Topic || cstring(unsafe.Pointer(rows[0].stable_id)) != input[0].StableId {
+		t.Fatal("ROS transport and topic identity lost across bridge")
+	}
+	if rows[1].ros2 != 0 {
+		t.Fatal("camera name inferred a ROS transport")
+	}
+}

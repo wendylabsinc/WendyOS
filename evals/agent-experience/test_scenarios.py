@@ -1021,6 +1021,18 @@ class MainTests(unittest.TestCase):
             code = b.main()
         return code, out.getvalue()
 
+    def test_tasks_keep_every_target_when_scenarios_are_selected_too(self):
+        # A suite passes --task and --scenario together; only the scenarios default to simulators.
+        code, text = self.main("--scenario", "all", "--task", "deploy-http", "--repetitions", "1")
+        self.assertEqual(code, 0)
+        coverage = json.loads(text[:text.index("\n}\n") + 2])["coverage"]
+        self.assertEqual({c["target"] for c in coverage if c.get("kind") != "scenario"}, {"simulator", "cloud-orin"})
+        self.assertEqual({(c["task"], c["target"]) for c in coverage if c.get("kind") == "scenario"},
+                         {("probe", "simulator"), ("wifi", None)})
+        plan = json.loads(text[text.index("\n}\n") + 3:text.rindex("]") + 1])
+        self.assertEqual({(p.get("kind", "task"), p["target"]) for p in plan},
+                         {("task", "simulator"), ("task", "cloud-orin"), ("scenario", "simulator")})
+
     def test_plan_only_lists_scenarios_on_simulators_without_calls(self):
         code, text = self.main("--scenario", "all", "--repetitions", "1")
         self.assertEqual(code, 0)

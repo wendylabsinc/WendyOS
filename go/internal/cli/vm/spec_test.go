@@ -270,3 +270,95 @@ func TestEveryPathArgumentEscapesCommas(t *testing.T) {
 		}
 	}
 }
+
+// TestARM64ArgsAreUnchanged pins the ARM64 command line byte for byte. The
+// literals were printed from the launcher before it learned about other guest
+// architectures; an ARM64 guest must keep launching exactly this way.
+func TestARM64ArgsAreUnchanged(t *testing.T) {
+	for accel, want := range map[Accel]string{
+		AccelHVF: "-name\ndev\n-machine\nvirt,gic-version=3\n-accel\nhvf\n-cpu\nhost\n-smp\n4\n-m\n4096\n-drive\nif=pflash,format=raw,readonly=on,file=/fw/code.fd\n-drive\nif=pflash,format=raw,file=/vms/dev/efivars.fd\n-drive\nfile=/vms/dev/disk.img,if=none,format=raw,id=hd0\n-device\nvirtio-blk-pci,drive=hd0\n-display\nnone\n-chardev\nfile,id=console,append=on,path=/vms/dev/console.log\n-serial\nchardev:console\n-monitor\nnone\n-qmp\nunix:/vms/dev/qmp.sock,server=on,wait=off\n-netdev\nuser,id=net0,hostfwd=tcp:127.0.0.1:50051-:50051,hostfwd=tcp:127.0.0.1:50052-:50052,hostfwd=tcp:127.0.0.1:5000-:5000\n-device\nvirtio-net-pci,netdev=net0,mac=52:54:00:12:34:56",
+		AccelKVM: "-name\ndev\n-machine\nvirt\n-accel\nkvm\n-cpu\nhost\n-smp\n4\n-m\n4096\n-drive\nif=pflash,format=raw,readonly=on,file=/fw/code.fd\n-drive\nif=pflash,format=raw,file=/vms/dev/efivars.fd\n-drive\nfile=/vms/dev/disk.img,if=none,format=raw,id=hd0\n-device\nvirtio-blk-pci,drive=hd0\n-display\nnone\n-chardev\nfile,id=console,append=on,path=/vms/dev/console.log\n-serial\nchardev:console\n-monitor\nnone\n-qmp\nunix:/vms/dev/qmp.sock,server=on,wait=off\n-netdev\nuser,id=net0,hostfwd=tcp:127.0.0.1:50051-:50051,hostfwd=tcp:127.0.0.1:50052-:50052,hostfwd=tcp:127.0.0.1:5000-:5000\n-device\nvirtio-net-pci,netdev=net0,mac=52:54:00:12:34:56",
+		AccelTCG: "-name\ndev\n-machine\nvirt\n-accel\ntcg\n-cpu\ncortex-a57\n-smp\n4\n-m\n4096\n-drive\nif=pflash,format=raw,readonly=on,file=/fw/code.fd\n-drive\nif=pflash,format=raw,file=/vms/dev/efivars.fd\n-drive\nfile=/vms/dev/disk.img,if=none,format=raw,id=hd0\n-device\nvirtio-blk-pci,drive=hd0\n-display\nnone\n-chardev\nfile,id=console,append=on,path=/vms/dev/console.log\n-serial\nchardev:console\n-monitor\nnone\n-qmp\nunix:/vms/dev/qmp.sock,server=on,wait=off\n-netdev\nuser,id=net0,hostfwd=tcp:127.0.0.1:50051-:50051,hostfwd=tcp:127.0.0.1:50052-:50052,hostfwd=tcp:127.0.0.1:5000-:5000\n-device\nvirtio-net-pci,netdev=net0,mac=52:54:00:12:34:56",
+	} {
+		spec := Spec{Name: "dev", DiskPath: "/vms/dev/disk.img", FirmwareCode: "/fw/code.fd", FirmwareVars: "/vms/dev/efivars.fd",
+			MemoryMiB: 4096, CPUs: 4, ConsoleLog: "/vms/dev/console.log", QMPPath: "/vms/dev/qmp.sock", Accel: accel,
+			Net: NetConfig{Mode: NetUser, AgentPort: 50051, RegistryPort: 5000, MAC: "52:54:00:12:34:56"}}
+		args, err := spec.Args()
+		if err != nil {
+			t.Fatalf("%s: %v", accel, err)
+		}
+		if got := strings.Join(args, "\n"); got != want {
+			t.Errorf("%s ARM64 arguments changed:\n got %q\nwant %q", accel, got, want)
+		}
+	}
+}
+
+// withoutMachineAccelCPU drops the -machine, -accel and -cpu pairs, the only
+// arguments that differ between the two guests.
+func withoutMachineAccelCPU(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-machine", "-accel", "-cpu":
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
+func TestX86ArgsUseQ35AndTheHostCPUUnderKVM(t *testing.T) {
+	x86 := testSpec()
+	x86.Arch, x86.Accel = ArchAMD64, AccelKVM
+	args, err := x86.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-machine q35", "-accel kvm", "-cpu host"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("x86-64 KVM args missing %q; got %q", want, joined)
+		}
+	}
+	arm := testSpec()
+	arm.Accel = AccelKVM
+	armArgs, err := arm.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(withoutMachineAccelCPU(args), "\n"), strings.Join(withoutMachineAccelCPU(armArgs), "\n"); got != want {
+		t.Errorf("x86-64 args differ from ARM64 beyond machine, accel and cpu:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestX86ArgsNameACPUModelWhenEmulated(t *testing.T) {
+	spec := testSpec()
+	spec.Arch, spec.Accel = ArchAMD64, AccelTCG
+	args, err := spec.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-machine q35", "-accel tcg", "-cpu Skylake-Client"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("emulated x86-64 args missing %q; got %q", want, joined)
+		}
+	}
+	for _, arg := range args {
+		if arg == "max" {
+			t.Errorf("emulated x86-64 args use -cpu max, which crashes Mesa's renderer: %q", joined)
+		}
+	}
+}
+
+func TestBinaryFollowsTheGuestArchitecture(t *testing.T) {
+	x86 := testSpec()
+	x86.Arch = ArchAMD64
+	if got := strings.TrimSuffix(filepath.Base(x86.Binary()), ".exe"); got != "qemu-system-x86_64" {
+		t.Errorf("x86-64 Binary() = %q, want qemu-system-x86_64", got)
+	}
+	if got := strings.TrimSuffix(filepath.Base(testSpec().Binary()), ".exe"); got != "qemu-system-aarch64" {
+		t.Errorf("zero-Arch Binary() = %q, want qemu-system-aarch64", got)
+	}
+}

@@ -7,7 +7,9 @@ import json
 import math
 import pathlib
 import struct
+import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -17,6 +19,47 @@ from types import SimpleNamespace as NS
 spec = importlib.util.spec_from_file_location("lidar_probe", pathlib.Path(__file__).with_name("lidar_probe.py"))
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
+
+
+class ProbeProcessExitTests(unittest.TestCase):
+    def test_main_preserves_exit_status_and_keyboard_interrupt(self):
+        # Fault injection stops at the subscriber boundary. The production
+        # options parser/main handler and interpreter exit are real; this does
+        # not claim ROS subscription or physical sensor teardown coverage.
+        child = '''import importlib.util,sys
+source,kind=sys.argv[1:]
+spec=importlib.util.spec_from_file_location("actual_probe",source)
+probe=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+def interrupted_subscriber(options):
+    assert options["topic"]=="/cloud"
+    print("INJECTED_SUBSCRIBER_EXIT",file=sys.stderr,flush=True)
+    if kind=="exit":raise SystemExit(73)
+    raise KeyboardInterrupt()
+probe.run=interrupted_subscriber
+sys.argv=[source,'{"topic":"/cloud"}']
+probe.main()
+'''
+
+        def execute(source, kind):
+            result = subprocess.run([sys.executable, "-B", "-c", child, str(source), kind],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertIn("INJECTED_SUBSCRIBER_EXIT", result.stderr)
+            self.assertEqual(result.stdout, "")
+            return result.returncode
+
+        source = pathlib.Path(__file__).with_name("lidar_probe.py")
+        self.assertEqual(execute(source, "exit"), 73, "PROBE_EXIT_STATUS: SystemExit was swallowed")
+        self.assertEqual(execute(source, "interrupt"), 0)
+        original = source.read_text()
+        boundary = "    except KeyboardInterrupt:\n        return"
+        self.assertEqual(original.count(boundary), 1, "original exception boundary changed")
+        with tempfile.TemporaryDirectory() as directory:
+            previous = pathlib.Path(directory) / "previous_probe.py"
+            previous.write_text(original.replace(boundary,
+                "    except (KeyboardInterrupt, SystemExit):\n        return"))
+            self.assertEqual(execute(previous, "exit"), 0,
+                             "historical swallowed-exit control did not reproduce")
 
 
 def options(**kwargs):

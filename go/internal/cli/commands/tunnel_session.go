@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"google.golang.org/grpc"
@@ -15,16 +16,19 @@ import (
 )
 
 // TunnelSession owns authorization transports for one foreground account
-// scope. It shares setup, never tunnel grants, session keys, or device streams.
+// scope. It shares authorization and authenticated device channels. Calls and
+// streams remain independent; closing one caller only releases its reference.
 // Call SetActive(false) before changing accounts and on background/shutdown.
 type TunnelSession struct {
 	mu      sync.Mutex
 	current *tunnelGeneration
 }
 type tunnelGeneration struct {
-	mu      sync.Mutex
-	closed  bool
-	entries map[[32]byte]*tunnelAuthorization
+	mu            sync.Mutex
+	closed        bool
+	entries       map[[32]byte]*tunnelAuthorization
+	devices       grpcclient.ConnectionPool
+	deviceAliases map[string]string
 }
 type tunnelContextKey struct{}
 type tunnelAuthorization struct {
@@ -50,6 +54,7 @@ func (s *TunnelSession) SetActive(active bool) {
 		}
 		g.entries = nil
 		g.mu.Unlock()
+		g.devices.Close()
 		s.current = nil
 	}
 }
@@ -66,6 +71,9 @@ func (s *TunnelSession) Context(ctx context.Context) context.Context {
 	return context.WithValue(ctx, tunnelContextKey{}, g)
 }
 func carryTunnelSession(ctx, source context.Context) context.Context {
+	if pin, ok := source.Value(appTunnelIdentityKey{}).(appTunnelIdentity); ok {
+		ctx = context.WithValue(ctx, appTunnelIdentityKey{}, pin)
+	}
 	if g, ok := source.Value(tunnelContextKey{}).(*tunnelGeneration); ok {
 		return context.WithValue(ctx, tunnelContextKey{}, g)
 	}

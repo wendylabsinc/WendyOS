@@ -233,4 +233,114 @@ struct `'wendy cache clear'` {
     func `rejects unexpected positional arguments`() async throws {
         // TODO: enable once 'wendy cache clear' rejects unexpected positional arguments.
     }
+
+    /**
+     Downloaded trees can contain owner-readable, non-writable directories and
+     files. Clearing removes those entries, leaves an empty inventory, and can be
+     repeated. A denied raw removal proves that the POSIX fixture needs cleanup
+     permission handling. This does not cover Windows ACLs.
+     */
+    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"))
+    func `removes read-only extracted entries and remains empty on repeat clear`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                """
+                \(try CacheCommandFixture.environment(cli))
+                test "$(id -u)" -ne 0
+                entry="$cache/simulator/extracted"
+                mkdir -p "$entry/nested" "$cache/buildx/com.example.keep-linux_arm64"
+                printf 'downloaded-content' > "$entry/nested/payload"
+                printf 'build-layer-sentinel' > "$cache/buildx/com.example.keep-linux_arm64/layer"
+                cp "$cache/buildx/com.example.keep-linux_arm64/layer" expected-layer
+                chmod 444 "$entry/nested/payload"
+                chmod 555 "$entry/nested" "$entry"
+                trap 'if [ -d "$entry" ]; then chmod -R u+rwX "$entry"; fi' EXIT
+                if rm "$entry/nested/payload" 2>/dev/null; then
+                  echo 'negative control unexpectedly removed read-only payload' >&2; exit 90
+                fi
+                wendy cache clear
+                """
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "Cache cleared.\n")
+                #expect(result.stderr.isEmpty)
+            }
+            try await cli.sh(
+                """
+                \(try CacheCommandFixture.environment(cli))
+                test ! -e "$cache/simulator/extracted"
+                test ! -e "$cache/buildx/com.example.keep-linux_arm64/layer"
+                """
+            )
+            try await cli.sh("\(try CacheCommandFixture.environment(cli))\nwendy cache clear") {
+                result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "Cache cleared.\n")
+                #expect(result.stderr.isEmpty)
+            }
+            try await cli.sh("\(try CacheCommandFixture.environment(cli))\nwendy cache list --json")
+            { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stderr.isEmpty)
+                let rows = try #require(
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
+                        as? [[String: Any]]
+                )
+                #expect(rows.isEmpty)
+            }
+        }
+    }
+
+    /**
+     Clearing a cache containing a symlink, or whose selected root is itself a
+     symlink, only removes cache-owned links and entries. An outside binary
+     sentinel and its read-only modes survive byte for byte. A denied outside
+     write checks that permission changes would be observable. POSIX hosts only.
+     */
+    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX symlinks and permissions"))
+    func `never follows nested or root symlinks into outside state`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for rootLink in [false, true] {
+                try await cli.sh(
+                    """
+                    \(try CacheCommandFixture.environment(cli))
+                    test "$(id -u)" -ne 0
+                    outside="$HOME/outside-cache"
+                    mkdir -p "$outside" "$cache"
+                    printf 'outside\\000sentinel\\377\\n' > "$outside/keep"
+                    cp "$outside/keep" expected-outside
+                    chmod 444 "$outside/keep"
+                    chmod 555 "$outside"
+                    trap 'chmod 755 "$outside"; chmod 644 "$outside/keep"' EXIT
+                    dir_mode=$(LC_ALL=C ls -ld "$outside" | cut -c1-10)
+                    file_mode=$(LC_ALL=C ls -ld "$outside/keep" | cut -c1-10)
+                    if (printf 'changed' >> "$outside/keep") 2>/dev/null; then
+                      echo 'negative control unexpectedly wrote outside sentinel' >&2; exit 90
+                    fi
+                    selected="$cache"
+                    if [ "\(rootLink)" = true ]; then
+                      rmdir "$selected"
+                      ln -s "$outside" "$selected"
+                    else
+                      mkdir -p "$selected/nested"
+                      printf 'owned-cache-entry' > "$selected/nested/payload"
+                      ln -s "$outside" "$selected/nested/escape"
+                      ln -s "$outside/keep" "$selected/file-link"
+                    fi
+                    wendy cache clear
+                    test ! -L "$selected"
+                    test ! -e "$selected/nested/payload"
+                    cmp expected-outside "$outside/keep"
+                    test "$(ls -A "$outside")" = keep
+                    test "$(LC_ALL=C ls -ld "$outside" | cut -c1-10)" = "$dir_mode"
+                    test "$(LC_ALL=C ls -ld "$outside/keep" | cut -c1-10)" = "$file_mode"
+                    """
+                ) { result in
+                    #expect(result.status.isSuccess)
+                    #expect(result.stdout == "Cache cleared.\n")
+                    #expect(result.stderr.isEmpty)
+                }
+            }
+        }
+    }
 }

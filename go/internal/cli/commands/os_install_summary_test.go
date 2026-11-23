@@ -88,7 +88,7 @@ func TestProvisionConfigWithRetryReportsWhatLanded(t *testing.T) {
 	creds := []wendyconf.WifiCredential{{SSID: "Home", Password: "hunter2"}}
 	withStubbedProvisioning(t, func(drive, []wendyconf.WifiCredential, string, []byte) error { return nil }, false, nil)
 	out, _ := captureCommandStdout(t, func() error {
-		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, creds, "nano-lab", nil, true, nil)
+		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, creds, "nano-lab", nil, true, agentSeed{})
 		return err
 	})
 	if !strings.Contains(out, "Config partition written: name nano-lab · Wi-Fi Home · agent seed") || strings.Contains(out, "hunter2") {
@@ -99,7 +99,7 @@ func TestProvisionConfigWithRetryReportsWhatLanded(t *testing.T) {
 		return errors.New("no config partition")
 	}, false, nil)
 	out, _ = captureCommandStdout(t, func() error {
-		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, creds, "nano-lab", nil, true, nil)
+		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, creds, "nano-lab", nil, true, agentSeed{})
 		return err
 	})
 	if strings.Contains(out, "Config partition written") {

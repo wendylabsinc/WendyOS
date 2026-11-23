@@ -19,10 +19,11 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if !active || changed {
+		b.previewsReset(true)
+		b.recordings.setActive(false)
 		b.tunnelSession.SetActive(false)
 		b.resetNearbyDiscovery(true)
 		b.galleryReset(true)
-		b.recordings.setActive(false)
 		b.cancelOperation()
 		b.ReserveConnection()
 		// Retire device streams while their packet carrier can still deliver
@@ -48,6 +49,9 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 		b.gallery.mu.Unlock()
 	}
 	if err == nil && active {
+		b.previews.mu.Lock()
+		b.previews.blocked = false
+		b.previews.mu.Unlock()
 		b.allowNearbyDiscovery()
 	}
 	if err == nil {

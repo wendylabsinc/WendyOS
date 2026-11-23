@@ -77,9 +77,10 @@ performing tests or other required checks.
 
 ## Optional AI reviews
 
-Security review runs automatically on PRs ready for review and subsequent pushes.
-To request additional AI reviews, apply the corresponding PR labels:
+AI reviews run only when requested. Apply the corresponding PR labels:
 
+- `review: security` for the security review. Dependabot PRs still run the
+  dependency policy check without a label.
 - `review: api` for API and compatibility review, including a risk recommendation.
 - `review: docs` for documentation coverage suggestions.
 - `review: integration-tests` for integration-test coverage suggestions.

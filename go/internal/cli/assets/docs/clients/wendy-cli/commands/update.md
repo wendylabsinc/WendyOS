@@ -83,8 +83,11 @@ process continues using its old binary and tools until restarted. Rerun
 Ordinary commands check for releases in the background. A successful check is
 cached for 24 hours; a failed or cancelled check can retry after one hour. The
 reminder waits at most one second for a background release request, with separate
-bounded installation and cache lookups, so an unavailable release service does
-not hold up your command.
+bounded cache and installation lookups, so an unavailable release service does
+not hold up your command. Identifying the installation can take up to five
+seconds when its package manager is slow to answer; the popup follows. If it
+does not answer in that time, later commands wait at most one second until the
+next day's reminder.
 
 After a successful command in an interactive terminal, a bold popup shows the
 installed and available versions for supported stable installations. Choose
@@ -97,6 +100,12 @@ installed by the Wendy plugin never open a prompt. A command that failed can
 show a short, noninteractive reminder while preserving its original error and
 exit status. An update failure after a successful command also preserves the
 original command's success.
+
+When the popup cannot open in a terminal (an unsupported installation, a CLI
+installed by the Wendy plugin, or a command that failed), the short reminder
+comes back once a day until you update, and **Ask again later...** snoozes it
+too. Scripts, `--json` output and other automated invocations see it once per
+release.
 
 Local MCP servers also check for releases daily while running. Tool responses
 include a prominent update notice once per release per session, repeated after

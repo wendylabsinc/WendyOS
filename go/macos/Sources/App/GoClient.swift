@@ -38,7 +38,9 @@ struct WendyError: LocalizedError, Sendable, Equatable, ExpressibleByStringLiter
 final class GoClient: Sendable {
     static let shared = GoClient()
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
+    private let appRequests = DispatchQueue(label: "dev.wendy.desktop.apps", qos: .userInitiated, attributes: .concurrent)
     private let accountReads = DispatchQueue(label: "dev.wendy.desktop.accounts", qos: .userInitiated)
+    private let discoveryReads = DispatchQueue(label: "dev.wendy.desktop.discovery", qos: .utility)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
     private let events = DispatchQueue(label: "dev.wendy.desktop.events", qos: .userInitiated)
     private let mobileLifecycle = DispatchQueue(label: "dev.wendy.mobile.lifecycle", qos: .userInitiated)
@@ -98,7 +100,7 @@ final class GoClient: Sendable {
                     appropriateFor: nil, create: true
                 ).appendingPathComponent("Wendy", isDirectory: true)
                 directory = FileManager.default.containerURL(
-                    forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile"
+                    forSecurityApplicationGroupIdentifier: "group.dev.wendy.WendyCompanion"
                 )?.appendingPathComponent("Wendy", isDirectory: true) ?? legacy
                 if directory != legacy && !FileManager.default.fileExists(atPath: directory.path)
                     && FileManager.default.fileExists(atPath: legacy.path) {
@@ -132,12 +134,19 @@ final class GoClient: Sendable {
     func initialize(cliPath: String) async throws {
         try await perform { try Self.withCString(cliPath) { try Self.finish(WDInitialize($0)) } }
     }
-    func nearbyInventory() async throws -> (devices: [Device], warning: String?) {
-        try await perform {
+    func nearbyInventory() async throws -> (devices: [Device], warning: WendyError?) {
+        // The backend isolates discovery from device operations; preserve that
+        // isolation here so a network scan cannot queue-block logs or controls.
+        try await BlockingWork.run(on: discoveryReads) {
             guard let result = WDNearby() else { throw WendyError(message: "Missing devices result.") }
             defer { WDDevicesFree(result) }
-            if result.pointee.count == 0 { try Self.check(result.pointee.status) }
-            return (Self.deviceRows(result), Self.optionalString(result.pointee.status.message))
+            let status = result.pointee.status
+            if result.pointee.count == 0 { try Self.check(status) }
+            // Devices found another way stay listed; keep the typed reason beside them.
+            let warning = Self.optionalString(status.message).map {
+                WendyError(message: $0, code: status.error_code, remedy: status.remedy)
+            }
+            return (Self.deviceRows(result), warning)
         }
     }
     func nearby() async throws -> [Device] { try await nearbyInventory().devices }
@@ -154,11 +163,18 @@ final class GoClient: Sendable {
     }
 
     func disconnect() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDDisconnect()) } }
-    func apps() async throws -> [DeviceApp] { try await perform { try Self.readApps(WDApps()) } }
+    func apps() async throws -> [DeviceApp] { try await BlockingWork.run(on: appRequests) { try Self.readApps(WDApps()) } }
     func openApp(_ app: String, session: UInt64) async throws -> URL {
         try await perform {
             try Self.withCString(app) {
-                guard let result = WDOpenApp($0, session) else { throw WendyError(message: "Missing app URL result.") }
+                let opened: UnsafeMutablePointer<WDOpenAppResult>?
+                if app == "dev.wendy.digital-twin" {
+                    guard let bundle = Bundle.main.resourceURL?.appendingPathComponent("DigitalTwin") else {
+                        throw WendyError(message: "This app is missing its Digital Twin service.")
+                    }
+                    opened = try Self.withCString(bundle.path) { WDOpenTwin(session, $0) }
+                } else { opened = WDOpenApp($0, session) }
+                guard let result = opened else { throw WendyError(message: "Missing app URL result.") }
                 defer { WDOpenAppFree(result) }
                 try Self.check(result.pointee.status)
                 guard let url = URL(string: Self.string(result.pointee.url)), url.scheme == "http", url.host != nil else {
@@ -169,10 +185,10 @@ final class GoClient: Sendable {
         }
     }
     func startApp(_ app: String, session: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStartApp($0, session)) } }
+        try await BlockingWork.run(on: appRequests) { try Self.withCString(app) { try Self.finish(WDStartApp($0, session)) } }
     }
     func stopApp(_ app: String, session: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStopApp($0, session)) } }
+        try await BlockingWork.run(on: appRequests) { try Self.withCString(app) { try Self.finish(WDStopApp($0, session)) } }
     }
     func deleteApp(_ app: String, session: UInt64) async throws {
         try await perform { try Self.withCString(app) { try Self.finish(WDDeleteApp($0, session)) } }
@@ -263,7 +279,7 @@ final class GoClient: Sendable {
         defer { WDCamerasFree(pointer) }
         try check(pointer.pointee.status)
         return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
-            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0, stableID: string($0.stable_id))
+            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0, stableID: string($0.stable_id), rosTopic: optionalString($0.topic), isROS2: $0.ros2 != 0)
         }
     }
     private static func readVPN(_ pointer: UnsafeMutablePointer<WDVPNResult>?) throws -> VPNConfiguration {
@@ -378,6 +394,8 @@ struct Camera: Identifiable, Hashable {
     var path: String?
     var thermal = false
     var stableID = ""
+    var rosTopic: String?
+    var isROS2 = false
     var orderKey: String { !stableID.isEmpty ? stableID : path ?? String(id) }
 }
 struct VPNRouteSelection { let selector: String; let name: String }

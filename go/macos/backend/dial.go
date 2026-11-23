@@ -18,7 +18,7 @@ func desktopDial(ctx context.Context, selector string, port uint16) (net.Conn, e
 	if !strings.HasPrefix(selector, "mesh:") && !strings.HasPrefix(selector, "cloud://") {
 		return nil, errors.New("VPN routes require a mesh or cloud device")
 	}
-	agent, err := commands.DesktopConnect(ctx, selector)
+	agent, err := commands.DesktopConnectTunnel(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func desktopDial(ctx context.Context, selector string, port uint16) (net.Conn, e
 		agent.Close()
 		return nil, err
 	}
-	return &ownedConn{Conn: conn, closeAgent: func() { agent.Close() }}, nil
+	return withConnRelease(conn, func() { agent.Close() }), nil
 }
 
 // Report missing Cloud port support once per VPN session. Other dial failures
@@ -48,20 +48,34 @@ func reportVPNDialFailures(dial vpn.DialFunc, report func(error)) vpn.DialFunc {
 	}
 }
 
+// withConnRelease releases ownership on full close while preserving a
+// transport's optional write half-close.
+func withConnRelease(conn net.Conn, release func()) net.Conn {
+	owned := &ownedConn{Conn: conn, release: release}
+	if half, ok := conn.(interface{ CloseWrite() error }); ok {
+		return &ownedHalfCloseConn{ownedConn: owned, closeWrite: half.CloseWrite}
+	}
+	return owned
+}
+
 type ownedConn struct {
 	net.Conn
-	closeAgent func()
-	once       sync.Once
+	release func()
+	once    sync.Once
 }
 
 func (c *ownedConn) Close() error {
 	var err error
-	c.once.Do(func() { err = c.Conn.Close(); c.closeAgent() })
+	c.once.Do(func() {
+		err = c.Conn.Close()
+		c.release()
+	})
 	return err
 }
-func (c *ownedConn) CloseWrite() error {
-	if h, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return h.CloseWrite()
-	}
-	return c.Close()
+
+type ownedHalfCloseConn struct {
+	*ownedConn
+	closeWrite func() error
 }
+
+func (c *ownedHalfCloseConn) CloseWrite() error { return c.closeWrite() }

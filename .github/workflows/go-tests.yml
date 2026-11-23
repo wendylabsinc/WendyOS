@@ -1,94 +1,37 @@
 name: Go Tests
 
 on:
-  # Populate caches on the default branch so new PRs can reuse them.
-  push:
-    branches: [main]
-    paths:
-      - '.gitattributes'
-      - '.github/dependabot.yml'
-      - 'go/**'
-      - 'web-client/public/**'
-      - 'web-client/package.json'
-      - 'web-client/package-lock.json'
-      - 'web-client/tests/credential-store.test.mjs'
-      - 'web-client/tests/wendy-web-bridge.test.mjs'
-      - 'web-client/scripts/build-wasm.mjs'
-      - 'go/simulator/go2/go2_sim/**'
-      - 'Proto/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/**'
-      - '.github/actions/setup-go-ci/**'
-      - '.github/actions/release-priority/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.github/scripts/**'
-      - '.github/ci-tests/memory-budget/**'
-      - '.github/ci-tests/host-sensor-loopback/**'
-      - '.github/ci-tests/python-gpu/**'
-      - '.github/ci-tests/python-onnx-gpu/**'
-      - '.github/regression-coverage/manual/**'
-      - 'plugins/**'
-      - 'scripts/sync-agent-skills.py'
-      - 'scripts/package-chatgpt-plugin.py'
-      - 'scripts/test-package-chatgpt-plugin.py'
-      - 'scripts/pin-cli.sh'
-      - 'scripts/test/plugin-launcher/**'
-      - 'packaging/linux/fpm/**'
-      - 'swift/Scripts/SetupSigningCI.sh'
-      - 'swift/Scripts/Build.sh'
-      - 'Examples/SO101Reader/**'
-  pull_request:
-    paths:
-      - '.gitattributes'
-      - '.github/dependabot.yml'
-      - 'go/**'
-      - 'web-client/public/**'
-      - 'web-client/package.json'
-      - 'web-client/package-lock.json'
-      - 'web-client/tests/credential-store.test.mjs'
-      - 'web-client/tests/wendy-web-bridge.test.mjs'
-      - 'web-client/scripts/build-wasm.mjs'
-      - 'go/simulator/go2/go2_sim/**'
-      - 'Proto/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/**'
-      - '.github/actions/setup-go-ci/**'
-      - '.github/actions/release-priority/**'
-      - '.github/actions/check-runner-disk/**'
-      - '.github/scripts/**'
-      - '.github/ci-tests/memory-budget/**'
-      - '.github/ci-tests/host-sensor-loopback/**'
-      - '.github/ci-tests/python-gpu/**'
-      - '.github/ci-tests/python-onnx-gpu/**'
-      - '.github/regression-coverage/manual/**'
-      - 'plugins/**'
-      - 'scripts/sync-agent-skills.py'
-      - 'scripts/package-chatgpt-plugin.py'
-      - 'scripts/test-package-chatgpt-plugin.py'
-      - 'scripts/pin-cli.sh'
-      - 'scripts/test/plugin-launcher/**'
-      - 'packaging/linux/fpm/**'
-      - 'swift/Scripts/SetupSigningCI.sh'
-      - 'swift/Scripts/Build.sh'
-      - 'Examples/SO101Reader/**'
+  workflow_call:
+    inputs:
+      media_only:
+        type: boolean
+        default: false
+        description: Run only the Linux media regressions
+  workflow_dispatch:
+    inputs:
+      media_only:
+        type: boolean
+        default: false
+        description: Run only the Linux media regressions
 
 concurrency:
-  group: go-tests-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: go-tests-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   plugin-launcher:
+    if: ${{ !inputs.media_only }}
     uses: ./.github/workflows/plugin-launcher.yml
 
   dependency-security:
+    if: ${{ !inputs.media_only }}
     uses: ./.github/workflows/security.yml
 
   automation-regressions:
+    if: ${{ !inputs.media_only }}
     name: Offline automation regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -103,11 +46,19 @@ jobs:
         with:
           node-version: '24.22.1'
       - name: Install the review SDK and fixture dependencies
-        run: python -m pip install -r .github/scripts/requirements-regression-tests.txt
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y libarchive-tools
+          python -m pip install -r .github/scripts/requirements-regression-tests.txt
       - name: Exercise review, event and failure contracts without publishing
-        run: python .github/scripts/run-automation-regressions.py
+        run: |
+          python .github/scripts/run-automation-regressions.py
+          python -m unittest discover -s Examples/WendyDataModelApp -p 'test_*.py'
+      - name: Require eval accounting, tool guards and process deadlines
+        run: python .github/scripts/run-eval-regressions.py
 
   shared-grpc-api-contracts:
+    if: ${{ !inputs.media_only }}
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -117,11 +68,11 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Verify shared contract pin is on service-protos master
+      - name: Verify shared contract pin is on service-protos main
         run: |
           source Proto/shared-grpc-api-contracts.sh
           check_shared_grpc_api_contracts_ancestry
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -142,6 +93,7 @@ jobs:
         run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
 
   babel:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Babel tests
@@ -156,7 +108,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # Use the repository's maintained compiler; Babel's module keeps its
           # own minimum language version for library consumers.
@@ -171,6 +123,7 @@ jobs:
         run: go vet ./...
 
   unit-tests:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Race tests
@@ -230,12 +183,94 @@ jobs:
           python3 scripts/test-package-chatgpt-plugin.py
           python3 scripts/package-chatgpt-plugin.py --check
 
+  transport-regressions:
+    if: ${{ !inputs.media_only }}
+    name: Transport and first-boot regressions
+    # Kept out of Race tests, whose budget is bounded at 30 minutes.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: transport-regressions
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev iproute2 dnsmasq-base busybox
+
+      - name: Test bounded physical thermal capture helper
+        run: go test -race ./.github/scripts/fixtures/topdon-physical-capture -count=1 -timeout=60s
+
+      - name: Require authenticated BLE transport after interval refusal
+        run: python3 .github/scripts/test-ble-interval-transport.py "$RUNNER_TEMP/ble-interval-transport"
+      - name: Retain BLE interval transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ble-interval-transport
+          path: ${{ runner.temp }}/ble-interval-transport
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require actual serial disconnect and retry classification
+        timeout-minutes: 10
+        env:
+          GOFLAGS: '-gcflags=all=-c=1 -vet=off'
+        run: python3 .github/scripts/test-serial-disconnect.py "$RUNNER_TEMP/serial-disconnect"
+      - name: Require sensor tenant identity and certificate policy over real TLS
+        timeout-minutes: 7
+        env:
+          GOFLAGS: '-gcflags=all=-c=1 -vet=off'
+        run: |
+          python3 .github/scripts/test-sensor-asset-identity.py "$RUNNER_TEMP/sensor-asset-identity"
+          python3 .github/scripts/test-mldsa-policy-transport.py "$RUNNER_TEMP/mldsa-policy-transport"
+      - name: Retain serial disconnect evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: serial-and-sensor-transport
+          path: |
+            ${{ runner.temp }}/serial-disconnect/*.log
+            ${{ runner.temp }}/serial-disconnect/sources.json
+            ${{ runner.temp }}/sensor-asset-identity/*.log
+            ${{ runner.temp }}/sensor-asset-identity/evidence.json
+            ${{ runner.temp }}/mldsa-policy-transport/*.log
+            ${{ runner.temp }}/mldsa-policy-transport/evidence.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require first-boot driver reconnect and target guards
+        run: python3 .github/scripts/test-firstboot-driver-transport.py --output "$RUNNER_TEMP/firstboot-driver-transport"
+      - name: Retain first-boot driver transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: firstboot-driver-transport
+          path: ${{ runner.temp }}/firstboot-driver-transport
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require delayed first-boot enrollment and its regression control
+        run: python3 .github/scripts/test-firstboot-enrollment.py --output "$RUNNER_TEMP/firstboot-enrollment"
+
+      - name: Retain first-boot enrollment evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: firstboot-enrollment
+          path: ${{ runner.temp }}/firstboot-enrollment
+          if-no-files-found: ignore
+          retention-days: 7
+
   containerd-regressions:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Containerd lifecycle, DNS and resource regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -312,10 +347,11 @@ jobs:
           PY
           go test -overlay "$RUNNER_TEMP/host-dns-overlay.json" -c -o "$RUNNER_TEMP/host-dns-pinned.test" ./go/internal/agent/containerd
       - name: Extract both runtimes without replacing the runner daemon
+        id: runtimes
         run: |
           sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update --error-on=any
-          sudo apt-get install -y systemd-resolved dbus iproute2 util-linux
+          sudo apt-get install -y systemd-resolved dbus iproute2 util-linux libusb-1.0-0-dev libasound2-dev pkg-config qemu-system-x86 qemu-utils e2fsprogs
           root="$RUNNER_TEMP/wendy-runtime"
           mkdir -p "$root/common"
           (
@@ -335,11 +371,87 @@ jobs:
           done
       - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
         run: bash .github/scripts/test-containerd-versions.sh
+      - name: Require real Compose watch sessions and regression controls
+        timeout-minutes: 15
+        run: |
+          bash .github/scripts/prepare-watch-container.sh "$RUNNER_TEMP/watch-container"
+          bash .github/scripts/prepare-multiapp-lifecycle.sh "$RUNNER_TEMP/watch-container"
+          runtime="$RUNNER_TEMP/wendy-runtime/current/root"
+          common="$RUNNER_TEMP/wendy-runtime/common/root"
+          runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$common/usr/bin:$common/usr/sbin:$common/bin:$common/sbin:$PATH"
+          for case_name in normal forced-detach restart-sibling multiapp-normal early-readiness ignored-service-env retained-isolation; do
+            sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+              bash .github/scripts/test-watch-container.sh "$RUNNER_TEMP/containerd.test" "$RUNNER_TEMP/watch-container" "$case_name"
+          done
+      - name: Preserve Compose watch evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: watch-container
+          path: ${{ runner.temp }}/watch-container/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Prepare real ROS scope image and regression controls
+        run: |
+          python3 .github/scripts/ros_scope_runtime_test.py
+          python3 .github/scripts/prepare-ros-scope-runtime.py --output "$RUNNER_TEMP/ros-scopes"
+      - name: Require actual DDS visibility for network and peripheral scopes
+        run: |
+          runtime="$RUNNER_TEMP/wendy-runtime/current/root"
+          common="$RUNNER_TEMP/wendy-runtime/common/root"
+          runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$common/usr/bin:$common/usr/sbin:$common/bin:$common/sbin:$PATH"
+          for case_name in normal old-loopback fail-open-routes; do
+            binary="$RUNNER_TEMP/ros-scopes/$case_name.test"
+            if [[ $case_name == normal ]]; then binary="$RUNNER_TEMP/containerd.test"; fi
+            sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+              bash .github/scripts/test-ros-scope-runtime.sh "$binary" "$RUNNER_TEMP/ros-scopes" "$case_name"
+          done
+      - name: Preserve ROS scope visibility evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ros-scope-runtime
+          path: |
+            ${{ runner.temp }}/ros-scopes/*.log
+            ${{ runner.temp }}/ros-scopes/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove exported ROS fixture image and controls
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ros-scopes/ros-image.tar" "$RUNNER_TEMP/ros-scopes/old-loopback.test" "$RUNNER_TEMP/ros-scopes/fail-open-routes.test"
+      - name: Require real kernel driver install, replacement, rollback and reboot
+        if: ${{ !cancelled() && steps.runtimes.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          # Software emulation ran each driver install for over a minute and
+          # exhausted the guest deadline. Hosted Linux runners expose KVM.
+          if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm; fi
+          python3 .github/scripts/test-driver-lifecycle-vm.py --work-parent "$RUNNER_TEMP" --output "$RUNNER_TEMP/driver-lifecycle-vm"
+      - name: Preserve driver lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: driver-lifecycle-vm
+          path: ${{ runner.temp }}/driver-lifecycle-vm
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require rootful ESP-IDF generated-file ownership
+        timeout-minutes: 35
+        run: python3 .github/scripts/test-esp-idf-ownership.py --output "$RUNNER_TEMP/esp-idf-ownership"
+      - name: Preserve ESP-IDF ownership evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: esp-idf-ownership
+          path: ${{ runner.temp }}/esp-idf-ownership
+          if-no-files-found: ignore
+          retention-days: 7
 
   linux-install-host:
+    if: ${{ !inputs.media_only }}
     name: Linux install safety
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -350,9 +462,34 @@ jobs:
       - name: Install disposable block-device tools
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
+          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config musl-tools ruby ruby-dev build-essential rpm cpio libarchive-tools systemd-container curl bzip2 python3-yaml
+          sudo gem install fpm -v 1.18.0 --no-document
       - name: Verify native Make VERSION in the built CLI
-        run: python3 .github/scripts/test-native-make-version.py
+        run: python3 .github/scripts/test-native-make-version.py --retain-binary "$RUNNER_TEMP/wendy-stagefile-cli"
+      - name: Execute the README installer with the actual candidate CLI
+        timeout-minutes: 5
+        run: python3 .github/scripts/test-readme-install.py --cli "$RUNNER_TEMP/wendy-stagefile-cli" --evidence "$RUNNER_TEMP/readme-install-evidence"
+      - name: Preserve README installation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: readme-install-execution
+          path: ${{ runner.temp }}/readme-install-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Build and execute inherited Stagefiles with both packaged backends
+        run: python3 .github/scripts/test-stagefile-images.py "$RUNNER_TEMP/wendy-stagefile-cli" --output "$RUNNER_TEMP/stagefile-images"
+      - name: Preserve Stagefile execution evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: stagefile-images-pr
+          path: ${{ runner.temp }}/stagefile-images
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove retained fixture CLI
+        if: always()
+        run: rm -f "$RUNNER_TEMP/wendy-stagefile-cli"
       - name: Compile host fixtures
         run: |
           go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
@@ -371,11 +508,36 @@ jobs:
         run: |
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
+      - name: Verify package artifact and guest cleanup controls
+        run: |
+          python3 .github/scripts/installed_linux_packages_test.py
+          python3 .github/scripts/installed_linux_package_guests_test.py
+      - name: Require a clean native runtime guest build and executable tools
+        run: python3 .github/scripts/test-runtime-guest-bootstrap.py --output "$RUNNER_TEMP/runtime-bootstrap"
+      - name: Preserve runtime bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: runtime-bootstrap-pr
+          path: ${{ runner.temp }}/runtime-bootstrap
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require native Agent package upgrades on Ubuntu and Fedora
+        run: bash .github/scripts/test-linux-packages-pr.sh "$RUNNER_TEMP/package-regressions"
+      - name: Preserve package upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: installed-linux-packages-pr
+          path: ${{ runner.temp }}/package-regressions
+          if-no-files-found: ignore
+          retention-days: 7
 
   network-regressions:
+    if: ${{ !inputs.media_only }}
     name: Linux network regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -386,9 +548,204 @@ jobs:
       - name: Install network fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+          sudo apt-get install -y avahi-daemon iproute2 iptables dnsmasq-base iputils-ping util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+      - name: Install USB profile dependencies with isolated service policy
+        run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
+      - name: Require stale Bluetooth bond recovery over private D-Bus
+        run: bash .github/scripts/test-stale-bond-dbus.sh "$RUNNER_TEMP/stale-bond-dbus"
+      - name: Require GATT disconnect wakeup and connection ownership
+        run: bash .github/scripts/test-gatt-disconnect-dbus.sh "$RUNNER_TEMP/gatt-disconnect-dbus"
+      - name: Preserve GATT disconnect evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: gatt-disconnect-dbus
+          path: ${{ runner.temp }}/gatt-disconnect-dbus/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require native Linux SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Main immediately before #2579. Compile its real ownership and
+          # cleanup paths unchanged to prove warm rollback compatibility.
+          ref: ceef5cfa15f6739b04559a365a617e1dd287ae47
+          path: .ci/operator-baseline
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Original rollback baseline documented with the kernel fixture.
+          ref: 581bff3a8aeb368680f346a9785934eef14848d7
+          path: .ci/operator-original-baseline
+          persist-credentials: false
+      - name: Compile current and pre-operator agent paths
+        run: |
+          test "$(git -C .ci/operator-baseline rev-parse HEAD)" = ceef5cfa15f6739b04559a365a617e1dd287ae47
+          test "$(git -C .ci/operator-original-baseline rev-parse HEAD)" = 581bff3a8aeb368680f346a9785934eef14848d7
+          go test -c -o "$RUNNER_TEMP/operator-current.test" ./go/internal/agent/localmesh
+          for baseline in operator-baseline operator-original-baseline; do
+            (
+              cd ".ci/$baseline"
+              go test -c -o "$RUNNER_TEMP/$baseline.test" ./go/internal/agent/localmesh
+              test -z "$(git status --porcelain)"
+            )
+          done
+      - name: Require live registry and management connection lifetimes
+        run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
+      - name: Require Cloud notification identity, retry and redaction contracts
+        run: bash .github/scripts/test-cloud-notification-contract.sh
+      - name: Require live relay traffic through stalled renewal and path changes
+        run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
+      - name: Require explicit disconnect intent across native process restarts
+        run: bash .github/scripts/test-operator-native-restart.sh "$RUNNER_TEMP/operator-native-restart"
+      - name: Require cold broker recovery and retained spare carrier traffic
+        run: bash .github/scripts/test-operator-spare-recovery.sh "$RUNNER_TEMP/operator-spare-recovery"
+      - name: Require persisted clock trust and packet expiry across restarts
+        run: bash .github/scripts/test-clock-packet-restart.sh "$RUNNER_TEMP/clock-packet-restart"
+      - name: Require service publication recovery through renewed identities
+        run: bash .github/scripts/test-service-packet-recovery.sh "$RUNNER_TEMP/service-packet-recovery"
+      - name: Preserve service publication evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: service-packet-recovery
+          path: ${{ runner.temp }}/service-packet-recovery
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require publication-loss recovery through an alternate supplier
+        run: bash .github/scripts/test-publication-loss-packets.sh "$RUNNER_TEMP/publication-loss-packets"
+      - name: Preserve alternate publication recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-loss-packets
+          path: ${{ runner.temp }}/publication-loss-packets
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require full-duration chunk stall recovery over TCP and disk
+        run: bash .github/scripts/test-chunk-stall-transport.sh "$RUNNER_TEMP/chunk-stall-transport"
+      - name: Require elevated cache and session broker ownership boundaries
+        run: bash .github/scripts/test-chunk-stall-ownership.sh "$RUNNER_TEMP/chunk-stall-ownership"
+      - name: Require link-local traffic across competing interface routes
+        run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
+      - name: Require USB profile migration across recreated interfaces
+        run: bash .github/scripts/test-usb-profile-namespace.sh "$RUNNER_TEMP/usb-profile-namespace"
+      - name: Require broker uplink migration after active sessions drain
+        run: bash .github/scripts/test-broker-uplink-namespace.sh "$RUNNER_TEMP/broker-uplink"
+      - name: Preserve transfer and interface recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: transfer-interface-recovery
+          path: |
+            ${{ runner.temp }}/stale-bond-dbus/*.log
+            ${{ runner.temp }}/chunk-stall-transport/*.log
+            ${{ runner.temp }}/chunk-stall-ownership/*.log
+            ${{ runner.temp }}/linklocal-multi-interface/*.log
+            ${{ runner.temp }}/broker-uplink/*.log
+            ${{ runner.temp }}/usb-profile-namespace/**/*.log
+            ${{ runner.temp }}/usb-profile-namespace/**/*.json
+            ${{ runner.temp }}/usb-profile-dependencies/*.log
+            ${{ runner.temp }}/usb-profile-dependencies/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require slow gateway lease continuation through controller steps
+        timeout-minutes: 10
+        run: |
+          python3 .github/scripts/prepare-sharing-slow-lease.py "$RUNNER_TEMP/sharing-slow-lease"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT .github/scripts/test-sharing-slow-lease.sh "$RUNNER_TEMP/sharing-slow-lease/normal.test" "$RUNNER_TEMP/sharing-slow-lease/control.test" "$RUNNER_TEMP/sharing-slow-lease"
+      - name: Retain slow gateway lease evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sharing-slow-lease
+          path: |
+            ${{ runner.temp }}/sharing-slow-lease/*.log
+            ${{ runner.temp }}/sharing-slow-lease/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require RTPS packets to stay on joined interfaces
+        timeout-minutes: 5
+        run: bash .github/scripts/test-rtps-multicast-isolation.sh "$RUNNER_TEMP/rtps-multicast-isolation"
+      - name: Retain RTPS interface packet evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rtps-multicast-isolation
+          path: |
+            ${{ runner.temp }}/rtps-multicast-isolation/*.log
+            ${{ runner.temp }}/rtps-multicast-isolation/source.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Require wired-only automatic ROS discovery
+        run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
+      - name: Require TLS UDP admission and recovery under a stalled stream
+        run: bash .github/scripts/test-tls-udp-admission.sh "$RUNNER_TEMP/tls-udp-admission"
+      - name: Require duplicate rejection with an incumbent forwarding route
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/operator-current.test" TestDuplicateCarrierPreservesLiveRoute | tee "$RUNNER_TEMP/duplicate-route.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/duplicate-route.log"; then exit 1; fi
+          grep -q '^--- PASS: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-route.log"
+      - name: Prove rejection happens before routing publication
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          source = Path('go/internal/agent/localmesh/node.go').resolve()
+          text = source.read_text()
+          guard = '\tif !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {\n\t\treturn nil\n\t}\n'
+          bind = '\tBindConnectionLink(ctx, p.id, p.cost, p.signalCapacityRetire)\n'
+          assert text.count(guard) == 1 and text.count(bind) == 1
+          # Reproduce the original ordering: publish a link before arbitration.
+          mutated = root / 'duplicate-late-admission.go'
+          mutated.write_text(text.replace(guard, '').replace(bind, guard + bind))
+          (root / 'duplicate-late-admission.json').write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PYCODE
+          go test -overlay="$RUNNER_TEMP/duplicate-late-admission.json" -c -o "$RUNNER_TEMP/duplicate-late-admission.test" ./go/internal/agent/localmesh
+          if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/duplicate-late-admission.test" TestDuplicateCarrierPreservesLiveRoute 2>&1 | tee "$RUNNER_TEMP/duplicate-late-admission.log"; then
+            echo 'Late duplicate arbitration unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'rejected duplicate published a routing link' "$RUNNER_TEMP/duplicate-late-admission.log"
+          grep -q '^--- FAIL: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-late-admission.log"
+      - name: Require real native TLS listener drain and Lite carrier attachment
+        shell: bash
+        run: |
+          set -o pipefail
+          for name in TestNormalNativeTLSListenerAttachmentAndDrain TestNormalNativeTLSLANDialsLitePeer; do
+            sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/operator-current.test" "$name" | tee "$RUNNER_TEMP/$name.log"
+            if grep -q -- '--- SKIP:' "$RUNNER_TEMP/$name.log"; then exit 1; fi
+            grep -q "^--- PASS: $name " "$RUNNER_TEMP/$name.log"
+          done
+      - name: Retain native carrier attachment evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-carrier-attachment
+          path: ${{ runner.temp }}/TestNormalNativeTLS*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # These four ran as separate jobs before the shared network job existed. They
+  # stay separate so a failure in one cannot skip the others.
+  packet-backends:
+    if: ${{ !inputs.media_only }}
+    name: Kernel and userspace packet contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: packet-backends
+      - name: Install kernel networking tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile both packet backends with the race detector
         run: go test -race -c -o "$RUNNER_TEMP/packet-backends.test" ./go/internal/cli/netmesh
       - name: Require identical tenant and route behavior
@@ -433,6 +790,20 @@ jobs:
           grep -q 'foreign tenant acquired a packet port' "$RUNNER_TEMP/tenant.log"
           grep -q 'unrouted packet reached carrier: withdrawn' "$RUNNER_TEMP/withdrawal.log"
 
+  multicast-interfaces:
+    if: ${{ !inputs.media_only }}
+    name: Multicast interface lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: multicast-interfaces
+      - name: Install namespace tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y iproute2 util-linux
       - name: Compile real multicast receiver with the race detector
         run: go test -race -c -o "$RUNNER_TEMP/multicast.test" ./go/internal/agent/timesync
       - name: Require delivery across interface hotplug and removal
@@ -465,6 +836,13 @@ jobs:
           grep -q 'multicast proof never arrived on time2' "$RUNNER_TEMP/multicast-startup-only.log"
           grep -q '^--- FAIL: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast-startup-only.log"
 
+  operator-policy:
+    if: ${{ !inputs.media_only }}
+    name: Mesh operator policy and rollback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Main immediately before #2579. Compile its real ownership and
@@ -478,6 +856,13 @@ jobs:
           ref: 581bff3a8aeb368680f346a9785934eef14848d7
           path: .ci/operator-original-baseline
           persist-credentials: false
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: operator-policy
+      - name: Install kernel policy test dependencies
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile current and pre-operator agent paths
         run: |
           test "$(git -C .ci/operator-baseline rev-parse HEAD)" = ceef5cfa15f6739b04559a365a617e1dd287ae47
@@ -490,47 +875,6 @@ jobs:
               test -z "$(git status --porcelain)"
             )
           done
-      - name: Require live registry and management connection lifetimes
-        run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
-      - name: Require Cloud notification identity, retry and redaction contracts
-        run: bash .github/scripts/test-cloud-notification-contract.sh
-      - name: Require live relay traffic through stalled renewal and path changes
-        run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
-      - name: Require wired-only automatic ROS discovery
-        run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
-      - name: Require TLS UDP admission and recovery under a stalled stream
-        run: bash .github/scripts/test-tls-udp-admission.sh "$RUNNER_TEMP/tls-udp-admission"
-      - name: Require duplicate rejection with an incumbent forwarding route
-        shell: bash
-        run: |
-          set -o pipefail
-          sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/operator-current.test" TestDuplicateCarrierPreservesLiveRoute | tee "$RUNNER_TEMP/duplicate-route.log"
-          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/duplicate-route.log"; then exit 1; fi
-          grep -q '^--- PASS: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-route.log"
-      - name: Prove rejection happens before routing publication
-        shell: bash
-        run: |
-          python3 - <<'PYCODE'
-          import json, os
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP'])
-          source = Path('go/internal/agent/localmesh/node.go').resolve()
-          text = source.read_text()
-          guard = '\tif !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {\n\t\treturn nil\n\t}\n'
-          bind = '\tBindConnectionLink(ctx, p.id, p.cost, p.signalCapacityRetire)\n'
-          assert text.count(guard) == 1 and text.count(bind) == 1
-          # Reproduce the original ordering: publish a link before arbitration.
-          mutated = root / 'duplicate-late-admission.go'
-          mutated.write_text(text.replace(guard, '').replace(bind, guard + bind))
-          (root / 'duplicate-late-admission.json').write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
-          PYCODE
-          go test -overlay="$RUNNER_TEMP/duplicate-late-admission.json" -c -o "$RUNNER_TEMP/duplicate-late-admission.test" ./go/internal/agent/localmesh
-          if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/duplicate-late-admission.test" TestDuplicateCarrierPreservesLiveRoute 2>&1 | tee "$RUNNER_TEMP/duplicate-late-admission.log"; then
-            echo 'Late duplicate arbitration unexpectedly passed' >&2
-            exit 1
-          fi
-          grep -q 'rejected duplicate published a routing link' "$RUNNER_TEMP/duplicate-late-admission.log"
-          grep -q '^--- FAIL: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-late-admission.log"
       - name: Require operator routing, warm rollback and DNS cleanup
         shell: bash
         run: |
@@ -546,12 +890,26 @@ jobs:
             done
           done
 
+  hostname-restart:
+    if: ${{ !inputs.media_only }}
+    name: Hostname and mDNS restart
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: wendylabsinc/WendyOS-Builder
           ref: 954d4e8680c3e5ef6c5fc7b6179902149cebd830
           path: .ci/hostname-builder
           persist-credentials: false
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: hostname-restart
+      - name: Install namespace and advertisement tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y avahi-daemon iproute2 util-linux libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile the actual rename and startup paths
         run: go test -c -o "$RUNNER_TEMP/hostname.test" ./go/internal/agent/configpartition
       - name: Require hostname and wire advertisement after process restart
@@ -562,32 +920,48 @@ jobs:
           grep -q '^--- PASS: TestDeviceNameRestartIntegration ' "$RUNNER_TEMP/hostname-restart.log"
 
   darwin-install-host:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: macOS CLI and device regressions
-    runs-on: macos-15
-    timeout-minutes: 25
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
+
+      - uses: ./.github/actions/setup-macos-ci
+
       - name: Require native macOS SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Require native G1 source cache publication and failure cleanup
+        run: python3 .github/scripts/test-g1-cache-publication.py --output "$RUNNER_TEMP/g1-cache-publication"
+      - name: Preserve G1 source cache filesystem evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: g1-cache-publication
+          path: |
+            ${{ runner.temp }}/g1-cache-publication/*.json
+            ${{ runner.temp }}/g1-cache-publication/*.jsonl
+            ${{ runner.temp }}/g1-cache-publication/*.stderr.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Install CLI native dependencies
+        run: brew install libusb pkg-config
       - name: Test direct and nested USB disk discovery
         shell: bash
         run: |
           go test ./go/internal/cli/tegraflash/t234 -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksNestedHub ' "$RUNNER_TEMP/disk-discovery.log"
           grep -q '^--- PASS: TestParseUMSDisksDirect ' "$RUNNER_TEMP/disk-discovery.log"
-      - name: Install CLI native dependencies
-        run: brew install libusb pkg-config
       - name: Verify native Make VERSION in the built CLI
         run: python3 .github/scripts/test-native-make-version.py
       - name: Compile raw-device and target-scoped preparation tests
@@ -595,14 +969,55 @@ jobs:
       - name: Require disposable disk image regressions
         shell: bash
         run: |
-          sudo env WENDY_E2E_DISKIMAGE=1 "$RUNNER_TEMP/install.test" -test.run '^(TestRelocateGPTDarwinRawDiskImage|TestMarkFATVolumes_DiskImage|TestStopTargetIndexing|TestStopTargetIndexingNoMountedFAT|TestUnmountDarwinDisk)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
+          env WENDY_E2E_DISKIMAGE=1 "$RUNNER_TEMP/install.test" -test.run '^(TestRelocateGPTDarwinRawDiskImage|TestMarkFATVolumes_DiskImage|TestStopTargetIndexing|TestStopTargetIndexingNoMountedFAT|TestUnmountDarwinDisk)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
           for test in TestRelocateGPTDarwinRawDiskImage TestMarkFATVolumes_DiskImage TestStopTargetIndexing TestStopTargetIndexingNoMountedFAT TestUnmountDarwinDisk; do
             grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
           done
+      - name: Require native resolver and stale discovery cache regressions
+        run: bash .github/scripts/test-darwin-discovery.sh
+
+  twin-linux-bundles:
+    if: ${{ !inputs.media_only }}
+    name: Linux digital twin bundle (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build and test the native Linux runtime and bundle
+        env:
+          WENDY_TWIN_BUILD_ARCH: ${{ matrix.arch }}
+          TARGET_BUILD_DIR: ${{ runner.temp }}/twin-bundle
+          UNLOCALIZED_RESOURCES_FOLDER_PATH: ''
+        run: python3 go/macos/Scripts/bundle-twin.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: twin-linux-bundle-${{ matrix.arch }}
+          path: ${{ runner.temp }}/twin-bundle/DigitalTwin/*
+          if-no-files-found: error
 
   native-app-regressions:
+    if: ${{ !inputs.media_only }}
     name: Native app regressions (${{ matrix.platform }})
-    runs-on: macos-26
+    needs: twin-linux-bundles
+    env:
+      WENDY_TWIN_BUNDLE_DIR: ${{ github.workspace }}/go/macos/Build/PrebuiltDigitalTwin
+    runs-on:
+      group: wendy-mac
+      labels: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -612,19 +1027,50 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+
+      - uses: ./.github/actions/setup-macos-ci
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: '26.5'
       - name: Install native build dependencies
         run: brew install xcodegen pkg-config libusb cmake ninja
+      - name: Download Linux bundles built from this commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: twin-linux-bundle-*
+          merge-multiple: true
+          path: go/macos/Build/PrebuiltDigitalTwin
       - name: Build and test native app
         env:
           APP_PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/test-native-app.sh "$APP_PLATFORM"
+      - name: Require CLI enrollment through production Mac provisioning
+        if: matrix.platform == 'macos'
+        timeout-minutes: 25
+        run: |
+          python3 .github/scripts/run-owned-media-test.py --timeout 600 -- go build -o "$RUNNER_TEMP/mac-enrollment-cli" ./go/cmd/wendy
+          bash .github/scripts/test-mac-enrollment.sh "$RUNNER_TEMP/mac-enrollment" "$RUNNER_TEMP/mac-enrollment-swift-core" "$RUNNER_TEMP/mac-enrollment-cli"
+      - name: Retain Mac enrollment evidence
+        if: always() && matrix.platform == 'macos'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mac-enrollment
+          path: |
+            ${{ runner.temp }}/mac-enrollment/build.log
+            ${{ runner.temp }}/mac-enrollment/runtime.log
+            ${{ runner.temp }}/mac-enrollment/evidence.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Exercise WendyNotify HTTP and private notification socket
+        if: matrix.platform == 'macos'
+        timeout-minutes: 15
+        run: swift test --package-path Examples/WendyNotify
+      - name: Exercise thermal metadata, freshness and notification thresholds
+        if: matrix.platform == 'macos'
+        timeout-minutes: 15
+        run: swift test --package-path Examples/ThermalNotify --force-resolved-versions
       - name: Upload native test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -636,7 +1082,7 @@ jobs:
   media-regressions:
     name: Linux media regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -647,7 +1093,9 @@ jobs:
       - name: Install camera and GStreamer fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules patch libelf-dev gcc-13 python3-venv
+          python3 .github/scripts/prepare-hosted-audio-modules.py
+          grep -qx 'WENDY_HOSTED_AUDIO=unavailable' "$GITHUB_ENV" || modinfo snd-aloop
           gst-inspect-1.0 fakesrc
           gst-inspect-1.0 fdsink
       - name: Compile the physical EGL probe and reject software fallback
@@ -669,25 +1117,81 @@ jobs:
           ref: 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4
           path: .ci-v4l2loopback
           persist-credentials: false
+      - name: Check out the exact Builder module candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: wendylabsinc/WendyOS-Builder
+          ref: 7206daae5b379794fbe36cf978cd77e3c5b0ec71
+          path: .ci-loopback-builder
+          sparse-checkout: recipes-kernel/v4l2loopback
+          persist-credentials: false
       - name: Build and load WendyOS loopback ABI
+        id: loopback-module
         run: |
+          set -euo pipefail
+          loopback_revision="$(git -C .ci-v4l2loopback rev-parse HEAD)"
+          if [[ "$loopback_revision" != 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4 ]]; then
+            echo "::error::Unexpected v4l2loopback source revision: $loopback_revision"
+            exit 1
+          fi
+          git -C .ci-v4l2loopback diff --exit-code HEAD --
+          # The pinned release's Git checkout includes this development marker.
+          # It makes MODULE_VERSION a git-describe snapshot instead of
+          # the canonical 0.15.4 header version. Remove only the marker, as in
+          # upstream's release tarball; keep the exact source and ABI guard.
+          rm -- .ci-v4l2loopback/.gitversion
           make -C .ci-v4l2loopback
+          loopback_version="$(modinfo -F version .ci-v4l2loopback/v4l2loopback.ko)"
+          if [[ "$loopback_version" != 0.15.4 ]]; then
+            echo "::error::Expected built v4l2loopback version 0.15.4; got <$loopback_version>"
+            exit 1
+          fi
           sudo modprobe videodev
           sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
+          echo 'loaded=true' >> "$GITHUB_OUTPUT"
           sudo udevadm settle
           test -c /dev/v4l2loopback
-      - name: Exercise the remove ioctl and require execution
-        shell: bash
+      - name: Require original failure and Builder candidate queue recovery
+        timeout-minutes: 8
         env:
-          CGO_ENABLED: '0'
-        run: |
-          trap 'sudo rmmod v4l2loopback' EXIT
-          go test -c -o "$RUNNER_TEMP/ipcam.test" ./go/internal/agent/ipcam
-          sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
-          grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
-
+          WENDY_LOOPBACK_JOB_OWNED: ${{ steps.loopback-module.outputs.loaded == 'true' && '1' || '0' }}
+        run: bash .github/scripts/test-v4l2-output-queue-module.sh .ci-v4l2loopback .ci-loopback-builder
+      - name: Preserve module comparison evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: v4l2-output-queue
+          path: |
+            ${{ runner.temp }}/wendy-output-queue.*/*.log
+            ${{ runner.temp }}/wendy-output-queue.*/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Decode authenticated Lite camera frames through the kernel node
+        run: bash .github/scripts/test-lite-camera-loopback.sh
       - name: Decode H264 without a producer parser and require regression controls
         run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Hand decoded MJPEG frames to the agent and run the encoder only for viewers
+        run: bash .github/scripts/test-camera-pixels-on-demand.sh
+      - name: Share one camera with two apps through kernel nodes and require regression controls
+        run: bash .github/scripts/test-camera-sharing.sh
+      - name: Preserve camera sharing and fresh reader evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: camera-sharing-fresh-readers
+          path: ${{ runner.temp }}/wendy-camera-sharing.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Decode native H264 for a late viewer and recording and require regression controls
+        run: bash .github/scripts/test-native-h264-parameter-sets.sh
+      - name: Require VP8 decoding after lost reads and oversized elements
+        env:
+          WENDY_GSTREAMER_REQUIRED: '1'
+        run: |
+          set -euo pipefail
+          test_name=TestGStreamerVP8DecodesAcrossLostReadsForViewersAndEpisodes
+          go test -race ./go/internal/agent/services -run "^${test_name}$" -v -count=1 -timeout 180s | tee "$RUNNER_TEMP/vp8-decoding.log"
+          grep -q "^--- PASS: $test_name " "$RUNNER_TEMP/vp8-decoding.log"
       - name: Require camera pairing before ONVIF and RTSP connections
         run: bash .github/scripts/test-camera-pairing-admission.sh
       - name: Preserve 16-bit thermal samples through the real raw tap
@@ -697,6 +1201,152 @@ jobs:
       - name: Decode shared app-owned camera capture and reject camera reopens
         run: bash .github/scripts/test-shared-camera-capture.sh
 
+      - name: Record distinct SensorLink microphones through ALSA with live PipeWire
+        if: env.WENDY_HOSTED_AUDIO != 'unavailable'
+        run: bash .github/scripts/test-sensorlink-audio-loopback.sh
+      - name: Preserve SensorLink audio execution evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sensorlink-audio-loopback
+          path: |
+            ${{ runner.temp }}/wendy-sensorlink-audio.*/*.log
+            ${{ runner.temp }}/wendy-lite-camera.*/*.log
+            ${{ runner.temp }}/wendy-source-restart.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require Go2 H264 decoding through the kernel and a camera-entitled container
+        timeout-minutes: 15
+        run: |
+          root="$RUNNER_TEMP/go2-runtime"
+          mkdir "$root"
+          (
+            cd "$root"
+            apt-get download containerd runc busybox-static
+            for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
+          )
+          runtime_path="$root/root/usr/bin:$root/root/usr/sbin:$root/root/bin:$root/root/sbin:$PATH"
+          env PATH="$runtime_path" bash .github/scripts/test-go2-h264-loopback.sh
+      - name: Preserve Go2 H264 evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go2-h264-loopback
+          path: ${{ runner.temp }}/wendy-go2-h264.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require kernel camera sample identity through model recording
+        timeout-minutes: 10
+        run: bash .github/scripts/test-v4l2-sample-ledger.sh
+      - name: Retain kernel camera sample identity evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: v4l2-sample-ledger
+          path: ${{ runner.temp }}/wendy-v4l2-ledger.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require authenticated IP-camera pump consumer lifecycle
+        run: bash .github/scripts/test-ipcam-loopback-lifecycle.sh
+      - name: Preserve IP-camera lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ipcam-loopback-lifecycle
+          path: ${{ runner.temp }}/wendy-ipcam-lifecycle.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove the owned fixture loopback module
+        if: always() && steps.loopback-module.outputs.loaded == 'true'
+        run: |
+          if test -d /sys/module/v4l2loopback; then
+            sudo rmmod v4l2loopback
+          fi
+
+  # These two ran as separate jobs before the shared media job existed. They
+  # stay separate so a failure in one cannot skip the other.
+  camera-node-regression:
+    if: ${{ !inputs.media_only }}
+    name: Camera node removal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: camera-node
+      - name: Install a real loopback control device
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential
+      # Match the WendyOS 0.15.4 ABI; Ubuntu's older package has different ioctls.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: v4l2loopback/v4l2loopback
+          ref: 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4
+          path: .ci-v4l2loopback
+          persist-credentials: false
+      - name: Build and load WendyOS loopback ABI
+        id: loopback-module
+        run: |
+          set -euo pipefail
+          loopback_revision="$(git -C .ci-v4l2loopback rev-parse HEAD)"
+          if [[ "$loopback_revision" != 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4 ]]; then
+            echo "::error::Unexpected v4l2loopback source revision: $loopback_revision"
+            exit 1
+          fi
+          git -C .ci-v4l2loopback diff --exit-code HEAD --
+          # The pinned release's Git checkout includes this development marker.
+          # It makes MODULE_VERSION a git-describe snapshot instead of
+          # the canonical 0.15.4 header version. Remove only the marker, as in
+          # upstream's release tarball; keep the exact source and ABI guard.
+          rm -- .ci-v4l2loopback/.gitversion
+          make -C .ci-v4l2loopback
+          loopback_version="$(modinfo -F version .ci-v4l2loopback/v4l2loopback.ko)"
+          if [[ "$loopback_version" != 0.15.4 ]]; then
+            echo "::error::Expected built v4l2loopback version 0.15.4; got <$loopback_version>"
+            exit 1
+          fi
+          sudo modprobe videodev
+          sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
+          echo 'loaded=true' >> "$GITHUB_OUTPUT"
+          sudo udevadm settle
+          test -c /dev/v4l2loopback
+      - name: Exercise the remove ioctl and require execution
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go test -c -o "$RUNNER_TEMP/ipcam.test" ./go/internal/agent/ipcam
+          sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
+          grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
+      - name: Remove the owned fixture loopback module
+        if: always() && steps.loopback-module.outputs.loaded == 'true'
+        run: |
+          if test -d /sys/module/v4l2loopback; then
+            sudo rmmod v4l2loopback
+          fi
+
+  gstreamer-regressions:
+    if: ${{ !inputs.media_only }}
+    name: GStreamer output and cancellation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: gstreamer
+      - name: Install GStreamer core elements
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-tools libasound2-dev libusb-1.0-0-dev
+          gst-inspect-1.0 fakesrc
+          gst-inspect-1.0 fdsink
       - name: Require actual pipeline output and shutdown
         shell: bash
         run: |
@@ -705,6 +1355,7 @@ jobs:
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
 
   windows:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Windows CLI
@@ -736,6 +1387,7 @@ jobs:
           go test -c -o /dev/null ./internal/cli/commands
 
   wasm:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Browser WASM
@@ -780,11 +1432,12 @@ jobs:
         run: go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth ./go/internal/shared/flock -count=1 -timeout 120s
 
   windows-telemetry:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Windows native regressions
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       CGO_ENABLED: '0'
     steps:
@@ -793,7 +1446,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -839,6 +1492,21 @@ jobs:
           go test ./internal/cli/commands -run '^(TestEnsureQEMUOnWindows|TestSimulatorWithoutDetachedSupport|TestDiscoverKeepsScanningWhenSimulatorNeedsForegroundStart|TestDiscoverSimulatorGuidanceFitsPopulatedTerminal|TestVMStorage|TestVMImageSpace|TestVMCreate)' -v -count=1 -timeout 120s
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Boot packaged Windows QEMU and connect through the CLI
+        shell: pwsh
+        timeout-minutes: 26
+        run: python .github/scripts/test-windows-vm-boot.py "$env:RUNNER_TEMP/windows-vm-boot"
+      - name: Preserve Windows VM boot evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-vm-boot
+          path: |
+            ${{ runner.temp }}/windows-vm-boot/*.log
+            ${{ runner.temp }}/windows-vm-boot/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Test pending Windows serial I/O and close races
         shell: bash
         run: |
@@ -854,6 +1522,20 @@ jobs:
           grep -q '^--- PASS: TestUSBDriverHelperRegistration ' "$RUNNER_TEMP/usb-helpers.log"
           go test ./go/internal/cli/tegraflash/winusb ./go/internal/cli/qdl -run '^Test(Windows|Signing|Usable|Driver|Compatible|Version|Parse|Instance)' -v -count=1 -timeout 120s
 
+      - name: Require Windows link-local binding across competing routes
+        shell: pwsh
+        run: python .github/scripts/test-linklocal-windows.py "$env:RUNNER_TEMP/linklocal-windows"
+      - name: Preserve Windows interface recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-linklocal-recovery
+          path: |
+            ${{ runner.temp }}/linklocal-windows/**/*.log
+            ${{ runner.temp }}/linklocal-windows/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Rebuild embedded skill tests from a CRLF checkout
         shell: bash
         run: |
@@ -867,6 +1549,7 @@ jobs:
   # The agent embeds this Python worker and runs it on devices for campaign
   # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
   inference-worker:
+    if: ${{ !inputs.media_only }}
     name: Inference worker tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -881,7 +1564,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           # The uv the agent installs on devices (uvVersion in runtime.go).
           version: "0.10.9"
@@ -892,7 +1575,33 @@ jobs:
       - name: Run worker unit tests
         run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
 
+      - name: Set up Go for camera campaign runtime
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: camera-campaign-runtime
+      - name: Install camera campaign compile dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y pkg-config libasound2-dev libusb-1.0-0-dev
+      - name: Require YAML campaigns through the actual managed HF worker
+        working-directory: .
+        timeout-minutes: 12
+        run: python3 .github/scripts/test-camera-campaign-runtime.py --output "$RUNNER_TEMP/camera-campaign-runtime"
+      - name: Preserve camera campaign runtime evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: camera-campaign-runtime
+          path: |
+            ${{ runner.temp }}/camera-campaign-runtime/*.log
+            ${{ runner.temp }}/camera-campaign-runtime/*.json
+            ${{ runner.temp }}/camera-campaign-runtime/fixture/fixture.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   workflow-security:
+    if: ${{ !inputs.media_only }}
     name: Workflow security
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -908,6 +1617,7 @@ jobs:
   # The report queries under go/scripts/analytics only run against a real
   # PostgreSQL; without one their tests skip, so nothing else covers them.
   analytics-queries:
+    if: ${{ !inputs.media_only }}
     name: Analytics report queries
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -936,10 +1646,12 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: python3 -m unittest -v test_recovery
 
+
   simulator-python310:
+    if: ${{ !inputs.media_only }}
     name: ROS Humble simulator dependencies (${{ matrix.robot }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.robot == 'go2' && 40 || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -948,7 +1660,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: '0.10.9'
       - name: Install the shipped requirements on Python 3.10
@@ -959,14 +1671,98 @@ jobs:
           uv pip install --python .venv/bin/python -r "go/simulator/$ROBOT/requirements.txt"
           uv pip check --python .venv/bin/python
           .venv/bin/python .github/scripts/test-simulator-dependencies.py
+      - name: Require Coke HTTP and inference lifecycle regressions
+        if: matrix.robot == 'g1'
+        timeout-minutes: 18
+        run: |
+          .venv/bin/python .github/scripts/test-g1-coke-transports.py --output "$RUNNER_TEMP/coke-transports"
+          uv run --project Examples/G1CokeDemo --frozen --group dev --managed-python --python 3.12 python .github/scripts/test-g1-coke-review.py --output "$RUNNER_TEMP/coke-review"
+          uv run --project Examples/G1CokeDemo --frozen --group dev --managed-python --python 3.12 python .github/scripts/test-coke-physical-cleanup.py --output "$RUNNER_TEMP/coke-physical-cleanup"
+      - name: Require pinned DLA package extraction and existing-library control
+        if: matrix.robot == 'g1'
+        timeout-minutes: 4
+        run: python3 .github/scripts/test-coke-dla-package.py --output "$RUNNER_TEMP/coke-dla"
+      - name: Preserve Coke regression evidence
+        if: always() && matrix.robot == 'g1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: coke-regressions
+          path: |
+            ${{ runner.temp }}/coke-transports/**/*.log
+            ${{ runner.temp }}/coke-transports/**/*.json
+            ${{ runner.temp }}/coke-review/*.log
+            ${{ runner.temp }}/coke-review/*.json
+            ${{ runner.temp }}/coke-review/junit.xml
+            ${{ runner.temp }}/coke-dla/*.log
+            ${{ runner.temp }}/coke-dla/*.json
+            ${{ runner.temp }}/coke-physical-cleanup/*.log
+            ${{ runner.temp }}/coke-physical-cleanup/*.json
+            ${{ runner.temp }}/coke-physical-cleanup/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Set up Go for the Go2 bridge deadline fixture
+        if: matrix.robot == 'go2'
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: go2-bridge-deadlines
+      - name: Require ROS callbacks, Patrol flags and robot transport deadlines
+        if: matrix.robot == 'go2'
+        run: python3 .github/scripts/test-go2-bridge-deadlines.py --output "$RUNNER_TEMP/go2-bridge-deadlines"
+      - name: Preserve Go2 bridge deadline evidence
+        if: always() && matrix.robot == 'go2'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go2-bridge-deadlines
+          path: |
+            ${{ runner.temp }}/go2-bridge-deadlines/*.json
+            ${{ runner.temp }}/go2-bridge-deadlines/*.log
+            ${{ runner.temp }}/go2-bridge-deadlines/patrol/**/*.json
+            ${{ runner.temp }}/go2-bridge-deadlines/patrol/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Prepare isolated Foxglove runtime tools
+        if: matrix.robot == 'go2'
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y pkg-config libusb-1.0-0-dev util-linux iproute2
+          runtime="$RUNNER_TEMP/foxglove-runtime-tools"
+          mkdir -p "$runtime"
+          (
+            cd "$runtime"
+            apt-get download containerd runc
+            for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
+          )
+      - name: Require generated Foxglove deployment and real ROS forwarding
+        if: matrix.robot == 'go2'
+        timeout-minutes: 25
+        run: |
+          runtime="$RUNNER_TEMP/foxglove-runtime-tools/root"
+          env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
+            python3 .github/scripts/test-foxglove-runtime.py --output "$RUNNER_TEMP/foxglove-runtime"
+      - name: Preserve Foxglove deployment evidence
+        if: always() && matrix.robot == 'go2'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: foxglove-runtime
+          path: |
+            ${{ runner.temp }}/foxglove-runtime/*.log
+            ${{ runner.temp }}/foxglove-runtime/*.json
+            ${{ runner.temp }}/foxglove-runtime/*/Dockerfile
+            ${{ runner.temp }}/foxglove-runtime/*/wendy.json
+            ${{ runner.temp }}/foxglove-runtime/*/image-digest.txt
+            ${{ runner.temp }}/foxglove-runtime/*/installed-packages.txt
+            ${{ runner.temp }}/foxglove-runtime/*/containerd.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Preserve the existing required "Test" check after splitting its work.
   test:
     permissions:
       contents: read
     name: Test
-    if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher, workflow-security, analytics-queries]
+    if: ${{ always() && !inputs.media_only }}
+    needs: [shared-grpc-api-contracts, babel, unit-tests, transport-regressions, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, packet-backends, multicast-interfaces, operator-policy, hostname-restart, plugin-launcher, workflow-security, analytics-queries]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -974,17 +1770,24 @@ jobs:
           SHARED_GRPC_API_CONTRACTS_RESULT: ${{ needs.shared-grpc-api-contracts.result }}
           BABEL_RESULT: ${{ needs.babel.result }}
           RACE_RESULT: ${{ needs.unit-tests.result }}
+          TRANSPORT_RESULT: ${{ needs.transport-regressions.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           WINDOWS_TELEMETRY_RESULT: ${{ needs.windows-telemetry.result }}
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
           MEDIA_RESULT: ${{ needs.media-regressions.result }}
+          CAMERA_NODE_RESULT: ${{ needs.camera-node-regression.result }}
+          GSTREAMER_RESULT: ${{ needs.gstreamer-regressions.result }}
           SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
           NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
           AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
           NETWORK_RESULT: ${{ needs.network-regressions.result }}
+          PACKET_BACKENDS_RESULT: ${{ needs.packet-backends.result }}
+          MULTICAST_INTERFACES_RESULT: ${{ needs.multicast-interfaces.result }}
+          OPERATOR_POLICY_RESULT: ${{ needs.operator-policy.result }}
+          HOSTNAME_RESTART_RESULT: ${{ needs.hostname-restart.result }}
           LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
           DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
           PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
@@ -996,6 +1799,7 @@ jobs:
           test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
           test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
+          test "$TRANSPORT_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$WINDOWS_TELEMETRY_RESULT" = success
           test "$WASM_RESULT" = success
@@ -1004,11 +1808,17 @@ jobs:
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
           test "$MEDIA_RESULT" = success
+          test "$CAMERA_NODE_RESULT" = success
+          test "$GSTREAMER_RESULT" = success
           test "$SIMULATOR_PYTHON_RESULT" = success
           test "$NATIVE_APP_RESULT" = success
           test "$AUTOMATION_RESULT" = success
           test "$DEPENDENCY_SECURITY_RESULT" = success
           test "$NETWORK_RESULT" = success
+          test "$PACKET_BACKENDS_RESULT" = success
+          test "$MULTICAST_INTERFACES_RESULT" = success
+          test "$OPERATOR_POLICY_RESULT" = success
+          test "$HOSTNAME_RESTART_RESULT" = success
           test "$LINUX_INSTALL_RESULT" = success
           test "$DARWIN_INSTALL_RESULT" = success
           test "$PLUGIN_LAUNCHER_RESULT" = success
@@ -1016,6 +1826,7 @@ jobs:
           test "$WORKFLOW_SECURITY_RESULT" = success
 
   agent-startup:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Agent setup startup
@@ -1044,8 +1855,23 @@ jobs:
           name: agent-performance-smoke
           path: /tmp/agent-performance-smoke
           retention-days: 7
+      - name: Reject unknown own scope before exposing Agent mTLS
+        run: |
+          python3 .github/scripts/agent_own_scope_test.py
+          python3 .github/scripts/test-agent-own-scope.py --agent /tmp/wendy-agent --output "$RUNNER_TEMP/agent-own-scope"
+      - name: Retain actual Agent scope startup evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: agent-own-scope-startup
+          path: |
+            ${{ runner.temp }}/agent-own-scope/*.log
+            ${{ runner.temp }}/agent-own-scope/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   vet:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Vet
@@ -1070,35 +1896,8 @@ jobs:
       - name: Build and execute the API detector
         run: python3 .github/scripts/api-snapshot-smoke.py
 
-  format:
-    permissions:
-      contents: read
-    name: Format Check
-    runs-on: runs-on,runner=2cpu-linux-x64
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Check formatting
-        working-directory: go
-        run: |
-          UNFORMATTED=$(gofmt -l -s .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "The following files need formatting:"
-            echo "$UNFORMATTED"
-            echo ""
-            echo "Run 'gofmt -w -s .' to fix."
-            exit 1
-          fi
-
   shell-tests:
+    if: ${{ !inputs.media_only }}
     permissions:
       contents: read
     name: Install script tests

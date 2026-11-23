@@ -15,14 +15,24 @@ import (
 )
 
 type GalleryMetadata struct {
-	Types          []string `json:"types"`
-	Labels         []string `json:"labels"`
-	Complete       bool     `json:"complete"`
-	ContentKinds   []string `json:"contentKinds"`
-	HasVisualMedia bool     `json:"hasVisualMedia"`
+	Types           []string `json:"types"`
+	Labels          []string `json:"labels"`
+	Complete        bool     `json:"complete"`
+	ContentKinds    []string `json:"contentKinds"`
+	HasVisualMedia  bool     `json:"hasVisualMedia"`
+	NotificationIDs []string `json:"notificationIDs,omitempty"`
 }
 
 func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, error) {
+	return b.galleryMetadataAt(selector, episode, false)
+}
+
+// GalleryMediaAt reads only the manifest; content filtering never needs event logs.
+func (b *Backend) GalleryMediaAt(selector, episode string) (GalleryMetadata, error) {
+	return b.galleryMetadataAt(selector, episode, true)
+}
+
+func (b *Backend) galleryMetadataAt(selector, episode string, mediaOnly bool) (GalleryMetadata, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	conn, release, err := b.galleryAcquire(ctx, selector)
@@ -44,6 +54,10 @@ func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, 
 	}
 	if manifest.ID != episode {
 		return GalleryMetadata{}, errors.New("recording identity mismatch")
+	}
+	if mediaOnly {
+		return GalleryMetadata{Types: []string{}, Labels: []string{}, Complete: true,
+			ContentKinds: galleryContentKinds(manifest), HasVisualMedia: galleryHasVisualMedia(manifest)}, nil
 	}
 	var events []byte
 	complete := true
@@ -73,6 +87,7 @@ func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, 
 
 func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadata {
 	types, labels := map[string]bool{}, map[string]bool{}
+	notificationIDs := map[string]bool{}
 	addLabel := func(label string) {
 		if label != "" && len(label) <= 256 && len(labels) < 128 {
 			labels[label] = true
@@ -92,9 +107,10 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 			Type       string `json:"type"`
 			Name       string `json:"name"`
 			Attributes struct {
-				Task       string   `json:"task"`
-				Maximum    *float64 `json:"max_celsius"`
-				Detections []struct {
+				NotificationID string   `json:"notification_id"`
+				Task           string   `json:"task"`
+				Maximum        *float64 `json:"max_celsius"`
+				Detections     []struct {
 					Label string `json:"label"`
 				} `json:"detections"`
 				Label  string   `json:"label"`
@@ -108,6 +124,9 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 		if row.Type == "event" {
 			types["Event"] = true
 			addLabel(row.Name)
+			if id := row.Attributes.NotificationID; len(id) == 36 && len(notificationIDs) < 256 {
+				notificationIDs[id] = true
+			}
 		}
 		if row.Attributes.Maximum != nil {
 			types["Thermal"] = true
@@ -142,6 +161,10 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 		out.Labels = append(out.Labels, label)
 	}
 	sort.Strings(out.Labels)
+	for id := range notificationIDs {
+		out.NotificationIDs = append(out.NotificationIDs, id)
+	}
+	sort.Strings(out.NotificationIDs)
 	return out
 }
 

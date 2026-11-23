@@ -122,8 +122,11 @@ WDCampaignNotificationsResult *WDCampaignNotifications(uint64_t session);
 void WDCampaignNotificationsFree(WDCampaignNotificationsResult *value);
 WDStatus *WDSetCampaignNotifications(uint64_t session, char *name, int32_t enabled);
 WDStatus *WDPushRegistration(char *account, uint8_t *token, size_t count, char *topic, int32_t environment, int32_t enabled);
+WDStatus *WDManageDevice(uint64_t session, char *account, char *organization, char *device, char *name, int32_t remove);
+
 typedef struct {
-    char *id, *title, *body;
+    char *id, *title, *body, *organization_id, *deep_link;
+    char *recording_event_id, *recording_campaign;
     double created_at;
 } WDInboxNotification;
 typedef struct {
@@ -132,6 +135,6 @@ typedef struct {
     size_t count;
 } WDInboxResult;
 WDInboxResult *WDInbox(char *account);
+WDInboxResult *WDNotification(char *account, char *organization, char *id);
 void WDInboxFree(WDInboxResult *value);
-WDStatus *WDManageDevice(uint64_t session, char *account, char *organization, char *device, char *name, int32_t remove);
 #endif
