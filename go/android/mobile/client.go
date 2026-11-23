@@ -88,6 +88,18 @@ func New() *Client {
 		"Apps": b.Apps, "StartApp": b.StartApp, "StopApp": b.StopApp, "DeleteApp": b.DeleteApp, "OpenApp": b.OpenApp, "Ports": b.Ports,
 		"DeviceInfo": b.DeviceInfo, "Resources": b.Resources, "NetworkTraffic": b.NetworkTraffic, "SensorTemperature": b.SensorTemperature,
 		"Cameras": b.Cameras, "CameraMetadata": b.CameraMetadata,
+		"PreviewCreate": b.PreviewCreate, "PreviewCameras": b.PreviewCameras,
+		"PreviewPlay": b.PreviewPlay, "PreviewPoll": b.PreviewPoll,
+		"PreviewCancel": b.PreviewCancel, "PreviewClose": b.PreviewClose,
+		"PreviewApps": b.PreviewApps, "ThermalFrames": b.PreviewThermalFrames,
+		"PreviewSensorPairings": b.PreviewSensorPairings,
+		"GalleryMetadata":       b.GalleryMetadataAt, "GalleryMedia": b.GalleryMediaAt,
+		"RecordingMediaLibrary": b.RecordingMediaLibrary,
+		"Inbox": func(account string) (any, error) {
+			ctx, cancel := cloudContext()
+			defer cancel()
+			return commands.DesktopInbox(ctx, account)
+		},
 		"StartCamera": func(camera uint32, stream, session uint64, stableID string) error {
 			return b.StartCamera(camera, stream, session, stableID)
 		},

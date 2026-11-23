@@ -27,7 +27,7 @@ private fun recordingKind(agentKind: String) = if (agentKind in recordingKinds &
 
 data class RecordingEpisode(
     val id: String, val title: String, val startedNanos: Long, val bytes: Long, val duration: Double?, val trigger: String?, val kind: String,
-    val synced: Boolean?, val topics: List<String>, val detailsLoaded: Boolean, val campaign: String?, val previewFile: String?, val previewCounts: List<Long>,
+    val synced: Boolean?, val topics: List<String>, val detailsLoaded: Boolean, val campaign: String?, val previewFile: String?, val previewCounts: List<Long>, val contentKinds: List<String>? = null,
 ) {
     /** Milliseconds since 1970, or null when the device did not report a start. */
     val started: Long? get() = if (startedNanos == 0L) null else startedNanos / 1_000_000
@@ -59,7 +59,8 @@ data class RecordingEpisode(
             val topics = value.optJSONArray("Topics")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
             return RecordingEpisode(id, index?.title ?: value.text("Title").ifEmpty { id }, index?.startedNanos ?: value.number("Started"), index?.bytes ?: value.number("Bytes"),
                 duration, triggerLabel(value.text("Trigger")), recordingKind(value.text("Kind")), synced, topics, value.flag("DetailsLoaded"),
-                value.text("Campaign").ifEmpty { null }, value.optJSONObject("PreviewFile")?.toString(), counts)
+                value.text("Campaign").ifEmpty { null }, value.optJSONObject("PreviewFile")?.toString(), counts,
+                value.optJSONArray("ContentKinds")?.let { array -> (0 until array.length()).map { array.getString(it) } } ?: index?.contentKinds)
         }
     }
 }
@@ -142,8 +143,8 @@ suspend fun <T> WendyModel.readRecordings(device: Device, block: suspend (Long) 
     try { return block(id) } finally { withContext(NonCancellable) { try { backend.call("EndRecordingRead", id) } catch (_: Exception) {} } }
 }
 
-suspend fun WendyModel.recordingLibrary(device: Device): RecordingLibrary = readRecordings(device) { id ->
-    val value = backend.call("RecordingLibrary", id, device.selector, device.requiresMTLS).obj()
+suspend fun WendyModel.recordingLibrary(device: Device, includeMedia: Boolean = false): RecordingLibrary = readRecordings(device) { id ->
+    val value = backend.call(if (includeMedia) "RecordingMediaLibrary" else "RecordingLibrary", id, device.selector, device.requiresMTLS).obj()
     RecordingLibrary(device, value.text("Model").ifEmpty { null }, value.list("Episodes").map { RecordingEpisode.parse(it) }, value.text("Warning").ifEmpty { null })
 }
 
@@ -164,7 +165,7 @@ suspend fun WendyModel.recordingDetails(device: Device, episodes: List<Recording
  * The libraries of every reachable device, kept for one account and organization. Several screens load it;
  * each has its own refresh counter so one screen's pull to refresh does not reset another's (iOS RecordingCatalog).
  */
-class RecordingCatalog(private val model: WendyModel) {
+class RecordingCatalog(private val model: WendyModel, private val includeMedia: Boolean = false) {
     var reads by mutableStateOf(emptyMap<String, RecordingRead>()); private set
     var loading by mutableStateOf(false); private set
     var detailProblems by mutableStateOf(emptyMap<String, String>()); private set
@@ -216,7 +217,7 @@ class RecordingCatalog(private val model: WendyModel) {
         var problem: String? = null
         for (device in target.routes) {
             currentCoroutineContext().ensureActive()
-            try { return RecordingRead(target, model.recordingLibrary(device)) }
+            try { return RecordingRead(target, model.recordingLibrary(device, includeMedia)) }
             catch (e: CancellationException) { throw e } catch (e: Exception) { problem = e.message ?: "Could not read recordings." }
         }
         return RecordingRead(target, null, problem)

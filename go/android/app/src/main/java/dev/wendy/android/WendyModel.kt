@@ -17,7 +17,14 @@ data class ExperienceEvent(val id: Long, val deviceID: String, val deviceName: S
 
 class WendyModel(app: Application) : AndroidViewModel(app) {
     val backend = (app as WendyApplication).backend
+    private val mobileRuntime = (app as WendyApplication).mobileRuntime
+    private val runtimeOwner = mobileRuntime.claim()
+    private suspend fun setMobileState(active: Boolean, account: String, organization: String) {
+        if (!mobileRuntime.update(runtimeOwner, active, account, organization)) throw CancellationException("Activity runtime was replaced")
+    }
     var initialized by mutableStateOf(false); private set
+    /** True only after the backend has activated the current account scope. */
+    var mobileReady by mutableStateOf(false); private set
     // Nearby (LAN, mesh, USB) and Cloud devices are separate lists, as on iOS.
     var nearbyDevices by mutableStateOf(emptyList<Device>()); private set
     var cloudDevices by mutableStateOf(emptyList<Device>()); private set
@@ -153,12 +160,15 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     }
     fun chooseAccount(id: String, org: String = "") = task {
         check(!WendyVpnService.engaged) { "Disconnect the Wendy VPN before changing accounts or organizations." }
+        mobileReady = false
+        experienceEvents = emptyList()
         invalidateConnection()
         cloudDevices = emptyList(); cloudLoaded = false; cloudError = null; presence = null
         account = id; organization = org
         preferences.edit().putString("account", id).putString("organization", org).apply()
         refreshAccounts()
-        backend.call("SetMobileState", inForeground, account, organization)
+        setMobileState(inForeground, account, organization)
+        mobileReady = inForeground
         refresh()
     }
     suspend fun refresh() { refreshNearby(); if (organization.isNotEmpty()) refreshCloud() }
@@ -396,16 +406,22 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun cancelLogin() { browserURL = null; AuthSessionService.cancelLogin() }
-    fun setForeground(active: Boolean) {
-        inForeground = active
+    private val foregroundGrace by lazy { ForegroundGrace(viewModelScope, ::applyForeground) }
+    fun setForeground(active: Boolean, graceMillis: Long = 0) {
         getApplication<WendyApplication>().visible = active
+        foregroundGrace.update(active, graceMillis)
+    }
+    private fun applyForeground(active: Boolean) {
+        if (active && inForeground && mobileReady) return
+        inForeground = active
+        mobileReady = false
         if (!initialized) return
         updatePolling()
         lifecycleJob?.cancel()
         maintainJob?.cancel()
         if (active) activate() else {
             invalidateConnection()
-            lifecycleJob = viewModelScope.launch { try { backend.call("SetMobileState", false, account, organization); backend.call("NearbyClose", 0) } catch (e: Exception) { error = e.message } }
+            lifecycleJob = viewModelScope.launch { try { setMobileState(false, account, organization); backend.call("NearbyClose", 0) } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } }
         }
     }
     private fun activate() {
@@ -415,7 +431,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
             previous?.join()
             try {
                 refreshAccounts()
-                backend.call("SetMobileState", true, account, organization)
+                setMobileState(true, account, organization)
+                mobileReady = inForeground
 
                 launch { refresh() }
                 selected?.let { connect(it) }
@@ -468,7 +485,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 1 -> if (loginPending) browserURL = event.text("Text")
                 2 -> {
                     try {
-                        if (inForeground) { refreshAccounts(); backend.call("SetMobileState", true, account, organization) }
+                        if (inForeground) { mobileReady = false; refreshAccounts(); setMobileState(true, account, organization); mobileReady = inForeground; refresh() }
                     } finally { loginPending = false; AuthSessionService.complete() }
                 }
                 3 -> { loginPending = false; error = event.text("Text"); AuthSessionService.complete() }
@@ -481,5 +498,9 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-    override fun onCleared() { AuthSessionService.cancelLogin(); super.onCleared() }
+    override fun onCleared() {
+        mobileRuntime.release(runtimeOwner, account, organization)
+        AuthSessionService.cancelLogin()
+        super.onCleared()
+    }
 }

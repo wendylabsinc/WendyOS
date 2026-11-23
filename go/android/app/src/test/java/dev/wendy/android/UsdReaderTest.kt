@@ -68,6 +68,28 @@ class UsdReaderTest {
         geometry.meshes.forEach { mesh -> assertEquals(mesh.positions.size, mesh.normals.size) }
     }
 
+    private fun usda(body: String) = ("#usda 1.0\n(\n    upAxis = \"Y\"\n)\n\ndef Mesh \"Tri\"\n{\n" + body + "\n}\n").toByteArray()
+
+    @Test fun degenerateFacesAreSkippedAndOverrunsRejected() {
+        val points = "point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]"
+        val geometry = UsdReader.read(usda("int[] faceVertexCounts = [0, 2, 3]\nint[] faceVertexIndices = [7, 7, 0, 1, 2]\n$points"))
+        assertEquals(1, geometry.triangles)
+        assertThrows(UsdFormatException::class.java) { UsdReader.read(usda("int[] faceVertexCounts = [3, 4]\nint[] faceVertexIndices = [0, 1, 2, 0, 1]\n$points")) }
+    }
+
+    @Test fun firstSubsetKeepsAnOverlappedFace() {
+        val body = """
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+            def GeomSubset "A" { uniform token elementType = "face"
+                int[] indices = [0, 0] }
+            def GeomSubset "B" { uniform token elementType = "face"
+                int[] indices = [0] }
+        """.trimIndent()
+        assertEquals(1, UsdReader.read(usda(body)).triangles)
+    }
+
     @Test fun damagedOrForeignFilesAreRejected() {
         assertThrows(UsdFormatException::class.java) { UsdReader.read("not a model".toByteArray()) }
         val truncated = fixture("room.usdc").copyOf(400)

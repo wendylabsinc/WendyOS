@@ -224,7 +224,7 @@ private fun SiteModelThumbnailView(store: SitesStore, modelID: String) {
 internal fun scaled(geometry: SiteGeometry, metresPerUnit: Double): SiteGeometry {
     if (metresPerUnit == 1.0) return geometry
     val s = metresPerUnit.toFloat()
-    return SiteGeometry(geometry.meshes.map { m -> SiteMesh(m.name, FloatArray(m.positions.size) { m.positions[it] * s }, m.normals, m.color) })
+    return SiteGeometry(geometry.meshes.map { m -> SiteMesh(m.name, FloatArray(m.positions.size) { m.positions[it] * s }, m.normals, m.color, m.uv, m.texture) })
 }
 
 private class AssetChoice(val asset: SiteAsset, val status: String, val online: Boolean)
