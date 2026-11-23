@@ -1128,19 +1128,31 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// bmap and the actual image). Fall back to a full sequential dd write.
 		// For the seekable-zstd path the .zst is already on disk — open it as a
 		// sequential reader to avoid re-downloading the full image. For the regular
-		// bmap path the zip is also already cached.
+		// bmap path the zip is also already cached. Either file is hashed again
+		// first: the mismatch may be the cached file's, and then it must not be
+		// written in full.
 		var fallbackReader io.Reader
 		var fallbackSize int64
 		var fallbackCloser io.Closer
 		switch {
 		case seekableZst != "":
+			if verr := recheckCachedImage(seekableZst, imgInfo.ZstChecksum); verr != nil {
+				return fmt.Errorf("%w; full-image fallback skipped: %v", primary, verr)
+			}
 			si, ferr := openSeekableZstd(seekableZst)
 			if ferr != nil {
 				return fmt.Errorf("%w; could not open image for full-image fallback: %v", primary, ferr)
 			}
 			fallbackReader, fallbackSize, fallbackCloser = si, si.Size(), si
 		case bmapPath != "":
-			fs, ferr := openOSImageStream(deviceKey, imgInfo)
+			cachePath, ferr := resolveOSImage(deviceKey, imgInfo)
+			if ferr != nil {
+				return fmt.Errorf("%w; could not open image for full-image fallback: %v", primary, ferr)
+			}
+			if verr := recheckCachedImage(cachePath, imgInfo.Checksum); verr != nil {
+				return fmt.Errorf("%w; full-image fallback skipped: %v", primary, verr)
+			}
+			fs, ferr := openLocalImageStream(cachePath)
 			if ferr != nil {
 				return fmt.Errorf("%w; could not open image for full-image fallback: %v", primary, ferr)
 			}
@@ -1274,7 +1286,14 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 	// download only the .zst + bmap and write mapped ranges, skipping holes —
 	// and crucially we do NOT download the full .zip image at all.
 	if !noBmap && img.ZstURL != "" && img.BmapURL != "" {
-		zstPath, zerr := resolveSeekableZst(deviceKey, version, storage, img.ZstURL)
+		zstPath, zerr := resolveSeekableZst(deviceKey, version, storage, img.ZstURL, img.ZstChecksum)
+		// A download that is not the published image is an error, not a reason
+		// to fetch the full image: current manifests publish the same file as
+		// both, so that download would fail the same way.
+		var mismatch *imageChecksumError
+		if errors.As(zerr, &mismatch) {
+			return nil, zerr
+		}
 		bmapCandidate, berr := osCachedBmapPath(deviceKey, version, storage)
 		if zerr == nil {
 			localZst = zstPath
@@ -1306,11 +1325,9 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		}
 	} else if img.ZstURL != "" {
 		// --no-bmap, or no block map published: a cached .zst is still the image.
-		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil {
-			if info, err := os.Stat(cached); err == nil && info.Size() > 0 {
-				fmt.Printf("Using cached seekable image (%s)\n", cached)
-				localZst = cached
-			}
+		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil && cachedImageUsable(cached, img.ZstChecksum) {
+			fmt.Printf("Using cached seekable image (%s)\n", cached)
+			localZst = cached
 		}
 	}
 
@@ -1861,13 +1878,15 @@ var downloadOSImage = downloadImage
 
 // resolveSeekableZst downloads (or cache-hits) the seekable .img.zst for
 // deviceKey+version from zstURL, returning the cached path. Reuses downloadImage
-// (streams to a temp file with progress) then renames into the cache.
-func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, error) {
+// (streams to a temp file with progress) then renames into the cache. checksum
+// is the manifest's checksum for that file, or "" when it publishes none: both
+// a cached file and a download are used only when they match it.
+func resolveSeekableZst(deviceKey, version, storage, zstURL, checksum string) (string, error) {
 	cached, err := osCachedZstPath(deviceKey, version, storage)
 	if err != nil {
 		return "", err
 	}
-	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
+	if cachedImageUsable(cached, checksum) {
 		fmt.Printf("Using cached seekable image (%s)\n", cached)
 		return cached, nil
 	}
@@ -1875,9 +1894,10 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("downloading seekable image: %w", err)
 	}
-	os.Remove(cached) // clear stale/0-byte so Rename succeeds on Windows
-	if err := os.Rename(downloadPath, cached); err != nil {
-		os.Remove(downloadPath)
+	if err := verifyDownloadedImage(downloadPath, checksum); err != nil {
+		return "", err
+	}
+	if err := moveToImageCache(downloadPath, cached, checksum); err != nil {
 		return "", fmt.Errorf("caching seekable image: %w", err)
 	}
 	return cached, nil
@@ -1952,7 +1972,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info, statErr := os.Stat(imgCached); statErr == nil && info.Size() > 0 {
+	if cachedImageUsable(imgCached, img.Checksum) {
 		fmt.Printf("Using cached image (%s)\n", imgCached)
 		return imgCached, nil
 	}
@@ -1963,7 +1983,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		if zipErr != nil {
 			return "", zipErr
 		}
-		if info, statErr := os.Stat(zipCached); statErr == nil && info.Size() > 0 {
+		if cachedImageUsable(zipCached, img.Checksum) {
 			fmt.Printf("Using cached image (%s)\n", zipCached)
 			return zipCached, nil
 		}
@@ -1972,9 +1992,10 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		if dlErr != nil {
 			return "", fmt.Errorf("downloading image: %w", dlErr)
 		}
-		os.Remove(zipCached) // remove stale/0-byte file if present so Rename succeeds on Windows
-		if renameErr := os.Rename(downloadPath, zipCached); renameErr != nil {
-			os.Remove(downloadPath)
+		if err := verifyDownloadedImage(downloadPath, img.Checksum); err != nil {
+			return "", err
+		}
+		if renameErr := moveToImageCache(downloadPath, zipCached, img.Checksum); renameErr != nil {
 			return "", fmt.Errorf("caching image: %w", renameErr)
 		}
 		return zipCached, nil
@@ -1985,9 +2006,10 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("downloading image: %w", err)
 	}
-	os.Remove(imgCached) // remove stale/0-byte file if present so Rename succeeds on Windows
-	if err := os.Rename(downloadPath, imgCached); err != nil {
-		os.Remove(downloadPath)
+	if err := verifyDownloadedImage(downloadPath, img.Checksum); err != nil {
+		return "", err
+	}
+	if err := moveToImageCache(downloadPath, imgCached, img.Checksum); err != nil {
 		return "", fmt.Errorf("caching image: %w", err)
 	}
 	return imgCached, nil
