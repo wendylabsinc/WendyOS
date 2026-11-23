@@ -248,3 +248,43 @@ func TestLiteCloudEnrollmentLabelFollowsCatalogValue(t *testing.T) {
 		t.Fatalf("nothing: %q", got)
 	}
 }
+
+func TestLiteInstallChecksGivenNameBeforeFlashing(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = "prod.example.com:443"
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{*auth}}); err != nil {
+		t.Fatal(err)
+	}
+	stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
+	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native",
+		discovery.SerialPortInfo{Port: "/dev/ttyACM0"}, wifiCLIOptions{NoWifi: true}, "brave-dolphin",
+		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"})
+	want := "brave-dolphin is already used by another device in your organization. Pass a different --device-name."
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v; want %q before anything is flashed", err, want)
+	}
+}
+
+// Stopping at the name question after the flash leaves the board unenrolled;
+// the person must still learn how to finish.
+func TestEnrollInstalledLiteCancelSaysHowToFinish(t *testing.T) {
+	origWait, origRun := waitInstalledLiteFn, runLiteEnrollmentFn
+	t.Cleanup(func() { waitInstalledLiteFn, runLiteEnrollmentFn = origWait, origRun })
+	waitInstalledLiteFn = func(_ context.Context, p discovery.SerialPortInfo, _ bool) (discovery.SerialPortInfo, error) {
+		return p, nil
+	}
+	runLiteEnrollmentFn = func(*cobra.Command, models.ExternalDevice, *config.AuthConfig, string, liteEnrollmentOptions) error {
+		return ErrUserCancelled
+	}
+	var err error
+	captureStdout(t, func() {
+		err = enrollInstalledLite(context.Background(), discovery.SerialPortInfo{Port: "/dev/ttyACM0"}, &config.AuthConfig{CloudGRPC: "prod.example.com:443"}, "lab", "1.4.0", true)
+	})
+	if err == nil || errors.Is(err, ErrUserCancelled) || !strings.Contains(err.Error(), "not enrolled") ||
+		!strings.Contains(err.Error(), "wendy device enroll --cloud-grpc prod.example.com:443") {
+		t.Fatalf("got %v; want a visible error saying how to finish enrollment", err)
+	}
+}

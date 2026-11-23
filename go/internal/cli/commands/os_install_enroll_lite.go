@@ -125,6 +125,10 @@ func enrollInstalledLite(ctx context.Context, port discovery.SerialPortInfo, aut
 	if errors.Is(err, errLiteNoCloudEnrollment) {
 		return fmt.Errorf("the firmware was flashed and the board works, but it is not enrolled. The firmware image that was installed does not include Wendy Cloud enrollment. Install again and choose an image that supports it, such as %q", wendyLiteCloudImage)
 	}
+	// A stop at the name question is not silent here: the board is flashed but not enrolled.
+	if errors.Is(err, ErrUserCancelled) {
+		return fmt.Errorf("the firmware was flashed, but the board is not enrolled; use 'wendy device enroll --cloud-grpc %s' over native USB to finish setup without reflashing", auth.CloudGRPC)
+	}
 	if err != nil {
 		return fmt.Errorf("firmware was flashed, but Cloud enrollment is not confirmed: %w; use 'wendy device enroll --cloud-grpc %s' over native USB to finish setup without reflashing", err, auth.CloudGRPC)
 	}

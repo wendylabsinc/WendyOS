@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -108,7 +109,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if !challenge.GetUuidEnrollmentSupported() {
 		return errLiteUUIDUnsupported
 	}
-	name, err = enrollmentName(identity.Name, name, func(string) bool { return false })
+	name, err = enrollmentName(identity.Name, name, newNameChecker(ctx, auth))
 	if err != nil {
 		return err
 	}
@@ -180,7 +181,6 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if err != nil {
 		return err
 	}
-	mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
 	hardware := &cloudpb.DeviceHardware{}
 	if identity.ID != "" {
 		hardware.SerialNumber = proto.String(identity.ID)
@@ -191,8 +191,20 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if target.CPUArchitecture != "" {
 		hardware.Architecture = proto.String(target.CPUArchitecture)
 	}
-	asset, err := liteenroll.Mint(mintCtx, cloud, auth, cfg, name, hardware, trustProfile)
-	cancel()
+	// A refused name leaves cfg, its signed time and the board's challenge as
+	// they were, so the retry reuses them.
+	var asset string
+	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen}
+	err = retryTakenDeviceName(&name, retry, func(n string) error {
+		mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
+		defer cancel()
+		var mintErr error
+		asset, mintErr = liteenroll.Mint(mintCtx, cloud, auth, cfg, n, hardware, trustProfile)
+		return mintErr
+	})
+	if errors.Is(err, tui.ErrCancelled) {
+		return ErrUserCancelled
+	}
 	if err != nil {
 		if asset != "" {
 			return fmt.Errorf("asset %s was reserved but enrollment could not continue: %w", asset, err)

@@ -3457,11 +3457,6 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return err
 	}
 
-	provDeviceName, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-
 	var enrollmentAuth *config.AuthConfig
 	if preOpts.mode != preEnrollSkip {
 		cfg, cfgErr := config.Load()
@@ -3481,6 +3476,13 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 				return err
 			}
 		}
+	}
+
+	// A blank name stays allowed: the board then enrolls under its own name,
+	// which only it can report after the flash.
+	provDeviceName, err := resolveInstallDeviceName(ctx, deviceName, enrollmentAuth, false)
+	if err != nil {
+		return err
 	}
 
 	wendyConf, err := buildWendyConf(provCreds, provDeviceName, nil)
