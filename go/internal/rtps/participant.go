@@ -162,7 +162,12 @@ type Participant struct {
 	// announce tick. A single announcement is one UDP datagram: if it is lost,
 	// or arrives before the peer has finished discovering us, the subscription
 	// never matches and no data ever flows.
-	subAnnounce map[GUID][]byte
+	subAnnounce  map[GUID][]byte
+	subSequence  map[GUID]SequenceNumber
+	subHistory   map[SequenceNumber][]byte
+	subDisposals []SequenceNumber
+	subHeartbeat uint32
+	subAckCount  map[GUIDPrefix]uint32
 
 	// fragmentsMu isolates potentially large fragment copies from participant
 	// bookkeeping such as subscription changes and discovery updates.
@@ -247,6 +252,9 @@ func newParticipant(cfg Config) *Participant {
 		leases:       map[*Lease]struct{}{},
 		closed:       make(chan struct{}),
 		subAnnounce:  map[GUID][]byte{},
+		subSequence:  map[GUID]SequenceNumber{},
+		subHistory:   map[SequenceNumber][]byte{},
+		subAckCount:  map[GUIDPrefix]uint32{},
 		ackCount:     map[writerKey]uint32{},
 		sedpReceived: map[writerKey]*discoverySequences{},
 		subWriters:   map[GUID]struct{}{},
@@ -472,6 +480,7 @@ func (p *Participant) removePeerLocked(prefix GUIDPrefix) {
 	delete(p.peers, prefix)
 	delete(p.peerExpiry, prefix)
 	delete(p.peerLease, prefix)
+	delete(p.subAckCount, prefix)
 	for key := range p.sedpReceived {
 		if key.prefix == prefix {
 			delete(p.sedpReceived, key)
@@ -613,6 +622,10 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 				copy(destination[:], s.Body[:12])
 				gapDestination = destination == (GUIDPrefix{}) || destination == p.prefix
 			}
+		case subACKNACK:
+			if gapDestination {
+				p.handleSubscriptionAck(msg.Prefix, s)
+			}
 		case subGAP:
 			if gapDestination {
 				p.handleDiscoveryGap(msg.Prefix, s)
@@ -677,7 +690,7 @@ func (p *Participant) renewPeer(prefix GUIDPrefix) {
 
 // handleHeartbeat answers a SEDP publications writer so it replays its history.
 //
-// This is the only reliability we implement, and only for discovery: SEDP
+// Reliability is implemented only for discovery: SEDP
 // builtin endpoints are RELIABLE + TRANSIENT_LOCAL, so a late joiner is
 // announced the history via HEARTBEAT and must ACKNACK to receive it. User data
 // needs none of this — our reader is BEST_EFFORT and the writer simply sends.
@@ -846,6 +859,15 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 			p.statRepliesSent.Add(1)
 		}
 	}
+	p.mu.Lock()
+	for _, packet := range p.subscriptionReplayLocked() {
+		for _, l := range metaUnicast {
+			if addr, ok := l.UDPAddr(); ok {
+				p.sendTo(addr, packet)
+			}
+		}
+	}
+	p.mu.Unlock()
 }
 
 // handleSEDPPublication turns a remote publication announcement into an
@@ -1089,7 +1111,10 @@ func (p *Participant) Subscribe(ep Endpoint) error {
 	p.seqByWriter[entitySEDPSubWriter]++
 	dgram := buildMessage(p.prefix, buildData(entityUnknown, entitySEDPSubWriter, p.seqByWriter[entitySEDPSubWriter], payload))
 	p.subAnnounce[ep.GUID] = dgram
+	p.subSequence[ep.GUID] = p.seqByWriter[entitySEDPSubWriter]
+	p.subHistory[p.seqByWriter[entitySEDPSubWriter]] = dgram
 	p.sendDiscoveryLocked(dgram)
+	p.sendDiscoveryLocked(p.subscriptionHeartbeatLocked())
 	return nil
 }
 
@@ -1102,6 +1127,8 @@ func (p *Participant) Unsubscribe(writer GUID) {
 	}
 	delete(p.subWriters, writer)
 	delete(p.subAnnounce, writer)
+	delete(p.subHistory, p.subSequence[writer])
+	delete(p.subSequence, writer)
 	for entity, guid := range p.subs {
 		if guid != writer {
 			continue
@@ -1109,7 +1136,9 @@ func (p *Participant) Unsubscribe(writer GUID) {
 		delete(p.subs, entity)
 		p.seqByWriter[entitySEDPSubWriter]++
 		dgram := buildMessage(p.prefix, buildDispose(entitySEDPSubWriter, p.seqByWriter[entitySEDPSubWriter], GUID{Prefix: p.prefix, EntityID: entity}))
+		p.retainSubscriptionDisposalLocked(p.seqByWriter[entitySEDPSubWriter], dgram)
 		p.sendDiscoveryLocked(dgram)
+		p.sendDiscoveryLocked(p.subscriptionHeartbeatLocked())
 	}
 }
 
@@ -1206,7 +1235,7 @@ func (p *Participant) announce() {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, dgram := range p.subAnnounce {
+	for _, dgram := range p.subscriptionReplayLocked() {
 		p.sendDiscoveryLocked(dgram)
 	}
 }
