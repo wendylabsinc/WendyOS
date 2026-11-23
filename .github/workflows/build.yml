@@ -508,7 +508,7 @@ jobs:
           if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
       - name: Download runtime guest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}
           path: ${{ runner.temp }}/wendy-macos-runtime-guest
@@ -780,7 +780,7 @@ jobs:
           syft-version: v1.18.1
 
       - name: Download archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ matrix.artifact-name }}-${{ needs.determine-version.outputs.version }}.${{ matrix.ext }}
           path: dist
@@ -861,12 +861,12 @@ jobs:
           sudo gem install fpm -v 1.18.0 --no-document
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-cli-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
       - name: Download Agent artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-agent-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
@@ -975,7 +975,7 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
 
@@ -1089,14 +1089,14 @@ jobs:
           persist-credentials: false
 
       - name: Download all .deb packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: linux-packages-deb-*
           merge-multiple: true
           path: packages/deb
 
       - name: Download all .rpm packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: linux-packages-rpm-*
           merge-multiple: true
@@ -1181,7 +1181,7 @@ jobs:
           persist-credentials: false
 
       - name: Download agent tarballs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: wendy-agent-linux-*.tar.gz
           merge-multiple: true
@@ -1191,7 +1191,7 @@ jobs:
       # build-agent-macos-app failed or was skipped, e.g. during a
       # macOS signing/notarization outage.
       - name: Download macOS agent artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: wendy-agent-macos-*.zip
           merge-multiple: true
@@ -1296,17 +1296,17 @@ jobs:
     steps:
       # Validation artifacts and caches share this run; only download products.
       - name: Download release products
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: 'wendy-*'
           merge-multiple: true
       - name: Download Linux packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: 'linux-packages-*'
           merge-multiple: true
       - name: Download SBOMs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: 'sbom-*'
           merge-multiple: true
