@@ -67,6 +67,8 @@ type testRelay struct {
 	callerPub           *ecdsa.PublicKey
 	grantJWS            string
 	toCaller, toAgent   chan *pb.TunnelFrame
+	callerClosed        chan struct{}
+	agentClosed         chan struct{}
 }
 
 func (r *testRelay) artifact(c claims, typ string) string {
@@ -403,8 +405,16 @@ func (r *testRelay) JoinSession(s grpc.BidiStreamingServer[pb.JoinSessionRequest
 		return e
 	}
 	incoming, outgoing := r.toAgent, r.toCaller
+	var peerClosed <-chan struct{}
 	if o.Role == pb.JoinRole_JOIN_ROLE_AGENT {
 		incoming, outgoing = r.toCaller, r.toAgent
+		if r.agentClosed != nil {
+			defer close(r.agentClosed)
+			peerClosed = r.callerClosed
+		}
+	} else if r.callerClosed != nil {
+		defer close(r.callerClosed)
+		peerClosed = r.agentClosed
 	}
 	errs := make(chan error, 1)
 	go func() {
@@ -433,6 +443,8 @@ func (r *testRelay) JoinSession(s grpc.BidiStreamingServer[pb.JoinSessionRequest
 			}
 		case e := <-errs:
 			return e
+		case <-peerClosed:
+			return nil
 		case <-s.Context().Done():
 			return s.Context().Err()
 		}
@@ -454,6 +466,8 @@ type relayLifecycle struct {
 	dial          func(string) (*grpc.ClientConn, error)
 	configure     func(*testRelay, *Agent)
 	exercise      func(func(string))
+	tcpService    func(net.Conn)
+	tcpExercise   func(net.Conn, *Agent)
 }
 
 func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycle ...*relayLifecycle) {
@@ -540,6 +554,10 @@ func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycl
 				return
 			}
 			defer func() { _ = c.Close() }()
+			if len(lifecycle) != 0 && lifecycle[0].tcpService != nil {
+				lifecycle[0].tcpService(c)
+				return
+			}
 			_, _ = io.Copy(c, c)
 		}()
 	}
@@ -618,9 +636,13 @@ func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycl
 				t.Fatalf("%s: %v", phase, err)
 			}
 		}
-		exchange("before renewal")
-		if len(lifecycle) != 0 {
-			lifecycle[0].exercise(exchange)
+		if len(lifecycle) != 0 && lifecycle[0].tcpExercise != nil {
+			lifecycle[0].tcpExercise(conn, agent)
+		} else {
+			exchange("before renewal")
+			if len(lifecycle) != 0 {
+				lifecycle[0].exercise(exchange)
+			}
 		}
 		if reconnect {
 			// The session has carried bytes before Cloud issues a new route. Wait
