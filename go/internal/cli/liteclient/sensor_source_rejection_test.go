@@ -2,6 +2,8 @@ package liteclient
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -16,22 +18,38 @@ type fakeAlert string
 
 func (e fakeAlert) Error() string { return string(e) }
 
-func TestPeerRejectedCertificate(t *testing.T) {
+func TestSourceCertificateRejection(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
-		want bool
+		want error
 	}{
-		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: bad certificate")}, true},
-		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: unknown certificate authority")}, true},
-		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: certificate required")}, true},
-		{&net.OpError{Op: "local error", Err: fakeAlert("tls: bad record MAC")}, true},
-		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: internal error")}, false},
-		{&net.OpError{Op: "read", Err: errors.New("connection reset by peer")}, false},
-		{context.DeadlineExceeded, false},
+		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: bad certificate")}, ErrSourceRejectedCertificate},
+		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: unknown certificate authority")}, ErrSourceRejectedCertificate},
+		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: certificate required")}, ErrSourceRejectedCertificate},
+		{&net.OpError{Op: "local error", Err: fakeAlert("tls: bad record MAC")}, ErrSourceMayHaveRejectedCertificate},
+		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: bad record MAC")}, nil},
+		{&net.OpError{Op: "remote error", Err: fakeAlert("tls: internal error")}, nil},
+		{&net.OpError{Op: "read", Err: errors.New("connection reset by peer")}, nil},
+		{context.DeadlineExceeded, nil},
 	} {
-		if got := peerRejectedCertificate(tc.err); got != tc.want {
-			t.Errorf("peerRejectedCertificate(%v) = %v, want %v", tc.err, got, tc.want)
+		if got := sourceCertificateRejection(tc.err); got != tc.want {
+			t.Errorf("sourceCertificateRejection(%v) = %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestDescribeRejectionDistinguishesP256LeafSigners(t *testing.T) {
+	own := &x509.Certificate{PublicKeyAlgorithm: x509.MLDSA, SignatureAlgorithm: x509.MLDSA65}
+	peer := &x509.Certificate{
+		PublicKey:          &ecdsa.PublicKey{Curve: elliptic.P256()},
+		SignatureAlgorithm: x509.ECDSAWithSHA256,
+	}
+	if desc := describeRejection(own, []*x509.Certificate{peer}); !strings.Contains(desc, "classical P-256 Lite chain") {
+		t.Fatalf("classical leaf: %s", desc)
+	}
+	peer.SignatureAlgorithm = x509.MLDSA65
+	if desc := describeRejection(own, []*x509.Certificate{peer}); strings.Contains(desc, "classical P-256 Lite chain") {
+		t.Fatalf("ML-DSA-signed leaf: %s", desc)
 	}
 }
 

@@ -74,6 +74,36 @@ func TestAddSensorPairingSavesWhenARefusalDoesNotRepeat(t *testing.T) {
 	}
 }
 
+func TestAddSensorPairingSavesWhenARefusalIsAmbiguous(t *testing.T) {
+	ambiguous := mcusource.ErrSourceMayHaveRejectedCertificate
+	confirmed := mcusource.ErrSourceRejectedCertificate
+	for _, tc := range []struct {
+		name          string
+		first, second error
+	}{
+		{"two ambiguous errors", ambiguous, ambiguous},
+		{"confirmed then ambiguous", confirmed, ambiguous},
+		{"ambiguous then confirmed", ambiguous, confirmed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probes := 0
+			svc, store, starts := probedPairingService(t, func(context.Context, mcusource.SensorPairing, string) error {
+				probes++
+				if probes == 1 {
+					return tc.first
+				}
+				return tc.second
+			})
+			if err := addProbedPairing(svc, context.Background(), "192.168.100.49:5054"); err != nil {
+				t.Fatal(err)
+			}
+			if probes != 2 || len(store.List()) != 1 || *starts != 1 {
+				t.Fatalf("probes = %d, saved = %d, started = %d; want the pairing saved", probes, len(store.List()), *starts)
+			}
+		})
+	}
+}
+
 func TestAddSensorPairingSavesWhenTheSourceIsNotReachable(t *testing.T) {
 	for _, probeErr := range []error{nil, errors.New("dial tcp: i/o timeout"), context.DeadlineExceeded} {
 		svc, store, starts := probedPairingService(t, func(context.Context, mcusource.SensorPairing, string) error { return probeErr })

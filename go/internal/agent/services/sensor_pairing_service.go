@@ -179,9 +179,9 @@ func (s *SensorPairingService) SetSourceDiscovery(browse SensorSourceBrowseFunc,
 func (s *SensorPairingService) SetPairingProbe(probe PairingProbeFunc) { s.probe = probe }
 
 // refusedBySource tries the new pairing. Only a source that refuses this
-// device's certificate twice in a row stops the save: a board short of memory
-// can end one handshake the same way. An unreachable or slow source is saved
-// as before and retried by its supervisor.
+// device's certificate explicitly twice in a row stops the save. Ambiguous
+// TLS failures are retried and logged. Slow or unreachable sources are saved
+// and retried by their supervisor.
 func (s *SensorPairingService) refusedBySource(ctx context.Context, p mcusource.SensorPairing, addr string) error {
 	if s.probe == nil || p.SourcePrincipalURI == "" || (s.isConnected != nil && s.isConnected(p)) {
 		return nil
@@ -196,7 +196,8 @@ func (s *SensorPairingService) refusedBySource(ctx context.Context, p mcusource.
 	probeCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	err := s.probe(probeCtx, p, addr)
-	if errors.Is(err, mcusource.ErrSourceRejectedCertificate) {
+	confirmedRefusal := errors.Is(err, mcusource.ErrSourceRejectedCertificate)
+	if confirmedRefusal || errors.Is(err, mcusource.ErrSourceMayHaveRejectedCertificate) {
 		select {
 		case <-probeCtx.Done():
 			err = probeCtx.Err()
@@ -204,7 +205,7 @@ func (s *SensorPairingService) refusedBySource(ctx context.Context, p mcusource.
 			err = s.probe(probeCtx, p, addr)
 		}
 	}
-	if errors.Is(err, mcusource.ErrSourceRejectedCertificate) {
+	if confirmedRefusal && errors.Is(err, mcusource.ErrSourceRejectedCertificate) {
 		return status.Errorf(codes.FailedPrecondition, "sensor source %s refused this device twice, so the pairing was not saved: %v", p.SourcePrincipalURI, err)
 	}
 	if err != nil {

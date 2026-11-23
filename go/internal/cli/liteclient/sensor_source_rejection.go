@@ -14,6 +14,9 @@ import (
 // so the refusal surfaces on the first read.
 var ErrSourceRejectedCertificate = errors.New("the source rejected this device's certificate")
 
+// ErrSourceMayHaveRejectedCertificate reports an ambiguous TLS read failure.
+var ErrSourceMayHaveRejectedCertificate = errors.New("the source may have rejected this device's certificate")
+
 // Alerts a peer sends when it cannot accept a certificate, as Go names them.
 var certificateAlerts = map[string]bool{
 	"tls: bad certificate":               true,
@@ -25,22 +28,25 @@ var certificateAlerts = map[string]bool{
 	"tls: certificate required":          true,
 }
 
-// peerRejectedCertificate classifies the first read after the TLS handshake.
-// mbedTLS sends its rejection under the handshake keys while Go reads with the
-// application keys, which Go reports as a MAC failure; the same failure can
-// hide another server-side error, so the description stays tentative.
-func peerRejectedCertificate(err error) bool {
+// sourceCertificateRejection classifies the first read after the TLS handshake.
+// mbedTLS can send a rejection under handshake keys while Go reads with
+// application keys. Go reports a MAC failure, which has other causes too.
+func sourceCertificateRejection(err error) error {
 	var op *net.OpError
 	if !errors.As(err, &op) || op.Err == nil {
-		return false
+		return nil
 	}
 	switch op.Op {
 	case "remote error":
-		return certificateAlerts[op.Err.Error()]
+		if certificateAlerts[op.Err.Error()] {
+			return ErrSourceRejectedCertificate
+		}
 	case "local error":
-		return op.Err.Error() == "tls: bad record MAC"
+		if op.Err.Error() == "tls: bad record MAC" {
+			return ErrSourceMayHaveRejectedCertificate
+		}
 	}
-	return false
+	return nil
 }
 
 // describeRejection names what the source was asked to trust, and why a board
@@ -48,8 +54,10 @@ func peerRejectedCertificate(err error) bool {
 func describeRejection(own *x509.Certificate, peer []*x509.Certificate) string {
 	desc := fmt.Sprintf("this device's certificate is issued by %q and signed with %s", own.Issuer.CommonName, own.SignatureAlgorithm)
 	if len(peer) > 0 {
-		key, ok := peer[0].PublicKey.(*ecdsa.PublicKey)
-		if ok && key.Curve == elliptic.P256() && own.PublicKeyAlgorithm != x509.ECDSA {
+		leaf := peer[0]
+		key, ok := leaf.PublicKey.(*ecdsa.PublicKey)
+		if ok && key.Curve == elliptic.P256() && leaf.SignatureAlgorithm == x509.ECDSAWithSHA256 &&
+			own.PublicKeyAlgorithm != x509.ECDSA {
 			desc += "; the source is on the classical P-256 Lite chain and may not be able to verify it"
 		}
 	}
