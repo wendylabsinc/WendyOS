@@ -665,26 +665,7 @@ func main() {
 		return scope
 	}
 	sensorSvc := services.NewSensorPairingService(logger, sensorStore, sensorAgentScope, sensorRunner.StartDiscovered, sensorRunner.StopPairing, sensorSup.IsPairingConnected)
-	// A new pairing is tried before it is saved, so a source that refuses
-	// this device's certificate is reported instead of retried forever.
-	sensorSvc.SetPairingProbe(func(ctx context.Context, p mcusource.SensorPairing, addr string) error {
-		if addr == "" {
-			candidates, ok := resolveSensorSource(ctx, p)
-			if !ok || len(candidates) == 0 {
-				return errors.New("sensor source not found on this device's network")
-			}
-			addr = candidates[0]
-		}
-		transport, err := sensorTransportFor(p, addr)
-		if err != nil {
-			return err
-		}
-		defer transport.Close()
-		if connector, ok := transport.(interface{ Connect(context.Context) error }); ok {
-			return connector.Connect(ctx)
-		}
-		return nil
-	})
+	sensorSvc.SetPairingProbe(sensorSup.ProbePairing)
 	// `device pair` lists sources from this device's network, so this device
 	// must not offer itself. Its asset ID is read per request because
 	// enrollment can assign one while the agent runs.
