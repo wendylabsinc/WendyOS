@@ -17,7 +17,7 @@ bash "$pr_package_repo/.github/scripts/build-linux-release-cli.sh" "$pr_package_
   "$pr_package_work/wendy" 2>&1 | tee "$pr_package_output/build-cli.log"
 (
   cd "$pr_package_repo/go"
-  CGO_ENABLED=0 GOOS=linux GOARCH="$pr_package_arch" go build \
+  CGO_ENABLED=0 GOOS=linux GOARCH="$pr_package_arch" python3 scripts/with-agent-tls.py build \
     -ldflags "-s -w -X github.com/wendylabsinc/wendy/go/internal/shared/version.Version=$pr_package_version" \
     -o "$pr_package_work/wendy-agent" ./cmd/wendy-agent
 ) 2>&1 | tee "$pr_package_output/build-agent.log"
