@@ -23,5 +23,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: python3 .github/scripts/test-agent-tls.py
+      - name: Run TLS interoperability regression
+        run: |
+          # The job container and checkout action can use different home paths.
+          # Trust only this checkout so Go can read its VCS build metadata.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 .github/scripts/test-agent-tls.py
 
