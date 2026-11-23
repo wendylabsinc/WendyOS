@@ -3,8 +3,7 @@ package services
 import (
 	"context"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -63,7 +62,7 @@ func dial(t *testing.T, lis *bufconn.Listener, creds credentials.TransportCreden
 
 func newKey(t *testing.T) (crypto.Signer, []byte) {
 	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +196,75 @@ func TestAccessShapeTransitions(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, trustedkeys.FileName)); !os.IsNotExist(err) {
 		t.Fatalf("open device kept its keys file: %v", err)
+	}
+}
+
+// Item 2: the access service, now served on Open and Enrolled listeners too,
+// changes nothing there. Open: it reports Open with no role and no key call
+// writes a file. Enrolled (straight from Open): it reports Enrolled, every
+// change is refused, and the device never becomes Closed or restarts.
+func TestOpenAndEnrolledUnchanged(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, trustedkeys.FileName)
+	keys, err := trustedkeys.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &accessDevice{dir: dir, keys: keys}
+	srv, lis := serve(t)
+	agentpbv2.RegisterWendyAccessServiceServer(srv, d.svc())
+	go srv.Serve(lis)
+	c := dial(t, lis, insecure.NewCredentials())
+	_, spki := newKey(t)
+
+	changes := func(shape string) {
+		t.Helper()
+		for name, call := range map[string]func() error{
+			"AddTrustedKey": func() error {
+				_, err := c.AddTrustedKey(ctx, &agentpbv2.AddTrustedKeyRequest{PublicKey: spki, Role: agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_OPERATOR})
+				return err
+			},
+			"ListTrustedKeys": func() error { _, err := c.ListTrustedKeys(ctx, &agentpbv2.ListTrustedKeysRequest{}); return err },
+			"RemoveTrustedKey": func() error {
+				_, err := c.RemoveTrustedKey(ctx, &agentpbv2.RemoveTrustedKeyRequest{Fingerprint: trustedkeys.Fingerprint(spki)})
+				return err
+			},
+			"SetKeylessApps": func() error {
+				_, err := c.SetKeylessApps(ctx, &agentpbv2.SetKeylessAppsRequest{Enabled: true})
+				return err
+			},
+			"OpenDevice": func() error { _, err := c.OpenDevice(ctx, &agentpbv2.OpenDeviceRequest{}); return err },
+		} {
+			if err := call(); err == nil {
+				t.Errorf("%s: %s succeeded", shape, name)
+			}
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s: a key call wrote the keys file: %v", shape, err)
+		}
+		if d.restarts != 0 {
+			t.Fatalf("%s: restarted %d times", shape, d.restarts)
+		}
+	}
+
+	got, err := c.GetAccess(ctx, &agentpbv2.GetAccessRequest{})
+	if err != nil || got.GetShape() != agentpbv2.AccessShape_ACCESS_SHAPE_OPEN ||
+		got.GetCallerRole() != agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_UNSPECIFIED || got.GetKeylessApps() {
+		t.Fatalf("open: %v %v", got, err)
+	}
+	changes("open")
+
+	d.enrolled = true
+	got, err = c.GetAccess(ctx, &agentpbv2.GetAccessRequest{})
+	if err != nil || got.GetShape() != agentpbv2.AccessShape_ACCESS_SHAPE_ENROLLED || got.GetCallerRole() != agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_UNSPECIFIED {
+		t.Fatalf("enrolled: %v %v", got, err)
+	}
+	_, err = c.CloseDevice(ctx, &agentpbv2.CloseDeviceRequest{PublicKey: spki})
+	wantCode(t, "closing an enrolled device", err, codes.FailedPrecondition)
+	changes("enrolled")
+	if keys.Closed() {
+		t.Fatal("enrolled device became Closed")
 	}
 }
 
