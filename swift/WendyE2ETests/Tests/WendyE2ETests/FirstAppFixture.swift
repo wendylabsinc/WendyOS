@@ -43,7 +43,7 @@ enum FirstAppFixture {
         // A timeout is always an assertion failure, including in negative specs.
         let script = """
             import os, shutil, subprocess, sys
-            keep = ['HOME', 'PATH', 'TMPDIR', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot']
+            keep = ['HOME', 'PATH', 'GOCOVERDIR', 'TMPDIR', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot']
             env = {k: os.environ[k] for k in keep if k in os.environ}
             env.update(WENDY_CONFIG_DIR=os.path.join(env['HOME'], '.wendy'), WENDY_ANALYTICS='false',
                        WENDY_NO_UPDATE_CHECK='1', WENDY_SECRET_STORE='file', CI='1', NO_COLOR='1')

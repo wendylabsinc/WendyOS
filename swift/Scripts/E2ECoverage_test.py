@@ -94,6 +94,44 @@ func main() {
         self.assertNotIn("generated.go", (self.repo / self._testMethodName / "union/coverage.out").read_text())
         self.assertTrue(list(left.glob("covmeta.*")))
 
+    def test_expanded_fixture_child_environments_preserve_coverage(self):
+        fixtures = PRODUCT / "swift/WendyE2ETests/Tests/WendyE2ETests"
+        ordinary = self.repo / "ordinary-wendy"
+        subprocess.run(["go", "build", "-o", str(ordinary), "./go/cmd/wendy"], cwd=self.repo, check=True)
+        for filename in ("ContextCLIAssertions.swift", "FirstAppFixture.swift",
+                         "WendyProjectOptimizeTests.swift", "LocalCLIAssertions.swift"):
+            source = (fixtures / filename).read_text()
+            if filename == "LocalCLIAssertions.swift":
+                # Execute the actual shell environment-clearing prefix.
+                shell = "env -i " + source.split("env -i ", 1)[1].split("code=$?", 1)[0]
+            else:
+                # Execute the actual Python child-environment construction.
+                lines = [line.strip() for line in source.splitlines()
+                         if line.strip().startswith(("keep = ", "env = {k:"))]
+                script = "import os, subprocess, sys\n" + "\n".join(lines) + "\n" + (
+                    "p = subprocess.run([sys.argv[1], 'left'], env=env, capture_output=True)\n"
+                    "sys.stdout.buffer.write(p.stdout); sys.stderr.buffer.write(p.stderr)\n"
+                    "sys.exit(p.returncode)\n")
+            for covered in (False, True):
+                with self.subTest(fixture=filename, coverage=covered):
+                    native = self.native(filename + ("/covered with spaces" if covered else "/ordinary"))
+                    env = dict(os.environ, HOME=str(self.repo), TMPDIR=str(self.repo),
+                               PATH=str(self.repo) + os.pathsep + os.environ["PATH"])
+                    env.pop("GOCOVERDIR", None)
+                    if covered:
+                        env["GOCOVERDIR"] = str(native)
+                    binary = self.repo / "wendy" if covered else ordinary
+                    if filename == "LocalCLIAssertions.swift":
+                        command = shell.replace(r"\(posixCommand) \(posixArgs)", '"' + str(binary) + '" left')
+                        result = subprocess.run(["bash", "-c", command], env=env, capture_output=True)
+                    else:
+                        result = subprocess.run(["python3", "-c", script, str(binary)], env=env, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), b"1")
+                    self.assertEqual(result.stderr, b"")
+                    self.assertEqual(coverage.check_cli_counters(native), int(covered))
+                    self.assertEqual(bool(list(native.glob("covmeta.*"))), covered)
+
     def test_nonzero_exit_still_writes_native_counters(self):
         native = self.native("nonzero")
         self.assertEqual(self.invoke(native, "fail"), 7)

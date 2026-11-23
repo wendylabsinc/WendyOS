@@ -397,7 +397,7 @@ private enum OptimizeFixture {
         // accepted as an expected nonzero CLI result. No inherited routes/auth.
         let script = """
             import os, pathlib, shutil, subprocess, sys
-            env = {k: os.environ[k] for k in ['HOME', 'PATH', 'TMPDIR'] if k in os.environ}
+            env = {k: os.environ[k] for k in ['HOME', 'PATH', 'GOCOVERDIR', 'TMPDIR'] if k in os.environ}
             env.update(WENDY_CONFIG_DIR=os.path.join(env['HOME'], '.wendy'), WENDY_ANALYTICS='false',
                        WENDY_NO_UPDATE_CHECK='1', WENDY_SECRET_STORE='file', CI='1', NO_COLOR='1')
             os.umask(0o022)

@@ -125,7 +125,7 @@ enum ContextCLIAssertions {
                 return 'org %d — %s' % ({'alpha': 41, 'beta': 73}[name], self.endpoint)
 
             def run(self, *args, exit=0):
-                env = {k: os.environ[k] for k in ('HOME', 'PATH', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'USERPROFILE') if k in os.environ}
+                env = {k: os.environ[k] for k in ('HOME', 'PATH', 'GOCOVERDIR', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'USERPROFILE') if k in os.environ}
                 env.update(WENDY_CONFIG_DIR=str(self.directory), WENDY_ANALYTICS='false',
                            WENDY_NO_UPDATE_CHECK='1', WENDY_SECRET_STORE='file', CI='1', NO_COLOR='1')
                 # DEVNULL on stdin and pipes on both output streams guarantee no terminal.
