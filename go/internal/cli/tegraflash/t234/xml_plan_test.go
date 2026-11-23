@@ -225,6 +225,14 @@ func TestLoadXMLPlanWithoutAlignBoundaryPlacesAsBefore(t *testing.T) {
 		{"16 KiB on config and data too", func(layout string) string {
 			return strings.ReplaceAll(layout, fourMiBBoundary, "<align_boundary> 16384 </align_boundary>")
 		}},
+		// Several partitions end off a 1 MiB boundary (the kernel-dtb ones are
+		// 768 KiB), so this is the case that tells "at least 1 MiB" from "the
+		// boundary as given": taken as given, their successors would start on
+		// the next 16 KiB instead.
+		{"16 KiB on every partition", func(layout string) string {
+			bare := alignBoundaryElement.ReplaceAllString(layout, "")
+			return strings.ReplaceAll(bare, "</partition>", "<align_boundary> 16384 </align_boundary></partition>")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			layout, images := orinNanoNVMeLayout(t, func(text string) string {
