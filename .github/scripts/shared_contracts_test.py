@@ -78,6 +78,8 @@ cp "$POLICY_SCRIPT" "$2"
             ("cloud/apps.proto", "", False),
             ("wendylite/v1/sensorlink.proto", "", False),
             ("wendy/lite/sensorlink.proto", "", False),
+            ("wendylite/v1/wendy_com_msg.proto", "", False),
+            ("wendy/lite/wendy_com_msg.proto", "", False),
             ("service/nested.proto", "", False),
             ("cloud/apps.proto", "cloud/apps.proto", True),
             ("apps.proto", "cloud/apps.proto", False),
@@ -88,7 +90,8 @@ cp "$POLICY_SCRIPT" "$2"
             with self.subTest(local=local_path, exception=exception), tempfile.TemporaryDirectory(dir=self.root) as directory:
                 proto, catalogue = Path(directory) / "local", Path(directory) / "catalogue"
                 proto.mkdir(); catalogue.mkdir()
-                for name in ("apps.proto", "wendylite/v1/sensorlink.proto", "service/nested.proto", "retained.proto"):
+                for name in ("apps.proto", "wendylite/v1/sensorlink.proto", "wendylite/v1/wendy_com_msg.proto",
+                             "service/nested.proto", "retained.proto"):
                     path = catalogue / name
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text('syntax = "proto3";\n')

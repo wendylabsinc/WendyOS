@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="87510205398fc0c3fcfb38300cb6304bd0919371"
+SHARED_GRPC_API_CONTRACTS_REF="cf30788f1fbabbab76135227b6fac77a69b365da"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"
@@ -58,6 +58,8 @@ SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
     "wendylite/v1/sensorlink.proto"
 )
 SHARED_GRPC_API_CONTRACTS_INPUT="https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF"
+
+SHARED_GRPC_API_CONTRACTS_WENDYCOM_PROTO="wendylite/v1/wendy_com_msg.proto"
 
 SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
     "wendycloud/tunnel/v2/tunnel.proto"
@@ -151,7 +153,8 @@ check_shared_grpc_api_contracts_sources() {
         alias=""
         # Root catalogue files are staged under cloud/ by legacy consumers.
         case "$proto" in
-            wendylite/v1/sensorlink.proto) alias="wendy/lite/sensorlink.proto" ;;
+            wendylite/v1/sensorlink.proto|wendylite/v1/wendy_com_msg.proto)
+                alias="wendy/lite/${proto##*/}" ;;
             */*) ;;
             *) alias="cloud/$proto" ;;
         esac
