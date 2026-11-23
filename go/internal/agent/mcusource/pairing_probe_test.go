@@ -71,3 +71,33 @@ func TestProbePairingLeavesTimeForAlternateRoutes(t *testing.T) {
 		}
 	})
 }
+
+func TestProbePairingResolvesAlternatesForAnAddressHint(t *testing.T) {
+	for _, discover := range []bool{true, false} {
+		var attempted []string
+		s := NewSupervisor(zap.NewNop(), nil, func(_ SensorPairing, addr string) (SensorTransport, error) {
+			attempted = append(attempted, addr)
+			if addr == "stale:5054" {
+				return probeTransport{connect: func(context.Context) error {
+					return ErrSourceRejectedCertificate
+				}}, nil
+			}
+			return probeTransport{connect: func(context.Context) error { return nil }}, nil
+		}, nil, nil)
+		s.SetSourceResolver(func(context.Context, SensorPairing) ([]string, bool) {
+			if discover {
+				return []string{"stale:5054", "mesh:5054"}, true
+			}
+			return nil, false
+		})
+		pairing := SensorPairing{SourcePrincipalURI: "spiffe://wendy.sh/tenant/test/device/lite"}
+		err := s.ProbePairing(t.Context(), pairing, "stale:5054")
+		if discover {
+			if err != nil || !slices.Equal(attempted, []string{"stale:5054", "mesh:5054"}) {
+				t.Fatalf("alternate route: tried %v, err = %v", attempted, err)
+			}
+		} else if err == nil || errors.Is(err, ErrSourceRejectedCertificate) {
+			t.Fatalf("unconfirmed routes: got %v, want an inconclusive error", err)
+		}
+	}
+}

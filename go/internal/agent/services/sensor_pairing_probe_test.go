@@ -169,3 +169,17 @@ func TestAddSensorPairingSkipsProbeForAConnectedSource(t *testing.T) {
 		t.Fatalf("err = %v, probed a connected source = %v", err, called)
 	}
 }
+
+func TestAddSensorPairingDoesNotSaveWhenRequestIsCanceledDuringProbe(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	svc, store, starts := probedPairingService(t, func(probeCtx context.Context, _ mcusource.SensorPairing, _ string) error {
+		cancel()
+		<-probeCtx.Done()
+		return probeCtx.Err()
+	})
+	err := addProbedPairing(svc, ctx, "")
+	if status.Code(err) != codes.Canceled || len(store.List()) != 0 || *starts != 0 {
+		t.Fatalf("err = %v, saved = %d, started = %d", err, len(store.List()), *starts)
+	}
+}

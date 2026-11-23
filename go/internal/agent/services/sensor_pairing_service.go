@@ -236,6 +236,9 @@ func (s *SensorPairingService) AddSensorPairing(ctx context.Context, req *agentp
 	if err := s.refusedBySource(ctx, p, req.SourceAddress); err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
 	if err := s.store.Add(p); err != nil {
 		return nil, err
 	}
