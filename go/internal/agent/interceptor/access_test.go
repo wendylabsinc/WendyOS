@@ -2,9 +2,7 @@ package interceptor
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
+	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -77,7 +75,7 @@ func TestKeylessSetIsTheAppsSet(t *testing.T) {
 
 func spkiOf(t *testing.T) []byte {
 	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}

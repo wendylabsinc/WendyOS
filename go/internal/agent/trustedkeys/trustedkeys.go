@@ -12,6 +12,7 @@ package trustedkeys
 import (
 	"bytes"
 	"context"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -135,10 +136,30 @@ func ParsePublicKey(b []byte) ([]byte, error) {
 		}
 		der = block.Bytes
 	}
-	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
-		return nil, fmt.Errorf("the public key could not be read (%v); send a PEM or DER SubjectPublicKeyInfo", err)
+	if err := checkKey(der); err != nil {
+		return nil, err
 	}
 	return der, nil
+}
+
+// checkKey accepts only ML-DSA-65, the algorithm of the CLI's local key: no
+// classical key is a fallback (ML-DSA first, no silent downgrade).
+func checkKey(der []byte) error {
+	pub, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return fmt.Errorf("the public key could not be read (%v); send a PEM or DER SubjectPublicKeyInfo", err)
+	}
+	if k, ok := pub.(*mldsa.PublicKey); !ok || k.Parameters() != mldsa.MLDSA65() {
+		return fmt.Errorf("the key is %s; trusted keys must be ML-DSA-65, the key `wendy auth local-key show` prints", keyAlgorithm(pub))
+	}
+	return nil
+}
+
+func keyAlgorithm(pub any) string {
+	if k, ok := pub.(*mldsa.PublicKey); ok {
+		return k.Parameters().String()
+	}
+	return fmt.Sprintf("%T", pub)
 }
 
 // Open loads path. A missing file is an Open device. A file that exists but
@@ -259,8 +280,8 @@ func newEntry(spki []byte, role Role, label, addedBy string, now time.Time) (Ent
 	if role == RoleNone {
 		return Entry{}, errors.New("a role is required: owner, operator or viewer")
 	}
-	if _, err := x509.ParsePKIXPublicKey(spki); err != nil {
-		return Entry{}, fmt.Errorf("the public key could not be read (%v); send a PEM or DER SubjectPublicKeyInfo", err)
+	if err := checkKey(spki); err != nil {
+		return Entry{}, err
 	}
 	return Entry{
 		PublicKey: string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki})),

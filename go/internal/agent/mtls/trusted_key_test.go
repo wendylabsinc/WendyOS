@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -124,7 +125,7 @@ func TestTrustedKeyTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	viewerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	viewerKey, _ := mldsa.GenerateKey(mldsa.MLDSA65())
 	strangerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	owner, err := keys.Close(spki(t, ownerKey), "", time.Now())
 	if err != nil {
@@ -149,7 +150,7 @@ func TestTrustedKeyTLS(t *testing.T) {
 		ok   bool
 	}{
 		{"ML-DSA owner", grpcTLS, ownerKey, true},
-		{"ECDSA viewer", grpcTLS, viewerKey, true},
+		{"ML-DSA viewer", grpcTLS, viewerKey, true},
 		{"untrusted key", grpcTLS, strangerKey, false},
 		{"viewer on the registry", registryTLS, viewerKey, false},
 		{"owner on the registry", registryTLS, ownerKey, true},

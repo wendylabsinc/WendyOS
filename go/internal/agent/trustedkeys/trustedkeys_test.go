@@ -1,9 +1,13 @@
 package trustedkeys
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"errors"
 	"os"
@@ -14,7 +18,7 @@ import (
 
 func newSPKI(t *testing.T) []byte {
 	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	k, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,5 +123,41 @@ func TestOpenRefusesUnusableFile(t *testing.T) {
 		if _, err := Open(path); err == nil {
 			t.Errorf("%s: loaded", name)
 		}
+	}
+}
+
+// Only ML-DSA-65, the CLI's local-key algorithm, is accepted; every classical
+// algorithm and the other ML-DSA sizes are refused, on add and on load.
+func TestKeysMustBeMLDSA65(t *testing.T) {
+	gen := map[string]func() (crypto.Signer, error){
+		"RSA":       func() (crypto.Signer, error) { return rsa.GenerateKey(rand.Reader, 2048) },
+		"P-224":     func() (crypto.Signer, error) { return ecdsa.GenerateKey(elliptic.P224(), rand.Reader) },
+		"P-256":     func() (crypto.Signer, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) },
+		"Ed25519":   func() (crypto.Signer, error) { _, k, err := ed25519.GenerateKey(rand.Reader); return k, err },
+		"ML-DSA-44": func() (crypto.Signer, error) { return mldsa.GenerateKey(mldsa.MLDSA44()) },
+		"ML-DSA-87": func() (crypto.Signer, error) { return mldsa.GenerateKey(mldsa.MLDSA87()) },
+	}
+	store, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, g := range gen {
+		k, err := g()
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.MarshalPKIXPublicKey(k.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParsePublicKey(der); err == nil {
+			t.Errorf("%s key accepted", name)
+		}
+		if _, err := store.Close(der, "", time.Now()); err == nil {
+			t.Errorf("%s key closed the device", name)
+		}
+	}
+	if _, err := ParsePublicKey(newSPKI(t)); err != nil {
+		t.Errorf("ML-DSA-65 key refused: %v", err)
 	}
 }

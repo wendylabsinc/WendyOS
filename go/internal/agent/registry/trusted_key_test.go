@@ -1,9 +1,7 @@
 package registry
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
+	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
@@ -21,7 +19,7 @@ func TestTrustedKeyMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 	spki := func() []byte {
-		k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		k, _ := mldsa.GenerateKey(mldsa.MLDSA65())
 		der, _ := x509.MarshalPKIXPublicKey(k.Public())
 		return der
 	}
