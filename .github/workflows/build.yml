@@ -56,9 +56,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  XCODE_VERSION: '26.5'
-
 jobs:
   validate-go:
     name: Go validation
@@ -193,7 +190,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -282,7 +279,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -342,6 +339,9 @@ jobs:
     runs-on:
       group: wendy-mac
       labels: [self-hosted, macOS, ARM64]
+    env:
+      # Keep release binaries compatible with the Homebrew tap's baseline.
+      MACOSX_DEPLOYMENT_TARGET: '26.0'
     needs: [determine-version]
     # Attest SLSA build provenance in the job that produces the archive, so the
     # provenance reflects the actual build environment (not a downstream job).
@@ -365,7 +365,7 @@ jobs:
       - uses: ./.github/actions/setup-macos-ci
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -379,17 +379,8 @@ jobs:
           CGO_ENABLED: '1'
         run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
 
-      - name: Install libusb
-        run: |
-          set -euo pipefail
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          echo "/usr/local/bin" >> "$GITHUB_PATH"
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          brew list libusb >/dev/null 2>&1 || brew install libusb
-
-      # build-wendy.sh links libusb statically and fails the build if a dynamic
-      # libusb dependency sneaks in — a plain `go build` would produce a binary
-      # that only runs on Macs with Homebrew libusb installed.
+      # Build libusb for the same deployment target as the CLI. The runner's
+      # Homebrew archive may require symbols only available on its newer OS.
       - name: Build
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -397,8 +388,7 @@ jobs:
         run: |
           ARTIFACT="${{ matrix.artifact-name }}"
           mkdir -p "${ARTIFACT}"
-          # build-wendy.sh cds into go/, so the output path is relative to go/.
-          go/scripts/build-wendy.sh "../${ARTIFACT}/wendy"
+          bash .github/scripts/build-macos-release-cli.sh "${ARTIFACT}/wendy"
           # libusb is statically linked (LGPL-2.1): ship its attribution/license.
           cp NOTICE "${ARTIFACT}/NOTICE"
 
@@ -440,7 +430,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -518,7 +508,7 @@ jobs:
           if (( ${#missing[@]} )); then brew install "${missing[@]}"; fi
 
       - name: Download runtime guest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}
           path: ${{ runner.temp }}/wendy-macos-runtime-guest
@@ -528,11 +518,6 @@ jobs:
         run: |
           tar -C swift/WendyAgentMac/Resources/runtime -xzf \
             "${RUNNER_TEMP}/wendy-macos-runtime-guest/wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}.tar.gz"
-
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Identify Release build cache
         id: release_cache
@@ -764,10 +749,9 @@ jobs:
   sbom-binaries:
     name: SBOM+attest (${{ matrix.artifact-name }})
     runs-on: ubuntu-latest
-    # build-cli-linux produces the wendy-cli-linux-* archives; without it in
-    # needs, those matrix entries race the upload and fail with "Artifact not
-    # found".
-    needs: [determine-version, build, build-cli-linux, build-go-macos]
+    # Wait for Windows signing to replace the unsigned archives, so each SBOM
+    # attests the released bytes and never races the artifact replacement.
+    needs: [determine-version, build, build-cli-linux, build-go-macos, package-windows]
     permissions:
       contents: read
       id-token: write
@@ -796,7 +780,7 @@ jobs:
           syft-version: v1.18.1
 
       - name: Download archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ matrix.artifact-name }}-${{ needs.determine-version.outputs.version }}.${{ matrix.ext }}
           path: dist
@@ -877,12 +861,12 @@ jobs:
           sudo gem install fpm -v 1.18.0 --no-document
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-cli-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
       - name: Download Agent artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-agent-linux-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.tar.gz
 
@@ -991,7 +975,7 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
 
@@ -1105,14 +1089,14 @@ jobs:
           persist-credentials: false
 
       - name: Download all .deb packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: linux-packages-deb-*
           merge-multiple: true
           path: packages/deb
 
       - name: Download all .rpm packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: linux-packages-rpm-*
           merge-multiple: true
@@ -1197,7 +1181,7 @@ jobs:
           persist-credentials: false
 
       - name: Download agent tarballs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: wendy-agent-linux-*.tar.gz
           merge-multiple: true
@@ -1207,7 +1191,7 @@ jobs:
       # build-agent-macos-app failed or was skipped, e.g. during a
       # macOS signing/notarization outage.
       - name: Download macOS agent artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: wendy-agent-macos-*.zip
           merge-multiple: true
@@ -1312,17 +1296,17 @@ jobs:
     steps:
       # Validation artifacts and caches share this run; only download products.
       - name: Download release products
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: 'wendy-*'
           merge-multiple: true
       - name: Download Linux packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: 'linux-packages-*'
           merge-multiple: true
       - name: Download SBOMs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: 'sbom-*'
           merge-multiple: true
@@ -1420,7 +1404,7 @@ jobs:
       # Bump Homebrew tap formula and cask
       - name: Create GitHub App Token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ vars.CLI_PUBLISHER_APP_ID }}
           private-key: ${{ secrets.CLI_PUBLISHER_APP_PRIVATE_KEY }}

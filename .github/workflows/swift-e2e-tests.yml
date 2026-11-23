@@ -608,13 +608,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          slug() {
-            printf '%s' "$1" \
-              | tr '[:upper:]' '[:lower:]' \
-              | sed -E 's/[^[:alnum:]._-]+/-/g; s/-+/-/g; s/^-//; s/-$//'
-          }
-
-          workflow_id="$(slug "${GITHUB_WORKFLOW:-swift-e2e-tests}")"
+          # Match swift-e2e-run's stable artifact prefix. GITHUB_WORKFLOW names
+          # the caller when this workflow is reused by build.yml.
+          workflow_id=swift-e2e-tests
           printf -v attempt_suffix '%04d' "${GITHUB_RUN_ATTEMPT:-1}"
           echo "run_artifact_id=${workflow_id}.gh${GITHUB_RUN_ID}.run.${attempt_suffix}" >> "$GITHUB_OUTPUT"
           echo "run_dir=${RUNNER_TEMP}/wendy/${workflow_id}.gh${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
@@ -628,7 +624,7 @@ jobs:
             "${{ steps.e2e-run.outputs.run_dir }}"
 
       - name: Download Swift E2E attempts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ${{ runner.temp }}/wendy-raw/${{ github.run_id }}
           pattern: swift-e2e-tests.gh${{ github.run_id }}.*
@@ -717,7 +713,7 @@ jobs:
           mv "$staging/$tests_path" "$tests_path"
 
       - name: Set up Node.js for review tools
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.4'
 

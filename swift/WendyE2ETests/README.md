@@ -59,6 +59,26 @@ bash Scripts/E2ETest.sh \
 
 Repeat `--filter` to pass multiple test filters.
 
+The first-app Python scaffold checks (default parsed build settings and optional
+installation) require Python 3.11+ on the CLI machine. They check this prerequisite
+before scaffolding and report how to select a supported `python3` on `PATH`.
+CI selecting either check must provision that interpreter. The optional installation
+check additionally needs an offline wheelhouse and venv/ensurepip tooling.
+Provision the wheelhouse once in an isolated fixture directory, then pass its absolute path
+on the CLI machine as `WENDY_E2E_PYTHON_WHEELHOUSE`:
+
+```bash
+python3 -m pip download --no-cache-dir --only-binary=:all: \
+  --dest /path/to/isolated/wheelhouse hatchling==1.27.0
+WENDY_E2E_PYTHON_WHEELHOUSE=/path/to/isolated/wheelhouse \
+  bash Scripts/E2ETest.sh --output-dir /path/to/evidence \
+    --no-managed-agent --filter "installs and runs the generated Python"
+```
+
+The spec creates a per-test virtual environment, installs with `--no-index`, and
+runs the installed console script outside the source tree. Without that fixture,
+only this installation spec is skipped; parsed build settings remain covered.
+
 ### Collect Go source coverage
 
 Local coverage is opt-in. Every active Swift E2E CI run collects Go coverage,
@@ -186,6 +206,89 @@ WENDY_E2E_LEGACY_INTEGRATION=true \
     --filter "legacy integration tests"
 ```
 
+### Run the HTTP app lifecycle specs
+
+`WENDY_E2E_HTTP_APP=true` opts into uniquely named real-device app fixtures
+from `.github/ci-tests/http-app-loop`. Select an explicit WendyOS device and
+an isolated CLI HOME. This fixture accepts plain dotted LAN hostnames or IPv4
+addresses only; it rejects cloud/provider/VM/socket selectors, explicit ports,
+credentials and unsupported IPv6 forms before scenario setup or inventory.
+The CLI host needs Python 3, curl, and OpenSSL. Before
+any Wendy command, the fixture reduces the copied single-context auth config
+to its held certificate/key and saved device pins. It removes OAuth/API tokens,
+refresh tokens, DPoP/service-account material and renewal endpoints, then checks
+the actual X509 validity locally. Expired or not-yet-valid certificates fail
+before device access. Remaining signed validity must exceed the maximum
+15-minute CLI renewal margin plus the enforced test timeout and 60 seconds of
+runner shutdown grace. These fixtures require `--test-timeout` between 1 and
+300 seconds; the runner exports its actual normalized bound. An ambient
+`WENDY_AGENT_SOCKET` is refused before scenario setup because it overrides the
+explicit device. No test refreshes a copied session. Private source auth files
+remain unchanged.
+
+The prebuilt Compose cases pin a small official Python multiarch image by
+immutable digest, then run the HTTP payload through Compose's `command` array.
+They need no local or remote builder. Cleanup removes only the exact app;
+the public immutable image remains shared device cache content and is never
+deleted by the fixture. Runs explicitly skip Cloud app registration and never
+consent to changing the builder role. Every fixture CLI command sets the
+supported `WENDY_RUN_NO_CLOUD_FALLBACK=1` setting; failed primary LAN resolution
+must not query Cloud. Build-host resolution is explicitly exempt from that
+setting, so both remote-builder negative specs are deferred with full bodies.
+No product routing or security behavior is changed by this harness setup.
+
+```bash
+WENDY_E2E_HTTP_APP=true bash Scripts/E2ETest.sh \
+  --no-managed-agent --agent-os wendyos --test-timeout 300 \
+  --device-address my-device.local \
+  --cli-auth-config /private/path/e2e-auth.json \
+  --filter "prebuilt HTTP"
+```
+
+The HTTP assertions verify app identity and payload version, a live reported
+endpoint, inventory identity/state/port, endpoint closure after stop, and a new
+process instance after restart. Detached start must report unchecked readiness.
+A separate full-body disabled spec retains companion version preservation:
+Compose currently reports `latest` instead of configured `1.0.0` in inventory.
+Other Compose cases leave that assertion to the disabled defect spec. To replay
+that known failure, explicitly set both `WENDY_E2E_REPLAY_KNOWN_DEFECTS=true` and
+`WENDY_E2E_HTTP_APP=true` and filter `preserves the companion version`.
+The replay retains the original `1.0.0` assertion.
+
+The everyday update/log batch uses the same prebuilt service. Select the exact
+test-name filters `replays owned stdout`, `limits stored replay`,
+`keeps serving after output`, `redeploys changed HTTP`, and
+`preserves the working HTTP`. The replay cases compare actual request markers
+from both streams, app and severity filtering, and recent versus older matching
+batches. `--tail` counts batches, not JSON lines. The pressure case writes a
+bounded 2 MiB per stream without a log reader and requires the same process to
+keep serving HTTP. It does not prove unlimited output handling or attribution
+of Agent events from a crash-loop that emits no stdout; the latter remains
+uncovered. Changed runtime configuration must change the served payload version
+and process while preserving a second owned app. Invalid-manifest preservation
+is checked before deployment, followed by a repaired successful redeploy; it
+does not assert rollback after an accepted replacement starts or crashes.
+
+Five source-build positive specs retain complete bodies but remain disabled:
+the available test Jetson lacks BuildKit and the CLI host has no container
+builder. Their same-device `--build-host` path also rejects `--wait-ready`.
+No fixture installs or enables a builder. A claimed ready result must satisfy
+the declared TCP probe immediately; only unchecked detached startup may retry.
+If source deployment may have imported an image but no container exists,
+cleanup fails loudly with the exact app/repository because app inventory alone
+cannot establish image absence. It never prunes shared device caches.
+
+The same opt-in allows selective real-device checks filtered by
+`rejects a missing application and preserves`. The unavailable-builder and
+unsupported remote-readiness cases remain deferred because the supported
+no-fallback setting exempts build hosts. Use a trusted hostname or saved
+identity binding; a bare IP may be refused by identity verification.
+
+For the offline no-Cloud contact control, point `WENDY_E2E_CONTROL_CLI` at a
+locally built CLI and run `test_lan_no_cloud.py` with Python's unittest runner.
+It uses only synthetic credentials, an unreachable loopback Agent, and a local
+Cloud contact counter, including an unset-guard positive control.
+
 ## Test environment
 
 `Scripts/E2ETest.sh` is the preferred runner. It:
@@ -232,6 +335,38 @@ sandbox. Prefer a dedicated E2E fixture config instead of your live
 `~/.wendy/config.json`; do not commit fixture configs, and avoid putting
 credential-related values directly in shell history. If the variable is not set,
 the runner uses the current CLI user's `~/.wendy/config.json` where possible.
+
+For repeated explicit-device inner loops with the Bash runner, add
+`--device-cache-fixture /absolute/path/to/e2e-target-cache.json` (or
+`WENDY_E2E_CLI_DEVICE_CACHE_FIXTURE`) alongside `--device-address`. The first
+run prepares target-only, untrusted `devices.json` address hints after a successful
+`device info --read-only` preflight in a temporary HOME. The supplied auth fixture
+must already contain a saved device principal for the explicit target hostname.
+The CLI parses and enforces that existing binding on every connection; cache
+metadata never creates or replaces identity bindings. In particular, a cached
+`mtls: true` value is a routing hint, not proof of an authenticated connection.
+Unset `WENDY_AGENT_SOCKET`: the runner, preflight and opted-in scenario reject
+this ambient override because it bypasses the explicit device address.
+Preparation pays the normal cold lookup cost. Later runs seed that preflight
+HOME from the prepared fixture and check reachability using the real CLI and
+its mandatory saved binding. Each run writes a separate refreshed snapshot;
+tests copy it into their own HOME. No TLS session cache, pin store or additional
+credentials are copied.
+The preflight command has a separate 30-second deadline; `--test-timeout` applies
+to the subsequent Swift test process.
+
+Only scenario calls with `run(useDeviceCache: true)` consume that snapshot;
+currently the explicit-device and non-interactive device-info specs opt in.
+Discovery and other scenarios remain cold by default. This requires `per-test`
+isolation and an unmanaged explicit target. The prepared fixture is immutable
+and bound to the exact target argument. Use a named LAN target that the CLI
+persists in its discovery cache; IP literals do not produce these entries.
+Missing fixtures are prepared; malformed or mismatched fixtures fail setup.
+The CLI retains its normal stale-address
+fallback. Remove a stale fixture to prepare a fresh one rather than repeatedly
+paying for fallback. Use a dedicated path, never your personal
+`~/.wendy/devices.json`. Do not commit fixture files. The PowerShell runner does
+not prepare these fixtures.
 
 ## Artifacts
 
@@ -337,6 +472,50 @@ Build/Reference/
 
 Use this artifact to review the behavioral reference generated from the current
 E2E source files.
+
+`swift-e2e-testing reference --spec-review` (or `--include-disabled-state`)
+adds static availability metadata in HTML, Markdown and JSON. `enabled` means
+no recognized availability trait restricts the declaration; it does not mean the
+test passed or its runtime prerequisites are satisfied. Unconditional `.disabled`
+is `disabled`. `.enabled(if:)`, conditional `.disabled` and
+closure conditions are `conditional`: the generator never evaluates Swift
+expressions, even literal booleans. Suite traits are inherited. An unconditional
+disable takes precedence over conditional traits. Trait source is retained as
+`availabilityReason`, including any literal explanation, without evaluating
+interpolation or computed reasons. Predicate overloads, including a reason followed
+by a closure or predicate expression, remain conditional. Ordinary reference output
+still omits metadata. Generic argument lists inside traits are not parsed:
+commas in an expression such as `.disabled(Reason<Int, String>.comment)` can be
+reported conservatively as `conditional` (unknown), even when Swift resolves the
+expression to an unconditional comment. A parenthesized generic expression is
+supported because its commas are grouped. Other supported computed comments remain
+unconditional; the extractor does not typecheck or evaluate their expressions.
+
+For API consumers, `Entry.availability` and `Entry.availabilityReason` are additive.
+The existing `isDisabled` initializer/property remains available; false alone is
+not evidence of enablement. Setting that property explicitly resets availability
+and clears its reason. JSON with availability metadata adds `availability` and
+`availabilityReason` (when present). It retains `isDisabled` for static enabled or
+disabled entries, and omits that legacy boolean for conditional entries so they
+cannot be mistaken for enabled. Consumers requiring that key must migrate to
+`availability` before reading conditional entries.
+
+The extractor follows the repository convention: standalone `@Suite` / `@Test`
+attributes followed by backticked `struct` / `func` names, one flattened suite per
+command file. Its small lexical scanner balances function bodies and attributes
+across ordinary, raw and multiline strings (including interpolation), quoted
+identifiers, line comments and nested block comments. It also handles a function's
+opening brace on a later line. This is not a complete Swift parser: regex literals,
+inline attribute/declaration layouts, custom or qualified availability traits,
+nested suite inheritance and conditional compilation are not interpreted. Keep
+availability traits directly in the suite/test attribute when using this reference.
+
+Recognized unterminated `@Test` / `@Suite` attributes fail file/directory parsing
+and the CLI with a source path and line diagnostic. CLI directory output validates
+all sources before writing any files. The existing nonthrowing `parseSource` API
+returns no documents for this error, rather than a partial reference; use the
+throwing `parseFile` API when diagnostics are needed. Other Swift syntax errors
+are outside this bounded validation.
 
 ## Writing tests
 

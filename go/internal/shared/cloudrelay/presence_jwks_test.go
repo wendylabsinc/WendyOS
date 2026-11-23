@@ -48,18 +48,32 @@ func artifactWithKid(t *testing.T, key *ecdsa.PrivateKey, compact, kid, typ stri
 
 func waitPresenceExpiry(t *testing.T, done <-chan error, exp int64) bool {
 	t.Helper()
-	timeout := time.NewTimer(max(time.Until(time.Unix(exp, 0))+350*time.Millisecond, time.Millisecond))
+	// The signed deadline is unchanged. Allow the same one-second scheduling
+	// and transport-cleanup margin as the other presence expiry tests, including
+	// when every Go package runs concurrently on a small CI runner.
+	expires := time.Unix(exp, 0)
+	timeout := time.NewTimer(max(time.Until(expires)+time.Second, time.Millisecond))
 	defer timeout.Stop()
+	var err error
 	select {
-	case err := <-done:
-		if err == nil || err.Error() != "Cloud presence lease expired" {
-			t.Fatalf("wrong expiry: %v", err)
-		}
-		return true
+	case err = <-done:
 	case <-timeout.C:
-		t.Error("key lookup held presence past its original signed expiry")
-		return false
+		// Both channels can be ready if the test goroutine was descheduled.
+		// Prefer a completed shutdown over reporting a blocked owner.
+		select {
+		case err = <-done:
+		default:
+			t.Error("presence did not stop after its original signed expiry")
+			return false
+		}
 	}
+	if err == nil || err.Error() != "Cloud presence lease expired" {
+		t.Fatalf("wrong expiry: %v", err)
+	}
+	if time.Now().Before(expires) {
+		t.Fatal("presence stopped before its signed expiry")
+	}
+	return true
 }
 
 // A rotated renewal key must not hold up a valid old cached key, and the

@@ -38,6 +38,10 @@ type NMCLINetworkManager struct {
 	// scanning is closed when the scan in progress returns. Nil while no
 	// scan is in progress.
 	scanning chan struct{}
+
+	// reactivating counts the profiles being brought back up after a failed
+	// connect (see restoreProfile), so tests can wait for them.
+	reactivating sync.WaitGroup
 }
 
 func NewNMCLINetworkManager(logger *zap.Logger) *NMCLINetworkManager {
@@ -313,10 +317,15 @@ func profileGone(err error) bool {
 	return errors.As(err, &exitErr) && exitErr.ExitCode() == nmcliNoSuchConnection
 }
 
+// classifyKeyMgmt maps a saved profile's key-mgmt to a security type. A profile
+// for an open network has no security setting and so no key-mgmt; "none" is
+// NetworkManager's value for static WEP.
 func classifyKeyMgmt(k string) agentpb.WiFiSecurityType {
 	switch strings.ToLower(strings.TrimSpace(k)) {
-	case "none", "":
+	case "":
 		return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN
+	case "none":
+		return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WEP
 	case "wpa-psk":
 		return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK
 	case "sae":
@@ -782,9 +791,9 @@ func keyMgmtFromHint(hint, password string) string {
 	return ""
 }
 
-// ConnectToWiFi connects through a profile it writes for hidden networks and
+// connectToWiFi connects through a profile it writes for hidden networks and
 // known key management, and through `nmcli device wifi connect` otherwise.
-func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
+func (n *NMCLINetworkManager) connectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
 	ssid := req.GetSsid()
 	hidden := req.GetHidden()
 	password := req.GetPassword()
@@ -795,14 +804,14 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 		network, scanned = scanNetwork(ctx, n.nmcliPath, ssid)
 	}
 
-	// Snapshot whether a saved profile exists *before* we touch nmcli so we
-	// can roll back any profile we (or `nmcli device wifi connect`) created
-	// when activation later fails. Without this, a failed authentication
-	// leaves the SSID with a saved profile, and ListWiFiNetworks then reports
-	// the network as IsKnown — making the UI show ★ for a connection that
-	// never actually succeeded. We deliberately do NOT touch a pre-existing
-	// profile, since that one holds credentials from a previously-working
-	// connection that a single mistyped retry shouldn't destroy.
+	// Read the saved profiles before touching nmcli, so a failed attempt can
+	// be undone. A profile the attempt (or `nmcli device wifi connect`)
+	// created is deleted: left behind, ListWiFiNetworks would report the
+	// network as IsKnown and the UI show ★ for a connection that never
+	// worked. A saved profile the agent changes is put back as it was (see
+	// backupProfile): it holds the credentials of a connection that worked,
+	// and a mistyped retry must not destroy them. `nmcli device wifi connect`
+	// can also save a new passphrase to a saved profile; that is not undone.
 	saved, err := ssidProfiles(ctx, n.nmcliPath, ssid)
 	if err != nil {
 		return fmt.Errorf("checking for existing WiFi profile: %w", err)
@@ -822,12 +831,15 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 			Hidden:   hidden,
 			Security: security,
 		}
+		backup := n.backupProfile(ctx, preExistingUUID, cred)
 		uuid, err := saveProfile(ctx, n.nmcliPath, preExistingUUID, cred)
 		if err != nil {
+			n.restoreProfile(ctx, ssid, backup)
 			return fmt.Errorf("preparing WiFi profile: %w", err)
 		}
 		if err := upProfile(ctx, n.nmcliPath, ssid, uuid, ""); err != nil {
 			n.cleanupTransientProfile(ctx, ssid, preExistingUUID, uuid)
+			n.restoreProfile(ctx, ssid, backup)
 			return err
 		}
 		n.logger.Info("Connected to WiFi via profile",
@@ -847,6 +859,8 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 
 // connectScanned joins a passphrase network the scan shows. Like nmcli, it reuses
 // a saved profile the network accepts, or adds one, on a device that sees it.
+// A failed attempt deletes the profile it added, or puts the one it reused
+// back as it was.
 func (n *NMCLINetworkManager) connectScanned(ctx context.Context, ssid, password string, network scannedNetwork, saved []savedProfile) error {
 	device := network.devices[0]
 	reuse, keyMgmt := "", network.keyMgmt(device)
@@ -854,12 +868,15 @@ func (n *NMCLINetworkManager) connectScanned(ctx context.Context, ssid, password
 		reuse, keyMgmt, device = p.UUID, p.KeyMgmt, dev
 	}
 	cred := SavedCredential{SSID: ssid, Password: password, Security: keyMgmt}
+	backup := n.backupProfile(ctx, reuse, cred)
 	uuid, err := saveProfile(ctx, n.nmcliPath, reuse, cred)
 	if err != nil {
+		n.restoreProfile(ctx, ssid, backup)
 		return fmt.Errorf("preparing WiFi profile: %w", err)
 	}
 	if err := upProfile(ctx, n.nmcliPath, ssid, uuid, device); err != nil {
 		n.cleanupTransientProfile(ctx, ssid, reuse, uuid)
+		n.restoreProfile(ctx, ssid, backup)
 		return err
 	}
 	n.logger.Info("Connected to WiFi via profile",
@@ -985,17 +1002,31 @@ func passphraseSecurity(rows []string) (psk, sae, ok bool) {
 	return psk, sae, psk || sae
 }
 
-// cleanupTransientProfile removes a saved nmcli profile for ssid if and only
-// if it didn't already exist before the connect attempt. preExistingUUID is
-// the saved profile the attempt used, if any: an empty value means
-// the profile we now see was created during the failed attempt itself, so
-// it's safe to delete. Cleanup is best-effort — if it fails we just log,
-// since the original connect error is what the caller actually needs.
-// createdUUID names that profile when the caller knows it; "" looks it up.
+// undoTimeout bounds the nmcli calls that undo a failed connect attempt.
+const undoTimeout = 10 * time.Second
+
+// reactivateTimeout bounds bringing a restored profile back up.
+const reactivateTimeout = 45 * time.Second
+
+// undoContext returns the context a failed attempt is undone on. A client that
+// cancels (Ctrl-C in the CLI) has ended ctx by then, and nmcli would not even
+// start on it, so the undo is bounded by undoTimeout instead.
+func undoContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+}
+
+// cleanupTransientProfile deletes the profile a failed connect attempt created
+// for ssid. preExistingUUID is the saved profile the attempt used, if any: that
+// one existed before and is kept (restoreProfile puts it back as it was).
+// createdUUID names the created profile when the caller knows it; "" looks it
+// up. Cleanup is best-effort: if it fails we just log, since the connect error
+// is what the caller needs.
 func (n *NMCLINetworkManager) cleanupTransientProfile(ctx context.Context, ssid, preExistingUUID, createdUUID string) {
 	if preExistingUUID != "" {
 		return
 	}
+	ctx, cancel := undoContext(ctx)
+	defer cancel()
 	uuid := createdUUID
 	if uuid == "" {
 		var err error
@@ -1010,6 +1041,145 @@ func (n *NMCLINetworkManager) cleanupTransientProfile(ctx context.Context, ssid,
 			zap.String("output", strings.TrimSpace(string(out))),
 			zap.Error(err))
 	}
+}
+
+const (
+	hiddenField = "802-11-wireless.hidden"
+	pskField    = "802-11-wireless-security.psk"
+	// securitySetting is the setting the profile of an open network lacks.
+	securitySetting = "802-11-wireless-security"
+	// snapshotFields ends with the passphrase: values come back raw, and the
+	// passphrase is the only one that can span lines.
+	snapshotFields = hiddenField + "," + keyMgmtField + "," + authAlgField + "," + pskField
+)
+
+// profileSnapshot holds the fields of a saved profile that a connect attempt
+// may change. It carries the passphrase, so it must never be logged.
+type profileSnapshot struct {
+	hidden  string
+	keyMgmt string // empty when the profile has no security setting
+	authAlg string
+	psk     string
+}
+
+// readProfileSnapshot reads a profile's snapshot. nmcli prints the passphrase
+// only with --show-secrets, which takes the root rights the agent runs with.
+func readProfileSnapshot(ctx context.Context, nmcliPath, uuid string) (profileSnapshot, error) {
+	out, err := nmcli.Command(ctx, nmcliPath, "-s", "--escape", "no", "-t", "-f", snapshotFields,
+		"connection", "show", uuid).Output()
+	if err != nil {
+		return profileSnapshot{}, fmt.Errorf("nmcli connection show %s: %w", uuid, err)
+	}
+	return parseProfileSnapshot(string(out))
+}
+
+// errSnapshotOutput leaves nmcli's output out: it holds the passphrase.
+var errSnapshotOutput = errors.New("unexpected nmcli profile output")
+
+// parseProfileSnapshot parses readProfileSnapshot's output; a profile without a
+// security setting has only the hidden line.
+func parseProfileSnapshot(out string) (profileSnapshot, error) {
+	var s profileSnapshot
+	rest, ok := strings.CutPrefix(out, hiddenField+":")
+	if !ok {
+		return profileSnapshot{}, errSnapshotOutput
+	}
+	s.hidden, rest, _ = strings.Cut(rest, "\n")
+	s.keyMgmt, rest = cutField(rest, keyMgmtField)
+	s.authAlg, rest = cutField(rest, authAlgField)
+	if s.keyMgmt == "" {
+		if rest != "" {
+			return profileSnapshot{}, errSnapshotOutput
+		}
+		return s, nil
+	}
+	psk, ok := strings.CutPrefix(rest, pskField+":")
+	if !ok {
+		return profileSnapshot{}, errSnapshotOutput
+	}
+	s.psk = strings.TrimSuffix(psk, "\n")
+	return s, nil
+}
+
+// restoreArgs returns the `nmcli connection modify` arguments that put s back.
+func (s profileSnapshot) restoreArgs(uuid string) []string {
+	args := []string{"connection", "modify", uuid, hiddenField, s.hidden}
+	if s.keyMgmt == "" {
+		return append(args, "remove", securitySetting)
+	}
+	return append(args, keyMgmtField, s.keyMgmt, authAlgField, s.authAlg, pskField, s.psk)
+}
+
+// profileBackup is what restoreProfile needs to put a saved profile back.
+type profileBackup struct {
+	uuid   string
+	before profileSnapshot
+	err    error  // why before could not be read
+	device string // the device the profile was active on, if any
+}
+
+// backupProfile reads the saved profile uuid before an attempt saves c to it.
+// It returns nil when there is nothing to put back: the attempt adds a profile
+// of its own, or c has neither a passphrase nor the hidden flag, the only
+// things saveProfile changes on a saved profile here.
+func (n *NMCLINetworkManager) backupProfile(ctx context.Context, uuid string, c SavedCredential) *profileBackup {
+	if uuid == "" || (c.Password == "" && !c.Hidden) {
+		return nil
+	}
+	b := &profileBackup{uuid: uuid}
+	if b.before, b.err = readProfileSnapshot(ctx, n.nmcliPath, uuid); b.err == nil {
+		b.device = activeDevices(ctx, n.nmcliPath)[uuid]
+	}
+	return b
+}
+
+// restoreProfile puts a saved profile back as it was before a failed attempt
+// changed it, so a mistyped password doesn't cost the device a network it
+// could join. If the device was on that network, the attempt took it off, so
+// the profile is brought back up too. That runs after restoreProfile returns:
+// the caller already has its error and shouldn't wait for an activation.
+//
+// Only the snapshot's fields are put back. NetworkManager drops a profile's
+// other secrets (WEP keys, 802.1X passwords) when a passphrase is saved to it,
+// and those stay lost. Without a snapshot the profile stays as the attempt
+// left it.
+func (n *NMCLINetworkManager) restoreProfile(ctx context.Context, ssid string, b *profileBackup) {
+	if b == nil {
+		return
+	}
+	if b.err != nil {
+		n.logger.Warn("Saved WiFi profile could not be read before a connect that failed; it may have been left changed",
+			zap.String("ssid", ssid), zap.String("uuid", b.uuid), zap.Error(b.err))
+		return
+	}
+	undo, cancel := undoContext(ctx)
+	defer cancel()
+	if now, err := readProfileSnapshot(undo, n.nmcliPath, b.uuid); err == nil && now == b.before {
+		// The attempt changed nothing, so it took nothing from the device.
+		return
+	}
+	// nmcli's reply can quote the passphrase, so only its exit status is logged.
+	if err := nmcli.Command(undo, n.nmcliPath, b.before.restoreArgs(b.uuid)...).Run(); err != nil {
+		n.logger.Warn("Restoring the saved WiFi profile after a failed connect failed; it may have been left changed",
+			zap.String("ssid", ssid), zap.String("uuid", b.uuid), zap.Error(err))
+		return
+	}
+	n.logger.Info("Restored saved WiFi profile after a failed connect",
+		zap.String("ssid", ssid), zap.String("uuid", b.uuid))
+	if b.device == "" {
+		return
+	}
+	n.reactivating.Go(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reactivateTimeout)
+		defer cancel()
+		if err := upProfile(ctx, n.nmcliPath, ssid, b.uuid, b.device); err != nil {
+			n.logger.Warn("Returning to the WiFi network the device was on failed",
+				zap.String("ssid", ssid), zap.String("device", b.device), zap.Error(err))
+			return
+		}
+		n.logger.Info("Returned to the WiFi network the device was on",
+			zap.String("ssid", ssid), zap.String("device", b.device))
+	})
 }
 
 // securityHintFromProto maps the proto enum to the free-form string consumed

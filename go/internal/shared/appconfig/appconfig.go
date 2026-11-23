@@ -77,6 +77,9 @@ const (
 	// via its local unix socket — the most security-sensitive entitlement.
 	// See entitlements.md for the blast radius.
 	EntitlementAdmin = "admin"
+	// EntitlementSensorRead grants read-only access to paired generic sensor
+	// samples, without provisioning, container control, or credential access.
+	EntitlementSensorRead = "sensor-read"
 	// EntitlementBuild grants the namespace/mount privileges a nested container
 	// builder (BuildKit) needs — CAP_SYS_ADMIN plus the unshare/userns-clone
 	// syscalls the default seccomp profile denies. It is privileged-equivalent
@@ -115,6 +118,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementEpisodeWrite,
 	EntitlementNotifications,
 	EntitlementAdmin,
+	EntitlementSensorRead,
 	EntitlementBuild,
 	EntitlementHTTP,
 	EntitlementArduinoBridge,
@@ -156,6 +160,7 @@ var allowedKeys = map[string][]string{
 	EntitlementEpisodeWrite:  {"type", "streams"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
+	EntitlementSensorRead:    {"type"},
 	EntitlementBuild:         {"type"},
 	EntitlementHTTP:          {"type", "port"},
 	EntitlementArduinoBridge: {"type"},
@@ -446,11 +451,38 @@ type PortMapping struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
+// CameraModeDirect is the camera entitlement mode that gives the app the real
+// device. Any other value, or none, shares the camera with other apps.
+const CameraModeDirect = "direct"
+
+// Results of CameraShareChoice.
+const (
+	CameraShareShared = "shared"
+	CameraShareDirect = "direct"
+)
+
+// CameraShareChoice reports how the app gets its camera: "" without a camera or
+// video entitlement, CameraShareDirect when one has mode exactly "direct", and
+// CameraShareShared otherwise.
+func CameraShareChoice(entitlements []Entitlement) string {
+	choice := ""
+	for _, e := range entitlements {
+		if e.Type != EntitlementCamera && e.Type != EntitlementVideo {
+			continue
+		}
+		if e.Mode == CameraModeDirect {
+			return CameraShareDirect
+		}
+		choice = CameraShareShared
+	}
+	return choice
+}
+
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
 	Streams   map[string]RecordingStream `json:"streams,omitempty"`
 	Type      string                     `json:"type"`
-	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video
+	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video, Camera ("direct")
 	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
 	Name      string                     `json:"name,omitempty"`      // Persist
 	Path      string                     `json:"path,omitempty"`      // Persist
@@ -675,13 +707,20 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 	}
 
 	adminCount := 0
+	sensorReadCount := 0
 	for _, e := range entitlements {
+		if e.Type == EntitlementSensorRead {
+			sensorReadCount++
+		}
 		if e.Type == EntitlementAdmin {
 			adminCount++
 		}
 	}
 	if adminCount > 1 {
 		return fmt.Errorf("at most one admin entitlement is allowed in %s, found %d", prefix, adminCount)
+	}
+	if sensorReadCount > 1 {
+		return fmt.Errorf("at most one sensor-read entitlement is allowed in %s", prefix)
 	}
 	nanCount := 0
 	for _, e := range entitlements {
@@ -1433,6 +1472,17 @@ func validateEntitlementsJSON(entRaw json.RawMessage, prefix string) []string {
 				"%s[%d]: %q is deprecated; use %q instead",
 				prefix, i, entType, replacement,
 			))
+		}
+
+		if entType == EntitlementCamera || entType == EntitlementVideo {
+			var mode string
+			if raw, ok := ent["mode"]; ok && json.Unmarshal(raw, &mode) == nil &&
+				strings.EqualFold(strings.TrimSpace(mode), CameraModeDirect) && mode != CameraModeDirect {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s[%d]: camera mode %q is not \"direct\", so this app shares the camera; write \"direct\" exactly for the real device",
+					prefix, i, mode,
+				))
+			}
 		}
 
 		allowed, ok := allowedKeys[entType]

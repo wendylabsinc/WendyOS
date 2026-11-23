@@ -214,6 +214,136 @@ final class DesktopTests: XCTestCase {
     }
 
     @MainActor
+    func testStoppedAppCannotBeOverwrittenByAnOlderRefresh() async {
+        let started = expectation(description: "Old inventory read started")
+        var oldRead: CheckedContinuation<[DeviceApp], Error>?
+        var reads = 0
+        let running = DeviceApp(appName: "example", runningState: .running, services: [])
+        let stopped = DeviceApp(appName: "example", runningState: .stopped, services: [])
+        var stops = 0
+        let model = AppModel(loadDeviceApps: {
+            reads += 1
+            if reads == 1 {
+                return try await withCheckedThrowingContinuation {
+                    oldRead = $0; started.fulfill()
+                }
+            }
+            return [stopped]
+        }, loadDeviceCameras: { [] }, connectDevice: { _, _, _ in
+            DeviceConnection(session: 1, lite: false)
+        }, stopDeviceApp: { _, _ in stops += 1 })
+        let device = Device(id: "test", name: "Test", selector: "test", transport: .lan, address: "test")
+        model.selection = device; model.connected = device; model.apps = [running]
+        async let refresh: Void = model.refreshDetails()
+        await fulfillment(of: [started], timeout: 1)
+        await model.setAppRunning("example", running: false)
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(model.apps.first?.runningState, .stopped)
+        oldRead?.resume(returning: [running])
+        await refresh
+        XCTAssertEqual(model.apps.first?.runningState, .stopped)
+        XCTAssertTrue(model.appActions.isEmpty)
+    }
+
+    @MainActor
+    func testNewDeviceLoadsAppsWhileOldStopAndInventoryArePending() async {
+        let old = Device(id: "old", name: "Old", selector: "old", transport: .lan, address: "old")
+        let next = Device(id: "next", name: "Next", selector: "next", transport: .lan, address: "next")
+        let oldApp = DeviceApp(appName: "old-app", runningState: .running, services: [])
+        let nextApp = DeviceApp(appName: "next-app", runningState: .stopped, services: [])
+        let stopStarted = expectation(description: "Old device stop started")
+        let readStarted = expectation(description: "Old device inventory started")
+        var pendingStop: CheckedContinuation<Void, Error>?
+        var pendingRead: CheckedContinuation<[DeviceApp], Error>?
+        var reads = 0
+        let model = AppModel(loadDeviceApps: {
+            reads += 1
+            if reads == 1 { return [oldApp] }
+            if reads == 2 {
+                return try await withCheckedThrowingContinuation {
+                    pendingRead = $0
+                    readStarted.fulfill()
+                }
+            }
+            return [nextApp]
+        }, loadDeviceCameras: { [] }, connectDevice: { device, _, _ in
+            DeviceConnection(session: device.id == old.id ? 10 : 20, lite: false)
+        }, stopDeviceApp: { app, session in
+            XCTAssertEqual(app, oldApp.appName)
+            XCTAssertEqual(session, 10)
+            try await withCheckedThrowingContinuation {
+                pendingStop = $0
+                stopStarted.fulfill()
+            }
+        })
+        await model.connect(old)
+        async let stop: Void = model.setAppRunning(oldApp.appName, running: false)
+        await fulfillment(of: [stopStarted], timeout: 1)
+        async let refresh: Void = model.refreshDetails()
+        await fulfillment(of: [readStarted], timeout: 1)
+
+        await model.connect(next)
+        XCTAssertEqual(model.apps.map(\.appName), [nextApp.appName])
+        XCTAssertFalse(model.appsInitialLoading)
+        XCTAssertEqual(reads, 3)
+
+        pendingRead?.resume(returning: [oldApp])
+        pendingStop?.resume(throwing: WendyError(message: "Old device disconnected"))
+        await refresh
+        await stop
+        XCTAssertEqual(model.connected?.id, next.id)
+        XCTAssertEqual(model.apps.map(\.appName), [nextApp.appName])
+        XCTAssertFalse(model.appsInitialLoading)
+        XCTAssertNil(model.alert)
+        XCTAssertTrue(model.appActions.isEmpty)
+        XCTAssertEqual(reads, 3)
+    }
+
+    @MainActor
+    func testFailedStopReadsActualStateAndReportsFailure() async {
+        let running = DeviceApp(appName: "example", runningState: .running, services: [])
+        let model = AppModel(loadDeviceApps: { [running] }, loadDeviceCameras: { [] },
+                             connectDevice: { _, _, _ in DeviceConnection(session: 1, lite: false) },
+                             stopDeviceApp: { _, _ in throw WendyError(message: "Stop denied") })
+        let device = Device(id: "test", name: "Test", selector: "test", transport: .lan, address: "test")
+        model.selection = device; model.connected = device; model.apps = [running]
+        await model.setAppRunning("example", running: false)
+        XCTAssertEqual(model.apps.first?.runningState, .running)
+        XCTAssertEqual(model.alert, "Stop denied")
+        XCTAssertTrue(model.appActions.isEmpty)
+    }
+
+    @MainActor
+    func testBatchStopReportsFailureWhenAnotherRefreshSupersedesItsInventory() async {
+        let started = expectation(description: "Batch inventory started")
+        var pendingRead: CheckedContinuation<[DeviceApp], Error>?
+        var reads = 0
+        let running = DeviceApp(appName: "example", runningState: .running, services: [])
+        let model = AppModel(loadDeviceApps: {
+            reads += 1
+            if reads == 1 {
+                return try await withCheckedThrowingContinuation {
+                    pendingRead = $0
+                    started.fulfill()
+                }
+            }
+            return [running]
+        }, loadDeviceCameras: { [] },
+                             connectDevice: { _, _, _ in DeviceConnection(session: 1, lite: false) },
+                             stopDeviceApp: { _, _ in throw WendyError(message: "Stop denied") })
+        let device = Device(id: "test", name: "Test", selector: "test", transport: .lan, address: "test")
+        model.selection = device; model.connected = device; model.apps = [running]
+        async let batch: Void = model.stopApps([running], expectedSession: model.deviceSession)
+        await fulfillment(of: [started], timeout: 1)
+        await model.refreshDetails()
+        pendingRead?.resume(returning: [])
+        await batch
+        XCTAssertEqual(model.apps.map(\.appName), [running.appName])
+        XCTAssertEqual(model.alert, "Could not complete all app stops:\nexample: Stop denied")
+        XCTAssertTrue(model.appActions.isEmpty)
+    }
+
+    @MainActor
     func testBatchStopContinuesAfterFailureAndDeduplicates() async {
         var stopped: [String] = []
         let errors = await AppStopBatch.run(names: ["c", "a", "b", "a"], isCurrent: { true }) { name in
@@ -339,9 +469,13 @@ final class DesktopTests: XCTestCase {
         cameras.pointee.items = allocate(WDCamera.self)
         cameras.pointee.count = 1
         cameras.pointee.items.pointee.name = strdup("Camera zero")
+        cameras.pointee.items.pointee.topic = strdup("/thermal/exact/temperature")
+        cameras.pointee.items.pointee.ros2 = 1
         let values = try GoClient.readCameras(cameras) // Consumes and frees C result.
         XCTAssertEqual(values.first?.id, 0)
         XCTAssertEqual(values.first?.name, "Camera zero")
+        XCTAssertEqual(values.first?.rosTopic, "/thermal/exact/temperature")
+        XCTAssertEqual(values.first?.isROS2, true)
 
         let apps = allocate(WDAppsResult.self)
         apps.pointee.count = 1

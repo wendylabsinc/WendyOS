@@ -15,11 +15,12 @@ import (
 )
 
 type GalleryMetadata struct {
-	Types          []string `json:"types"`
-	Labels         []string `json:"labels"`
-	Complete       bool     `json:"complete"`
-	ContentKinds   []string `json:"contentKinds"`
-	HasVisualMedia bool     `json:"hasVisualMedia"`
+	Types           []string `json:"types"`
+	Labels          []string `json:"labels"`
+	Complete        bool     `json:"complete"`
+	ContentKinds    []string `json:"contentKinds"`
+	HasVisualMedia  bool     `json:"hasVisualMedia"`
+	NotificationIDs []string `json:"notificationIDs,omitempty"`
 }
 
 func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, error) {
@@ -86,6 +87,7 @@ func (b *Backend) galleryMetadataAt(selector, episode string, mediaOnly bool) (G
 
 func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadata {
 	types, labels := map[string]bool{}, map[string]bool{}
+	notificationIDs := map[string]bool{}
 	addLabel := func(label string) {
 		if label != "" && len(label) <= 256 && len(labels) < 128 {
 			labels[label] = true
@@ -105,9 +107,10 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 			Type       string `json:"type"`
 			Name       string `json:"name"`
 			Attributes struct {
-				Task       string   `json:"task"`
-				Maximum    *float64 `json:"max_celsius"`
-				Detections []struct {
+				NotificationID string   `json:"notification_id"`
+				Task           string   `json:"task"`
+				Maximum        *float64 `json:"max_celsius"`
+				Detections     []struct {
 					Label string `json:"label"`
 				} `json:"detections"`
 				Label  string   `json:"label"`
@@ -121,6 +124,9 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 		if row.Type == "event" {
 			types["Event"] = true
 			addLabel(row.Name)
+			if id := row.Attributes.NotificationID; len(id) == 36 && len(notificationIDs) < 256 {
+				notificationIDs[id] = true
+			}
 		}
 		if row.Attributes.Maximum != nil {
 			types["Thermal"] = true
@@ -155,6 +161,10 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 		out.Labels = append(out.Labels, label)
 	}
 	sort.Strings(out.Labels)
+	for id := range notificationIDs {
+		out.NotificationIDs = append(out.NotificationIDs, id)
+	}
+	sort.Strings(out.NotificationIDs)
 	return out
 }
 

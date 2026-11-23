@@ -173,6 +173,8 @@ type AgentConnection struct {
 	// tcpDial records failures before TCP connected, separately from TLS errors.
 	// nil when gRPC owns dialing, including HTTP CONNECT proxy transports.
 	tcpDial *agentTCPDialState
+	// A pooled lease releases its owner instead of closing the shared channel.
+	release func() error
 }
 
 type agentTCPDialState struct {
@@ -689,12 +691,18 @@ func (c *AgentConnection) Close() error {
 		return nil
 	}
 	c.extraMu.Lock()
+	if c.extraClosed {
+		c.extraMu.Unlock()
+		return nil
+	}
 	c.extraClosed = true
 	closers := c.ExtraClosers
 	c.ExtraClosers = nil
 	c.extraMu.Unlock()
 	var errs []error
-	if c.Conn != nil {
+	if c.release != nil {
+		errs = append(errs, c.release())
+	} else if c.Conn != nil {
 		errs = append(errs, c.Conn.Close())
 	}
 	for _, closer := range closers {

@@ -24,7 +24,6 @@ struct SiteCameraAlignmentView: View {
     @State private var busy = false
     @State private var message: String?
     @State private var saved: SiteLocalizationResult?
-    @State private var engine = SiteLocalizationEngine()
     @State private var loaded = false
     @State private var previewReady = false
     @State private var attemptedAutomaticAlignment = false
@@ -125,7 +124,6 @@ struct SiteCameraAlignmentView: View {
         }
         .task {
             do {
-                try await SiteCameraAlignment.load(request.site, into: engine)
                 try Task.checkCancellation()
                 loaded = true
             } catch is CancellationError {} catch { message = error.localizedDescription }
@@ -217,7 +215,7 @@ struct SiteCameraAlignmentView: View {
         busy = true; message = nil
         defer { busy = false }
         do {
-            saved = try await SiteCameraAlignment.align(model: model, request: request, feed: feed, engine: engine)
+            saved = try await SiteCameraAlignment.align(model: model, request: request, feed: feed)
         } catch is CancellationError {} catch { message = error.localizedDescription }
     }
 

@@ -18,7 +18,7 @@ func desktopDial(ctx context.Context, selector string, port uint16) (net.Conn, e
 	if !strings.HasPrefix(selector, "mesh:") && !strings.HasPrefix(selector, "cloud://") {
 		return nil, errors.New("VPN routes require a mesh or cloud device")
 	}
-	agent, err := commands.DesktopConnect(ctx, selector)
+	agent, err := commands.DesktopConnectTunnel(ctx, selector)
 	if err != nil {
 		return nil, err
 	}

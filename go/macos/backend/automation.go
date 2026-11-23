@@ -7,15 +7,14 @@ import (
 )
 
 func (b *Backend) Pairings(session uint64, cameras bool) (commands.DesktopPairings, error) {
-	ctx, done := b.begin()
-	defer done()
 	if session == 0 {
 		return commands.DesktopPairings{}, errors.New("select a device first")
 	}
-	conn, err := b.connection(session)
+	ctx, conn, done, err := b.deviceRPC(session)
 	if err != nil {
 		return commands.DesktopPairings{}, err
 	}
+	defer done()
 	if cameras {
 		return commands.DesktopIPCameraPairings(ctx, conn)
 	}

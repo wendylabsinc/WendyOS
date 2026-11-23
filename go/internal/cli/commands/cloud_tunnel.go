@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudsession"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
@@ -27,7 +28,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/metadata"
 )
 
 const maxCloudAssets = 10_000
@@ -60,49 +60,10 @@ func (f closeFunc) Close() error {
 // certXFCC is the identity header pair only legacy (urn:wendy) sessions send to
 // the old cloud. A PKI-principal session gets none: the new cloud reads no
 // identity header (WDY-2346); the old one is retired with the v1 cutover.
-func certXFCC(cert config.CertificateInfo) string {
-	if cert.PrincipalURI != "" {
-		return ""
-	}
-	if cert.UserID != "" {
-		return fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
-	}
-	if cert.AssetID != 0 {
-		return fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", cert.OrganizationID, cert.AssetID)
-	}
-	return ""
-}
+func certXFCC(cert config.CertificateInfo) string { return cloudsession.LegacyCertificateHeader(cert) }
 
 func cloudContext(ctx context.Context, auth *config.AuthConfig) (context.Context, error) {
-	if auth.OAuthIssuer != "" {
-		// Discovery can build several RPC contexts concurrently from one auth
-		// entry. Refresh a local snapshot rather than mutating shared state.
-		local := *auth
-		auth = &local
-		if err := ensureOAuthAccessToken(ctx, auth); err != nil {
-			return nil, err
-		}
-	}
-	md := metadata.MD{}
-	// A DPoP-bound token (OAuth login) must not go out as Bearer — the DPoP
-	// interceptor (dpopDialOptions, appended at dial) sets
-	// `authorization: DPoP <token>` plus a per-call proof. Only unbound
-	// API-key/legacy sessions carry a Bearer here (WDY-3107).
-	if auth.HasAPIKey() && !authIsDPoPBound(auth) {
-		bearerToken, err := auth.BearerToken()
-		if err != nil {
-			return nil, fmt.Errorf("loading API token: %w", err)
-		}
-		md.Set("authorization", "Bearer "+bearerToken)
-	}
-	if len(auth.Certificates) > 0 {
-		certHeader := certXFCC(auth.Certificates[0])
-		if certHeader != "" {
-			md.Set("x-wendy-client-cert", certHeader)
-			md.Set("x-forwarded-client-cert", certHeader)
-		}
-	}
-	return metadata.NewOutgoingContext(ctx, md), nil
+	return cloudsession.Context(ctx, auth, ensureOAuthAccessToken)
 }
 
 func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL string) (*grpcclient.AgentConnection, error) {
@@ -117,6 +78,8 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 // connectToCloudAgentWithAuthExpecting checks a saved identity before treating
 // a Cloud name match as the same device (see connectToPinnedCloudName).
 func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err
@@ -124,8 +87,6 @@ func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.Auth
 	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
 		return nil, err
 	}
-	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
-
 	return asset.connect(ctx, auth, brokerURL)
 }
 
@@ -161,6 +122,23 @@ func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cl
 }
 
 func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
+	// Cloud selects the identity, not the transport. CLI commands also prefer
+	// authenticated LAN; only native sessions retain and share the connection.
+	if cloudTunnelOnly(ctx) {
+		cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
+		return cloudTunnelDial()(ctx, auth, asset, brokerURL)
+	}
+	if _, native := ctx.Value(tunnelContextKey{}).(*tunnelGeneration); native {
+		expected := cloudDiscoveryIdentity(auth, asset)
+		desktopRememberCloudTarget(ctx, auth, asset, expected.IdentityKey())
+		return desktopSessionConnection(ctx, auth, expected.IdentityKey(), func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return desktopReconnectableCloudConnection(ctx, auth, asset, brokerURL)
+		})
+	}
+	return connectCloudDevicePreferLAN(ctx, auth, asset, brokerURL)
+}
+
+func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -713,29 +691,5 @@ func boolPtr(b bool) *bool { return &b }
 func int32Ptr(i int32) *int32 { return &i }
 
 func dialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
-	var cert *config.CertificateInfo
-	if len(auth.Certificates) > 0 {
-		cert = &auth.Certificates[0]
-	}
-	creds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, cert)
-	if err != nil {
-		return nil, err
-	}
-	dialOptions := append([]grpc.DialOption{
-		grpc.WithTransportCredentials(creds),
-		grpc.WithInitialWindowSize(8 * 1024 * 1024),
-		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
-		grpc.WithReadBufferSize(256 * 1024),
-		grpc.WithWriteBufferSize(256 * 1024),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                clouddefaults.KeepalivePing,
-			Timeout:             clouddefaults.KeepaliveACKTimeout,
-			PermitWithoutStream: true,
-		}),
-	}, dpopDialOptions(auth)...)
-	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to cloud: %w", err)
-	}
-	return conn, nil
+	return cloudsession.Dial(auth, ensureOAuthAccessToken)
 }

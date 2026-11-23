@@ -60,7 +60,7 @@ func doctorCheckLabel(id string) string {
 	labels := map[string]string{
 		"cli_config": "CLI configuration", "project": "Project", "docker_executable": "Docker CLI",
 		"docker_daemon": "Docker engine", "docker_buildx": "Docker Buildx", "qemu_executable": "QEMU",
-		"qemu_firmware": "ARM64 VM firmware", "selected_target": "Selected device",
+		"qemu_firmware": "VM firmware", "selected_target": "Selected device",
 		"device_reachable": "Device connection", "wendy_agent": "Wendy Agent", "authentication": "Authentication",
 		"diagnostics": "Diagnostic checks",
 	}

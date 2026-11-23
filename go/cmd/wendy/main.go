@@ -73,6 +73,7 @@ func executeInvocation(ctx context.Context, root *cobra.Command, args []string) 
 	if args == nil {
 		args = []string{} // Cobra treats nil as a request to read os.Args.
 	}
+	args = normalizeLeadingConfirmationFlag(args)
 	root.SetContext(ctx)
 	root.SetArgs(args)
 	var target *cobra.Command

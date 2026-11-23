@@ -23,6 +23,7 @@ struct WendyMobileApp: App {
                 MobileRootView().environmentObject(model)
                     .preferredColorScheme((MobileAppearance(rawValue: appearance) ?? .system).colorScheme)
                     .task { await model.cleanup.run() }
+                    .task { await MobileOSUpdateTask.shared.run() }
                     .task { await model.vpn.observeStatus() }
                     .task(id: model.initialized) { await model.observeEvents() }
                     .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
@@ -33,6 +34,10 @@ struct WendyMobileApp: App {
 
 @MainActor
 final class MobileAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        OSUpdateScheduler.shared.register()
+        return true
+    }
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushNotifications.shared.didRegister(deviceToken)
     }

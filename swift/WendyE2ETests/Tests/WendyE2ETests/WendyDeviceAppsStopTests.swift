@@ -6,6 +6,60 @@ struct `'wendy device apps stop'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     Stopping a prebuilt HTTP service confirms the selected app, leaves that
+     identity stopped in inventory, and makes its endpoint stop answering.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `stops a prebuilt HTTP app and closes its endpoint`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                _ = try await app.response(cli)
+                try await app.stop(cli, expectedVersion: nil)
+            }
+        }
+    }
+
+    /**
+     An explicitly named application that is absent from the device fails
+     without inventing success or changing the inventory of deployed apps.
+     The diagnostic identifies the requested app so the caller can correct it.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `rejects a missing application and preserves deployed app state`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in
+                try await cli.sh("\(app.command) device apps stop \(app.app)") { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stderr.contains(app.app))
+                    #expect(result.stdout.isEmpty)
+                }
+                let after = try await app.inventory(cli)
+                #expect(!after.contains { $0.name == app.app })
+            }
+        }
+    }
+
+    /**
+     Stopping a running HTTP application identifies the app in its JSON result,
+     leaves it listed as stopped with the same version and port, and makes its
+     endpoint stop answering. Other application identities remain present.
+     */
+    @Test(
+        .enabled(if: httpAppTestsEnabled),
+        .disabled(
+            "Fixture blocked: Jetson build host has no BuildKit and the CLI host has no container builder; validate a supported builder path before enabling"
+        )
+    )
+    func `stops the selected HTTP app and its endpoint`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withApp(cli: cli) { app in
+                _ = try await app.response(cli)
+                try await app.stop(cli)
+            }
+        }
+    }
+
+    /**
      Displays usage for `wendy device apps stop`. The output includes the
      command synopsis, local flags, inherited global flags, and concise
      descriptions. Help exits successfully, writes to stdout, emits no

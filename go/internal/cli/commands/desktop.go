@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -64,7 +65,7 @@ type DesktopDevice struct {
 
 // InitializeDesktop must run once, before any other desktop operation.
 func InitializeDesktop(cliPath string) error {
-	if runtime.GOOS == "ios" {
+	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
 		sessionbroker.EnableEmbeddedHost()
 		jsonOutput = true
 		return nil
@@ -106,7 +107,7 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		options := cliLANStreamOptions(ctx)
 		options.OnBackendError = browse.record
 		options.Supplemental = meshDiscoveryStream
-		if runtime.GOOS == "ios" {
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
 			options.Supplemental = mobileMeshDiscoveryStream
 		}
 		devices, err = discovery.CollectLAN(ctx, options, 5*time.Second)
@@ -121,11 +122,7 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		if d.ConnectionInfo["needsInstall"] == "true" {
 			continue
 		}
-		address := d.ConnectionInfo["ip"]
-		if d.ConnectionType() == "USB" {
-			address = d.ConnectionInfo["serialPort"]
-		}
-		result = append(result, DesktopDevice{ID: d.ID, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true})
+		result = append(result, desktopNearbyLiteDevice(d))
 	}
 	// The legacy LAN projection cannot represent native Lite management. Merge
 	// the current broker directory as canonical mesh selectors for both platforms.
@@ -178,7 +175,25 @@ func DesktopConnect(ctx context.Context, selector string) (*grpcclient.AgentConn
 	if strings.TrimSpace(selector) == "" {
 		return nil, errors.New("choose a device")
 	}
+	if os.Getenv("WENDY_AGENT_SOCKET") == "" && desktopPinnedLAN(ctx, selector) {
+		return DesktopConnectSecureLAN(ctx, mcpStartupAddress(selector))
+	}
 	return connectMCPDevice(ctx, selector)
+}
+
+type cloudTunnelOnlyKey struct{}
+
+// DesktopConnectTunnel is DesktopConnect for VPN flows and their probes. A
+// flow needs the device's TCP ports through RegistryDialer, which only the
+// Cloud tunnel provides, so a Cloud device stays on its tunnel even when it
+// is also on the LAN. The connection is the caller's own, never a shared one.
+func DesktopConnectTunnel(ctx context.Context, selector string) (*grpcclient.AgentConnection, error) {
+	return DesktopConnect(context.WithValue(ctx, cloudTunnelOnlyKey{}, true), selector)
+}
+
+func cloudTunnelOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(cloudTunnelOnlyKey{}).(bool)
+	return only
 }
 
 // DesktopRecordingConnect uses only the mobile app's current Cloud identity.
@@ -208,6 +223,9 @@ func DesktopRecordingConnect(ctx context.Context, selector string, secureLAN boo
 	}
 	if !target.matches(auth) {
 		return nil, failure.Wrap(errors.New("this recording device is outside the current Cloud organization"), failure.AccountMismatch, failure.ChooseAccount)
+	}
+	if conn, err := desktopExistingCloudConnection(ctx, auth, target.String()); conn != nil || err != nil {
+		return conn, err
 	}
 	devices, err := listCloudDiscoveryDevices(ctx, auth, true)
 	if err != nil {
@@ -296,6 +314,19 @@ func desktopAccountInfo(auth config.AuthConfig) DesktopAccountInfo {
 	return DesktopAccountInfo{State: state, Context: auth.Name, Cloud: authStatusEndpoint(auth), Email: email}
 }
 
+func desktopNearbyLiteDevice(d models.ExternalDevice) DesktopDevice {
+	address := d.ConnectionInfo["ip"]
+	if d.ConnectionType() == "USB" {
+		address = d.ConnectionInfo["serialPort"]
+	}
+	id := d.ID
+	principal := certs.DeviceSPIFFEURI(d.ConnectionInfo["tenantId"], d.ConnectionInfo["enrolledDeviceId"])
+	if _, err := certs.ParseDevicePrincipal(principal); err == nil {
+		id = principal
+	}
+	return DesktopDevice{ID: id, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true}
+}
+
 func desktopNearbyDevice(d models.LANDevice) DesktopDevice {
 	host := strings.TrimSuffix(d.Hostname, ".")
 	if host == "" {
@@ -364,10 +395,21 @@ func DesktopConnectSecureLAN(ctx context.Context, selector string) (*grpcclient.
 	if err := prepareDefaultCloudCertificate(ctx, auth); err != nil {
 		return nil, fmt.Errorf("renewing device connection credentials: %w", err)
 	}
-	target := newDialTargetCandidates(pinKeyForAddr(selector), resolveAddrCandidates(ctx, selector))
+	target := newDialTarget(pinKeyForAddr(selector), selector)
 	target.RequiresMTLS = true
-	conn, _, err := dialAgentLadderWithCerts(ctx, target, auth.Certificates)
-	return conn, err
+	key := "lan:" + selector
+	if target.Expected != nil {
+		key = target.Expected.IdentityKey()
+	}
+	return desktopSessionConnection(ctx, auth, key, func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		// A shared channel needs no repeat DNS lookup. Only its creator resolves.
+		target.Candidates = resolveAddrCandidates(ctx, selector)
+		if len(target.Candidates) > 0 {
+			target.Addr = target.Candidates[0]
+		}
+		conn, _, err := dialAgentLadderWithCerts(ctx, target, auth.Certificates)
+		return conn, err
+	})
 }
 
 // Addresses and transports may change while the enrolled identity stays the same.

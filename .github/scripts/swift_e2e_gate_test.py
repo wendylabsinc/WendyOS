@@ -4,6 +4,8 @@
 import itertools
 import json
 import os
+
+import yaml
 from pathlib import Path
 import re
 import subprocess
@@ -126,6 +128,28 @@ class GateTests(unittest.TestCase):
         needs = {job: re.search(rf"^  {job}:\n(?:.*\n)*?    needs:\n((?:      - .*\n)+)", self.text, re.M)[1]
                  for job in (ANALYZE, PASSED)}
         self.assertEqual(needs[ANALYZE], needs[PASSED])
+
+    def test_analysis_run_directory_matches_producer_under_reusable_workflow(self):
+        root = WORKFLOW.parents[2]
+        action = yaml.safe_load((root / '.github/actions/swift-e2e-run/action.yml').read_text())
+        producer = next(step for step in action['runs']['steps'] if step.get('id') == 'e2e-run-unix')
+        workflow = yaml.safe_load(self.text)
+        consumer = next(step for step in workflow['jobs'][ANALYZE]['steps'] if step.get('id') == 'e2e-run')
+        for caller in ('Swift E2E Tests', 'Build products and release'):
+            with self.subTest(caller=caller), tempfile.TemporaryDirectory() as directory:
+                outputs = []
+                for index, step in enumerate((producer, consumer)):
+                    output = Path(directory) / str(index)
+                    env = dict(os.environ, GITHUB_WORKFLOW=caller, GITHUB_RUN_ID='123',
+                               GITHUB_RUN_ATTEMPT='2', RUNNER_TEMP=directory,
+                               WORKFLOW_ID=action['inputs']['workflow_id']['default'],
+                               TARGET_ID='local-ubuntu-24', GITHUB_OUTPUT=str(output))
+                    subprocess.run(['bash', '-euo', 'pipefail', '-c', step['run']],
+                                   env=env, check=True, capture_output=True, timeout=10)
+                    outputs.append(dict(line.split('=', 1) for line in output.read_text().splitlines()))
+                run_id = outputs[0]['run_id'].rsplit('.', 2)[0]
+                self.assertEqual(outputs[1]['run_dir'], str(Path(directory) / 'wendy' / run_id))
+                self.assertEqual(outputs[1]['run_artifact_id'], run_id + '.run.0002')
 
     def test_report_reads_the_review_outcome_before_continue_on_error(self):
         # A step's conclusion is always success under continue-on-error.

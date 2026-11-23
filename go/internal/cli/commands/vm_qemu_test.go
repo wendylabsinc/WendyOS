@@ -20,7 +20,7 @@ import (
 func stubQEMUMissing(t *testing.T, installed *bool) {
 	t.Helper()
 	savedLook, savedInstall := findQEMUFn, installQEMUFn
-	findQEMUFn = func(string) (string, error) { return "", errors.New("not found") }
+	findQEMUFn = func(vm.Arch, string) (string, error) { return "", errors.New("not found") }
 	installQEMUFn = func(context.Context) error {
 		*installed = true
 		return nil
@@ -46,12 +46,12 @@ func stubQEMUConfirmAnswer(t *testing.T, confirm func(string) bool) {
 
 func TestEnsureQEMUIsANoOpWhenAlreadyInstalled(t *testing.T) {
 	saved := findQEMUFn
-	findQEMUFn = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	findQEMUFn = func(_ vm.Arch, name string) (string, error) { return "/usr/bin/" + name, nil }
 	t.Cleanup(func() { findQEMUFn = saved })
 
 	asked := false
 	stubQEMUConfirmAnswer(t, func(string) bool { asked = true; return true })
-	if err := ensureQEMUForHostOS(context.Background(), "darwin"); err != nil {
+	if err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin"); err != nil {
 		t.Fatalf("ensureQEMUForHostOS() = %v, want nil", err)
 	}
 	if asked {
@@ -75,7 +75,7 @@ func TestEnsureQEMUOffersToInstallOnInteractiveMac(t *testing.T) {
 	// The stub keeps reporting the binary as missing, so the post-install PATH
 	// re-check is what this lands on -- which is the point: an install that
 	// does not put QEMU on PATH must say so rather than claim success.
-	err := ensureQEMUForHostOS(context.Background(), "darwin")
+	err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin")
 	if !asked {
 		t.Error("did not prompt before installing")
 	}
@@ -94,7 +94,7 @@ func TestEnsureQEMUDoesNotPromptWithoutHomebrew(t *testing.T) {
 	stubTerminal(t, true)
 	stubQEMUConfirmAnswer(t, func(string) bool { asked = true; return true })
 
-	err := ensureQEMUForHostOS(context.Background(), "darwin")
+	err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin")
 	if asked || installed {
 		t.Error("prompted or installed on a host with no Homebrew")
 	}
@@ -110,7 +110,7 @@ func TestEnsureQEMUDoesNotPromptWhenNotInteractive(t *testing.T) {
 	stubTerminal(t, false)
 	stubQEMUConfirmAnswer(t, func(string) bool { asked = true; return true })
 
-	if err := ensureQEMUForHostOS(context.Background(), "darwin"); err == nil {
+	if err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin"); err == nil {
 		t.Fatal("ensureQEMUForHostOS() = nil, want the not-found error")
 	}
 	if asked || installed {
@@ -125,14 +125,14 @@ func TestEnsureQEMUDeclinedKeepsTheManualCommand(t *testing.T) {
 	stubTerminal(t, true)
 	stubQEMUConfirmAnswer(t, func(string) bool { asked = true; return false })
 
-	err := ensureQEMUForHostOS(context.Background(), "darwin")
+	err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin")
 	if !asked {
 		t.Error("never prompted")
 	}
 	if installed {
 		t.Error("installed despite the prompt being declined")
 	}
-	if err == nil || !strings.Contains(err.Error(), qemuInstallHintForHostOS("darwin")) {
+	if err == nil || !strings.Contains(err.Error(), qemuInstallHintFor(vm.ArchARM64, "darwin")) {
 		t.Errorf("ensureQEMUForHostOS() = %v, want the Homebrew install command", err)
 	}
 }
@@ -179,9 +179,9 @@ func TestEnsureQEMUOnLinux(t *testing.T) {
 		{name: "apt-get before dnf", onPath: []string{"sudo", "dnf", "apt-get"}, interactive: true, wantAsked: true, wantCommand: aptGet},
 		{name: "root needs no sudo", onPath: []string{"apt-get"}, root: true, interactive: true, wantAsked: true,
 			wantCommand: []string{"apt-get", "install", "-y", "qemu-system-arm", "qemu-efi-aarch64"}},
-		{name: "no sudo", onPath: []string{"apt-get"}, interactive: true, wantMessage: qemuInstallHintForHostOS("linux")},
-		{name: "no package manager", onPath: []string{"sudo"}, interactive: true, wantMessage: qemuInstallHintForHostOS("linux")},
-		{name: "declined", onPath: []string{"sudo", "apt-get"}, interactive: true, decline: true, wantAsked: true, wantMessage: qemuInstallHintForHostOS("linux")},
+		{name: "no sudo", onPath: []string{"apt-get"}, interactive: true, wantMessage: qemuInstallHintFor(vm.ArchARM64, "linux")},
+		{name: "no package manager", onPath: []string{"sudo"}, interactive: true, wantMessage: qemuInstallHintFor(vm.ArchARM64, "linux")},
+		{name: "declined", onPath: []string{"sudo", "apt-get"}, interactive: true, decline: true, wantAsked: true, wantMessage: qemuInstallHintFor(vm.ArchARM64, "linux")},
 		{name: "cancelled prompt", onPath: []string{"sudo", "apt-get"}, interactive: true, confirmErr: ErrUserCancelled, wantAsked: true, wantErr: ErrUserCancelled},
 		{name: "no terminal", onPath: []string{"sudo", "apt-get"}, wantMessage: "qemu-system-aarch64 not found"},
 		// sudo needs a person to ask: --yes alone never starts it.
@@ -197,7 +197,7 @@ func TestEnsureQEMUOnLinux(t *testing.T) {
 			var command []string
 			savedFind, savedYes := findQEMUFn, vmAssumeYes
 			t.Cleanup(func() { findQEMUFn, vmAssumeYes = savedFind, savedYes })
-			findQEMUFn = func(hostOS string) (string, error) {
+			findQEMUFn = func(_ vm.Arch, hostOS string) (string, error) {
 				if hostOS != "linux" {
 					t.Fatalf("looked up QEMU for %q", hostOS)
 				}
@@ -222,7 +222,7 @@ func TestEnsureQEMUOnLinux(t *testing.T) {
 			stubTerminal(t, tc.interactive)
 			vmAssumeYes = tc.yes
 
-			err := ensureQEMUForHostOS(context.Background(), "linux")
+			err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "linux")
 			if asked != tc.wantAsked || !slices.Equal(command, tc.wantCommand) {
 				t.Fatalf("asked=%t command=%q, want asked=%t command=%q", asked, command, tc.wantAsked, tc.wantCommand)
 			}
@@ -240,7 +240,7 @@ func TestEnsureQEMUOnLinux(t *testing.T) {
 }
 
 func TestQEMUInstallHintNamesBothLinuxPackageManagers(t *testing.T) {
-	hint := qemuInstallHintForHostOS("linux")
+	hint := qemuInstallHintFor(vm.ArchARM64, "linux")
 	for _, want := range []string{"apt install qemu-system-arm qemu-efi-aarch64", "dnf install qemu-system-aarch64 edk2-aarch64"} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("Linux hint = %q, want it to name %q", hint, want)
@@ -278,7 +278,7 @@ func TestEnsureQEMUOnWindows(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var asked, installed bool
-			findQEMUFn = func(hostOS string) (string, error) {
+			findQEMUFn = func(_ vm.Arch, hostOS string) (string, error) {
 				if hostOS != "windows" {
 					t.Fatalf("looked up QEMU for %q", hostOS)
 				}
@@ -312,7 +312,7 @@ func TestEnsureQEMUOnWindows(t *testing.T) {
 			if tc.cancelBefore {
 				cancel()
 			}
-			err := ensureQEMUForHostOS(ctx, "windows")
+			err := ensureQEMUForHostOS(ctx, vm.ArchARM64, "windows")
 			if (err != nil) != tc.wantError || asked != tc.wantAsked || installed != tc.wantInstall {
 				t.Fatalf("err=%v asked=%t installed=%t", err, asked, installed)
 			}
@@ -345,7 +345,7 @@ func TestEnsureQEMUWithYesSkipsThePromptAndInstalls(t *testing.T) {
 	vmAssumeYes = true
 	t.Cleanup(func() { vmAssumeYes = saved })
 
-	_ = ensureQEMUForHostOS(context.Background(), "darwin")
+	_ = ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin")
 	if asked {
 		t.Error("prompted despite --yes")
 	}
@@ -377,7 +377,7 @@ func TestEnsureQEMUCancelledDoesNotInstall(t *testing.T) {
 	qemuConfirmFn = func(context.Context, string) (bool, error) { return false, ErrUserCancelled }
 	t.Cleanup(func() { qemuConfirmFn = saved })
 
-	if err := ensureQEMUForHostOS(context.Background(), "darwin"); !errors.Is(err, ErrUserCancelled) {
+	if err := ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "darwin"); !errors.Is(err, ErrUserCancelled) {
 		t.Fatalf("err = %v, want cancellation", err)
 	}
 	if installed {
@@ -402,8 +402,8 @@ func TestQEMURecoveryStopsOnContextCancellation(t *testing.T) {
 						findQEMUFirmwareFn, installQEMUFirmwareFn = savedFind, savedInstall
 					})
 					vmAssumeYes = false
-					findQEMUFirmwareFn = func(string, string) (string, error) { return "", vm.ErrFirmwareNotFound }
-					installQEMUFirmwareFn = func(context.Context) error { installed = true; return nil }
+					findQEMUFirmwareFn = func(vm.Arch, string, string) (vm.Firmware, error) { return vm.Firmware{}, vm.ErrFirmwareNotFound }
+					installQEMUFirmwareFn = func(context.Context, vm.Arch) error { installed = true; return nil }
 					ctx, cancel := context.WithCancel(context.Background())
 					defer cancel()
 					qemuConfirmFn = func(promptCtx context.Context, _ string) (bool, error) {
@@ -420,9 +420,9 @@ func TestQEMURecoveryStopsOnContextCancellation(t *testing.T) {
 
 					var err error
 					if firmware {
-						_, err = ensureQEMUFirmwareForHostOS(ctx, hostOS, "/test/homebrew")
+						_, err = ensureQEMUFirmwareForHostOS(ctx, vm.ArchARM64, hostOS, "/test/homebrew")
 					} else {
-						err = ensureQEMUForHostOS(ctx, hostOS)
+						err = ensureQEMUForHostOS(ctx, vm.ArchARM64, hostOS)
 					}
 					if !errors.Is(err, context.Canceled) || installed || asked == beforePrompt {
 						t.Fatalf("err=%v installed=%t asked=%t, want cancellation with no install and asked=%t", err, installed, asked, !beforePrompt)
@@ -466,17 +466,17 @@ func TestEnsureQEMUFirmwareRecovery(t *testing.T) {
 			})
 			var asked, installed bool
 			findCalls := 0
-			findQEMUFirmwareFn = func(hostOS, prefix string) (string, error) {
+			findQEMUFirmwareFn = func(_ vm.Arch, hostOS, prefix string) (vm.Firmware, error) {
 				findCalls++
 				if hostOS != tc.hostOS || prefix != "/test/homebrew" {
 					t.Fatalf("firmware discovery used host %q and prefix %q", hostOS, prefix)
 				}
 				if tc.alreadyInstalled || installed && !tc.stillMissing {
-					return "/test/arm64.fd", nil
+					return vm.Firmware{Code: "/test/arm64.fd"}, nil
 				}
-				return "", vm.ErrFirmwareNotFound
+				return vm.Firmware{}, vm.ErrFirmwareNotFound
 			}
-			installQEMUFirmwareFn = func(context.Context) error {
+			installQEMUFirmwareFn = func(context.Context, vm.Arch) error {
 				installed = true
 				return tc.installErr
 			}
@@ -497,15 +497,15 @@ func TestEnsureQEMUFirmwareRecovery(t *testing.T) {
 				return nil
 			})
 
-			firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), tc.hostOS, "/test/homebrew")
+			firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), vm.ArchARM64, tc.hostOS, "/test/homebrew")
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
 			if asked != tc.wantAsked || installed != tc.wantInstalled {
 				t.Errorf("asked=%t installed=%t, want asked=%t installed=%t", asked, installed, tc.wantAsked, tc.wantInstalled)
 			}
-			if err == nil && firmware != "/test/arm64.fd" {
-				t.Errorf("firmware = %q", firmware)
+			if err == nil && firmware.Code != "/test/arm64.fd" {
+				t.Errorf("firmware = %q", firmware.Code)
 			}
 			if installed && tc.installErr == nil && findCalls != 2 {
 				t.Errorf("discovery calls = %d, want another check after repair", findCalls)
@@ -546,14 +546,14 @@ func TestEnsureQEMUFirmwareOnLinux(t *testing.T) {
 			var command []string
 			savedFind, savedConfirm, savedYes := findQEMUFirmwareFn, qemuConfirmFn, vmAssumeYes
 			t.Cleanup(func() { findQEMUFirmwareFn, qemuConfirmFn, vmAssumeYes = savedFind, savedConfirm, savedYes })
-			findQEMUFirmwareFn = func(hostOS, _ string) (string, error) {
+			findQEMUFirmwareFn = func(_ vm.Arch, hostOS, _ string) (vm.Firmware, error) {
 				if hostOS != "linux" {
 					t.Fatalf("firmware discovery used host %q", hostOS)
 				}
 				if installed && !tc.stillMissing {
-					return "/usr/share/AAVMF/AAVMF_CODE.fd", nil
+					return vm.Firmware{Code: "/usr/share/AAVMF/AAVMF_CODE.fd"}, nil
 				}
-				return "", vm.ErrFirmwareNotFound
+				return vm.Firmware{}, vm.ErrFirmwareNotFound
 			}
 			stubLinuxHost(t, false, tc.onPath, func(c []string) error {
 				installed, command = true, c
@@ -569,13 +569,13 @@ func TestEnsureQEMUFirmwareOnLinux(t *testing.T) {
 			stubTerminal(t, tc.interactive)
 			vmAssumeYes = tc.yes
 
-			firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), "linux", "")
+			firmware, err := ensureQEMUFirmwareForHostOS(context.Background(), vm.ArchARM64, "linux", "")
 			if asked != tc.wantAsked || !slices.Equal(command, tc.wantCommand) {
 				t.Fatalf("asked=%t command=%q, want asked=%t command=%q", asked, command, tc.wantAsked, tc.wantCommand)
 			}
 			if tc.wantErr == nil {
-				if err != nil || firmware != "/usr/share/AAVMF/AAVMF_CODE.fd" {
-					t.Fatalf("ensureQEMUFirmwareForHostOS() = %q, %v, want the installed firmware", firmware, err)
+				if err != nil || firmware.Code != "/usr/share/AAVMF/AAVMF_CODE.fd" {
+					t.Fatalf("ensureQEMUFirmwareForHostOS() = %q, %v, want the installed firmware", firmware.Code, err)
 				}
 				return
 			}
@@ -618,14 +618,14 @@ func TestResolveVMSpecOffersMissingFirmware(t *testing.T) {
 		ensureQEMUFn, findQEMUFirmwareFn, installQEMUFirmwareFn = savedQEMU, savedFind, savedInstall
 		qemuConfirmFn, vmAssumeYes = savedConfirm, savedYes
 	})
-	ensureQEMUFn = func(context.Context) error { return nil }
-	findQEMUFirmwareFn = func(string, string) (string, error) {
+	ensureQEMUFn = func(context.Context, vm.Arch) error { return nil }
+	findQEMUFirmwareFn = func(vm.Arch, string, string) (vm.Firmware, error) {
 		if installed {
-			return "/test/arm64.fd", nil
+			return vm.Firmware{Code: "/test/arm64.fd"}, nil
 		}
-		return "", vm.ErrFirmwareNotFound
+		return vm.Firmware{}, vm.ErrFirmwareNotFound
 	}
-	installQEMUFirmwareFn = func(context.Context) error { installed = true; return nil }
+	installQEMUFirmwareFn = func(context.Context, vm.Arch) error { installed = true; return nil }
 	stubLinuxHost(t, false, []string{"sudo", "apt-get"}, func([]string) error { installed = true; return nil })
 	stubBrewLookPath(t, func(string) (string, error) { return "/test/brew", nil })
 	qemuConfirmFn = func(context.Context, string) (bool, error) { asked = true; return true, nil }
@@ -735,5 +735,133 @@ func TestEnsureSocketVMNetDoesNotPromptWithoutHomebrew(t *testing.T) {
 	}
 	if asked || installed || started {
 		t.Error("prompted or installed on a host with no Homebrew")
+	}
+}
+
+// stubQEMUInstallPrompt answers the install prompt with yes, records each
+// question, and runs as an interactive terminal without --yes.
+func stubQEMUInstallPrompt(t *testing.T) *[]string {
+	t.Helper()
+	savedConfirm, savedYes := qemuConfirmFn, vmAssumeYes
+	t.Cleanup(func() { qemuConfirmFn, vmAssumeYes = savedConfirm, savedYes })
+	var questions []string
+	qemuConfirmFn = func(_ context.Context, question string) (bool, error) {
+		questions = append(questions, question)
+		return true, nil
+	}
+	vmAssumeYes = false
+	stubTerminal(t, true)
+	return &questions
+}
+
+func TestLinuxInstallCommandsFollowTheGuestArchitecture(t *testing.T) {
+	for _, tc := range []struct {
+		arch               vm.Arch
+		manager            string
+		emulator, firmware []string
+	}{
+		{vm.ArchAMD64, "apt-get", []string{"qemu-system-x86", "ovmf"}, []string{"ovmf"}},
+		{vm.ArchAMD64, "dnf", []string{"qemu-system-x86", "edk2-ovmf"}, []string{"edk2-ovmf"}},
+		{vm.ArchARM64, "apt-get", []string{"qemu-system-arm", "qemu-efi-aarch64"}, []string{"qemu-efi-aarch64"}},
+		{vm.ArchARM64, "dnf", []string{"qemu-system-aarch64", "edk2-aarch64"}, []string{"edk2-aarch64"}},
+	} {
+		t.Run(string(tc.arch)+"/"+tc.manager, func(t *testing.T) {
+			stubQEMUInstallPrompt(t)
+			var commands [][]string
+			stubLinuxHost(t, false, []string{"sudo", tc.manager}, func(c []string) error {
+				commands = append(commands, c)
+				return nil
+			})
+			savedFind, savedFirmware := findQEMUFn, findQEMUFirmwareFn
+			t.Cleanup(func() { findQEMUFn, findQEMUFirmwareFn = savedFind, savedFirmware })
+			findQEMUFn = func(arch vm.Arch, _ string) (string, error) {
+				if arch != tc.arch {
+					t.Errorf("looked up the emulator for %q, want %q", arch, tc.arch)
+				}
+				if len(commands) > 0 {
+					return "/usr/bin/" + arch.QEMUBinary(), nil
+				}
+				return "", errors.New("not found")
+			}
+			findQEMUFirmwareFn = func(arch vm.Arch, _, _ string) (vm.Firmware, error) {
+				if arch != tc.arch {
+					t.Errorf("looked up firmware for %q, want %q", arch, tc.arch)
+				}
+				if len(commands) > 1 {
+					return vm.Firmware{Code: "/fw/code"}, nil
+				}
+				return vm.Firmware{}, vm.ErrFirmwareNotFound
+			}
+			if err := ensureQEMUForHostOS(context.Background(), tc.arch, "linux"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ensureQEMUFirmwareForHostOS(context.Background(), tc.arch, "linux", ""); err != nil {
+				t.Fatal(err)
+			}
+			want := [][]string{
+				append([]string{"sudo", tc.manager, "install", "-y"}, tc.emulator...),
+				append([]string{"sudo", tc.manager, "install", "-y"}, tc.firmware...),
+			}
+			if len(commands) != 2 || !slices.Equal(commands[0], want[0]) || !slices.Equal(commands[1], want[1]) {
+				t.Fatalf("ran %q, want %q", commands, want)
+			}
+		})
+	}
+}
+
+func TestQEMUInstallHints(t *testing.T) {
+	for _, tc := range []struct {
+		arch   vm.Arch
+		hostOS string
+		want   string
+	}{
+		{vm.ArchAMD64, "linux", "apt install qemu-system-x86 ovmf, or dnf install qemu-system-x86 edk2-ovmf"},
+		{vm.ArchAMD64, "darwin", "brew install qemu"},
+		{vm.ArchARM64, "linux", "apt install qemu-system-arm qemu-efi-aarch64, or dnf install qemu-system-aarch64 edk2-aarch64"},
+		{vm.ArchARM64, "darwin", "brew install qemu"},
+		{vm.ArchARM64, "windows", "winget install --id SoftwareFreedomConservancy.QEMU --exact --source winget"},
+	} {
+		if got := qemuInstallHintFor(tc.arch, tc.hostOS); got != tc.want {
+			t.Errorf("qemuInstallHintFor(%s, %s) = %q, want %q", tc.arch, tc.hostOS, got, tc.want)
+		}
+	}
+}
+
+func TestQEMUNotFoundNamesTheEmulatorForTheGuest(t *testing.T) {
+	savedFind := findQEMUFn
+	t.Cleanup(func() { findQEMUFn = savedFind })
+	findQEMUFn = func(vm.Arch, string) (string, error) { return "", errors.New("not found") }
+	stubTerminal(t, false)
+
+	err := ensureQEMUForHostOS(context.Background(), vm.ArchAMD64, "linux")
+	if err == nil || !strings.Contains(err.Error(), "qemu-system-x86_64 not found") || !strings.Contains(err.Error(), qemuInstallHintFor(vm.ArchAMD64, "linux")) {
+		t.Errorf("x86-64 not-found error = %v", err)
+	}
+	err = ensureQEMUForHostOS(context.Background(), vm.ArchARM64, "linux")
+	const arm64 = "qemu-system-aarch64 not found: install QEMU (apt install qemu-system-arm qemu-efi-aarch64, or dnf install qemu-system-aarch64 edk2-aarch64). The ARM64 emulator runs the WendyOS guest on both ARM64 and x86_64 PCs"
+	if err == nil || err.Error() != arm64 {
+		t.Errorf("ARM64 not-found error = %v, want exactly %q", err, arm64)
+	}
+}
+
+func TestFirmwareOfferNamesTheGuest(t *testing.T) {
+	questions := stubQEMUInstallPrompt(t)
+	installed := false
+	stubLinuxHost(t, false, []string{"sudo", "apt-get"}, func([]string) error { installed = true; return nil })
+	savedFirmware := findQEMUFirmwareFn
+	t.Cleanup(func() { findQEMUFirmwareFn = savedFirmware })
+	want := vm.Firmware{Code: "/usr/share/OVMF/OVMF_CODE_4M.fd", VarsTemplate: "/usr/share/OVMF/OVMF_VARS_4M.fd"}
+	findQEMUFirmwareFn = func(vm.Arch, string, string) (vm.Firmware, error) {
+		if installed {
+			return want, nil
+		}
+		return vm.Firmware{}, vm.ErrFirmwareNotFound
+	}
+	got, err := ensureQEMUFirmwareForHostOS(context.Background(), vm.ArchAMD64, "linux", "")
+	if err != nil || got != want {
+		t.Fatalf("ensureQEMUFirmwareForHostOS() = %+v, %v; want %+v", got, err, want)
+	}
+	if len(*questions) != 1 || !strings.Contains((*questions)[0], "QEMU's x86-64 firmware") {
+		t.Errorf("asked %q, want one question about QEMU's x86-64 firmware", *questions)
 	}
 }

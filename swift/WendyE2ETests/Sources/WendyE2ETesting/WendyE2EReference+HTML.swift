@@ -57,7 +57,7 @@ private func renderHTMLBody(
     )
     appendHTMLBlocks(document.overview, to: &html)
     appendHTMLMetadata(
-        isDisabled: nil,
+        availability: nil,
         sourceLocation: document.sourceLocation,
         options: options,
         to: &html
@@ -77,7 +77,8 @@ private func renderHTMLBody(
                 "<h3 id=\"\(escapeHTMLAttribute(WendyE2EReference.markdownAnchor(forTitle: title)))\">\(renderInlineHTML(title))</h3>"
             )
             appendHTMLMetadata(
-                isDisabled: entry.isDisabled,
+                availability: entry.availability,
+                availabilityReason: entry.availabilityReason,
                 sourceLocation: entry.sourceLocation,
                 options: options,
                 to: &html
@@ -514,14 +515,15 @@ private func appendHTMLBlocks(_ text: String, to html: inout [String]) {
 }
 
 private func appendHTMLMetadata(
-    isDisabled: Bool?,
+    availability: WendyE2EReference.Availability?,
+    availabilityReason: String? = nil,
     sourceLocation: WendyE2EReference.SourceLocation,
     options: WendyE2EReference.RenderOptions,
     to html: inout [String]
 ) {
     var metadata: [String] = []
-    if options.includeDisabledState, let isDisabled {
-        metadata.append(isDisabled ? "disabled" : "enabled")
+    if options.includeDisabledState, let availability {
+        metadata.append(availability.rawValue)
     }
     if options.includeSourceLocations {
         metadata.append(
@@ -534,6 +536,11 @@ private func appendHTMLMetadata(
     }
 
     html.append("<p class=\"metadata\">\(metadata.joined(separator: " · "))</p>")
+    if options.includeDisabledState, let availabilityReason {
+        html.append(
+            "<p class=\"metadata\">Availability traits: <code>\(escapeHTMLText(availabilityReason))</code></p>"
+        )
+    }
 }
 
 private func renderInlineHTML(_ value: String) -> String {

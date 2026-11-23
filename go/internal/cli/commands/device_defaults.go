@@ -219,6 +219,14 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 	if !selector.matches(auth) {
 		return nil, selector.missingAuth()
 	}
+	if conn, err := desktopExistingCloudConnection(ctx, auth, selector.String()); conn != nil || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
+	}
+	ctx, cancelBrowse := startCloudLANBrowse(ctx)
+	defer cancelBrowse()
 	if selector.TenantUUID != "" {
 		assets, err := fetchDefaultCloudAssetsV2Fn(ctx, auth, true)
 		if err != nil {
@@ -336,7 +344,7 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 			provider := providers.ProviderForKey("wendy-lite")
 			return &SelectedDevice{External: &external, Provider: provider, DefaultSelector: device, PinKey: device}, true, nil
 		}
-		client, err := connectOperatorMeshSelector(ctx, device)
+		client, err := connectDesktopMeshAgent(ctx, device)
 		if err != nil {
 			return nil, true, err
 		}

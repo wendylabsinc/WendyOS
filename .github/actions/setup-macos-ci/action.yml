@@ -1,13 +1,24 @@
 name: Prepare self-hosted macOS CI
-description: Expose Homebrew tools and check disk space on the Mac runner.
+description: Provision base tools and check disk space on the Mac runner.
 
 runs:
   using: composite
   steps:
-    - name: Add Homebrew to PATH
+    - uses: ./.github/actions/check-runner-disk
+
+    - name: Provision base tools
+      shell: bash
+      run: bash .github/scripts/provision-macos-ci.sh --base
+
+    - name: Check repository checkout
+      id: checkout
       shell: bash
       run: |
-        echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-        echo "/usr/local/bin" >> "$GITHUB_PATH"
+        # checkout falls back to an archive when a fresh Mac only has Git's shim.
+        if [[ ! -e .git ]]; then echo 'repair=true' >> "$GITHUB_OUTPUT"; fi
 
-    - uses: ./.github/actions/check-runner-disk
+    - name: Restore Git checkout after provisioning
+      if: steps.checkout.outputs.repair == 'true'
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        persist-credentials: false

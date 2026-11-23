@@ -191,4 +191,139 @@ struct `'wendy cache list'` {
             }
         }
     }
+
+    /**
+     Populated caches report exact file bytes for OS downloads, nested flashpacks,
+     per-app build stores and other cache directories. JSON and the noninteractive
+     list agree on largest-first order; shared build data belongs only to the
+     human summary. Listing leaves every seeded payload unchanged. POSIX hosts only.
+     */
+    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX cache fixture"))
+    func `lists populated categories with exact bytes in JSON and size order`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await CacheCommandFixture.populate(cli)
+            let expectedNames = [
+                "misc", "ocilayout/com.example.demo-linux_arm64",
+                "buildx/com.example.demo-linux_arm64", "os-images/jetson.flashpack",
+                "os-images/pi.img",
+            ]
+            try await cli.sh("\(try CacheCommandFixture.environment(cli))\nwendy cache list --json")
+            { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stderr.isEmpty)
+                let rows = try #require(
+                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
+                        as? [[String: Any]]
+                )
+                #expect(rows.compactMap { $0["name"] as? String } == expectedNames)
+                #expect(rows.compactMap { $0["sizeBytes"] as? Int } == [19, 17, 13, 12, 11])
+                #expect(
+                    rows.compactMap { $0["size"] as? String } == [
+                        "19 B", "17 B", "13 B", "12 B", "11 B",
+                    ]
+                )
+                for row in rows {
+                    let name = try #require(row["name"] as? String)
+                    let path = try #require(row["path"] as? String)
+                    #expect(path == cli.wendyCacheDirectory + "/" + name)
+                    if name.hasPrefix("buildx/") || name.hasPrefix("ocilayout/") {
+                        #expect(!(row["lastBuilt"] as? String ?? "").isEmpty)
+                    } else {
+                        #expect(row["lastBuilt"] == nil)
+                    }
+                }
+            }
+            try await cli.sh("\(try CacheCommandFixture.environment(cli))\nwendy cache list") {
+                result in
+                #expect(result.status.isSuccess)
+                #expect(result.stderr.isEmpty)
+                let lines = result.stdout.split(separator: "\n").map(String.init)
+                #expect(lines.count == 6)
+                for (index, name) in expectedNames.enumerated() {
+                    let line = try #require(lines.indices.contains(index) ? lines[index] : nil)
+                    let prefix = "  \(name)  (\([19, 17, 13, 12, 11][index]) B"
+                    if name.hasPrefix("buildx/") || name.hasPrefix("ocilayout/") {
+                        #expect(line.hasPrefix(prefix + ", built "))
+                        #expect(line.hasSuffix(" ago)"))
+                    } else {
+                        #expect(line == prefix + ")")
+                    }
+                }
+                #expect(result.stdout.contains("Build cache: 33 B on disk (3 B shared)"))
+            }
+            try await cli.sh(
+                """
+                \(try CacheCommandFixture.environment(cli))
+                test "$(cat "$cache/misc/nested/payload")" = '1234567890123456789'
+                test "$(cat "$cache/ocilayout/com.example.demo-linux_arm64/blobs/sha256/97f40b8ae3e4d3118bb4afb623d3e768f04d9bc2f913bd64296ebcd53386c1ac")" = '12345678901234567'
+                test "$(cat "$cache/buildx/com.example.demo-linux_arm64/blobs/sha256/bca2b41a2b25e137c83fee346af7bd1e0f52bd560583ca07a1b42f9944c5c50b")" = '1234567890123'
+                test "$(cat "$cache/os-images/jetson.flashpack/boot/kernel")" = '1234567'
+                test "$(cat "$cache/os-images/jetson.flashpack/rootfs")" = '12345'
+                test "$(cat "$cache/os-images/pi.img")" = '12345678901'
+                test "$(cat "$cache/ocilayout/blobs/shared")" = '123'
+                """
+            )
+        }
+    }
+
+    /**
+     An unreadable per-app build cache must fail visibly instead of presenting a
+     successful zero-byte or partial inventory. Both output modes identify the
+     affected app, emit no successful listing, and preserve its payload. POSIX
+     permissions are checked with a real denied read before running the CLI.
+
+     **CURRENT KNOWN DEFECT:** unreadable per-app build directories currently
+     return success with zero bytes instead of failing. This guarantee does not
+     currently pass. Opt in with `WENDY_E2E_KNOWN_CACHE_DEFECTS=1` and filter
+     `fails loudly when a populated build cache cannot be sized` to reproduce it
+     using the isolated denied-read fixture below.
+     Tracked by [WDY-4297 — wendy cache list reports an unreadable populated build cache as empty](https://linear.app/wendylabsinc/issue/WDY-4297/wendy-cache-list-reports-an-unreadable-populated-build-cache-as-empty).
+     */
+    @Test(
+        .enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"),
+        .disabled(
+            if: !CacheCommandFixture.knownDefectsEnabled,
+            "DEFECT: [WDY-4297 — wendy cache list reports an unreadable populated build cache as empty](https://linear.app/wendylabsinc/issue/WDY-4297/wendy-cache-list-reports-an-unreadable-populated-build-cache-as-empty). Replay the denied-read fixture with WENDY_E2E_KNOWN_CACHE_DEFECTS=1."
+        )
+    )
+    func `fails loudly when a populated build cache cannot be sized`() async throws {
+        let scenario = CacheCommandFixture.restoringPermissions(
+            for: "ocilayout/com.example.locked-linux_arm64"
+        )
+        try await scenario.run(authenticated: false) { cli, _ in
+            for mode in ["", "--json"] {
+                try await cli.sh(
+                    """
+                    \(try CacheCommandFixture.environment(cli))
+                    test "$(id -u)" -ne 0
+                    locked="$cache/ocilayout/com.example.locked-linux_arm64"
+                    mkdir -p "$locked"
+                    printf 'preserve-this-layer' > "$locked/layer"
+                    chmod 000 "$locked"
+                    trap 'chmod 700 "$locked"' EXIT
+                    if cat "$locked/layer" >/dev/null 2>&1; then
+                      echo 'negative control unexpectedly read locked layer' >&2; exit 90
+                    fi
+                    set +e
+                    wendy cache list \(mode)
+                    cache_command_exit=$?
+                    set -e
+                    exit "$cache_command_exit"
+                    """
+                ) { result in
+                    #expect(!result.status.isSuccess)
+                    #expect(result.stdout.isEmpty)
+                    #expect(result.stderr.contains("com.example.locked-linux_arm64"))
+                    #expect(result.stderr.lowercased().contains("permission denied"))
+                }
+                // Preservation must succeed independently of the expected CLI failure.
+                try await cli.sh(
+                    """
+                    \(try CacheCommandFixture.environment(cli))
+                    test "$(cat "$cache/ocilayout/com.example.locked-linux_arm64/layer")" = 'preserve-this-layer'
+                    """
+                )
+            }
+        }
+    }
 }

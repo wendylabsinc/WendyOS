@@ -141,6 +141,11 @@ type Client struct {
 	// systemAPISocketProvider's nil-tolerant treatment above.
 	cameraLoopbackProvider CameraLoopbackProvider
 
+	// cameraShareProvider is the camera share manager, injected via
+	// SetCameraShareProvider (camera_share_wiring.go). Nil means no sharing:
+	// every share call is a no-op and camera apps get the real cameras.
+	cameraShareProvider CameraShareProvider
+
 	// appServices caches the services map for multi-service apps, keyed by appID.
 	// Populated on CreateContainerWithProgress; used by resolveStopOrder.
 	appServices map[string]map[string]*appconfig.ServiceConfig
@@ -1630,6 +1635,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	if desiredNetworkIdentity != "" {
 		labels[labelKeyNetworkIdentity] = desiredNetworkIdentity
 	}
+	// How a camera app gets its camera, set only at create: the label is what
+	// tells a sharing container from one made before sharing existed (R4).
+	addCameraShareLabel(labels, entCfg.Entitlements)
 
 	// Publish the resolved ROS 2 configuration as a container label so the
 	// agent can discover ROS 2 containers at runtime and configure the CLI
@@ -1749,7 +1757,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		retiredMesh := false
 		oldHadNAN := false
 		oldHadNPU := false
+		oldSharedCamera := false
 		if oldLabels, labelErr := existing.Labels(ctx); labelErr == nil {
+			oldSharedCamera = sharesCamera(oldLabels)
 			oldEntitlements := parseEntitlementsFromAnnotations(oldLabels)
 			oldHadSystemAPI = entitlementsContain(oldEntitlements, appconfig.EntitlementNotifications)
 			oldHadData = entitlementsContain(oldEntitlements, appconfig.EntitlementEpisodeWrite)
@@ -1861,6 +1871,18 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
+		}
+		// The old container's shares go before the new container's are made,
+		// and on this goroutine, so the removal never races the new
+		// container's CreateCameraShares for the same ID (Review Focus 1).
+		// Outside c.mu, like the NAN release below: the share manager may be
+		// busy with a sync, and other apps' lifecycle calls must not wait for
+		// it. The container's lifecycle lock keeps this Remove before the
+		// Create.
+		if oldSharedCamera {
+			c.mu.Unlock()
+			c.removeCameraShares(containerName)
+			c.mu.Lock()
 		}
 		if oldHadSystemAPI && c.systemAPISocketProvider != nil {
 			c.systemAPISocketProvider.Release(appID, serviceName)
@@ -2123,6 +2145,18 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// Hydration must not revive old sibling labels during group replacement.
 	c.appIsolation[appID] = appCfg.Isolation
 
+	// Make the new container's camera shares. It can take up to the share
+	// manager's 2 s budget, so c.mu is let go of meanwhile; the container's
+	// own lifecycle lock, held since the top, keeps its start (whose cover
+	// needs the shares), stop and delete waiting until they exist. Not bound
+	// to the request: the container exists now, and a share not made here is
+	// never made, so its app would get the real cameras.
+	if sharesCamera(labels) {
+		c.mu.Unlock()
+		c.createCameraShares(context.WithoutCancel(ctx), containerName, appID)
+		c.mu.Lock()
+	}
+
 	return nil
 }
 
@@ -2346,7 +2380,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	c.mu.Lock()
 	lockWait := time.Since(lockStarted)
 	var resolveDuration, staleTaskDuration, newTaskDuration, waitDuration, runtimeStartDuration, netnsAnchorDuration time.Duration
-	var cniDeleteDuration, cniAddDuration, networkFinalizeDuration time.Duration
+	var cniDeleteDuration, cniAddDuration, networkFinalizeDuration, cameraShareCoverDuration time.Duration
 	muHeld := true
 	defer func() {
 		if muHeld {
@@ -3000,6 +3034,24 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			return nil, failPreparedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
 		}
 	}
+	// Cover the camera shares while the runtime still holds the entrypoint,
+	// so the app's first open of a camera path finds its share node. Never
+	// through failPreparedTask: sharing never stops or delays a start (R2),
+	// and a camera not covered is the real camera. A start that fails from
+	// here on lets go of the namespace the cover took.
+	if sharesCamera(containerLabels) {
+		sharingContainer := container.ID()
+		phaseStarted = time.Now()
+		covered := c.coverCameraShares(ctx, sharingContainer, appName, task.Pid())
+		cameraShareCoverDuration = time.Since(phaseStarted)
+		if covered {
+			defer func() {
+				if !taskStarted {
+					c.releaseCameraShares(sharingContainer)
+				}
+			}()
+		}
+	}
 	// Order the release of the entrypoint against whole-app StopContainer's
 	// appStopping marker. Per-container stop/delete also holds our keyed lock.
 	// The IO context survives RPC disconnect, but a request canceled during
@@ -3046,12 +3098,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		zap.Duration("cni_delete", cniDeleteDuration),
 		zap.Duration("cni_add", cniAddDuration),
 		zap.Duration("network_finalize", networkFinalizeDuration),
+		zap.Duration("camera_share_cover", cameraShareCoverDuration),
 		zap.Duration("total", time.Since(startStarted)),
 	)
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
 	outputOwner := c.trackTaskOutput(appName, task.Pid())
+	// Set before streamOutput, its only reader, starts.
+	outputOwner.cameraShared = sharesCamera(containerLabels)
 	meshIngressStarted = true
 	nanStartLease.committed = true
 	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, nanTaskAppID, meshIngressRun, outputOwner, stdoutR, stderrR, stdoutW, stderrW)
@@ -3141,9 +3196,28 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("exec in container %q: %w", appName, err)
 	}
-	defer func() { _, _ = proc.Delete(ctx, containerd.WithProcessKill) }()
+	return runExecProcess(ctx, proc, tty, resize, 5*time.Second)
+}
 
-	statusC, err := proc.Wait(ctx)
+// runExecProcess owns the exec from creation through deletion. The stream's
+// cancellation ends the command, but must not cancel the RPCs that kill and
+// remove it. WithoutCancel preserves the containerd namespace and tracing values.
+func runExecProcess(ctx context.Context, proc containerd.Process, tty bool, resize <-chan [2]uint32, cleanupTimeout time.Duration) (int, error) {
+	baseCtx := context.WithoutCancel(ctx)
+	waitCtx, cancelWait := context.WithCancel(baseCtx)
+	defer cancelWait()
+	defer func() {
+		if pio := proc.IO(); pio != nil {
+			pio.Cancel()
+		}
+		cleanupCtx, cancel := context.WithTimeout(baseCtx, cleanupTimeout)
+		defer cancel()
+		_, _ = proc.Delete(cleanupCtx, containerd.WithProcessKill)
+	}()
+
+	// A Wait bound to ctx can report cancellation while the process is still
+	// running. Keep observing real exit until cleanup finishes instead.
+	statusC, err := proc.Wait(waitCtx)
 	if err != nil {
 		return -1, fmt.Errorf("waiting on exec: %w", err)
 	}
@@ -3152,27 +3226,50 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	}
 
 	if tty && resize != nil {
-		// proc.Resize takes (width=cols, height=rows). The initial size was sent
-		// by the handler as the first resize frame.
 		go func() {
-			for sz := range resize {
-				_ = proc.Resize(ctx, sz[1], sz[0])
+			for {
+				select {
+				case <-waitCtx.Done():
+					return
+				case sz, ok := <-resize:
+					if !ok {
+						return
+					}
+					// Resize takes width (columns), then height (rows).
+					_ = proc.Resize(ctx, sz[1], sz[0])
+				}
 			}
 		}()
 	}
 
 	select {
-	case st := <-statusC:
-		// Block until containerd's stdout/stderr copy goroutines have drained so
-		// the caller can send its final frame (e.g. an exit code) only after the
-		// last output byte, not racing in-flight output.
-		if pio := proc.IO(); pio != nil {
-			pio.Wait()
+	case st, ok := <-statusC:
+		if !ok {
+			return -1, fmt.Errorf("exec exit status stream closed without a status")
 		}
-		return int(st.ExitCode()), st.Error()
+		if err := st.Error(); err != nil {
+			return -1, err
+		}
+		// Preserve all output before returning an exit code. If the client
+		// disconnects during the drain, cleanup cancels the FIFO readers.
+		if pio := proc.IO(); pio != nil {
+			drained := make(chan struct{})
+			go func() { pio.Wait(); close(drained) }()
+			select {
+			case <-drained:
+			case <-ctx.Done():
+				return -1, ctx.Err()
+			}
+		}
+		return int(st.ExitCode()), nil
 	case <-ctx.Done():
-		_ = proc.Kill(ctx, syscall.SIGKILL)
-		<-statusC
+		cleanupCtx, cancel := context.WithTimeout(baseCtx, cleanupTimeout)
+		defer cancel()
+		_ = proc.Kill(cleanupCtx, syscall.SIGKILL)
+		select {
+		case <-statusC:
+		case <-cleanupCtx.Done():
+		}
 		return -1, ctx.Err()
 	}
 }
@@ -3957,6 +4054,11 @@ func (c *Client) recreateContainer(ctx context.Context, ctr containerd.Container
 		),
 	)
 	if err != nil {
+		// The container is gone for good. Recreated, it keeps its ID and
+		// labels, and so its camera shares.
+		if sharesCamera(info.Labels) {
+			c.removeCameraShares(ctr.ID())
+		}
 		return fmt.Errorf("recreating container: %w", err)
 	}
 
@@ -4211,6 +4313,11 @@ func (c *Client) refreshSecondaryNamespaces(ctx context.Context, name string, pr
 		),
 	)
 	if err != nil {
+		// As in recreateContainer: only a container gone for good loses its
+		// camera shares.
+		if sharesCamera(info.Labels) {
+			c.removeCameraShares(name)
+		}
 		return fmt.Errorf("recreating container with refreshed namespaces: %w", err)
 	}
 	return nil
@@ -4337,6 +4444,14 @@ func (c *Client) streamOutput(
 
 	if taskExited {
 		c.withTaskOutputOwner(appName, outputOwner, func() {
+			// The task ended on its own (or was stopped): let go of its mount
+			// namespace now, not on the next start's path, where closing a
+			// dead container's last reference costs milliseconds. Run only
+			// while this run is current, under the container's lifecycle lock,
+			// so a replacement run's cover is never let go of.
+			if outputOwner != nil && outputOwner.cameraShared {
+				c.releaseCameraShares(appName)
+			}
 			recCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			c.recordContainerExit(recCtx, appName, int32(code), classifyExit(code, taskOOMKilled(recCtx, task)), exitedAt)
@@ -4538,6 +4653,10 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	task, err := container.Task(ctx, nil)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
+			// No task: a namespace held for its last run, if any, goes too.
+			if sharesCamera(labels) {
+				c.releaseCameraShares(containerID)
+			}
 			if _, meshApp := findMeshEntitlement(parseEntitlementsFromAnnotations(labels)); meshApp && !releasedSandbox {
 				if err := c.CNIDel(ctx, owner, containerID, networkSandboxPath(containerID)); err != nil {
 					return errors.Join(clearSandboxErr, err)
@@ -4606,6 +4725,11 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	}
 	if stopErr != nil {
 		return errors.Join(clearSandboxErr, stopErr)
+	}
+	// The task is gone: let go of the mount namespace its start's cover took.
+	// A failed stop returned above, so a task still running keeps it.
+	if sharesCamera(labels) {
+		c.releaseCameraShares(containerID)
 	}
 
 	if c.proxyManager != nil {
@@ -4949,7 +5073,16 @@ func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantIm
 		}
 	}
 	if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+		if errdefs.IsNotFound(err) && sharesCamera(persistedLabels) {
+			// Deleted meanwhile by someone else: its shares still go.
+			c.removeCameraShares(ctr.ID())
+		}
 		return "", fmt.Errorf("deleting container %q: %w", ctr.ID(), err)
+	}
+	// Every delete removes a sharing container's shares here, without waiting
+	// for its nodes to go; a sync would otherwise keep them for a minute.
+	if sharesCamera(persistedLabels) {
+		c.removeCameraShares(ctr.ID())
 	}
 	c.forgetTaskOutput(ctr.ID(), nil)
 	if c.proxyManager != nil {

@@ -82,7 +82,7 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 	// and playback reads. Keep secure LAN policy in the cache identity.
 	key := fmt.Sprintf("recording:%t:%s", secure, selector)
 	conn, release, err := b.galleryAcquireWith(ctx, key, func(dialCtx context.Context) (*grpcclient.AgentConnection, error) {
-		return commands.DesktopRecordingConnect(dialCtx, selector, secure)
+		return commands.DesktopRecordingConnect(b.tunnelSession.Context(dialCtx), selector, secure)
 	})
 	if err != nil {
 		cancel()
@@ -174,7 +174,7 @@ func exportRecordings(ctx context.Context, client pb.DataServiceClient, episodes
 }
 
 func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (RecordingLibrary, error) {
-	list, err := recordingEpisodeIndex(ctx, client)
+	list, err := recordingEpisodeIndex(ctx, client, false)
 	if err != nil {
 		return RecordingLibrary{}, err
 	}
@@ -197,11 +197,12 @@ func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (Rec
 
 // Large libraries can contain megabytes of names and repeated metadata. Ask
 // gRPC to compress the response, while retaining compatibility with agents
-// that predate compression support. This is a read-only, idempotent request.
-func recordingEpisodeIndex(ctx context.Context, client pb.DataServiceClient) (*pb.DataEpisodesResponse, error) {
-	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
+// that predate compression support. Only callers that filter by media should
+// request the additional file metadata. This is a read-only, idempotent request.
+func recordingEpisodeIndex(ctx context.Context, client pb.DataServiceClient, includeMedia bool) (*pb.DataEpisodesResponse, error) {
+	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: includeMedia}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
 	if status.Code(err) == codes.Unimplemented {
-		return client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+		return client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: includeMedia}, grpc.MaxCallRecvMsgSize(64<<20))
 	}
 	return list, err
 }
@@ -280,7 +281,7 @@ type savedEpisode[T any] struct {
 }
 
 func inspectSavedEpisodes[T any](ctx context.Context, client pb.DataServiceClient, manifestBudget time.Duration, summarize func(*pb.DataEpisode, *data.Manifest) T) ([]savedEpisode[T], error) {
-	list, err := recordingEpisodeIndex(ctx, client)
+	list, err := recordingEpisodeIndex(ctx, client, false)
 	if err != nil {
 		return nil, err
 	}

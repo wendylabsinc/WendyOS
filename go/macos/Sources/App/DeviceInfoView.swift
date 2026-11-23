@@ -35,6 +35,107 @@ extension GoClient {
     }
 }
 struct DeviceInfoView: View {
+    let session: UInt64
+    let deviceName: String
+    @State private var info: DeviceInfoSnapshot?
+    @State private var error: String?
+
+    var body: some View {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(deviceName).font(.headline).textSelection(.enabled)
+                    if let info {
+                        if !info.board.isEmpty {
+                            Text(info.board).font(.subheadline).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        let specs = hardwareSummary(info)
+                        if !specs.isEmpty {
+                            Text(specs).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                }.padding(.vertical, 4)
+                if info == nil && error == nil { ProgressView("Loading device info…") }
+                if let error { FailureNote(message: error) }
+            }
+            if let info {
+                Section("Operating system") {
+                    row("Installed", info.osVersion.isEmpty ? info.os : info.osVersion)
+                    NavigationLink("OS update") {
+                        DeviceOSUpdateView(session: session, deviceName: deviceName)
+                    }
+                }
+                Section {
+                    NavigationLink("Advanced") {
+                        Form {
+                            Section("Hardware") {
+                                row("Serial number", info.serial)
+                                row("Architecture", info.architecture)
+                            }
+                            Section("Software") {
+                                row("Operating system", info.os)
+                                row("Kernel", info.kernel)
+                                row("JetPack", info.jetpack)
+                                row("CUDA", info.cuda)
+                                row("L4T", info.l4t)
+                                NavigationLink("Wendy Agent") {
+                                    DeviceAgentUpdateView(session: session, deviceName: deviceName)
+                                }
+                            }
+                        }
+                        .formStyle(.grouped)
+                        .navigationTitle("Advanced")
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Device info")
+        .task(id: session) { await refresh() }
+        .mobileRefreshable { await refresh() }
+    }
+
+    private func refresh() async {
+        do {
+            let snapshot = try await GoClient.shared.deviceInfo(session: session)
+            guard !Task.isCancelled else { return }
+            info = snapshot
+            error = nil
+        } catch {
+            if !Task.isCancelled { self.error = error.localizedDescription }
+        }
+    }
+    private func hardwareSummary(_ info: DeviceInfoSnapshot) -> String {
+        var parts: [String] = []
+        if info.cores > 0 { parts.append("\(info.cores.formatted()) CPU cores") }
+        if info.memory > 0 {
+            parts.append("\(ByteCountFormatter.string(fromByteCount: info.memory, countStyle: .memory)) memory")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder private func row(_ title: String, _ value: String) -> some View {
+        if !value.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(title).fixedSize()
+                    Spacer(minLength: 16)
+                    Text(value).foregroundStyle(.secondary).fixedSize()
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                    Text(value).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .textSelection(.enabled)
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+struct DeviceAgentUpdateView: View {
     @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
@@ -54,27 +155,10 @@ struct DeviceInfoView: View {
 
     @ViewBuilder private var actionContent: some View {
         Form {
-            Section("Device") {
-                LabeledContent("Name", value: deviceName)
-                if let info {
-                    row("Model", info.board)
-                    row("Serial number", info.serial)
-                    row("Architecture", info.architecture)
-                    if info.cores > 0 { LabeledContent("CPU cores", value: info.cores.formatted()) }
-                    if info.memory > 0 { LabeledContent("Memory", value: ByteCountFormatter.string(fromByteCount: info.memory, countStyle: .memory)) }
-                } else if error == nil { ProgressView("Loading device info…") }
+            Section {
+                row("Device", deviceName)
+                if let info { row("Installed version", info.version) }
                 if let error { FailureNote(message: error) }
-            }
-            if let info {
-                Section("Software") {
-                    row("Wendy Agent", info.version)
-                    row("Operating system", info.os)
-                    row("OS version", info.osVersion)
-                    row("Kernel", info.kernel)
-                    row("JetPack", info.jetpack)
-                    row("CUDA", info.cuda)
-                    row("L4T", info.l4t)
-                }
             }
             Section {
                 if checking { HStack { ProgressView(); Text("Checking for updates…") } }
@@ -97,10 +181,10 @@ struct DeviceInfoView: View {
                 }
                 if let updateError { FailureNote(message: updateError) }
                 if !checking && !starting && !waiting && update?.busy != true {
-                    Button("Check again") { actions.submit { await refresh() } }
+                    Button("Check for agent updates") { actions.submit { await refresh() } }
                 }
             } header: { Text("Agent update") } footer: { Text("The device downloads and installs the update. Its connection will briefly restart.") }
-        }.formStyle(.grouped).navigationTitle("Device info")
+        }.formStyle(.grouped).navigationTitle("Wendy Agent")
             .task(id: session) { await refresh() }
             .confirmationDialog("Update Wendy Agent on \(deviceName)?", isPresented: Binding(get: { confirmVersion != nil }, set: { if !$0 { confirmVersion = nil } }), titleVisibility: .visible) {
                 if let target = confirmVersion {
@@ -164,6 +248,6 @@ struct DeviceInfoView: View {
                 update = status
             } catch { waiting = true }
         }
-        if !Task.isCancelled { updateError = "The update has not been verified. Reopen Device info when the device reconnects."; waiting = false; update = nil }
+        if !Task.isCancelled { updateError = "The update has not been verified. Reopen Wendy Agent when the device reconnects."; waiting = false; update = nil }
     }
 }

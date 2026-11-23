@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2920,7 +2921,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// A saved binding too old to name a device (organization only) must
 		// never turn into a plaintext attempt or a first-contact connection.
 		// A device with no saved binding at all is dialled below.
-		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
+		refusal := orgOnlyBindingError{key: target.refusalKey()}
+		return nil, refusal, refusal
 	}
 	candidates := target.dialCandidates()
 	walk := &mtlsWalk{target: target, tlsDebug: os.Getenv("WENDY_TLS_DEBUG") != ""}
@@ -3623,6 +3625,7 @@ type resolveConfig struct {
 	sameTargetFallback       defaultDeviceSameTargetFallback
 	readOnlyMonitoring       bool
 	enrollmentTrustRecovery  bool
+	knownCloudLookup         *knownCloudLookup
 }
 
 var (
@@ -3749,21 +3752,33 @@ func ExcludeProviders(keys ...string) resolveOption {
 // (issue #1171). This is the single funnel every command uses to obtain a
 // device, so the clock fix applies to info, run, deploy, ros2 bag, etc.
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
-	sel, err := resolveTargetInner(ctx, opts...)
+	known := &knownCloudLookup{}
+	innerOpts := append(slices.Clip(opts), recordKnownCloudLookup(known))
+	resolve := func() (*SelectedDevice, error) {
+		known.err = nil
+		return resolveTargetInner(ctx, innerOpts...)
+	}
+	sel, err := resolve()
 	for range 2 {
 		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
 		if !retry {
 			err = confirmErr
 			break
 		}
-		sel, err = resolveTargetInner(ctx, opts...)
+		sel, err = resolve()
 	}
 	if err != nil {
 		device := resolveOptionsDevice(opts)
 		if device == "" {
 			device = deviceFlag
 		}
-		if conn, cloudErr, attempted := connectUnresolvedCloudName(ctx, device, err, opts...); attempted {
+		if known.err != nil {
+			// Cloud already failed to reach this pinned name before the local
+			// path ran. Its answer names the next useful action.
+			if localMissDefersToCloud(ctx, device, err) {
+				err = &cloudNameResolutionError{known.err}
+			}
+		} else if conn, cloudErr, attempted := connectUnresolvedCloudName(ctx, device, err, opts...); attempted {
 			err = cloudErr
 			if err == nil {
 				sel = &SelectedDevice{Agent: conn}
@@ -3866,6 +3881,15 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		if p := providers.ProviderForKey(device); p != nil {
 			return explicitProviderDevice(ctx, p)
 		}
+	}
+
+	if selected, matched, err := connectKnownCloudName(ctx, device, cfg); matched {
+		if err == nil && isDefault {
+			noteImplicitDevice(device, implicitDefaultDevice)
+		}
+		return selected, err
+	} else if err != nil && cfg.knownCloudLookup != nil {
+		cfg.knownCloudLookup.err = err
 	}
 
 	// Check if the device flag matches a discovered device ID (e.g.
@@ -4745,7 +4769,6 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 				cliLogln("Connecting to %s via Wendy Cloud relay...", choice.CloudV2.GetName())
 				return cloudLiteSelectedDevice(cloudAuth, choice.CloudV2, selector)
 			}
-			cliLogln("Connecting to %s via cloud tunnel...", choice.CloudV2.GetName())
 			conn, err := connectCloudAssetV2(ctx, cloudAuth, choice.CloudV2, dm.cloud.brokerURL)
 			if err != nil {
 				return nil, err
@@ -4756,7 +4779,6 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		if err != nil {
 			return nil, err
 		}
-		cliLogln("Connecting to %s via cloud tunnel...", choice.Cloud.GetName())
 		conn, err := connectCloudAsset(ctx, cloudAuth, choice.Cloud, dm.cloud.brokerURL)
 		if err != nil {
 			return nil, err

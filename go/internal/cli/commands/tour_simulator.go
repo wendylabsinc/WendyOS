@@ -52,16 +52,49 @@ func (p tourRobotProject) validate() error {
 	return nil
 }
 
-func loadTourRobotProject(dir string) (tourRobotProject, string, error) {
-	var p tourRobotProject
+// tourProjectDir is the tour's starter directory: the one given, or the
+// default under Documents.
+func tourProjectDir(dir string) (string, error) {
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return p, "", err
+			return "", err
 		}
 		dir = filepath.Join(home, "Documents", "wendy-robot-tour")
 	}
-	dir, err := filepath.Abs(dir)
+	return filepath.Abs(dir)
+}
+
+// tourGuestArch is the guest architecture the tour prepares for: that of the
+// tour VM it will resume, when one exists, else this host's default for the
+// VM it will create. It creates nothing.
+func tourGuestArch(projectDir string) vm.Arch {
+	dir, err := tourProjectDir(projectDir)
+	if err != nil {
+		return defaultGuestArchFn()
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "tour.json"))
+	if err != nil || len(data) > 8192 {
+		return defaultGuestArchFn()
+	}
+	var p tourRobotProject
+	if json.Unmarshal(data, &p) != nil || vm.ValidName(p.VMName) != nil {
+		return defaultGuestArchFn()
+	}
+	store, err := vm.NewStore()
+	if err != nil {
+		return defaultGuestArchFn()
+	}
+	meta, ok := store.ReadMeta(p.VMName)
+	if !ok || !meta.Arch.Valid() {
+		return defaultGuestArchFn()
+	}
+	return meta.GuestArch()
+}
+
+func loadTourRobotProject(dir string) (tourRobotProject, string, error) {
+	var p tourRobotProject
+	dir, err := tourProjectDir(dir)
 	if err != nil {
 		return p, "", err
 	}
@@ -121,13 +154,14 @@ func runRobotTour(cmd *cobra.Command, projectDir string) (runErr error) {
 		out := cmd.OutOrStdout()
 		fmt.Fprintln(out, tui.Header("Preparing your robot"))
 		fmt.Fprintln(out, "The first run can take a few minutes.")
+		guest := tourGuestArch(projectDir)
 		if err := runTourStep(ctx, out, "Setting up QEMU", func() error {
-			return ensureQEMUFn(ctx)
+			return ensureQEMUFn(ctx, guest)
 		}); err != nil {
 			return err
 		}
-		if err := runTourStep(ctx, out, "Setting up ARM64 firmware", func() error {
-			_, err := ensureQEMUFirmwareFn(ctx)
+		if err := runTourStep(ctx, out, "Setting up UEFI firmware", func() error {
+			_, err := ensureQEMUFirmwareFn(ctx, guest)
 			return err
 		}); err != nil {
 			return err

@@ -420,6 +420,7 @@ func main() {
 	agentUpdateSvc := services.NewAgentUpdateService(logger, installer)
 	agentUpdateSvc.PrimeExecPath()
 	osUpdateSvc := services.NewOSUpdateService(logger, installer)
+	powerSvc := services.NewPowerService(logger, installer)
 	driverSvc := services.NewDriverService(logger)
 	// Before anything reads the store: devices updated from an older agent still
 	// have add-ons in the pre-keyed flat layout.
@@ -535,6 +536,9 @@ func main() {
 		logger.Warn("loading camera DHCP configuration failed", zap.Error(err))
 	}
 	dataSvc.SetVideoService(videoSvc)
+	// The hardware listing skips camera share nodes and says how each camera
+	// is shared.
+	hwDiscoverer.SetCameraShareReporter(videoSvc)
 	// Arm pre-roll for campaigns deployed in a previous agent lifetime so their
 	// next trigger opens BEFORE the trigger instant, not only campaigns deployed
 	// during this run.
@@ -588,6 +592,10 @@ func main() {
 	// client miss (e.g. a container's task crash-exiting on its own).
 	if ctrdClient != nil {
 		ctrdClient.SetCameraLoopbackProvider(videoSvc)
+		// The camera share manager rides the same syncs: the first adopts the
+		// share nodes of apps that kept running through an agent restart, and
+		// drops those of containers deleted while the agent was down.
+		ctrdClient.SetCameraShareProvider(videoSvc)
 		ctrdClient.SyncCameraLoopbacks(ctx)
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
 	}
@@ -644,6 +652,8 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
+	genericSensorFeed := services.NewGenericSensorFeed(logger, filepath.Join(supervisor.RemoteSeenDir, "sensor-channel-ids"))
+	sensorSup.SetGenericSink(genericSensorFeed)
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
@@ -944,6 +954,11 @@ func main() {
 		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
 		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
 		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
+		// Reboot follows the same access policy as OS updates, which already
+		// reboot the device: available before enrollment, over mTLS afterward,
+		// and through the local admin socket. Device credentials are refused
+		// by the RPC policy's exact-method allowlist.
+		agentpbv2.RegisterWendyPowerServiceServer(srv, powerSvc)
 		// Driver management follows the same access policy as OS updates:
 		// available before enrollment, over mTLS afterward, and through the
 		// local admin socket. The store and apply path require Linux.
@@ -1549,12 +1564,36 @@ func main() {
 	// bind-mounts this socket into entitled containers). Disabled with
 	// WENDY_LOCAL_SOCKET=off.
 	var localSocketServer *grpc.Server
+	var sensorReadServer *grpc.Server
 	if os.Getenv("WENDY_LOCAL_SOCKET") != "off" {
+		// A sensor reader must not inherit the full administrative API. This
+		// listener registers only the two read-only generic sensor RPCs.
+		sensorReadServer = services.NewSensorReadServer(genericSensorFeed)
+		sensorLis, sensorErr := localsocket.Listen(oci.SensorReadSocketHostPath)
+		if sensorErr == nil {
+			sensorErr = os.Chown(oci.SensorReadSocketHostPath, -1, int(oci.SensorReadSocketGID))
+			if sensorErr != nil {
+				sensorLis.Close()
+			}
+		}
+		if sensorErr != nil {
+			logger.Error("Failed to listen on sensor-read socket", zap.Error(sensorErr))
+		} else {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := sensorReadServer.Serve(sensorLis); err != nil {
+					logger.Error("Sensor-read server error", zap.Error(err))
+				}
+			}()
+		}
 		localSocketServer = grpc.NewServer(
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
 		registerAllServices(localSocketServer)
+		// Generic samples are available only to explicitly trusted local apps.
+		agentpbv2.RegisterWendySensorServiceServer(localSocketServer, genericSensorFeed)
 		agentpbv2.RegisterWendyUnitreeServiceServer(localSocketServer, unitreeSvc)
 		agentpbv2.RegisterWendyUnitreeRobotServiceServer(localSocketServer, unitreeRobotSvc)
 
@@ -1878,6 +1917,9 @@ func main() {
 	}
 	if localSocketServer != nil {
 		shutdown.servers = append(shutdown.servers, namedGRPCServer{"local socket", localSocketServer})
+	}
+	if sensorReadServer != nil {
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"sensor read", sensorReadServer})
 	}
 	shutdown.servers = append(shutdown.servers, namedGRPCServer{"OTEL", otelServer})
 	mtlsMu.Lock()
