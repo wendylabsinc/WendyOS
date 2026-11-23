@@ -3,7 +3,6 @@ package meshalpn
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"strings"
 )
 
 // ClientProtocols offers root-first fingerprints and cached CA availability.
@@ -38,32 +37,26 @@ func (c *Certificates) clientProtocols(known []*x509.Certificate, lite bool, pro
 // A connection keeps the exact immutable CA snapshot it advertised/acknowledged.
 // Cache FIFO turnover may drop its metadata but Go references retain the DER
 // until verification has consumed it. No lock is held during TLS or crypto.
-func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate, hinted bool) {
+func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate, server bool) {
 	if c == nil {
 		return
 	}
 	loan := &handshakeIssuers{available: available}
 	loan.configureTickets(config)
-	var peerErr error
-	chainVerify := config.VerifyPeerCertificate
-	if chainVerify != nil {
+	if chainVerify := config.VerifyPeerCertificate; chainVerify != nil {
 		config.VerifyPeerCertificate = func(raw [][]byte, verified [][]*x509.Certificate) error {
-			// TLS calls VerifyConnection after this callback. Only that hook
-			// can tell which protocol actually negotiated chain shortening.
-			peerErr = chainVerify(c.candidatesFrom(raw, loan.available), verified)
-			return nil
+			err := chainVerify(c.candidatesFrom(raw, loan.available), verified)
+			// ConfigureServer binds this hook only after selecting the protocol.
+			// Clients need VerifyConnection to observe the negotiated ALPN.
+			if err != nil && server && len(config.NextProtos) == 1 {
+				c.recoveryState().failed(err, negotiatedShortening(config.NextProtos[0]))
+			}
+			return err
 		}
 	}
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		defer func() { loan.available = nil }()
-		_, prefix := Decode(state.NegotiatedProtocol)
-		_, kind, _ := decodeLeafOffer(state.NegotiatedProtocol)
-		shortened := hinted && (len(prefix) > 0 || kind != 0)
-		if peerErr != nil {
-			c.recoveryState().failed(peerErr, shortened)
-			return peerErr
-		}
 		raw := make([][]byte, len(state.PeerCertificates))
 		for i, cert := range state.PeerCertificates {
 			raw[i] = cert.Raw
@@ -80,7 +73,7 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		}
 		if previous != nil {
 			if err := previous(augmented); err != nil {
-				c.recoveryState().failed(err, shortened)
+				c.recoveryState().failed(err, negotiatedShortening(state.NegotiatedProtocol))
 				return err
 			}
 		}
@@ -92,6 +85,12 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		c.Remember(complete, c.certificateNow())
 		return nil
 	}
+}
+
+func negotiatedShortening(protocol string) bool {
+	_, prefix := Decode(protocol)
+	_, kind, _ := decodeLeafOffer(protocol)
+	return len(prefix) > 0 || kind != 0
 }
 
 func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bool) *tls.Certificate {
@@ -110,22 +109,13 @@ func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bo
 func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) {
 	if c != nil {
 		available, lite := c.snapshotWithLite(c.certificateNow())
-		hinted := !c.recoveryState().active()
-		if hinted {
+		if !c.recoveryState().active() {
 			config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, lite, protocols...), available)
-			hinted = false
-			for _, protocol := range config.NextProtos {
-				_, hashes := Decode(protocol)
-				if _, kind, _ := decodeLeafOffer(protocol); len(hashes) > 0 || kind != 0 || strings.HasPrefix(protocol, inventory) {
-					hinted = true
-					break
-				}
-			}
 		} else {
 			config.NextProtos = append([]string(nil), protocols...)
 			fullExchange(config)
 		}
-		c.bindIssuerSnapshot(config, available, hinted)
+		c.bindIssuerSnapshot(config, available, false)
 	} else {
 		config.NextProtos = append([]string(nil), protocols...)
 		return
@@ -237,7 +227,7 @@ func (c *Certificates) ConfigureServer(config *tls.Config) {
 		if cooldown {
 			fullExchange(result)
 		}
-		c.bindIssuerSnapshot(result, available, len(hashes) > 0)
+		c.bindIssuerSnapshot(result, available, true)
 		return result, nil
 	}
 }
