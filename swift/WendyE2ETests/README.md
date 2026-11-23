@@ -47,6 +47,11 @@ swift test --filter WendyE2ETests
 
 ## Common workflows
 
+The [Apps & Deployments guide](AppsDeploymentsDraft.md) describes the opt-in
+Swift specs, tiny HTTP app, ARM64 layouts, public client adapter, real DOM checks
+and separate isolation tier. Offline build-only checks pass. No tests or live
+journeys have been run.
+
 ### Run a single test or suite
 
 From `swift/`:
