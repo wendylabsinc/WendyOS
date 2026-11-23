@@ -22,6 +22,9 @@ func newTwoPlaneTestService(t *testing.T) (*VideoService, *fakeLoopback, *device
 	video.hasVideoCapture = func(string) bool { return true }
 	video.readDeviceName = func(string) (string, error) { return "test camera", nil }
 	video.readStableNames = func() map[string]stableNames { return nil }
+	// A camera that produces H.264 itself, so the tests never depend on what
+	// the machine running them has at /dev/video0.
+	video.capturePixelFormats = func(string) ([]uint32, bool) { return []uint32{v4l2PixFmtH264}, true }
 	hub, _ := newDefaultHub(t, video, "/dev/video0")
 
 	original := openLoopbackFrameWriter
@@ -125,4 +128,54 @@ func TestTwoPlaneConcurrentSweepsAllocateOneNode(t *testing.T) {
 	if _, ok := video.TwoPlaneNodePath("v4l2:/dev/video0"); !ok {
 		t.Fatal("no node is registered for the source after the sweeps")
 	}
+}
+
+// A camera that does not produce H.264 itself can never be bound to a node: its
+// frames reach the hub through an encoder as a byte stream. The sweep used to
+// find that out by starting the capture and refusing its first frame, which
+// meant the agent opened every such camera each time an app with the camera
+// entitlement started. For the second or so that took, the app's own open of
+// the same camera failed with "Device or resource busy". What the camera offers
+// is a question the driver answers without the device being claimed.
+func TestTwoPlaneDoesNotJoinCameraWithoutNativeH264(t *testing.T) {
+	video, loop, hub := newTwoPlaneTestService(t)
+	video.capturePixelFormats = func(string) ([]uint32, bool) {
+		return []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, true
+	}
+	ctx := context.Background()
+
+	video.SetTwoPlaneContainerConsumers(ctx, []string{"container-a"})
+
+	if !video.twoPlaneSourceRefused("v4l2:/dev/video0") {
+		t.Fatal("a camera without native H.264 was not refused before its capture was joined")
+	}
+	if got := loop.auxCreatedCount(); got != 0 {
+		t.Fatalf("aux nodes created = %d, want 0 for a camera that cannot be bound", got)
+	}
+	// The join happens on the pump's goroutine, so give a wrong one time to
+	// show up before concluding it never came.
+	time.Sleep(50 * time.Millisecond)
+	if got := hubSubscriberCount(hub); got != 1 {
+		t.Fatalf("hub subscribers = %d, want 1: the sweep joined the camera's capture", got)
+	}
+
+	// A different set of apps asks the same question of the same camera, and
+	// gets the same answer without the capture being joined.
+	video.SetTwoPlaneContainerConsumers(ctx, []string{"container-b"})
+	time.Sleep(50 * time.Millisecond)
+	if nodes, subscribers := loop.auxCreatedCount(), hubSubscriberCount(hub); nodes != 0 || subscribers != 1 {
+		t.Fatalf("after a new consumer set: aux nodes = %d, hub subscribers = %d, want 0 and 1", nodes, subscribers)
+	}
+}
+
+// A driver that will not list its formats has not said the camera lacks H.264,
+// so the sweep still makes its one attempt, as it did before formats were asked.
+func TestTwoPlaneStillTriesCameraWhoseFormatsAreUnknown(t *testing.T) {
+	video, loop, hub := newTwoPlaneTestService(t)
+	video.capturePixelFormats = func(string) ([]uint32, bool) { return nil, false }
+
+	video.SetTwoPlaneContainerConsumers(context.Background(), []string{"container-a"})
+
+	waitUntilTwoPlane(t, "the node to be created", func() bool { return loop.auxCreatedCount() == 1 })
+	waitUntilTwoPlane(t, "the pump to join the hub", func() bool { return hubSubscriberCount(hub) == 2 })
 }

@@ -524,7 +524,11 @@ func getOTAUpdateURL(dm *deviceManifest, ver string, storageMedium string) (stri
 // selects the variant-specific artifact when the manifest provides one. nightly
 // selects the latest prerelease version instead of the latest stable version.
 func getLatestOTAInfoForDeviceType(deviceType string, storageMedium string, nightly bool) (artifactURL, latestVersion string, err error) {
-	main, err := fetchMainManifest()
+	return getLatestOTAInfoForDeviceTypeContext(context.Background(), deviceType, storageMedium, nightly)
+}
+
+func getLatestOTAInfoForDeviceTypeContext(ctx context.Context, deviceType string, storageMedium string, nightly bool) (artifactURL, latestVersion string, err error) {
+	main, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("fetching manifest: %w", err)
 	}
@@ -537,7 +541,7 @@ func getLatestOTAInfoForDeviceType(deviceType string, storageMedium string, nigh
 		return "", "", fmt.Errorf("no manifest path for device type %q", deviceType)
 	}
 
-	dm, err := fetchDeviceManifest(dev.ManifestPath)
+	dm, err := fetchDeviceManifestContext(ctx, dev.ManifestPath)
 	if err != nil {
 		return "", "", fmt.Errorf("fetching device manifest: %w", err)
 	}

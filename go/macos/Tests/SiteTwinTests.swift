@@ -10,6 +10,16 @@ import AVFoundation
 @testable import WendyDesktop
 #endif
 
+@Test func siteNavigationCancellationDoesNotBecomeAnAlert() {
+    #expect(isCancelledSiteOperation(CancellationError()))
+    #expect(isCancelledSiteOperation(URLError(.cancelled)))
+    // URLSession can deliver cancellation through the NSError bridge.
+    #expect(isCancelledSiteOperation(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)))
+    #expect(isCancelledSiteOperation(WendyError(message: "cancelled", code: .cancelled)))
+    #expect(!isCancelledSiteOperation(URLError(.timedOut)))
+    #expect(!isCancelledSiteOperation(WendyError(message: "Device unavailable", code: .networkUnavailable)))
+}
+
 @Suite @MainActor struct CameraWallPlacementTests {
     private func room() -> SCNScene {
         let scene = SCNScene()
@@ -418,4 +428,89 @@ private func visualMapFixture(site: Site, model: Data) -> SiteVisualMap {
         let unrelated = SiteAlignmentRequest(site: site, camera: camera, gatewayID: "other", session: 42)
         #expect(!unrelated.isCurrent(session: 42))
     }
+}
+
+private actor CachedRoomServer {
+    struct Room: Encodable {
+        var hasModel = true
+        var hasVisualMap = true
+        var site: Site
+        var revision: UInt64 = 1
+        var model: Data?
+        var visualMap: SiteVisualMap?
+        var points: [SitePoint] = []
+        var removed = false
+    }
+    private var room: Room
+    private var paths: [String] = []
+    init(site: Site) {
+        let bytes = Data([0x50, 0x4b, 0x03, 0x04, 1])
+        room = Room(site: site, model: bytes, visualMap: SiteVisualMap(
+            modelRevision: site.modelRevision, modelSHA256: SiteVisualMap.digest(bytes), capturedAt: Date(),
+            frameCount: 1, landmarks: Data(count: 120 * 131 * 4)))
+    }
+    func fetch(_ request: URLRequest) throws -> (Data, URLResponse) {
+        let url = request.url!
+        paths.append(url.path)
+        var response = room
+        if url.path.hasSuffix("/state") { response.model = nil; response.visualMap = nil }
+        return (try JSONEncoder().encode(response), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+    func takePaths() -> [String] { defer { paths = [] }; return paths }
+    func updateObservations() { room.revision += 1; room.points = [SitePoint(x: 1, y: 2, z: 3)] }
+    func changeModelRevision() {
+        room.site.replaceModel()
+        let revision = room.site.modelRevision
+        room.visualMap?.modelRevision = revision
+        room.revision += 1
+    }
+}
+
+@Test func remoteRoomAssetsSurviveReopenButNeverReplaceCurrentState() async throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let site = Site(name: "Room")
+    let server = CachedRoomServer(site: site)
+    let endpoint = URL(string: "http://127.0.0.1:12345/")!
+    let directory = SiteStore.remoteCacheDirectory(base: base, gatewayID: "tenant-a/device-a")
+    let route = "/v1/rooms/" + site.id.uuidString.lowercased()
+    func reopen(_ folder: URL) -> SiteStore {
+        SiteStore(directory: folder, endpoint: endpoint, fetch: { try await server.fetch($0) })
+    }
+    let first = try await reopen(directory).load(id: site.id)
+    #expect(await server.takePaths() == [route + "/state", route])
+    #expect(first.visualMapURL != nil)
+    await server.updateObservations()
+    let next = try await reopen(directory).load(id: site.id)
+    #expect(await server.takePaths() == [route + "/state"])
+    #expect(next.revision == 2)
+    #expect(next.points.first?.x == 1)
+    #expect(next.modelURL == first.modelURL)
+    let model = try Data(contentsOf: next.modelURL)
+    let map = try SiteVisualMap.read(next.visualMapURL!, revision: site.modelRevision, model: model)
+    #expect(map.modelSHA256 == SiteVisualMap.digest(model))
+
+    // A corrupt model or map, missing file, or an incomplete manifest must
+    // download the immutable assets again; the repaired cache must work later.
+    let folder = first.modelURL.deletingLastPathComponent()
+    for (name, remove) in [("model.usdz", false), ("visual-map.json", false), ("visual-map.json", true), ("assets.json", true)] {
+        let file = folder.appendingPathComponent(name)
+        if remove { try FileManager.default.removeItem(at: file) }
+        else { try Data("corrupt".utf8).write(to: file, options: .atomic) }
+        _ = try await reopen(directory).load(id: site.id)
+        #expect(await server.takePaths() == [route + "/state", route])
+        _ = try await reopen(directory).load(id: site.id)
+        #expect(await server.takePaths() == [route + "/state"])
+    }
+
+    let other = SiteStore.remoteCacheDirectory(base: base, gatewayID: "tenant-b/device-a")
+    #expect(other != directory)
+    _ = try await reopen(other).load(id: site.id)
+    #expect(await server.takePaths() == [route + "/state", route])
+    await server.changeModelRevision()
+    let changed = try await reopen(directory).load(id: site.id)
+    #expect(await server.takePaths() == [route + "/state", route])
+    #expect(changed.modelURL != first.modelURL)
+    #expect(changed.site.modelRevision != site.modelRevision)
+    _ = try SiteVisualMap.read(changed.visualMapURL!, revision: changed.site.modelRevision, model: Data(contentsOf: changed.modelURL))
 }

@@ -25,7 +25,8 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 # --- macOS: static libusb -------------------------------------------------------
-LIBUSB_PREFIX="$(brew --prefix libusb 2>/dev/null || echo /opt/homebrew/opt/libusb)"
+# Release builds provide a library compiled for their deployment target.
+LIBUSB_PREFIX="${LIBUSB_PREFIX:-$(brew --prefix libusb 2>/dev/null || echo /opt/homebrew/opt/libusb)}"
 ARCHIVE="$LIBUSB_PREFIX/lib/libusb-1.0.a"
 HEADERS="$LIBUSB_PREFIX/include/libusb-1.0"
 [[ -f "$ARCHIVE" ]] || { echo "error: $ARCHIVE not found (brew install libusb)"; exit 1; }

@@ -157,20 +157,20 @@ func TestCameraPickerColumns(t *testing.T) {
 }
 
 func TestCameraStatus(t *testing.T) {
-	if got := cameraStatus(usbCam(0, "webcam")); got != "ready" {
+	if got := cameraStatus(usbCam(0, "webcam"), nil); got != "ready" {
 		t.Fatalf("local camera status = %q, want ready", got)
 	}
 	needsLogin := ipCam(200, "RLC-520A", "10.98.0.50")
 	needsLogin.HasCredentials = false
-	if got := cameraStatus(needsLogin); got != "needs login" {
+	if got := cameraStatus(needsLogin, nil); got != "needs login" {
 		t.Fatalf("status = %q, want needs login", got)
 	}
 	offline := ipCam(200, "RLC-520A", "10.98.0.50")
 	offline.Online = false
-	if got := cameraStatus(offline); got != "offline" {
+	if got := cameraStatus(offline, nil); got != "offline" {
 		t.Fatalf("status = %q, want offline", got)
 	}
-	if got := cameraStatus(ipCam(200, "RLC-520A", "10.98.0.50")); got != "ready" {
+	if got := cameraStatus(ipCam(200, "RLC-520A", "10.98.0.50"), nil); got != "ready" {
 		t.Fatalf("status = %q, want ready", got)
 	}
 }
@@ -183,7 +183,7 @@ func TestROS2CameraColumns(t *testing.T) {
 	if got := cameraWhere(cam); got != "/front_camera/image/compressed" {
 		t.Fatalf("where = %q", got)
 	}
-	if got := cameraStatus(cam); got != "ready" {
+	if got := cameraStatus(cam, nil); got != "ready" {
 		t.Fatalf("status = %q", got)
 	}
 }

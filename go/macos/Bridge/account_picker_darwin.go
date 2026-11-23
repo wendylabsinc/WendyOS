@@ -55,5 +55,6 @@ func WDAccountChoicesFree(p *C.WDAccountChoicesResult) {
 
 //export WDUseAccount
 func WDUseAccount(name *C.char) *C.WDStatus {
-	return statusResult(commands.DesktopUseAccount(C.GoString(name)))
+	account := C.GoString(name)
+	return statusResult(desktop.RetirePreviews(func() error { return commands.DesktopUseAccount(account) }))
 }

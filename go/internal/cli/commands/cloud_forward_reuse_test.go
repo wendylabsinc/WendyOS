@@ -45,7 +45,7 @@ func TestCloudTunnelForwardReusesAuthorizationConnection(t *testing.T) {
 	failures := make(chan error, 2)
 	served := make(chan error, 1)
 	go func() {
-		served <- d.serveTunnelForward(ctx, ln, nil, auth, 50052, func(err error) { failures <- err })
+		served <- d.serveTunnelForward(ctx, ln, nil, auth, 50052, func(err error) { failures <- err }, nil)
 	}()
 
 	var address string

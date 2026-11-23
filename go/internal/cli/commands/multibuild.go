@@ -392,6 +392,7 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		networkConfigs = append(networkConfigs, multiServiceCreateConfig(appCfg, name, services[name]))
 	}
 	printMissingNetworkWarnings(networkConfigs...)
+	printCameraShareNotice(ctx, conn, networkConfigs...)
 	portConfigs := []*appconfig.AppConfig{appCfg}
 	for name, svc := range services {
 		portConfigs = append(portConfigs, multiServiceCreateConfig(appCfg, name, svc))

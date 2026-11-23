@@ -110,17 +110,52 @@ struct `'wendy auth status'` {
     }
 
     /**
-     With `--json`, emits one JSON object containing login state, cloud
-     endpoint identity, and certificate validity fields. JSON mode emits
-     no prompt text and no stderr on success.
+     Both status spellings report two saved context names, the current selection,
+     endpoint, user, organization, login method and exact certificate validity facts.
+     JSON is one complete object. Private key and token sentinel values never appear
+     on either stream; inspecting state never edits it or contacts saved endpoints.
      */
-    @Test(
-        .disabled(
-            "WDY-1909: 'wendy auth status --json' ignores JSON mode and prints human status; WDY-1948 tracks missing structured credential validity states."
-        )
-    )
+    @Test
     func `prints JSON auth status for automation`() async throws {
-        // TODO: enable when auth status implements structured JSON (WDY-1909, WDY-1948).
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await ContextCLIAssertions.run(
+                cli,
+                body: #"""
+                    before = f.snapshot()
+                    for namespace in ('cloud', 'auth'):
+                        f.expect_status(f.run(namespace, 'status', '--json'))
+                        assert f.snapshot() == before
+                    """#
+            )
+        }
+    }
+
+    /**
+     Human status associates each account with its own context, identity and validity.
+     Exactly one context is marked current; the expired account remains visible.
+     The same facts appear through cloud status and auth status without exposing
+     private keys or tokens, changing configuration or contacting a saved endpoint.
+     */
+    @Test
+    func `identifies saved contexts and certificate validity in human status`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await ContextCLIAssertions.run(
+                cli,
+                body: #"""
+                    before = f.snapshot()
+                    for namespace in ('cloud', 'auth'):
+                        result = f.run(namespace, 'status', '--json=false')
+                        expected = []
+                        for name, org, validity in (('alpha', 41, '✓   Certificate valid until 9999-01-01 00:00 UTC'), ('beta', 73, '✗   Certificate expired on 2001-01-01 00:00 UTC')):
+                            expected += ['Context: ' + name + (' (current)' if name == 'alpha' else ''),
+                                'Cloud:  ' + f.url, '  gRPC: ' + f.endpoint, '  Identity: fixture:' + name,
+                                '  User: ' + name + '-user', '  Org:  ' + str(org),
+                                '  Key:  ECDSA P-256 (OIDC login)', validity]
+                        assert result.stdout.splitlines() == expected, 'incorrect human status associations'
+                        assert f.snapshot() == before
+                    """#
+            )
+        }
     }
 
     /**

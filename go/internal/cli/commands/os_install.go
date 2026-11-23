@@ -1574,6 +1574,11 @@ func downloadImageContext(ctx context.Context, img *imageInfo, opts ...tea.Progr
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// JSON and headless invocations cannot open /dev/tty. Keep cancellation,
+	// transfer retries and partial-file cleanup in the shared downloader.
+	if jsonOutput || !isInteractiveTerminal() {
+		return downloadImageIntoContext(ctx, img, nil)
+	}
 	downloadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	prog := tui.NewProgress(fmt.Sprintf("Downloading %s...", img.Version))

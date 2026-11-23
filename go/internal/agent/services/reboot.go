@@ -29,6 +29,23 @@ type rebooter struct {
 	sleep func(time.Duration)
 }
 
+// systemctlRebootArgs is the systemctl command line for an orderly reboot that
+// hands argument to the kernel's restart; an empty argument is a plain reboot.
+// systemd keeps the argument in /run/systemd/reboot-param until the final
+// reboot(2), so it survives the whole shutdown.
+//
+// --no-block is required, not merely an optimisation: without it systemctl waits
+// for the shutdown transaction to finish, and the caller is a unit that the very
+// same transaction is stopping, so the call would block until it is killed.
+func systemctlRebootArgs(argument string) []string {
+	args := []string{"--no-block"}
+	if argument != "" {
+		// Accepted since systemd 246; WendyOS (Yocto scarthgap) ships 255.
+		args = append(args, "--reboot-argument="+argument)
+	}
+	return append(args, "reboot")
+}
+
 // reboot flushes filesystems and then restarts immediately.
 //
 // The flush is unconditional and is the fix for WDY-2200's underlying defect:

@@ -58,6 +58,8 @@ final class AppModel: ObservableObject {
 
     private let loadDeviceApps: () async throws -> [DeviceApp]
     private let loadDeviceCameras: () async throws -> [Camera]
+    private let stopDeviceApp: (String, UInt64) async throws -> Void
+    private var appsRevision: UInt64 = 0
 
     convenience init(connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection = { device, request, forgetIdentity in
         try await GoClient.shared.connect(selector: device.selector, request: request, forgetIdentity: forgetIdentity, requiresMTLS: device.requiresMTLS)
@@ -68,10 +70,12 @@ final class AppModel: ObservableObject {
 
     init(loadDeviceApps: @escaping () async throws -> [DeviceApp],
          loadDeviceCameras: @escaping () async throws -> [Camera],
-         connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection) {
+         connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection,
+         stopDeviceApp: @escaping (String, UInt64) async throws -> Void = { try await GoClient.shared.stopApp($0, session: $1) }) {
         self.connectDevice = connectDevice
         self.loadDeviceApps = loadDeviceApps
         self.loadDeviceCameras = loadDeviceCameras
+        self.stopDeviceApp = stopDeviceApp
     }
 
     var selectedDeviceReady: Bool {
@@ -498,9 +502,10 @@ final class AppModel: ObservableObject {
     private func applyAppCommand(_ command: AppCommand, to app: String, session target: UInt64) async {
         guard selectedDeviceReady, target == session, !appActions.contains(app), !Task.isCancelled else { return }
         appActions.insert(app)
+        appsRevision &+= 1
         defer { appActions.remove(app) }
         do {
-            if command != .start { try await client.stopApp(app, session: target) }
+            if command != .start { try await stopDeviceApp(app, target) }
             if command != .stop {
                 guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
                 try await client.startApp(app, session: target)
@@ -512,13 +517,16 @@ final class AppModel: ObservableObject {
         // A restart can stop successfully and then fail to start. Re-read the
         // agent even on failure so the controls reflect the actual process state.
         guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
+        appsRevision &+= 1
+        let revision = appsRevision
         do {
-            let current = try await client.apps()
-            guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
+            let current = try await loadDeviceApps()
+            guard selectedDeviceReady, target == session, revision == appsRevision, !Task.isCancelled else { return }
             apps = current
             appsError = nil
+            appsReadSession = target
         } catch {
-            if selectedDeviceReady, target == session, !Task.isCancelled { appsErrorFailure = WendyError(error) }
+            if selectedDeviceReady, target == session, revision == appsRevision, !Task.isCancelled { appsErrorFailure = WendyError(error) }
         }
     }
 
@@ -533,16 +541,26 @@ final class AppModel: ObservableObject {
             .intersection(apps.map(\.appName))
         guard !names.isEmpty, appActions.isDisjoint(with: names) else { return }
         appActions.formUnion(names)
+        appsRevision &+= 1
         defer { appActions.subtract(names) }
         var failures = await AppStopBatch.run(names: Array(names), isCurrent: { self.session == expectedSession }, stop: { name in
-            try await self.client.stopApp(name, session: expectedSession)
+            try await self.stopDeviceApp(name, expectedSession)
         })
         guard session == expectedSession else { return }
+        appsRevision &+= 1
+        let revision = appsRevision
         do {
-            let updated = try await client.apps()
+            let updated = try await loadDeviceApps()
             guard session == expectedSession else { return }
-            apps = updated
-        } catch { failures.append("Refresh: \(error.localizedDescription)") }
+            if revision == appsRevision {
+                apps = updated
+                appsReadSession = expectedSession
+            }
+        } catch {
+            if session == expectedSession, revision == appsRevision {
+                failures.append("Refresh: \(error.localizedDescription)")
+            }
+        }
         guard session == expectedSession else { return }
         if !failures.isEmpty { alert = "Could not complete all app stops:\n" + failures.joined(separator: "\n") }
     }
@@ -554,15 +572,19 @@ final class AppModel: ObservableObject {
         }
         guard !appActions.contains(target.app) else { return }
         appActions.insert(target.app)
+        appsRevision &+= 1
         defer { appActions.remove(target.app) }
         do {
             try await client.deleteApp(target.app, session: target.session)
             guard session == target.session else { return }
             apps.removeAll { $0.id == target.app }
             if logApp == target.app { logApp = "" }
-            let updated = try await client.apps()
-            guard session == target.session else { return }
+            appsRevision &+= 1
+            let revision = appsRevision
+            let updated = try await loadDeviceApps()
+            guard session == target.session, revision == appsRevision else { return }
             apps = updated
+            appsReadSession = target.session
         } catch {
             guard session == target.session else { return }
             alertFailure = WendyError(error)
@@ -573,9 +595,11 @@ final class AppModel: ObservableObject {
         guard selectedDeviceReady else { return }
         let capturedSession = session
         if loadApps {
+            appsRevision &+= 1
+            let revision = appsRevision
             do {
                 let result = connectedLite ? [] : try await loadDeviceApps()
-                guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
+                guard session == capturedSession, selectedDeviceReady, revision == appsRevision, !Task.isCancelled else { return }
                 let previous = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.runningState) })
                 if let connected {
                     for app in result where previous[app.id] != nil && previous[app.id] != app.runningState {
@@ -585,7 +609,7 @@ final class AppModel: ObservableObject {
                 apps = result; appsError = nil
                 appsReadSession = capturedSession
             } catch {
-                guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
+                guard session == capturedSession, selectedDeviceReady, revision == appsRevision, !Task.isCancelled else { return }
                 appsErrorFailure = WendyError(error)
                 appsReadSession = capturedSession
             }

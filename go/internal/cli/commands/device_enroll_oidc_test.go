@@ -153,7 +153,7 @@ func (s *oidcEnrollmentServer) RegisterOperatorLeaf(_ context.Context, in *cloud
 	return &cloudpbv2.RegisterOperatorLeafResponse{Kid: base64.RawURLEncoding.EncodeToString(sum[:])}, nil
 }
 
-func enrollmentServers(t *testing.T, cloud *oidcEnrollmentServer, agent *acmeProvisioningServer) (*grpcclient.AgentConnection, string) {
+func enrollmentServers(t *testing.T, cloud *oidcEnrollmentServer, agent *acmeProvisioningServer, register ...func(*grpc.Server)) (*grpcclient.AgentConnection, string) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -164,6 +164,9 @@ func enrollmentServers(t *testing.T, cloud *oidcEnrollmentServer, agent *acmePro
 	cloudpbv2.RegisterOperatorSessionServiceServer(srv, cloud)
 	agentpbv2.RegisterWendyProvisioningServiceServer(srv, agent)
 	agentpbv2.RegisterWendyDeviceInfoServiceServer(srv, agent)
+	for _, add := range register {
+		add(srv)
+	}
 	go srv.Serve(lis) //nolint:errcheck
 	t.Cleanup(srv.Stop)
 	client, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))

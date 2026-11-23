@@ -2403,6 +2403,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	if isContainerPlatform(platform) && projectType != "compose" {
 		printMissingNetworkWarnings(appCfg)
+		printCameraShareNotice(ctx, conn, appCfg)
 	}
 
 	if appCfg.Run != nil && appCfg.Run.Command != "" {

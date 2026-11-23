@@ -27,6 +27,20 @@ func TestGalleryMetadataUsesRecordedEvidence(t *testing.T) {
 	}
 }
 
+func TestGalleryNotificationIDsComeFromRecordedEvents(t *testing.T) {
+	const id = "a4c0899e-f2c0-4c60-a42d-5c89f756be55"
+	events := []byte(`{"type":"event","name":"thermal_recording_test","attributes":{"notification_id":"` + id + `","max_celsius":27.5}}
+{"type":"event","attributes":{"notification_id":"` + id + `"}}
+{"type":"prediction","attributes":{"notification_id":"0cdfb0f4-fd00-43bb-a821-ee28ed0b6cc9"}}`)
+	got := galleryMetadata("event:thermal_recording_test", events, true)
+	if !slices.Equal(got.NotificationIDs, []string{id}) || !got.Complete {
+		t.Fatalf("%+v", got)
+	}
+	if got := galleryMetadata(id, nil, true); len(got.NotificationIDs) != 0 {
+		t.Fatal("inferred a recording association from its title")
+	}
+}
+
 func TestGalleryMediaEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

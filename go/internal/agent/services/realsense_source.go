@@ -556,7 +556,8 @@ func (st *realsenseStream) nextColour(ctx context.Context) (*videoFrame, error) 
 
 // colourEnded says why the shared colour hub closed this subscriber. Only a
 // producer that finished cleanly is a clean end (io.EOF). A failed capture,
-// or one an episode capture took over at its campaign's parameters, ends the
+// or one a takeover restarted (an episode capture at its campaign's
+// parameters, or an app starting to share the camera), ends the
 // calibrated stream with that reason — the same answer StreamVideo gives —
 // rather than an end subscribers would read as the camera simply finishing.
 func (st *realsenseStream) colourEnded() error {
@@ -567,8 +568,11 @@ func (st *realsenseStream) colourEnded() error {
 		return err
 	}
 	if st.hub.wasRestarted() {
-		return streamreason.New(codes.Unavailable,
-			"an episode capture restarted the colour capture at the campaign's requested parameters; resubscribe to join the new stream",
+		cause := "an episode capture restarted the colour capture at the campaign's requested parameters"
+		if st.hub.wasRestartedForShare() {
+			cause = shareRestartCause
+		}
+		return streamreason.New(codes.Unavailable, cause+"; resubscribe to join the new stream",
 			streamreason.CameraProducerRestarted, nil)
 	}
 	return io.EOF

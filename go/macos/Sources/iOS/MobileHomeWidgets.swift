@@ -390,7 +390,10 @@ private struct HomeWidgetSession: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let webpage, ready { BrowserSheet(url: webpage) }
+                if let webpage, ready {
+                    BrowserSheet(url: webpage)
+                        .ignoresSafeArea(.container, edges: .bottom)
+                }
                 else if busy && (session == 0 || widget.kind == .portal) { ProgressView(session == 0 ? "Connecting…" : "Opening portal…") }
                 else if ready {
                     if widget.kind == .camera {

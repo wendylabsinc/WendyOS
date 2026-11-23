@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="a1d6fc3d292fcff219d8d8be9f4d71d7c5373755"
+SHARED_GRPC_API_CONTRACTS_REF="87510205398fc0c3fcfb38300cb6304bd0919371"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"
@@ -25,6 +25,7 @@ SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
     "wendy/agent/services/v2/device_info_service.proto"
     "wendy/agent/services/v2/agent_update_service.proto"
     "wendy/agent/services/v2/os_update_service.proto"
+    "wendy/agent/services/v2/power_service.proto"
     "wendy/agent/services/v2/driver_service.proto"
     "wendy/agent/services/v2/arduino_mcu_service.proto"
     "wendy/agent/services/v2/wifi_service.proto"
