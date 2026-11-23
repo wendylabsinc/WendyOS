@@ -1,14 +1,23 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
+	"github.com/wendylabsinc/wendy/go/internal/cli/closedtest"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/localkey"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
 )
 
 // `wendy os install --close`: the config partition carries an access file the
@@ -68,5 +77,53 @@ func TestInstallCloseRefusedWhereNoConfigPartitionIsWritten(t *testing.T) {
 	}
 	if err := executeRootForError(t, "os", "install", "--close", "image.img", "/dev/null"); err == nil || !strings.Contains(err.Error(), "--close cannot be combined") {
 		t.Fatalf("--close with positional image and drive: %v", err)
+	}
+}
+
+// --close must never leave a device Open silently: a drive install (whose
+// first boot this computer cannot see) is refused, and a USB-flashed board is
+// checked after first boot: Closed with this computer's key as owner passes;
+// an Open device or an agent that predates access shapes fails the install.
+func TestInstallCloseNeverLeavesTheDeviceOpenSilently(t *testing.T) {
+	seed := preEnrollOptions{ownerKeys: []byte("{}")}
+	if err := installLinuxImage(context.Background(), "", pickerDevice{}, false, "", "", false, false, false, false, "", wifiCLIOptions{}, "box", seed, nil); !errors.Is(err, errCloseOnDrive) {
+		t.Fatalf("drive install with --close: %v, want the refusal", err)
+	}
+	if err := executeRootForError(t, "os", "install", "--close"); err == nil || !strings.Contains(err.Error(), "--device-name") {
+		t.Fatalf("--close without --device-name: %v", err)
+	}
+
+	mine := useLocalKey(t)
+	origDial, origUSB, origWait := dialInstallDriverDevice, usbDirectCandidatesFn, closeBootWait
+	t.Cleanup(func() { dialInstallDriverDevice, usbDirectCandidatesFn, closeBootWait = origDial, origUSB, origWait })
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	closeBootWait = 3 * time.Second
+	at := func(addr string) {
+		dialInstallDriverDevice = func(ctx context.Context, _ string) (*grpcclient.AgentConnection, error) {
+			return connectWithAutoTLS(ctx, addr)
+		}
+	}
+	oldAgent := grpc.NewServer()
+	agentpb.RegisterWendyAgentServiceServer(oldAgent, localVersionAgent{})
+
+	for _, c := range []struct {
+		name, addr, want string
+	}{
+		{"closed, this computer owns it", startLocalOnlyAgent(t, mine), ""},
+		{"open", closedtest.Start(t, t.TempDir()).Addr, "Open, not Closed"},
+		{"agent without access shapes", serveTest(t, oldAgent), "does not support access shapes"},
+	} {
+		// Each case is a different device on 127.0.0.1: start from no pins.
+		setTempConfig(t, &config.Config{})
+		setPinCache(t)
+		at(c.addr)
+		err := verifyClosedAfterBoot(context.Background(), "box")
+		if c.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", c.name, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "wendy device access close") {
+			t.Errorf("%s: err=%v, want a failure saying %q with the next step", c.name, err, c.want)
+		}
 	}
 }
