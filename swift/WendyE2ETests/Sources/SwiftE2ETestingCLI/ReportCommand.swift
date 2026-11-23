@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import WendyE2ETesting
 
 #if canImport(FoundationXML)
     import FoundationXML
@@ -28,6 +29,12 @@ struct ReportCommand: ParsableCommand {
     @Option(name: .long, help: "Swift E2E run directory. Writes index.html.")
     var runDir: String
 
+    @Option(
+        name: .long,
+        help: "Validated coverage/diff.json; otherwise use the single attempt's comparison."
+    )
+    var comparison: String?
+
     mutating func run() throws {
         let packageURL = URL(fileURLWithPath: packageDir)
         let testsURL = URL(
@@ -47,13 +54,15 @@ struct ReportCommand: ParsableCommand {
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
         let testResults = try loadRunTestResults(in: runURL)
+        let comparisonData = try e2eRunComparison(at: runURL, explicit: comparison)
         let files = try parseTests(
             in: testsURL,
             packageURL: packageURL,
             runURL: runURL,
             records: records,
             aiReviews: aiReviews,
-            testResults: testResults
+            testResults: testResults,
+            comparison: comparisonData
         )
         try renderReport(
             templateURL: templateURL,
@@ -361,6 +370,7 @@ private struct ReportTestCase {
     var recordName = ""
     var aiReviews: [E2EReview] = []
     var commands: [CommandRun] = []
+    var change: WendyE2EReference.Change?
 
     var aiReviewMarkdown: String {
         aiReviews.map { review in
@@ -912,7 +922,8 @@ private func parseTests(
     runURL: URL,
     records: [E2ETestIdentityKey: [CommandRun]],
     aiReviews: RunAIReviews,
-    testResults: [E2ETestIdentityKey: ReportRunTestResult]
+    testResults: [E2ETestIdentityKey: ReportRunTestResult],
+    comparison: E2EDiffComparison? = nil
 ) throws -> [ReportTestFile] {
     let sourceURLs = try swiftTestFiles(in: testsURL)
     var files: [ReportTestFile] = []
@@ -954,6 +965,24 @@ private func parseTests(
                     )
                 )
                 pendingTest = nil
+            }
+        }
+
+        if let comparison {
+            let parsed = try WendyE2EReference.parseFile(at: sourceURL.path)
+            let annotated = try comparison.annotate(
+                parsed,
+                at: sourceURL.path,
+                sourceFilePath: e2ePackageRelativePath(from: packageURL, to: sourceURL)
+            )
+            var changes: [Int: WendyE2EReference.Change] = [:]
+            for document in annotated {
+                for entry in document.sections.flatMap(\.entries) {
+                    changes[entry.sourceLocation.line] = entry.change
+                }
+            }
+            for i in tests.indices {
+                tests[i].change = changes[tests[i].funcLine]
             }
         }
 
@@ -1126,7 +1155,7 @@ private func buildTargetOverview(
     .sorted { $0.target < $1.target }
 }
 
-private func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
+func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
     var urlsByTarget: [String: [URL]] = [:]
     for targetURL in try directoryChildren(of: e2eAttemptArtifactsRootURL(in: runURL)) {
         let target = targetURL.lastPathComponent
@@ -1181,6 +1210,10 @@ private func renderReport(
         coverageAttempts.count > 1
         ? "Multiple attempts"
         : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
+    let goDiffCoverageTotal =
+        coverageAttempts.count > 1
+        ? "Multiple attempts"
+        : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
     let testCards = renderCards(files: files)
 
     template.replaceSubrange(
@@ -1197,6 +1230,7 @@ private func renderReport(
         "{{REVIEW_AGGREGATE_LINK}}": renderReviewAggregateLink(runURL: runURL),
         "{{TARGET_OVERVIEW}}": targetOverview,
         "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
+        "{{GO_DIFF_COVERAGE_TOTAL}}": escapeHTML(goDiffCoverageTotal),
         "{{TESTS_PASSED_COUNT}}": String(passed),
         "{{TESTS_FLAKED_COUNT}}": String(flaked),
         "{{TESTS_SKIPPED_COUNT}}": String(skipped),
@@ -1461,12 +1495,16 @@ private func renderCards(files: [ReportTestFile]) -> String {
             let hasAIReview = test.aiReviewMarkdown.isEmpty ? "false" : "true"
             let aiBadge = hasAIReview == "true" ? renderAIReviewBadge() : ""
             let pathText = "\(test.suite) › \(test.name)"
+            let changeBadge =
+                test.change.map {
+                    "<span class=\"badge\" data-spec-change=\"\($0.rawValue)\" title=\"Spec declaration change; independent of test outcome\">\($0.rawValue)</span>"
+                } ?? ""
 
             cards.append(
                 "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\">"
             )
             cards.append(
-                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)\(aiBadge)</span>\(runDurationBadge(test.durationRange))<span class=\"report-links\"></span></summary>"
+                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(changeBadge)\(outcomeBadges)\(aiBadge)</span>\(runDurationBadge(test.durationRange))<span class=\"report-links\"></span></summary>"
             )
             cards.append(renderObservations(test.observations, aiReviews: test.aiReviews))
             cards.append("</details>")

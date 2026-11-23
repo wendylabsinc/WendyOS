@@ -180,6 +180,59 @@ paused.
 Framework verification (real instrumented fixture binaries using the Agent hook,
 separate from product E2E assertions): `python3 Scripts/E2ECoverage_test.py -v`.
 
+### Compare coverage and specs with a Git diff
+
+The overall Go total remains the run's source union. A second, informational
+number reports statements in coverage blocks touched by added/modified executable
+Go tokens. A block counts once even when several changed lines or hunks touch it;
+this is **block granularity**, not an exact count of only the changed statements.
+Comments, blank/formatting-only changes, removed statements, pure renames,
+`_test.go`, Go `testdata`, generated sources (standard header or
+`linguist-generated` attribute), and the test-only coverage hooks are excluded.
+Production Go under `go/`, including simulator code, remains eligible. Eligible
+source missing from the instrumented build makes the result incomplete with no
+percentage. No eligible changes means **Not applicable**, never 100%.
+
+Use the existing overall profile; native evidence need not be unpacked:
+
+```bash
+python3 Scripts/E2EDiff.py --run-dir /path/to/attempt --base-ref origin/main
+```
+
+The adapter resolves the merge base against the **tested** revision. Reusable
+input can instead be an ordinary unified Git diff, including a filtered diff:
+
+```bash
+git diff BASE TESTED -- go/internal/example > /path/to/changes.patch
+python3 Scripts/E2EDiff.py --run-dir /path/to/attempt \
+  --diff /path/to/changes.patch --base-revision BASE --source-revision TESTED
+```
+
+Both revision IDs, the literal patch hash, profile hash and Go source identity
+are recorded in `coverage/diff.json`; the patch is retained beside it. Selected
+hunk positions/content must match both revisions. Omitted hunks stay omitted.
+Wrong-source, malformed or unavailable input is explicitly unavailable, without
+changing product test selection, assertions or success. The comparison requires
+the committed Go source corresponding to the recorded build. Tests use real Git
+diffs and instrumented Go output: `python3 Scripts/E2EDiff_test.py -v`.
+
+The same comparison snapshots annotate **NEW** and **MODIFIED** specs in HTML.
+The existing reference parser compares suite/test identities and bounded
+declaration content (including attached prose and traits). Helper-file edits do
+not create new specs. Badges describe declaration changes, independently of test
+outcomes, and select no causal tests; the full suite remains visible.
+
+The report automatically reads a single attempt's comparison. Standalone HTML
+reference generation accepts `swift-e2e-testing reference --format html
+--comparison /path/to/attempt/coverage/diff.json ...`. Rendering rejects a source
+snapshot that differs from the comparison. Several attempts retain the existing
+separate-attempt semantics rather than averaging coverage percentages.
+
+Active Ubuntu CI captures the comparison before rendering its artifact. An
+explicit workflow `diff_base_ref` overrides the default PR base, push's previous
+revision, or main comparison. Comparison problems remain informational labels;
+there are no coverage thresholds or gates.
+
 ### Test against a remote device
 
 From `swift/`:

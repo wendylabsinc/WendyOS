@@ -282,6 +282,21 @@ def report(repo, run, html=False, control=None, per_test=False):
         except Exception as error:
             errors.append(str(error))
     result["status"] = "incomplete" if errors else "collected" if natives else "no-data"
+    comparison = run / "coverage/diff.json"
+    if comparison.exists():
+        try:
+            data = json.loads(comparison.read_text())
+            provenance = data.get("provenance", {})
+            overall = run / "coverage/coverage.out"
+            digest = hashlib.sha256(overall.read_bytes()).hexdigest() if overall.exists() else None
+            result["diff"] = ({k: v for k, v in data.items() if k != "files"}
+                              if provenance.get("sourceID") == source["sourceID"] and provenance.get("profileSHA256") == digest
+                              else {"status": "unavailable", "percent": None,
+                                    "reason": "Coverage changed; regenerate the diff comparison"})
+            if result["status"] != "collected" and result["diff"]["status"] == "collected":
+                result["diff"].update(status="incomplete", percent=None)
+        except (ValueError, KeyError, TypeError) as error:
+            result["diff"] = {"status": "unavailable", "percent": None, "reason": str(error)}
     if errors:
         (run / "coverage/index.html").unlink(missing_ok=True)
     write_json(run / "coverage/tests.json", records)

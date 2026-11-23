@@ -2,6 +2,10 @@ name: Swift E2E Run
 description: Run one WendyAgent Swift E2E route and upload its raw artifact.
 
 inputs:
+  diff_base_ref:
+    description: Optional comparison base ref; defaults to the event's base or main.
+    required: false
+    default: ''
   coverage:
     description: Collect sequential Go source coverage (local Ubuntu managed Agent).
     required: false
@@ -469,11 +473,32 @@ runs:
       shell: bash
       env:
         RUN_ID: ${{ steps.e2e-run-unix.outputs.run_id }}
+        DIFF_BASE_REF: ${{ inputs.diff_base_ref }}
       run: |
         set -euo pipefail
         attempt_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
         report_staging="${RUNNER_TEMP}/wendy-report/${RUN_ID}"
         python3 swift/Scripts/E2ECoverage.py pack --run-dir "$attempt_dir"
+        if [[ -f "$attempt_dir/coverage/source.json" ]]; then
+          base_ref="$DIFF_BASE_REF"
+          if [[ -z "$base_ref" ]]; then
+            base_ref="$(python3 - <<'PY'
+        import json, os
+        from pathlib import Path
+        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+        before = event.get('before', '')
+        print(event.get('pull_request', {}).get('base', {}).get('sha')
+              or (before if before and set(before) != {'0'} else 'origin/main'))
+        PY
+            )"
+            if [[ "$(git rev-parse "$base_ref" 2>/dev/null || true)" == "$GITHUB_SHA" ]]; then
+              base_ref="$GITHUB_SHA^"
+            fi
+          fi
+          # Informational: malformed/unavailable comparisons are labeled in the
+          # artifact and HTML, without changing test selection or test status.
+          python3 swift/Scripts/E2EDiff.py --run-dir "$attempt_dir" --base-ref="$base_ref"
+        fi
         bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" "$attempt_dir"
         reports=("$report_staging"/*)
         [[ ${#reports[@]} -eq 1 && -d "${reports[0]}" ]]

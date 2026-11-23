@@ -44,6 +44,11 @@ public enum WendyE2EReference {
         public var availability: Availability
         /// Source spelling of availability traits. Expressions are never evaluated.
         public var availabilityReason: String?
+        /// Exact attribute/function source, bounded by the reference lexer.
+        public var declarationSource = ""
+        public var declarationStartLine = 0
+        public var declarationEndLine = 0
+        public var change: Change?
 
         /// Compatibility view: true only for unconditional disabling traits.
         /// False does not imply enabled; inspect `availability` for conditional tests.
@@ -81,6 +86,11 @@ public enum WendyE2EReference {
             self.availability = availability
             self.availabilityReason = availabilityReason
         }
+    }
+
+    public enum Change: String, Sendable {
+        case new = "NEW"
+        case modified = "MODIFIED"
     }
 
     public struct SourceLocation: Sendable, Equatable, Encodable {
@@ -135,6 +145,7 @@ public enum WendyE2EReference {
         case directoryNotFound(String)
         case unreadableDirectory(String)
         case unterminatedAttribute(path: String, line: Int)
+        case ambiguousSpec(String)
 
         public var description: String {
             switch self {
@@ -146,6 +157,8 @@ public enum WendyE2EReference {
                 "reference source directory cannot be read: \(path)"
             case .unterminatedAttribute(let path, let line):
                 "\(path):\(line): unterminated reference attribute"
+            case .ambiguousSpec(let identity):
+                "ambiguous reference spec identity: \(identity)"
             }
         }
     }
@@ -159,6 +172,13 @@ public enum WendyE2EReference {
         }
 
         let source = try String(contentsOf: url, encoding: .utf8)
+        return try parseValidatedSource(source, path: path)
+    }
+
+    public static func parseValidatedSource(
+        _ source: String,
+        path: String = "<memory>"
+    ) throws -> [Document] {
         var parser = ReferenceSourceParser(source: source, path: path)
         let documents = parser.parse()
         if let error = parser.parsingError { throw error }
