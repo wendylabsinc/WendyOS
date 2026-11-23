@@ -139,3 +139,66 @@ func TestForcedCloudTCPFeatureCacheIsScopedToDeviceAndSession(t *testing.T) {
 		t.Fatal("feature cache survived the old account generation")
 	}
 }
+
+func TestVPNFlowsRefreshFeaturesOnOneManagementTransport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	device := new(tcpFeatureVersionAgent)
+	device.halfClose.Store(true)
+	server := grpc.NewServer()
+	agentpb.RegisterWendyAgentServiceServer(server, device)
+	listener := bufconn.Listen(64 << 10)
+	defer listener.Close()
+	go server.Serve(listener)
+	defer server.Stop()
+
+	var dials atomic.Int32
+	dialManagement := func(features *cloudTCPFeatures) agentpb.WendyAgentServiceClient {
+		t.Helper()
+		cc, err := grpc.NewClient("passthrough:///device", grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithUnaryInterceptor(features.observeVersion),
+			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+				dials.Add(1)
+				return listener.DialContext(ctx)
+			}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cc.Close() })
+		return agentpb.NewWendyAgentServiceClient(cc)
+	}
+	features := new(cloudTCPFeatures)
+	management := dialManagement(features)
+	flowCtx := WithCloudTCPFeatureProbe(ctx, func(ctx context.Context) error {
+		_, err := management.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+		return err
+	})
+	openFlow := func(scope *cloudTCPFeatures, want bool) {
+		t.Helper()
+		disposable := dialManagement(scope)
+		if got := scope.halfClose(flowCtx, disposable); got != want {
+			t.Fatalf("half-close support = %t, want %t", got, want)
+		}
+		// Keep the flow and its disposable channel alive beyond the next
+		// observation expiry, as a VPN forwarding connection would.
+		local, peer := net.Pipe()
+		t.Cleanup(func() { local.Close(); peer.Close() })
+	}
+	openFlow(features, true)
+	features.last.Store(&cloudTCPFeatureObservation{halfClose: true, expires: time.Now().Add(-time.Second)})
+	openFlow(features, true)
+	if got := device.calls.Load(); got != 2 {
+		t.Fatalf("management RPCs after expiry = %d, want 2", got)
+	}
+	// A connection selected under a different credential or asset binding
+	// cannot use this management channel's version as its own proof.
+	differentScope := new(cloudTCPFeatures)
+	openFlow(differentScope, false)
+	openFlow(differentScope, false)
+	if got := device.calls.Load(); got != 3 {
+		t.Fatalf("management RPCs after repeated unmatched probes = %d, want 3", got)
+	}
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("dialed %d management transports while flows were open, want 1", got)
+	}
+}

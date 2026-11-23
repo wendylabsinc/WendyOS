@@ -28,6 +28,19 @@ type cloudTCPFeatureObservation struct {
 	expires   time.Time
 }
 
+func (o *cloudTCPFeatureObservation) fresh() bool {
+	return o != nil && time.Now().Before(o.expires)
+}
+
+type cloudTCPFeatureProbeKey struct{}
+
+// WithCloudTCPFeatureProbe uses an existing management channel to refresh
+// capabilities when a TCP flow opens. The dialer reads only its own scoped
+// observation, which the management channel's GetAgentVersion can populate.
+func WithCloudTCPFeatureProbe(ctx context.Context, probe func(context.Context) error) context.Context {
+	return context.WithValue(ctx, cloudTCPFeatureProbeKey{}, probe)
+}
+
 func cloudTCPFeaturesFor(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice) *cloudTCPFeatures {
 	g, shared := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
 	if !shared || !cloudTunnelOnly(ctx) {
@@ -74,19 +87,31 @@ func (f *cloudTCPFeatures) halfClose(ctx context.Context, agent agentpb.WendyAge
 	if ctx.Err() != nil {
 		return false
 	}
-	if observation := f.last.Load(); observation != nil && time.Now().Before(observation.expires) {
+	if observation := f.last.Load(); observation.fresh() {
 		return observation.halfClose
 	}
 	result := f.probe.DoChan("", func() (any, error) {
-		if observation := f.last.Load(); observation != nil && time.Now().Before(observation.expires) {
+		if observation := f.last.Load(); observation.fresh() {
 			return observation.halfClose, nil
 		}
 		// The channel owns this bounded probe. One socket abandoning its
 		// dial should not cut the check short for the other waiting sockets.
 		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloudTCPFeatureTimeout)
 		defer cancel()
-		version, err := agent.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-		return err == nil && slices.Contains(version.GetFeatureset(), cloudrelay.TCPHalfCloseFeature), nil
+		var err error
+		if probe, ok := ctx.Value(cloudTCPFeatureProbeKey{}).(func(context.Context) error); ok {
+			err = probe(probeCtx)
+		} else {
+			_, err = agent.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+		}
+		observation := f.last.Load()
+		if observation.fresh() {
+			return err == nil && probeCtx.Err() == nil && observation.halfClose, nil
+		}
+		// The shared probe may have reached another credential or asset binding,
+		// or failed before invoking an RPC. Throttle retries in this scope.
+		f.last.CompareAndSwap(observation, &cloudTCPFeatureObservation{expires: time.Now().Add(cloudTCPFeatureTTL)})
+		return false, nil
 	})
 	select {
 	case <-ctx.Done():

@@ -46,10 +46,20 @@ func (p *vpnProbes) tunnelContext(ctx context.Context, selector string) context.
 }
 
 func (p *vpnProbes) Dial(ctx context.Context, selector string, port uint16) (net.Conn, error) {
-	return desktopDial(p.tunnelContext(ctx, selector), selector, port)
+	if strings.HasPrefix(selector, "cloud://") {
+		ctx = p.tunnels.Context(ctx)
+		ctx = commands.WithCloudTCPFeatureProbe(ctx, func(probeCtx context.Context) error {
+			return p.probe(probeCtx, selector, false)
+		})
+	}
+	return desktopDial(ctx, selector, port)
 }
 
 func (p *vpnProbes) Probe(ctx context.Context, selector string) error {
+	return p.probe(ctx, selector, true)
+}
+
+func (p *vpnProbes) probe(ctx context.Context, selector string, healthCheck bool) error {
 	d, ok := p.devices[selector]
 	if !ok {
 		return errors.New("device is not selected for VPN probes")
@@ -71,8 +81,6 @@ func (p *vpnProbes) Probe(ctx context.Context, selector string) error {
 		return err
 	}
 	if d.agent == nil {
-		// The transport must outlive this echo's deadline. Until the first
-		// RPC completes, its cancellation still interrupts setup/lazy dialing.
 		life, cancelLife := context.WithCancel(p.ctx)
 		stopSetup := context.AfterFunc(ctx, cancelLife)
 		defer stopSetup()
@@ -81,13 +89,20 @@ func (p *vpnProbes) Probe(ctx context.Context, selector string) error {
 			cancelLife()
 			return err
 		}
+		// A health check owns setup through its first RPC. Capability lookups
+		// give the shared channel time to warm after their shorter deadline.
+		if !healthCheck && !stopSetup() && ctx.Err() != nil {
+			cancelLife()
+			agent.Close()
+			return ctx.Err()
+		}
 		d.agent, d.cancel = agent, cancelLife
 	}
 	_, err := d.agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err != nil {
+	if err != nil && (healthCheck || ctx.Err() == nil) {
 		d.close()
 	}
 	return err
