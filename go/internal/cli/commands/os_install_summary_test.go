@@ -110,7 +110,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 	t.Run("undecided Wi-Fi fails before the erase question", func(t *testing.T) {
 		stubWifiChoice(t, false, "")
 		asked := stubInstallConfirms(t, true)
-		_, _, _, err := confirmDiskInstall(d, wifiCLIOptions{RequireChoice: true}, "", skip, false, false)
+		_, _, _, err := confirmDiskInstall(context.Background(), d, wifiCLIOptions{RequireChoice: true}, "", skip, false, false)
 		if !errors.Is(err, errWiFiUndecided) || len(*asked) != 0 {
 			t.Fatalf("got %v, asked %v; want errWiFiUndecided before any question", err, *asked)
 		}
@@ -119,7 +119,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 	t.Run("bad name fails before the erase question", func(t *testing.T) {
 		stubWifiChoice(t, false, "")
 		asked := stubInstallConfirms(t, true)
-		_, _, _, err := confirmDiskInstall(d, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "Lab_1", skip, true, false)
+		_, _, _, err := confirmDiskInstall(context.Background(), d, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "Lab_1", skip, true, false)
 		if err == nil || !strings.Contains(err.Error(), "--device-name") || len(*asked) != 0 {
 			t.Fatalf("got %v, asked %v", err, *asked)
 		}
@@ -137,7 +137,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 		var name string
 		out, err := captureCommandStdout(t, func() error {
 			var err error
-			creds, name, _, err = confirmDiskInstall(d, wifiCLIOptions{SSID: "Home", Password: "hunter2", RequireChoice: true}, "nano-lab", skip, false, false)
+			creds, name, _, err = confirmDiskInstall(context.Background(), d, wifiCLIOptions{SSID: "Home", Password: "hunter2", RequireChoice: true}, "nano-lab", skip, false, false)
 			return err
 		})
 		if err != nil || name != "nano-lab" || len(creds) != 1 {
@@ -159,7 +159,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 		stubWifiChoice(t, false, "")
 		asked := stubInstallConfirms(t, false)
 		out, err := captureCommandStdout(t, func() error {
-			_, _, _, err := confirmDiskInstall(d, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "", skip, true, false)
+			_, _, _, err := confirmDiskInstall(context.Background(), d, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "", skip, true, false)
 			return err
 		})
 		if err != nil || len(*asked) != 0 || !strings.Contains(out, "auto-generated") {
@@ -172,7 +172,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 		stubEnrollPrompts(t) // fails the test on any enrollment call
 		asked := stubInstallConfirms(t, true)
 		out, err := captureCommandStdout(t, func() error {
-			_, _, _, err := confirmDiskInstall(d, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollForced}, false, false)
+			_, _, _, err := confirmDiskInstall(context.Background(), d, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollForced}, false, false)
 			return err
 		})
 		if err == nil || !strings.Contains(err.Error(), "needs confirmation") || len(*asked) != 0 {
@@ -188,7 +188,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 		stubEnrollPrompts(t)
 		asked := stubInstallConfirms(t, true)
 		internal := drive{Name: "Data SSD", DevicePath: "/dev/disk2"}
-		_, _, _, err := confirmDiskInstall(internal, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollForced}, true, false)
+		_, _, _, err := confirmDiskInstall(context.Background(), internal, wifiCLIOptions{NoWifi: true, RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollForced}, true, false)
 		if err == nil || !strings.Contains(err.Error(), "--yes-overwrite-internal") || len(*asked) != 0 {
 			t.Fatalf("got %v, asked %v", err, *asked)
 		}
@@ -247,14 +247,14 @@ func TestConfirmDiskInstallSummaryShowsTheNamePreEnrollmentChose(t *testing.T) {
 	var plan *acmePreEnrollPlan
 	out, err := captureCommandStdout(t, func() error {
 		var err error
-		_, name, plan, err = confirmDiskInstall(drive{Name: "SD Card", DevicePath: "/dev/disk4", IsRemovable: true},
+		_, name, plan, err = confirmDiskInstall(context.Background(), drive{Name: "SD Card", DevicePath: "/dev/disk4", IsRemovable: true},
 			wifiCLIOptions{RequireChoice: true}, "", preEnrollOptions{mode: preEnrollAuto}, false, false)
 		return err
 	})
 	if err != nil || name != "lab-box" || plan == nil {
 		t.Fatalf("got name %q, plan %v, %v", name, plan, err)
 	}
-	if want := []string{"name?", "pre-enroll?", "required name?", "erase?"}; !slices.Equal(events, want) {
+	if want := []string{"pre-enroll?", "required name?", "erase?"}; !slices.Equal(events, want) {
 		t.Fatalf("events %v; want %v, with nothing minted", events, want)
 	}
 	summary, erase := strings.Index(out, "› First boot:"), strings.Index(out, "<erase question>")
@@ -277,10 +277,9 @@ func TestPlanProvisioningReservesNothing(t *testing.T) {
 		t.Fatal("the plan reserved the device in Cloud")
 		return nil, nil
 	}
-	name := ""
-	plan, err := planProvisioning(preEnrollOptions{mode: preEnrollAuto}, &name)
-	if err != nil || plan == nil || name != "lab-box" {
-		t.Fatalf("got plan %v, name %q, %v", plan, name, err)
+	plan, err := planProvisioning(preEnrollOptions{mode: preEnrollAuto})
+	if err != nil || plan == nil || !slices.Equal(events, []string{"pre-enroll?"}) {
+		t.Fatalf("got plan %v, events %v, %v; want only the pre-enroll question", plan, events, err)
 	}
 }
 
@@ -344,7 +343,7 @@ func TestSettleDiskInstallReservesTheNameOnlyAfterTheEraseConfirm(t *testing.T) 
 				}
 				return
 			}
-			if want := []string{"name?", "pre-enroll?", "required name?", "erase?", "mint lab-box"}; err != nil || !slices.Equal(events, want) {
+			if want := []string{"pre-enroll?", "required name?", "erase?", "mint lab-box"}; err != nil || !slices.Equal(events, want) {
 				t.Fatalf("err %v, events %v; want %v", err, events, want)
 			}
 			if settled.name != "lab-box" || !bytes.Contains(settled.provisioningJSON, []byte("11111111-1111-4111-8111-111111111111")) || settled.storage == "" || settled.imgInfo == nil {
@@ -447,7 +446,7 @@ func TestDestructiveConfirmsShowTheSummaryWherePromptsAre(t *testing.T) {
 	disk := drive{Name: "SD Card", DevicePath: "/dev/disk4", IsRemovable: true}
 	installers := map[string]func() error{
 		"disk": func() error {
-			_, _, _, err := confirmDiskInstall(disk, wifiCLIOptions{SSID: "Home", Password: "hunter2", RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollSkip}, false, false)
+			_, _, _, err := confirmDiskInstall(context.Background(), disk, wifiCLIOptions{SSID: "Home", Password: "hunter2", RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollSkip}, false, false)
 			return err
 		},
 		"recovery": func() error { return confirmRecoveryFlash(recovery, "lab-pi", creds, false, false) },

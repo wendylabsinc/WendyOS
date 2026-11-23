@@ -200,10 +200,15 @@ func ackContinueUnenrolled() error {
 // settled before the mint and written back, so the device is given the name
 // Cloud reserved.
 func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
-	plan, err := planACMEPreEnrollment(cfg, opts, interactive, deviceName)
+	plan, err := planACMEPreEnrollment(cfg, opts, interactive)
 	if err != nil || plan == nil {
 		return nil, err
 	}
+	name, err := resolveInstallDeviceName(ctx, *deviceName, plan.auth, true)
+	if err != nil {
+		return nil, err
+	}
+	*deviceName = name
 	return plan.mint(ctx, deviceName)
 }
 
@@ -214,10 +219,9 @@ type acmePreEnrollPlan struct {
 	interactive bool
 }
 
-// planACMEPreEnrollment asks everything resolveACMEPreEnrollment asks and
-// settles a blank *deviceName, reading only the local config: Cloud is not
-// contacted. A nil plan means nothing will be baked.
-func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
+// planACMEPreEnrollment asks whether to pre-enroll and with which session,
+// without contacting Cloud; a nil plan bakes nothing.
+func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool) (*acmePreEnrollPlan, error) {
 	switch opts.mode {
 	case preEnrollSkip:
 		return nil, nil
@@ -248,28 +252,6 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 	if auth == nil {
 		fmt.Println("Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot.")
 		return nil, nil
-	}
-
-	// Cloud reserves the device under its name and refuses a blank one
-	// (WDY-3016), so a blank name cannot wait for the device to name itself on
-	// first boot. The caller writes the name settled here to the config
-	// partition, so the device's hostname and its Cloud row agree.
-	if *deviceName == "" {
-		if !interactive {
-			return nil, fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
-		}
-		name, err := promptDeviceName(
-			"Device name",
-			fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen),
-			validateDeviceName,
-		)
-		if err != nil {
-			if errors.Is(err, tui.ErrCancelled) {
-				return nil, ErrUserCancelled
-			}
-			return nil, fmt.Errorf("device-name prompt: %w", err)
-		}
-		*deviceName = name
 	}
 	return &acmePreEnrollPlan{auth: auth, interactive: interactive}, nil
 }

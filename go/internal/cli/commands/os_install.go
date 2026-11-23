@@ -2808,16 +2808,93 @@ func resolveDeviceName(flagName string) (string, error) {
 // *deviceName is filled in when the device is pre-enrolled, so the caller
 // writes the name Cloud reserved.
 func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName *string) ([]byte, error) {
-	plan, err := planProvisioning(preOpts, deviceName)
-	if err != nil || plan == nil {
+	name, plan, err := resolveFirstBootChoices(ctx, *deviceName, preOpts)
+	if err != nil {
 		return nil, err
 	}
+	*deviceName = name
 	return mintProvisioningJSON(ctx, plan, deviceName)
 }
 
-// planProvisioning is the question half of resolveProvisioningJSON: it may
-// prompt and fill a blank *deviceName, but reserves nothing in Cloud.
-func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnrollPlan, error) {
+// resolveFirstBootChoices asks whether to enroll in Wendy Cloud, then for the
+// device name, which an enrolling install checks against the organization.
+func resolveFirstBootChoices(ctx context.Context, deviceName string, preOpts preEnrollOptions) (string, *acmePreEnrollPlan, error) {
+	plan, err := planProvisioning(preOpts)
+	if err != nil {
+		return "", nil, err
+	}
+	var auth *config.AuthConfig
+	if plan != nil {
+		auth = plan.auth
+	}
+	name, err := resolveInstallDeviceName(ctx, deviceName, auth, true)
+	return name, plan, err
+}
+
+// resolveInstallDeviceName settles the device name. With auth the install
+// enrolls, so a name another device in the organization holds is refused
+// before anything is erased; required makes the name mandatory then.
+func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config.AuthConfig, required bool) (string, error) {
+	if auth == nil {
+		return resolveDeviceName(flagName)
+	}
+	taken := newNameChecker(ctx, auth)
+	interactive := isInteractiveTerminal()
+	suggestion := ""
+	if flagName != "" {
+		if err := validateDeviceName(flagName); err != nil {
+			return "", fmt.Errorf("--device-name: %w", err)
+		}
+		if !taken(flagName) {
+			return flagName, nil
+		}
+		if !interactive {
+			return "", nameTakenError(takenNameMessage(flagName) + " " + noTTYHintInstall)
+		}
+		fmt.Println(tui.ErrorMessage(takenNameMessage(flagName)))
+		suggestion = suggestFreeName(flagName, maxDeviceNameLen, taken)
+	} else if !interactive {
+		if required {
+			return "", fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
+		}
+		return "", nil
+	}
+
+	rule := tui.ValidateFunc(validateDeviceName)
+	hint := fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen)
+	if !required {
+		rule = optionalDeviceNameValidator
+		hint = fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; empty = auto-generate)", maxDeviceNameLen)
+	}
+	validate := func(n string) error {
+		if err := rule(n); err != nil {
+			return err
+		}
+		if n = strings.TrimSpace(n); n != "" && taken(n) {
+			return nameTakenError(takenNameMessage(n) + " Try another name.")
+		}
+		return nil
+	}
+	fmt.Println()
+	var name string
+	var err error
+	if suggestion != "" {
+		name, err = promptDeviceNameDefault("Device name", hint, suggestion, validate)
+	} else {
+		name, err = promptDeviceName("Device name", hint, validate)
+	}
+	if err != nil {
+		if errors.Is(err, tui.ErrCancelled) {
+			return "", ErrUserCancelled
+		}
+		return "", fmt.Errorf("device-name prompt: %w", err)
+	}
+	return strings.TrimSpace(name), nil
+}
+
+// planProvisioning asks whether and with which session to pre-enroll; it
+// reserves nothing in Cloud.
+func planProvisioning(preOpts preEnrollOptions) (*acmePreEnrollPlan, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2828,7 +2905,7 @@ func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnr
 		}
 		cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 	}
-	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal(), deviceName)
+	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal())
 }
 
 // mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
@@ -2994,7 +3071,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 		return diskInstallSettled{}, err
 	}
 
-	creds, name, plan, err := confirmDiskInstall(d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
+	creds, name, plan, err := confirmDiskInstall(ctx, d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
 	if err != nil {
 		return diskInstallSettled{}, err
 	}
@@ -3011,24 +3088,19 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 // confirmDiskInstall settles what first boot will apply, including whether to
 // pre-enroll, and shows it before asking to erase d, so nothing that changes
 // the result is asked afterwards. The returned plan is minted only after this.
-func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+func confirmDiskInstall(ctx context.Context, d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
 	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	// Answers to the pre-enrollment questions are wasted if the erase cannot be confirmed.
+	// Answers to the enrollment and name questions are wasted if the erase cannot be confirmed.
 	if err := internalDriveRefusal(d, force, yesOverwriteInternal); err != nil {
 		return nil, "", nil, err
 	}
 	if err := checkInstallConfirmable(eraseDriveStep(d), force); err != nil {
 		return nil, "", nil, err
 	}
-	// It may ask for the name to enroll, which the summary then shows.
-	plan, err := planProvisioning(preOpts, &name)
+	name, plan, err := resolveFirstBootChoices(ctx, deviceName, preOpts)
 	if err != nil {
 		return nil, "", nil, err
 	}
