@@ -588,7 +588,7 @@ func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig, lite b
 		}
 	}
 	if !lite {
-		leaf, err := storedLeaf(certInfo.PemCertificate)
+		leaf, err := certs.ParseStoredLeaf(certInfo.PemCertificate)
 		if err != nil {
 			return err
 		}

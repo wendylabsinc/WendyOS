@@ -17,6 +17,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -158,7 +159,7 @@ func prepareDefaultCloudCertificate(ctx context.Context, auth *config.AuthConfig
 	// before either renewal path can spend. Malformed leaves are diagnosed
 	// by the connection as before.
 	if auth.OAuthIssuer != "" {
-		if leaf, parseErr := storedLeaf(auth.Certificates[0].PemCertificate); parseErr == nil && leaf.NotBefore.After(timeNowFn().Add(certificateIssuanceSkew)) {
+		if leaf, parseErr := certs.ParseStoredLeaf(auth.Certificates[0].PemCertificate); parseErr == nil && leaf.NotBefore.After(timeNowFn().Add(certificateIssuanceSkew)) {
 			return fmt.Errorf("operator certificate is not yet valid; check this computer's clock")
 		}
 	}

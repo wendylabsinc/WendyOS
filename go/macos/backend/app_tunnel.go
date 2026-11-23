@@ -2,14 +2,13 @@ package backend
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 // App forwarders can outlive the certificate in their original connection.
@@ -64,11 +63,7 @@ func appTunnelCertificateDue(conn *grpcclient.AgentConnection, now time.Time) bo
 	if conn.CertInfo == nil {
 		return false
 	}
-	block, _ := pem.Decode([]byte(conn.CertInfo.PemCertificate))
-	if block == nil {
-		return false
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
+	cert, err := certs.ParseStoredLeaf(conn.CertInfo.PemCertificate)
 	if err != nil {
 		return false
 	}

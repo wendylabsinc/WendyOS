@@ -98,29 +98,9 @@ var (
 	}
 )
 
-// storedLeaf parses the leaf out of a stored certificate PEM. It normalises
-// through certs.LeafCertificatePEM first because pki-core leaves can carry
-// trailing ASN.1 bytes that defeat a raw x509 parse, and reads it back with
-// ParseCertsFromPEM — the ML-DSA-aware parser the mTLS paths use — so callers
-// see exactly the certificate the handshake can present.
-func storedLeaf(certPEM string) (*x509.Certificate, error) {
-	leafPEM, err := certs.LeafCertificatePEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
-	}
-	leaves, err := certs.ParseCertsFromPEM([]byte(leafPEM))
-	if err != nil {
-		return nil, err
-	}
-	if len(leaves) == 0 {
-		return nil, errors.New("no certificate in stored leaf PEM")
-	}
-	return leaves[0], nil
-}
-
 // leafNotAfter returns the stored leaf's expiry.
 func leafNotAfter(certPEM string) (time.Time, error) {
-	leaf, err := storedLeaf(certPEM)
+	leaf, err := certs.ParseStoredLeaf(certPEM)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -132,7 +112,7 @@ func leafNotAfter(certPEM string) (time.Time, error) {
 // reported as carrying none: the connection attempt diagnoses that with better
 // context than a renewal can.
 func tenantPrincipalFor(certPEM string) (string, bool) {
-	leaf, err := storedLeaf(certPEM)
+	leaf, err := certs.ParseStoredLeaf(certPEM)
 	if err != nil {
 		return "", false
 	}
@@ -142,7 +122,7 @@ func tenantPrincipalFor(certPEM string) (string, bool) {
 // certificateRenewalMargin leaves two thirds of even a short policy lifetime
 // usable before renewal. Keep the historical ceiling for longer certificates.
 func certificateRenewalMargin(certPEM string) time.Duration {
-	leaf, err := storedLeaf(certPEM)
+	leaf, err := certs.ParseStoredLeaf(certPEM)
 	if err != nil {
 		// Callers diagnose unreadable expiry separately; retain the existing
 		// lead time when the full validity interval cannot be read.

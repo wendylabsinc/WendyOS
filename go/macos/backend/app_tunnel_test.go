@@ -99,3 +99,14 @@ func TestAppTunnelKeepsValidConnectionAndPropagatesSignInFailure(t *testing.T) {
 		t.Fatal("missed near expiry")
 	}
 }
+
+func TestAppTunnelCertificateDueWithTrailingDER(t *testing.T) {
+	now := time.Now()
+	conn := appTunnelTestConnection(t, now.Add(-time.Minute))
+	block, _ := pem.Decode([]byte(conn.CertInfo.PemCertificate))
+	block.Bytes = append(block.Bytes, 0x05, 0x00)
+	conn.CertInfo.PemCertificate = string(pem.EncodeToMemory(block))
+	if !appTunnelCertificateDue(conn, now) {
+		t.Fatal("missed expiry on a stored leaf with trailing ASN.1 data")
+	}
+}
