@@ -658,6 +658,9 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	if err := reloadOAuthSession(auth); err != nil {
 		return err
 	}
+	if err := requireAppTunnelOperator(ctx, auth); err != nil {
+		return err
+	}
 	// The process that held the lock may already have consumed our old token.
 	if oauthAccessTokenFreshFor(auth, 90*time.Second) {
 		return nil

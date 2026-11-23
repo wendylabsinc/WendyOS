@@ -78,7 +78,7 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		if b.appTunnelContext != nil {
 			forwardCtx = b.appTunnelContext(forwardCtx)
 		}
-		dial = renewingAppTunnel(forwardCtx, b.deviceSelector, conn, commands.DesktopConnectTunnel)
+		dial = renewingAppTunnel(forwardCtx, b.deviceSelector, conn, commands.DesktopAppTunnelConnector(conn))
 	}
 	if dial != nil {
 		// Binding a local listener does not prove the remote app is reachable.

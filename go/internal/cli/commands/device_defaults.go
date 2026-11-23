@@ -152,6 +152,9 @@ func prepareDefaultCloudCertificate(ctx context.Context, auth *config.AuthConfig
 	if err := reloadOAuthSession(auth); err != nil {
 		return err
 	}
+	if err := requireAppTunnelOperator(ctx, auth); err != nil {
+		return err
+	}
 	if len(auth.Certificates) == 0 {
 		return nil
 	}
@@ -217,6 +220,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 		return nil, fmt.Errorf("preparing Cloud device certificate: %w", err)
 	}
 	// Certificate preparation reloads and can renew the selected session.
+	if err := requireAppTunnelOperator(ctx, auth); err != nil {
+		return nil, err
+	}
 	if !selector.matches(auth) {
 		return nil, selector.missingAuth()
 	}
@@ -236,6 +242,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 		for _, asset := range assets {
 			if asset.GetId() != selector.AssetUUID {
 				continue
+			}
+			if err := requireAppTunnelDevice(ctx, auth, cloudDiscoveryDevice{v2: asset, key: asset.GetId()}); err != nil {
+				return nil, err
 			}
 			if isLiteCloudAsset(asset) {
 				return cloudLiteSelectedDevice(auth, asset, selector.String())
@@ -258,6 +267,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 	for _, asset := range assets {
 		if asset.GetId() != selector.AssetID {
 			continue
+		}
+		if err := requireAppTunnelDevice(ctx, auth, cloudDiscoveryDevice{legacy: asset, key: fmt.Sprint(asset.GetId())}); err != nil {
+			return nil, err
 		}
 		conn, err := connectDefaultCloudAssetFn(ctx, auth, asset, os.Getenv("WENDY_BROKER_URL"))
 		if err != nil {
