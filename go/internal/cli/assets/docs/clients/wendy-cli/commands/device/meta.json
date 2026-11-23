@@ -17,6 +17,8 @@
     "---Reference---",
     "enroll",
     "unenroll",
+    "access",
+    "keys",
     "rename",
     "power-mode",
     "reboot",

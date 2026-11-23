@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
@@ -186,6 +187,56 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 		return nil
 	}
 	s.dirty[key] = true
+	return s.flush()
+}
+
+// LocalPinKey is the key a Closed device's key is pinned under: the name the
+// user dials it by, since its certificate carries no identity.
+func LocalPinKey(name string) string {
+	return "local:" + strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), "."), ".local")
+}
+
+// CheckLocal pins the key of a Closed device: it serves a certificate
+// self-signed over its device key, so the key is the device's only identity
+// (pinned like an SSH host key). names[0] is the name being dialled, the rest
+// are other names the device is known by; the key must match a pin under any
+// of them (a PinMismatchError naming the key that differs otherwise, since
+// the device key never rotates), and is recorded under names[0] on first use.
+func (s *Store) CheckLocal(names []string, leaf *x509.Certificate) error {
+	if len(names) == 0 {
+		return nil
+	}
+	fingerprint := spkiFingerprint(leaf)
+	for _, name := range names {
+		if existing, pinned := s.devices[LocalPinKey(name)]; pinned && existing.SPKIFingerprint != fingerprint {
+			return &PinMismatchError{Key: LocalPinKey(name), DisplayName: name, Want: existing.SPKIFingerprint, Got: fingerprint}
+		}
+	}
+	key := LocalPinKey(names[0])
+	_, pinned := s.devices[key]
+	s.devices[key] = PinnedDevice{
+		SPKIFingerprint: fingerprint,
+		DisplayName:     names[0],
+		LastSeen:        time.Now().UTC().Format(time.RFC3339),
+	}
+	if pinned {
+		return nil
+	}
+	s.dirty[key] = true
+	return s.flush()
+}
+
+// ForgetLocal removes every local pin of the device key spki: a device that
+// was opened no longer serves that key, and a pin would refuse it.
+func (s *Store) ForgetLocal(spki []byte) error {
+	sum := sha256.Sum256(spki)
+	fingerprint := "sha256:" + hex.EncodeToString(sum[:])
+	for key, d := range s.devices {
+		if strings.HasPrefix(key, "local:") && d.SPKIFingerprint == fingerprint {
+			delete(s.devices, key)
+			s.dirty[key] = true
+		}
+	}
 	return s.flush()
 }
 

@@ -1375,15 +1375,18 @@ func humanReadableArch(arch string) string {
 	}
 }
 
-// lanProvisionedDisplay maps a LAN device's advertised mTLS state to the
-// "Provisioned" column value. Non-LAN devices don't advertise this, so nil
-// returns "".
+// lanProvisionedDisplay maps a LAN device's advertised mTLS state and access
+// shape to the "Provisioned" column value. Non-LAN devices don't advertise
+// this, so nil returns "".
 func lanProvisionedDisplay(lan *models.LANDevice) string {
 	if lan == nil {
 		return ""
 	}
 	if lan.IsMTLS {
 		return "Provisioned"
+	}
+	if lan.Access == "closed" {
+		return "Closed"
 	}
 	return "Unprovisioned"
 }
