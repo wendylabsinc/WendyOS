@@ -18,6 +18,7 @@ import (
 const (
 	noTTYHintInstall = "Pass a different --device-name."
 	noTTYHintEnroll  = "Pass a different --name."
+	noTTYHintRename  = "Nothing was changed.\n  Choose another name:  wendy device rename <new-name>"
 )
 
 // orgNameLookupTimeout bounds the early name check; Cloud's refusal at

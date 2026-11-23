@@ -3,10 +3,12 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudunenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -70,7 +72,19 @@ func newDeviceRenameCmd() *cobra.Command {
 				if isLegacyCloudEnrollment(prov.GetOrganizationId(), prov.GetAssetId()) {
 					assetID, err = prov.GetAssetId(), cloudRenameAsset(ctx, cloudGRPC, prov.GetCloudHost(), prov.GetAssetId(), name)
 				} else {
-					assetID, err = cloudRenameAssetV2(ctx, conn, cloudGRPC, prov.GetCloudHost(), name)
+					retry := nameRetry{interactive: isInteractiveTerminal() && !jsonOutput, noTTYHint: noTTYHintRename, validate: validateHostnameArg, maxLen: maxHostnameLen}
+					err = retryTakenDeviceName(&name, retry, func(n string) error {
+						id, rerr := cloudRenameAssetV2(ctx, conn, cloudGRPC, prov.GetCloudHost(), n)
+						assetID = id
+						return rerr
+					})
+					if errors.Is(err, tui.ErrCancelled) {
+						return ErrUserCancelled
+					}
+				}
+				var taken nameTakenError
+				if errors.As(err, &taken) {
+					return err
 				}
 				if err != nil {
 					return fmt.Errorf("the Wendy Cloud rename failed, so the device's hostname was not changed: %w", err)
@@ -187,6 +201,9 @@ func cloudRenameAssetV2(ctx context.Context, conn *grpcclient.AgentConnection, c
 	}
 	if err := cloudrequest.Invoke(rpcctx, cloudConn, auth, cloudpbv2.AssetService_UpdateAsset_FullMethodName,
 		&cloudpbv2.UpdateAssetRequest{Id: asset.GetId(), Name: &name}, &cloudpbv2.Asset{}); err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			return "", fmt.Errorf("renaming asset %s: %w: %w", asset.GetId(), cloudenroll.ErrDeviceNameTaken, err)
+		}
 		return "", fmt.Errorf("renaming asset %s: %w", asset.GetId(), err)
 	}
 	return asset.GetId(), nil

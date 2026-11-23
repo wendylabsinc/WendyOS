@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -56,6 +57,7 @@ type renameCloudV2 struct {
 	log       *renameLog
 	asset     *cloudpbv2.Asset
 	updateErr error
+	takenName string // refused as held by another device
 }
 
 func (s *renameCloudV2) GetAsset(_ context.Context, req *cloudpbv2.GetAssetRequest) (*cloudpbv2.Asset, error) {
@@ -85,6 +87,9 @@ func (s *renameCloudV2) UpdateAsset(_ context.Context, in *cloudpbv2.SignedReque
 	s.log.add("cloud v2 UpdateAsset id=%s name=%s op=%s resource=%s", req.GetId(), req.GetName(), claims.Operation, claims.Target.Resource)
 	if s.updateErr != nil {
 		return nil, s.updateErr
+	}
+	if s.takenName != "" && req.GetName() == s.takenName {
+		return nil, status.Error(codes.AlreadyExists, "another device in this organization is already named "+s.takenName)
 	}
 	return &cloudpbv2.Asset{Id: req.GetId(), OrganizationId: s.asset.GetOrganizationId(), Name: req.GetName()}, nil
 }
@@ -200,7 +205,11 @@ func TestDeviceRenameCloudRefusalLeavesHostnameUnchanged(t *testing.T) {
 			startV2RenameDevice(t, cloud, renamePrincipal)
 
 			_, err := runDeviceRename(t, "living-room")
-			if err == nil || !strings.Contains(err.Error(), status.Convert(refusal).Message()) || !strings.Contains(err.Error(), "hostname was not changed") {
+			if status.Code(refusal) == codes.AlreadyExists {
+				if err == nil || err.Error() != renameTakenNoTerminal {
+					t.Fatalf("taken name reported as %v; want %q", err, renameTakenNoTerminal)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), status.Convert(refusal).Message()) || !strings.Contains(err.Error(), "hostname was not changed") {
 				t.Fatalf("refusal not reported: %v", err)
 			}
 			if strings.Contains(log.String(), "SetHostname") {
@@ -298,5 +307,53 @@ func TestResolveRenameNameFromArg(t *testing.T) {
 
 	if _, err := resolveRenameName([]string{"Bad_Name"}); err == nil {
 		t.Errorf("resolveRenameName with invalid arg: expected error, got nil")
+	}
+}
+
+const renameTakenNoTerminal = "living-room is already used by another device in your organization. Nothing was changed.\n  Choose another name:  wendy device rename <new-name>"
+
+func TestDeviceRenameTakenNameAsksAgain(t *testing.T) {
+	log := &renameLog{}
+	cloud := &renameCloudV2{log: log, takenName: "living-room", asset: &cloudpbv2.Asset{Id: renameAsset, OrganizationId: testOperatorTenant, PkiDeviceName: proto.String(renameDevice)}}
+	startV2RenameDevice(t, cloud, renamePrincipal)
+	setInteractive(t, true)
+	stubPromptDeviceNameDefault(t, func(_, _, def string, _ tui.ValidateFunc) (string, error) { return def, nil })
+	if _, err := runDeviceRename(t, "living-room"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if !strings.HasSuffix(log.String(), "agent SetHostname living-room-2") {
+		t.Fatalf("calls:\n%s\nwant the hostname set to the suggested name", log)
+	}
+}
+
+func TestDeviceRenameTakenNameNoTerminal(t *testing.T) {
+	log := &renameLog{}
+	cloud := &renameCloudV2{log: log, takenName: "living-room", asset: &cloudpbv2.Asset{Id: renameAsset, OrganizationId: testOperatorTenant, PkiDeviceName: proto.String(renameDevice)}}
+	startV2RenameDevice(t, cloud, renamePrincipal)
+	setInteractive(t, false)
+	_, err := runDeviceRename(t, "living-room")
+	if err == nil || err.Error() != renameTakenNoTerminal || strings.Contains(log.String(), "SetHostname") {
+		t.Fatalf("err %v, calls:\n%s", err, log)
+	}
+}
+
+func TestDeviceRenameJSONNeverPrompts(t *testing.T) {
+	log := &renameLog{}
+	cloud := &renameCloudV2{log: log, takenName: "living-room", asset: &cloudpbv2.Asset{Id: renameAsset, OrganizationId: testOperatorTenant, PkiDeviceName: proto.String(renameDevice)}}
+	startV2RenameDevice(t, cloud, renamePrincipal)
+	setInteractive(t, true)
+	stubPromptDeviceNameDefault(t, func(string, string, string, tui.ValidateFunc) (string, error) {
+		t.Fatal("--json must not prompt")
+		return "", nil
+	})
+	device, asJSON, fresh := deviceFlag, jsonOutput, ensureFreshCertificateFn
+	t.Cleanup(func() { deviceFlag, jsonOutput, ensureFreshCertificateFn = device, asJSON, fresh })
+	deviceFlag, jsonOutput = "", true
+	ensureFreshCertificateFn = func(context.Context, *config.AuthConfig) error { return nil }
+	cmd := newDeviceRenameCmd()
+	cmd.SetContext(context.Background())
+	_, err := captureCommandStdout(t, func() error { return cmd.RunE(cmd, []string{"living-room"}) })
+	if err == nil || err.Error() != renameTakenNoTerminal {
+		t.Fatalf("got %v; want %q", err, renameTakenNoTerminal)
 	}
 }
