@@ -325,8 +325,8 @@ func TestFullSessionSlotsKeepPresence(t *testing.T) {
 
 // The broker confirms an acknowledgement whenever it arrives. A confirmation
 // that returns after its offer's grant expired and the offer was dropped must
-// cost nothing: ending presence for it drops the lease and every other session,
-// and under load the redelivered offers repeat it (WDY-4295).
+// cost nothing: ending presence for it drops the lease and interrupts new
+// sessions (WDY-4295).
 func TestLateOfferAcknowledgementKeepsPresence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -352,6 +352,12 @@ func TestLateOfferAcknowledgementKeepsPresence(t *testing.T) {
 		t.Fatalf("acknowledged %q, want %q", ack.OfferId, next.OfferId)
 	}
 	r.queue(t, ctx, done, acknowledgedMessage(late))
+	// The broker may also outlive any local expiry history, including when
+	// churn would have filled the old cache. A confirmation alone can never
+	// authorize a session. Keep the other half of its pair distinct too.
+	r.queue(t, ctx, done, acknowledgedMessage(&pb.PresenceOfferAcknowledgement{
+		OfferId: "no-longer-retained", SessionId: uuid.NewString(),
+	}))
 	r.queue(t, ctx, done, acknowledgedMessage(ack))
 	if grant := r.nextJoin(t, ctx, done); grant != next.SessionGrantJws {
 		t.Fatal("served the session whose grant had expired")
@@ -360,6 +366,28 @@ func TestLateOfferAcknowledgementKeepsPresence(t *testing.T) {
 	case err := <-done:
 		t.Fatalf("presence ended: %v", err)
 	default:
+	}
+}
+
+func TestRetainedOfferAcknowledgementMustMatchSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, _, done, _ := startOfferRelay(t, ctx, nil)
+	o := r.sessionOffer("retained", nil, nil)
+	r.queue(t, ctx, done, offerMessage(o))
+	ack := r.nextAck(t, ctx, done)
+	r.queue(t, ctx, done, acknowledgedMessage(&pb.PresenceOfferAcknowledgement{
+		OfferId: ack.OfferId, SessionId: uuid.NewString(),
+	}))
+	select {
+	case err := <-done:
+		if err == nil || err.Error() != "unknown relay offer acknowledgement" {
+			t.Fatalf("presence ended with %v, want mismatched acknowledgement", err)
+		}
+	case <-r.joins:
+		t.Fatal("served an offer whose acknowledgement did not match")
+	case <-ctx.Done():
+		t.Fatal("mismatched acknowledgement was not rejected")
 	}
 }
 

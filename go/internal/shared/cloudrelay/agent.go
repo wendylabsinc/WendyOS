@@ -481,9 +481,6 @@ func (a *Agent) runOnce(parent context.Context) error {
 	pending := map[string]*offerState{}
 	// Offers refused on this stream, until the broker stops redelivering them.
 	rejected := map[string]int64{}
-	// Offers dropped at their grant's expiry, until a confirmation of their
-	// acknowledgement can no longer be on its way.
-	expired := map[string]int64{}
 	var renewing *pb.IssuePresenceLeaseResponse
 	var renewedClaims claims
 	type renewalResult struct {
@@ -515,14 +512,6 @@ func (a *Agent) runOnce(parent context.Context) error {
 			if s.c.Exp <= now.Unix() {
 				delete(pending, id)
 				_ = os.Remove(filepath.Join(a.StateDir, "offer-"+binding([]byte(id))+".pb"))
-				if len(expired) < maxRetainedOffers {
-					expired[id] = now.Add(time.Minute + cloudClockSkew).Unix()
-				}
-			}
-		}
-		for id, until := range expired {
-			if until <= now.Unix() {
-				delete(expired, id)
 			}
 		}
 		for id, l := range a.leases {
@@ -721,17 +710,18 @@ func (a *Agent) runOnce(parent context.Context) error {
 					return e
 				}
 			case *pb.RegisterPresenceResponse_OfferAcknowledged:
-				s := pending[m.OfferAcknowledged.OfferId]
-				if s == nil {
-					// The broker confirms an acknowledgement whenever it
-					// arrives. One for an offer whose grant has since expired
-					// is late, not a protocol error: ending presence for it
-					// would drop the lease and every other session.
-					if _, late := expired[m.OfferAcknowledged.OfferId]; late {
-						continue
-					}
+				ack := m.OfferAcknowledged
+				if !bounded(ack.GetOfferId(), 128) || !bounded(ack.GetSessionId(), 128) {
+					return fmt.Errorf("invalid relay offer acknowledgement")
 				}
-				if s == nil || s.c.Session != m.OfferAcknowledged.SessionId {
+				s := pending[ack.OfferId]
+				if s == nil {
+					// A confirmation can arrive after the corresponding grant
+					// has expired and been pruned. Without a retained offer
+					// there is no authority to start a session.
+					continue
+				}
+				if s.c.Session != ack.SessionId {
 					return fmt.Errorf("unknown relay offer acknowledgement")
 				}
 				if !s.started && s.c.Exp <= time.Now().Unix() {
