@@ -845,13 +845,22 @@ func defaultEnrollmentName(host string) string {
 	return strings.ToLower(strings.TrimSuffix(h, ".local"))
 }
 
-func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
-	return enrollmentName(conn.Host, name)
+func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string, taken func(string) bool) (string, error) {
+	return enrollmentName(conn.Host, name, taken)
 }
 
-func enrollmentName(host, name string) (string, error) {
+// enrollmentName falls back to the device's own name for a blank one, unless
+// another device in the organization holds it.
+func enrollmentName(host, name string, taken func(string) bool) (string, error) {
 	if name == "" {
 		defaultName := defaultEnrollmentName(host)
+		if defaultName != "" && taken(defaultName) {
+			if !isInteractiveTerminal() {
+				return "", nameTakenError(takenNameMessage(defaultName) + " " + noTTYHintEnroll)
+			}
+			fmt.Println(tui.ErrorMessage(takenNameMessage(defaultName)))
+			defaultName = suggestFreeName(defaultName, maxHostnameLen, taken)
+		}
 		if !isInteractiveTerminal() {
 			if defaultName != "" {
 				name = defaultName
@@ -888,7 +897,7 @@ func enrollmentName(host, name string) (string, error) {
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
-	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	identity, name, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
 	if err != nil {
 		return err
 	}
@@ -899,19 +908,19 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	return err
 }
 
-func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
+func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, string, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return nil, validateEnrollmentCertificate(auth)
+		return nil, "", validateEnrollmentCertificate(auth)
 	}
 	acmeDirectoryURL := ""
 	if len(acmeDirectoryURLs) > 0 {
 		acmeDirectoryURL = acmeDirectoryURLs[0]
 	}
 	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
-		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
+		return nil, "", fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
 	// and legacy sessions retain the Cloud enrollment contract.
@@ -919,27 +928,28 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		return runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
 	}
 
-	name, err := enrollmentDeviceName(conn, name)
+	// Legacy sessions cannot list the organization's devices; Cloud's own check decides.
+	name, err := enrollmentDeviceName(conn, name, func(string) bool { return false })
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	cert := auth.Certificates[0]
 
 	cloudCreds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(cloudCreds)}, dpopDialOptions(auth)...)
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to cloud: %w", err)
+		return nil, "", fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// The selected session already identifies the enrollment organization.
@@ -956,10 +966,10 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		TtlSeconds:     600,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return nil, fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+		return nil, "", fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("creating enrollment token: %w", err)
+		return nil, "", fmt.Errorf("creating enrollment token: %w", err)
 	}
 
 	fmt.Println("Enrolling device...")
@@ -970,12 +980,12 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("enrolling device: %w", err)
+		return nil, "", fmt.Errorf("enrolling device: %w", err)
 	}
 
 	fmt.Printf("Device enrolled (org: %s, asset: %d).\n",
 		orgLabel(auth.CloudGRPC, tokenResp.GetOrganizationId()), tokenResp.GetAssetId())
-	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, nil
+	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, name, nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {

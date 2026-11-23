@@ -108,7 +108,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if !challenge.GetUuidEnrollmentSupported() {
 		return errLiteUUIDUnsupported
 	}
-	name, err = enrollmentName(identity.Name, name)
+	name, err = enrollmentName(identity.Name, name, func(string) bool { return false })
 	if err != nil {
 		return err
 	}
