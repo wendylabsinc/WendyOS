@@ -1,9 +1,13 @@
 package backend
 
 import (
+	"context"
 	"errors"
+
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudsession"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc"
 )
 
 func (b *Backend) CampaignNotifications(session uint64) ([]commands.DesktopCampaignNotification, error) {
@@ -41,4 +45,16 @@ func (b *Backend) Inbox(account string) ([]*cloudpb.Notification, error) {
 	ctx, done := b.begin()
 	defer done()
 	return commands.DesktopInbox(ctx, account)
+}
+
+func (b *Backend) Notification(account, organization, id string) (*cloudpb.Notification, error) {
+	ctx, done := b.begin()
+	defer done()
+	auth, err := cloudsession.LoadAccount(account, "")
+	if err != nil {
+		return nil, err
+	}
+	return notificationForAccount(ctx, auth, organization, id, func(ctx context.Context, call func(context.Context, grpc.ClientConnInterface) error) error {
+		return cloudsession.With(ctx, auth, commands.EnsureCloudAccessToken, call)
+	})
 }

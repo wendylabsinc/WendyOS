@@ -30,11 +30,30 @@ public enum WendyE2EReference {
         }
     }
 
+    /// Static trait information, not the result of running a test or its conditions.
+    public enum Availability: String, Sendable, Equatable, Encodable {
+        case enabled
+        case disabled
+        case conditional
+    }
+
     public struct Entry: Sendable, Equatable {
         public var title: String
         public var documentation: String
         public var sourceLocation: SourceLocation
-        public var isDisabled: Bool
+        public var availability: Availability
+        /// Source spelling of availability traits. Expressions are never evaluated.
+        public var availabilityReason: String?
+
+        /// Compatibility view: true only for unconditional disabling traits.
+        /// False does not imply enabled; inspect `availability` for conditional tests.
+        public var isDisabled: Bool {
+            get { availability == .disabled }
+            set {
+                availability = newValue ? .disabled : .enabled
+                availabilityReason = nil
+            }
+        }
 
         public init(
             title: String,
@@ -45,7 +64,22 @@ public enum WendyE2EReference {
             self.title = title
             self.documentation = documentation
             self.sourceLocation = sourceLocation
-            self.isDisabled = isDisabled
+            self.availability = isDisabled ? .disabled : .enabled
+            self.availabilityReason = nil
+        }
+
+        public init(
+            title: String,
+            documentation: String,
+            sourceLocation: SourceLocation,
+            availability: Availability,
+            availabilityReason: String? = nil
+        ) {
+            self.title = title
+            self.documentation = documentation
+            self.sourceLocation = sourceLocation
+            self.availability = availability
+            self.availabilityReason = availabilityReason
         }
     }
 
@@ -100,6 +134,7 @@ public enum WendyE2EReference {
         case fileNotFound(String)
         case directoryNotFound(String)
         case unreadableDirectory(String)
+        case unterminatedAttribute(path: String, line: Int)
 
         public var description: String {
             switch self {
@@ -109,6 +144,8 @@ public enum WendyE2EReference {
                 "reference source directory not found: \(path)"
             case .unreadableDirectory(let path):
                 "reference source directory cannot be read: \(path)"
+            case .unterminatedAttribute(let path, let line):
+                "\(path):\(line): unterminated reference attribute"
             }
         }
     }
@@ -122,7 +159,10 @@ public enum WendyE2EReference {
         }
 
         let source = try String(contentsOf: url, encoding: .utf8)
-        return parseSource(source, path: path)
+        var parser = ReferenceSourceParser(source: source, path: path)
+        let documents = parser.parse()
+        if let error = parser.parsingError { throw error }
+        return documents
     }
 
     public static func parseDirectory(at path: String) throws -> [Document] {
@@ -151,6 +191,8 @@ public enum WendyE2EReference {
         return documents
     }
 
+    /// Returns no documents when a recognized attribute is unterminated.
+    /// Use `parseFile(at:)` for a throwing path-and-line diagnostic.
     public static func parseSource(_ source: String, path: String = "<memory>") -> [Document] {
         var parser = ReferenceSourceParser(source: source, path: path)
         return parser.parse()

@@ -3,14 +3,10 @@
 package commands
 
 import (
-	"context"
-	"crypto"
-	"fmt"
-
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudsession"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -33,20 +29,5 @@ func dpopDialOptions(auth *config.AuthConfig) []grpc.DialOption {
 // with its bound ML-DSA key. It snapshots the session so concurrent RPCs on one
 // dialed conn do not race on shared state.
 func cliDPoPTokenProvider(auth *config.AuthConfig) cloudrequest.DPoPTokenProvider {
-	return func(ctx context.Context) (string, crypto.Signer, error) {
-		local := *auth
-		local.Certificates = append([]config.CertificateInfo(nil), auth.Certificates...)
-		if err := ensureOAuthAccessToken(ctx, &local); err != nil {
-			return "", nil, err
-		}
-		keyPEM, err := local.OAuthDPoPKey()
-		if err != nil {
-			return "", nil, fmt.Errorf("DPoP: loading bound key: %w", err)
-		}
-		key, err := certs.ParseSigningPrivateKeyPEM([]byte(keyPEM))
-		if err != nil {
-			return "", nil, fmt.Errorf("DPoP: parsing bound key: %w", err)
-		}
-		return local.APIKey, key, nil
-	}
+	return cloudsession.TokenProvider(auth, ensureOAuthAccessToken)
 }

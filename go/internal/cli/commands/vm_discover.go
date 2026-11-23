@@ -195,7 +195,7 @@ func attachSimulators(collection *models.DevicesCollection, vms []models.LANDevi
 }
 
 // isSimulatorBoard reports whether a device type names one of the Builder's
-// VM boards (vmDeviceKey and its x86 sibling). A positive signal: no physical
+// VM boards (vm-arm64 and vm-x86-64). A positive signal: no physical
 // board id starts this way, so a real device can never be filed as a VM.
 func isSimulatorBoard(deviceType string) bool {
 	return strings.HasPrefix(deviceType, "vm-")
@@ -289,7 +289,7 @@ func (f *simulatorFilter) Changed() <-chan struct{} { return f.changed }
 // re-check what it has listed. Bounded by the boot budget: a VM that never
 // answers is one that never announced itself either.
 func (f *simulatorFilter) learn(ctx context.Context, name string, port int) {
-	deadline := time.Now().Add(simulatorBootTimeout())
+	deadline := time.Now().Add(simulatorBootTimeout(name))
 	for {
 		if hostname := askVMHostname(ctx, name, port); hostname != "" {
 			// Best-effort: a store that cannot be written costs the next

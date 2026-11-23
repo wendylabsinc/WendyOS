@@ -113,7 +113,7 @@ func TestWriteConfigPartitionWaitsForTheLabelAndRetriesTheMount(t *testing.T) {
 	shortenConfigPartitionTimeout(t, 5*time.Second)
 	tools := fakeProvisioningTools(t, 2, 32)
 	disk := fakeDisk(t)
-	if err := writeConfigPartition(disk, nil, nil, "", nil); err != nil {
+	if err := writeConfigPartition(disk, configAgent{}, nil, "", nil); err != nil {
 		t.Fatalf("writeConfigPartition: %v", err)
 	}
 	// Two lookups before udev has the label, one whose mount finds the node gone, one that mounts.
@@ -135,7 +135,7 @@ func TestWriteConfigPartitionWaitsForTheLabelAndRetriesTheMount(t *testing.T) {
 func TestWriteConfigPartitionDoesNotRetryAFailingSudo(t *testing.T) {
 	shortenConfigPartitionTimeout(t, 5*time.Second)
 	tools := fakeProvisioningTools(t, 0, 1)
-	err := writeConfigPartition(fakeDisk(t), nil, nil, "", nil)
+	err := writeConfigPartition(fakeDisk(t), configAgent{}, nil, "", nil)
 	if err == nil || tools.ran("mount") != 1 || tools.ran("umount") != 0 {
 		t.Fatalf("got %v after %d mounts and %d umounts, want the first failure and no umount",
 			err, tools.ran("mount"), tools.ran("umount"))
@@ -146,7 +146,7 @@ func TestWriteConfigPartitionStopsWhenTheDriveIsGone(t *testing.T) {
 	shortenConfigPartitionTimeout(t, 5*time.Second)
 	tools := fakeProvisioningTools(t, 1000)
 	gone := drive{DevicePath: filepath.Join(t.TempDir(), "sdz")}
-	if err := writeConfigPartition(gone, nil, nil, "", nil); err == nil || tools.ran("lsblk") != 1 {
+	if err := writeConfigPartition(gone, configAgent{}, nil, "", nil); err == nil || tools.ran("lsblk") != 1 {
 		t.Fatalf("got %v after %d lookups, want the lookup error at once", err, tools.ran("lsblk"))
 	}
 }
@@ -226,7 +226,7 @@ func TestWriteConfigPartitionKeepsFilesWhenUnmountFails(t *testing.T) {
 	tools := fakeProvisioningTools(t, 0)
 	tools.failUmount(1000)
 
-	err := writeConfigPartition(fakeDisk(t), []byte("agent"), nil, "lab-nano", nil)
+	err := writeConfigPartition(fakeDisk(t), configAgent{data: []byte("agent")}, nil, "lab-nano", nil)
 
 	got := tools.sudoed()
 	dir := strings.TrimPrefix(got[len(got)-1], "umount ")
@@ -251,7 +251,7 @@ func TestWriteConfigPartitionRetriesABusyUnmount(t *testing.T) {
 	tools := fakeProvisioningTools(t, 0)
 	tools.failUmount(1)
 
-	if err := writeConfigPartition(fakeDisk(t), nil, nil, "", nil); err != nil {
+	if err := writeConfigPartition(fakeDisk(t), configAgent{}, nil, "", nil); err != nil {
 		t.Fatalf("writeConfigPartition: %v", err)
 	}
 	if n := tools.ran("umount"); n != 2 {
@@ -266,7 +266,7 @@ func TestWriteConfigPartitionReportsWriteAndUnmountFailures(t *testing.T) {
 	tools.failUmount(1000)
 
 	// A newline in the name fails the write after the mount.
-	err := writeConfigPartition(fakeDisk(t), nil, nil, "bad\nname", nil)
+	err := writeConfigPartition(fakeDisk(t), configAgent{}, nil, "bad\nname", nil)
 	if notApplied, _ := splitStillMounted(err); notApplied == nil || !strings.Contains(err.Error(), "newline") || !strings.Contains(err.Error(), "still mounted") {
 		t.Fatalf("writeConfigPartition = %v; want both the write and the unmount failure", err)
 	}
@@ -279,14 +279,14 @@ func TestInstallWithAStillMountedConfigPartitionFailsAsWritten(t *testing.T) {
 	tools.failUmount(1000)
 	disk := fakeDisk(t)
 	withStubbedProvisioning(t, func(d drive, creds []wendyconf.WifiCredential, name string, j []byte) error {
-		return writeConfigPartition(d, []byte("agent"), creds, name, j)
+		return writeConfigPartition(d, configAgent{data: []byte("agent")}, creds, name, j)
 	}, true, nil)
 	retried := false
 	confirmProvisioningRetry = func() (bool, error) { retried = true; return true, nil }
 
 	var provErr error
 	out, _ := captureCommandStdout(t, func() error {
-		_, _, provErr = provisionConfigWithRetry(context.Background(), disk, nil, "lab-nano", nil, true, nil)
+		_, _, provErr = provisionConfigWithRetry(context.Background(), disk, nil, "lab-nano", nil, true, agentSeed{})
 		return nil
 	})
 	if retried || tools.ran("mount") != 1 || !strings.Contains(out, "Config partition written: name lab-nano") {

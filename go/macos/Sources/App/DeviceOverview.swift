@@ -3,6 +3,7 @@ import SwiftUI
 struct DeviceOverview: View {
     @ObservedObject var model: AppModel
     let device: Device
+    var showLogs: (() -> Void)? = nil
     let open: (String) -> Void
     @Environment(\.scenePhase) private var scenePhase
     @State private var info: DeviceInfoSnapshot?
@@ -20,6 +21,12 @@ struct DeviceOverview: View {
                         Label("Connected", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
+                }
+                if let showLogs {
+                    Button(action: showLogs) {
+                        Label("Logs", systemImage: "text.alignleft").frame(minHeight: 32)
+                    }.buttonStyle(.bordered).buttonBorderShape(.capsule)
+                        .accessibilityIdentifier("devices.detail.logs")
                 }
                 if let app = running.first(where: \.hasWebpage) {
                     Button { actions.submit { await model.openApp(app) } } label: {

@@ -61,8 +61,8 @@ def generate(args):
             raise ValueError(f'{key} needs concrete instructions, not a label or placeholder')
     bundle = Path(line(raw['app_bundle'], 'app_bundle')).expanduser().resolve(strict=True)
     plist = plistlib.loads((bundle / 'Info.plist').read_bytes())
-    if plist.get('CFBundleIdentifier') != 'dev.wendy.mobile':
-        raise ValueError('expected WendyMobile.app with bundle ID dev.wendy.mobile')
+    if plist.get('CFBundleIdentifier') != 'dev.wendy.WendyCompanion':
+        raise ValueError('expected WendyMobile.app with bundle ID dev.wendy.WendyCompanion')
     executable = plist.get('CFBundleExecutable', '')
     if not executable or Path(executable).name != executable:
         raise ValueError('invalid app executable name')

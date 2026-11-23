@@ -278,6 +278,35 @@ func TestSchemaJSON_CameraEntitlement(t *testing.T) {
 	}
 }
 
+func TestSchema_CameraModeOffersDirect(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(SchemaJSON), &schema); err != nil {
+		t.Fatalf("schema is not valid JSON: %v", err)
+	}
+	branches, _ := defOf(t, schema, "entitlement")["oneOf"].([]any)
+	seen := 0
+	for _, raw := range branches {
+		branch, _ := raw.(map[string]any)
+		props, _ := branch["properties"].(map[string]any)
+		typeProp, _ := props["type"].(map[string]any)
+		if typeProp["const"] != "camera" && typeProp["const"] != "video" {
+			continue
+		}
+		seen++
+		mode, _ := props["mode"].(map[string]any)
+		if _, has := mode["enum"]; has {
+			t.Errorf("%v mode must not have an enum", typeProp["const"])
+		}
+		ex, _ := mode["examples"].([]any)
+		if len(ex) != 1 || ex[0] != "direct" {
+			t.Errorf("%v mode examples = %v, want [direct]", typeProp["const"], mode["examples"])
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("found %d camera/video variants, want 2", seen)
+	}
+}
+
 func TestSchemaJSON_DeclaresROS2ExampleKeys(t *testing.T) {
 	// The flagship ROS 2 example must validate against the schema (WDY-1700):
 	// every top-level key it uses must be a declared property, else

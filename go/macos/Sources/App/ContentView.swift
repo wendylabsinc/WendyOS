@@ -12,11 +12,6 @@ struct ContentView: View {
     @State private var showingActivity = false
     @State private var showingSimulators = false
     @StateObject private var simulators = SimulatorModel()
-    @FocusedValue(\.simulatorRefresh) private var simulatorRefresh
-    @State private var refreshingPane = false
-    @FocusedValue(\.organizationRefresh) private var organizationRefresh
-    @FocusedValue(\.devicePaneRefresh) private var devicePaneRefresh
-    @FocusedValue(\.fleetRefresh) private var fleetRefresh
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @FocusState private var searchFocused: Bool
     @FocusState private var deviceTabsFocused: Bool
@@ -118,12 +113,12 @@ struct ContentView: View {
                         Text(error).font(.caption).foregroundStyle(.secondary)
                     }
                     if deviceSource == "nearby" {
-                        if let message = model.nearbyError { FailureNote(message: message) }
+                        if let message = model.nearbyErrorFailure { FailureNote(message: message) }
                         if model.nearby.isEmpty && model.nearbyUnitree.isEmpty && !model.discovering {
                             Text("No nearby devices found").foregroundStyle(.secondary)
                         }
                     } else {
-                        if let message = model.cloudError { FailureNote(message: message) }
+                        if let message = model.cloudErrorFailure { FailureNote(message: message) }
                         if model.cloud.isEmpty && !model.discovering {
                             if model.account?.signedIn == true {
                                 Text("No cloud devices found").foregroundStyle(.secondary)
@@ -212,25 +207,9 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem { VPNToolbarControls(model: model, vpn: model.vpn) }
             ToolbarItemGroup {
-                Button {
-                    if showingSimulators { simulatorRefresh?.perform() }
-                    else if showingSites { fleetRefresh?.perform() }
-                    else if showingOrganization { organizationRefresh?.perform() }
-                    else if ["campaigns", "pairing", "chat", "data", "settings"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
-                    else {
-                        refreshingPane = true
-                        actions.submit {
-                            defer { refreshingPane = false }
-                            if model.connected != nil { await model.refreshDetails() }
-                            else if deviceSource == "cloud" { await model.refreshCloud() }
-                            else { await model.refreshNearby() }
-                        }
-                    }
-                } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .help(showingSimulators ? "Refresh simulators" : showingSites ? "Refresh fleet" : showingOrganization ? "Refresh organization" : model.connected != nil ? "Refresh device" : "Refresh devices")
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(!showingSimulators && !showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
-                    .disabled(showingSimulators ? simulatorRefresh?.enabled != true : showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data", "settings"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
+                DesktopPaneRefreshButton(model: model, actions: actions,
+                                         showingSimulators: showingSimulators, showingSites: showingSites,
+                                         showingOrganization: showingOrganization, tab: tab, deviceSource: deviceSource)
                 Menu {
                     Button { showingNearbySetup = true } label: {
                         Label("Set up nearby device…", systemImage: "antenna.radiowaves.left.and.right")
@@ -291,20 +270,27 @@ struct ContentView: View {
         } message: { target in
             Text("Delete \"\(target.app)\" from \"\(target.device)\"? This stops and removes the app and its services. Persistent data and container images are kept.")
         }
+        .environment(\.failureSignIn, { actions.submit { await model.signIn() } })
         .alert("Could not complete the action", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
+            if PresentedFailure(model.alertFailure ?? WendyError(message: "")).offersDeviceSignIn {
+                Button("Sign in again") { model.alert = nil; actions.submit { await model.signIn() } }
+            }
             Button("Technical details") { errorDetails = model.alert; model.alert = nil }
-        } message: { Text(PresentedFailure(model.alert ?? "").message) }
-        .alert(PresentedFailure(model.connectionError ?? "").title ?? "Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
+        } message: { Text(PresentedFailure(model.alertFailure ?? WendyError(message: "")).message) }
+        .alert(PresentedFailure(model.connectionError ?? WendyError(message: "")).title ?? "Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
             Button("OK", role: .cancel) { model.connectionError = nil }
-            if let device = model.failedConnection {
+            if PresentedFailure(model.connectionError ?? WendyError(message: "")).offersDeviceSignIn {
+                Button("Sign in again") { model.connectionError = nil; actions.submit { await model.signIn() } }
+            }
+            if let device = model.failedConnection, !PresentedFailure(model.connectionError ?? WendyError(message: "")).offersDeviceSignIn {
                 Button("Try again") { actions.submit { await model.connect(device) } }
                 if model.canForgetIdentity {
                     Button("Forget saved identity and retry") { actions.submit { await model.connect(device, forgetIdentity: true) } }
                 }
             }
-            Button("Technical details") { errorDetails = model.connectionError; model.connectionError = nil }
-        } message: { Text(PresentedFailure(model.connectionError ?? "").message) }
+            Button("Technical details") { errorDetails = model.connectionError?.message; model.connectionError = nil }
+        } message: { Text(PresentedFailure(model.connectionError ?? WendyError(message: "")).message) }
         .sheet(isPresented: Binding(get: { errorDetails != nil }, set: { if !$0 { errorDetails = nil } })) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Technical details").font(.title2)
@@ -499,6 +485,6 @@ struct ContentView: View {
     private var logsPane: some View { LogsView(model: model) }
 
     private func unavailable(_ title: String, error: String) -> some View {
-        FailureView(title: title, error: error) { actions.submit { await model.refreshDetails() } }
+        FailureView(title: title, error: model.appsErrorFailure ?? WendyError(message: error)) { actions.submit { await model.refreshDetails() } }
     }
 }

@@ -4,6 +4,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,6 +62,9 @@ func newAuthListOrgsCmd() *cobra.Command {
 		Short: "List and select your Wendy Cloud organizations",
 		Long: `Show all organizations your account belongs to and optionally set a default.
 
+With --json or outside an interactive terminal, print a JSON array of organization
+IDs and names without opening the management picker or changing your default.
+
 Press 'd' on a highlighted organization to mark it as the default for commands
 that target a specific org (such as 'wendy os install --pre-enroll' and
 'wendy device enroll'). Press 'x' to clear the default. Press 'r' to remove
@@ -77,14 +81,31 @@ org's ID to the clipboard; press 'q' to quit.`,
 
 			orgs, pickerAuth, okSessions, failed := collectOrgsV2(cmd.Context(), cfg, cmd.ErrOrStderr())
 
-			if len(orgs) == 0 {
+			if len(orgs) == 0 && okSessions == 0 {
 				// Only claim an empty membership when a session actually
 				// answered. If every probe failed, propagate the failure so the
 				// user sees why — never the misleading no-orgs sentence.
-				if okSessions == 0 {
-					return errors.Join(failed...)
+				return errors.Join(failed...)
+			}
+
+			if jsonOutput || !isInteractiveTerminal() {
+				// Keep the CLI output independent of the protobuf representation.
+				// An empty membership is [] rather than null or a human message.
+				type organization struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
 				}
-				fmt.Println("Your account belongs to no organizations.")
+				result := make([]organization, 0, len(orgs))
+				for _, org := range orgs {
+					result = append(result, organization{ID: org.GetId(), Name: org.GetName()})
+				}
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(result)
+			}
+
+			if len(orgs) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "Your account belongs to no organizations.")
 				return nil
 			}
 
@@ -103,7 +124,7 @@ org's ID to the clipboard; press 'q' to quit.`,
 					break
 				}
 			}
-			fmt.Printf("Selected organization: %s (ID: %s)\n", name, id)
+			fmt.Fprintf(cmd.OutOrStdout(), "Selected organization: %s (ID: %s)\n", name, id)
 			return nil
 		},
 	}

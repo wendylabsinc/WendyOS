@@ -136,7 +136,7 @@ private func makeServerContext(method: String) -> ServerContext {
     let keyframe = CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true)
     let delta = CameraFrame(annexB: Data([0, 0, 0, 1, 0x41]), isKeyframe: false)
     let camera = FakeCamera(descriptorValue: cameraDescriptor(), frameList: [keyframe, delta])
-    let svc = SensorService(audio: FakeAudio(), camera: camera)
+    let svc = SensorService(audio: FakeAudio(), camera: camera, micAuthorized: { false })
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
@@ -176,7 +176,7 @@ private func makeServerContext(method: String) -> ServerContext {
 @Test func manifestListsBothChannelsAndBothFanInThroughOneWriter() async throws {
     let keyframe = CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true)
     let camera = FakeCamera(descriptorValue: cameraDescriptor(), frameList: [keyframe])
-    let svc = SensorService(audio: FakeAudio(), camera: camera)
+    let svc = SensorService(audio: FakeAudio(), camera: camera, micAuthorized: { true })
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(

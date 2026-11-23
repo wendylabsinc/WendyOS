@@ -89,6 +89,144 @@ Depth and infrared nodes do not inherit the color feed. Private container
 network namespaces and original raw frames are not supported by this JPEG
 fallback.
 
+## Open a camera from an app while Wendy is using it
+
+A V4L2 camera streams to one process at a time. While Wendy is capturing from a
+camera, an app that opens the same `/dev/videoN` itself fails with
+`Device or resource busy`. Wendy captures from a camera while:
+
+- a `wendy device camera view`, a snapshot or another Wendy viewer is open on it
+- a Wendy Data campaign that records it is armed or recording
+
+To give the camera back to the app, close the view, or switch the campaign off
+with `wendy data campaign disarm <campaign>`. `wendy data campaign arm <campaign>`
+switches it back on.
+
+Starting an app does not make Wendy open a camera that only offers raw or MJPEG
+frames, which covers most USB webcams. A camera that produces H.264 itself is
+different: while an app with the `camera` entitlement runs, Wendy captures that
+camera and feeds its H.264 frames to a separate agent-fed device node, so the
+app should read that node rather than the camera.
+
+## Several apps on one camera
+
+Every app you deploy with the `camera` entitlement gets its own agent-fed
+device node at the camera's usual path, so several apps, live views and
+recordings can read one USB camera at the same time. Add `"mode": "direct"` to
+the camera entitlement to get the real device instead.
+
+Sharing covers local USB cameras captured as MJPEG or packed raw formats. These
+keep today's behavior and are not shared: CSI cameras, depth, infrared and
+thermal streams, metadata nodes, cameras that produce H.264 themselves,
+SensorLink, ROS 2 and network cameras. A device without a compatible
+`v4l2loopback` module also gives the app the real camera.
+
+### What an app gets
+
+The app opens the same path as before, for example `/dev/video0` or its
+`/dev/v4l/by-id` link, and sees one mode: one size up to 1280x720, one frame
+rate, and YUYV when the camera itself produces MJPEG. `wendy run` prints one
+line when this applies, naming each camera and its mode:
+
+```
+Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.
+```
+
+The line is not printed for `"mode": "direct"`, for apps without a camera
+entitlement, for compose projects, or when the agent reports no shared mode
+(an older agent, or no shareable camera).
+
+When the app is deployed, it gets a node for every shared camera plugged in at
+that moment, not only for the one it opens, so each of those cameras counts as
+shared by the app (see below).
+
+### Apps that need `"mode": "direct"`
+
+Some apps cannot work with the shared mode:
+
+- Apps that insist on MJPG, for example `ffmpeg -input_format mjpeg` or
+  `v4l2src ! image/jpeg`. `HelloVLM` did, and was changed.
+- Apps that ask for a size and do not read back what they got. `HelloVideo`
+  did, and was changed.
+- Apps that take a buffer's length and offset for `mmap` from the struct they
+  passed to `VIDIOC_QBUF`, or map only buffer 0. The node fills in neither
+  field on `VIDIOC_QBUF`, so `mmap` fails, and it hands out its buffers in turn.
+  Map each buffer as `VIDIOC_QUERYBUF` describes it, and read the one
+  `VIDIOC_DQBUF` returns. `HelloVideo` did both, and was changed.
+- Apps that need more than 1280x720, a different frame rate, or camera
+  controls.
+
+`Examples/RemoteCam` works unchanged. For an app that breaks, either set
+`"mode": "direct"` on its camera entitlement, or change it to accept the shared
+mode.
+
+```json
+{ "type": "camera", "mode": "direct" }
+```
+
+### Viewers and recordings
+
+A camera is shared while any app holds a node for it, and an app holds one for
+every shared camera that was plugged in when it was deployed. That includes a
+stopped app: its nodes stay until the app is removed. So while any such app
+exists, even a stopped one, every camera it holds a node for runs only at its
+shared mode, including cameras the app never opens.
+
+While a camera is shared:
+
+- A viewer or recording that names no size or rate joins the shared mode.
+- One that names another size or rate is refused with a message naming the
+  shared mode.
+- A viewer already running at another mode is ended when an app starts reading.
+- A recording at other parameters is not interrupted. The app's node gets
+  frames once the recording leaves.
+
+### Status of shared cameras
+
+The Status column of `wendy device camera list` shows
+`shared: <app> (<state>), ...` for each app sharing the camera. The same detail
+is in the JSON from `wendy device hardware list --category camera --json` as
+the properties `share_mode`, `share_unavailable`, `shared_with` and
+`share_state`. A camera that is not shared carries `share_unavailable` with the
+reason.
+
+### Behavior to know about
+
+- **The camera is off while nobody reads.** No frames are captured, and no
+  H.264 encoder runs while only apps read.
+- **Apps deployed before the agent update are untouched** until you redeploy
+  them. A camera plugged in after a deploy is shared only from the next deploy.
+- **Each capture waits for a new camera frame.** Apps that open, read one
+  picture and close receive a real frame, including after an earlier reader
+  stops. The node does not return a black placeholder or replay the previous
+  session's picture. If the camera is unavailable, capture waits for frames.
+  Sharing requires the Wendy v4l2loopback module with `fresh_start` support.
+  On older modules, sharing is unavailable and apps use the real camera
+  directly, with its usual exclusive-access limit.
+- **The frame rate is the camera's.** The node declares the camera's highest
+  advertised rate, but the camera may deliver fewer frames: in low light, auto
+  exposure lengthens each frame (a Brio 101 in a dark room gave 15 fps instead
+  of 30). The Status column still says `reading` then.
+- **An app with `"mode": "direct"` that holds the camera stops sharing.** While
+  it has the camera open, sharing apps get no frames, and their Status says
+  `no frames: the real camera is held by another app ("mode": "direct") or
+  process`. The agent tries the camera again every 10 seconds, so frames
+  return within about 10 seconds of the direct app letting go.
+- **Replugging a camera.** The agent re-places each app's node about 2 to 3
+  milliseconds after the camera reappears. An app that retries `open()` very
+  fast can take the real camera for that moment, and then is not sharing until
+  it reopens it. The agent logs this and shows it in the Status column.
+- **Other apps' nodes are visible.** Their nodes appear at `/dev/video200` to
+  `/dev/video255` and announce both capture and output. Open the camera's path
+  rather than scanning for nodes.
+- **Agent restarts.** An app that is already reading pauses for about a second,
+  while the agent starts again and restarts the camera, and continues without
+  reopening. An app that opens its
+  camera while the agent restarts can open it and set its format, and gets
+  frames once the agent is back. To make this possible, share nodes always
+  announce both capture and output rather than capture only. Some readers, such
+  as browser and WebRTC stacks, may reject that; this has not been tested.
+
 ## Wendy Lite cameras
 
 Select a Wendy Lite board in the device picker, or use one saved as your default,
@@ -342,6 +480,16 @@ cameras use `sensorlink:<pairing-key>:<channel-id>` and registered IP cameras us
 `ip-mac:<mac>`. ROS cameras use `ros2:<key>`, scoped to their graph, domain and
 topic so identical topic names in isolated apps stay distinct. A blank stable ID means the source cannot yet be saved safely as
 a site camera. Marker placement is manual and does not calibrate the camera.
+
+For paired MJPEG cameras, the agent delivers complete frames in order. Frames
+that arrive together, such as after a brief network stall, are all delivered.
+When a consumer falls behind, a pending frame that has waited too long is
+replaced by the camera's next frame, so the consumer resumes at the newest
+frame instead of replaying an older queue. Camera traffic does not evict queued
+microphone or H.264 frames; those keep a bounded FIFO and can still drop
+incoming frames when full. Recordings made from these live camera feeds can
+therefore contain gaps under load. This delivery policy does not guarantee
+capture of every source frame.
 
 Native clients can discover enrolled SensorLink sources through the selected
 gateway without a terminal UI:

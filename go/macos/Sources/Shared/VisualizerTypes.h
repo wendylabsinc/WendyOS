@@ -1,7 +1,7 @@
 #ifndef WENDY_VISUALIZER_TYPES_H
 #define WENDY_VISUALIZER_TYPES_H
 
-typedef struct { char *id, *name, *state; int64_t started_ns, size_bytes; } WDVisualEpisode;
+typedef struct { char *id, *name, *state; int64_t started_ns, size_bytes; char *media_files_json; } WDVisualEpisode;
 typedef struct { WDStatus status; WDVisualEpisode *items; size_t count; } WDVisualEpisodesResult;
 typedef struct { char *id, *name, *kind, *detail; } WDVisualTrack;
 // local_path is owned by the result and removed on free. Move the file to
@@ -33,8 +33,13 @@ void WDVisualExportFree(WDVisualExportResult *value);
 typedef struct { WDStatus status; char *local_path, *reason; double maximum_celsius, duration; int32_t has_maximum; } WDVisualPreviewResult;
 WDVisualPreviewResult *WDVisualPreviewAt(char *selector, char *episode);
 void WDVisualPreviewFree(WDVisualPreviewResult *value);
+typedef struct { WDStatus status; char *json, *local_path; } WDNotificationVideoResult;
+WDNotificationVideoResult *WDNotificationVideoAt(char *selector, char *campaign, char *event_id);
+WDNotificationVideoResult *WDNotificationVideoNear(char *selector, char *campaign, char *event_id, double notification_unix, char *episode_hint);
+void WDNotificationVideoFree(WDNotificationVideoResult *value);
 
 typedef enum { WD_RECORDING_STATUS, WD_RECORDING_START, WD_RECORDING_STOP } WDVisualRecordingAction;
+WDVisualEpisodesResult *WDHomeCampaign(uint64_t session, char *name, int32_t trigger);
 WDVisualEpisodesResult *WDVisualRecording(uint64_t session, WDVisualRecordingAction action, char *name, char **sources, size_t source_count);
 WDVisualEpisodesResult *WDVisualEpisodes(uint64_t session);
 WDVisualEpisodesResult *WDVisualEpisodesAt(char *selector);
@@ -42,10 +47,37 @@ void WDVisualEpisodesFree(WDVisualEpisodesResult *value);
 WDVisualSnapshotResult *WDVisualEpisodeLoad(uint64_t session, char *episode);
 WDVisualSnapshotResult *WDVisualEpisodeLoadAt(char *selector, char *episode);
 void WDVisualSnapshotFree(WDVisualSnapshotResult *value);
-#endif
+typedef struct {
+    char *id, *title, *trigger, *kind, *upload_state, *topics, *preview_file, *campaign;
+    uint64_t *preview_counts; size_t preview_count;
+    int64_t started_ns, size_bytes;
+    double duration_seconds;
+    int32_t details_loaded;
+} WDRecordingEpisode;
+typedef struct {
+    WDStatus status;
+    WDRecordingEpisode *items; size_t count;
+    char *warning, *model;
+} WDRecordingLibraryResult;
+typedef struct { WDStatus status; char **paths; size_t count; } WDRecordingExportsResult;
+uint64_t WDBeginRecordingRead(void);
+void WDEndRecordingRead(uint64_t request);
+WDRecordingLibraryResult *WDRecordingLibrary(uint64_t request, char *selector, int32_t secure);
+WDRecordingLibraryResult *WDRecordingDetails(uint64_t request, char *selector, int32_t secure, char **episodes, size_t count);
+void WDRecordingLibraryFree(WDRecordingLibraryResult *value);
+typedef struct { WDStatus status; char *format; uint8_t *bytes; size_t count; } WDRecordingThumbnailResult;
+WDRecordingThumbnailResult *WDRecordingThumbnail(uint64_t request, char *selector, int32_t secure, char *episode, char *file);
+void WDRecordingThumbnailFree(WDRecordingThumbnailResult *value);
+WDVisualSnapshotResult *WDRecordingPlay(uint64_t request, char *selector, int32_t secure, char *episode);
+WDRecordingExportsResult *WDRecordingExport(uint64_t request, char *selector, int32_t secure, char **episodes, size_t count);
+void WDRecordingExportsFree(WDRecordingExportsResult *value);
 
 typedef struct { WDStatus status; char *json; } WDGalleryMetadataResult;
 WDGalleryMetadataResult *WDGalleryMetadataAt(char *selector, char *episode);
+WDGalleryMetadataResult *WDGalleryMediaAt(char *selector, char *episode);
 void WDGalleryMetadataFree(WDGalleryMetadataResult *value);
 
 WDVisualSnapshotResult *WDVisualGalleryDataAt(char *selector, char *episode, int summary);
+
+WDVisualSnapshotResult *WDRecordingData(uint64_t request, char *selector, int32_t secure, char *episode, int32_t mode);
+#endif

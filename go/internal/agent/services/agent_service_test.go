@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -522,6 +524,11 @@ func sendV1UpdateStream(t *testing.T, stream grpc.BidiStreamingClient[agentpb.Up
 			Chunk: &agentpb.UpdateAgentRequest_Chunk{Data: binaryData},
 		},
 	}); err != nil {
+		if errors.Is(err, io.EOF) {
+			// The server ended the stream, as an early refusal does; its status is on Recv.
+			_, err = stream.Recv()
+			return err
+		}
 		t.Fatalf("send chunk: %v", err)
 	}
 
@@ -537,6 +544,10 @@ func sendV1UpdateStream(t *testing.T, stream grpc.BidiStreamingClient[agentpb.Up
 			},
 		},
 	}); err != nil {
+		if errors.Is(err, io.EOF) {
+			_, err = stream.Recv()
+			return err
+		}
 		t.Fatalf("send control: %v", err)
 	}
 	if err := stream.CloseSend(); err != nil {

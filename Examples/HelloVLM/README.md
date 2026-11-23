@@ -8,7 +8,11 @@ timing) and shown in the UI.
 
 Instead of HelloMLX's Mac-only stack (AVFoundation + MLX), HelloVLM uses:
 
-- **Linux V4L2** (MJPG) for camera capture
+- **Linux V4L2** (MJPG) for camera capture. The app also accepts a shared
+  camera: when the Wendy agent shares the camera, `/dev/video0` is a virtual
+  camera that gives YUYV at its own size (at most 1280x720) even though the
+  app asks for MJPG. The app reads the size back and encodes only the frames
+  it samples (`--fps`) to JPEG.
 - **llama.cpp's `llama-server`** with `gemma-3-27b-it` (Q4_K_M) for inference
   — the same model as HelloMLX's `large` tier — served over the
   OpenAI-compatible `/v1/chat/completions` API
@@ -170,9 +174,10 @@ learns that "integrated" does not mean "small".
 
 - **Model status stuck on `loading`** — the backend is still starting.
   Check it with `wendy device logs --app sh.wendy.examples.hellovlm --service llm`.
-- **`Camera does not support MJPG frames`** — the app requests MJPG so
+- **`only MJPG and YUYV are supported`** — the app requests MJPG so
   frames go straight from the camera to JPEG without re-encoding. Check
   formats with `v4l2-ctl -d /dev/video0 --list-formats` on the device.
+  The error names the format the camera gave instead.
 - **Green or corrupted first frames** — one-shot V4L2 captures return
   frames before exposure settles; the app keeps the camera streaming and
   skips the first 10 frames, so this should not appear in the UI.

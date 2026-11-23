@@ -94,6 +94,46 @@ func TestStartDetachedRecordsTheRun(t *testing.T) {
 	}
 }
 
+func TestDetachedVMLockOutlivesLauncher(t *testing.T) {
+	const rootEnv = "WENDY_VM_TEST_LAUNCHER_ROOT"
+	if root := os.Getenv(rootEnv); root != "" {
+		stubEmulator(t)
+		s := &Store{Root: root}
+		if _, err := s.StartDetached(detachableSpec(t, s, "dev")); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	s := newTestStore(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestDetachedVMLockOutlivesLauncher$")
+	cmd.Env = append(os.Environ(), rootEnv+"="+s.Root)
+	output, launchErr := cmd.CombinedOutput()
+	if state, err := s.ReadState("dev"); err == nil && state.PID > 0 {
+		t.Cleanup(func() { _ = syscallKill(state.PID) })
+	}
+	if launchErr != nil {
+		t.Fatalf("launcher: %v\n%s", launchErr, output)
+	}
+	st, err := s.Status("dev")
+	if err != nil || !st.Running || st.State.PID <= 0 {
+		t.Fatalf("Status() after launcher exit = %+v, %v; want running", st, err)
+	}
+	if err := s.Stop("dev", true, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Status("dev")
+	if err != nil || st.Running {
+		t.Fatalf("Status() after Stop() = %+v, %v; want stopped", st, err)
+	}
+}
+
 func TestStartDetachedCreatesAnOwnerOnlyConsoleLog(t *testing.T) {
 	stubEmulator(t)
 	s := newTestStore(t)
@@ -389,5 +429,46 @@ func TestARejectedSpecKeepsThePreviousConsoleLog(t *testing.T) {
 	}
 	if string(got) != previous {
 		t.Errorf("console.log = %q, want the previous boot's output untouched", got)
+	}
+}
+
+func TestStartDetachedPreparesTheX86VariableStore(t *testing.T) {
+	stubEmulator(t)
+	s := newTestStore(t)
+	createTestVM(t, s, "x86", Meta{Arch: ArchAMD64})
+	template := filepath.Join(t.TempDir(), "OVMF_VARS.fd")
+	want := []byte(strings.Repeat("v", 4096))
+	if err := os.WriteFile(template, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{
+		Name:                 "x86",
+		Arch:                 ArchAMD64,
+		DiskPath:             s.DiskPath("x86"),
+		FirmwareCode:         filepath.Join(t.TempDir(), "OVMF_CODE.fd"),
+		FirmwareVars:         s.VarsPath("x86"),
+		FirmwareVarsTemplate: template,
+		Accel:                AccelTCG,
+		Net:                  NetConfig{Mode: NetUser, AgentPort: 50051, MAC: MACFor("x86")},
+	}
+	st, err := s.StartDetached(spec)
+	if err != nil {
+		t.Fatalf("StartDetached() = %v", err)
+	}
+	t.Cleanup(func() { _ = syscallKill(st.PID) })
+	if got, err := os.ReadFile(s.VarsPath("x86")); err != nil || string(got) != string(want) {
+		t.Fatalf("store after start = %d bytes, %v; want the template", len(got), err)
+	}
+
+	// A second start must not touch the running VM's store.
+	other := []byte(strings.Repeat("o", 4096))
+	if err := os.WriteFile(s.VarsPath("x86"), other, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartDetached(spec); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("second StartDetached() = %v, want ErrAlreadyRunning", err)
+	}
+	if got, _ := os.ReadFile(s.VarsPath("x86")); string(got) != string(other) {
+		t.Fatal("a refused second start rewrote the running VM's variable store")
 	}
 }

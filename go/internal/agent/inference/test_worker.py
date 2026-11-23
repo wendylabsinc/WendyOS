@@ -306,6 +306,83 @@ class DetectorFailureTests(unittest.TestCase):
         self.assertEqual(detection_error(KeyError()), "inference: KeyError")
 
 
+class ThroughputTests(unittest.TestCase):
+    """Every detector reports what its scoring loop achieved. Before, only the
+    YOLO detector's accelerator did, so a Transformers model that scored one
+    frame every 9 s at rate 1 said nothing about it."""
+
+    run_with_detector = DetectorFailureTests.run_with_detector
+
+    def test_stats_cover_the_recent_frames(self):
+        from worker import Throughput
+        throughput = Throughput()
+        for second in range(5):
+            throughput.record(100.0 + second, now=10 + second)
+        self.assertEqual(throughput.stats(now=14.5), {
+            "fps": 1.0, "infer_ms_p50": 102.0, "infer_ms_p95": 104.0, "frames_scored": 5})
+
+    def test_model_slower_than_the_window_still_has_a_rate(self):
+        from worker import Throughput
+        throughput = Throughput()
+        for frame in range(4):
+            throughput.record(40000.0, now=40 * frame)
+        self.assertEqual(throughput.stats(now=125), {
+            "fps": 0.025, "infer_ms_p50": 40000.0, "infer_ms_p95": 40000.0, "frames_scored": 4})
+
+    def test_no_rate_once_scoring_has_stopped(self):
+        from worker import Throughput
+        throughput = Throughput()
+        self.assertEqual(throughput.stats(now=1), {
+            "fps": 0.0, "infer_ms_p50": 0.0, "infer_ms_p95": 0.0, "frames_scored": 0})
+        for second in range(5):
+            throughput.record(100.0, now=second)
+        self.assertEqual(throughput.stats(now=100), {
+            "fps": 0.0, "infer_ms_p50": 0.0, "infer_ms_p95": 0.0, "frames_scored": 5})
+
+    def test_loop_reports_for_a_detector_without_an_accelerator(self):
+        from unittest import mock
+
+        class Detector:
+            accelerator_status = {"requested": "auto", "active": "cpu", "runtime": "PyTorch"}
+
+            def __call__(self, frame):
+                if frame == 1:
+                    return None  # No engine yet: not a scored frame.
+                if frame == 2:
+                    raise ValueError("bad frame")
+                time.sleep(0.03)
+                return []
+
+        with mock.patch("accelerator.STATUS_SECONDS", 0.2):
+            emitted, _ = self.run_with_detector(Detector(), frame_count=10, wait=1.5)
+        reports = [item for item in emitted if item["type"] == "accelerator"]
+        self.assertGreaterEqual(len(reports), 2)
+        self.assertEqual(reports[-1]["accelerator"], Detector.accelerator_status)
+        stats = reports[-1]["stats"]
+        self.assertEqual(stats["frames_scored"], 8)
+        self.assertGreater(stats["fps"], 0)
+        # The whole scoring step, timed around the detector.
+        self.assertGreaterEqual(stats["infer_ms_p50"], 30)
+        self.assertGreaterEqual(stats["infer_ms_p95"], stats["infer_ms_p50"])
+
+    def test_loop_leaves_the_report_to_a_detectors_accelerator(self):
+        # The YOLO detector's accelerator reports its engine's throughput in
+        # the same message. Two sources would overwrite each other's figures.
+        from unittest import mock
+
+        class Detector:
+            accelerator = object()
+            accelerator_status = {"requested": "auto", "active": "cpu"}
+
+            def __call__(self, frame):
+                return []
+
+        with mock.patch("accelerator.STATUS_SECONDS", 0.2):
+            emitted, _ = self.run_with_detector(Detector(), frame_count=10, wait=1)
+        self.assertEqual({item["type"] for item in emitted}, {"prediction"})
+        self.assertEqual(len(emitted), 10)
+
+
 class OfflineStartTests(unittest.TestCase):
     """A pinned model already on the device starts with no network call, and
     one that is missing while the network is down fails with a plain reason."""

@@ -1,6 +1,11 @@
 #ifndef WENDY_DESKTOP_BRIDGE_H
 #define WENDY_DESKTOP_BRIDGE_H
 #include "BridgeTypes.h"
+#include "LocalResetTypes.h"
+typedef struct { char *name; int32_t value, minimum, maximum, step; int mutable; } WDCameraControl;
+typedef struct { WDStatus status; WDCameraControl *items; size_t count; } WDCameraControlsResult;
+WDCameraControlsResult *WDCameraControls(uint64_t session, uint32_t camera, char *stable_id, char *name, int32_t value);
+void WDCameraControlsFree(WDCameraControlsResult *value);
 #include "VisualRecognition.h"
 #include "SiteLocalization.h"
 WDCameraMetadataResult *WDCameraMetadataList(uint64_t session);
@@ -23,18 +28,19 @@ WDDevicesResult *WDCloud(void);
 WDStatus *WDLogin(int32_t development);
 WDStatus *WDCancelLogin(void);
 uint64_t WDBeginConnection(void);
-WDConnectionResult *WDConnect(char *selector, uint64_t request);
-WDConnectionResult *WDForgetIdentityAndReconnect(char *selector, uint64_t request);
+WDConnectionResult *WDConnect(char *selector, uint64_t request, int32_t requires_mtls);
+WDConnectionResult *WDForgetIdentityAndReconnect(char *selector, uint64_t request, int32_t requires_mtls);
 WDStatus *WDDisconnect(void);
 WDAppsResult *WDApps(void);
+WDOpenAppResult *WDOpenTwin(uint64_t session, char *directory);
 WDOpenAppResult *WDOpenApp(char *app, uint64_t session);
 void WDOpenAppFree(WDOpenAppResult *value);
 WDStatus *WDStartApp(char *app, uint64_t session);
 WDStatus *WDStopApp(char *app, uint64_t session);
 WDStatus *WDDeleteApp(char *app, uint64_t session);
 WDCamerasResult *WDCameras(void);
-WDStatus *WDStartLogs(char *app, uint64_t stream);
-WDStatus *WDStopLogs(void);
+WDStatus *WDStartLogs(char *app, uint64_t stream, uint64_t session);
+WDStatus *WDStopLogs(uint64_t stream, uint64_t session);
 WDStatus *WDStartCamera(uint32_t camera, uint64_t stream, uint64_t session, char *stable_id);
 WDStatus *WDStopCamera(uint32_t camera, uint64_t stream, uint64_t session);
 WDStatus *WDStopCameras(uint64_t session);
@@ -42,6 +48,14 @@ WDVPNResult *WDStartVPN(WDRouteInput *routes, size_t count, char *gateway);
 WDStatus *WDStopVPN(void);
 WDStatus *WDShutdown(void);
 WDEvents *WDPollEvents(void);
+uint64_t WDPreviewCreate(void);
+WDCamerasResult *WDPreviewCameras(uint64_t preview, char *selector, int32_t secure);
+WDStatus *WDPreviewPlay(uint64_t preview, char *stable_id);
+WDEvents *WDPreviewPoll(uint64_t preview);
+void WDPreviewCancel(uint64_t preview);
+void WDPreviewClose(uint64_t preview);
+WDAppsResult *WDPreviewApps(uint64_t preview);
+WDOpenAppResult *WDPreviewOpenApp(uint64_t preview, char *app);
 WDResourcesResult *WDResources(uint64_t session);
 WDPortsResult *WDPorts(char *app, uint64_t session);
 void WDResourcesFree(WDResourcesResult *value);
@@ -74,6 +88,7 @@ WDStatus *WDDeleteAccess(char *account, char *org, char *id);
 #include "ModelLibraryTypes.h"
 #include "FleetTypes.h"
 #include "SettingsTypes.h"
+#include "OSUpdateTypes.h"
 #include "SensorTypes.h"
 #include "EnrollmentTypes.h"
 #ifdef __APPLE__

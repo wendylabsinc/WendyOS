@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="a1d6fc3d292fcff219d8d8be9f4d71d7c5373755"
+SHARED_GRPC_API_CONTRACTS_REF="87510205398fc0c3fcfb38300cb6304bd0919371"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"
@@ -25,6 +25,7 @@ SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
     "wendy/agent/services/v2/device_info_service.proto"
     "wendy/agent/services/v2/agent_update_service.proto"
     "wendy/agent/services/v2/os_update_service.proto"
+    "wendy/agent/services/v2/power_service.proto"
     "wendy/agent/services/v2/driver_service.proto"
     "wendy/agent/services/v2/arduino_mcu_service.proto"
     "wendy/agent/services/v2/wifi_service.proto"
@@ -98,9 +99,9 @@ check_shared_grpc_api_contracts_ancestry() (
     local scratch
     scratch="$(mktemp -d)" || return $?
     trap 'rm -rf "$scratch"' EXIT
-    # Policy comes from authoritative master, independently of the schema pin.
+    # Policy comes from authoritative main, independently of the schema pin.
     curl --fail --silent --show-error --location \
-        https://raw.githubusercontent.com/wendylabsinc/service-protos/master/tools/check-pin.sh \
+        https://raw.githubusercontent.com/wendylabsinc/service-protos/main/tools/check-pin.sh \
         --output "$scratch/check-pin.sh" || return $?
     bash "$scratch/check-pin.sh" "${SHARED_GRPC_API_CONTRACTS_REF:-}"
 )
