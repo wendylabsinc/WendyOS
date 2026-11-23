@@ -182,7 +182,6 @@ func OpenTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier 
 }
 
 func openPortSession(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier *Verifier, assetID, service string, transport pb.DialTransport, signRequest func([]byte) ([]byte, error)) (*Session, error) {
-	started := time.Now()
 	if _, err := uuid.Parse(assetID); err != nil {
 		return nil, fmt.Errorf("invalid Cloud asset UUID")
 	}
@@ -221,11 +220,7 @@ func openPortSession(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, v
 	if c.Request != binding(descriptor) || c.Caller != binding(publicDER(key)) {
 		return nil, fmt.Errorf("Cloud tunnel grant request/key mismatch")
 	}
-	s, err := join(ctx, response.Broker, response.SessionGrantJws, c, key, pb.JoinRole_JOIN_ROLE_CALLER, verifier.dialRelay)
-	if err != nil {
-		return nil, admissionError(ctx, c, started, err)
-	}
-	return s, nil
+	return join(ctx, response.Broker, response.SessionGrantJws, c, key, pb.JoinRole_JOIN_ROLE_CALLER, verifier.dialRelay)
 }
 
 // PrincipalRequest binds a tunnel-v2 request to a fresh caller key.

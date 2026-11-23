@@ -62,6 +62,8 @@ type testRelay struct {
 	present             chan struct{}
 	ack                 chan struct{}
 	paired              chan struct{}
+	joinOpenErr         error
+	callerProved        chan struct{}
 	joins               int
 	joined              map[pb.JoinRole]bool
 	grant               claims
@@ -376,6 +378,9 @@ func (r *testRelay) JoinSession(s grpc.BidiStreamingServer[pb.JoinSessionRequest
 	if o.SessionGrantJws != artifact {
 		return fmt.Errorf("wrong session grant")
 	}
+	if r.joinOpenErr != nil {
+		return r.joinOpenErr
+	}
 	ch := challenge()
 	if e = s.Send(&pb.JoinSessionResponse{Message: &pb.JoinSessionResponse_Challenge{Challenge: ch}}); e != nil {
 		return e
@@ -394,6 +399,9 @@ func (r *testRelay) JoinSession(s grpc.BidiStreamingServer[pb.JoinSessionRequest
 		return fmt.Errorf("duplicate role")
 	}
 	r.joined[o.Role] = true
+	if r.callerProved != nil && o.Role == pb.JoinRole_JOIN_ROLE_CALLER {
+		close(r.callerProved)
+	}
 	r.joins++
 	if r.joins == 2 {
 		close(r.paired)

@@ -10,34 +10,39 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// NotAdmittedError reports a session the device never joined: the caller
-// waited until the grant's admission window closed. The relay cannot say why,
-// so the message names the causes seen in practice.
+var errAdmissionTimeout = errors.New("Cloud session admission timer expired")
+
+// NotAdmittedError reports that the admission window closed before the caller
+// connected. The closing window does not identify which endpoint was delayed.
 type NotAdmittedError struct {
 	Waited time.Duration
 	Err    error
 }
 
 func (e *NotAdmittedError) Error() string {
-	return fmt.Sprintf("the device did not accept the Cloud session within %s: it may be handling too many new connections, or its clock may be wrong (a device whose clock disagrees with Wendy Cloud's refuses every session)", e.Waited.Round(time.Second))
+	return fmt.Sprintf("Cloud session admission did not complete within %s", e.Waited.Round(100*time.Millisecond))
 }
 
 func (e *NotAdmittedError) Unwrap() error { return e.Err }
 
-// admissionError turns a join that ended because the grant's admission window
-// closed into a NotAdmittedError. The caller's own cancellation, and a join
-// that failed while the window was still open, are returned unchanged.
-func admissionError(ctx context.Context, c claims, started time.Time, err error) error {
-	if ctx.Err() != nil || time.Now().Before(time.Unix(c.Exp, 0).Add(-cloudClockSkew)) {
-		return err
+// admissionError distinguishes a locally expired admission timer and the
+// broker's explicit admission-close result from other join failures.
+func admissionError(parent context.Context, cause error, started time.Time, err error) error {
+	if parentErr := parent.Err(); parentErr != nil {
+		return parentErr
 	}
-	switch status.Code(err) {
-	// The caller's admission timer, or the broker closing admission first.
-	case codes.Canceled, codes.DeadlineExceeded, codes.FailedPrecondition:
-	default:
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return err
+	canceled := errors.Is(err, context.Canceled)
+	var rpcError interface{ GRPCStatus() *status.Status }
+	if errors.As(err, &rpcError) {
+		if st := rpcError.GRPCStatus(); st != nil {
+			if st.Code() == codes.FailedPrecondition && st.Message() == "admission closed" {
+				return &NotAdmittedError{Waited: time.Since(started), Err: err}
+			}
+			canceled = canceled || (st.Code() == codes.Canceled && st.Message() == context.Canceled.Error())
 		}
 	}
-	return &NotAdmittedError{Waited: time.Since(started), Err: err}
+	if cause == errAdmissionTimeout && canceled {
+		return &NotAdmittedError{Waited: time.Since(started), Err: err}
+	}
+	return err
 }

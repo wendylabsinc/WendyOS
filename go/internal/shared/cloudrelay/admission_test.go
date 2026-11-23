@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 
 // absentAgentRelay is a Cloud and broker for a device that holds presence but
 // never joins a session, with grants that expire after ttl seconds.
-func absentAgentRelay(t *testing.T, ttl int64) (*Verifier, *grpc.ClientConn) {
+func absentAgentRelay(t *testing.T, ttl int64, joinOpenErr error) (*Verifier, *grpc.ClientConn, <-chan struct{}) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -37,6 +38,7 @@ func absentAgentRelay(t *testing.T, ttl int64) (*Verifier, *grpc.ClientConn) {
 	r := &testRelay{t: t, endpoint: listener.Addr().String(), cloudKey: key, verifier: verifier, grantTTL: ttl,
 		requested: make(chan *pb.RequestTunnelRequest, 1), offers: make(chan *pb.SessionOffer, 1),
 		paired: make(chan struct{}), joined: map[pb.JoinRole]bool{},
+		joinOpenErr: joinOpenErr, callerProved: make(chan struct{}),
 		signing: publicDER(signing), encryption: publicDER(encryption)}
 	r.lease = claims{Route: "opaque-route", JTI: "opaque-lease", Signing: binding(r.signing)}
 	srv := grpc.NewServer()
@@ -53,7 +55,7 @@ func absentAgentRelay(t *testing.T, ttl int64) (*Verifier, *grpc.ClientConn) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cloudConn.Close() })
-	return verifier, cloudConn
+	return verifier, cloudConn, r.callerProved
 }
 
 func openAbsentAgent(ctx context.Context, verifier *Verifier, cloudConn *grpc.ClientConn) error {
@@ -65,20 +67,18 @@ func openAbsentAgent(ctx context.Context, verifier *Verifier, cloudConn *grpc.Cl
 	return err
 }
 
-// A device that never joins leaves the caller waiting until the grant's
-// admission window closes. That is a device that did not accept the session,
-// not a cancelled command (WDY-4295: "context canceled").
-func TestCallerLearnsTheDeviceDidNotAcceptTheSession(t *testing.T) {
+// The admission deadline is distinct from a caller canceling the command.
+func TestCallerLearnsSessionAdmissionTimedOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	verifier, cloudConn := absentAgentRelay(t, 2)
+	verifier, cloudConn, _ := absentAgentRelay(t, 2, nil)
 
 	err := openAbsentAgent(ctx, verifier, cloudConn)
 	var notAdmitted *NotAdmittedError
 	if !errors.As(err, &notAdmitted) {
 		t.Fatalf("OpenTCP error = %v, want a NotAdmittedError", err)
 	}
-	if !strings.Contains(err.Error(), "did not accept the Cloud session") || strings.Contains(err.Error(), "context canceled") {
+	if !strings.HasPrefix(err.Error(), "Cloud session admission did not complete within ") {
 		t.Fatalf("message = %q", err.Error())
 	}
 	if status.Code(notAdmitted.Err) != codes.Canceled {
@@ -90,39 +90,72 @@ func TestCallerLearnsTheDeviceDidNotAcceptTheSession(t *testing.T) {
 func TestCallerCancellationIsNotADeviceRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	verifier, cloudConn := absentAgentRelay(t, 60)
+	verifier, cloudConn, proved := absentAgentRelay(t, 60, nil)
 
 	callCtx, stop := context.WithCancel(ctx)
-	time.AfterFunc(300*time.Millisecond, stop)
-	err := openAbsentAgent(callCtx, verifier, cloudConn)
-	var notAdmitted *NotAdmittedError
-	if err == nil || errors.As(err, &notAdmitted) {
-		t.Fatalf("OpenTCP error = %v, want the caller's cancellation", err)
+	defer stop()
+	result := make(chan error, 1)
+	go func() { result <- openAbsentAgent(callCtx, verifier, cloudConn) }()
+	select {
+	case <-proved:
+	case err := <-result:
+		t.Fatalf("OpenTCP ended before the caller proved its key: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	stop()
+	if err := <-result; err != context.Canceled {
+		t.Fatalf("OpenTCP error = %v, want context.Canceled", err)
+	}
+}
+
+func TestNearExpiryJoinKeepsDistinctBrokerFailures(t *testing.T) {
+	for _, tc := range []struct {
+		code    codes.Code
+		message string
+		closed  bool
+	}{
+		{codes.FailedPrecondition, "grant mismatch", false},
+		{codes.Canceled, "broker shut down the stream", false},
+		{codes.DeadlineExceeded, "broker setup timed out", false},
+		{codes.FailedPrecondition, "admission closed", true},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			verifier, cloudConn, _ := absentAgentRelay(t, 4, status.Error(tc.code, tc.message))
+			err := openAbsentAgent(ctx, verifier, cloudConn)
+			var notAdmitted *NotAdmittedError
+			if got := errors.As(err, &notAdmitted); got != tc.closed {
+				t.Fatalf("OpenTCP error = %v, want NotAdmittedError = %v", err, tc.closed)
+			}
+			if notAdmitted != nil {
+				err = notAdmitted.Err
+			}
+			if status.Code(err) != tc.code || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("OpenTCP cause = %v, want %s: %s", err, tc.code, tc.message)
+			}
+		})
 	}
 }
 
 func TestAdmissionError(t *testing.T) {
-	open := claims{Exp: time.Now().Add(time.Minute).Unix()}
-	closed := claims{Exp: time.Now().Add(-time.Second).Unix()}
-	cancelled := status.Error(codes.Canceled, "context canceled")
-	done, stop := context.WithCancel(context.Background())
-	stop()
 	for _, tc := range []struct {
-		name string
-		ctx  context.Context
-		c    claims
-		err  error
-		want bool
+		name  string
+		cause error
+		err   error
+		want  bool
 	}{
-		{"admission timer", context.Background(), closed, cancelled, true},
-		{"deadline as the cause", context.Background(), closed, context.DeadlineExceeded, true},
-		{"broker closed admission", context.Background(), closed, status.Error(codes.FailedPrecondition, "admission closed"), true},
-		{"window still open", context.Background(), open, cancelled, false},
-		{"caller cancelled", done, closed, cancelled, false},
-		{"another failure at expiry", context.Background(), closed, status.Error(codes.Unavailable, "connection reset"), false},
+		{"local timer canceled GRPC", errAdmissionTimeout, status.FromContextError(context.Canceled).Err(), true},
+		{"local timer canceled join", errAdmissionTimeout, context.Canceled, true},
+		{"setup deadline without the timer", nil, context.DeadlineExceeded, false},
+		{"cancellation without the timer", nil, status.FromContextError(context.Canceled).Err(), false},
+		{"broker closed admission", nil, fmt.Errorf("joining Cloud relay: %w", status.Error(codes.FailedPrecondition, "admission closed")), true},
+		{"broker grant mismatch during timer", errAdmissionTimeout, status.Error(codes.FailedPrecondition, "grant mismatch"), false},
+		{"another failure during timer", errAdmissionTimeout, status.Error(codes.Unavailable, "connection reset"), false},
 	} {
 		var notAdmitted *NotAdmittedError
-		got := errors.As(admissionError(tc.ctx, tc.c, time.Now(), tc.err), &notAdmitted)
+		got := errors.As(admissionError(context.Background(), tc.cause, time.Now(), tc.err), &notAdmitted)
 		if got != tc.want {
 			t.Errorf("%s: NotAdmittedError = %v, want %v", tc.name, got, tc.want)
 		}

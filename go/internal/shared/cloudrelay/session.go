@@ -22,8 +22,9 @@ type Session struct {
 	closed bool
 }
 
-func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c claims, key *ecdsa.PrivateKey, role pb.JoinRole, dial func(string) (*grpc.ClientConn, error)) (*Session, error) {
-	ctx, cancel := context.WithDeadline(ctx, time.Unix(c.RelayExp, 0))
+func join(parent context.Context, broker *pb.BrokerInstance, artifact string, c claims, key *ecdsa.PrivateKey, role pb.JoinRole, dial func(string) (*grpc.ClientConn, error)) (result *Session, err error) {
+	ctx, cancel := context.WithDeadline(parent, time.Unix(c.RelayExp, 0))
+	ctx, cancelAdmission := context.WithCancelCause(ctx)
 	ctx = metadata.NewOutgoingContext(ctx, metadata.MD{})
 	conn, err := dial(broker.Endpoint)
 	if err != nil {
@@ -31,15 +32,28 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 		return nil, err
 	}
 	s := &Session{cancel: cancel, conn: conn}
-	ok := false
+	// Admission must finish before the grant expires; the relay has a later deadline.
+	started := time.Now()
+	timerDone := make(chan struct{})
+	timer := time.AfterFunc(time.Until(time.Unix(c.Exp, 0)), func() {
+		cancelAdmission(errAdmissionTimeout)
+		close(timerDone)
+	})
 	defer func() {
-		if !ok {
+		if !timer.Stop() {
+			<-timerDone
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			if role == pb.JoinRole_JOIN_ROLE_CALLER {
+				err = admissionError(parent, context.Cause(ctx), started, err)
+			}
 			s.Close()
+			result = nil
 		}
 	}()
-	// Admission must finish before the grant expires; the relay has a later deadline.
-	timer := time.AfterFunc(time.Until(time.Unix(c.Exp, 0)), cancel)
-	defer timer.Stop()
 	s.stream, err = pb.NewTunnelBrokerV2ServiceClient(conn).JoinSession(ctx)
 	if err != nil {
 		return nil, err
@@ -70,7 +84,6 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	if a == nil || a.Role != role || a.RelayExpiresAt == nil || a.RelayExpiresAt.CheckValid() != nil || a.RelayExpiresAt.AsTime().Unix() != c.RelayExp {
 		return nil, fmt.Errorf("invalid relay join acceptance")
 	}
-	ok = true
 	return s, nil
 }
 func (s *Session) Close() error { s.cancel(); return s.conn.Close() }
