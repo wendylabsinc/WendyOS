@@ -138,7 +138,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 			return fmt.Errorf("firmware does not support trust bundle provisioning; update the board first")
 		}
 		timeClient, err = liteenroll.DiscoverTrustForProfile(ctx, cfg, opts.caCertsURL, trustProfile, func(err error) {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Wendy Net cross-chain trust was not provisioned: %v\nThe device can pick up the trust bundle during a later certificate renewal.\n", err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Wendy Net cross-chain trust was not provisioned: %v\nThe device can fetch its peer CA certificates later when it can reach PKI.\n", err)
 		})
 		if err != nil {
 			return err
