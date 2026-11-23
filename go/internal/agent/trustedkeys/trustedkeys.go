@@ -255,18 +255,6 @@ func (s *Store) List() []Entry {
 	return append([]Entry(nil), s.file.Keys...)
 }
 
-// Floor is the latest added_at: a lower bound for the device clock when
-// checking a client certificate's NotBefore on a device without an RTC.
-func (s *Store) Floor() time.Time {
-	var floor time.Time
-	for _, e := range s.List() {
-		if e.AddedAt.After(floor) {
-			floor = e.AddedAt
-		}
-	}
-	return floor
-}
-
 func newEntry(spki []byte, role Role, label, addedBy string, now time.Time) (Entry, error) {
 	if role == RoleNone {
 		return Entry{}, errors.New("a role is required: owner, operator or viewer")
