@@ -54,6 +54,7 @@ type Backend struct {
 	mobileMu                sync.Mutex
 	mobileScope             string
 	tunnelSession           commands.TunnelSession
+	appTunnelContext        func(context.Context) context.Context
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
@@ -97,6 +98,7 @@ type secureLANConnectionKey struct{}
 func New() *Backend {
 	b := &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second, unpinDevice: commands.DesktopUnpin}
 	b.tunnelSession.SetActive(true)
+	b.appTunnelContext = b.tunnelSession.Context
 	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
 		ctx = b.tunnelSession.Context(ctx)
 		if secure, _ := ctx.Value(secureLANConnectionKey{}).(bool); secure {
