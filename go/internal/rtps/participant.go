@@ -122,12 +122,8 @@ type Participant struct {
 	// ackCount tracks per-writer ACKNACK counts, which RTPS requires to
 	// increase monotonically or the writer ignores the request as a duplicate.
 	ackCount map[writerKey]uint32
-	// sedpHighest is the highest SEDP sequence number received per writer. It
-	// is what stops an ACKNACK storm: without it every heartbeat re-requests
-	// the writer's whole history, the writer replays it, and the replay
-	// provokes more heartbeats. Measured on a Go2, that amplified to 2.1M
-	// submessages in 25 seconds.
-	sedpHighest map[writerKey]SequenceNumber
+	// sedpReceived tracks holes as well as received and explicitly gapped history.
+	sedpReceived map[writerKey]*discoverySequences
 
 	samples chan Sample
 	discov  chan Endpoint
@@ -240,23 +236,23 @@ func (p *Participant) logf(format string, args ...any) {
 
 func newParticipant(cfg Config) *Participant {
 	return &Participant{
-		cfg:         cfg,
-		endpoints:   map[GUID]*Endpoint{},
-		subs:        map[uint32]GUID{},
-		peers:       map[GUIDPrefix][]Locator{},
-		lastReply:   map[GUIDPrefix]time.Time{},
-		peerExpiry:  map[GUIDPrefix]time.Time{},
-		peerLease:   map[GUIDPrefix]time.Duration{},
-		endpointSN:  map[GUID]SequenceNumber{},
-		leases:      map[*Lease]struct{}{},
-		closed:      make(chan struct{}),
-		subAnnounce: map[GUID][]byte{},
-		ackCount:    map[writerKey]uint32{},
-		sedpHighest: map[writerKey]SequenceNumber{},
-		subWriters:  map[GUID]struct{}{},
-		seenData:    map[uint32]int{},
-		seenHB:      map[uint32]int{},
-		unmatched:   map[GUID]int{},
+		cfg:          cfg,
+		endpoints:    map[GUID]*Endpoint{},
+		subs:         map[uint32]GUID{},
+		peers:        map[GUIDPrefix][]Locator{},
+		lastReply:    map[GUIDPrefix]time.Time{},
+		peerExpiry:   map[GUIDPrefix]time.Time{},
+		peerLease:    map[GUIDPrefix]time.Duration{},
+		endpointSN:   map[GUID]SequenceNumber{},
+		leases:       map[*Lease]struct{}{},
+		closed:       make(chan struct{}),
+		subAnnounce:  map[GUID][]byte{},
+		ackCount:     map[writerKey]uint32{},
+		sedpReceived: map[writerKey]*discoverySequences{},
+		subWriters:   map[GUID]struct{}{},
+		seenData:     map[uint32]int{},
+		seenHB:       map[uint32]int{},
+		unmatched:    map[GUID]int{},
 		// Four maximum-sized image samples cap queued payload memory at 64 MiB;
 		// the channel is lossy by design, so a slow consumer gets newer frames.
 		samples:     make(chan Sample, 4),
@@ -476,9 +472,9 @@ func (p *Participant) removePeerLocked(prefix GUIDPrefix) {
 	delete(p.peers, prefix)
 	delete(p.peerExpiry, prefix)
 	delete(p.peerLease, prefix)
-	for key := range p.sedpHighest {
+	for key := range p.sedpReceived {
 		if key.prefix == prefix {
-			delete(p.sedpHighest, key)
+			delete(p.sedpReceived, key)
 			delete(p.ackCount, key)
 		}
 	}
@@ -607,8 +603,20 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 	}
 	p.statRTPS.Add(1)
 	p.renewPeer(msg.Prefix)
+	gapDestination := true
 	for _, s := range msg.Submessages {
 		switch s.Kind {
+		case subINFO_DST:
+			gapDestination = false
+			if len(s.Body) >= 12 {
+				var destination GUIDPrefix
+				copy(destination[:], s.Body[:12])
+				gapDestination = destination == (GUIDPrefix{}) || destination == p.prefix
+			}
+		case subGAP:
+			if gapDestination {
+				p.handleDiscoveryGap(msg.Prefix, s)
+			}
 		case subHEARTBEAT:
 			p.statHeartbeat.Add(1)
 			p.handleHeartbeat(msg.Prefix, s, src)
@@ -681,29 +689,26 @@ func (p *Participant) handleHeartbeat(prefix GUIDPrefix, s Submessage, src *net.
 	p.seenMu.Lock()
 	p.seenHB[hb.WriterID]++
 	p.seenMu.Unlock()
-	if hb.WriterID != entitySEDPPubWriter {
+	if hb.WriterID != entitySEDPPubWriter || hb.FirstSN < 1 || hb.LastSN < hb.FirstSN {
 		return
 	}
 
 	key := writerKey{prefix: prefix, entity: hb.WriterID}
 	p.mu.Lock()
-	have := p.sedpHighest[key]
-	base := hb.FirstSN
-	if have+1 > base {
-		base = have + 1
-	}
-	if base > hb.LastSN {
-		// Nothing outstanding. Staying silent here is the difference between a
-		// steady trickle of heartbeats and a self-sustaining replay storm.
+	received := p.discoverySequencesLocked(key)
+	// The writer no longer retains history below FirstSN.
+	received.add(1, hb.FirstSN-1)
+	base, missing := received.firstMissing(hb.FirstSN, hb.LastSN)
+	if !missing {
+		// Stay silent once discovery is complete; never replay known history.
 		p.mu.Unlock()
 		return
 	}
 	p.ackCount[key]++
 	count := p.ackCount[key]
 	locators := append([]Locator(nil), p.peers[prefix]...)
+	ack := buildAcknackMissing(entitySEDPPubReader, entitySEDPPubWriter, base, hb.LastSN, count, received.contains)
 	p.mu.Unlock()
-
-	ack := buildAcknack(entitySEDPPubReader, entitySEDPPubWriter, base, hb.LastSN, count)
 	dgram := buildMessage(p.prefix, buildInfoDst(prefix), ack)
 	// Fast DDS may transmit from an ephemeral output socket that does not
 	// receive discovery traffic. Reply to the listening locators learned from
@@ -727,13 +732,37 @@ type writerKey struct {
 	entity uint32
 }
 
-// noteSEDPReceived advances the high-water mark used to decide what an ACKNACK
-// still needs to ask for.
+func (p *Participant) discoverySequencesLocked(key writerKey) *discoverySequences {
+	state := p.sedpReceived[key]
+	if state == nil {
+		state = &discoverySequences{}
+		p.sedpReceived[key] = state
+	}
+	return state
+}
+
 func (p *Participant) noteSEDPReceived(prefix GUIDPrefix, entity uint32, sn SequenceNumber) {
-	key := writerKey{prefix: prefix, entity: entity}
 	p.mu.Lock()
-	if sn > p.sedpHighest[key] {
-		p.sedpHighest[key] = sn
+	p.discoverySequencesLocked(writerKey{prefix: prefix, entity: entity}).add(sn, sn)
+	p.mu.Unlock()
+}
+
+// GAP marks history that the writer cannot replay. Without it a missing
+// disposed/replaced publication could be requested forever.
+func (p *Participant) handleDiscoveryGap(prefix GUIDPrefix, s Submessage) {
+	gap, err := parseGap(s)
+	if err != nil || gap.writerID != entitySEDPPubWriter ||
+		(gap.readerID != entityUnknown && gap.readerID != entitySEDPPubReader) {
+		return
+	}
+	p.mu.Lock()
+	state := p.discoverySequencesLocked(writerKey{prefix: prefix, entity: gap.writerID})
+	state.add(gap.start, gap.base-1)
+	for i := uint32(0); i < gap.numBits; i++ {
+		if gap.bitmap[i/32]&(1<<(31-i%32)) != 0 {
+			sn := gap.base + SequenceNumber(i)
+			state.add(sn, sn)
+		}
 	}
 	p.mu.Unlock()
 }
