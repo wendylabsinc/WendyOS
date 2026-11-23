@@ -482,7 +482,6 @@ func pickWendyLiteBoard(ctx context.Context, target string, nightly bool) (strin
 			Value:   v.Board,
 		})
 	}
-	fmt.Println()
 	return pickFromItems("Select your board model", items)
 }
 
@@ -683,7 +682,6 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		// The rows came from the master manifest alone. The chosen device's own
 		// manifest is read now; when that fails the list opens again.
 		for {
-			fmt.Println()
 			selected, err = pickInstallDeviceFn(items)
 			if err != nil {
 				return err
@@ -2666,7 +2664,6 @@ func selectWifiNetworkStreaming() (wifiScanSelection, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	p := tui.NewProgram(newLocalWifiPickerModel(ctx))
-	fmt.Fprintln(tui.PromptWriter())
 	finalModel, runErr := tui.RunProgram(p)
 	if errors.Is(runErr, tea.ErrInterrupted) {
 		return wifiScanSelection{}, ErrUserCancelled
@@ -2798,8 +2795,23 @@ func resolveDeviceName(flagName string) (string, error) {
 		}
 		return "", fmt.Errorf("device-name prompt: %w", err)
 	}
-	return strings.TrimSpace(name), nil
+	name = strings.TrimSpace(name)
+	printNameAnswer(name)
+	return name, nil
 }
+
+// printNameAnswer leaves the answered device-name question on screen.
+func printNameAnswer(name string) {
+	if name == "" {
+		name = "auto-generated"
+	}
+	printAnswer(alsoOnPromptTerminal(os.Stdout), "Device name", name, false)
+}
+
+// wifiWillBeAsked and nameWillBeAsked say whether the person answers these at a
+// prompt; when both are answered, no first-boot summary repeats them.
+func wifiWillBeAsked(wifi wifiCLIOptions) bool { return !wifi.chosen() && isInteractiveTerminal() }
+func nameWillBeAsked(flagName string) bool     { return flagName == "" && isInteractiveTerminal() }
 
 // resolveProvisioningJSON runs EAB pre-enrollment per preOpts and returns the
 // marshaled acme-enrollment.json, or nil when enrollment is skipped or not
@@ -2833,7 +2845,8 @@ func resolveFirstBootChoices(ctx context.Context, deviceName string, preOpts pre
 
 // settleRecoveryFirstBoot reserves the name in Cloud only after the flash is
 // confirmed, so a declined flash leaves nothing reserved.
-func settleRecoveryFirstBoot(ctx context.Context, c recoveryFlashConfirm, creds []wendyconf.WifiCredential, requestedName string, preOpts preEnrollOptions, force bool) (string, []byte, error) {
+func settleRecoveryFirstBoot(ctx context.Context, c recoveryFlashConfirm, creds []wendyconf.WifiCredential, wifiAsked bool, requestedName string, preOpts preEnrollOptions, force bool) (string, []byte, error) {
+	summary := !(wifiAsked && nameWillBeAsked(requestedName) && preOpts.mode != preEnrollForced)
 	name, plan, err := resolveFirstBootChoices(ctx, requestedName, preOpts)
 	if err != nil {
 		return "", nil, err
@@ -2842,9 +2855,10 @@ func settleRecoveryFirstBoot(ctx context.Context, c recoveryFlashConfirm, creds 
 	if plan != nil {
 		cloud = cloudWillPreEnroll
 	}
-	if err := confirmRecoveryFlash(c, name, creds, cloud, force); err != nil {
+	if err := confirmRecoveryFlash(c, name, creds, cloud, summary, force); err != nil {
 		return "", nil, err
 	}
+	fmt.Println() // the work starts a new stage
 	provJSON, err := mintProvisioningJSON(ctx, plan, &name)
 	return name, provJSON, err
 }
@@ -2893,7 +2907,6 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 		}
 		return nil
 	}
-	fmt.Println()
 	var name string
 	var err error
 	if suggestion != "" {
@@ -2907,7 +2920,9 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 		}
 		return "", fmt.Errorf("device-name prompt: %w", err)
 	}
-	return strings.TrimSpace(name), nil
+	name = strings.TrimSpace(name)
+	printNameAnswer(name)
+	return name, nil
 }
 
 // planProvisioning asks whether and with which session to pre-enroll; it
@@ -2984,7 +2999,7 @@ func eraseDriveStep(d drive) string { return fmt.Sprintf("erasing %s (%s)", d.Na
 // confirmEraseDrive asks before d is erased; --force skips the question.
 func confirmEraseDrive(d drive, force bool) error {
 	if !force && isInteractiveTerminal() {
-		fmt.Fprintln(tui.PromptWriter())
+		fmt.Fprintln(alsoOnPromptTerminal(os.Stdout))
 	}
 	ok, err := confirmInstallStep(eraseDriveStep(d),
 		fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", d.Name, d.DevicePath), false, force)
@@ -3012,7 +3027,7 @@ func eraseDriveLabel(d drive) string {
 // resolveFirstBootWiFi resolves first-boot Wi-Fi and, when it was asked,
 // leaves the answer on screen.
 func resolveFirstBootWiFi(wifi wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
-	asked := !wifi.chosen() && isInteractiveTerminal()
+	asked := wifiWillBeAsked(wifi)
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err == nil && asked {
 		answer := "none"
@@ -3107,6 +3122,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 // pre-enroll, and shows it before asking to erase d, so nothing that changes
 // the result is asked afterwards. The returned plan is minted only after this.
 func confirmDiskInstall(ctx context.Context, d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+	answered := wifiWillBeAsked(wifi) && nameWillBeAsked(deviceName) && preOpts.mode != preEnrollForced
 	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return nil, "", nil, err
@@ -3126,7 +3142,9 @@ func confirmDiskInstall(ctx context.Context, d drive, wifi wifiCLIOptions, devic
 	if plan != nil {
 		cloud = cloudWillPreEnroll
 	}
-	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), name, creds, cloud)
+	if !answered {
+		printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), name, creds, cloud)
+	}
 	if err := confirmOverwriteInternalDrive(d, force, yesOverwriteInternal); err != nil {
 		return nil, "", nil, err
 	}
@@ -3416,7 +3434,6 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	autoDiscoverPort := serialDevice.Port == ""
 	interactive := !jsonOutput && isInteractiveTerminal()
 	if autoDiscoverPort {
-		fmt.Println()
 		installNote(os.Stdout, "Scanning for ESP32 devices...")
 
 		// A device that's rebooting on its own can drop off and reappear on
@@ -3453,6 +3470,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 
 	wifi.MaxNetworks = liteMaxWiFiNetworks
+	fmt.Println() // the first-boot questions start a new stage
 	provCreds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
@@ -3485,6 +3503,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if err != nil {
 		return err
 	}
+	if !(wifiWillBeAsked(wifi) && nameWillBeAsked(deviceName) && preOpts.mode != preEnrollForced) {
+		printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), provDeviceName, provCreds, "")
+	}
 
 	wendyConf, err := buildWendyConf(provCreds, provDeviceName, nil)
 	if err != nil {
@@ -3498,8 +3519,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
 		return fmt.Errorf("ESP32 enrollment requires native USB after flashing; connect the board's native USB port, or install with --pre-enroll=false and run 'wendy device enroll' over native USB later")
 	}
+	fmt.Println() // the work starts a new stage
 	fmt.Println(esp32InstallCandidateMessage(serialDevice))
-
 	installNote(os.Stdout, "Fetching latest Wendy Lite firmware...")
 	firmwareID, err := WendyLiteFirmwareID(board)
 	if err != nil {
@@ -3537,8 +3558,6 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if err := img.SetPartition("wendy_conf", payload); err != nil {
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
-
-	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), provDeviceName, provCreds, "")
 
 	// Flash with progress bar. Retries on failure: a busy port gets an extra
 	// offer to identify and kill whatever holds it; any other failure just

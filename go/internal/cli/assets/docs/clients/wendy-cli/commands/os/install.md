@@ -293,16 +293,21 @@ Without a terminal on the input (CI, an agent's shell), nothing is asked, and ev
 | Internal drive | `--yes-overwrite-internal` is required. |
 | Several boards in recovery or EDL mode | Connect only the one to flash. |
 
-Before anything is erased or flashed, the installer prints what first boot will apply, also with `--force`. Passwords are never printed:
+Before anything is erased or flashed, the first-boot settings are on screen; passwords are never printed. Answered questions stay as one line each:
 
 ```text
-First boot will apply:
-  Device name  lab-pi
-  Wi-Fi        MyNetwork, Cafe (open)
-  Cloud        not enrolled
+? Wi-Fi: MyNetwork, Cafe (open)
+? Pre-enroll with Wendy Cloud: yes (Wendy Labs, Inc.)
+? Device name: lab-pi
 ```
 
-Installs that pre-enroll show `will pre-enroll`, because the name is reserved only after the erase or flash is confirmed. The Cloud line is left out for Wendy Lite, which enrolls after flashing. Jetson and Dragonwing flash logs start with the same summary.
+Settings that come from flags, including `--force` runs, show as one line:
+
+```text
+› First boot: name lab-pi · Wi-Fi MyNetwork, Cafe (open) · Cloud not enrolled
+```
+
+The Cloud part says `will pre-enroll` when pre-enrolling and is left out for Wendy Lite. Jetson and Dragonwing flash logs start with the same settings.
 
 ## Agent-driven installation
 

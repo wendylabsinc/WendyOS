@@ -583,7 +583,8 @@ func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
 	if name != "hackathon-display-2" || len(out) == 0 || fmt.Sprint(*tried) != "[hackathon-display hackathon-display-2]" {
 		t.Fatalf("name %q, tried %v", name, *tried)
 	}
-	if !strings.Contains(stdout, "Another device in your organization already uses hackathon-display.") || strings.Contains(stdout, "rpc error") {
+	if !strings.Contains(stdout, "Another device in your organization already uses hackathon-display.") || strings.Contains(stdout, "rpc error") ||
+		!strings.Contains(stdout, "? Device name: hackathon-display-2") {
 		t.Fatalf("output:\n%s", stdout)
 	}
 }

@@ -93,7 +93,7 @@ func TestJetsonRecoveryReadiness(t *testing.T) {
 					if tc.name == "present" {
 						t.Logf("Readiness output with a descriptor fixture (no hardware writes):\n%s", out)
 						_, err = captureCommandStdout(t, func() error {
-							return confirmRecoveryFlash(recoveryFlashConfirm{target: target.name, question: "Flash selected target?"}, "", nil, cloudNotEnrolled, false)
+							return confirmRecoveryFlash(recoveryFlashConfirm{target: target.name, question: "Flash selected target?"}, "", nil, cloudNotEnrolled, true, false)
 						})
 						if err != nil || len(*asked) != 1 || (*asked)[0] != "danger:Flash selected target?" {
 							t.Fatalf("erase confirmation after detected recovery: %v, prompts %v", err, *asked)

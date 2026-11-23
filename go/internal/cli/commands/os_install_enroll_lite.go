@@ -30,11 +30,18 @@ func resolveLiteInstallEnrollment(cfg *config.Config, opts preEnrollOptions, int
 			return nil, nil
 		}
 		ok, err := confirmPreEnroll()
-		if err != nil || !ok {
+		if err != nil {
 			return nil, err
+		}
+		if !ok {
+			printPreEnrollAnswer(nil)
+			return nil, nil
 		}
 	}
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
+	if err == nil && auth != nil && opts.mode == preEnrollAuto {
+		printPreEnrollAnswer(auth)
+	}
 	if err == nil && auth != nil {
 		// Validate derived endpoints and the tenant operator identity without
 		// any Cloud calls or minting a credential before the board is ready.

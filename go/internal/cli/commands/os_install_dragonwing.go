@@ -406,6 +406,8 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	// Resolve what the flash will write up front, as Thor does: the prompts
 	// must run before the flash UI takes over the terminal, and a bad flag
 	// should abort before the board is written.
+	fmt.Println() // the first-boot questions start a new stage
+	wifiAsked := wifiWillBeAsked(wifi)
 	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
@@ -418,7 +420,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 			tui.Dim("  the model from its chip id during the flash, not here."),
 		},
 		question: fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)),
-	}, creds, deviceName, preOpts, force)
+	}, creds, wifiAsked, deviceName, preOpts, force)
 	if err != nil {
 		return err
 	}

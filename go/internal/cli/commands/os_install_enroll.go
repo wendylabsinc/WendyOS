@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -212,6 +213,19 @@ func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preE
 	return plan.mint(ctx, deviceName)
 }
 
+// printPreEnrollAnswer leaves the answered pre-enroll question on screen; a nil
+// auth means the person said no.
+func printPreEnrollAnswer(auth *config.AuthConfig) {
+	answer := "no"
+	if auth != nil {
+		answer = "yes"
+		if org := strings.TrimSpace(tui.StripControl(cachedCloudOrganizationName(auth))); org != "" {
+			answer += " (" + org + ")"
+		}
+	}
+	printAnswer(alsoOnPromptTerminal(os.Stdout), "Pre-enroll with Wendy Cloud", answer, false)
+}
+
 // acmePreEnrollPlan is a settled choice to pre-enroll with auth; nothing has
 // been reserved in Cloud yet.
 type acmePreEnrollPlan struct {
@@ -234,11 +248,15 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 			return nil, err
 		}
 		if !ok {
+			printPreEnrollAnswer(nil)
 			return nil, nil
 		}
 	}
 
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
+	if err == nil && auth != nil && opts.mode == preEnrollAuto {
+		printPreEnrollAnswer(auth)
+	}
 	if err != nil {
 		if errors.Is(err, ErrUserCancelled) {
 			return nil, err
@@ -261,6 +279,7 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 // continue unenrolled, which returns nil. A name another device holds is asked
 // again, and the new name is written back to *deviceName.
 func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acmeEnrollmentBake, error) {
+	asked := *deviceName
 	var state *acmeEnrollmentBake
 	retry := nameRetry{interactive: p.interactive, noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen, org: cachedCloudOrganizationName(p.auth)}
 	enrollErr := retryTakenDeviceName(deviceName, retry, func(name string) (err error) {
@@ -274,6 +293,9 @@ func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acme
 		return nil, enrollErr
 	}
 	if enrollErr == nil {
+		if *deviceName != asked {
+			printNameAnswer(*deviceName)
+		}
 		installDone(os.Stdout, "Cloud enrollment reserved")
 		return state, nil
 	}

@@ -115,6 +115,8 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	// bad flag or failed enrollment aborts before anything is written. Written
 	// to the config image in stepProvision, then flashed like a disk install's
 	// config partition.
+	fmt.Println() // the first-boot questions start a new stage
+	wifiAsked := wifiWillBeAsked(wifi)
 	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
@@ -123,7 +125,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		target:   dev.Label,
 		warning:  []string{tui.WarningMessage(thorEraseWarning)},
 		question: fmt.Sprintf("Flash %s?", dev.Label),
-	}, creds, deviceName, preOpts, force)
+	}, creds, wifiAsked, deviceName, preOpts, force)
 	if err != nil {
 		return err
 	}
