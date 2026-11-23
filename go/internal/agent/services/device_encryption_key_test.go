@@ -260,7 +260,7 @@ func TestDeviceEncryptionKeyReregistersWhileUnbound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { k.Run(ctx); close(done) }()
-	waitForEncryptionKey(t, func() bool { return fake.count() == 4 })
+	waitUntil(t, "the key is registered", func() bool { return fake.count() == 4 })
 	time.Sleep(20 * time.Millisecond)
 	if n := fake.count(); n != 4 {
 		t.Fatalf("%d registrations after Cloud acknowledged the key, want 4", n)
@@ -281,7 +281,7 @@ func TestDeviceEncryptionKeyReregistersWhileUnbound(t *testing.T) {
 	// A renewed leaf for the same device registers the same key again.
 	renewedCert, renewedKey := mldsaDevice(t, uri)
 	k.UpdateIdentity("cloud", renewedCert, renewedKey, "")
-	waitForEncryptionKey(t, func() bool { return fake.count() == 5 })
+	waitUntil(t, "the key is registered", func() bool { return fake.count() == 5 })
 	if !bytes.Equal(fake.calls[4].GetPayload(), fake.calls[3].GetPayload()) {
 		t.Fatal("the renewed identity registered a different key")
 	}
@@ -364,16 +364,5 @@ func TestDeviceEncryptionKeyWarnsWhenReplacingUnparsableKey(t *testing.T) {
 	}
 	if logs.FilterField(zap.String("event", "device_encryption_key_replaced")).Len() != 1 {
 		t.Fatal("replacing an unparsable key was not logged")
-	}
-}
-
-func waitForEncryptionKey(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out")
-		}
-		time.Sleep(time.Millisecond)
 	}
 }

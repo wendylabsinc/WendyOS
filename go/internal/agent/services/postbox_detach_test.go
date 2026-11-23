@@ -178,23 +178,15 @@ func TestPostboxDetachStopsAPullInProgress(t *testing.T) {
 	f.p.retry = time.Hour // the pull only ends by cancellation
 	f.assignEntry(r.assign)
 	f.cycleWithin(5 * time.Second)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+	waitUntil(t, "the pull calls the registry", func() bool {
 		arts.mu.Lock()
-		calls := arts.materialCalls
-		arts.mu.Unlock()
-		if calls > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the pull never called the registry")
-		}
-	}
+		defer arts.mu.Unlock()
+		return arts.materialCalls > 0
+	})
 	dep := r.assign.GetDeploymentId()
 	f.detach(detachOp, f.detachRequest(dep, "web"), dep, "")
 	f.cycleWithin(5 * time.Second)
-	f.p.mu.Lock()
-	running := len(f.p.pulls)
-	f.p.mu.Unlock()
+	running := f.runningPulls()
 	if running != 0 || len(rec.imported) != 0 || f.held(dep) != nil ||
 		!slices.EqualFunc(rec.removed, []removal{{app: "web", prune: true}}, removal.equal) {
 		t.Fatalf("pulls %d, imported %d, held %+v, removed %v: want the pull stopped and nothing left", running, len(rec.imported), f.held(dep), rec.removed)

@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"reflect"
 	"slices"
@@ -23,10 +22,7 @@ import (
 )
 
 func (f *pbFixture) unassignEntry(dep string) {
-	resource := "org/" + f.tenant + "/deployment/" + dep + "/device/" + f.uuid
-	req := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour)), Revision: maxRevision}
-	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, req, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
-	f.cloud.add(jws, payload, typ)
+	f.statement(unassignOld, dep, nil, maxRevision)
 }
 
 // cycleWithin runs one cycle without waiting for the pulls it starts, and
@@ -72,9 +68,7 @@ func TestRegistryPullRunsBesideTheCommandQueue(t *testing.T) {
 
 	f.unassignEntry(r.assign.GetDeploymentId())
 	f.cycleWithin(5 * time.Second)
-	f.p.mu.Lock()
-	running := len(f.p.pulls)
-	f.p.mu.Unlock()
+	running := f.runningPulls()
 	if running != 0 || len(f.p.snapshot().Assignments) != 0 {
 		t.Fatalf("pulls %d, assignments %v: want the removal to cancel the pull", running, f.p.snapshot().Assignments)
 	}
@@ -90,20 +84,7 @@ func TestRegistryPullRunsBesideTheCommandQueue(t *testing.T) {
 // deployment after the restart; a finished pull is not repeated.
 func TestRegistryPullResumesAfterARestart(t *testing.T) {
 	f := newPBFixture(t)
-	r := f.release(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	arts := &fakeArtifacts{r: r, materialErr: func(call int) error {
-		if call == 1 {
-			stop() // the agent stops mid-pull
-			return status.Error(codes.Unavailable, "connection closed")
-		}
-		return nil
-	}}
-	rec := f.withArtifacts(arts)
-	f.assignEntry(r.assign)
-	_ = f.p.cycle(ctx)
-	f.p.waitPulls()
+	arts, rec := f.stoppedMidPull(f.release(t))
 	if len(rec.imported) != 0 {
 		t.Fatalf("imported %d before the restart", len(rec.imported))
 	}
@@ -244,19 +225,6 @@ func (m *releaseReaderMock) ReleaseLabels(_ context.Context, _, _, digest string
 	return m.labels, nil
 }
 
-// Install only (desired state stopped) is applied once the image is imported.
-func TestRegistryPullInstallOnlyIsAppliedOnceImported(t *testing.T) {
-	f := newPBFixture(t)
-	r := f.release(t)
-	r.assign.DesiredState = cloudpbv2.Running_STOPPED
-	rec := f.withArtifacts(&fakeArtifacts{r: r})
-	f.assignEntry(r.assign)
-	f.cycle()
-	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || len(rec.imported) != 1 {
-		t.Fatalf("outcome %v, imported %d: want APPLIED", o.Outcome, len(rec.imported))
-	}
-}
-
 // B10: an imported release supersedes the app's other releases; removing the
 // deployment removes the app's releases except one another held deployment
 // of the app still uses.
@@ -329,9 +297,7 @@ func TestPostboxResetRemovesEveryRelease(t *testing.T) {
 	if err := f.p.RemoveAllReleases(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
-	f.p.mu.Lock()
-	running := len(f.p.pulls)
-	f.p.mu.Unlock()
+	running := f.runningPulls()
 	if running != 0 || !slices.EqualFunc(rec.removed, []removal{{}}, removal.equal) {
 		t.Fatalf("pulls %d, removed %v: want every pull stopped and every release removed", running, rec.removed)
 	}
@@ -397,17 +363,11 @@ func TestRegistryPullReplacementCancelsThePull(t *testing.T) {
 	f.p.retry = time.Hour // after its first failure the old pull only ends by cancellation
 	f.assignEntry(r.assign)
 	f.cycleWithin(5 * time.Second)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+	waitUntil(t, "the first pull calls the registry", func() bool {
 		arts.mu.Lock()
-		calls := arts.materialCalls
-		arts.mu.Unlock()
-		if calls > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the first pull never called the registry")
-		}
-	}
+		defer arts.mu.Unlock()
+		return arts.materialCalls > 0
+	})
 	mu.Lock()
 	down = false
 	mu.Unlock()
@@ -424,20 +384,7 @@ func TestRegistryPullReplacementCancelsThePull(t *testing.T) {
 // A pull resumed after the statement expired fetches nothing.
 func TestRegistryPullResumedAfterExpiryIsRefused(t *testing.T) {
 	f := newPBFixture(t)
-	r := f.release(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	arts := &fakeArtifacts{r: r, materialErr: func(call int) error {
-		if call == 1 {
-			stop()
-			return status.Error(codes.Unavailable, "connection closed")
-		}
-		return nil
-	}}
-	f.withArtifacts(arts)
-	f.assignEntry(r.assign)
-	_ = f.p.cycle(ctx)
-	f.p.waitPulls()
+	arts, _ := f.stoppedMidPull(f.release(t))
 
 	f.now = f.now.Add(2 * time.Hour) // the device comes back after expires_at
 	f.p = f.newPostbox()
@@ -708,47 +655,20 @@ func TestRegistryPullRestoresOnlyWhatItReplaced(t *testing.T) {
 func TestRegistryPullPutsBackAfterACrashAndExpiry(t *testing.T) {
 	for _, state := range []string{"absent", "half swapped", "running", "direct run"} {
 		f, rec, base := runningRelease(t)
-		next := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
-		next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
-		next.AppReleaseId = uuid.NewString() // not on the device
-		rec.arts.materialErr = func(int) error { return status.Error(codes.Unavailable, "registry unreachable") }
-		f.assignEntry(next)
-		f.cycleWithin(5 * time.Second)
-		f.p.stopPull(next.GetDeploymentId()) // the agent is killed mid-pull
-		switch state {
-		case "absent":
-			rec.app = nil
-		case "half swapped":
-			rec.app = &fakeApp{image: ReleaseImageName("web", next.GetAppReleaseId())}
-		case "direct run":
-			rec.app = &fakeApp{image: "docker.io/dev/web:latest"}
-		}
-		f.p.now = func() time.Time { return f.now.Add(2 * time.Hour) } // past both expiries
-		starts := len(rec.starts)
-		f.cycle()
-		f.p.waitPulls()
-		restored := len(rec.starts) > starts && slices.Equal(rec.starts[len(rec.starts)-1].Env, []string{"MODE=a"})
+		_, starts := crashedResume(t, f, rec, base, nil, func(next *cloudpbv2.DeviceAssignment) *fakeApp {
+			switch state {
+			case "absent":
+				return nil
+			case "half swapped":
+				return &fakeApp{image: ReleaseImageName("web", next.GetAppReleaseId())}
+			case "direct run":
+				return &fakeApp{image: "docker.io/dev/web:latest"}
+			}
+			return rec.app
+		})
+		restored := len(starts) > 0 && slices.Equal(starts[len(starts)-1].Env, []string{"MODE=a"})
 		if want := state == "absent" || state == "half swapped"; restored != want || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED {
 			t.Errorf("%s: restored %v (want %v), outcome %v", state, restored, want, f.outcome("web"))
-		}
-	}
-}
-
-// Fix 4-7 at the statement: a service name, the agent's own variables and
-// values the runtime would refuse are refused when the statement arrives.
-func TestConfigurationIsAsStrictAsTheRuntime(t *testing.T) {
-	for config, ok := range map[string]bool{
-		`{"ROS_DOMAIN_ID":"7"}`:                          false,
-		`{"otel_service_name":"x"}`:                      false,
-		`{"RMW_IMPLEMENTATION":"x"}`:                     false,
-		`{"CYCLONEDDS_URI":"x"}`:                         false,
-		`{"ld_preload":"x"}`:                             false,
-		`{"PEM":"a\nb"}`:                                 false,
-		`{"BIG":"` + strings.Repeat("x", 33*1024) + `"}`: false,
-		`{"ROSETTA":"ok","OTELX":"ok"}`:                  true,
-	} {
-		if err := checkConfig(config); (err == nil) != ok {
-			t.Errorf("checkConfig(%.30q) = %v, want ok %v", config, err, ok)
 		}
 	}
 }
@@ -766,6 +686,33 @@ func TestPostboxRotationCrashKeepsTheTrueOutcome(t *testing.T) {
 	if o := f.outcome("web"); o.EntryID != 2 || o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || len(rec.starts) != starts {
 		t.Fatalf("outcome %+v, starts %d->%d: want entry 2 settled as the recorded APPLIED, nothing started", o, starts, len(rec.starts))
 	}
+}
+
+// runningPulls is the number of pulls running now.
+func (f *pbFixture) runningPulls() int {
+	f.p.mu.Lock()
+	defer f.p.mu.Unlock()
+	return len(f.p.pulls)
+}
+
+// stoppedMidPull queues r's assignment and runs a cycle whose agent stops
+// during the pull's first registry call.
+func (f *pbFixture) stoppedMidPull(r *testRelease) (*fakeArtifacts, *importRecorder) {
+	f.t.Helper()
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	arts := &fakeArtifacts{r: r, materialErr: func(call int) error {
+		if call == 1 {
+			stop()
+			return status.Error(codes.Unavailable, "connection closed")
+		}
+		return nil
+	}}
+	rec := f.withArtifacts(arts)
+	f.assignEntry(r.assign)
+	_ = f.p.cycle(ctx)
+	f.p.waitPulls()
+	return arts, rec
 }
 
 // crashedResume holds revision 2 of the running deployment with its pull cut

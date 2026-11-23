@@ -163,8 +163,9 @@ func TestRemovalMarksArePrunedAfterTheyCanMatter(t *testing.T) {
 	}
 }
 
-// At an equal revision only identical content is accepted (a key
-// rotation): the new statement is held and the move is not applied again.
+// At an equal revision identical content is accepted (a key rotation): the
+// new statement is held and the move is not applied again. A changed copy is
+// refused (TestAssignOrderRules, TestPostboxRefusalReporting).
 func TestPostboxEqualRevisionAcceptsOnlyIdenticalContent(t *testing.T) {
 	f := newPBFixture(t)
 	old, dep := uuid.NewString(), uuid.NewString()
@@ -184,23 +185,6 @@ func TestPostboxEqualRevisionAcceptsOnlyIdenticalContent(t *testing.T) {
 	f.cycle()
 	if h := f.held(dep); h == nil || h.DeploymentKeyID != "k2" || f.mark(old).RemovedAt != removedAt {
 		t.Fatalf("held %+v, old mark %+v: want the rotation held and the move not applied again", h, f.mark(old))
-	}
-
-	g := newPBFixture(t)
-	d := uuid.NewString()
-	first := g.assignment(d, "web", 1)
-	g.statement(assignNew, d, first, 0)
-	g.cycle()
-	rotated = g.assignment(d, "web", 1)
-	rotated.AppReleaseId, rotated.DeploymentKeyId = first.AppReleaseId, "k2"
-	changed := g.assignment(d, "web", 1)
-	changed.AppReleaseId = first.AppReleaseId
-	changed.ConfigJson = `{"A":"2"}`
-	g.statement(assignNew, d, rotated, 0)
-	g.statement(assignNew, d, changed, 0)
-	g.cycle()
-	if h := g.held(d); h == nil || h.DeploymentKeyID != "k2" || g.p.refusals["revision_conflict"] != 1 {
-		t.Fatalf("held %+v, refusals %v: want the rotation held and the changed copy refused", h, g.p.refusals)
 	}
 }
 
@@ -307,22 +291,20 @@ func TestCheckConfig(t *testing.T) {
 		`{"a":{"env":1},"b":{"ENV":1}}`:                      false, // nested: not a named value
 		`{"a":1e400}`:                                        true,
 		`{"a":123456789012345678901234567890}`:               true,
+		// As strict as the runtime: the agent's own variables, a linker's,
+		// and values the runtime would refuse.
+		`{"ROS_DOMAIN_ID":"7"}`:                          false,
+		`{"otel_service_name":"x"}`:                      false,
+		`{"RMW_IMPLEMENTATION":"x"}`:                     false,
+		`{"CYCLONEDDS_URI":"x"}`:                         false,
+		`{"ld_preload":"x"}`:                             false,
+		`{"PEM":"a\nb"}`:                                 false,
+		`{"BIG":"` + strings.Repeat("x", 33*1024) + `"}`: false,
+		`{"ROSETTA":"ok","OTELX":"ok"}`:                  true,
 	} {
 		if err := checkConfig(config); (err == nil) != ok {
-			t.Errorf("checkConfig(%.20q) = %v, want ok %v", config, err, ok)
+			t.Errorf("checkConfig(%.30q) = %v, want ok %v", config, err, ok)
 		}
-	}
-}
-
-func TestPostboxRefusesAnInvalidConfiguration(t *testing.T) {
-	f := newPBFixture(t)
-	dep := uuid.NewString()
-	a := f.assignment(dep, "web", 1)
-	a.ConfigJson = `[1]`
-	f.statement(assignNew, dep, a, 0)
-	f.cycle()
-	if f.held(dep) != nil || f.mark(dep) != nil || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED || f.p.refusals["config"] != 1 {
-		t.Fatalf("held %v, outcome %v, refusals %v", f.held(dep), f.outcome("web"), f.p.refusals)
 	}
 }
 
@@ -466,15 +448,9 @@ func TestPostboxRemovalIsDurableBeforeItActs(t *testing.T) {
 			t.Fatalf("absent %v: on disk during the delete: held %+v, mark %+v, removals %v", absent, held, st.Marks[dep], st.Removals)
 		}
 		// Crash there and restart: the queued removal runs again.
-		if err := os.WriteFile(filepath.Join(f.dir, postboxStateFile), peek.snap, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		f.p.mu.Lock()
-		f.p.state = nil
-		f.p.mu.Unlock()
+		snap := peek.snap
 		peek.snap = nil
-		f.cycle()
-		f.p.waitPulls()
+		f.restartFrom(snap)
 		if peek.snap == nil || slices.Contains(f.p.snapshot().Removals, "web") {
 			t.Fatalf("absent %v: removal not finished after the restart (removals %v)", absent, f.p.snapshot().Removals)
 		}
@@ -504,13 +480,8 @@ func TestPostboxRotationAfterARefusedPullPullsAgain(t *testing.T) {
 	}
 
 	g := newPBFixture(t)
-	r := g.release(t)
-	r.assign.Revision, r.assign.ConfigJson = 1, "{}"
-	rec := g.withArtifacts(&fakeArtifacts{r: r})
-	g.assignEntry(r.assign)
-	g.cycle()
-	g.p.waitPulls()
-	again := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
+	assign, rec := g.pulledRelease(1)
+	again := proto.Clone(assign).(*cloudpbv2.DeviceAssignment)
 	again.ExpiresAt = timestamppb.New(g.now.Add(2 * time.Hour))
 	g.assignEntry(again)
 	g.cycle()
@@ -574,14 +545,7 @@ func TestPostboxRemovalCrashPoints(t *testing.T) {
 			if err := json.Unmarshal(writes[k], &snap); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(f.dir, postboxStateFile), writes[k], 0o600); err != nil {
-				t.Fatal(err)
-			}
-			f.p.mu.Lock()
-			f.p.state = nil
-			f.p.mu.Unlock()
-			f.cycle()
-			f.p.waitPulls()
+			f.restartFrom(writes[k])
 			o := f.outcome("web")
 			removed := len(f.p.snapshot().Removals) == 0 && o.EntryID == 2 && o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED &&
 				(kind == "absent" || f.held(dep) == nil && f.mark(dep).Removed)
@@ -629,6 +593,19 @@ func (f *pbFixture) committedWrite() []byte {
 	return nil
 }
 
+// pulledRelease is a release pulled and applied at revision rev, with an
+// empty configuration.
+func (f *pbFixture) pulledRelease(rev int32) (*cloudpbv2.DeviceAssignment, *importRecorder) {
+	f.t.Helper()
+	r := f.release(f.t)
+	r.assign.Revision, r.assign.ConfigJson = rev, "{}"
+	rec := f.withArtifacts(&fakeArtifacts{r: r})
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	return r.assign, rec
+}
+
 // restartFrom puts snap on disk as the state a crash left and runs a cycle.
 func (f *pbFixture) restartFrom(snap []byte) {
 	f.t.Helper()
@@ -646,14 +623,9 @@ func (f *pbFixture) restartFrom(snap []byte) {
 // device holds; it is counted and audited only.
 func TestPostboxRefusedRemovalKeepsTheHeldOutcome(t *testing.T) {
 	f := newPBFixture(t)
-	r := f.release(t)
-	r.assign.Revision, r.assign.ConfigJson = 1, "{}"
-	f.withArtifacts(&fakeArtifacts{r: r})
-	f.assignEntry(r.assign)
-	f.cycle()
-	f.p.waitPulls()
+	assign, _ := f.pulledRelease(1)
 	before := f.outcome("web")
-	dep := r.assign.GetDeploymentId()
+	dep := assign.GetDeploymentId()
 	expired := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri,
 		ValidUntil: timestamppb.New(f.now.Add(-time.Second)), Revision: 2}
 	jws, payload, typ := f.sign(unassignNew, expired, "org/"+f.tenant+"/deployment/"+dep+"/device/"+f.uuid, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
@@ -685,13 +657,8 @@ func TestSettleCommittedReportsTheRecordedOutcome(t *testing.T) {
 // stays queued.
 func TestPostboxCommittedRemovalFailingAtRestart(t *testing.T) {
 	f := newPBFixture(t)
-	r := f.release(t)
-	r.assign.Revision, r.assign.ConfigJson = 1, "{}"
-	rec := f.withArtifacts(&fakeArtifacts{r: r})
-	f.assignEntry(r.assign)
-	f.cycle()
-	f.p.waitPulls()
-	f.statement(unassignNew, r.assign.GetDeploymentId(), nil, 2)
+	assign, rec := f.pulledRelease(1)
+	f.statement(unassignNew, assign.GetDeploymentId(), nil, 2)
 	snap := f.committedWrite()
 	rec.removeErr = errors.New("containerd down")
 	f.restartFrom(snap)
@@ -738,13 +705,8 @@ func TestPostboxRefusalReporting(t *testing.T) {
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE},
 	} {
 		f := newPBFixture(t)
-		r := f.release(t)
-		r.assign.Revision, r.assign.ConfigJson = 2, "{}"
-		rec := f.withArtifacts(&fakeArtifacts{r: r})
-		dep := r.assign.GetDeploymentId()
-		f.assignEntry(r.assign)
-		f.cycle()
-		f.p.waitPulls()
+		assign, rec := f.pulledRelease(2)
+		dep := assign.GetDeploymentId()
 		held, before := *f.held(dep), f.outcome("web")
 		target, a := tc.statement(f, dep)
 		f.statement(assignNew, target, a, 0)

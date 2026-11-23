@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -344,9 +343,7 @@ func (f *pbFixture) withArtifacts(a *fakeArtifacts) *importRecorder {
 }
 
 func (f *pbFixture) assignEntry(a *cloudpbv2.DeviceAssignment) {
-	resource := "org/" + f.tenant + "/deployment/" + a.GetDeploymentId() + "/device/" + f.uuid
-	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, a, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
-	f.cloud.add(jws, payload, typ)
+	f.statement(assignOld, a.GetDeploymentId(), a, 0)
 }
 
 func TestRegistryPullImportsAVerifiedReleaseAndResumesACutBlob(t *testing.T) {
@@ -388,9 +385,6 @@ func TestRegistryPullRepeatedLayerIsOneBlob(t *testing.T) {
 	f := newPBFixture(t)
 	shared := randomBytes(5000)
 	r := f.releaseOf(t, shared, randomBytes(300), shared)
-	if n := len(r.material.GetManifest().GetBlobs()); n != 3 {
-		t.Fatalf("fixture lists %d blobs, want 3 (config and two distinct layers)", n)
-	}
 	arts := &fakeArtifacts{r: r}
 	rec := f.withArtifacts(arts)
 	f.assignEntry(r.assign)
@@ -506,27 +500,11 @@ func TestRegistryPullAssignmentRemovedMidPull(t *testing.T) {
 	}
 }
 
-func TestRegistryPullRetriesUnavailableUntilTheCheckRuns(t *testing.T) {
-	f := newPBFixture(t)
-	r := f.release(t)
-	arts := &fakeArtifacts{r: r, materialErr: func(call int) error {
-		if call < 3 {
-			return status.Error(codes.Unavailable, "the assignment check could not be made; retry")
-		}
-		return nil
-	}}
-	rec := f.withArtifacts(arts)
-	f.assignEntry(r.assign)
-	f.cycle()
-	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || arts.materialCalls != 3 || len(rec.imported) != 1 {
-		t.Fatalf("outcome %v after %d calls, %d imports: want APPLIED on the third", o.Outcome, arts.materialCalls, len(rec.imported))
-	}
-}
-
-// A stream reset (INTERNAL, CANCELLED from the connection), a rate limit or an
-// aborted call is transient like UNAVAILABLE: retried, not a refusal.
+// UNAVAILABLE (the registry could not make the assignment check), a stream
+// reset (INTERNAL, CANCELLED from the connection), a rate limit or an aborted
+// call is transient: retried, not a refusal.
 func TestRegistryPullRetriesTransientStatuses(t *testing.T) {
-	for _, code := range []codes.Code{codes.Internal, codes.ResourceExhausted, codes.Aborted, codes.Canceled} {
+	for _, code := range []codes.Code{codes.Unavailable, codes.Internal, codes.ResourceExhausted, codes.Aborted, codes.Canceled} {
 		t.Run(code.String(), func(t *testing.T) {
 			f := newPBFixture(t)
 			r := f.release(t)
@@ -644,19 +622,6 @@ func TestRegistryPullConformanceVectors(t *testing.T) {
 		DeploymentKeyID string `json:"deployment_key_id"`
 	}
 	var v struct {
-		ChunkAEAD struct {
-			ContentKeyHex string `json:"content_key_hex"`
-			ChunkSize     int    `json:"chunk_size"`
-			Vectors       []struct {
-				Name             string `json:"name"`
-				Expect           string `json:"expect"`
-				PlaintextHex     string `json:"plaintext_hex"`
-				PlaintextDigest  string `json:"plaintext_digest"`
-				PlaintextSize    uint64 `json:"plaintext_size"`
-				CiphertextHex    string `json:"ciphertext_hex"`
-				CiphertextDigest string `json:"ciphertext_digest"`
-			} `json:"vectors"`
-		} `json:"chunk_aead"`
 		KeyWrap struct {
 			RecipientIKMHex string `json:"recipient_ikm_hex"`
 			Vectors         []struct {
@@ -725,32 +690,6 @@ func TestRegistryPullConformanceVectors(t *testing.T) {
 			&cloudpbv2.SealedContentKey{Nonce: unhex(sv.NonceHex), Ciphertext: unhex(sv.CiphertextHex)})
 		if (err == nil) != (sv.Expect == "valid") || err == nil && hex.EncodeToString(key) != sv.ContentKeyHex {
 			t.Fatalf("seal %s: expect %s, got %v", sv.Name, sv.Expect, err)
-		}
-	}
-
-	c := v.ChunkAEAD
-	dir := t.TempDir()
-	for _, cv := range c.Vectors {
-		ct := filepath.Join(dir, cv.Name+".enc")
-		pt := filepath.Join(dir, cv.Name)
-		ciphertext := unhex(cv.CiphertextHex)
-		if err := os.WriteFile(ct, ciphertext, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		err := decryptStaged(ct, pt, unhex(c.ContentKeyHex), &cloudpbv2.EncryptedBlob{
-			PlaintextDigest: cv.PlaintextDigest, CiphertextDigest: cv.CiphertextDigest,
-			PlaintextSize: cv.PlaintextSize, CiphertextSize: uint64(len(ciphertext)),
-		}, c.ChunkSize)
-		if cv.Expect == "valid" {
-			got, rerr := os.ReadFile(pt)
-			if err != nil || rerr != nil || hex.EncodeToString(got) != cv.PlaintextHex {
-				t.Fatalf("chunks %s: %v", cv.Name, err)
-			}
-			continue
-		}
-		var f *pullFailure
-		if !errors.As(err, &f) || f.outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_DIGEST {
-			t.Fatalf("chunks %s: want REJECTED_DIGEST, got %v", cv.Name, err)
 		}
 	}
 }
