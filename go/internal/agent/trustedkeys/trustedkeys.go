@@ -422,16 +422,18 @@ func (s *Store) write(f *fileFormat) error {
 	return nil
 }
 
-type keylessKey struct{}
+type callerRoleKey struct{}
 
-// WithKeyless marks ctx as a call admitted without a key (the keyless apps
-// set), so the deploy path can refuse what that set must not grant.
-func WithKeyless(ctx context.Context) context.Context {
-	return context.WithValue(ctx, keylessKey{}, true)
+// WithCallerRole marks ctx as a call a Closed device admitted with role
+// (RoleNone: without a key), so the deploy path can refuse what that role
+// must not grant.
+func WithCallerRole(ctx context.Context, role Role) context.Context {
+	return context.WithValue(ctx, callerRoleKey{}, role)
 }
 
-// Keyless reports whether ctx is a call admitted without a key.
-func Keyless(ctx context.Context) bool {
-	v, _ := ctx.Value(keylessKey{}).(bool)
-	return v
+// CallerRole returns the role a Closed device admitted the call with; ok is
+// false on Open and Enrolled devices, which check no roles.
+func CallerRole(ctx context.Context) (role Role, ok bool) {
+	role, ok = ctx.Value(callerRoleKey{}).(Role)
+	return role, ok
 }

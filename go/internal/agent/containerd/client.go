@@ -1572,7 +1572,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 
-	if err := keylessEntitlementError(ctx, &entCfg); err != nil {
+	if err := entitlementRoleError(ctx, &entCfg); err != nil {
 		return err
 	}
 	if err := localoci.ApplyEntitlements(spec, &entCfg, opts); err != nil {
@@ -6114,18 +6114,32 @@ func ensureDataSockets(provider AppDataSocketProvider, appID, service string, en
 	return p.EnsureStreams(appID, service, streams)
 }
 
-// keylessEntitlementError refuses, for an app deployed without a key on a
-// Closed device, the entitlements that would hand it more than the keyless
-// set: admin mounts the agent's local socket and build is
-// privileged-equivalent.
-func keylessEntitlementError(ctx context.Context, cfg *appconfig.AppConfig) error {
-	if !trustedkeys.Keyless(ctx) {
+// entitlementRoleError refuses, on a Closed device, the entitlements the
+// caller's role must not grant: admin needs a key (operator), and build, which
+// is privileged-equivalent, needs the owner. Open and Enrolled devices carry no
+// role and are not checked.
+func entitlementRoleError(ctx context.Context, cfg *appconfig.AppConfig) error {
+	role, closed := trustedkeys.CallerRole(ctx)
+	if !closed {
 		return nil
 	}
-	for _, e := range []string{appconfig.EntitlementAdmin, appconfig.EntitlementBuild} {
-		if cfg.HasEntitlement(e) {
-			return fmt.Errorf("apps deployed without a key cannot use the %s entitlement; remove it from wendy.json or deploy with a trusted key", e)
+	for _, e := range []struct {
+		name string
+		min  trustedkeys.Role
+	}{
+		{appconfig.EntitlementAdmin, trustedkeys.RoleOperator},
+		{appconfig.EntitlementBuild, trustedkeys.RoleOwner},
+	} {
+		if role < e.min && cfg.HasEntitlement(e.name) {
+			return fmt.Errorf("the %s entitlement needs the %s key and this deploy has %s; remove it from wendy.json or deploy with the %s key", e.name, e.min, describeRole(role), e.min)
 		}
 	}
 	return nil
+}
+
+func describeRole(r trustedkeys.Role) string {
+	if r == trustedkeys.RoleNone {
+		return "no key"
+	}
+	return "the " + r.String() + " role"
 }

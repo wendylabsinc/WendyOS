@@ -15,9 +15,10 @@ const (
 // (default deny); TestEveryAgentMethodHasARole fails the build on an agent
 // call without a role, and a Closed agent refuses to start serving one.
 //
-// owner: everything, plus the trusted keys, the shape, enrollment, unenroll
-// and the host shell. operator: deploy and run apps, and the device settings
-// apps need. viewer: reads only.
+// owner: everything, plus the trusted keys, the shape, enrollment, unenroll,
+// the host shell and whatever reaches root (agent and OS updates, drivers,
+// MCU flashing, the build host). operator: deploy and run apps, and the
+// device settings apps need. viewer: reads only.
 var methodRoles = map[string]trustedkeys.Role{
 	// wendy.agent.services.v1.WendyAgentService
 	"/wendy.agent.services.v1.WendyAgentService/ConnectBluetoothPeripheral":    operator,
@@ -40,8 +41,8 @@ var methodRoles = map[string]trustedkeys.Role{
 	"/wendy.agent.services.v1.WendyAgentService/SetHostname":                   operator,
 	"/wendy.agent.services.v1.WendyAgentService/SetPowerMode":                  operator,
 	"/wendy.agent.services.v1.WendyAgentService/SetWiFiNetworkPriority":        operator,
-	"/wendy.agent.services.v1.WendyAgentService/UpdateAgent":                   operator,
-	"/wendy.agent.services.v1.WendyAgentService/UpdateOS":                      operator,
+	"/wendy.agent.services.v1.WendyAgentService/UpdateAgent":                   owner,
+	"/wendy.agent.services.v1.WendyAgentService/UpdateOS":                      owner,
 
 	// wendy.agent.services.v1.WendyAudioService
 	"/wendy.agent.services.v1.WendyAudioService/ListAudioDevices":      viewer,
@@ -163,11 +164,11 @@ var methodRoles = map[string]trustedkeys.Role{
 	// wendy.agent.services.v2.WendyAgentUpdateService
 	"/wendy.agent.services.v2.WendyAgentUpdateService/CheckOnlineUpdate":     viewer,
 	"/wendy.agent.services.v2.WendyAgentUpdateService/GetOnlineUpdateStatus": viewer,
-	"/wendy.agent.services.v2.WendyAgentUpdateService/StartOnlineUpdate":     operator,
-	"/wendy.agent.services.v2.WendyAgentUpdateService/UpdateAgent":           operator,
+	"/wendy.agent.services.v2.WendyAgentUpdateService/StartOnlineUpdate":     owner,
+	"/wendy.agent.services.v2.WendyAgentUpdateService/UpdateAgent":           owner,
 
 	// wendy.agent.services.v2.WendyArduinoMcuService
-	"/wendy.agent.services.v2.WendyArduinoMcuService/FlashSketch": operator,
+	"/wendy.agent.services.v2.WendyArduinoMcuService/FlashSketch": owner,
 
 	// wendy.agent.services.v2.WendyAudioService
 	"/wendy.agent.services.v2.WendyAudioService/ListAudioDevices":      viewer,
@@ -193,7 +194,7 @@ var methodRoles = map[string]trustedkeys.Role{
 	// wendy.agent.services.v2.WendyBuildService
 	"/wendy.agent.services.v2.WendyBuildService/BuildImage":           operator,
 	"/wendy.agent.services.v2.WendyBuildService/GetBuildCapabilities": viewer,
-	"/wendy.agent.services.v2.WendyBuildService/SetBuildHostEnabled":  operator,
+	"/wendy.agent.services.v2.WendyBuildService/SetBuildHostEnabled":  owner,
 
 	// wendy.agent.services.v2.WendyCalibratedFrameService
 	"/wendy.agent.services.v2.WendyCalibratedFrameService/ListCalibratedSources":  viewer,
@@ -217,7 +218,7 @@ var methodRoles = map[string]trustedkeys.Role{
 	"/wendy.agent.services.v2.WendyDeviceInfoService/ListHardwareCapabilities": viewer,
 
 	// wendy.agent.services.v2.WendyDriverService
-	"/wendy.agent.services.v2.WendyDriverService/InstallDriver": operator,
+	"/wendy.agent.services.v2.WendyDriverService/InstallDriver": owner,
 	"/wendy.agent.services.v2.WendyDriverService/ListDrivers":   viewer,
 	"/wendy.agent.services.v2.WendyDriverService/RemoveDriver":  operator,
 
@@ -234,7 +235,7 @@ var methodRoles = map[string]trustedkeys.Role{
 
 	// wendy.agent.services.v2.WendyOSUpdateService
 	"/wendy.agent.services.v2.WendyOSUpdateService/GetOSUpdateStatus": viewer,
-	"/wendy.agent.services.v2.WendyOSUpdateService/UpdateOS":          operator,
+	"/wendy.agent.services.v2.WendyOSUpdateService/UpdateOS":          owner,
 
 	// wendy.agent.services.v2.WendyPowerService
 	"/wendy.agent.services.v2.WendyPowerService/Reboot": operator,
