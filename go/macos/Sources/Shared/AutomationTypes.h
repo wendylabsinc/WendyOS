@@ -35,6 +35,7 @@ WDCampaignClipsResult *WDCampaignClips(uint64_t session);
 void WDCampaignClipsFree(WDCampaignClipsResult *value);
 
 WDPairingsResult *WDPairings(uint64_t session, WDPairingKind kind);
+WDPairingsResult *WDPreviewSensorPairings(uint64_t preview);
 void WDPairingsFree(WDPairingsResult *value);
 WDStatus *WDPairSensor(uint64_t session, char *id);
 WDStatus *WDForgetSensor(uint64_t session, char *id);
