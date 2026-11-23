@@ -288,54 +288,9 @@ func ensureApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface
 	return createApp(ctx, out, conn, auth, a, false)
 }
 
-// registryFlags are the flags deploy, assign, unassign and rotate share.
-type registryFlags struct {
-	devices    []string
-	cloudGRPC  string
-	deployment string
-}
-
-func (f *registryFlags) bind(cmd *cobra.Command, deployment bool) {
-	cmd.Flags().StringArrayVar(&f.devices, "device", nil, "Target device UUID (repeatable)")
-	cmd.Flags().StringVar(&f.cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
-	if deployment {
-		cmd.Flags().StringVar(&f.deployment, "deployment", "", "Deployment id (required)")
-	}
-}
-
-// run validates the flags and runs call with this project's app id against
-// the session's registry.
-func (f *registryFlags) run(cmd *cobra.Command, call func(context.Context, *registryOp, string, []string) error) error {
-	if cmd.Flags().Lookup("deployment") != nil && !canonicalUUID(f.deployment) {
-		return usageErrorf("--deployment must be a deployment id (lower-case UUID)")
-	}
-	if len(f.devices) == 0 {
-		return usageErrorf("name each target device with --device <uuid>")
-	}
-	for _, d := range f.devices {
-		if !canonicalUUID(d) {
-			return usageErrorf("--device must be a device UUID (lower-case), got %q", d)
-		}
-	}
-	appCfg, err := appconfig.LoadFromFile("wendy.json")
-	if err != nil {
-		return err
-	}
-	auth, err := pickAuthEntry(f.cloudGRPC)
-	if err != nil {
-		return err
-	}
-	return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-		op, err := newRegistryOp(ctx, conn, auth)
-		if err != nil {
-			return err
-		}
-		return call(ctx, op, appCfg.AppID, f.devices)
-	})
-}
-
 func newAppRotateCmd() *cobra.Command {
-	var f registryFlags
+	var devices []string
+	var cloudGRPC, deployment string
 	cmd := &cobra.Command{
 		Use:   "rotate",
 		Short: "Replace a deployment's key and re-assign the named devices",
@@ -344,12 +299,37 @@ func newAppRotateCmd() *cobra.Command {
 			"Only the deployment's creator can rotate (Cloud accepts its custodian wrap from them only).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
-				return op.rotate(ctx, f.deployment, appID, devices)
+			if !canonicalUUID(deployment) {
+				return usageErrorf("--deployment must be a deployment id (lower-case UUID)")
+			}
+			if len(devices) == 0 {
+				return usageErrorf("name each target device with --device <uuid>")
+			}
+			for _, d := range devices {
+				if !canonicalUUID(d) {
+					return usageErrorf("--device must be a device UUID (lower-case), got %q", d)
+				}
+			}
+			appCfg, err := appconfig.LoadFromFile("wendy.json")
+			if err != nil {
+				return err
+			}
+			auth, err := pickAuthEntry(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+				op, err := newRegistryOp(ctx, conn, auth)
+				if err != nil {
+					return err
+				}
+				return op.rotate(ctx, deployment, appCfg.AppID, devices)
 			})
 		},
 	}
-	f.bind(cmd, true)
+	cmd.Flags().StringArrayVar(&devices, "device", nil, "Target device UUID (repeatable)")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
+	cmd.Flags().StringVar(&deployment, "deployment", "", "Deployment id (required)")
 	return cmd
 }
 
@@ -453,10 +433,6 @@ func sessionCAs(chainPEM string) ([]*x509.Certificate, error) {
 	return cas, nil
 }
 
-func deviceURI(org, device string) string {
-	return "spiffe://wendy.sh/tenant/" + org + "/device/" + device
-}
-
 // verified returns the registered public key of principal from keys, verified
 // against the session's CAs, and refuses a principal with none or several.
 func (op *registryOp) verified(keys []*cloudpb.RecipientKey, principal string) ([]byte, error) {
@@ -488,7 +464,7 @@ func (op *registryOp) verified(keys []*cloudpb.RecipientKey, principal string) (
 func (op *registryOp) deviceKeys(ctx context.Context, devices []string) (map[string][]byte, error) {
 	principals := make([]string, len(devices))
 	for i, d := range devices {
-		principals[i] = deviceURI(op.org, d)
+		principals[i] = certs.DeviceSPIFFEURI(op.org, d)
 	}
 	resp, err := cloudpb.NewKeyDirectoryServiceClient(op.conn).GetRecipientKeys(ctx, &cloudpb.GetRecipientKeysRequest{OrganizationId: op.org, Principals: principals})
 	if err != nil {
@@ -833,7 +809,7 @@ func (op *registryOp) deploy(ctx context.Context, p deployPlan) (*cloudpb.Deploy
 	}
 	moves := map[string]string{}
 	for dev, from := range p.moves {
-		moves[deviceURI(op.org, dev)] = from
+		moves[certs.DeviceSPIFFEURI(op.org, dev)] = from
 	}
 	resp := new(cloudpb.DeploymentChangeResponse)
 	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName, &cloudpb.CreateDeploymentRequest{
@@ -861,32 +837,19 @@ func (op *registryOp) deploy(ctx context.Context, p deployPlan) (*cloudpb.Deploy
 
 // releases lists appID's releases, newest first.
 func (op *registryOp) releases(ctx context.Context, appID string) ([]*cloudpb.AppRelease, error) {
-	var out []*cloudpb.AppRelease
-	for {
-		stream, err := cloudpb.NewDeploymentServiceClient(op.conn).ListAppReleases(ctx, &cloudpb.ListAppReleasesRequest{OrganizationId: op.org, AppId: appID, Offset: int32(len(out))})
-		if err != nil {
-			return nil, fmt.Errorf("reading the releases of %s: %w", appID, err)
-		}
-		var total int32
-		before := len(out)
-		for {
-			page, err := stream.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return nil, fmt.Errorf("reading the releases of %s: %w", appID, err)
-			}
-			total = page.GetTotal()
-			for _, r := range page.GetAppReleases() {
-				if r.GetAppId() == appID {
-					out = append(out, r)
-				}
+	out, err := streamAll(func(offset int32) (grpc.ServerStreamingClient[cloudpb.ListAppReleasesResponse], error) {
+		return cloudpb.NewDeploymentServiceClient(op.conn).ListAppReleases(ctx, &cloudpb.ListAppReleasesRequest{OrganizationId: op.org, AppId: appID, Offset: offset})
+	}, func(page *cloudpb.ListAppReleasesResponse) ([]*cloudpb.AppRelease, int32) {
+		var rels []*cloudpb.AppRelease
+		for _, r := range page.GetAppReleases() {
+			if r.GetAppId() == appID {
+				rels = append(rels, r)
 			}
 		}
-		if len(out) == before || int32(len(out)) >= total {
-			break
-		}
+		return rels, page.GetTotal()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading the releases of %s: %w", appID, err)
 	}
 	slices.SortStableFunc(out, func(a, b *cloudpb.AppRelease) int {
 		return b.GetCreatedAt().AsTime().Compare(a.GetCreatedAt().AsTime())

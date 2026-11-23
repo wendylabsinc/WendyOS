@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -33,10 +34,10 @@ func promoteFixture(t *testing.T) (*registryOp, *fakeRegistry) {
 	fake.apps["sh.wendy.example"] = &cloudpb.App{Id: "sh.wendy.example"}
 	fake.assets = []*cloudpb.Asset{{Id: vectorDevice, Name: "packer-01"}, {Id: vectorOtherDevice, Name: "dock-cam-07"}}
 	fake.online = map[string]bool{vectorDevice: true}
-	prevAsk, prevConfirm := deployAsk, deployConfirm
-	t.Cleanup(func() { deployAsk, deployConfirm = prevAsk, prevConfirm })
-	deployAsk = func(q, _, _ string) (string, error) { t.Fatalf("asked %q", q); return "", nil }
-	deployConfirm = func(q string) (bool, error) { t.Fatalf("asked %q", q); return false, nil }
+	prevAsk, prevConfirm := askText, askConfirm
+	t.Cleanup(func() { askText, askConfirm = prevAsk, prevConfirm })
+	askText = func(q, _, _ string, _ tui.ValidateFunc) (string, error) { t.Fatalf("asked %q", q); return "", nil }
+	askConfirm = func(q string) (bool, error) { t.Fatalf("asked %q", q); return false, nil }
 	return op, fake
 }
 

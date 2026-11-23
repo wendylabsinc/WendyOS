@@ -16,6 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -76,10 +78,10 @@ func stepsFixture(t *testing.T) (*registryOp, *fakeRegistry, string) {
 	fake.apps["sh.wendy.example"] = &cloudpb.App{Id: "sh.wendy.example"}
 	fake.assets = []*cloudpb.Asset{{Id: vectorDevice, Name: "packer-01", Tags: []string{"line-3"}}, {Id: vectorOtherDevice, Name: "dock-cam-07"}}
 	fake.online = map[string]bool{vectorDevice: true}
-	prevAsk, prevConfirm := deployAsk, deployConfirm
-	t.Cleanup(func() { deployAsk, deployConfirm = prevAsk, prevConfirm })
-	deployAsk = func(q, _, _ string) (string, error) { t.Fatalf("asked %q", q); return "", nil }
-	deployConfirm = func(q string) (bool, error) { t.Fatalf("asked %q", q); return false, nil }
+	prevAsk, prevConfirm := askText, askConfirm
+	t.Cleanup(func() { askText, askConfirm = prevAsk, prevConfirm })
+	askText = func(q, _, _ string, _ tui.ValidateFunc) (string, error) { t.Fatalf("asked %q", q); return "", nil }
+	askConfirm = func(q string) (bool, error) { t.Fatalf("asked %q", q); return false, nil }
 	return op, fake, releaseID
 }
 
@@ -142,7 +144,7 @@ func TestDeployBySite(t *testing.T) {
 	if !strings.Contains(out.String(), "Devices: packer-01\n") {
 		t.Fatalf("review:\n%s", out.String())
 	}
-	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) {
+	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice) {
 		t.Fatalf("statements %v", fake.assigned)
 	}
 }
@@ -181,8 +183,11 @@ func TestDeployAsksTheDashboardQuestionsInOrder(t *testing.T) {
 	answers := map[string]string{"App": "sh.wendy.example", "Release": releaseID, "Devices": "packer-01", "Name this deployment": "line-3",
 		"LOG_LEVEL": "info", "UPLOAD_INTERVAL_SECONDS": "30", "Run it now, or install only?": "run", "If a device is offline, keep trying for": "1y", "Note for the history": ""}
 	var asked []string
-	deployAsk = func(q, _, _ string) (string, error) { asked = append(asked, q); return answers[q], nil }
-	deployConfirm = func(q string) (bool, error) { asked = append(asked, q); return true, nil }
+	askText = func(q, _, _ string, _ tui.ValidateFunc) (string, error) {
+		asked = append(asked, q)
+		return answers[q], nil
+	}
+	askConfirm = func(q string) (bool, error) { asked = append(asked, q); return true, nil }
 	var out bytes.Buffer
 	if err := runDeploy(context.Background(), op, deployAnswers{}, &out, true); err != nil {
 		t.Fatal(err)
@@ -209,13 +214,13 @@ func TestDeployGoesOnWhenSitesFailToLoad(t *testing.T) {
 	fake.sitesErr = status.Error(codes.Unavailable, "down")
 	answers := map[string]string{"App": "sh.wendy.example", "Release": releaseID, "Devices": "packer-01", "Name this deployment": "line-3",
 		"Run it now, or install only?": "run", "If a device is offline, keep trying for": "60d"}
-	deployAsk = func(q, _, def string) (string, error) {
+	askText = func(q, _, def string, _ tui.ValidateFunc) (string, error) {
 		if a, ok := answers[q]; ok {
 			return a, nil
 		}
 		return def, nil
 	}
-	deployConfirm = func(string) (bool, error) { return true, nil }
+	askConfirm = func(string) (bool, error) { return true, nil }
 	var out bytes.Buffer
 	if err := runDeploy(context.Background(), op, deployAnswers{}, &out, true); err != nil {
 		t.Fatal(err)
@@ -302,7 +307,7 @@ func TestDeployAsksARequiredSettingAgain(t *testing.T) {
 	t.Cleanup(func() { releaseRequired = prev })
 	releaseRequired = func(*cloudpb.AppRelease) []string { return []string{"LOG_LEVEL"} }
 	asks := 0
-	deployAsk = func(q, hint, def string) (string, error) {
+	askText = func(q, hint, def string, _ tui.ValidateFunc) (string, error) {
 		if q != "LOG_LEVEL" {
 			return def, nil
 		}

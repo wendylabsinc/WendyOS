@@ -14,6 +14,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -100,7 +102,7 @@ func deleteFixture(t *testing.T, rows ...*cloudpb.PendingDeviceStatement) (*regi
 }
 
 func row(kind cloudpb.PendingDeviceStatement_Kind, device, name string) *cloudpb.PendingDeviceStatement {
-	return &cloudpb.PendingDeviceStatement{Kind: kind, Device: deviceURI(testOperatorTenant, device), DeviceDisplayName: name}
+	return &cloudpb.PendingDeviceStatement{Kind: kind, Device: certs.DeviceSPIFFEURI(testOperatorTenant, device), DeviceDisplayName: name}
 }
 
 const (
@@ -139,8 +141,8 @@ func TestAppDeleteDetachesOnlyChosenDevices(t *testing.T) {
 	if err := runAppDelete(context.Background(), op, exampleApp, []string{"packer-01"}, true, &out, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.detached) != 1 || fake.detached[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) || fake.detached[0].GetAppId() != exampleApp ||
-		fake.removed[len(fake.removed)-1].GetDevice() != deviceURI(testOperatorTenant, vectorOtherDevice) {
+	if len(fake.detached) != 1 || fake.detached[0].GetDevice() != certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice) || fake.detached[0].GetAppId() != exampleApp ||
+		fake.removed[len(fake.removed)-1].GetDevice() != certs.DeviceSPIFFEURI(testOperatorTenant, vectorOtherDevice) {
 		t.Fatalf("detached %v removed %v", fake.detached, fake.removed)
 	}
 	for _, want := range []string{"packer-01 keeps running sh.wendy.example as a direct run.", "which may hold secrets"} {
@@ -150,14 +152,14 @@ func TestAppDeleteDetachesOnlyChosenDevices(t *testing.T) {
 	}
 
 	op, fake, _ = deleteFixture(t, rows()...)
-	deployConfirm = func(q string) (bool, error) {
+	askConfirm = func(q string) (bool, error) {
 		return strings.HasPrefix(q, "Delete ") || strings.HasPrefix(q, "Detach dock-cam-07 instead?"), nil
 	}
-	deployAsk = func(string, string, string) (string, error) { return exampleApp, nil }
+	askText = func(string, string, string, tui.ValidateFunc) (string, error) { return exampleApp, nil }
 	if err := runAppDelete(context.Background(), op, exampleApp, nil, false, io.Discard, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.detached) != 1 || fake.detached[0].GetDevice() != deviceURI(testOperatorTenant, vectorOtherDevice) {
+	if len(fake.detached) != 1 || fake.detached[0].GetDevice() != certs.DeviceSPIFFEURI(testOperatorTenant, vectorOtherDevice) {
 		t.Fatalf("interactive detached %v", fake.detached)
 	}
 }
@@ -227,8 +229,11 @@ func TestAppDeleteResumeShowsAndAsksLikeAFirstRun(t *testing.T) {
 		t.Fatalf("no terminal, no --yes: %v", err)
 	}
 	var asked []string
-	deployConfirm = func(q string) (bool, error) { asked = append(asked, q); return strings.HasPrefix(q, "Delete "), nil }
-	deployAsk = func(q, _, _ string) (string, error) { asked = append(asked, q); return exampleApp, nil }
+	askConfirm = func(q string) (bool, error) { asked = append(asked, q); return strings.HasPrefix(q, "Delete "), nil }
+	askText = func(q, _, _ string, _ tui.ValidateFunc) (string, error) {
+		asked = append(asked, q)
+		return exampleApp, nil
+	}
 	var out bytes.Buffer
 	if err := runAppDelete(context.Background(), op, exampleApp, nil, false, &out, true); err != nil {
 		t.Fatal(err)
@@ -243,7 +248,7 @@ func TestAppDeleteResumeShowsAndAsksLikeAFirstRun(t *testing.T) {
 // deletes it after the first confirmation.
 func TestAppDeleteSignsTheApp(t *testing.T) {
 	op, fake, _ := deleteFixture(t)
-	deployConfirm = func(q string) (bool, error) { return strings.HasPrefix(q, "Delete sh.wendy.example?"), nil }
+	askConfirm = func(q string) (bool, error) { return strings.HasPrefix(q, "Delete sh.wendy.example?"), nil }
 	if err := runAppDelete(context.Background(), op, exampleApp, nil, false, io.Discard, true); err != nil {
 		t.Fatal(err)
 	}

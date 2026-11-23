@@ -249,17 +249,9 @@ func newAppLifecycleCmd() *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(out, "Lifecycle policy of %s: %s → %s\n", app.GetId(), policySummary(app.GetLifecyclePolicy()), policySummary(p))
-				if !yes {
-					if !isInteractiveTerminal() {
-						return usageErrorf("Not confirmed. Add --yes to apply it without a terminal.")
-					}
-					ok, err := askConfirm("Apply this lifecycle policy?")
-					if err != nil {
-						return err
-					}
-					if !ok {
-						return errors.New("nothing was changed")
-					}
+				if err := confirmOrYes(yes, isInteractiveTerminal(), "Apply this lifecycle policy?",
+					usageErrorf("Not confirmed. Add --yes to apply it without a terminal."), errors.New("nothing was changed")); err != nil {
+					return err
 				}
 				updated := new(cloudpb.App)
 				if err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.AppService_UpdateApp_FullMethodName,

@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -150,7 +151,7 @@ func TestRemoveSignsTerminalRemovals(t *testing.T) {
 // the current content shown; a statement for another revision is refused.
 func TestResumeSignsOnlyTheCurrentRevision(t *testing.T) {
 	op, fake, _, depID := deployedFixture(t)
-	device := deviceURI(testOperatorTenant, vectorDevice)
+	device := certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice)
 	fake.pending[depID] = []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, DeploymentId: depID, Device: device, Revision: 1}}
 	var out bytes.Buffer
 	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, &out, false); err != nil {

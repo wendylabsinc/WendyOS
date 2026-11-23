@@ -30,6 +30,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -481,7 +482,7 @@ func (f *fakeRegistry) extraRows(d *cloudpb.Deployment) []*cloudpb.PendingDevice
 func (f *fakeRegistry) rows(d *cloudpb.Deployment, kind cloudpb.PendingDeviceStatement_Kind, devices []string) []*cloudpb.PendingDeviceStatement {
 	var out []*cloudpb.PendingDeviceStatement
 	for _, dev := range devices {
-		out = append(out, &cloudpb.PendingDeviceStatement{Kind: kind, DeploymentId: d.GetId(), Device: deviceURI(testOperatorTenant, dev), Revision: d.GetRevision()})
+		out = append(out, &cloudpb.PendingDeviceStatement{Kind: kind, DeploymentId: d.GetId(), Device: certs.DeviceSPIFFEURI(testOperatorTenant, dev), Revision: d.GetRevision()})
 	}
 	return out
 }
@@ -504,7 +505,7 @@ func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedR
 	rows := f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, devices)
 	for _, r := range rows {
 		for _, st := range f.states {
-			if deviceURI(testOperatorTenant, st.GetAssetId()) == r.GetDevice() && st.GetState().GetDeploymentId() != "" {
+			if certs.DeviceSPIFFEURI(testOperatorTenant, st.GetAssetId()) == r.GetDevice() && st.GetState().GetDeploymentId() != "" {
 				if !req.GetMoveDevices() {
 					return nil, status.Errorf(codes.FailedPrecondition, "%s is in deployment %s", st.GetAssetId(), st.GetState().GetDeploymentId())
 				}
@@ -648,7 +649,7 @@ func (f *fakeRegistry) RemoveDeployment(_ context.Context, in *cloudpb.SignedReq
 	f.deploys[d.Id] = d
 	var rows []*cloudpb.PendingDeviceStatement
 	for _, dev := range f.revDevices[fmt.Sprint(d.Id, "/", old.GetRevision())] {
-		rows = append(rows, &cloudpb.PendingDeviceStatement{Kind: cloudpb.PendingDeviceStatement_KIND_UNASSIGN, DeploymentId: d.Id, Device: deviceURI(testOperatorTenant, dev), Revision: maxRevision})
+		rows = append(rows, &cloudpb.PendingDeviceStatement{Kind: cloudpb.PendingDeviceStatement_KIND_UNASSIGN, DeploymentId: d.Id, Device: certs.DeviceSPIFFEURI(testOperatorTenant, dev), Revision: maxRevision})
 	}
 	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: rows}, nil
 }
@@ -686,25 +687,14 @@ func (f *fakeRegistry) GetDeployment(_ context.Context, in *cloudpb.GetDeploymen
 	return nil, status.Error(codes.NotFound, "deployment not found")
 }
 
-func (f *fakeRegistry) AssignDevice(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.AssignDeviceResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var a cloudpb.DeviceAssignment
-	if err := f.accept(cloudpb.ArtifactRegistryService_AssignDevice_FullMethodName, in, &a); err != nil {
-		return nil, err
-	}
-	f.assigned = append(f.assigned, &a)
-	return &cloudpb.AssignDeviceResponse{PostboxEntryId: int64(len(f.assigned))}, nil
+// The deprecated ArtifactRegistryService pair: defined only because both
+// embedded servers have the names. The CLI uses DeploymentService's.
+func (f *fakeRegistry) AssignDevice(context.Context, *cloudpb.SignedRequest) (*cloudpb.AssignDeviceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "deprecated")
 }
 
-func (f *fakeRegistry) UnassignDevice(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.UnassignDeviceResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var req cloudpb.UnassignDeviceRequest
-	if err := f.accept(cloudpb.ArtifactRegistryService_UnassignDevice_FullMethodName, in, &req); err != nil {
-		return nil, err
-	}
-	return &cloudpb.UnassignDeviceResponse{PostboxEntryId: 1}, nil
+func (f *fakeRegistry) UnassignDevice(context.Context, *cloudpb.SignedRequest) (*cloudpb.UnassignDeviceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "deprecated")
 }
 
 // registryFixture is an operator session on the dev cloud (whose custodian is
@@ -907,15 +897,12 @@ func TestDeploySignsRevisionOneThroughDeploymentService(t *testing.T) {
 		len(req.GetTargetDeviceIds()) != 1 || req.GetTargetDeviceIds()[0] != vectorDevice || len(req.GetTargetTags()) != 0 {
 		t.Fatalf("deployment request %v", req)
 	}
-	if len(fake.signed(cloudpb.DeploymentService_CreateDeployment_FullMethodName)) != 0 || len(fake.signed(cloudpb.ArtifactRegistryService_AssignDevice_FullMethodName)) != 0 {
-		t.Fatal("the deprecated operations were signed")
-	}
 	if len(fake.sealed) != 1 || len(fake.wraps) != 4 {
 		t.Fatalf("%d sealed keys, %d wraps", len(fake.sealed), len(fake.wraps))
 	}
 	s := fake.sealed[0]
 	assigns := fake.signed(cloudpb.DeploymentService_AssignDevice_FullMethodName)
-	device := deviceURI(testOperatorTenant, vectorDevice)
+	device := certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice)
 	if len(assigns) != 1 || assigns[0].resource != "org/"+testOperatorTenant+"/deployment/"+depID+"/device/"+vectorDevice || assigns[0].header["x5c"] == nil || assigns[0].header["kid"] != nil {
 		t.Fatalf("AssignDevice %+v", assigns)
 	}
@@ -938,14 +925,14 @@ func TestDeployRefusesStatementsNotAskedFor(t *testing.T) {
 	op, fake := registryFixture(t, deviceKey)
 	releaseID, m := publishFixture(t, op)
 	fake.extra = []*cloudpb.PendingDeviceStatement{
-		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorOtherDevice), Revision: 1},
-		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorDevice), Revision: 1, ReplacesDeploymentId: uuid.NewString(), ReplacesRevision: 4},
+		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: certs.DeviceSPIFFEURI(testOperatorTenant, vectorOtherDevice), Revision: 1},
+		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice), Revision: 1, ReplacesDeploymentId: uuid.NewString(), ReplacesRevision: 4},
 	}
 	err := deployErr(op.deploy(context.Background(), testPlan(releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice})))
 	if err == nil || !strings.Contains(err.Error(), "Cloud asked to give it the deployment, which was not asked for") || !strings.Contains(err.Error(), "Cloud asked to move it from deployment") {
 		t.Fatalf("an unasked-for statement: %v", err)
 	}
-	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) {
+	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice) {
 		t.Fatalf("signed %v", fake.assigned)
 	}
 }
@@ -956,7 +943,7 @@ func TestDeployRefusesUnverifiedDevicesBeforeCreating(t *testing.T) {
 	v := loadRecipientVectors(t)
 	valid, _ := vectorRecipientKey(t, v, "recipient-key-valid")
 	substituted, _ := vectorRecipientKey(t, v, "recipient-key-substituted-key-invalid")
-	substituted.Principal = deviceURI(testOperatorTenant, vectorOtherDevice)
+	substituted.Principal = certs.DeviceSPIFFEURI(testOperatorTenant, vectorOtherDevice)
 	op, fake := registryFixture(t, valid, substituted)
 	releaseID, m := publishFixture(t, op)
 	for _, devices := range [][]string{{vectorDevice, vectorOtherDevice}, {vectorDevice, uuid.NewString()}} {

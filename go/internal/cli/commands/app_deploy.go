@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -31,14 +30,8 @@ type deployAnswers struct {
 	run, installOnly, move, yes, wait                                   bool
 }
 
-// Prompts, replaceable in tests.
-var (
-	deployAsk = func(question, hint, def string) (string, error) {
-		return tui.PromptTextWithDefault(question, hint, def, nil)
-	}
-	deployConfirm = func(question string) (bool, error) { return tui.ConfirmDefaultNo(question) }
-	deployPoll    = 3 * time.Second
-)
+// deployPoll is how often progress is read; tests shorten it.
+var deployPoll = 3 * time.Second
 
 var keepTryingChoices = map[string]time.Duration{
 	"7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "60d": 60 * 24 * time.Hour, "1y": 365 * 24 * time.Hour,
@@ -139,7 +132,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			}
 			say("     %s  %s", app.GetId(), plural(len(rels), "release"))
 		}
-		if a.app, err = deployAsk("App", "Type its id. A new app? Create it with wendy app create.", ""); err != nil {
+		if a.app, err = askText("App", "Type its id. A new app? Create it with wendy app create.", "", nil); err != nil {
 			return err
 		}
 	}
@@ -179,7 +172,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			}
 			say("%s", line)
 		}
-		if a.release, err = deployAsk("Release", "Newest first.", rels[0].GetName()); err != nil {
+		if a.release, err = askText("Release", "Newest first.", rels[0].GetName(), nil); err != nil {
 			return err
 		}
 	}
@@ -213,7 +206,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		for _, d := range assets {
 			say("     %s  %s", assetName(d), deviceNote(d, online, states, a.app))
 		}
-		answer, err := deployAsk("Devices", "Device names, site:<site> and tag:<tag>, separated by commas.", "")
+		answer, err := askText("Devices", "Device names, site:<site> and tag:<tag>, separated by commas.", "", nil)
 		if err != nil {
 			return err
 		}
@@ -227,27 +220,18 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			}
 		}
 	}
-	plan := deployPlan{appID: a.app, releaseID: rel.GetId(), digest: a.digest, moves: map[string]string{}}
-	chosen := map[string]*cloudpb.Asset{}
+	plan := deployPlan{appID: a.app, releaseID: rel.GetId(), digest: a.digest, tags: a.tags}
 	for _, name := range a.devices {
-		i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool {
-			return d.GetId() == name || d.GetName() == name || d.GetDisplayName() == name
-		})
-		if i < 0 || name == "" {
-			return usageErrorf("No device %q in this organization.", name)
+		id, err := assetID(assets, name)
+		if err != nil {
+			return err
 		}
-		chosen[assets[i].GetId()] = assets[i]
-		plan.deviceIDs = append(plan.deviceIDs, assets[i].GetId())
+		plan.deviceIDs = append(plan.deviceIDs, id)
 	}
 	for _, tag := range a.tags {
-		tagged := withTag(assets, tag)
-		if len(tagged) == 0 {
+		if len(withTag(assets, tag)) == 0 {
 			return usageErrorf("No device has the tag %s.", tag)
 		}
-		for _, d := range tagged {
-			chosen[d.GetId()] = d
-		}
-		plan.tags = append(plan.tags, tag)
 	}
 	if len(a.sites) > 0 && sites == nil {
 		if sites, err = op.sites(ctx); err != nil {
@@ -259,39 +243,20 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		if err != nil {
 			return err
 		}
-		in := inSite(assets, s.GetId())
-		if len(in) == 0 {
+		if len(inSite(assets, s.GetId())) == 0 {
 			return usageErrorf("No device is in the site %s. Add devices to it under Sites in the dashboard first.", s.GetName())
-		}
-		for _, d := range in {
-			chosen[d.GetId()] = d
 		}
 		plan.siteIDs = append(plan.siteIDs, s.GetId())
 	}
-	for _, id := range slices.Sorted(maps.Keys(chosen)) {
-		plan.devices = append(plan.devices, id)
-		if other := otherDeployment(states, id, a.app); other != nil {
-			name := op.deploymentName(ctx, other.GetDeploymentId())
-			if !a.move {
-				if !interactive {
-					return usageErrorf("%s already runs %s in the deployment %q. Add --move to move it, or leave it out.", assetName(chosen[id]), a.app, name)
-				}
-				ok, err := deployConfirm(fmt.Sprintf("%s already runs %s in the deployment %q. Move it to this one?", assetName(chosen[id]), a.app, name))
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return usageErrorf("Leave %s out, or move it, then deploy again.", assetName(chosen[id]))
-				}
-			}
-			plan.moves[id] = other.GetDeploymentId()
-		}
+	plan.devices = resolveSelection(assets, &cloudpb.DeviceSelection{TargetDeviceIds: plan.deviceIDs, TargetTags: plan.tags, TargetSiteIds: plan.siteIDs})
+	if plan.moves, err = op.confirmMoves(ctx, a.app, "", plan.devices, assets, a.move, interactive); err != nil {
+		return err
 	}
 	if a.name == "" {
 		if !interactive {
 			return missing("deployment name given", "--name <name>", "enter one")
 		}
-		if a.name, err = deployAsk("Name this deployment", "Shown in the deployments list. Use the place or the purpose.", ""); err != nil {
+		if a.name, err = askText("Name this deployment", "Shown in the deployments list. Use the place or the purpose.", "", nil); err != nil {
 			return err
 		}
 	}
@@ -314,7 +279,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			return missing("run state chosen", "--run or --install-only", "choose")
 		}
 		say("5/7  Should it run now?")
-		answer, err := deployAsk("Run it now, or install only?", "run: each device starts the app as soon as it is installed. install: it stays stopped until someone starts it.", "run")
+		answer, err := askText("Run it now, or install only?", "run: each device starts the app as soon as it is installed. install: it stays stopped until someone starts it.", "run", nil)
 		if err != nil {
 			return err
 		}
@@ -325,7 +290,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			a.keepTrying = "60d" // the preselected answer (ruling 4)
 			break
 		}
-		answer, err := deployAsk("If a device is offline, keep trying for", "7d, 30d, 60d or 1y. After that, the device no longer installs this deployment.", "60d")
+		answer, err := askText("If a device is offline, keep trying for", "7d, 30d, 60d or 1y. After that, the device no longer installs this deployment.", "60d", nil)
 		if err != nil {
 			return err
 		}
@@ -346,11 +311,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	}
 	say("6/7  Review")
 	say("     %s: %s %s to %s, %s, %s.", plan.name, a.app, rel.GetName(), plural(len(plan.devices), "device"), runWords, plural(changed, "value")+" changed")
-	names := make([]string, 0, len(plan.devices))
-	for _, id := range plan.devices {
-		names = append(names, assetName(chosen[id]))
-	}
-	say("     Devices: %s", strings.Join(names, ", "))
+	say("     Devices: %s", deviceNames(assets, plan.devices))
 	if offline > 0 {
 		say("     %s offline. Offline devices keep trying for %s.", plural(offline, "device is", "devices are"), keepTryingWords[a.keepTrying])
 	} else {
@@ -360,22 +321,14 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		say("     %s from another deployment of %s.", plural(len(plan.moves), "device moves", "devices move"), a.app)
 	}
 	if a.note == "" && interactive && !a.yes {
-		if a.note, err = deployAsk("Note for the history", "Optional. Shown in this deployment's history and the audit log.", ""); err != nil {
+		if a.note, err = askText("Note for the history", "Optional. Shown in this deployment's history and the audit log.", "", nil); err != nil {
 			return err
 		}
 	}
 	plan.note = a.note
-	if !a.yes {
-		if !interactive {
-			return usageErrorf("Not confirmed. Add --yes to deploy without a terminal.")
-		}
-		ok, err := deployConfirm(fmt.Sprintf("Deploy to %s?", plural(len(plan.devices), "device")))
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return errors.New("nothing was deployed")
-		}
+	if err := confirmOrYes(a.yes, interactive, fmt.Sprintf("Deploy to %s?", plural(len(plan.devices), "device")),
+		usageErrorf("Not confirmed. Add --yes to deploy without a terminal."), errors.New("nothing was deployed")); err != nil {
+		return err
 	}
 	d, err := op.deploy(ctx, plan)
 	if d == nil {
@@ -436,9 +389,9 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 			if slices.Contains(a.required, name) {
 				hint = "Required."
 			}
-			answer, err := deployAsk(name, hint, def)
+			answer, err := askText(name, hint, def, nil)
 			for err == nil && hint != "" && strings.TrimSpace(answer) == "" {
-				answer, err = deployAsk(name, name+" is required. Enter a value to continue.", def)
+				answer, err = askText(name, name+" is required. Enter a value to continue.", def, nil)
 			}
 			if err != nil {
 				return "", 0, err
@@ -678,30 +631,16 @@ func (op *registryOp) apps(ctx context.Context) ([]*cloudpb.App, error) {
 // devices lists the organization's compute devices and which are online.
 func (op *registryOp) devices(ctx context.Context) ([]*cloudpb.Asset, map[string]bool, error) {
 	list := func(onlineOnly bool) ([]*cloudpb.Asset, error) {
-		var out []*cloudpb.Asset
-		for {
-			offset, limit, compute := int32(len(out)), int32(500), true
-			stream, err := cloudpb.NewAssetServiceClient(op.conn).ListAssets(ctx, &cloudpb.ListAssetsRequest{OrganizationId: op.org, IsComputeDevice: &compute, Offset: &offset, Limit: &limit, OnlineOnly: &onlineOnly})
-			if err != nil {
-				return nil, fmt.Errorf("reading the devices: %w", err)
-			}
-			var total int32
-			before := len(out)
-			for {
-				r, err := stream.Recv()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					return nil, fmt.Errorf("reading the devices: %w", err)
-				}
-				total = r.GetTotal()
-				out = append(out, r.GetAsset())
-			}
-			if len(out) == before || int32(len(out)) >= total {
-				return out, nil
-			}
+		out, err := streamAll(func(offset int32) (grpc.ServerStreamingClient[cloudpb.ListAssetsResponse], error) {
+			limit, compute := int32(500), true
+			return cloudpb.NewAssetServiceClient(op.conn).ListAssets(ctx, &cloudpb.ListAssetsRequest{OrganizationId: op.org, IsComputeDevice: &compute, Offset: &offset, Limit: &limit, OnlineOnly: &onlineOnly})
+		}, func(r *cloudpb.ListAssetsResponse) ([]*cloudpb.Asset, int32) {
+			return []*cloudpb.Asset{r.GetAsset()}, r.GetTotal()
+		})
+		if err != nil {
+			return nil, fmt.Errorf("reading the devices: %w", err)
 		}
+		return out, nil
 	}
 	all, err := list(false)
 	if err != nil {
@@ -719,18 +658,14 @@ func (op *registryOp) devices(ctx context.Context) ([]*cloudpb.Asset, map[string
 }
 
 func (op *registryOp) appDeviceStates(ctx context.Context, appID, deploymentID string) ([]*cloudpb.AppDeviceState, error) {
-	var out []*cloudpb.AppDeviceState
-	token := ""
-	for {
+	out, err := pages(func(token string) ([]*cloudpb.AppDeviceState, string, error) {
 		resp, err := cloudpb.NewDeploymentServiceClient(op.conn).ListAppDeviceStates(ctx, &cloudpb.ListAppDeviceStatesRequest{OrganizationId: op.org, AppId: appID, DeploymentId: deploymentID, PageToken: token})
-		if err != nil {
-			return nil, fmt.Errorf("reading the devices of %s: %w", appID, err)
-		}
-		out = append(out, resp.GetRows()...)
-		if token = resp.GetNextPageToken(); token == "" {
-			return out, nil
-		}
+		return resp.GetRows(), resp.GetNextPageToken(), err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading the devices of %s: %w", appID, err)
 	}
+	return out, nil
 }
 
 func (op *registryOp) deploymentName(ctx context.Context, id string) string {
@@ -745,31 +680,10 @@ func (op *registryOp) deploymentName(ctx context.Context, id string) string {
 // and where each device stands.
 func newAppDeploymentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "deployment", Short: "Show and change a deployment of an app"}
-	var cloudGRPC string
-	show := &cobra.Command{
-		Use:   "show <app>/<name>",
-		Short: "Show a deployment and each device's state",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			appID, name, ok := strings.Cut(args[0], "/")
-			if !ok || appID == "" || name == "" {
-				return usageErrorf("Name the deployment as <app>/<name>, e.g. camera-gateway/line-3.")
-			}
-			auth, err := pickAuthEntry(cloudGRPC)
-			if err != nil {
-				return err
-			}
-			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-				op, err := newRegistryOp(ctx, conn, auth)
-				if err != nil {
-					return err
-				}
-				return op.showDeployment(ctx, appID, name, cmd.OutOrStdout())
-			})
-		},
-	}
-	show.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
-	cmd.AddCommand(show)
+	cmd.AddCommand(deploymentSub("show", "Show a deployment and each device's state", nil,
+		func(ctx context.Context, op *registryOp, appID, name string, _ changeFlags, out io.Writer, _ bool) error {
+			return op.showDeployment(ctx, appID, name, out)
+		}))
 	cmd.AddCommand(deploymentChangeCmds()...)
 	return cmd
 }

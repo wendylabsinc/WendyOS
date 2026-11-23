@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -66,16 +67,12 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", appID, err)
 	}
-	var rows []*cloudpb.PendingDeviceStatement
-	for token := ""; ; {
+	rows, err := pages(func(token string) ([]*cloudpb.PendingDeviceStatement, string, error) {
 		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{AppId: appID, PageToken: token})
-		if err != nil {
-			return fmt.Errorf("reading the devices of %s: %w", appID, err)
-		}
-		rows = append(rows, page.GetStatements()...)
-		if token = page.GetNextPageToken(); token == "" {
-			break
-		}
+		return page.GetStatements(), page.GetNextPageToken(), err
+	})
+	if err != nil {
+		return fmt.Errorf("reading the devices of %s: %w", appID, err)
 	}
 	name := func(r *cloudpb.PendingDeviceStatement) string {
 		if r.GetDeviceDisplayName() != "" {
@@ -87,7 +84,7 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 	for _, d := range detachFlags {
 		found := false
 		for _, r := range rows {
-			if d == name(r) || deviceURI(op.org, d) == r.GetDevice() {
+			if d == name(r) || certs.DeviceSPIFFEURI(op.org, d) == r.GetDevice() {
 				detach[r.GetDevice()], found = true, true
 			}
 		}
@@ -114,17 +111,9 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 		say("%s is being deleted: %s a removal or a detach. Finishing.", appID, plural(len(rows), "device still needs", "devices still need"))
 	}
 	{
-		if !yes {
-			if !interactive {
-				return usageErrorf("Not confirmed. Add --yes to delete it without a terminal.")
-			}
-			ok, err := deployConfirm(fmt.Sprintf("Delete %s? This removes it from every device that runs it and deletes all its releases.", appID))
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return errors.New("nothing was deleted")
-			}
+		if err := confirmOrYes(yes, interactive, fmt.Sprintf("Delete %s? This removes it from every device that runs it and deletes all its releases.", appID),
+			usageErrorf("Not confirmed. Add --yes to delete it without a terminal."), errors.New("nothing was deleted")); err != nil {
+			return err
 		}
 		if len(rows) > 0 {
 			rels, err := op.releases(ctx, appID)
@@ -166,7 +155,7 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 			detach[r.GetDevice()] = true
 			continue
 		}
-		ok, err := deployConfirm(fmt.Sprintf("Detach %s instead? The app keeps running there as a direct run.", name(r)))
+		ok, err := askConfirm(fmt.Sprintf("Detach %s instead? The app keeps running there as a direct run.", name(r)))
 		if err != nil {
 			return err
 		}
@@ -179,7 +168,7 @@ func runAppDelete(ctx context.Context, op *registryOp, appID string, detachFlags
 		}
 	}
 	if len(rows) > 0 && !yes {
-		typed, err := deployAsk("Type the app name to confirm", "", "")
+		typed, err := askText("Type the app name to confirm", "", "", nil)
 		if err != nil {
 			return err
 		}
@@ -210,7 +199,7 @@ func onlyDetach(n int) error {
 // statement they may sign for it.
 func askUnreachable(device string, say func(string, ...any)) error {
 	say("You can't reach %s. It can only be detached: the app keeps running there.", device)
-	ok, err := deployConfirm(fmt.Sprintf("Detach %s?", device))
+	ok, err := askConfirm(fmt.Sprintf("Detach %s?", device))
 	if err != nil {
 		return err
 	}

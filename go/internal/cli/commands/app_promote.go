@@ -29,7 +29,7 @@ func newAppPromoteCmd() *cobra.Command {
 			interactive := isInteractiveTerminal()
 			if device == "" && interactive {
 				var err error
-				if device, err = deployAsk("Device", "The device you ran it on: its name or id.", ""); err != nil {
+				if device, err = askText("Device", "The device you ran it on: its name or id.", "", nil); err != nil {
 					return err
 				}
 			}

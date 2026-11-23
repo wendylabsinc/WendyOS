@@ -23,17 +23,17 @@ func TestRegistryResources(t *testing.T) {
 		req    proto.Message
 		want   string // empty: refused
 	}{
-		{cloudpbv2.DeploymentService_CreateDeployment_FullMethodName, &cloudpbv2.CreateDeploymentRequest{OrganizationId: tenant, AppReleaseId: release}, "org/" + tenant + "/release/" + release},
+		{cloudpbv2.DeploymentService_CreateDeploymentV2_FullMethodName, &cloudpbv2.CreateDeploymentRequest{OrganizationId: tenant, AppReleaseId: release}, "org/" + tenant + "/release/" + release},
 		{cloudpbv2.ArtifactRegistryService_PublishArtifact_FullMethodName, &cloudpbv2.PublishArtifactRequest{OrganizationId: tenant, AppReleaseId: release}, "org/" + tenant + "/release/" + release},
 		{cloudpbv2.ArtifactRegistryService_PublishArtifact_FullMethodName, &cloudpbv2.PublishArtifactRequest{OrganizationId: tenant, AppReleaseId: "0B5C1F3E-2A4B-4C6D-8E9F-0A1B2C3D4E5F"}, ""},
 		{cloudpbv2.ArtifactRegistryService_AddWraps_FullMethodName, &cloudpbv2.AddWrapsRequest{OrganizationId: tenant}, "org/" + tenant + "/wraps"},
 		{cloudpbv2.ArtifactRegistryService_AddWraps_FullMethodName, &cloudpbv2.AddWrapsRequest{OrganizationId: release}, ""},
-		{cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
-		{cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: "spiffe://wendy.sh/tenant/" + release + "/device/" + device}, ""},
-		{cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri + "/x"}, ""},
-		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
-		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: "", Device: uri}, ""},
-		{cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, ""},
+		{cloudpbv2.DeploymentService_AssignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
+		{cloudpbv2.DeploymentService_AssignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: "spiffe://wendy.sh/tenant/" + release + "/device/" + device}, ""},
+		{cloudpbv2.DeploymentService_AssignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri + "/x"}, ""},
+		{cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
+		{cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, &cloudpbv2.UnassignDeviceRequest{OrganizationId: tenant, DeploymentId: "", Device: uri}, ""},
+		{cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, &cloudpbv2.DeviceAssignment{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, ""},
 		{cloudpbv2.DeploymentService_DetachDevice_FullMethodName, &cloudpbv2.DetachDeviceRequest{OrganizationId: tenant, DeploymentId: deploy, Device: uri}, "org/" + tenant + "/deployment/" + deploy + "/device/" + device},
 		{cloudpbv2.DeploymentService_DetachDevice_FullMethodName, &cloudpbv2.DetachDeviceRequest{OrganizationId: release, DeploymentId: deploy, Device: uri}, ""},
 		{cloudpbv2.AppService_DeleteApp_FullMethodName, &cloudpbv2.DeleteAppRequest{OrganizationId: tenant, Id: "sh.wendy.example"}, "org/" + tenant + "/app/sh.wendy.example"},
@@ -47,7 +47,7 @@ func TestRegistryResources(t *testing.T) {
 			t.Errorf("%s %v: got %q %t, want %q", c.method, c.req, got, ok, c.want)
 		}
 	}
-	for _, m := range []string{cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, cloudpbv2.DeploymentService_DetachDevice_FullMethodName} {
+	for _, m := range []string{cloudpbv2.DeploymentService_AssignDevice_FullMethodName, cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, cloudpbv2.DeploymentService_DetachDevice_FullMethodName} {
 		if !x5cOnly[m] || !relayedSignatures[m] {
 			t.Errorf("%s must be x5c-only and postbox-relayed", m)
 		}

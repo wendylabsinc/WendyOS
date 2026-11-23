@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -33,7 +34,8 @@ type changeFlags struct {
 
 type changeRun func(ctx context.Context, op *registryOp, appID, name string, c changeFlags, out io.Writer, interactive bool) error
 
-// deploymentSub is a `wendy app deployment <use> <app>/<name>` command.
+// deploymentSub is a `wendy app deployment <use> <app>/<name>` command; one
+// without bind changes nothing and has no --yes.
 func deploymentSub(use, short string, bind func(*cobra.Command, *changeFlags), run changeRun) *cobra.Command {
 	var c changeFlags
 	cmd := &cobra.Command{
@@ -59,8 +61,10 @@ func deploymentSub(use, short string, bind func(*cobra.Command, *changeFlags), r
 		},
 	}
 	cmd.Flags().StringVar(&c.cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the session to use")
-	cmd.Flags().BoolVarP(&c.yes, "yes", "y", false, "Apply without asking for confirmation")
-	bind(cmd, &c)
+	if bind != nil {
+		cmd.Flags().BoolVarP(&c.yes, "yes", "y", false, "Apply without asking for confirmation")
+		bind(cmd, &c)
+	}
 	return cmd
 }
 
@@ -101,18 +105,24 @@ func deploymentChangeCmds() []*cobra.Command {
 
 // confirmChange shows the review and asks, or needs --yes without a terminal.
 func confirmChange(c changeFlags, interactive bool, question string) error {
-	if c.yes {
+	return confirmOrYes(c.yes, interactive, question, usageErrorf("Not confirmed. Add --yes to apply it without a terminal."), errors.New("nothing was changed"))
+}
+
+// confirmOrYes asks question unless yes. Without a terminal it is
+// notConfirmed; a "no" answer is no.
+func confirmOrYes(yes, interactive bool, question string, notConfirmed, no error) error {
+	if yes {
 		return nil
 	}
 	if !interactive {
-		return usageErrorf("Not confirmed. Add --yes to apply it without a terminal.")
+		return notConfirmed
 	}
-	ok, err := deployConfirm(question)
+	ok, err := askConfirm(question)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return errors.New("nothing was changed")
+		return no
 	}
 	return nil
 }
@@ -279,7 +289,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 	return op.change(ctx, d, newRel, get, without(cur, next), moves, true, keepTryingChoices[c.keepTrying], cloudpb.DeploymentService_UpdateDeployment_FullMethodName, req,
 		func(n *cloudpb.Deployment) bool {
 			return n.GetAppReleaseId() == orDefault(req.AppReleaseId, d.GetAppReleaseId()) && n.GetConfigJson() == orDefault(req.ConfigJson, d.GetConfigJson()) &&
-				n.GetDesiredState() == orDefaultState(req.DesiredState, d.GetDesiredState())
+				n.GetDesiredState() == orDefault(req.DesiredState, d.GetDesiredState())
 		}, say)
 }
 
@@ -396,16 +406,12 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 	if err != nil {
 		return err
 	}
-	var rows []*cloudpb.PendingDeviceStatement
-	for token := ""; ; {
+	rows, err := pages(func(token string) ([]*cloudpb.PendingDeviceStatement, string, error) {
 		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: d.GetId(), PageToken: token})
-		if err != nil {
-			return fmt.Errorf("reading what %s still needs: %w", name, err)
-		}
-		rows = append(rows, page.GetStatements()...)
-		if token = page.GetNextPageToken(); token == "" {
-			break
-		}
+		return page.GetStatements(), page.GetNextPageToken(), err
+	})
+	if err != nil {
+		return fmt.Errorf("reading what %s still needs: %w", name, err)
 	}
 	if len(rows) == 0 {
 		say("Every device of %s has its instruction.", name)
@@ -447,17 +453,10 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 			if held == nil || held.GetDeploymentId() != r.GetReplacesDeploymentId() {
 				return fmt.Errorf("Cloud asked to move %s from a deployment it is not in; nothing was sent", deviceNames(assets, []string{id}))
 			}
-			if !c.move {
-				if !interactive {
-					return usageErrorf("%s moves here from the deployment %q. Add --move to send it.", deviceNames(assets, []string{id}), op.deploymentName(ctx, held.GetDeploymentId()))
-				}
-				ok, err := deployConfirm(fmt.Sprintf("%s moves here from the deployment %q. Move it?", deviceNames(assets, []string{id}), op.deploymentName(ctx, held.GetDeploymentId())))
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return errors.New("nothing was sent")
-				}
+			dn, other := deviceNames(assets, []string{id}), op.deploymentName(ctx, held.GetDeploymentId())
+			if err := confirmOrYes(c.move, interactive, fmt.Sprintf("%s moves here from the deployment %q. Move it?", dn, other),
+				usageErrorf("%s moves here from the deployment %q. Add --move to send it.", dn, other), errors.New("nothing was sent")); err != nil {
+				return err
 			}
 			moves[r.GetDevice()] = r.GetReplacesDeploymentId()
 			gets = append(gets, id)
@@ -493,7 +492,7 @@ func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, newRel 
 ) error {
 	conf := confirmed{appID: d.GetAppId(), remove: uris(op.org, drop), moves: map[string]string{}}
 	for dev, from := range moves {
-		conf.moves[deviceURI(op.org, dev)] = from
+		conf.moves[certs.DeviceSPIFFEURI(op.org, dev)] = from
 	}
 	var m *cloudpb.ArtifactManifest
 	var contentKey []byte
@@ -561,17 +560,10 @@ func (op *registryOp) confirmMoves(ctx context.Context, appID, deploymentID stri
 			continue
 		}
 		dn, other := deviceNames(assets, []string{id}), op.deploymentName(ctx, held.GetDeploymentId())
-		if !move {
-			if !interactive {
-				return nil, usageErrorf("%s already runs %s in the deployment %q. Add --move to move it, or leave it out.", dn, appID, other)
-			}
-			ok, err := deployConfirm(fmt.Sprintf("%s already runs %s in the deployment %q. Move it to this one?", dn, appID, other))
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				return nil, usageErrorf("Leave %s out, or move it, then try again.", dn)
-			}
+		if err := confirmOrYes(move, interactive, fmt.Sprintf("%s already runs %s in the deployment %q. Move it to this one?", dn, appID, other),
+			usageErrorf("%s already runs %s in the deployment %q. Add --move to move it, or leave it out.", dn, appID, other),
+			usageErrorf("Leave %s out, or move it, then try again.", dn)); err != nil {
+			return nil, err
 		}
 		moves[id] = held.GetDeploymentId()
 	}
@@ -604,17 +596,14 @@ func (op *registryOp) currentSelection(ctx context.Context, d *cloudpb.Deploymen
 }
 
 func (op *registryOp) revisionDevices(ctx context.Context, deploymentID string, n int32) ([]string, error) {
-	var out []string
-	for token := ""; ; {
+	out, err := pages(func(token string) ([]string, string, error) {
 		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListDeploymentRevisionDevices(ctx, &cloudpb.ListDeploymentRevisionDevicesRequest{DeploymentId: deploymentID, Revision: n, PageToken: token})
-		if err != nil {
-			return nil, fmt.Errorf("reading the devices of revision %d: %w", n, err)
-		}
-		out = append(out, page.GetDeviceIds()...)
-		if token = page.GetNextPageToken(); token == "" {
-			return out, nil
-		}
+		return page.GetDeviceIds(), page.GetNextPageToken(), err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading the devices of revision %d: %w", n, err)
 	}
+	return out, nil
 }
 
 func assetID(assets []*cloudpb.Asset, name string) (string, error) {
@@ -643,6 +632,50 @@ func resolveSelection(assets []*cloudpb.Asset, sel *cloudpb.DeviceSelection) []s
 		}
 	}
 	return slices.Sorted(maps.Keys(set))
+}
+
+// pages collects every item of a page-token listing.
+func pages[T any](list func(token string) ([]T, string, error)) ([]T, error) {
+	var out []T
+	for token := ""; ; {
+		items, next, err := list(token)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if token = next; token == "" {
+			return out, nil
+		}
+	}
+}
+
+// streamAll collects every item of an offset-paged streaming listing: open
+// starts the stream at an offset, items reads one message's items and the
+// total. It stops at the total or when a stream adds nothing.
+func streamAll[R, T any](open func(offset int32) (grpc.ServerStreamingClient[R], error), items func(*R) ([]T, int32)) ([]T, error) {
+	var out []T
+	for {
+		stream, err := open(int32(len(out)))
+		if err != nil {
+			return nil, err
+		}
+		before, total := len(out), int32(0)
+		for {
+			msg, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			var got []T
+			got, total = items(msg)
+			out = append(out, got...)
+		}
+		if len(out) == before || int32(len(out)) >= total {
+			return out, nil
+		}
+	}
 }
 
 // without is a minus b.
@@ -685,7 +718,7 @@ func deviceDiff(assets []*cloudpb.Asset, cur, next []string) string {
 func uris(org string, ids []string) map[string]bool {
 	out := map[string]bool{}
 	for _, id := range ids {
-		out[deviceURI(org, id)] = true
+		out[certs.DeviceSPIFFEURI(org, id)] = true
 	}
 	return out
 }
@@ -697,14 +730,7 @@ func releaseName(rels []*cloudpb.AppRelease, id string) string {
 	return id
 }
 
-func orDefault(p *string, def string) string {
-	if p != nil {
-		return *p
-	}
-	return def
-}
-
-func orDefaultState(p *cloudpb.Running, def cloudpb.Running) cloudpb.Running {
+func orDefault[T any](p *T, def T) T {
 	if p != nil {
 		return *p
 	}
