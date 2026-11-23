@@ -449,7 +449,7 @@ func TestDestructiveConfirmsShowTheSummaryWherePromptsAre(t *testing.T) {
 			_, _, _, err := confirmDiskInstall(context.Background(), disk, wifiCLIOptions{SSID: "Home", Password: "hunter2", RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollSkip}, false, false)
 			return err
 		},
-		"recovery": func() error { return confirmRecoveryFlash(recovery, "lab-pi", creds, false, false) },
+		"recovery": func() error { return confirmRecoveryFlash(recovery, "lab-pi", creds, cloudNotEnrolled, false) },
 	}
 	for name, install := range installers {
 		for _, redirected := range []bool{true, false} {
@@ -490,7 +490,7 @@ func TestConfirmRecoveryFlash(t *testing.T) {
 	t.Run("declined", func(t *testing.T) {
 		setInteractive(t, true)
 		asked := stubInstallConfirms(t, false)
-		_, err := captureCommandStdout(t, func() error { return confirmRecoveryFlash(c, "", nil, true, false) })
+		_, err := captureCommandStdout(t, func() error { return confirmRecoveryFlash(c, "", nil, cloudWillPreEnroll, false) })
 		if !errors.Is(err, ErrUserCancelled) || len(*asked) != 1 || (*asked)[0] != "danger:Flash Orin (1-3)?" {
 			t.Fatalf("got %v, asked %v", err, *asked)
 		}
@@ -498,15 +498,15 @@ func TestConfirmRecoveryFlash(t *testing.T) {
 	t.Run("force shows the summary without the warning or question", func(t *testing.T) {
 		setInteractive(t, false)
 		asked := stubInstallConfirms(t, false)
-		out, err := captureCommandStdout(t, func() error { return confirmRecoveryFlash(c, "", nil, true, true) })
-		if err != nil || len(*asked) != 0 || !strings.Contains(out, "pre-enrolled") || strings.Contains(out, "This erases QSPI.") {
+		out, err := captureCommandStdout(t, func() error { return confirmRecoveryFlash(c, "", nil, cloudWillPreEnroll, true) })
+		if err != nil || len(*asked) != 0 || !strings.Contains(out, "Cloud will pre-enroll") || strings.Contains(out, "This erases QSPI.") {
 			t.Fatalf("got %v, asked %v, output %q", err, *asked, out)
 		}
 	})
 	t.Run("no terminal and no --force", func(t *testing.T) {
 		setInteractive(t, false)
 		asked := stubInstallConfirms(t, true)
-		_, err := captureCommandStdout(t, func() error { return confirmRecoveryFlash(c, "", nil, false, false) })
+		_, err := captureCommandStdout(t, func() error { return confirmRecoveryFlash(c, "", nil, cloudNotEnrolled, false) })
 		if err == nil || !strings.Contains(err.Error(), "flashing Orin (1-3) needs confirmation") || len(*asked) != 0 {
 			t.Fatalf("got %v, asked %v", err, *asked)
 		}
@@ -605,5 +605,80 @@ func TestFirstBootWiFiRecordsTheAnswer(t *testing.T) {
 	})
 	if err != nil || strings.Contains(out, "? Wi-Fi") {
 		t.Fatalf("err %v, output %q; a flag answers nothing on screen", err, out)
+	}
+}
+
+// stubRecoveryEnroll makes an interactive install that enrolls as lab-box and
+// records the flash question and the reservation, in order, in events.
+func stubRecoveryEnroll(t *testing.T, events *[]string, flash bool) {
+	t.Helper()
+	stubEnrollPrompts(t)
+	saveOneSession(t)
+	confirmPreEnroll = func() (bool, error) { return true, nil }
+	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "lab-box", nil }
+	preEnrollACMEFn = func(_ context.Context, _ *config.AuthConfig, name string) (*acmeEnrollmentBake, error) {
+		*events = append(*events, "reserve "+name)
+		return &acmeEnrollmentBake{DeviceID: "11111111-1111-4111-8111-111111111111"}, nil
+	}
+	origDanger := installDangerConfirmPrompt
+	t.Cleanup(func() { installDangerConfirmPrompt = origDanger })
+	installDangerConfirmPrompt = func(string) (bool, error) {
+		*events = append(*events, "flash?")
+		return flash, nil
+	}
+}
+
+var recoveryTestConfirm = recoveryFlashConfirm{target: "Orin (1-3)", warning: []string{"This erases QSPI."}, question: "Flash Orin (1-3)?"}
+
+func TestRecoveryDeclineReservesNothing(t *testing.T) {
+	var events []string
+	stubRecoveryEnroll(t, &events, false)
+	setInteractive(t, true)
+	_, err := captureCommandStdout(t, func() error {
+		_, _, err := settleRecoveryFirstBoot(context.Background(), recoveryTestConfirm, nil, "", preEnrollOptions{mode: preEnrollAuto}, false)
+		return err
+	})
+	if !errors.Is(err, ErrUserCancelled) || !slices.Equal(events, []string{"flash?"}) {
+		t.Fatalf("err %v, events %v; want a cancel with nothing reserved", err, events)
+	}
+}
+
+func TestRecoveryReservesAfterConfirm(t *testing.T) {
+	var events []string
+	stubRecoveryEnroll(t, &events, true)
+	setInteractive(t, true)
+	var name string
+	var provJSON []byte
+	out, err := captureCommandStdout(t, func() error {
+		var err error
+		name, provJSON, err = settleRecoveryFirstBoot(context.Background(), recoveryTestConfirm, nil, "", preEnrollOptions{mode: preEnrollAuto}, false)
+		return err
+	})
+	if err != nil || name != "lab-box" || len(provJSON) == 0 || !slices.Equal(events, []string{"flash?", "reserve lab-box"}) {
+		t.Fatalf("name %q, provJSON %d bytes, err %v, events %v", name, len(provJSON), err, events)
+	}
+	if !strings.Contains(out, "Cloud will pre-enroll") {
+		t.Fatalf("output %q; want the planned enrollment at the confirmation", out)
+	}
+}
+
+func TestRecoveryForceReservesWithoutPrompt(t *testing.T) {
+	var events []string
+	stubRecoveryEnroll(t, &events, false)
+	setInteractive(t, false)
+	_, _, err := settleRecoveryFirstBoot(context.Background(), recoveryTestConfirm, nil, "lab-box",
+		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, true)
+	if err != nil || !slices.Equal(events, []string{"reserve lab-box"}) {
+		t.Fatalf("err %v, events %v; want one reservation and no flash question", err, events)
+	}
+}
+
+func TestConfirmRecoveryFlashShowsWillPreEnroll(t *testing.T) {
+	setInteractive(t, false)
+	out, err := captureCommandStdout(t, func() error {
+		return confirmRecoveryFlash(recoveryTestConfirm, "lab-box", nil, cloudWillPreEnroll, true)
+	})
+	if err != nil || !strings.Contains(out, "Cloud will pre-enroll") {
+		t.Fatalf("err %v, output %q", err, out)
 	}
 }

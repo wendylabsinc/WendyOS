@@ -64,10 +64,10 @@ type recoveryFlashConfirm struct {
 
 // confirmRecoveryFlash shows the target and what first boot will apply, then
 // warns and asks before flashing; --force skips only the warning and question.
-func confirmRecoveryFlash(c recoveryFlashConfirm, name string, creds []wendyconf.WifiCredential, enrolled, force bool) error {
+func confirmRecoveryFlash(c recoveryFlashConfirm, name string, creds []wendyconf.WifiCredential, cloud cloudStatus, force bool) error {
 	w := alsoOnPromptTerminal(os.Stdout)
 	fmt.Fprintf(w, "\n%s %s\n", tui.Dim("Target:"), tui.Device(c.target))
-	printProvisioningSummary(w, name, creds, enrolledStatus(enrolled))
+	printProvisioningSummary(w, name, creds, cloud)
 	if force {
 		return nil
 	}

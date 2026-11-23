@@ -2831,9 +2831,26 @@ func resolveFirstBootChoices(ctx context.Context, deviceName string, preOpts pre
 	return name, plan, err
 }
 
-// resolveInstallDeviceName settles the device name. With auth the install
-// enrolls, so a name another device in the organization holds is refused
-// before anything is erased; required makes the name mandatory then.
+// settleRecoveryFirstBoot reserves the name in Cloud only after the flash is
+// confirmed, so a declined flash leaves nothing reserved.
+func settleRecoveryFirstBoot(ctx context.Context, c recoveryFlashConfirm, creds []wendyconf.WifiCredential, requestedName string, preOpts preEnrollOptions, force bool) (string, []byte, error) {
+	name, plan, err := resolveFirstBootChoices(ctx, requestedName, preOpts)
+	if err != nil {
+		return "", nil, err
+	}
+	cloud := cloudNotEnrolled
+	if plan != nil {
+		cloud = cloudWillPreEnroll
+	}
+	if err := confirmRecoveryFlash(c, name, creds, cloud, force); err != nil {
+		return "", nil, err
+	}
+	provJSON, err := mintProvisioningJSON(ctx, plan, &name)
+	return name, provJSON, err
+}
+
+// resolveInstallDeviceName refuses, when auth is set (the install enrolls), a
+// name another device in the organization holds, before anything is erased.
 func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config.AuthConfig, required bool) (string, error) {
 	if auth == nil {
 		return resolveDeviceName(flagName)

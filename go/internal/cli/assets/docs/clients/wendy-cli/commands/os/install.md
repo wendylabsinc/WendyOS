@@ -302,7 +302,7 @@ First boot will apply:
   Cloud        not enrolled
 ```
 
-SD card and NVMe installs show `will pre-enroll`, because the name is reserved only after the erase is confirmed. The Cloud line is left out for Wendy Lite, which enrolls after flashing. Jetson and Dragonwing flash logs start with the same summary.
+Installs that pre-enroll show `will pre-enroll`, because the name is reserved only after the erase or flash is confirmed. The Cloud line is left out for Wendy Lite, which enrolls after flashing. Jetson and Dragonwing flash logs start with the same summary.
 
 ## Agent-driven installation
 

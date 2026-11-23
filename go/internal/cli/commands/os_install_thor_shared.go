@@ -119,22 +119,15 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
+	name, provJSON, err := settleRecoveryFirstBoot(ctx, recoveryFlashConfirm{
+		target:   dev.Label,
+		warning:  []string{tui.WarningMessage(thorEraseWarning)},
+		question: fmt.Sprintf("Flash %s?", dev.Label),
+	}, creds, deviceName, preOpts, force)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-	if err := confirmRecoveryFlash(recoveryFlashConfirm{
-		target:   dev.Label,
-		warning:  []string{tui.WarningMessage(thorEraseWarning)},
-		question: fmt.Sprintf("Flash %s?", dev.Label),
-	}, name, creds, enrolled, force); err != nil {
-		return err
-	}
 
 	// flashCtx aborts in-flight step work (the stage-2 engine) when the user
 	// confirms a ctrl+c cancel in the steps UI.
