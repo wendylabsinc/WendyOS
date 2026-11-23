@@ -50,6 +50,8 @@ type DeviceIdentity struct {
 	// EnrolledDeviceID is the enrolled device UUID; empty when the board is
 	// unenrolled or its firmware predates the field.
 	EnrolledDeviceID string
+	// TenantID is populated by USB discovery's optional enrollment status read.
+	TenantID string
 }
 
 type DeviceInfo struct {
@@ -1152,12 +1154,22 @@ func (c *WendyLiteClient) handshakeWithin(budget time.Duration) error {
 // Firmware controls which transports support bootstrap challenges.
 // statusOnly observes completion without replacing the bootstrap nonce.
 func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyComEnrollmentChallenge, error) {
+	return c.enrollmentChallenge(statusOnly, 5*time.Second)
+}
+
+// EnrollmentStatus reads enrollment without rotating the bootstrap nonce.
+// Discovery uses a short timeout so older firmware remains discoverable.
+func (c *WendyLiteClient) EnrollmentStatus(timeout time.Duration) (*wendypb.WendyComEnrollmentChallenge, error) {
+	return c.enrollmentChallenge(true, timeout)
+}
+
+func (c *WendyLiteClient) enrollmentChallenge(statusOnly bool, timeout time.Duration) (*wendypb.WendyComEnrollmentChallenge, error) {
 	resp, err := c.sendCommand(&wendypb.WendyComCommand{
 		RequestId: c.requestIdGen.Add(1),
 		Params: &wendypb.WendyComCommand_EnrollmentChallenge{
 			EnrollmentChallenge: &wendypb.WendyComEnrollmentChallengeParams{StatusOnly: statusOnly},
 		},
-	}, 5*time.Second)
+	}, timeout)
 	if err != nil {
 		return nil, err
 	}

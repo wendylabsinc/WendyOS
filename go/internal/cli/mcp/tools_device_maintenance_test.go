@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -149,5 +150,42 @@ func TestAgentUpdateRequiresVerifiedCLIResult(t *testing.T) {
 	}
 	if _, err := parseAgentUpdateResult(strings.Repeat("x", 100)); err == nil {
 		t.Fatal("accepted non-JSON output")
+	}
+}
+
+func TestParseAgentUpdateResultReportsARejection(t *testing.T) {
+	out := `{"status":"rejected","message":"the new agent failed its checks: did not pass its checks within 3m0s; the device went back to agent 2026.10.29-210857 from the OS image","version":"2026.10.29-210857"}`
+	_, err := parseAgentUpdateResult(out)
+	if err == nil || !strings.Contains(err.Error(), "failed its checks") || !strings.Contains(err.Error(), "went back to agent") {
+		t.Fatalf("the rejection reason must reach the MCP client, got %v", err)
+	}
+}
+
+func TestAgentUpdateReportsTheSupervisorsRejection(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	s.SetConn(&grpcclient.AgentConnection{Host: "old", Addr: "old:50051"})
+	out := `{"status":"rejected","message":"the new agent failed its checks: failed 3 times during its trial; the device went back to agent 2026.10.29-210857 from the OS image","version":"2026.10.29-210857"}`
+	s.updateAgentCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		return out, false, errors.New("exit status 1")
+	}
+	r, err := s.handleDeviceUpdateAgent(context.Background(), callToolReq("device_update_agent", nil))
+	result := structuredMap(t, r)
+	if err != nil || !r.IsError || result["status"] != "rejected" || !strings.Contains(result["message"].(string), "failed 3 times") {
+		t.Fatalf("want the rejection with its reason, got %v %v", result, err)
+	}
+}
+
+func TestAgentUpdateReportsACheckRefusal(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	s.SetConn(&grpcclient.AgentConnection{Host: "old", Addr: "old:50051"})
+	out := `{"status":"rejected","message":"the new agent failed its checks: this agent is too old to run under the agent supervisor; the device kept agent 2026.11.02-101010","version":"2026.11.02-101010"}
+{"error":{"code":"internal","message":"the new agent failed its checks: this agent is too old to run under the agent supervisor"}}`
+	s.updateAgentCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		return out, false, errors.New("exit status 1")
+	}
+	r, err := s.handleDeviceUpdateAgent(context.Background(), callToolReq("device_update_agent", nil))
+	result := structuredMap(t, r)
+	if err != nil || !r.IsError || result["status"] != "rejected" || !strings.Contains(result["message"].(string), "too old") {
+		t.Fatalf("want the refusal as a rejection, got %v %v", result, err)
 	}
 }

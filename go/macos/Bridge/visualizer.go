@@ -15,6 +15,47 @@ import (
 	"unsafe"
 )
 
+//export WDNotificationVideoAt
+func WDNotificationVideoAt(selector, campaign, eventID *C.char) *C.WDNotificationVideoResult {
+	return WDNotificationVideoNear(selector, campaign, eventID, 0, nil)
+}
+
+//export WDNotificationVideoNear
+func WDNotificationVideoNear(selector, campaign, eventID *C.char, notificationUnix C.double, hint *C.char) *C.WDNotificationVideoResult {
+	p := alloc[C.WDNotificationVideoResult](1)
+	result, err := desktop.NotificationVideoNear(C.GoString(selector), C.GoString(campaign), C.GoString(eventID), float64(notificationUnix), C.GoString(hint))
+	p.status = status(err)
+	if err != nil || result.Episode == nil {
+		return p
+	}
+	row := result.Episode
+	raw, err := json.Marshal(map[string]any{"id": row.GetId(), "name": row.GetName(), "state": row.GetState(),
+		"started": float64(row.GetStartedUnixNanos()) / 1e9, "bytes": row.GetSizeBytes(),
+		"timings": result.Timings, "duration": result.Preview.Duration, "maximumCelsius": result.Preview.MaximumCelsius})
+	if err != nil {
+		_ = os.Remove(result.Preview.Path)
+		p.status = status(err)
+		return p
+	}
+	p.json = C.CString(string(raw))
+	p.local_path = C.CString(result.Preview.Path)
+	return p
+}
+
+//export WDNotificationVideoFree
+func WDNotificationVideoFree(p *C.WDNotificationVideoResult) {
+	if p == nil {
+		return
+	}
+	if p.local_path != nil {
+		_ = os.Remove(C.GoString(p.local_path))
+	}
+	free(p.local_path)
+	free(p.json)
+	free(p.status.message)
+	free(p)
+}
+
 //export WDVisualEpisodes
 func WDVisualEpisodes(session C.uint64_t) *C.WDVisualEpisodesResult {
 	p := alloc[C.WDVisualEpisodesResult](1)
@@ -22,7 +63,7 @@ func WDVisualEpisodes(session C.uint64_t) *C.WDVisualEpisodesResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
 	for i, r := range rows {
-		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(r.GetId()), name: C.CString(r.GetName()), state: C.CString(r.GetState()), started_ns: C.int64_t(r.GetStartedUnixNanos()), size_bytes: C.int64_t(r.GetSizeBytes())}
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(r.GetId()), name: C.CString(r.GetName()), state: C.CString(r.GetState()), started_ns: C.int64_t(r.GetStartedUnixNanos()), size_bytes: C.int64_t(r.GetSizeBytes()), media_files_json: episodeMediaFiles(r)}
 	}
 	return p
 }
@@ -34,7 +75,7 @@ func WDVisualEpisodesAt(selector *C.char) *C.WDVisualEpisodesResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
 	for i, r := range rows {
-		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(r.GetId()), name: C.CString(r.GetName()), state: C.CString(r.GetState()), started_ns: C.int64_t(r.GetStartedUnixNanos()), size_bytes: C.int64_t(r.GetSizeBytes())}
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(r.GetId()), name: C.CString(r.GetName()), state: C.CString(r.GetState()), started_ns: C.int64_t(r.GetStartedUnixNanos()), size_bytes: C.int64_t(r.GetSizeBytes()), media_files_json: episodeMediaFiles(r)}
 	}
 	return p
 }
@@ -77,6 +118,7 @@ func WDVisualEpisodesFree(p *C.WDVisualEpisodesResult) {
 		free(r.id)
 		free(r.name)
 		free(r.state)
+		free(r.media_files_json)
 	}
 	free(p.items)
 	free(p.status.message)
@@ -233,7 +275,19 @@ func WDVisualRecording(session C.uint64_t, action C.WDVisualRecordingAction, nam
 	if row != nil {
 		p.items = alloc[C.WDVisualEpisode](1)
 		p.count = 1
-		*p.items = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
+		*p.items = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes()), media_files_json: episodeMediaFiles(row)}
+	}
+	return p
+}
+
+//export WDHomeCampaign
+func WDHomeCampaign(session C.uint64_t, name *C.char, trigger C.int32_t) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	rows, err := desktop.HomeCampaign(uint64(session), C.GoString(name), trigger != 0)
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
+	for i, row := range rows {
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes()), media_files_json: episodeMediaFiles(row)}
 	}
 	return p
 }
@@ -242,6 +296,19 @@ func WDVisualRecording(session C.uint64_t, action C.WDVisualRecordingAction, nam
 func WDGalleryMetadataAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
 	p := alloc[C.WDGalleryMetadataResult](1)
 	metadata, err := desktop.GalleryMetadataAt(C.GoString(selector), C.GoString(episode))
+	if err == nil {
+		var raw []byte
+		raw, err = json.Marshal(metadata)
+		p.json = C.CString(string(raw))
+	}
+	p.status = status(err)
+	return p
+}
+
+//export WDGalleryMediaAt
+func WDGalleryMediaAt(selector, episode *C.char) *C.WDGalleryMetadataResult {
+	p := alloc[C.WDGalleryMetadataResult](1)
+	metadata, err := desktop.GalleryMediaAt(C.GoString(selector), C.GoString(episode))
 	if err == nil {
 		var raw []byte
 		raw, err = json.Marshal(metadata)
@@ -267,14 +334,15 @@ func WDVisualGalleryDataAt(selector, episode *C.char, summary C.int) *C.WDVisual
 	return visualSnapshotResult(snapshot, err)
 }
 
-//export WDHomeCampaign
-func WDHomeCampaign(session C.uint64_t, name *C.char, trigger C.int32_t) *C.WDVisualEpisodesResult {
-	p := alloc[C.WDVisualEpisodesResult](1)
-	rows, err := desktop.HomeCampaign(uint64(session), C.GoString(name), trigger != 0)
-	p.status = status(err)
-	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
-	for i, row := range rows {
-		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
+// nil means unknown (old agent or unfinished episode); [] means known empty.
+func episodeMediaFiles(row *pb.DataEpisode) *C.char {
+	if row.GetMedia() == nil {
+		return nil
 	}
-	return p
+	files := make([]map[string]string, 0, len(row.GetMedia().GetFiles()))
+	for _, file := range row.GetMedia().GetFiles() {
+		files = append(files, map[string]string{"path": file.GetPath(), "media_type": file.GetMediaType()})
+	}
+	encoded, _ := json.Marshal(files)
+	return C.CString(string(encoded))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -39,7 +40,7 @@ func (s *ProvisioningServiceV2) IsProvisioned(ctx context.Context, _ *agentpbv2.
 		return nil, status.Error(codes.Unavailable, "reset recovery blocked; explicit local recovery required")
 	}
 	if s.v1.resetCleanupErr != nil {
-		return nil, status.Error(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying")
+		return nil, resetcleanup.Refusal(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying", s.v1.resetCleanupErr)
 	}
 	if !s.v1.enrolled {
 		completion, err := s.v1.cloudCompletion()

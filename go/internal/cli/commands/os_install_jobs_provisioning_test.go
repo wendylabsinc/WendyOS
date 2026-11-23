@@ -226,13 +226,13 @@ func TestInstallJobMediaProvisionsAfterTheWrite(t *testing.T) {
 	})
 }
 
-type configInjector = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), *localInstallAgent) error
+type configInjector = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), agentSeed) error
 
 // withLocalAgent runs inject with a local agent so no release is downloaded.
 func withLocalAgent(inject configInjector) configInjector {
 	agent := &localInstallAgent{path: "test-agent", data: installTestELF(elf.EM_AARCH64), arch: "arm64"}
-	return func(img string, creds []wendyconf.WifiCredential, name string, prov []byte, out io.Writer, detail func(string), _ *localInstallAgent) error {
-		return inject(img, creds, name, prov, out, detail, agent)
+	return func(img string, creds []wendyconf.WifiCredential, name string, prov []byte, out io.Writer, detail func(string), _ agentSeed) error {
+		return inject(img, creds, name, prov, out, detail, agentSeed{local: agent})
 	}
 }
 
@@ -316,11 +316,11 @@ func TestInstallJobRecoveryWorkspacesCarryFirstBootInput(t *testing.T) {
 		}
 	})
 	t.Run("without input the published config image is flashed", func(t *testing.T) {
-		installJobInjectOrinConfig = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), *localInstallAgent) error {
+		installJobInjectOrinConfig = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), agentSeed) error {
 			t.Fatal("injected into the Orin config image without first-boot input")
 			return nil
 		}
-		installJobInjectThorConfig = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), *localInstallAgent) error {
+		installJobInjectThorConfig = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), agentSeed) error {
 			t.Fatal("injected into the Thor config image without first-boot input")
 			return nil
 		}
@@ -363,7 +363,7 @@ func TestInstallJobRecoveryWorkspacesCarryFirstBootInput(t *testing.T) {
 		copyTestFile(t, newFATImage(t), filepath.Join(root, "ws", "flash-images", "config-partition.fat32.img"))
 		fp := &flashpack.Flashpack{Root: root}
 		fp.Manifest.Layout.FlashWorkspace = "ws"
-		installJobInjectThorConfig = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), *localInstallAgent) error {
+		installJobInjectThorConfig = func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), agentSeed) error {
 			return errors.New("config image is full")
 		}
 		if _, err := prepareThorJobWorkspace(fp, fb, func(string) {}); err == nil || !strings.Contains(err.Error(), "config image is full") {

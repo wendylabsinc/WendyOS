@@ -231,7 +231,7 @@ func TestRefusedUnmountOnMacIsReportedOnlyWhenTheEjectFails(t *testing.T) {
 
 	var provErr error
 	out, _ := captureCommandStdout(t, func() error {
-		_, _, provErr = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk4"}, nil, "lab-nano", nil, true, nil)
+		_, _, provErr = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk4"}, nil, "lab-nano", nil, true, agentSeed{})
 		return nil
 	})
 	if provErr != nil || retried || !strings.Contains(out, "Config partition written: name lab-nano") {
@@ -298,7 +298,7 @@ func TestProvisionConfigWithRetryNeverRetriesAStillMountedPartition(t *testing.T
 			calls := withStubbedProvisioning(t, func(drive, []wendyconf.WifiCredential, string, []byte) error { return c.err }, true, []bool{true})
 			var err error
 			out, _ := captureCommandStdout(t, func() error {
-				_, _, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/sdz"}, nil, "lab-nano", nil, c.requested, nil)
+				_, _, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/sdz"}, nil, "lab-nano", nil, c.requested, agentSeed{})
 				return nil
 			})
 			if *calls != 1 {

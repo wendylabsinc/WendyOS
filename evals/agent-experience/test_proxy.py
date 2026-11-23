@@ -275,7 +275,9 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(len(failed["reply_text"]), 2000)
         self.assertTrue(failed["reply_text"].startswith('{"tool": "read_thing"'))
         self.assertIs(canned["canned"], True)
-        self.assertIsNone(canned["reply_text"])
+        self.assertEqual(canned["reply_text"], "captured write")
+        self.assertGreater(failed["reply_bytes"], len(failed["reply_text"]))
+        self.assertGreater(canned["reply_bytes"], 0)
 
     def test_unanswered_call_has_no_reply_text(self):
         with mock.patch.dict(os.environ, {"FAKE_MCP_SILENT": "1"}):

@@ -6,6 +6,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 )
 
@@ -15,6 +16,10 @@ func DesktopFailure(err error) failure.Info {
 	var explicit *failure.Error
 	if errors.As(err, &explicit) {
 		return explicit.Info
+	}
+	// A denied browse is the platform's own answer, not a guess from its text.
+	if errors.Is(err, discovery.ErrLocalNetworkDenied) {
+		return failure.Info{Code: failure.LocalNetworkDenied, Remedy: failure.OpenNetworkSettings}
 	}
 	if expiredLoginFrom(err) != nil {
 		return failure.Info{Code: failure.CredentialsExpired, Remedy: failure.SignIn}

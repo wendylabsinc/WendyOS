@@ -24,7 +24,7 @@ func TestMCPSimulatorLocalCreationProfilesAndLifecycle(t *testing.T) {
 	if err := os.WriteFile(image, []byte("disk bytes"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	backend := newSimulatorBackend(func() (*vm.Store, error) { return store, nil }, func(context.Context, string) (string, string, func(), error) {
+	backend := newSimulatorBackend(func() (*vm.Store, error) { return store, nil }, func(context.Context, vm.Arch, string) (string, string, func(), error) {
 		t.Fatal("local image triggered network resolver")
 		return "", "", nil, nil
 	})
@@ -87,7 +87,7 @@ func TestMCPSimulatorPublishedCreationHonorsCancellationBeforeWrite(t *testing.T
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cleaned := false
-	backend := newSimulatorBackend(func() (*vm.Store, error) { return store, nil }, func(ctx context.Context, version string) (string, string, func(), error) {
+	backend := newSimulatorBackend(func() (*vm.Store, error) { return store, nil }, func(ctx context.Context, _ vm.Arch, version string) (string, string, func(), error) {
 		if version != "v1" {
 			t.Fatalf("version = %q", version)
 		}
@@ -173,5 +173,53 @@ func TestMCPSimulatorImageCacheValidatesWithoutGlobalDownloader(t *testing.T) {
 	files, err := os.ReadDir(dir)
 	if err != nil || len(files) != 1 {
 		t.Fatalf("failed checksum left temporary download: %v %v", files, err)
+	}
+}
+
+func TestMCPSimulatorCreateRecordsArch(t *testing.T) {
+	stubDefaultGuestArch(t, vm.ArchAMD64)
+	store := &vm.Store{Root: t.TempDir()}
+	image := filepath.Join(t.TempDir(), "image.wic")
+	if err := os.WriteFile(image, []byte("disk bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var resolved []vm.Arch
+	backend := newSimulatorBackend(func() (*vm.Store, error) { return store, nil }, func(_ context.Context, arch vm.Arch, _ string) (string, string, func(), error) {
+		resolved = append(resolved, arch)
+		return image, "0.21.0", func() {}, nil
+	})
+	info, err := backend.Create(context.Background(), wendymcp.SimulatorCreateOptions{Name: "x86", Profile: "g1", Image: image, DiskGiB: 1, Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Arch != "amd64" {
+		t.Errorf("local image with arch amd64: info.Arch = %q", info.Arch)
+	}
+	if m, _ := store.ReadMeta("x86"); m.Arch != vm.ArchAMD64 {
+		t.Errorf("meta arch = %q, want amd64", m.Arch)
+	}
+	if _, err := os.Stat(store.VarsPath("x86")); !os.IsNotExist(err) {
+		t.Errorf("x86-64 simulator has a variable store at create: %v", err)
+	}
+	info, err = backend.Create(context.Background(), wendymcp.SimulatorCreateOptions{Name: "local", Profile: "generic", Image: image, DiskGiB: 1})
+	if err != nil || info.Arch != "arm64" {
+		t.Fatalf("local image without arch: %+v, %v; want arm64", info, err)
+	}
+	info, err = backend.Create(context.Background(), wendymcp.SimulatorCreateOptions{Name: "published", Profile: "generic", DiskGiB: 1})
+	if err != nil || info.Arch != "amd64" || len(resolved) != 1 || resolved[0] != vm.ArchAMD64 {
+		t.Fatalf("published image: %+v, %v, resolver saw %v; want the default amd64 throughout", info, err, resolved)
+	}
+	if err := store.CreateFrom("lite", strings.NewReader("fw"), 2, 1024, vm.Meta{Profile: "wendy-lite"}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := backend.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"x86": "amd64", "local": "arm64", "published": "amd64", "lite": ""}
+	for _, item := range items {
+		if item.Arch != want[item.Name] {
+			t.Errorf("simulator_list %s: arch %q, want %q", item.Name, item.Arch, want[item.Name])
+		}
 	}
 }

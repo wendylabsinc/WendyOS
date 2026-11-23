@@ -21,6 +21,7 @@ struct HomeWidgetDeck: View {
     @State private var actions = AsyncActions()
     @Environment(\.recordingPosters) private var posters
     @State private var expandedCamera: HomeWidget?
+    @State private var visible = false
     @State private var refresh = 0
     @State private var dragged: UUID?
     @State private var resizing: UUID?
@@ -63,9 +64,10 @@ struct HomeWidgetDeck: View {
             }
         }.task { await actions.run() }
         .onChange(of: editing) { _, value in if value { activeCamera = nil } else { dragged = nil; resizing = nil; resizePreview = nil } }
-        .onDisappear { activeCamera = nil }
-        .task(id: LoadKey(targets: targets, inventory: RecordingSources(model: model).inventory, active: phase == .active, refresh: refresh)) {
-            if phase == .active { await catalog.load(targets, refresh: refresh, priority: nil, consumer: "home.widgets", retaining: RecordingSources(model: model).inventory) }
+        .onAppear { visible = true }
+        .onDisappear { visible = false; activeCamera = nil }
+        .task(id: LoadKey(targets: targets, inventory: RecordingSources(model: model).inventory, active: visible && phase == .active, refresh: refresh)) {
+            if visible && phase == .active { await catalog.load(targets, refresh: refresh, priority: nil, consumer: "home.widgets", retaining: RecordingSources(model: model).inventory) }
         }
         .fullScreenCover(item: $expandedCamera) { widget in
             HomeWidgetSession(widget: widget, model: model)
@@ -388,7 +390,10 @@ private struct HomeWidgetSession: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let webpage, ready { BrowserSheet(url: webpage) }
+                if let webpage, ready {
+                    BrowserSheet(url: webpage)
+                        .ignoresSafeArea(.container, edges: .bottom)
+                }
                 else if busy && (session == 0 || widget.kind == .portal) { ProgressView(session == 0 ? "Connecting…" : "Opening portal…") }
                 else if ready {
                     if widget.kind == .camera {

@@ -568,7 +568,7 @@ func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	if gotErr := finishDragonwingFlash(&out, board, run.collected(), "0.19.3", err, false); gotErr == nil {
 		t.Fatal("the failure was swallowed")
 	}
-	for _, want := range []string{"Nothing was written", "S2-8"} {
+	for _, want := range []string{"Nothing was written", "DIP switch 3"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("failure output %q is missing %q", out.String(), want)
 		}
@@ -817,7 +817,7 @@ func TestPlanDragonwingFlashResolvesBeforeAnyWrite(t *testing.T) {
 	// Every write is resolved up front, so a bundle the flash cannot take
 	// fails while the board is still untouched rather than after 12 GiB.
 	_, err := planDragonwingFlash(t.TempDir(), t.TempDir(), "", nil, "", nil,
-		io.Discard, func(string) {}, func(string) {}, nil)
+		io.Discard, func(string) {}, func(string) {}, agentSeed{})
 	if err == nil {
 		t.Fatal("want an error for an empty bundle dir")
 	}
@@ -950,7 +950,7 @@ func TestReportDragonwingFailureCoversCancellation(t *testing.T) {
 }
 
 func TestDragonwingEDLInstructionsMatchTheBoard(t *testing.T) {
-	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "S2-8"}, {"dragonwing-iq-9075", "MODE switch 3"}} {
+	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "DIP switch 3"}, {"dragonwing-iq-9075", "MODE switch 3"}} {
 		board, _ := dragonwingBoardFor(tc.board)
 		guide := board.guide()
 		for label, value := range map[string]string{"entry": strings.Join(guide.entry, "\n"), "ready": guide.ready, "done": strings.Join(guide.done, "\n"), "retry": guide.retry, "reenter": strings.Join(guide.reenter, "\n")} {

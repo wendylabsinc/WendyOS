@@ -50,7 +50,8 @@ func (r *Recovery) failed(err error, hinted bool) {
 	}
 	r.until = now.Add(issuerCooldown)
 	r.mu.Unlock()
-	slog.Warn("TLS issuer hints paused after issuer path failure", "duration", issuerCooldown, "error", err)
+	// Automatic fallback is diagnostic information, not a user-facing warning.
+	slog.Debug("TLS issuer hints paused after issuer path failure", "duration", issuerCooldown, "error", err)
 }
 
 func (c *Certificates) recoveryState() *Recovery {

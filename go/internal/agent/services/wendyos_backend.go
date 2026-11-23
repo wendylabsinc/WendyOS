@@ -86,7 +86,26 @@ func (w wendyOSUpdater) install(ctx context.Context, artifactURL string, onProgr
 		return err
 	}
 	if err := w.prepareRootfs(ctx); err != nil {
-		return fmt.Errorf("OS update preparation failed: %w", err)
+		var legacy *jetsonFirmwareManagedRedundancyError
+		if !errors.As(err, &legacy) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("OS update preparation failed: %w", err)
+		}
+		refusal := updaterRootfsRefusal(ctx, binary)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// The verdict hinges on the updater's check name, which its CLI
+		// contract does not pin; record both outcomes so a rename there shows
+		// up as a logged refusal instead of a silent change in behaviour.
+		if refusal != "" {
+			w.logger.Warn("wendyos-update check did not confirm readiness; refusing the OS update",
+				zap.String("reason", refusal))
+			return fmt.Errorf("OS update preparation failed: %w (wendyos-update check: %s)", err, refusal)
+		}
+		w.logger.Info("wendyos-update check confirmed readiness; delegating firmware-managed rootfs redundancy to the updater")
 	}
 	if err := ctx.Err(); err != nil {
 		return err

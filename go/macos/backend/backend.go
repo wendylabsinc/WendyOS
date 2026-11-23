@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
@@ -41,17 +42,19 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	deviceRPCSession        atomic.Pointer[deviceRPCSession]
 	previews                cameraPreviews
+	osUpdate                mobileOSRun
+	recordings              recordingReads
 	gallery                 galleryConnections
 	discovery               nearbyDiscovery
 	discoverNearby          func(context.Context) ([]commands.DesktopDevice, error)
-	osUpdate                mobileOSRun
-	recordings              recordingReads
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
 	mobileScope             string
 	tunnelSession           commands.TunnelSession
+	appTunnelContext        func(context.Context) context.Context
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
@@ -90,11 +93,19 @@ type Backend struct {
 	vpnProbes           *vpnProbes
 }
 
+type secureLANConnectionKey struct{}
+
 func New() *Backend {
 	b := &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second, unpinDevice: commands.DesktopUnpin}
 	b.tunnelSession.SetActive(true)
+	b.appTunnelContext = b.tunnelSession.Context
 	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
-		return connectDesktopTarget(b.tunnelSession.Context(ctx), selector)
+		ctx = b.tunnelSession.Context(ctx)
+		if secure, _ := ctx.Value(secureLANConnectionKey{}).(bool); secure {
+			conn, err := commands.DesktopConnectSecureLAN(ctx, selector)
+			return conn, nil, err
+		}
+		return connectDesktopTarget(ctx, selector)
 	}
 	return b
 }
@@ -146,6 +157,7 @@ func (b *Backend) stopCameras() {
 	}
 }
 func (b *Backend) disconnect() {
+	b.deviceRPCSession.Store(nil)
 	b.cameraDevices = nil
 	b.logStream = 0
 	if b.chatEnvironment != nil {
@@ -191,11 +203,9 @@ func (b *Backend) disconnect() {
 }
 
 // Public operations serialize access to the CLI connection and configuration.
-func (b *Backend) begin() (context.Context, func()) {
-	return b.beginTimeout(65 * time.Second)
-}
+func (b *Backend) begin() (context.Context, func()) { return b.beginWithTimeout(65 * time.Second) }
 
-func (b *Backend) beginTimeout(timeout time.Duration) (context.Context, func()) {
+func (b *Backend) beginWithTimeout(timeout time.Duration) (context.Context, func()) {
 	b.mu.Lock()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	b.operationMu.Lock()
@@ -336,7 +346,9 @@ func (b *Backend) ConnectTargetRequest(selector string, forgetIdentity bool, req
 	var lite liteConnection
 	var err error
 	if requiresMTLS {
-		conn, err = commands.DesktopConnectSecureLAN(targetCtx, selector)
+		// Preview backends inherit this callback and therefore the parent's
+		// account-scoped pool, including for explicit secure LAN selections.
+		conn, lite, err = b.connectTarget(context.WithValue(targetCtx, secureLANConnectionKey{}, true), selector)
 	} else if b.connectDevice != nil {
 		conn, err = b.connectDevice(targetCtx, selector)
 	} else {
@@ -398,6 +410,7 @@ func (b *Backend) ConnectTargetRequest(selector string, forgetIdentity bool, req
 	b.conn, b.lite = conn, lite
 	b.deviceSelector = selector
 	b.life, b.stop = targetCtx, targetCancel
+	b.publishDeviceRPCSession()
 	committed = true
 	session := b.session
 	b.connectMu.Unlock()
@@ -447,7 +460,7 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 			return vpn.Config{}, err
 		}
 	}
-	probes := newVPNProbes(routes, commands.DesktopConnect)
+	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
 	relay, config, err := vpn.NewRelayWithInternet(routes, dial, probes.Probe, internet)
 	if err != nil {
 		if internet != nil {
@@ -483,10 +496,10 @@ func (b *Backend) stopVPN() {
 }
 func (b *Backend) Shutdown() error {
 	b.previewsReset(true)
+	b.recordings.setActive(false)
 	b.tunnelSession.SetActive(false)
 	b.resetNearbyDiscovery(true)
 	b.galleryReset(true)
-	b.recordings.setActive(false)
 	b.cancelOperation()
 	b.ReserveConnection()
 	b.NearbyClose(0)
@@ -505,12 +518,11 @@ func (b *Backend) Shutdown() error {
 	return meshErr
 }
 func (b *Backend) Apps() ([]*pb.AppContainer, error) {
-	ctx, done := b.begin()
-	defer done()
-	conn, err := b.connection(0)
+	ctx, conn, done, err := b.deviceRPC(0)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return listDesktopApps(ctx, conn)
 }
 

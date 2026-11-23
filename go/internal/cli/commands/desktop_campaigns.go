@@ -143,6 +143,11 @@ func desktopCampaign(p *pb.DataCampaign) DesktopCampaign {
 		if s.NotificationError != "" {
 			out.Problem += "\nNotification: " + s.NotificationError
 		}
+		// A model too slow for the campaign's rate still detects, so it is a
+		// warning beside "Detection: running", not a problem.
+		if s.Throughput != nil && s.Throughput.ModelTooSlow {
+			out.Warnings = append(slices.Clip(out.Warnings), "Detection misses its rate: "+s.Throughput.Summary)
+		}
 	}
 	return out
 }

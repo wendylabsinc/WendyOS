@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -52,12 +53,17 @@ func childEnv(dir, coverDir string) []string {
 // empty config, and returns its exit status, stdout and stderr.
 func runWendy(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
+	return runWendyWithStdin(t, nil, args...)
+}
+
+func runWendyWithStdin(t *testing.T, stdin io.Reader, args ...string) (int, string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Dir = dir
 	cmd.Env = childEnv(dir, t.TempDir())
 	var stdout, stderr bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, &stdout, &stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, &stdout, &stderr
 	err := cmd.Run()
 	code := 0
 	var exitErr *exec.ExitError

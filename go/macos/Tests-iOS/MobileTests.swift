@@ -227,7 +227,7 @@ final class MobileTests: XCTestCase {
         model.initialized = true
         await model.runMobileMesh(active: false)
         let started = expectation(description: "Nearby discovery in flight")
-        let finish = AsyncCallback<(devices: [Device], warning: String?)>()
+        let finish = AsyncCallback<(devices: [Device], warning: WendyError?)>()
         async let nearby: Void = model.refreshNearby {
             started.fulfill()
             return try await finish.value()
@@ -429,13 +429,46 @@ final class MobileTests: XCTestCase {
         XCTAssertEqual(model.nearbyError, denial)
         await model.refreshNearby(automatic: true) { XCTFail("Retried a denied browse"); return ([], nil) }
         let peer = Device(id: "usb", name: "Peer", selector: "usb", transport: .usb, address: "")
-        await model.refreshNearby { ([peer], denial) }
+        await model.refreshNearby { ([peer], WendyError(message: denial)) }
         XCTAssertEqual(model.nearby.map(\.id), [peer.id])
         XCTAssertEqual(model.nearbyError, denial)
         await model.refreshNearby { ([], nil) }
         XCTAssertTrue(model.nearbyLoaded)
         XCTAssertTrue(model.nearby.isEmpty)
         XCTAssertNil(model.nearbyError)
+    }
+
+    @MainActor
+    func testRecordingSourcesPreferConnectedCloudOverStaleLAN() async throws {
+        try await initializeIsolatedSandbox()
+        let cloud = Device(id: "cloud://api.wendy.dev:443/tenant/org/asset/board", name: "Board", selector: "cloud://api.wendy.dev:443/tenant/org/asset/board", transport: .cloud, address: "")
+        let lan = Device(id: "spiffe://wendy.sh/tenant/org/device/board", name: "Board", selector: "old:50051", transport: .lan, address: "")
+        let model = AppModel(loadDeviceApps: { [] }, loadDeviceCameras: { [] }, connectDevice: { _, _, _ in
+            DeviceConnection(session: 1, lite: false)
+        })
+        model.initialized = true
+        await model.runMobileMesh(active: false)
+        model.nearby = [lan]
+        await model.connect(cloud)
+        let sources = RecordingSources(model: model)
+        XCTAssertEqual(sources.targets.count, 1)
+        XCTAssertEqual(sources.targets.first?.routes.map(\.selector), [cloud.selector, lan.selector])
+    }
+
+    @MainActor
+    func testLANRetryUsesNewSightingWithoutDroppingSecureIdentity() async {
+        var original = Device(id: "same-device", name: "Board", selector: "old:50051", transport: .lan, address: "")
+        original.requiresMTLS = true
+        let sighting = Device(id: "same-device", name: "Board", selector: "new:50051", transport: .lan, address: "")
+        var selected: Device?
+        let model = AppModel(loadDeviceApps: { [] }, loadDeviceCameras: { [] }, connectDevice: { device, _, _ in
+            selected = device
+            return DeviceConnection(session: 1, lite: false)
+        })
+        model.nearby = [sighting]
+        await model.retryConnection(original)
+        XCTAssertEqual(selected?.selector, sighting.selector)
+        XCTAssertEqual(selected?.requiresMTLS, true)
     }
 
     @MainActor
@@ -825,4 +858,30 @@ private final class RoomCaptureSessionSpy: SiteRoomCaptureSession {
     var stops = 0
     func run(configuration: RoomCaptureSession.Configuration) { starts += 1 }
     func stop() { stops += 1 }
+}
+
+final class MobileInventoryPresenceTests: XCTestCase {
+    func testOnlyFreshVerifiedPresenceCanShowOnline() {
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: true, verified: true, fetchedAt: now, now: now), .online)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: false, verified: true, fetchedAt: now, now: now), .offline)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: true, verified: false, fetchedAt: now, now: now), .unknown)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: nil, verified: true, fetchedAt: now, now: now), .unknown)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: true, verified: true, fetchedAt: nil, now: now), .unknown)
+        for online in [true, false] {
+            XCTAssertEqual(MobileInventoryPresence.cloud(online: online, verified: true, fetchedAt: now.addingTimeInterval(-60), now: now), .unknown)
+        }
+        XCTAssertTrue(MobileInventoryPresence.unknown.muted)
+        XCTAssertTrue(MobileInventoryPresence.offline.muted)
+        XCTAssertLessThan(MobileInventoryPresence.online.rank, MobileInventoryPresence.offline.rank)
+    }
+}
+
+extension MobileTests {
+    func testGalleryPlaybackPreservesFullReplayForMixedAndUnknownRecordings() {
+        XCTAssertEqual(MobileRecordingLoadMode.playback(for: .audio), .audio)
+        for kind: MobileRecordingKind? in [nil, .unknown, .mixed, .rosbag, .video, .images, .dataset] {
+            XCTAssertEqual(MobileRecordingLoadMode.playback(for: kind), .full)
+        }
+    }
 }

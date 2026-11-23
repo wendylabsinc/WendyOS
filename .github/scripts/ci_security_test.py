@@ -68,7 +68,8 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertFalse(grants_write('      permissions: write-all\n', 4))
 
     def test_code_execution_jobs_have_no_write_tokens(self):
-        for filename, names in [('swift-tests.yml', ['test', 'build', 'lint']),
+        for filename, names in [('swift-tests.yml', ['test', 'build']),
+                                ('swift-lint.yml', ['lint']),
                                 ('swift-e2e-tests.yml', ['swift-e2e-local-macos', 'swift-e2e-local-ubuntu'])]:
             text = (ROOT / '.github/workflows' / filename).read_text()
             defaults = text.split('\njobs:', 1)[0]
@@ -77,7 +78,7 @@ class WorkflowSecurityTests(unittest.TestCase):
                 self.assertFalse(grants_write(job(filename, name), 4), name)
 
     def test_lint_comment_job_does_not_execute_pr_code(self):
-        comment = job('swift-tests.yml', 'lint-comment')
+        comment = job('swift-lint.yml', 'lint-comment')
         self.assertNotIn('actions/checkout@', comment)
         self.assertNotRegex(comment, r'(?m)^        run:')
         self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', comment)

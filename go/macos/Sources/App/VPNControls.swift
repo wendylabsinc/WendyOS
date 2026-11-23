@@ -68,7 +68,9 @@ struct VPNPopover: View {
                     .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             }
             if let error = model.vpnError ?? vpn.connectionError, error != vpn.setupIssue {
-                FailureNote(message: model.vpnErrorFailure ?? WendyError(message: error))
+                // The extension reports plain text, which keeps its tailored guidance.
+                if let failure = model.vpnErrorFailure { FailureNote(message: failure) }
+                else { FailureNote(message: error) }
             }
             Divider()
             Label("All devices over mesh", systemImage: "network")

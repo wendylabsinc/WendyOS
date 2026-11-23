@@ -203,3 +203,43 @@ func TestSimulatorStopClearsOnlyTheStoppedConnection(t *testing.T) {
 		}
 	}
 }
+
+func TestSimulatorCreatePassesArchAndRejectsBadValues(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	var got []string
+	s.SetSimulatorBackend(SimulatorBackend{Create: func(_ context.Context, o SimulatorCreateOptions) (*SimulatorInfo, error) {
+		got = append(got, o.Arch)
+		return &SimulatorInfo{Name: o.Name, Device: "vm:" + o.Name, State: "stopped", Arch: o.Arch}, nil
+	}})
+	for _, args := range []map[string]any{{"name": "x86", "arch": "amd64"}, {"name": "dflt"}} {
+		r, err := s.handleSimulatorCreate(context.Background(), callToolReq("simulator_create", args))
+		if err != nil || r.IsError {
+			t.Fatalf("args %v: %v %v", args, r, err)
+		}
+	}
+	if len(got) != 2 || got[0] != "amd64" || got[1] != "" {
+		t.Fatalf("backend received arch %q, want [amd64, \"\"]", got)
+	}
+	for _, args := range []map[string]any{
+		{"name": "dev", "arch": "x86_64"}, {"name": "dev", "arch": 7},
+		{"name": "esp", "profile": "wendy-lite", "arch": "arm64"},
+		{"name": "esp", "profile": "wendy-lite-native", "arch": "amd64"},
+	} {
+		r, err := s.handleSimulatorCreate(context.Background(), callToolReq("simulator_create", args))
+		if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != "INVALID_ARGUMENT" {
+			t.Fatalf("args %v: %v %v", args, r, err)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("invalid arch reached the backend: %q", got)
+	}
+	srv := server.NewMCPServer("test", "test")
+	s.registerSimulatorTools(srv)
+	prop, ok := srv.GetTool("simulator_create").Tool.InputSchema.Properties["arch"].(map[string]any)
+	if !ok {
+		t.Fatal("simulator_create has no arch parameter")
+	}
+	if enum := fmt.Sprint(prop["enum"]); enum != "[arm64 amd64]" {
+		t.Errorf("arch enum = %s, want [arm64 amd64]", enum)
+	}
+}

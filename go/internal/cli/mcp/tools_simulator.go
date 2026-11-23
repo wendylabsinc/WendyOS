@@ -47,6 +47,7 @@ type SimulatorInfo struct {
 	Device    string `json:"device"`
 	State     string `json:"state"`
 	Profile   string `json:"profile,omitempty"`
+	Arch      string `json:"arch,omitempty"`
 	Version   string `json:"version,omitempty"`
 	Source    string `json:"source,omitempty"`
 	DiskBytes int64  `json:"disk_bytes,omitempty"`
@@ -56,7 +57,10 @@ type SimulatorInfo struct {
 
 type SimulatorCreateOptions struct {
 	Name, Profile, Image, Version string
-	DiskGiB                       int
+	// Arch is the guest architecture, arm64 or amd64; empty uses the host's
+	// default, and ARM64 for a local image.
+	Arch    string
+	DiskGiB int
 }
 
 var simulatorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
@@ -76,6 +80,12 @@ func (o SimulatorCreateOptions) Validate() error {
 	}
 	if len(o.Image) > 4096 {
 		return fmt.Errorf("image path exceeds 4096 bytes")
+	}
+	if o.Arch != "" && o.Arch != "arm64" && o.Arch != "amd64" {
+		return fmt.Errorf("arch must be arm64 or amd64")
+	}
+	if o.Arch != "" && vm.IsLiteProfile(o.Profile) {
+		return fmt.Errorf("arch applies to WendyOS simulators; %s runs ESP32-C6 firmware", o.Profile)
 	}
 	if o.Version != "" && !simulatorVersionPattern.MatchString(o.Version) {
 		return fmt.Errorf("version must be a release tag of at most 128 letters, digits, dots, dashes, underscores or plus signs")
@@ -101,6 +111,7 @@ func (s *mcpServer) registerSimulatorTools(srv *server.MCPServer) {
 		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "so101", "rosmaster-r2", "wendy-lite", "wendy-lite-native"), mcpgo.DefaultString("generic")),
 		mcpgo.WithString("image", mcpgo.Description("Local raw, ZIP, gzip or zstd image path; mutually exclusive with version")),
 		mcpgo.WithString("version", mcpgo.Description("Published version; omitted downloads latest stable")),
+		mcpgo.WithString("arch", mcpgo.Enum("arm64", "amd64"), mcpgo.Description("Guest architecture; omitted uses this computer's default (a local image is treated as arm64)")),
 		mcpgo.WithInteger("disk_gib", mcpgo.Min(1), mcpgo.Max(1024), mcpgo.DefaultNumber(16)),
 	}
 	create = append(create, mutating()...)
@@ -190,7 +201,7 @@ func (s *mcpServer) handleSimulatorCreate(ctx context.Context, req mcpgo.CallToo
 	for _, p := range []struct {
 		key, fallback string
 		out           *string
-	}{{"name", "", &opts.Name}, {"profile", "generic", &opts.Profile}, {"image", "", &opts.Image}, {"version", "", &opts.Version}} {
+	}{{"name", "", &opts.Name}, {"profile", "generic", &opts.Profile}, {"image", "", &opts.Image}, {"version", "", &opts.Version}, {"arch", "", &opts.Arch}} {
 		v, err := simulatorString(req, p.key, p.fallback)
 		if err != nil {
 			return errResult(errCodeInvalidArgument, err.Error()), nil

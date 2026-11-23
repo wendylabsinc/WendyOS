@@ -143,6 +143,17 @@ func TestWiFiDisconnectAcknowledgedCommitsDespiteMissingConfirmation(t *testing.
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				stream := beginDisconnectAck(t, ctx, conn)
+				// Receiving Ready does not mean the server's Send has returned.
+				// Cancellation can otherwise win that send and legitimately skip
+				// the confirmation read, leaving only Begin in tracker.done.
+				// This case exercises cancellation with confirmation outstanding.
+				for i := 0; i < 2; i++ {
+					select {
+					case <-tracker.started:
+					case <-time.After(2 * time.Second):
+						t.Fatal("confirmation receive did not start")
+					}
+				}
 				if nm.calls.Load() != 0 {
 					t.Fatal("disconnect started before confirmation or grace expiry")
 				}

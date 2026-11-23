@@ -93,6 +93,9 @@ type DataService struct {
 	// Start RPC, which carry no campaign to declare one. Campaign episodes take
 	// their own value from the plan.
 	adHocDrain time.Duration
+	// telemetry receives campaign inference metrics. It is set once, before
+	// StartCampaignInference; without it nothing is published.
+	telemetry TelemetryPublisher
 }
 
 type dataCaptureAdapter interface {
@@ -156,6 +159,13 @@ func (s *DataService) SetVideoService(video *VideoService) {
 // fragment sealing.
 func (s *DataService) SetAudioService(audioSvc *AudioService) {
 	s.addAdapter(newAudioDataAdapter(audioSvc))
+}
+
+// SetTelemetryPublisher publishes what each campaign's model achieves against
+// its rate as OpenTelemetry metrics (inferenceMetrics). Call it before
+// StartCampaignInference.
+func (s *DataService) SetTelemetryPublisher(publisher TelemetryPublisher) {
+	s.telemetry = publisher
 }
 
 // SetROS2Service enables one managed rosbag2 recorder per live RMW graph.
@@ -629,12 +639,26 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 	if err != nil {
 		return nil, err
 	}
+	s.scheduleAutoStop(campaign.Name, episode.GetId(), campaign.AfterTriggerDuration())
+	return episode, nil
+}
+
+// A trigger can be delayed after startCapture releases the campaign lock. Do
+// not let that stale trigger replace the timer belonging to a newer episode.
+func (s *DataService) scheduleAutoStop(key, episodeID string, after time.Duration) {
+	lock := s.keyLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	session, ok := s.manager.ActiveSession(key)
+	if !ok || session.ID != episodeID {
+		return
+	}
 	timerContext, cancel := context.WithCancel(context.Background())
 	s.captureMu.Lock()
-	if previous := s.autoStopCancel[campaign.Name]; previous != nil {
+	if previous := s.autoStopCancel[key]; previous != nil {
 		previous()
 	}
-	s.autoStopCancel[campaign.Name] = cancel
+	s.autoStopCancel[key] = cancel
 	s.captureMu.Unlock()
 	go func(episodeID string, after time.Duration) {
 		timer := time.NewTimer(after)
@@ -643,10 +667,9 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		case <-timerContext.Done():
 			return
 		case <-timer.C:
-			s.stopCaptureIfCurrent(context.Background(), campaign.Name, episodeID)
+			s.stopCaptureIfCurrent(context.Background(), key, episodeID)
 		}
-	}(episode.GetId(), campaign.AfterTriggerDuration())
-	return episode, nil
+	}(episodeID, after)
 }
 
 func (s *DataService) observeApplicationRecord(_ string, record data.ApplicationRecord) {
@@ -707,7 +730,7 @@ func (s *DataService) Status(context.Context, *agentpbv2.DataStatusRequest) (*ag
 	return r, nil
 }
 
-func (s *DataService) Episodes(context.Context, *agentpbv2.DataEpisodesRequest) (*agentpbv2.DataEpisodesResponse, error) {
+func (s *DataService) Episodes(_ context.Context, req *agentpbv2.DataEpisodesRequest) (*agentpbv2.DataEpisodesResponse, error) {
 	// In-progress episodes are read before the store. An episode that finishes
 	// its seal in between is then in both lists, and is dropped from the
 	// in-progress one below; read the other way round, it would be in neither.
@@ -719,7 +742,7 @@ func (s *DataService) Episodes(context.Context, *agentpbv2.DataEpisodesRequest) 
 	r := &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}
 	finalized := make(map[string]bool, len(list))
 	for _, e := range list {
-		r.Episodes = append(r.Episodes, infoEpisode(e))
+		r.Episodes = append(r.Episodes, infoEpisode(e, req.GetIncludeMedia()))
 		finalized[e.ID] = true
 	}
 	for _, e := range open {
@@ -786,8 +809,15 @@ func (s *DataService) Download(req *agentpbv2.DataDownloadRequest, stream agentp
 func manifestEpisode(m data.Manifest) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: m.ID, Name: m.Name, State: m.State, StartedUnixNanos: m.StartedUnixNanos, BootId: m.BootID}
 }
-func infoEpisode(e data.EpisodeInfo) *agentpbv2.DataEpisode {
-	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID}
+func infoEpisode(e data.EpisodeInfo, includeMedia bool) *agentpbv2.DataEpisode {
+	var media *agentpbv2.DataEpisodeMedia
+	if includeMedia {
+		media = &agentpbv2.DataEpisodeMedia{}
+		for _, f := range e.MediaFiles {
+			media.Files = append(media.Files, &agentpbv2.DataEpisodeFileMedia{Path: f.Path, MediaType: f.MediaType})
+		}
+	}
+	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID, Media: media}
 }
 func inProgressEpisode(e data.InProgressEpisode) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID,

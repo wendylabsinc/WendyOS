@@ -122,7 +122,7 @@ func TestHW_WriteConfigPartition(t *testing.T) {
 		t.Fatalf("building provisioning json: %v", err)
 	}
 
-	if err := writeConfigPartition(drive{DevicePath: disk}, agent, creds, deviceName, provJSON); err != nil {
+	if err := writeConfigPartition(drive{DevicePath: disk}, configAgent{data: agent}, creds, deviceName, provJSON); err != nil {
 		t.Fatalf("writeConfigPartition: %v", err)
 	}
 

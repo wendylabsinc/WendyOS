@@ -1,0 +1,38 @@
+Candidate kernel compatibility observations
+==========================================
+
+The existing test-v4l2-output-queue-module.sh gate compiles one services binary.
+After that binary proves the original module's named completion failure and
+the exact Builder candidate's strict queue lifecycle, it runs
+TestV4L2OutputQueueCompatibility against the same loaded candidate. The existing
+media job retains its decoded camera, Go2, shared-service and sample-ID consumers.
+There is no additional job, module installation or binary compilation.
+
+The new test creates its own production IPCamera node 200 only when absent, under
+the existing hosted/job-owned-module admission. It uses real output MMAP buffers,
+QBUF/DQBUF and capture read(2). No generated pipeline or GStreamer timer stands
+in for the kernel controls. It requires all of these observations:
+
+* Set/read back sustain_framerate and 10 fps. After one submitted frame, receive
+  at least three complete identical capture frames across a 700 ms observation,
+  including delivery after 200 ms, while output DQBUF remains empty/EAGAIN.
+* Set/read back 400 ms timeout, fill the actual timeout_image_io buffer with a
+  distinct byte pattern, submit another fresh frame, observe the timeout pattern
+  only after the qualified idle interval, and recover to new submitted bytes.
+  Timer delivery must not fabricate an output completion.
+* Keep real writer and capture goroutines active, reopen the writer, reopen the
+  reader, then release both reopen operations from one barrier. Every phase
+  requires three complete frames with a new byte pattern at the expected reader
+  generation. A final new pattern proves continued delivery after both reopen.
+
+Each worker owns its descriptors/mappings. Cancellation joins both before node
+removal. Unknown drain fails and retains the node for the outer guardian and
+workflow cleanup. The wrapper requires every phase marker, an ordinary passing
+Go test, no skipped/racy/unknown-drain output, and the absent owned node.
+
+This is a bounded observation of those specific controls and restart sequences,
+not an exhaustive V4L2 API, performance, physical-camera or firmware claim. The
+runtime has a 45s guardian bound including failure cleanup; expected normal work
+is a few seconds and must be measured on the hosted kernel. Local compilation
+and source review cannot qualify these observations. Actual kernel execution
+remains pending until the hosted compatibility.log contains all required proof.

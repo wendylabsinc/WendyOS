@@ -39,6 +39,7 @@ func (b *Backend) PreviewCreate() uint64 {
 	child := New()
 	// Use the parent's scoped transport, including its mobile tunnel lifetime.
 	child.connectTarget = b.connectTarget
+	child.appTunnelContext = b.appTunnelContext
 	ctx, cancel := context.WithCancel(context.Background())
 	p.entries[p.next] = &cameraPreview{backend: child, request: child.ReserveConnection(), ctx: ctx, cancel: cancel}
 	return p.next

@@ -12,6 +12,8 @@ enum MobileInventorySource: CaseIterable, Hashable {
 }
 
 struct MobileRootView: View {
+    @ObservedObject private var osUpdate = MobileOSUpdateTask.shared
+    private var meshActive: Bool { scenePhase != .background || osUpdate.keepsConnection(session: model.deviceSession, scope: model.mobileCloudSelectionKey) }
     @StateObject private var appearances = DeviceAppearanceStore()
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
@@ -46,11 +48,12 @@ struct MobileRootView: View {
         .task { await model.start() }
         .task(id: model.account) { await model.refreshMobileCloudSelection() }
         .task(
-            id: "\(model.initialized)/\(scenePhase == .background)/\(model.mobileCloudSelectionKey)"
+            id: "\(model.initialized)/\(meshActive)/\(model.mobileCloudSelectionKey)"
         ) {
-            await model.runMobileMesh(active: scenePhase != .background)
+            await model.runMobileMesh(active: meshActive)
         }
         .task { await actions.run() }
+        .onChange(of: model.deviceSession) { _, session in osUpdate.selectionChanged(session: session, scope: model.mobileCloudSelectionKey) }
         .task(id: "\(model.initialized)/\(scenePhase == .active)") {
             if model.initialized && scenePhase == .active { await model.maintainExperience() }
         }
@@ -61,6 +64,7 @@ struct MobileRootView: View {
             if let device = selectedRouteDevice { await model.connect(device) }
         }
         .onChange(of: model.mobileCloudSelectionKey) { _, _ in
+            osUpdate.selectionChanged(session: model.deviceSession, scope: model.mobileCloudSelectionKey)
             // A source list can reload in the new organization; a device or log route cannot.
             homePath = homePath.filter { if case .device = $0 { return false }; return true }
             recordingPicker = nil
@@ -160,7 +164,7 @@ struct MobileRootView: View {
                         case .inventory(let inventory):
                             MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
                         case .device(let device):
-                            MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
+                            MobileDeviceView(device: device).id(device.id)
                         case .activity:
                             MobileDeviceActivity(model: model, isVisible: true, segment: $activitySegment, select: select)
                         }
@@ -189,12 +193,6 @@ struct MobileRootView: View {
     private func openActivity() {
         activitySegment = .alerts
         homePath.append(.activity)
-    }
-
-    private func openRecordings(for device: Device) {
-        enter(.devices)
-        recordingPicker = MobileEpisodeRoute(device: device)
-        homeTab = .data
     }
 
     private func enter(_ next: MobileLens) {
@@ -396,9 +394,11 @@ private struct MobileInventoryList: View {
     let source: MobileInventorySource
     let showAccounts: () -> Void
     @State private var search = ""
+    @State private var now = Date()
+    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         List {
-            MobileInventorySection(model: model, source: source, search: search, showAccounts: showAccounts)
+            MobileInventorySection(model: model, source: source, search: search, showAccounts: showAccounts, now: now)
         }
         .accessibilityIdentifier("devices.inventory")
         .modifier(MobileFloatingChatScrollMargins())
@@ -406,7 +406,19 @@ private struct MobileInventoryList: View {
         .navigationTitle(source.title)
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a device")
         .refreshable { await source.refresh(model) }
-        .task { await source.refresh(model) }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                await source.refresh(model)
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                now = Date()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
     }
 }
 
@@ -415,23 +427,25 @@ private struct MobileInventorySection: View {
     let source: MobileInventorySource
     let search: String
     let showAccounts: () -> Void
+    let now: Date
     @State private var actions = AsyncActions()
     @Environment(\.openURL) private var openURL
     private var matching: [Device] {
         source.devices(model).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
             .sorted { left, right in
-                let leftOffline = isOffline(left), rightOffline = isOffline(right)
-                if leftOffline != rightOffline { return !leftOffline }
+                let leftRank = status(left).rank, rightRank = status(right).rank
+                if leftRank != rightRank { return leftRank < rightRank }
                 let order = left.title.localizedStandardCompare(right.title)
                 return order == .orderedSame ? left.id < right.id : order == .orderedAscending
             }
     }
-    private func isOffline(_ device: Device) -> Bool {
-        guard device.transport == .cloud, model.connected?.id != device.id,
-              model.mobileScopeIsCurrent, model.cloudError == nil, model.cloudLoaded,
-              let snapshot = model.mobilePresence, snapshot.0.presenceError.isEmpty,
-              Date().timeIntervalSince(snapshot.1) < 60 else { return false }
-        return snapshot.0.devices.first { $0.selector == device.selector }?.online == false
+    private func status(_ device: Device) -> MobileInventoryPresence {
+        if model.selectedDeviceReady, model.connected?.id == device.id { return .connected }
+        if device.transport != .cloud { return .nearby }
+        let snapshot = model.mobilePresence
+        return .cloud(online: snapshot?.0.devices.first { $0.selector == device.selector }?.online,
+                      verified: model.mobileScopeIsCurrent && model.cloudError == nil && model.cloudLoaded && snapshot?.0.presenceError.isEmpty == true,
+                      fetchedAt: snapshot?.1, now: now)
     }
     private var error: WendyError? { source.error(model) ?? (source == .cloud ? model.mobileCloudSelectionError.map { WendyError(message: $0) } : nil) }
     private var loading: Bool {
@@ -447,10 +461,12 @@ private struct MobileInventorySection: View {
             } else {
                 ForEach(matching) { device in
                     NavigationLink(value: MobileDestination.device(device)) {
-                        DeviceIdentityRow(device: device, connected: model.connected?.id == device.id,
+                        DeviceIdentityRow(device: device, connected: status(device) == .connected,
                                           connecting: model.connectingDevice?.id == device.id,
-                                          offline: isOffline(device))
-                    }.listRowBackground(isOffline(device) ? Color(uiColor: .tertiarySystemFill) : Color(uiColor: .secondarySystemGroupedBackground))
+                                          offline: status(device) == .offline,
+                                          statusUnknown: status(device) == .unknown,
+                                          presenceLabel: status(device) == .online ? "Online" : nil)
+                    }.listRowBackground(status(device).muted ? Color(uiColor: .tertiarySystemFill) : Color(uiColor: .secondarySystemGroupedBackground))
                         .accessibilityIdentifier("devices.inventory.row." + device.id)
                 }
                 if let error {
@@ -498,6 +514,9 @@ private struct MobileAccountsView: View {
 
     var body: some View {
         actionContent.task { await actions.run() }
+            // Dismiss Settings before the root presents the sign-in browser.
+            // FailureNote must use the same route as the Add account button.
+            .environment(\.failureSignIn, { signIn(false) })
             .preferredColorScheme((MobileAppearance(rawValue: appearance) ?? .system).colorScheme)
     }
 
@@ -660,5 +679,17 @@ extension AppModel {
         mobileCloudOrganization = ""
         mobileCloudOrganizations = []
         await refreshMobileCloudSelection()
+    }
+}
+
+// Inventory entries are not proof of a live Cloud connection.
+enum MobileInventoryPresence: Equatable {
+    case connected, nearby, online, unknown, offline
+    var rank: Int { switch self { case .connected, .nearby, .online: 0; case .unknown: 1; case .offline: 2 } }
+    var muted: Bool { self == .unknown || self == .offline }
+    static func cloud(online: Bool?, verified: Bool, fetchedAt: Date?, now: Date) -> Self {
+        guard verified, let fetchedAt, now.timeIntervalSince(fetchedAt) >= 0,
+              now.timeIntervalSince(fetchedAt) < 60, let online else { return .unknown }
+        return online ? .online : .offline
     }
 }
