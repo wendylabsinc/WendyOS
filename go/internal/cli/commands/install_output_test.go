@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInstallOutputPlainWithoutTerminal(t *testing.T) {
@@ -88,5 +89,27 @@ func TestFinishLiteInstallFailedEnrollmentHasNoNextStep(t *testing.T) {
 	err := finishLiteInstall(&b, "1.4.0", func() error { return failed })
 	if !errors.Is(err, failed) || strings.Contains(b.String(), "Next:") {
 		t.Fatalf("err %v, output %q; want the enrollment error and no next step", err, b.String())
+	}
+}
+
+func TestFormatInstallDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		300 * time.Millisecond: "1s",
+		45 * time.Second:       "45s",
+		134 * time.Second:      "2m 14s",
+		63 * time.Minute:       "1h 3m",
+	} {
+		if got := formatInstallDuration(d); got != want {
+			t.Errorf("formatInstallDuration(%v) = %q; want %q", d, got, want)
+		}
+	}
+}
+
+func TestWrittenDetail(t *testing.T) {
+	if got, want := writtenDetail(12_500*1024*1024, 134*time.Second), "· 12.2 GiB in 2m 14s"; got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+	if got, want := writtenDetail(0, 45*time.Second), "· in 45s"; got != want {
+		t.Errorf("got %q; want %q without a size when it is unknown", got, want)
 	}
 }

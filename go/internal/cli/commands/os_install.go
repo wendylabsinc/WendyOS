@@ -311,10 +311,11 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	}
 	// This mode has no progress bar; say what the long write is doing.
 	installNote(os.Stdout, "Writing image to %s...", targetDrive.DevicePath)
+	writeStart := time.Now()
 	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, fit, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
-	installDone(os.Stdout, "Image written")
+	installDone(os.Stdout, "Image written", writtenDetail(fit.sequentialTotal(stream.uncompressedSize), time.Since(writeStart)))
 	if agent != nil {
 		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agentSeed{local: agent})
 		var ejectErr error
@@ -1032,12 +1033,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	activationStep(ctx, "flash", nil)
 	// Step 6: Write image to drive with progress bar.
-	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
+	writeProg := tui.NewProgress("Writing to " + targetDrive.DevicePath).Transient()
 	if seekableZst != "" || bmapPath != "" {
 		// a bmap failure falls back and its reason is printed then; suppress the TUI error render
 		writeProg = writeProg.WithoutErrorView()
 	}
 	wp := tui.NewProgressProgram(writeProg)
+	writeStart := time.Now()
 
 	// Track how far the fast path got and which path ran, so a failure can
 	// report the offset it reached and frame the primary error (WDY-1841).
@@ -1048,7 +1050,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	case seekableZst != "":
 		writeTotal, fastPathLabel = seekableTotal, "seekable block-map write"
 	case bmapPath != "":
-		writeTotal, fastPathLabel = stream.uncompressedSize, "block-map write"
+		writeTotal, fastPathLabel = imageSize, "block-map write"
 	default:
 		writeTotal, fastPathLabel = fit.sequentialTotal(stream.uncompressedSize), "image write"
 	}
@@ -1157,7 +1159,8 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 		announceFastWriteFallback(os.Stdout, primary)
 		fallbackTotal := fallbackFit.sequentialTotal(fallbackSize)
-		fallbackProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
+		writeTotal = fallbackTotal
+		fallbackProg := tui.NewProgress("Writing to " + targetDrive.DevicePath).Transient()
 		fp := tui.NewProgressProgram(fallbackProg)
 		go func() {
 			fp.Send(tui.ProgressDoneMsg{Err: writeImageToDisk(fallbackReader, fallbackSize, targetDrive, fallbackFit, func(written int64) {
@@ -1181,7 +1184,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
-	installDone(os.Stdout, "Image written")
+	installDone(os.Stdout, "Image written", writtenDetail(writeTotal, time.Since(writeStart)))
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
 	activationStep(ctx, "provision", nil)
 	hasProvisioningData := agent != nil || provisioningRequired(provCreds, provDeviceName, provisioningJSON)
@@ -1571,10 +1574,23 @@ func probeRangeSupportContext(ctx context.Context, client *http.Client, img *ima
 // progress-bar TUI. Prefer downloadImageInto when embedding the download inside
 // another progress UI (it takes a plain byte callback and owns no TUI).
 func downloadImage(img *imageInfo) (string, error) {
-	return downloadImageContext(context.Background(), img)
+	return downloadImageWithProgress(context.Background(), img, tui.NewProgress("Downloading WendyOS "+img.Version).Transient())
+}
+
+// downloadedDetail is the downloaded file's size for its ✓ line, or "".
+func downloadedDetail(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return "· " + tui.FormatBytes(info.Size())
 }
 
 func downloadImageContext(ctx context.Context, img *imageInfo, opts ...tea.ProgramOption) (string, error) {
+	return downloadImageWithProgress(ctx, img, tui.NewProgress(fmt.Sprintf("Downloading %s...", img.Version)), opts...)
+}
+
+func downloadImageWithProgress(ctx context.Context, img *imageInfo, prog tui.ProgressModel, opts ...tea.ProgramOption) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1585,7 +1601,6 @@ func downloadImageContext(ctx context.Context, img *imageInfo, opts ...tea.Progr
 	}
 	downloadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	prog := tui.NewProgress(fmt.Sprintf("Downloading %s...", img.Version))
 	p := tui.NewProgressProgram(prog, append([]tea.ProgramOption{tea.WithContext(downloadCtx)}, opts...)...)
 	sendProgress := throttledProgress(p, 33*time.Millisecond)
 
@@ -1881,7 +1896,7 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching seekable image: %w", err)
 	}
-	installDone(os.Stdout, "Image downloaded")
+	installDone(os.Stdout, "Image downloaded", downloadedDetail(cached))
 	return cached, nil
 }
 
@@ -1979,7 +1994,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 			os.Remove(downloadPath)
 			return "", fmt.Errorf("caching image: %w", renameErr)
 		}
-		installDone(os.Stdout, "Image downloaded")
+		installDone(os.Stdout, "Image downloaded", downloadedDetail(zipCached))
 		return zipCached, nil
 	}
 
@@ -1993,7 +2008,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching image: %w", err)
 	}
-	installDone(os.Stdout, "Image downloaded")
+	installDone(os.Stdout, "Image downloaded", downloadedDetail(imgCached))
 	return imgCached, nil
 }
 

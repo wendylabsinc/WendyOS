@@ -244,8 +244,8 @@ func TestResolveFlashSourceReportsDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveFlashSource: %v", err)
 	}
-	if !strings.Contains(out, "✓ Image downloaded") {
-		t.Fatalf("output %q; want the download reported", out)
+	if !strings.Contains(out, "✓ Image downloaded · ") {
+		t.Fatalf("output %q; want the download reported with its size", out)
 	}
 }
 

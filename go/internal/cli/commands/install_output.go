@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -70,6 +71,29 @@ func installDone(w io.Writer, text string, detail ...string) {
 
 func installResult(w io.Writer, text string) {
 	fmt.Fprintln(w, installResultStyle.Render("✓ "+text))
+}
+
+// writtenDetail is the "Image written" detail; an unknown size is left out.
+func writtenDetail(total int64, elapsed time.Duration) string {
+	if total <= 0 {
+		return "· in " + formatInstallDuration(elapsed)
+	}
+	return fmt.Sprintf("· %s in %s", tui.FormatBytes(total), formatInstallDuration(elapsed))
+}
+
+// formatInstallDuration is a whole-second duration such as "2m 14s".
+func formatInstallDuration(d time.Duration) string {
+	s := int(d.Round(time.Second) / time.Second)
+	switch {
+	case s < 1:
+		return "1s"
+	case s < 60:
+		return fmt.Sprintf("%ds", s)
+	case s < 3600:
+		return fmt.Sprintf("%dm %ds", s/60, s%60)
+	default:
+		return fmt.Sprintf("%dh %dm", s/3600, s%3600/60)
+	}
 }
 
 func installNote(w io.Writer, format string, args ...any) {
