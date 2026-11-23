@@ -58,6 +58,11 @@ func stubEnrollPrompts(t *testing.T) {
 		t.Fatal("unexpected device-name prompt")
 		return "", nil
 	}
+	origNameDefault := promptDeviceNameDefault
+	promptDeviceNameDefault = func(string, string, string, tui.ValidateFunc) (string, error) {
+		t.Fatal("unexpected device-name prompt")
+		return "", nil
+	}
 	// Default org resolver returns a stable test org so tests that reach
 	// preEnrollDeviceFn don't need a live cloud connection.
 	resolveOrgFn = func(_ context.Context, _ *config.AuthConfig, _ bool) (OrgResolution, error) {
@@ -70,6 +75,7 @@ func stubEnrollPrompts(t *testing.T) {
 		preEnrollDeviceFn = origEnroll
 		preEnrollACMEFn = origACME
 		promptDeviceName = origName
+		promptDeviceNameDefault = origNameDefault
 		resolveOrgFn = origResolveOrg
 	})
 }
@@ -561,7 +567,7 @@ func takenFirst(t *testing.T, taken string) *[]string {
 func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
 	stubEnrollPrompts(t)
 	tried := takenFirst(t, "hackathon-display")
-	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "hackathon-display-2", nil }
+	promptDeviceNameDefault = func(_, _, def string, _ tui.ValidateFunc) (string, error) { return def, nil }
 	name := "hackathon-display"
 	var out []byte
 	stdout := captureStdout(t, func() {
@@ -574,7 +580,7 @@ func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
 	if name != "hackathon-display-2" || len(out) == 0 || fmt.Sprint(*tried) != "[hackathon-display hackathon-display-2]" {
 		t.Fatalf("name %q, tried %v", name, *tried)
 	}
-	if !strings.Contains(stdout, "The name hackathon-display is already used by another device in this organization.") || strings.Contains(stdout, "rpc error") {
+	if !strings.Contains(stdout, "hackathon-display is already used by another device in your organization.") || strings.Contains(stdout, "rpc error") {
 		t.Fatalf("output:\n%s", stdout)
 	}
 }
@@ -586,7 +592,7 @@ func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
 	takenFirst(t, "hackathon-display")
 	name := "hackathon-display"
 	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}}, &name)
-	want := "The name hackathon-display is already used by another device in this organization. Names are unique per organization, regardless of upper and lower case. Choose another name. Pass a different name with --device-name."
+	want := "hackathon-display is already used by another device in your organization. Pass a different --device-name."
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v", err)
 	}
@@ -597,7 +603,7 @@ func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
 func TestPreEnrollTakenNameStopKeepsTheWayOut(t *testing.T) {
 	stubEnrollPrompts(t)
 	takenFirst(t, "hackathon-display")
-	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "", tui.ErrCancelled }
+	promptDeviceNameDefault = func(string, string, string, tui.ValidateFunc) (string, error) { return "", tui.ErrCancelled }
 	asked := false
 	confirmContinueUnenrolled = func() (bool, error) { asked = true; return false, nil }
 	name := "hackathon-display"

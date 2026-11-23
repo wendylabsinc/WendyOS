@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -208,40 +207,6 @@ func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preE
 	return plan.mint(ctx, deviceName)
 }
 
-// nameTakenError is the short refusal of a taken name without a terminal to
-// ask on.
-type nameTakenError string
-
-func (e nameTakenError) Error() string { return string(e) }
-
-// retryTakenDeviceName calls enroll with *name until it succeeds or fails for
-// another reason. When Cloud finds the name taken it says so and asks for
-// another one, which it writes back to *name; without a terminal it ends with
-// the short message and the flag to pass. Stopping at the prompt returns
-// tui.ErrCancelled.
-func retryTakenDeviceName(name *string, interactive bool, flag string, enroll func(string) error) error {
-	err := enroll(*name)
-	for errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
-		if !interactive {
-			return nameTakenError(deviceNameTakenMessage(*name) + " Pass a different name with " + flag + ".")
-		}
-		fmt.Println(deviceNameTakenMessage(*name))
-		next, perr := promptDeviceName("Another device name",
-			fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; Esc to stop)", maxDeviceNameLen), validateDeviceName)
-		if perr != nil {
-			return perr
-		}
-		*name = next
-		err = enroll(*name)
-	}
-	return err
-}
-
-// deviceNameTakenMessage says name is taken, in the person's terms.
-func deviceNameTakenMessage(name string) string {
-	return fmt.Sprintf("The name %s is already used by another device in this organization. Names are unique per organization, regardless of upper and lower case. Choose another name.", name)
-}
-
 // acmePreEnrollPlan is a settled choice to pre-enroll with auth; nothing has
 // been reserved in Cloud yet.
 type acmePreEnrollPlan struct {
@@ -315,7 +280,8 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 // again, and the new name is written back to *deviceName.
 func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acmeEnrollmentBake, error) {
 	var state *acmeEnrollmentBake
-	enrollErr := retryTakenDeviceName(deviceName, p.interactive, "--device-name", func(name string) (err error) {
+	retry := nameRetry{interactive: p.interactive, noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen}
+	enrollErr := retryTakenDeviceName(deviceName, retry, func(name string) (err error) {
 		state, err = preEnrollACMEFn(ctx, p.auth, name)
 		return err
 	})

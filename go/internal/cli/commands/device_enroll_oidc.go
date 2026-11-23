@@ -78,7 +78,8 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 
 	fmt.Printf("Enrolling %s with PKI...\n", name)
 	var assetID string
-	err = retryTakenDeviceName(&name, isInteractiveTerminal(), "--name", func(name string) (err error) {
+	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen}
+	err = retryTakenDeviceName(&name, retry, func(name string) (err error) {
 		cfg, assetID, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 		return err
 	})
