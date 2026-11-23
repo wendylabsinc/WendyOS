@@ -137,10 +137,11 @@ var scanUSBDevices = listUSBDevices
 
 // USB product strings of the two kinds of 1d6b:0104 gadget a Jetson shows: the
 // flashing initrd's (meta-tegra's initrd-flash.scheme.in) and the start of a
-// running WendyOS board's ("WendyOS Device <name>", from gadget-setup.sh).
+// running WendyOS board's (gadget-setup.sh: "WendyOS <name>", and "WendyOS
+// Device <name>" on images from before the prefix was shortened).
 const (
 	flashGadgetProduct   = "Linux for Tegra"
-	wendyOSProductPrefix = "WendyOS Device"
+	wendyOSProductPrefix = "WendyOS "
 )
 
 // describeTegraUSB says which situation this Jetson is in on USB — in recovery

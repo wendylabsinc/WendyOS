@@ -131,6 +131,23 @@ func TestFlashpkgTimeoutDoesNotBlameBystanderBoard(t *testing.T) {
 	}
 }
 
+// A running board is recognised by either form of its product string: images
+// name the gadget "WendyOS <name>", older ones "WendyOS Device <name>".
+func TestFlashpkgTimeoutRecognisesBothRunningBoardNames(t *testing.T) {
+	for _, product := range []string{"WendyOS brave-otter", "WendyOS Device brave-otter"} {
+		board := bystanderBoard
+		board.Product = product
+		got := flashpkgTimeout(t, "linux", board)
+		want := "Other USB gadgets present (not this Jetson, unless it started WendyOS instead of the flashing image): 1d6b:0104 (running board \"" + product + "\", serial 1421425005379, usb 4-1)"
+		if !strings.Contains(got, want) {
+			t.Errorf("product %q is not listed as a running board:\n%s", product, got)
+		}
+		if strings.Contains(got, "may be this Jetson") {
+			t.Errorf("product %q is reported as possibly this Jetson:\n%s", product, got)
+		}
+	}
+}
+
 // A running board on the port this Jetson was in recovery mode on is not a
 // bystander: the Jetson may have started its installed WendyOS instead of the
 // flashing image.
