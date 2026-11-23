@@ -84,7 +84,6 @@ type ConfPushMode int
 const (
 	ConfPushModeReplace ConfPushMode = iota
 	ConfPushModeUpdate
-	ConfPushModeMeshTrust
 )
 
 // ConsoleChunk is one piece of console output streamed by the device.
@@ -517,8 +516,6 @@ func (c *WendyLiteClient) PushConf(conf *wendypb.WendyConf, mode ConfPushMode, o
 		pbMode = wendypb.WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_REPLACE
 	case ConfPushModeUpdate:
 		pbMode = wendypb.WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_UPDATE
-	case ConfPushModeMeshTrust:
-		pbMode = wendypb.WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_MESH_TRUST
 	default:
 		return fmt.Errorf("unknown conf push mode %d", mode)
 	}

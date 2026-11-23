@@ -75,9 +75,8 @@ func (WendyComAppType) EnumDescriptor() ([]byte, []int) {
 type WendyComConfPushMode int32
 
 const (
-	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_REPLACE    WendyComConfPushMode = 0
-	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_UPDATE     WendyComConfPushMode = 1
-	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_MESH_TRUST WendyComConfPushMode = 2 // physical USB, current identity only
+	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_REPLACE WendyComConfPushMode = 0
+	WendyComConfPushMode_WENDY_COM_CONF_PUSH_MODE_UPDATE  WendyComConfPushMode = 1
 )
 
 // Enum value maps for WendyComConfPushMode.
@@ -85,12 +84,10 @@ var (
 	WendyComConfPushMode_name = map[int32]string{
 		0: "WENDY_COM_CONF_PUSH_MODE_REPLACE",
 		1: "WENDY_COM_CONF_PUSH_MODE_UPDATE",
-		2: "WENDY_COM_CONF_PUSH_MODE_MESH_TRUST",
 	}
 	WendyComConfPushMode_value = map[string]int32{
-		"WENDY_COM_CONF_PUSH_MODE_REPLACE":    0,
-		"WENDY_COM_CONF_PUSH_MODE_UPDATE":     1,
-		"WENDY_COM_CONF_PUSH_MODE_MESH_TRUST": 2,
+		"WENDY_COM_CONF_PUSH_MODE_REPLACE": 0,
+		"WENDY_COM_CONF_PUSH_MODE_UPDATE":  1,
 	}
 )
 
@@ -4523,11 +4520,10 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x03msg*M\n" +
 	"\x0fWendyComAppType\x12\x1b\n" +
 	"\x17WENDY_COM_APP_TYPE_WASM\x10\x00\x12\x1d\n" +
-	"\x19WENDY_COM_APP_TYPE_NATIVE\x10\x01*\x8a\x01\n" +
+	"\x19WENDY_COM_APP_TYPE_NATIVE\x10\x01*a\n" +
 	"\x14WendyComConfPushMode\x12$\n" +
 	" WENDY_COM_CONF_PUSH_MODE_REPLACE\x10\x00\x12#\n" +
-	"\x1fWENDY_COM_CONF_PUSH_MODE_UPDATE\x10\x01\x12'\n" +
-	"#WENDY_COM_CONF_PUSH_MODE_MESH_TRUST\x10\x02*x\n" +
+	"\x1fWENDY_COM_CONF_PUSH_MODE_UPDATE\x10\x01*x\n" +
 	"\x1aWendyComBluetoothPowerMode\x12\x1e\n" +
 	"\x1aWENDY_COM_BT_POWER_DEFAULT\x10\x00\x12\x1e\n" +
 	"\x1aWENDY_COM_BT_POWER_MAXIMUM\x10\x01\x12\x1a\n" +

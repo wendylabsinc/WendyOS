@@ -58,7 +58,6 @@ message WendyComAppStopParams {}
 enum WendyComConfPushMode {
     WENDY_COM_CONF_PUSH_MODE_REPLACE = 0;
     WENDY_COM_CONF_PUSH_MODE_UPDATE  = 1;
-    WENDY_COM_CONF_PUSH_MODE_MESH_TRUST = 2; // physical USB, current identity only
 }
 
 // Params for WENDY_COM_CMD_CONF_PUSH_BEGIN
