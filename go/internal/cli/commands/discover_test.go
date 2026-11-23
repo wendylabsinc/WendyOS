@@ -160,6 +160,35 @@ func TestDiscoverRefreshKeepsSelectedDeviceWhenMarkerColumnChanges(t *testing.T)
 	}
 }
 
+func TestDiscoverRefreshKeepsSelectedDeviceVisibleAfterReordering(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.windowHeight = 9
+	for _, name := range []string{"Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf"} {
+		m.collection.LANDevices = append(m.collection.LANDevices, models.LANDevice{
+			ID: name, DisplayName: name, Hostname: strings.ToLower(name) + ".local",
+		})
+	}
+	m.refreshTable()
+	for i := 0; i < 3; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(discoverModel)
+	}
+	if cursor := m.table.Cursor(); cursor != 3 || !strings.Contains(m.tableView(), "Echo") {
+		t.Fatalf("expected Echo to be highlighted and visible before the refresh, got row %d in:\n%s", cursor, m.tableView())
+	}
+
+	renamed := m.collection.LANDevices[3]
+	renamed.DisplayName = "Aardvark"
+	updated, _ := m.Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: renamed}})
+	m = updated.(discoverModel)
+	if cursor := m.table.Cursor(); cursor != 0 || m.tableItems[cursor].lanKey != "echo" {
+		t.Fatalf("cursor = %d, want the renamed device at row 0", cursor)
+	}
+	if view := m.tableView(); !strings.Contains(view, "Aardvark") {
+		t.Fatalf("highlighted device is outside the viewport:\n%s", view)
+	}
+}
+
 func TestDiscoverModel_UpdateRampsRescanIntervals(t *testing.T) {
 	t.Setenv("WENDY_DISCOVER_USB_INTERVAL", "3s")
 

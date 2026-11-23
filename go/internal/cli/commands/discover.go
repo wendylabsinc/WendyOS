@@ -520,15 +520,10 @@ type discoverTableItem struct {
 	picker       tui.PickerItem
 	info         discoverDeviceInfo
 	selectionKey string
-	lanName      string
-	// lanKey is discoverycache.Key(ID, DisplayName) for this row's LAN
-	// device — the same identity upsertLANDevice merges rows by. It is the
-	// map key into m.probe, kept distinct from lanName (which stays a plain
-	// display name for the 'u'-key update lookup in lanDeviceAddr) so a
-	// DisplayName change or a DisplayName collision between two different
-	// device IDs can never orphan or cross-wire a probe state. Empty for
-	// non-LAN rows.
-	lanKey string
+	// lanKey is the discovery cache identity used to merge LAN rows and track
+	// their probe state. lanPinKey identifies the same row's update target.
+	lanKey    string
+	lanPinKey string
 }
 
 // flashClearMsg is sent after a delay to clear the flash message.
@@ -775,8 +770,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			item := items[cursor]
-			addr := lanDeviceAddr(m.collection, item.lanName)
-			if addr == "" {
+			if item.lanKey == "" || item.info.Address == "" {
 				m.flashMessage = "Update is only supported for LAN devices."
 				m.flashIsError = true
 				return m, clearFlashAfter(3 * time.Second)
@@ -786,14 +780,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatingDeviceName = item.info.Name
 			m.flashMessage = "Checking " + item.info.Name + "..."
 			m.flashIsError = false
-			var pinKey string
-			for _, dev := range m.collection.LANDevices {
-				if strings.EqualFold(dev.DisplayName, item.lanName) {
-					pinKey = pinKeyForLANDevice(&dev)
-					break
-				}
-			}
-			return m, m.startDeviceUpdateCmd(addr, item.info.Name, pinKey)
+			return m, m.startDeviceUpdateCmd(item.info.Address, item.info.Name, item.lanPinKey)
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -844,7 +831,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		key := discoverycache.Key(msg.ev.Device.ID, msg.ev.Device.DisplayName)
 		m.probe[key], _ = lanRowState(msg.ev)
 		m.hasResults = true
-		m.refreshTable()
+		m.refreshTableReplacingLANKey(msg.ev.Supersedes, key)
 		return m, waitLANEvent(msg.ch)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -1116,12 +1103,19 @@ func (m discoverModel) bleWarningLine() string {
 }
 
 func (m *discoverModel) refreshTable() {
+	m.refreshTableReplacingLANKey("", "")
+}
+
+func (m *discoverModel) refreshTableReplacingLANKey(previousLANKey, newLANKey string) {
 	previousCursor := m.table.Cursor()
 	var selectedKey string
 	if previousCursor >= 0 && previousCursor < len(m.tableItems) {
-		key := m.tableItems[previousCursor].selectionKey
-		if discoverRowIndex(m.tableItems, key) == previousCursor {
-			selectedKey = key
+		item := m.tableItems[previousCursor]
+		if discoverRowIndex(m.tableItems, item.selectionKey) == previousCursor {
+			selectedKey = item.selectionKey
+			if previousLANKey != "" && item.lanKey == previousLANKey {
+				selectedKey = "lan:" + newLANKey
+			}
 		}
 	}
 	m.tableItems = discoverTableItems(m.collection)
@@ -1129,7 +1123,7 @@ func (m *discoverModel) refreshTable() {
 	// while connecting) so the Agent/OS columns animate / show the error glyph.
 	frame := m.spinner.View()
 	for i := range m.tableItems {
-		if m.tableItems[i].lanName == "" {
+		if m.tableItems[i].lanKey == "" {
 			continue
 		}
 		st := m.probe[m.tableItems[i].lanKey]
@@ -1215,24 +1209,13 @@ func (m discoverModel) tableViewportWidth() int {
 	return tui.PickerTableWidth(m.table.Columns())
 }
 
-func lanDeviceAddr(collection *models.DevicesCollection, displayName string) string {
-	for i := range collection.LANDevices {
-		d := &collection.LANDevices[i]
-		if strings.EqualFold(d.DisplayName, displayName) {
-			return preferredLANAddress(*d)
-		}
-	}
-	return ""
-}
-
-func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...string) tea.Cmd {
+func (m discoverModel) startDeviceUpdateCmd(addr, name, pinKey string) tea.Cmd {
 	ctx := m.ctx
-	pinKey := pinKeyForAddr(addr)
-	if len(selectedKeys) > 0 && selectedKeys[0] != "" {
-		pinKey = selectedKeys[0]
+	if pinKey == "" {
+		pinKey = pinKeyForAddr(addr)
 	}
 	return func() tea.Msg {
-		latestVer, _, err := resolveAgentVersion(false)
+		latestVer, _, err := resolveAgentVersionFn(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
@@ -1283,7 +1266,9 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 			// A trial that never listens is replaced only at its deadline.
 			newConn = nil
 		}
-		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) { return waitForAgentRestart(ctx, addr) }
+		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return waitForAgentRestartKeyed(ctx, addr, pinKey)
+		}
 		_, newConn, err = awaitAgentVerdict(ctx, newConn, reconnect, sha256Hash, func() {})
 		newConn.Close()
 		return discoverUpdateDoneMsg{deviceName: name, err: err}
@@ -1621,11 +1606,10 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			usb = d.LAN.USB
 		}
 		address := d.Address()
-		lanName := ""
-		lanKey := ""
+		var lanKey, lanPinKey string
 		if d.LAN != nil {
-			lanName = d.LAN.DisplayName
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
+			lanPinKey = pinKeyForLANDevice(d.LAN)
 			address = preferredLANAddress(*d.LAN)
 		}
 		hint := lanProbeHint(d.LAN)
@@ -1672,8 +1656,8 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Provisioned:  provisioned,
 				ProbeFailure: failure,
 			},
-			lanName: lanName,
-			lanKey:  lanKey,
+			lanKey:    lanKey,
+			lanPinKey: lanPinKey,
 		})
 	}
 	for _, d := range collection.Simulators {
