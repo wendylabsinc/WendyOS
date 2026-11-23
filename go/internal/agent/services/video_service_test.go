@@ -438,7 +438,7 @@ func TestBuildGStreamerArgs_V4L2LetsTheDriverPickItsInputFormat(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
 	args := mustBuildGStreamerArgs(t, "/usr/bin/gst-launch-1.0", "/dev/video0", req, "v4l2h264enc", true)
 	joined := strings.Join(args, " ")
-	const want = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc"
+	const want = "videoconvert ! videoscale ! video/x-raw,format={I420,NV12} ! v4l2h264enc"
 	if !strings.Contains(joined, want) {
 		t.Errorf("v4l2h264enc input caps must offer both formats (%q): %v", want, args)
 	}

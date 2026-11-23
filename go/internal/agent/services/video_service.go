@@ -4500,7 +4500,10 @@ func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
 		// profile-only capsfilter lets it negotiate a level the driver can't
 		// process. level 4 covers up to 1080p30, the encoder's ceiling
 		// (verified on a Pi 4, WDY-1603).
-		enc = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc" + kf + " ! video/x-h264,profile=baseline,level=(string)4"
+		// Scalar ROS cameras can be smaller than the hardware encoder's
+		// minimum input size (IQ8's 32x24 cells). Let videoscale negotiate a
+		// supported encoded size, leaving the source and raw tap untouched.
+		enc = "videoconvert ! videoscale ! video/x-raw,format={I420,NV12} ! v4l2h264enc" + kf + " ! video/x-h264,profile=baseline,level=(string)4"
 	case "x264enc":
 		caps := "video/x-h264,profile=high"
 		if !hasH264Parse {
