@@ -35,15 +35,17 @@ type Device struct {
 	Keys     *trustedkeys.Store
 	Restarts atomic.Int32
 
-	dir     string
-	servers []*grpc.Server
+	dir      string
+	servers  []*grpc.Server
+	register []func(*grpc.Server)
 }
 
 // Start runs a device whose access file is at dir/trusted-keys.json, Closed
-// when that file exists and Open otherwise.
-func Start(t testing.TB, dir string) *Device {
+// when that file exists and Open otherwise. register adds agent services
+// (behind the same role check) to every listener.
+func Start(t testing.TB, dir string, register ...func(*grpc.Server)) *Device {
 	t.Helper()
-	d := &Device{dir: dir}
+	d := &Device{dir: dir, register: register}
 	d.start(t, "127.0.0.1:0")
 	return d
 }
@@ -98,6 +100,9 @@ func (d *Device) serve(t testing.TB, ln net.Listener, access *services.AccessSer
 	d.servers = append(d.servers, srv)
 	agentpb.RegisterWendyAgentServiceServer(srv, versionService{})
 	agentpbv2.RegisterWendyAccessServiceServer(srv, access)
+	for _, add := range d.register {
+		add(srv)
+	}
 	go srv.Serve(ln) //nolint:errcheck
 	t.Cleanup(srv.Stop)
 }

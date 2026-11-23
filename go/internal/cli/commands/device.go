@@ -1070,6 +1070,23 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	return err
 }
 
+// requireClosedDeviceOwner refuses, before Cloud reserves the name, an enroll
+// over a local key that the Closed device would refuse: enrolling it needs the
+// owner key.
+func requireClosedDeviceOwner(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if conn == nil || !conn.IsLocalOperator {
+		return nil
+	}
+	resp, err := agentpbv2.NewWendyAccessServiceClient(conn.Conn).GetAccess(ctx, &agentpbv2.GetAccessRequest{})
+	if err != nil {
+		return accessError(err)
+	}
+	if resp.GetShape() == agentpbv2.AccessShape_ACCESS_SHAPE_CLOSED && resp.GetCallerRole() != agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_OWNER {
+		return fmt.Errorf("enrolling a closed device needs its owner key, and this computer's key has the %s role; enroll from the owner's computer", trustedKeyRoleName(resp.GetCallerRole()))
+	}
+	return nil
+}
+
 func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
 		return nil, validateEnrollmentCertificate(auth)
@@ -1082,6 +1099,9 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
+		return nil, err
+	}
+	if err := requireClosedDeviceOwner(ctx, conn); err != nil {
 		return nil, err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
