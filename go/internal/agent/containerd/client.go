@@ -493,7 +493,10 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 // Close releases the underlying containerd client connection and stops all
 // D-Bus proxy processes.
 func (c *Client) Close() error {
-	c.ros2ImagePreparation.close()
+	if !c.ros2ImagePreparation.close() {
+		c.logger.Warn("ROS 2 inspector image preparation did not stop in time",
+			zap.Duration("waited", ros2ImageShutdownTimeout))
+	}
 	c.closeRecoveredTaskOutput()
 	c.meshIngressStopOnce.Do(func() {
 		if c.meshIngressStop != nil {

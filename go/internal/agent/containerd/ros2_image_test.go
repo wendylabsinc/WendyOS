@@ -148,6 +148,37 @@ func TestROS2ClientCloseCancelsImagePreparation(t *testing.T) {
 	})
 }
 
+func TestROS2ClientCloseDoesNotWaitForStalledImageCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newROS2ContainerTestClient(t, nil, nil)
+		cleanupStarted := make(chan struct{})
+		releaseCleanup := make(chan struct{})
+		defer close(releaseCleanup)
+		go func() {
+			_, _ = c.ros2ImagePreparation.wait(context.Background(), func(ctx context.Context) (containerd.Image, error) {
+				<-ctx.Done()
+				close(cleanupStarted)
+				<-releaseCleanup
+				return nil, ctx.Err()
+			})
+		}()
+		synctest.Wait()
+		closed := make(chan error, 1)
+		go func() { closed <- c.Close() }()
+		<-cleanupStarted
+		time.Sleep(ros2ImageShutdownTimeout)
+		synctest.Wait()
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("client close is still waiting for stalled cleanup")
+		}
+	})
+}
+
 func TestROS2ImagePreparationTimeoutAndClose(t *testing.T) {
 	for _, shutdown := range []bool{false, true} {
 		name := "timeout"

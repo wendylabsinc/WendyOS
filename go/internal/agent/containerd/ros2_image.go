@@ -10,7 +10,10 @@ import (
 	"github.com/containerd/errdefs"
 )
 
-const ros2ImagePreparationTimeout = 15 * time.Minute
+const (
+	ros2ImagePreparationTimeout = 15 * time.Minute
+	ros2ImageShutdownTimeout    = 5 * time.Second
+)
 
 type ros2ImagePreparation struct {
 	mu     sync.Mutex
@@ -64,7 +67,9 @@ func (p *ros2ImagePreparation) wait(ctx context.Context, prepare func(context.Co
 	}
 }
 
-func (p *ros2ImagePreparation) close() {
+// close stops accepting work and gives a canceled job time to finish cleanup.
+// It reports whether the job exited before the shutdown wait expired.
+func (p *ros2ImagePreparation) close() bool {
 	p.mu.Lock()
 	p.closed = true
 	job := p.job
@@ -72,8 +77,14 @@ func (p *ros2ImagePreparation) close() {
 		job.cancel()
 	}
 	p.mu.Unlock()
-	if job != nil {
-		<-job.done
+	if job == nil {
+		return true
+	}
+	select {
+	case <-job.done:
+		return true
+	case <-time.After(ros2ImageShutdownTimeout):
+		return false
 	}
 }
 
