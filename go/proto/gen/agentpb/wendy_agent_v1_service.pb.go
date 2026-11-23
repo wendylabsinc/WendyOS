@@ -940,7 +940,26 @@ type GetAgentVersionResponse struct {
 	// Which agent runs and how the last agent update went, from the WendyOS
 	// agent supervisor. Absent when no supervisor started this agent (older
 	// images, generic Linux, macOS).
-	Supervision   *AgentSupervision `protobuf:"bytes,30,opt,name=supervision,proto3,oneof" json:"supervision,omitempty"`
+	Supervision *AgentSupervision `protobuf:"bytes,30,opt,name=supervision,proto3,oneof" json:"supervision,omitempty"`
+	// Build label the WendyOS Builder stamped into the running image, from the
+	// "Build:" line of /etc/issue. os_version names only the release an image
+	// is based on, which a release, a nightly and a pull-request image share;
+	// this tells them apart: "pr-<N>" for an image built from Builder pull
+	// request N (e.g. "pr-343"), "nightly-<YYYYMMDD>T<HHMMSS>" (UTC) for a
+	// nightly, and the release version itself (e.g. "0.21.0") for a release
+	// and for an image built outside CI. At most 64 printable ASCII
+	// characters, without spaces. Absent on hosts that are not WendyOS, on
+	// images without a readable stamp (WendyOS before 0.17.0), and on agents
+	// predating this field.
+	OsBuild *string `protobuf:"bytes,31,opt,name=os_build,json=osBuild,proto3,oneof" json:"os_build,omitempty"`
+	// Builder commit the running WendyOS image was built from, from
+	// /usr/lib/wendyos/commit: the full Git hash in lower-case hexadecimal.
+	// For a pull-request image it is the head commit of the pull request, so
+	// it distinguishes two builds of one pull request, which share os_build.
+	// Absent on hosts that are not WendyOS, on images built outside CI or
+	// before 0.17.0 (they carry no commit), and on agents predating this
+	// field.
+	OsCommit      *string `protobuf:"bytes,32,opt,name=os_commit,json=osCommit,proto3,oneof" json:"os_commit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1183,6 +1202,20 @@ func (x *GetAgentVersionResponse) GetSupervision() *AgentSupervision {
 		return x.Supervision
 	}
 	return nil
+}
+
+func (x *GetAgentVersionResponse) GetOsBuild() string {
+	if x != nil && x.OsBuild != nil {
+		return *x.OsBuild
+	}
+	return ""
+}
+
+func (x *GetAgentVersionResponse) GetOsCommit() string {
+	if x != nil && x.OsCommit != nil {
+		return *x.OsCommit
+	}
+	return ""
 }
 
 // A network interface on the device and the IP addresses assigned to it.
@@ -5065,7 +5098,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\x98\r\n" +
+	"\x16GetAgentVersionRequest\"\xf5\r\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -5108,7 +5141,9 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"power_mode\x18\x1c \x01(\v2\".wendy.agent.services.v1.PowerModeH\x0fR\tpowerMode\x88\x01\x01\x12+\n" +
 	"\x11entitlement_types\x18\x1d \x03(\tR\x10entitlementTypes\x12P\n" +
-	"\vsupervision\x18\x1e \x01(\v2).wendy.agent.services.v1.AgentSupervisionH\x10R\vsupervision\x88\x01\x01B\r\n" +
+	"\vsupervision\x18\x1e \x01(\v2).wendy.agent.services.v1.AgentSupervisionH\x10R\vsupervision\x88\x01\x01\x12\x1e\n" +
+	"\bos_build\x18\x1f \x01(\tH\x11R\aosBuild\x88\x01\x01\x12 \n" +
+	"\tos_commit\x18  \x01(\tH\x12R\bosCommit\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +
@@ -5128,7 +5163,10 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\v_npu_vendorB\x14\n" +
 	"\x12_container_storageB\r\n" +
 	"\v_power_modeB\x0e\n" +
-	"\f_supervision\"\xfe\x01\n" +
+	"\f_supervisionB\v\n" +
+	"\t_os_buildB\f\n" +
+	"\n" +
+	"_os_commit\"\xfe\x01\n" +
 	"\x10NetworkInterface\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fip_addresses\x18\x02 \x03(\tR\vipAddresses\x12(\n" +
