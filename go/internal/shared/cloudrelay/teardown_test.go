@@ -30,6 +30,7 @@ func TestRelayTCPTeardown(t *testing.T) {
 			keepServiceOpen := make(chan struct{})
 			var callerClosed <-chan struct{}
 			testAuthorizedRelay(t, "tcp", false, &relayLifecycle{
+				tcpHalfClose: true,
 				configure: func(r *testRelay, _ *Agent) {
 					r.callerClosed = make(chan struct{})
 					r.agentClosed = make(chan struct{})
@@ -93,6 +94,68 @@ func TestRelayTCPTeardown(t *testing.T) {
 							t.Fatal("agent relay slot still in use after caller disconnected")
 						}
 						time.Sleep(time.Millisecond)
+					}
+				},
+			})
+		})
+	}
+}
+
+func TestRelayTCPFramedResponseCompatibility(t *testing.T) {
+	const request = "GET /snapshot HTTP/1.1\r\nHost: example\r\nConnection: close\r\n\r\n"
+	const response = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndata"
+	for _, tt := range []struct {
+		name      string
+		halfClose bool
+	}{
+		{name: "unknown peer"},
+		{name: "capable peer", halfClose: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			completeRequest := make(chan struct{})
+			reply := make(chan struct{})
+			testAuthorizedRelay(t, "tcp", false, &relayLifecycle{
+				tcpHalfClose: tt.halfClose,
+				configure: func(r *testRelay, _ *Agent) {
+					r.callerClosed = make(chan struct{})
+					r.agentClosed = make(chan struct{})
+				},
+				tcpService: func(conn net.Conn) {
+					buf := make([]byte, len(request))
+					if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != request {
+						return
+					}
+					close(completeRequest)
+					<-reply
+					if tt.halfClose {
+						if extra, err := io.ReadAll(conn); err != nil || len(extra) != 0 {
+							return
+						}
+					}
+					_, _ = io.WriteString(conn, response)
+				},
+				tcpExercise: func(conn net.Conn, _ *Agent) {
+					defer close(reply)
+					half, hasHalfClose := conn.(interface{ CloseWrite() error })
+					if hasHalfClose != tt.halfClose {
+						t.Fatalf("CloseWrite support is %t, want %t", hasHalfClose, tt.halfClose)
+					}
+					if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := io.WriteString(conn, request); err != nil {
+						t.Fatal(err)
+					}
+					if hasHalfClose {
+						if err := half.CloseWrite(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					awaitRelayPhase(t, completeRequest, "framed request did not reach the device")
+					reply <- struct{}{}
+					got, err := io.ReadAll(conn)
+					if err != nil || string(got) != response {
+						t.Fatalf("caller got %q, %v, want the complete framed response", got, err)
 					}
 				},
 			})

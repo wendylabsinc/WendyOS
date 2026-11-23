@@ -468,6 +468,7 @@ type relayLifecycle struct {
 	exercise      func(func(string))
 	tcpService    func(net.Conn)
 	tcpExercise   func(net.Conn, *Agent)
+	tcpHalfClose  bool
 }
 
 func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycle ...*relayLifecycle) {
@@ -609,7 +610,11 @@ func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycl
 			}
 		}
 	} else {
-		conn, e := OpenTCP(authCtx, authCtx, cloudConn, verifier, "00000000-0000-4000-8000-000000000042", service, func(b []byte) ([]byte, error) { return b, nil })
+		open := OpenTCP
+		if len(lifecycle) != 0 && lifecycle[0].tcpHalfClose {
+			open = OpenTCPWithHalfClose
+		}
+		conn, e := open(authCtx, authCtx, cloudConn, verifier, "00000000-0000-4000-8000-000000000042", service, func(b []byte) ([]byte, error) { return b, nil })
 		if e != nil {
 			select {
 			case err := <-agentDone:

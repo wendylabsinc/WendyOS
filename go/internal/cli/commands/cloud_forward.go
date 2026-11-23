@@ -199,9 +199,21 @@ func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Lis
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
-	return serveTCPForward(session.Context(ctx), ln, func(ctx context.Context) (net.Conn, error) {
-		return d.openTunnel(ctx, brokerConn, auth, remotePort)
-	}, dialFailed, unanswered)
+	ctx = session.Context(ctx)
+	dial := func(ctx context.Context) (net.Conn, error) {
+		return d.openTunnel(ctx, brokerConn, auth, remotePort, false)
+	}
+	if d.v2 != nil && remotePort != defaultAgentPort+1 {
+		// A single lazy, authenticated management channel checks support for
+		// this forward. Raw ports can work even when management is unavailable.
+		if agent, err := connectCloudDiscoveryTransport(ctx, auth, d, ""); err == nil {
+			defer agent.Close()
+			dial = func(ctx context.Context) (net.Conn, error) {
+				return agent.RegistryDialer(ctx, int(remotePort))
+			}
+		}
+	}
+	return serveTCPForward(ctx, ln, dial, dialFailed, unanswered)
 }
 
 // serveTCPForward accepts connections on ln until ctx ends and relays each one

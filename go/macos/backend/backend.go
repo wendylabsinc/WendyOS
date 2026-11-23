@@ -443,7 +443,8 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 		b.automaticVPN = automatic
 		return cfg, err
 	}
-	dial := reportVPNDialFailures(desktopDial, func(err error) {
+	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
+	dial := reportVPNDialFailures(probes.Dial, func(err error) {
 		// A full UI event queue must not stall a failed network flow.
 		select {
 		case b.events <- Event{Kind: EventVPNError, Text: err.Error(), Err: err}:
@@ -455,10 +456,10 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 		var err error
 		internet, err = openVPNInternet(ctx, gateway[0])
 		if err != nil {
+			probes.Close()
 			return vpn.Config{}, err
 		}
 	}
-	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
 	relay, config, err := vpn.NewRelayWithInternet(routes, dial, probes.Probe, internet)
 	if err != nil {
 		if internet != nil {
