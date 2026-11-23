@@ -104,7 +104,9 @@ func meshTrustBundle(path, twins, regular []*x509.Certificate, tenant string, no
 			continue
 		}
 		switch ca.Subject.CommonName {
-		case label + " Identity CA":
+		// PKI's initial certificate and its rotated successors use the
+		// public common name and persisted CA label respectively.
+		case label + " Identity CA", label + " Device Identity CA":
 			devices = true
 		case label + " Operator Authority CA":
 			operators = true
