@@ -25,11 +25,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
-// ReleaseImageName is the local image name of a registry release.
-func ReleaseImageName(appID, releaseID string) string {
-	return services.ReleaseImageName(appID, releaseID)
-}
-
 // ImportRelease writes a verified registry release (registry plan T14) into
 // the content store and names it ReleaseImageName, labelled with its app and
 // release identity. containerd checks every blob against its digest again as
@@ -111,7 +106,7 @@ func (c *Client) importRelease(ctx context.Context, img services.ReleaseImage, m
 
 	labels := map[string]string{labelKeyAppID: img.AppID}
 	addReleaseIdentity(labels, img.ManifestDigest, &img.ReleaseID)
-	record := images.Image{Name: ReleaseImageName(img.AppID, img.ReleaseID), Target: manifestDesc, Labels: labels}
+	record := images.Image{Name: services.ReleaseImageName(img.AppID, img.ReleaseID), Target: manifestDesc, Labels: labels}
 	is := c.client.ImageService()
 	if _, err := is.Create(ctx, record); err != nil {
 		if !errdefs.IsAlreadyExists(err) {
@@ -151,13 +146,10 @@ var _ interface {
 	AppState(ctx context.Context, app string) (services.AppContainerState, error)
 } = (*Client)(nil)
 
-// releaseImagePrefix starts every ReleaseImageName.
-const releaseImagePrefix = services.ReleaseImagePrefix
-
 // removableRelease reports whether image name is a release of app (any app's
 // when app is "") whose release id is not in keep.
 func removableRelease(name, app string, keep []string) bool {
-	rest, ok := strings.CutPrefix(name, releaseImagePrefix)
+	rest, ok := strings.CutPrefix(name, services.ReleaseImagePrefix)
 	if !ok {
 		return false
 	}
@@ -179,36 +171,18 @@ func (c *Client) ReleaseApps(ctx context.Context, app string, keep []string) ([]
 // HasRelease reports whether the release image is in containerd with the
 // signed manifest digest.
 func (c *Client) HasRelease(ctx context.Context, app, release, manifestDigest string) bool {
-	_, err := c.releaseImage(c.withNamespace(ctx), app, release, manifestDigest)
+	_, err := c.releaseImage(c.withNamespace(ctx), services.ReleaseImageName(app, release), manifestDigest)
 	return err == nil
 }
 
-// releaseImage is the release image only when its manifest is the signed
-// digest: anything else under that name is not the release.
-func (c *Client) releaseImage(ctx context.Context, app, release, manifestDigest string) (containerd.Image, error) {
-	img, err := c.client.GetImage(ctx, ReleaseImageName(app, release))
-	if err != nil {
-		return nil, fmt.Errorf("release image: %w", err)
-	}
-	if err := checkReleaseDigest(img.Target().Digest.String(), manifestDigest); err != nil {
-		return nil, err
-	}
-	return img, nil
-}
-
-// releaseImageByRef resolves a release reference "<release name>@<digest>"
-// (services.ReleaseImageRef) to the image under that name whose manifest is
-// that digest; a reference without a digest is refused.
-func (c *Client) releaseImageByRef(ctx context.Context, ref string) (containerd.Image, error) {
-	name, digest, err := splitReleaseRef(ref)
-	if err != nil {
-		return nil, err
-	}
+// releaseImage is the image under a release name only when its manifest is
+// the signed digest: anything else under that name is not the release.
+func (c *Client) releaseImage(ctx context.Context, name, signed string) (containerd.Image, error) {
 	img, err := c.client.GetImage(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("release image %q is not on the device: %w", name, err)
 	}
-	if err := checkReleaseDigest(img.Target().Digest.String(), digest); err != nil {
+	if err := checkReleaseDigest(img.Target().Digest.String(), signed); err != nil {
 		return nil, err
 	}
 	return img, nil
@@ -241,7 +215,7 @@ func checkReleaseDigest(got, signed string) error {
 // them and createContainer never pulls them.
 func (c *Client) ReleaseLabels(ctx context.Context, app, release, manifestDigest string) (map[string]string, error) {
 	ctx = c.withNamespace(ctx)
-	img, err := c.releaseImage(ctx, app, release, manifestDigest)
+	img, err := c.releaseImage(ctx, services.ReleaseImageName(app, release), manifestDigest)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +267,7 @@ func (c *Client) ReleasesInUse(ctx context.Context, app string) ([]string, error
 func releasesInUse(ctrs []containers.Container, app string) []string {
 	var used []string
 	for _, ctr := range ctrs {
-		rest, ok := strings.CutPrefix(ctr.Image, releaseImagePrefix+app+":")
+		rest, ok := strings.CutPrefix(ctr.Image, services.ReleaseImagePrefix+app+":")
 		if ok && !slices.Contains(used, rest) {
 			used = append(used, rest)
 		}

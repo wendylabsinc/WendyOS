@@ -79,15 +79,10 @@ func configEnv(config string) ([]string, error) {
 	}
 	env := make([]string, 0, len(values))
 	for name, v := range values {
+		// Checked here as well: ValidateEnvEntries reads a name only up to its
+		// first "=", so "A=B" would pass there as A.
 		if !appconfig.IsEnvVarName(name) {
 			return nil, fmt.Errorf("configuration name %q is not a valid environment variable name", name)
-		}
-		// The agent's own variables and the linkers' are never set by a
-		// deployment: refused, not silently dropped.
-		for _, prefix := range appconfig.ReservedEnvPrefixes {
-			if strings.HasPrefix(strings.ToUpper(name), prefix) {
-				return nil, fmt.Errorf("configuration name %q is reserved", name)
-			}
 		}
 		var text string
 		switch v := v.(type) {
@@ -107,8 +102,9 @@ func configEnv(config string) ([]string, error) {
 	}
 	slices.Sort(env)
 	// At least as strict as the runtime, so a statement is refused when it
-	// arrives rather than failing at start: no NUL, CR or LF, entries of at
-	// most 32 KiB, at most 512 of them.
+	// arrives rather than failing at start: no reserved names (the agent's
+	// own or the linkers'), no NUL, CR or LF, entries of at most
+	// 32 KiB, at most 512 of them.
 	if err := appconfig.ValidateEnvEntries(env); err != nil {
 		return nil, fmt.Errorf("the configuration cannot be applied: %w", err)
 	}

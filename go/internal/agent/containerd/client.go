@@ -1370,8 +1370,11 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		// object the container is made from, so no lookup sits between the
 		// check and the create. It is only ever written by ImportRelease and
 		// never pulled by name.
-		image, err = c.releaseImageByRef(ctx, imageName)
-		if err != nil {
+		name, signed, refErr := splitReleaseRef(imageName)
+		if refErr != nil {
+			return refErr
+		}
+		if image, err = c.releaseImage(ctx, name, signed); err != nil {
 			return err
 		}
 	} else {

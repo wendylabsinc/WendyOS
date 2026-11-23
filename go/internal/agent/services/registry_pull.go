@@ -70,22 +70,19 @@ import (
 // held assignment on the next cycle. A removed deployment's releases are
 // deleted (RemoveReleases), and so is a release a newer one supersedes.
 
-// The three transient states of a deployment on the device (service-protos
-// #184: APPLY_OUTCOME_PULLING = 10, APPLY_OUTCOME_NOT_STARTED = 11,
-// APPLY_OUTCOME_PULL_RETRYING = 12). Each is reported from one place:
-// pulling by apply when the pull starts and by pullRetry when an attempt
-// succeeds after a retry, retrying by pullRetry, not started by
-// pullAssignment's result.
+// Two transient states of a deployment on the device (service-protos #184:
+// APPLY_OUTCOME_PULLING = 10, APPLY_OUTCOME_NOT_STARTED = 11): pulling when
+// the pull starts, not started for a release imported but not started.
+// APPLY_OUTCOME_PULL_RETRYING (12) is not reported yet.
 //
 // sendTransientOutcomes is the switch: cloud refuses an outcome it does not
-// know, so until cloud on prod accepts the three values all of them are
-// sent as no outcome (UNSPECIFIED). Turn it on only once that is confirmed.
+// know, so until cloud on prod accepts the values they are sent as no
+// outcome (UNSPECIFIED). Turn it on only once that is confirmed.
 const sendTransientOutcomes = false
 
 var (
-	outcomePulling      = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULLING)
-	outcomeNotStarted   = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_NOT_STARTED)
-	outcomePullRetrying = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_RETRYING)
+	outcomePulling    = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULLING)
+	outcomeNotStarted = transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_NOT_STARTED)
 )
 
 func transientOutcome(o cloudpbv2.ApplyOutcome) cloudpbv2.ApplyOutcome {
@@ -94,9 +91,6 @@ func transientOutcome(o cloudpbv2.ApplyOutcome) cloudpbv2.ApplyOutcome {
 	}
 	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED
 }
-
-// pullReport records a transient state of the pull it is given to.
-type pullReport func(cloudpbv2.ApplyOutcome)
 
 const (
 	// registryPullDir stages each pull's ciphertext and plaintext under the
@@ -196,7 +190,7 @@ func checkAssignment(a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, str
 
 // pullAssignment fetches, opens, verifies and imports a checked assignment's
 // release, then removes the app's releases no held assignment uses.
-func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment, report pullReport) (cloudpbv2.ApplyOutcome, string, error) {
+func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
 	// A resumed pull starts without a failure, where pullRetry checks the
 	// expiry: nothing is fetched under a statement that has expired.
 	if !p.trustedNow().Before(a.GetExpiresAt().AsTime()) {
@@ -223,7 +217,7 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	var err error
 	if !p.control.HasRelease(ctx, a.GetAppId(), a.GetAppReleaseId(), a.GetManifestDigest()) {
 		var img ReleaseImage
-		img, err = p.fetchRelease(ctx, id, a, dir, report)
+		img, err = p.fetchRelease(ctx, id, a, dir)
 		if err == nil {
 			if err = p.control.ImportRelease(ctx, img); err != nil {
 				err = pullFailed("import", err)
@@ -287,8 +281,7 @@ func (p *Postbox) startPull(ctx context.Context, id *postboxIdentity, a *cloudpb
 			p.mu.Unlock()
 		}()
 		defer cancel()
-		report := func(o cloudpbv2.ApplyOutcome) { p.recordPullState(a, entryID, correlation, o) }
-		outcome, reason, err := p.pullAssignment(ctx, id, a, report)
+		outcome, reason, err := p.pullAssignment(ctx, id, a)
 		if ctx.Err() != nil {
 			return
 		}
@@ -316,27 +309,6 @@ func (p *Postbox) waitPulls() {
 	p.mu.Unlock()
 	for _, job := range jobs {
 		<-job.done
-	}
-}
-
-// recordPullState records a transient state of a running pull as its
-// entry's outcome. It writes only when the entry's recorded state changes,
-// and never over a newer entry or a replaced assignment.
-func (p *Postbox) recordPullState(a *cloudpbv2.DeviceAssignment, entryID int64, correlation string, outcome cloudpbv2.ApplyOutcome) {
-	current := func(st *postboxState) bool {
-		held, o := st.Assignments[a.GetDeploymentId()], st.Outcomes[a.GetAppId()]
-		return held != nil && held.EntryID == entryID && o != nil && o.EntryID == entryID && o.Outcome != outcome
-	}
-	if st := p.snapshot(); !current(&st) {
-		return
-	}
-	if err := p.commit(func(st *postboxState) {
-		if current(st) {
-			st.Outcomes = maps.Clone(st.Outcomes)
-			st.Outcomes[a.GetAppId()] = &postboxOutcome{EntryID: entryID, CorrelationID: correlation, Outcome: outcome}
-		}
-	}); err != nil {
-		p.logger.Warn("postbox: saving a pull's state failed", zap.String("deployment_id", a.GetDeploymentId()), zap.Error(err))
 	}
 }
 
@@ -470,7 +442,7 @@ func (p *Postbox) RemoveAllReleases(ctx context.Context, imagesOnly bool) error 
 	return p.control.RemoveReleases(ctx, "", nil)
 }
 
-func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment, dir string, report pullReport) (ReleaseImage, error) {
+func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment, dir string) (ReleaseImage, error) {
 	p.mu.Lock()
 	cloudURL, certPEM, keyPEM, chainPEM := p.cloudURL, p.certPEM, p.keyPEM, p.chainPEM
 	p.mu.Unlock()
@@ -481,7 +453,7 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 	defer func() { _ = closer.Close() }()
 
 	var mat *cloudpbv2.GetDeploymentMaterialResponse
-	err = p.pullRetry(ctx, a, report, func(ctx context.Context) (bool, error) {
+	err = p.pullRetry(ctx, a, func(ctx context.Context) (bool, error) {
 		ctx, cancel := context.WithTimeout(ctx, materialTimeout)
 		defer cancel()
 		var err error
@@ -518,7 +490,7 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 	for i, b := range blobs {
 		ct := filepath.Join(dir, strconv.Itoa(i)+".enc")
 		pt := filepath.Join(dir, strconv.Itoa(i))
-		if err := p.pullRetry(ctx, a, report, func(ctx context.Context) (bool, error) {
+		if err := p.pullRetry(ctx, a, func(ctx context.Context) (bool, error) {
 			before := stagedSize(ct)
 			err := fetchBlob(ctx, client, a.GetDeploymentId(), b, ct)
 			return stagedSize(ct) > before, err
@@ -539,15 +511,11 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 // retries until the
 // assignment's signed validity ends: availability degrades, the check is
 // never skipped. An attempt that made progress starts the backoff again.
-// Any other registry status is its refusal. The pull is reported retrying
-// while it waits, and pulling again once an attempt succeeds.
-func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, report pullReport, call func(context.Context) (bool, error)) error {
+// Any other registry status is its refusal.
+func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, call func(context.Context) (bool, error)) error {
 	for failures := 0; ; failures++ {
 		progressed, err := call(ctx)
 		if err == nil {
-			if failures > 0 {
-				report(outcomePulling)
-			}
 			return nil
 		}
 		if progressed {
@@ -564,7 +532,6 @@ func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, 
 		case !p.trustedNow().Before(a.GetExpiresAt().AsTime()):
 			return pullRefused("unavailable", fmt.Errorf("assignment expired while the registry was unavailable: %w", err))
 		}
-		report(outcomePullRetrying)
 		wait := min(p.retry<<min(failures, 6), 30*time.Minute)
 		wait = wait/2 + rand.N(wait/2+1) // a fleet does not retry in one wave
 		p.logger.Warn("registry pull unavailable; retrying", zap.String("audit", "postbox"),

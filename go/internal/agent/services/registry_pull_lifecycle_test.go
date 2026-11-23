@@ -518,8 +518,8 @@ func TestPostboxDecideKeepsAFinishedPullsOutcome(t *testing.T) {
 	}
 }
 
-// finishPull and recordPullState write nothing for a replaced or removed
-// statement, and never over a newer entry's outcome.
+// finishPull writes nothing for a replaced or removed statement, and never
+// over a newer entry's outcome.
 func TestPostboxPullRecordsOnlyForItsOwnEntry(t *testing.T) {
 	f := newPBFixture(t)
 	f.cycle()
@@ -549,18 +549,6 @@ func TestPostboxPullRecordsOnlyForItsOwnEntry(t *testing.T) {
 	f.p.finishPull(ctx, a, 1, "c1", applied, "", nil)
 	if st := f.p.snapshot(); !st.Assignments["d"].Pulled || st.Outcomes["web"].Outcome != applied {
 		t.Fatalf("own entry: %+v %+v", st.Assignments["d"], st.Outcomes["web"])
-	}
-
-	// A transient state is recorded for its own entry only.
-	set(1, 1)
-	f.p.recordPullState(a, 1, "c1", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED)
-	if o := f.p.snapshot().Outcomes["web"]; o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED {
-		t.Fatalf("own entry state: %+v", o)
-	}
-	set(2, 2)
-	f.p.recordPullState(a, 1, "c1", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED)
-	if o := f.p.snapshot().Outcomes["web"]; o.Outcome != outcomePulling {
-		t.Fatalf("replaced entry state: %+v", o)
 	}
 }
 

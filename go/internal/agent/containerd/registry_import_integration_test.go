@@ -63,7 +63,7 @@ func TestIntegrationImportRelease(t *testing.T) {
 			t.Fatalf("importing release: %v", err)
 		}
 	}
-	name := ReleaseImageName(release.AppID, release.ReleaseID)
+	name := services.ReleaseImageName(release.AppID, release.ReleaseID)
 	image, err := c.client.GetImage(ctx, name)
 	if err != nil {
 		t.Fatalf("loading imported image: %v", err)

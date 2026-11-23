@@ -11,6 +11,8 @@ import (
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/leases"
 	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 )
 
 // fakeImageStore lists names and records each delete with its options.
@@ -45,7 +47,7 @@ func (f *fakeImageStore) Delete(_ context.Context, name string, opts ...images.D
 }
 
 var releaseImages = []string{
-	ReleaseImageName("web", "r1"), ReleaseImageName("web", "r2"), ReleaseImageName("api", "r3"),
+	services.ReleaseImageName("web", "r1"), services.ReleaseImageName("web", "r2"), services.ReleaseImageName("api", "r3"),
 	"localhost/web:latest", "docker.io/library/web:r1",
 }
 
@@ -57,9 +59,9 @@ func TestDeleteReleaseImages(t *testing.T) {
 		keep []string
 		want []string
 	}{
-		{"web", []string{"r2"}, []string{ReleaseImageName("web", "r1")}},
-		{"web", nil, []string{ReleaseImageName("web", "r1"), ReleaseImageName("web", "r2")}},
-		{"", nil, []string{ReleaseImageName("web", "r1"), ReleaseImageName("web", "r2"), ReleaseImageName("api", "r3")}},
+		{"web", []string{"r2"}, []string{services.ReleaseImageName("web", "r1")}},
+		{"web", nil, []string{services.ReleaseImageName("web", "r1"), services.ReleaseImageName("web", "r2")}},
+		{"", nil, []string{services.ReleaseImageName("web", "r1"), services.ReleaseImageName("web", "r2"), services.ReleaseImageName("api", "r3")}},
 		{"other", nil, nil},
 	} {
 		is := &fakeImageStore{names: releaseImages}
@@ -70,7 +72,7 @@ func TestDeleteReleaseImages(t *testing.T) {
 			t.Fatalf("app %q keep %v: deleted %v (synchronous %v), want %v synchronously", tc.app, tc.keep, is.deleted, is.sync, tc.want)
 		}
 	}
-	is := &fakeImageStore{names: releaseImages, failOn: ReleaseImageName("web", "r1")}
+	is := &fakeImageStore{names: releaseImages, failOn: services.ReleaseImageName("web", "r1")}
 	if err := deleteReleaseImages(context.Background(), is, zap.NewNop(), "web", nil); err == nil || len(is.deleted) != 2 {
 		t.Fatalf("err %v, deleted %v: want the failure returned after trying every release", err, is.deleted)
 	}
@@ -79,10 +81,10 @@ func TestDeleteReleaseImages(t *testing.T) {
 // Only containers running a removable release name their app.
 func TestReleaseApps(t *testing.T) {
 	ctrs := []containers.Container{
-		{Image: ReleaseImageName("web", "r1"), Labels: map[string]string{labelKeyAppID: "web"}},
-		{Image: ReleaseImageName("web", "r1"), Labels: map[string]string{labelKeyAppID: "web"}},
+		{Image: services.ReleaseImageName("web", "r1"), Labels: map[string]string{labelKeyAppID: "web"}},
+		{Image: services.ReleaseImageName("web", "r1"), Labels: map[string]string{labelKeyAppID: "web"}},
 		{Image: "localhost/web:latest", Labels: map[string]string{labelKeyAppID: "web"}},
-		{Image: ReleaseImageName("api", "r3"), Labels: map[string]string{labelKeyAppID: "api"}},
+		{Image: services.ReleaseImageName("api", "r3"), Labels: map[string]string{labelKeyAppID: "api"}},
 	}
 	if got := releaseApps(ctrs, "web", nil); !slices.Equal(got, []string{"web"}) {
 		t.Fatalf("web: %v", got)
@@ -123,9 +125,9 @@ func TestImportLeaseIsCollectedSynchronously(t *testing.T) {
 
 func TestReleasesInUse(t *testing.T) {
 	ctrs := []containers.Container{
-		{ID: "web", Image: releaseImagePrefix + "web:r1"},
-		{ID: "web_api", Image: releaseImagePrefix + "web:r1"},
-		{ID: "webx", Image: releaseImagePrefix + "webx:r2"},
+		{ID: "web", Image: services.ReleaseImagePrefix + "web:r1"},
+		{ID: "web_api", Image: services.ReleaseImagePrefix + "web:r1"},
+		{ID: "webx", Image: services.ReleaseImagePrefix + "webx:r2"},
 		{ID: "dev", Image: "docker.io/library/web:latest"},
 	}
 	if got := releasesInUse(ctrs, "web"); !slices.Equal(got, []string{"r1"}) {

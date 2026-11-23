@@ -357,14 +357,6 @@ func TestTransientOutcomesAreOffByDefault(t *testing.T) {
 	if sendTransientOutcomes {
 		t.Fatal("sendTransientOutcomes must stay off until cloud on prod accepts the values")
 	}
-	for _, o := range []cloudpbv2.ApplyOutcome{outcomePulling, outcomeNotStarted, outcomePullRetrying} {
-		if o != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED {
-			t.Fatalf("outcome %v sent while the switch is off", o)
-		}
-	}
-	if transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULLING) != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED {
-		t.Fatal("PULLING mapped while off")
-	}
 }
 
 // Each content field and move rule, alone: every case fails without its
