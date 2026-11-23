@@ -98,6 +98,32 @@ func TestManagerPumpsCompressedImageToLoopback(t *testing.T) {
 	}
 }
 
+func TestManagerFloatImageMakesCameraReady(t *testing.T) {
+	m := NewManager(context.Background(), zap.NewNop(), &fakeLoopback{}, filepath.Join(t.TempDir(), "registry.json"), nil, nil)
+	t.Cleanup(m.Shutdown)
+	writer := &fakeWriter{}
+	m.newWriter = func(string) cameraWriter { return writer }
+	m.containerUse = true
+	guid := rtps.GUID{EntityID: 9}
+	m.registerEndpoint(&participantState{iface: "lo", domainID: 42}, rtps.Endpoint{
+		Topic: "rt/thermal/cell/temperature", Type: TypeImage, GUID: guid,
+	})
+	values := make([]float32, 32*24)
+	for i := range values {
+		values[i] = 20 + float32(i%32)
+	}
+	m.handleSample(nil, rtps.Sample{Writer: guid, Payload: floatImageSample(32, 24, 128, false, values)})
+	if writer.frames != 1 || writer.width != 32 || writer.height != 24 || writer.codec != CodecMJPEG {
+		t.Fatalf("float image never reached the video writer: %+v", writer)
+	}
+	cam := m.cameras[m.List()[0].ID]
+	select {
+	case <-cam.ready:
+	default:
+		t.Fatal("float image left camera waiting for its first frame")
+	}
+}
+
 func TestManagerPreservesGo2H264ForLoopback(t *testing.T) {
 	loop := &fakeLoopback{}
 	m := NewManager(context.Background(), zap.NewNop(), loop, filepath.Join(t.TempDir(), "registry.json"), nil, nil)
