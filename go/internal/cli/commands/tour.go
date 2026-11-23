@@ -1792,7 +1792,12 @@ func (m tourWizardModel) viewError(w int) string {
 
 func loadDevicesCmd() tea.Cmd {
 	return func() tea.Msg {
-		devices, err := getAvailableDevices()
+		devices, err := getAvailableDevices(context.Background())
+		// Unlike the install picker, the tour reads every board's manifest
+		// before it lists them: the bundle check below and the Orin flash mode
+		// (tourNativeInstallArgs) come from it. A board whose manifest cannot
+		// be read stays listed; its installer reports why.
+		loadDeviceManifests(devices, fetchDeviceManifest)
 		// The tour always passes --device-name, which a bundle-flashed board
 		// cannot apply, so offering one would guarantee a failure at the last
 		// step.

@@ -195,12 +195,15 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
+			// The alias lookup, the driver lookup and the device list all read the
+			// master manifest; they share one download of it.
+			ctx := withMainManifestMemo(cmd.Context())
 			// Map an alias first so driver lookup and the install checks see the device it stands for.
 			var aliasErr error
-			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(cmd.Context(), deviceType, storageOverride, prNumber); aliasErr != nil {
+			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(ctx, deviceType, storageOverride, prNumber); aliasErr != nil {
 				return aliasErr
 			}
-			prepared, err := prepareOSInstallDrivers(cmd.Context(), deviceType, versionFlag, nightly, prNumber, drivers)
+			prepared, err := prepareOSInstallDrivers(ctx, deviceType, versionFlag, nightly, prNumber, drivers)
 			if err != nil {
 				return err
 			}
@@ -208,7 +211,7 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			if prepared != nil {
 				versionFlag = prepared.version
 			}
-			if err := runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent); err != nil {
+			if err := runOSInstall(ctx, nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent); err != nil {
 				return err
 			}
 			return prepared.installAfterBoot(cmd.Context(), deviceName)
@@ -345,7 +348,10 @@ type pickerDevice struct {
 	RawVersion string // exact version key for manifest lookup
 	IsESP32    bool
 	ESP32Board string
-	Manifest   *deviceManifest // cached manifest for Linux devices
+	// ManifestPath is where a Linux device's own manifest is published. Manifest
+	// is nil until loadPickedManifest reads it, once the device is chosen.
+	ManifestPath string
+	Manifest     *deviceManifest
 }
 
 // installedFromFlashBundle reports whether a device's manifest image is a flash
@@ -356,7 +362,8 @@ type pickerDevice struct {
 // installer).
 //
 // The device-type prefix is a floor, not a fallback, so the manifest can only
-// widen the set: a new EDL board is excluded without a code change here.
+// widen the set: a new EDL board is excluded without a code change here. Until
+// a device's manifest is loaded, only its type can answer.
 func installedFromFlashBundle(dev deviceInfo) bool {
 	if isFlashBundleDeviceType(dev.Key) {
 		return true
@@ -386,12 +393,21 @@ func isFlashBundleDeviceType(deviceType string) bool {
 	return strings.HasPrefix(deviceType, dragonwingDeviceTypePrefix)
 }
 
+// warnDeviceNotLoaded says why the device just chosen in a picker cannot be
+// used yet. The picker opens again after it, so the person can retry or choose
+// another device.
+func warnDeviceNotLoaded(name string, cause error) {
+	fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("Could not load the WendyOS versions for %s: %v.", name, cause)))
+	fmt.Fprintln(os.Stderr, "Check your network connection, then choose it again or choose another device.")
+}
+
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
-// an interactive picker. Returns the selected device key and its deviceInfo.
+// an interactive picker. Returns the selected device key and its deviceInfo,
+// with the device's own manifest loaded.
 func pickLinuxDevice() (string, deviceInfo, error) {
 	fmt.Println("Fetching available devices...")
 
-	devices, err := getAvailableDevices()
+	devices, err := getAvailableDevices(context.Background())
 	if err != nil {
 		log.Printf("WARNING: could not fetch Linux device manifest: %v", err)
 	}
@@ -415,12 +431,28 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 		return "", deviceInfo{}, fmt.Errorf("no devices available")
 	}
 
-	fmt.Println()
-	key, err := pickFromItems("Select a device", items)
-	if err != nil {
-		return "", deviceInfo{}, err
+	// The rows came from the master manifest alone. The chosen device's own
+	// manifest is read now; when it cannot be used the list opens again.
+	for {
+		fmt.Println()
+		key, err := pickListedDeviceFn("Select a device", items)
+		if err != nil {
+			return "", deviceInfo{}, err
+		}
+		dev := deviceMap[key]
+		fmt.Printf("Fetching WendyOS versions for %s...\n", dev.Name)
+		if err := dev.loadManifest(context.Background()); err != nil {
+			warnDeviceNotLoaded(dev.Name, err)
+			continue
+		}
+		// Only its manifest can say that a device outside the known flash-bundle
+		// types installs from a bundle, so that check waits until here.
+		if installedFromFlashBundle(dev) {
+			fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("%s installs from a flash bundle that this version of wendy cannot download. Choose another device, or update wendy.", dev.Name)))
+			continue
+		}
+		return key, dev, nil
 	}
-	return key, deviceMap[key], nil
 }
 
 // pickWendyLiteBoard asks which Wendy Lite board to install. When target is
@@ -428,8 +460,8 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 // lists every catalog board with published firmware. nightly selects which
 // release channel a board's firmware must be published on to be offered.
 // Returns ErrUserCancelled when the user quits the picker.
-func pickWendyLiteBoard(target string, nightly bool) (string, error) {
-	boards, err := WendyLiteBoardsWithFirmware(nightly)
+func pickWendyLiteBoard(ctx context.Context, target string, nightly bool) (string, error) {
+	boards, err := WendyLiteBoardsWithFirmware(ctx, nightly)
 	if err != nil {
 		return "", err
 	}
@@ -506,42 +538,18 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	fmt.Println("Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest — the per-PR manifest when --pr is
-	// set, otherwise the standard release manifest.
+	// set, otherwise the standard release manifest. Only the master manifest is
+	// read here: the device that gets chosen has its own manifest read then.
 	var linuxDevices []deviceInfo
 	var err error
 	if prNumber > 0 {
-		linuxDevices, err = getAvailablePRDevices(prNumber)
+		linuxDevices, err = getAvailablePRDevices(ctx, prNumber)
 	} else {
-		linuxDevices, err = getAvailableDevices()
+		linuxDevices, err = getAvailableDevices(ctx)
 	}
 	if err != nil {
 		log.Printf("WARNING: could not fetch Linux device manifest: %v", err)
 	}
-
-	// Fetch Wendy Lite boards and targets, keeping only boards with published
-	// firmware — a catalog entry with no build yet would otherwise reach the
-	// picker and fail immediately after selection.
-	wliteBoards, err := WendyLiteBoardsWithFirmware(nightly)
-	if err != nil {
-		log.Printf("WARNING: could not fetch Wendy Lite board catalog: %v", err)
-	}
-	wliteTargets, err := WendyLiteTargets()
-	if err != nil {
-		log.Printf("WARNING: could not fetch Wendy Lite target catalog: %v", err)
-	}
-	// Drop targets with no board left so the picker never offers a target
-	// that leads to an empty second picker.
-	boardTargets := make(map[string]bool, len(wliteBoards))
-	for _, b := range wliteBoards {
-		boardTargets[b.Target] = true
-	}
-	var targetsWithBoards []WendyLiteTarget
-	for _, t := range wliteTargets {
-		if boardTargets[t.Name] {
-			targetsWithBoards = append(targetsWithBoards, t)
-		}
-	}
-	wliteTargets = targetsWithBoards
 
 	// Build picker items.
 	var items []tui.PickerItem
@@ -559,10 +567,10 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 
 		pd := pickerDevice{
-			Name:       dev.Name,
-			Version:    displayVersion,
-			RawVersion: rawVersion,
-			Manifest:   dev.Manifest,
+			Name:         dev.Name,
+			Version:      displayVersion,
+			RawVersion:   rawVersion,
+			ManifestPath: dev.ManifestPath,
 		}
 		deviceMap[dev.Key] = pd
 
@@ -580,6 +588,32 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// ignores prNumber, so offering ESP32 here would silently install release
 	// firmware instead of a PR build.
 	if flagDeviceType == "" && prNumber == 0 {
+		// Fetch Wendy Lite boards and targets, keeping only boards with published
+		// firmware — a catalog entry with no build yet would otherwise reach the
+		// picker and fail immediately after selection. The firmware list is in
+		// the master manifest the device list above was built from.
+		wliteBoards, err := WendyLiteBoardsWithFirmware(ctx, nightly)
+		if err != nil {
+			log.Printf("WARNING: could not fetch Wendy Lite board catalog: %v", err)
+		}
+		wliteTargets, err := WendyLiteTargets()
+		if err != nil {
+			log.Printf("WARNING: could not fetch Wendy Lite target catalog: %v", err)
+		}
+		// Drop targets with no board left so the picker never offers a target
+		// that leads to an empty second picker.
+		boardTargets := make(map[string]bool, len(wliteBoards))
+		for _, b := range wliteBoards {
+			boardTargets[b.Target] = true
+		}
+		var targetsWithBoards []WendyLiteTarget
+		for _, t := range wliteTargets {
+			if boardTargets[t.Name] {
+				targetsWithBoards = append(targetsWithBoards, t)
+			}
+		}
+		wliteTargets = targetsWithBoards
+
 		for _, v := range wliteBoards {
 			deviceMap["wlite_"+v.Board] = pickerDevice{
 				Name:       v.DisplayName,
@@ -632,26 +666,39 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 			return fmt.Errorf("device type %q not found in manifest; available: %s", flagDeviceType, strings.Join(available, ", "))
 		}
 		selected = flagDeviceType
+		if err := loadPickedManifest(ctx, deviceMap, selected); err != nil {
+			return deviceManifestError(deviceMap[selected].Name, err)
+		}
 	} else {
 		if len(items) == 0 {
 			return fmt.Errorf("no devices available")
 		}
 
-		fmt.Println()
-		selected, err = pickInstallDevice(items)
-		if err != nil {
-			return err
-		}
-
-		if target, ok := strings.CutPrefix(selected, "wlite_target_"); ok {
-			if err := requireInstallChoice("choosing a Wendy Lite board", "Wendy Lite installs only from the interactive picker"); err != nil {
-				return err
-			}
-			board, err := pickWendyLiteBoard(target, nightly)
+		// The rows came from the master manifest alone. The chosen device's own
+		// manifest is read now; when that fails the list opens again.
+		for {
+			fmt.Println()
+			selected, err = pickInstallDeviceFn(items)
 			if err != nil {
 				return err
 			}
-			selected = "wlite_" + board
+
+			if target, ok := strings.CutPrefix(selected, "wlite_target_"); ok {
+				if err := requireInstallChoice("choosing a Wendy Lite board", "Wendy Lite installs only from the interactive picker"); err != nil {
+					return err
+				}
+				board, err := pickWendyLiteBoard(ctx, target, nightly)
+				if err != nil {
+					return err
+				}
+				selected = "wlite_" + board
+			}
+
+			err = loadPickedManifest(ctx, deviceMap, selected)
+			if err == nil {
+				break
+			}
+			warnDeviceNotLoaded(deviceMap[selected].Name, err)
 		}
 	}
 
@@ -812,6 +859,25 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 	}
 	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, yesOverwriteInternal, noBmap, rootfsOnly, storageOverride, wifi, deviceName, preOpts, agent)
+}
+
+// loadPickedManifest reads the chosen device's own manifest when the rest of
+// runOSInstall reads it: for a disk image or an Orin. Thor and the flash-bundle
+// boards resolve their artifact themselves, and the other choices have no
+// manifest.
+func loadPickedManifest(ctx context.Context, deviceMap map[string]pickerDevice, selected string) error {
+	device, ok := deviceMap[selected]
+	if !ok || device.IsESP32 || device.Manifest != nil || selected == thorDeviceType || isFlashBundleDeviceType(selected) {
+		return nil
+	}
+	fmt.Printf("Fetching WendyOS versions for %s...\n", device.Name)
+	dm, err := fetchDeviceManifestContext(ctx, device.ManifestPath)
+	if err != nil {
+		return err
+	}
+	device.Manifest = dm
+	deviceMap[selected] = device
+	return nil
 }
 
 func rejectRecoveryDriveFlags(drive string, noBmap, overwriteInternal bool) error {
