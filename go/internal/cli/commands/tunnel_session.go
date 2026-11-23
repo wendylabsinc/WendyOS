@@ -71,6 +71,9 @@ func (s *TunnelSession) Context(ctx context.Context) context.Context {
 	return context.WithValue(ctx, tunnelContextKey{}, g)
 }
 func carryTunnelSession(ctx, source context.Context) context.Context {
+	if pin, ok := source.Value(appTunnelIdentityKey{}).(appTunnelIdentity); ok {
+		ctx = context.WithValue(ctx, appTunnelIdentityKey{}, pin)
+	}
 	if g, ok := source.Value(tunnelContextKey{}).(*tunnelGeneration); ok {
 		return context.WithValue(ctx, tunnelContextKey{}, g)
 	}

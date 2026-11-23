@@ -588,7 +588,7 @@ func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig, lite b
 		}
 	}
 	if !lite {
-		leaf, err := storedLeaf(certInfo.PemCertificate)
+		leaf, err := certs.ParseStoredLeaf(certInfo.PemCertificate)
 		if err != nil {
 			return err
 		}
@@ -656,6 +656,9 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	}
 	defer unlock()
 	if err := reloadOAuthSession(auth); err != nil {
+		return err
+	}
+	if err := requireAppTunnelOperator(ctx, auth); err != nil {
 		return err
 	}
 	// The process that held the lock may already have consumed our old token.
