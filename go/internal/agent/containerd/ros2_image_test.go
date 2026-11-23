@@ -232,6 +232,7 @@ func TestROS2ImagePreparationDoesNotStartAfterCancellationOrClose(t *testing.T) 
 
 type ros2BlockingImageStore struct {
 	images.Store
+	started chan<- struct{}
 	release chan struct{}
 	calls   int
 	err     error
@@ -239,6 +240,9 @@ type ros2BlockingImageStore struct {
 
 func (s *ros2BlockingImageStore) Get(ctx context.Context, _ string) (images.Image, error) {
 	s.calls++
+	if s.started != nil {
+		s.started <- struct{}{}
+	}
 	select {
 	case <-s.release:
 		return images.Image{}, s.err
@@ -290,4 +294,63 @@ func TestROS2StandalonePreparationReleasesContainerLock(t *testing.T) {
 			t.Fatalf("system request: %v", err)
 		}
 	})
+}
+
+func TestROS2StandalonePreparationErrorReturnsWhileContainerLockIsHeld(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		cancel bool
+	}{
+		{name: "canceled request", cancel: true},
+		{name: "failed preparation"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{}, 1)
+			store := &ros2BlockingImageStore{
+				started: started,
+				release: make(chan struct{}),
+				err:     errors.New("image store unavailable"),
+			}
+			client, err := containerd.New("", containerd.WithServices(
+				containerd.WithContainerStore(ros2TestContainerStore{}),
+				containerd.WithImageStore(store),
+			))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{client: client, namespace: "wendy", logger: zap.NewNop()}
+			defer c.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := c.ensureStandaloneROS2Sidecar(ctx, ros2HostSidecarName, labelKeyROS2HostSidecar, 0, nil)
+				result <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("image preparation did not start")
+			}
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			wantErr := store.err
+			if test.cancel {
+				cancel()
+				wantErr = context.Canceled
+			} else {
+				close(store.release)
+			}
+			// A mutex wait is not durably blocked under synctest. A wall-clock
+			// deadline lets the test detect a relock without getting stuck.
+			select {
+			case err := <-result:
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("request error = %v, want %v", err, wantErr)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("failed inspector request waited for the container lock")
+			}
+		})
+	}
 }
