@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -62,6 +64,22 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		}
 		return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(int(port))), Path: "/"}).String(), nil
 	}
+	forwardCtx, cancel := context.WithCancel(b.life)
+	retained := false
+	defer func() {
+		if !retained {
+			cancel()
+		}
+	}()
+	if forward := b.appForwards[port]; forward != nil && forward.dial != nil {
+		dial = forward.dial
+	} else if strings.HasPrefix(b.deviceSelector, "cloud://") && conn.RegistryDialer != nil && conn.AppDialer == nil && app != TwinAppID {
+		// Capture the account generation before any delayed app request.
+		if b.appTunnelContext != nil {
+			forwardCtx = b.appTunnelContext(forwardCtx)
+		}
+		dial = renewingAppTunnel(forwardCtx, b.deviceSelector, conn, commands.DesktopAppTunnelConnector(conn), time.Now)
+	}
 	if dial != nil {
 		// Binding a local listener does not prove the remote app is reachable.
 		// Report admission and connection errors before opening the browser,
@@ -85,12 +103,12 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	forwardCtx, cancel := context.WithCancel(b.life)
-	forward := &appForward{listener: listener, cancel: cancel, url: "http://" + listener.Addr().String() + "/"}
+	forward := &appForward{listener: listener, cancel: cancel, url: "http://" + listener.Addr().String() + "/", dial: dial}
 	if b.appForwards == nil {
 		b.appForwards = make(map[uint32]*appForward)
 	}
 	b.appForwards[port] = forward
+	retained = true
 	if dial == nil {
 		transport, err := deviceChatTransport(conn, port)
 		if err != nil {
@@ -115,6 +133,7 @@ type appForward struct {
 	cancel   context.CancelFunc
 	url      string
 	server   *http.Server
+	dial     func(context.Context, int) (net.Conn, error)
 }
 
 func (f *appForward) Close() {

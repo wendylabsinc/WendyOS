@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/url"
 )
@@ -259,6 +260,26 @@ func LeafCertificatePEM(certPEM string) (string, error) {
 		return string(pem.EncodeToMemory(block)), nil
 	}
 	return "", fmt.Errorf("no CERTIFICATE block found")
+}
+
+// ParseStoredLeaf parses the leaf out of a stored certificate PEM. It normalises
+// through certs.LeafCertificatePEM first because pki-core leaves can carry
+// trailing ASN.1 bytes that defeat a raw x509 parse, and reads it back with
+// ParseCertsFromPEM — the ML-DSA-aware parser the mTLS paths use — so callers
+// see exactly the certificate the handshake can present.
+func ParseStoredLeaf(certPEM string) (*x509.Certificate, error) {
+	leafPEM, err := LeafCertificatePEM(certPEM)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
+	}
+	leaves, err := ParseCertsFromPEM([]byte(leafPEM))
+	if err != nil {
+		return nil, err
+	}
+	if len(leaves) == 0 {
+		return nil, errors.New("no certificate in stored leaf PEM")
+	}
+	return leaves[0], nil
 }
 
 // parseECPrivateKey decodes a PEM-encoded EC private key from a byte slice.
