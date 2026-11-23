@@ -114,7 +114,7 @@ func New() *Client {
 			return chat.HostedModels(ctx, provider, key)
 		},
 		"ManageDevice": b.ManageDevice, "PrepareLocalReset": b.PrepareLocalReset, "ResetLocalEnrollment": b.ResetLocalEnrollment,
-		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels, "HomeCampaign": b.HomeCampaign,
+		"MobileOSUpdate": b.MobileOSUpdate, "HomeCampaign": b.HomeCampaign,
 		"BeginRecordingRead": b.BeginRecordingRead, "EndRecordingRead": b.EndRecordingRead, "RecordingLibrary": b.RecordingLibrary,
 		"RecordingDetails": b.RecordingDetails, "PlayRecording": b.PlayRecording, "ExportRecordings": b.ExportRecordings,
 		// Thumbnails carry their format, as the iOS bridge reports it beside the bytes.

@@ -91,8 +91,9 @@ run on a real phone against a real WendyOS device yet.
   code crashes the Android emulator on Apple silicon, which reports SVE2 it
   cannot run. Unlike iOS there is no ARKit, so outlines follow the 2D image.
 - Sites lens: local sites with devices and robots, a setup checklist, 3D
-  models (USDZ or `.wendysite` import, rename, default, save to and load from
-  a device through `SiteModels`), live cameras, missions and activity.
+  models (local USDZ or `.wendysite` import, rename and default selection),
+  live cameras, missions and activity. Device-side model storage is not available
+  in the current shared backend; local model import, viewing and sharing remain available.
   Models are read by a Kotlin USD reader (usda and usdc crate layers) and
   drawn with OpenGL ES. Fixed cameras are added by gateway identity, placed
   by tapping the model, previewed and aligned.
