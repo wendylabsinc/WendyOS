@@ -24,12 +24,22 @@ func boolInt(v bool) C.int32_t {
 
 //export WDPairings
 func WDPairings(session C.uint64_t, kind C.WDPairingKind) *C.WDPairingsResult {
-	p := alloc[C.WDPairingsResult](1)
 	if kind != C.WD_PAIR_SENSOR && kind != C.WD_PAIR_IP_CAMERA {
+		p := alloc[C.WDPairingsResult](1)
 		p.status = status(errors.New("unknown pairing kind"))
 		return p
 	}
 	r, err := desktop.Pairings(uint64(session), kind == C.WD_PAIR_IP_CAMERA)
+	return pairingResult(r, err)
+}
+
+//export WDPreviewSensorPairings
+func WDPreviewSensorPairings(preview C.uint64_t) *C.WDPairingsResult {
+	return pairingResult(desktop.PreviewSensorPairings(uint64(preview)))
+}
+
+func pairingResult(r commands.DesktopPairings, err error) *C.WDPairingsResult {
+	p := alloc[C.WDPairingsResult](1)
 	p.status = status(err)
 	p.warning = C.CString(r.Warning)
 	p.items, p.count = alloc[C.WDPairing](len(r.Items)), C.size_t(len(r.Items))
