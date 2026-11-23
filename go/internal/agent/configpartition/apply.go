@@ -1112,7 +1112,55 @@ func applyHandoffs(logger *zap.Logger, configPath string) {
 	applyWendyConf(logger, configDir, configPath)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
+	// A seed that cannot be installed must not leave this boot Open: refuse
+	// to start, and systemd retries with the seed still in place.
+	if err := applyTrustedKeysSeed(logger, configDir, configPath); err != nil {
+		logger.Fatal("refusing to start: the owner key seeded at install could not be installed", zap.Error(err))
+	}
 	applyExtensions(logger, configDir)
+}
+
+// trustedKeysFile is both the seed's name on the config partition and the
+// access file's name in configPath (trustedkeys.FileName).
+const trustedKeysFile = "trusted-keys.json"
+
+// applyTrustedKeysSeed installs the access file `wendy os install` placed on
+// the config partition as configPath/trusted-keys.json (0600), so the device
+// starts Closed with the installer's key as its first owner, then deletes the
+// seed.
+//
+// A device that already has an access file ignores the seed: anyone holding
+// the storage can write /config, and it must not become a way to add an owner
+// to a device that has one. The seed is copied as-is, not parsed: the agent
+// refuses to start on an access file it cannot use, so a bad seed leaves the
+// device refusing to start, never Open. An error means a seed is present but
+// not installed; the caller must not start.
+func applyTrustedKeysSeed(logger *zap.Logger, cfgDir, configPath string) error {
+	src := filepath.Join(cfgDir, trustedKeysFile)
+	data, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", src, err)
+	}
+	dst := filepath.Join(configPath, trustedKeysFile)
+	if _, err := os.Lstat(dst); err == nil {
+		logger.Warn("configpartition: device already has trusted keys; ignoring and removing the seed on the config partition")
+		os.Remove(src) //nolint:errcheck
+		return nil
+	}
+	if err := os.MkdirAll(configPath, 0o700); err != nil {
+		return err
+	}
+	if err := atomicfile.Write(dst, data, 0o600); err != nil {
+		return fmt.Errorf("installing trusted keys: %w", err)
+	}
+	if err := os.Remove(src); err != nil {
+		logger.Warn("configpartition: failed to remove trusted keys seed", zap.Error(err))
+	}
+	logger.Info("configpartition: installed the owner key seeded at install; the device starts Closed")
+	return nil
 }
 
 // applyClockFloor copies clock_floor from cfgDir (the FAT32 config partition,

@@ -301,6 +301,20 @@ func (s *Store) Close(spki []byte, label string, now time.Time) (Entry, error) {
 	return owner, s.write(&fileFormat{Shape: shapeClosed, Keys: []Entry{owner}})
 }
 
+// Seed returns the access file the installer writes to the config partition:
+// a Closed device with spki as its only (owner) key, keyless apps off.
+func Seed(spki []byte, label string, now time.Time) ([]byte, error) {
+	owner, err := newEntry(spki, RoleOwner, label, AddedByInstall, now)
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(&fileFormat{Shape: shapeClosed, Keys: []Entry{owner}}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // Reopen turns a Closed device Open, dropping every key. actor must be an
 // owner when the write happens.
 func (s *Store) Reopen(actor string) error {
