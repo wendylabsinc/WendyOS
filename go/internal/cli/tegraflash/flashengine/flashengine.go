@@ -9,6 +9,10 @@
 // image to the partition via nvdd, and verify its MD5. The device-side tool
 // (nvdd, a static aarch64 binary) ships in the flashpack.
 //
+// One step is not bootburn's: before QSPI is erased, the engine clears what the
+// previous installation left in the partitions the flash does not write, so a
+// reflashed board does not come back with its old /data (see stale.go).
+//
 // Correctness is checked two ways: DryRun emits the exact nvdd/adb command stream
 // for diffing against a real bootburn run, and each partition's MD5 is verified
 // device-side after writing.
@@ -92,6 +96,13 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 	if err != nil {
 		return err
 	}
+	// Where the previous installation's data must be cleared is decided from
+	// the package alone, so a package that cannot say stops the flash here,
+	// before the device is touched.
+	stale, err := planStaleClear(opts.FlashImagesDir, parts)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(out, "Flashing %d partitions (dry-run=%v)\n", len(parts), opts.DryRun)
 
 	// Estimated bytes to transfer, for Progress: the plan's image files summed
@@ -108,6 +119,13 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 
 	// Device setup: push nvdd and make it executable.
 	if err := e.setup(); err != nil {
+		return err
+	}
+
+	// Clear what the previous installation left where the flash writes
+	// nothing. First, so that nothing the flash writes can be cleared and a
+	// failure leaves the board's boot firmware and OS as they were.
+	if err := e.clearStale(stale); err != nil {
 		return err
 	}
 
