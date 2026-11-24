@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -56,7 +58,7 @@ var nativeCaptureSources = []nativeCaptureSource{nativeH264Source, nativeJPEGSou
 func (s *VideoService) captureNatively(ctx context.Context, cam localCamera) (whyNotNative string, err error) {
 	var reasons []string
 	for _, source := range nativeCaptureSources {
-		if why, refused := s.sourceRefusals.recent(sourceRefusalKey(cam.path, source.format)); refused {
+		if why, refused := s.sourceRefusals.recent(s.sourceRefusalKey(cam.path, source.format)); refused {
 			reasons = append(reasons, source.format+": "+why)
 			continue
 		}
@@ -72,7 +74,7 @@ func (s *VideoService) captureNatively(ctx context.Context, cam localCamera) (wh
 		}
 		// What the camera lists is not what it delivers: the next capture and
 		// the share policy go by what happened here.
-		s.sourceRefusals.remember(sourceRefusalKey(cam.path, source.format), why, false)
+		s.sourceRefusals.remember(s.sourceRefusalKey(cam.path, source.format), why, false)
 		reasons = append(reasons, source.format+": "+why)
 	}
 	return strings.Join(reasons, "; "), nil
@@ -84,7 +86,7 @@ func (s *VideoService) captureNatively(ctx context.Context, cam localCamera) (wh
 func (s *VideoService) ownFramesFor(path string, req *agentpb.StreamVideoRequest) (frames ownFrames, declined string, native bool) {
 	var reasons []string
 	for _, source := range nativeCaptureSources {
-		if why, refused := s.sourceRefusals.recent(sourceRefusalKey(path, source.format)); refused {
+		if why, refused := s.sourceRefusals.recent(s.sourceRefusalKey(path, source.format)); refused {
 			reasons = append(reasons, source.format+": "+why)
 			continue
 		}
@@ -155,7 +157,7 @@ func (s *VideoService) wholeJPEGCapture(path string, req *agentpb.StreamVideoReq
 	if declined != "" {
 		return 0, 0, 0, declined
 	}
-	if why, failed := s.derivedFailures.recent(path); failed {
+	if why, failed := s.derivedFailures.recent(s.cameraFailureKey(path)); failed {
 		return 0, 0, 0, "deriving pictures and H.264 from this camera's frames failed recently: " + why
 	}
 	if _, err := s.derivedLayerFor(nil, videoCodecMJPEG, path, width, height, 0); err != nil {
@@ -197,7 +199,7 @@ var nativeJPEGSource = nativeCaptureSource{
 		if !errors.As(err, &gaveUp) {
 			return "", false
 		}
-		s.derivedFailures.remember(cam.path, gaveUp.msg, false)
+		s.derivedFailures.remember(s.cameraFailureKey(cam.path), gaveUp.msg, false)
 		s.logger.Error("derived frame pipeline is unusable for this camera; GStreamer captures it instead",
 			zap.String("device", cam.path), zap.Duration("retried_after", captureFailureRetryAfter), zap.String("reason", gaveUp.msg))
 		// A capture that already published whole access units ends here instead:
@@ -210,9 +212,10 @@ var nativeJPEGSource = nativeCaptureSource{
 
 const captureFailureRetryAfter = 10 * time.Minute
 
-// captureFailures remembers what failed for a camera, so the capture and the
-// share policy ask the same thing of it next time: for a bounded time, or
-// until the agent restarts when the cause is the camera's own stream.
+// captureFailures remembers what failed for a camera (cameraFailureKey), so the
+// capture and the share policy ask the same thing of it next time: for a
+// bounded time, or until the agent restarts when the cause is the camera's own
+// stream.
 type captureFailures struct {
 	mu     sync.Mutex
 	failed map[string]captureFailure
@@ -258,7 +261,25 @@ func (f *captureFailures) recent(key string) (why string, failed bool) {
 	return failure.why, true
 }
 
-func sourceRefusalKey(path, format string) string { return path + "\x00" + format }
+// cameraFailureKey names the camera at path for the failure memory: by its
+// udev by-id name, which holds its serial, else by the port, index and name a
+// share record follows it by. Another camera that takes the path later then
+// starts clean. A camera with neither is named by the path.
+func (s *VideoService) cameraFailureKey(path string) string {
+	if s.readStableNames != nil {
+		if byID := s.readStableNames()[path].byID; byID != "" {
+			return schemeByID + ":" + byID
+		}
+	}
+	if id, err := s.identityOf(filepath.Base(path)); err == nil && id != (camera.Identity{}) {
+		return strings.Join([]string{"sysfs", id.Device, id.Index, id.Name}, "\x00")
+	}
+	return path
+}
+
+func (s *VideoService) sourceRefusalKey(path, format string) string {
+	return s.cameraFailureKey(path) + "\x00" + format
+}
 
 // derivedLayerFor builds the layer that derives from a camera's frames for hub.
 // Without a hub it only answers whether such a layer can be built here.
@@ -281,7 +302,7 @@ func (s *VideoService) derivedLayerFor(hub derivingHub, format agentpb.VideoCode
 // capture's frames, for hub when there is one, or says why this camera has no
 // pictures.
 func (s *VideoService) pictureLayerFor(hub derivingHub, path string, frames ownFrames) (layer *derivedLayer, whyNot string) {
-	if why, failed := s.derivedFailures.recent(path); failed {
+	if why, failed := s.derivedFailures.recent(s.cameraFailureKey(path)); failed {
 		return nil, "decoding this camera's frames failed: " + why
 	}
 	layer, err := s.derivedLayerFor(hub, frames.codec, path, frames.width, frames.height, frames.framerate)
@@ -317,7 +338,7 @@ func (s *VideoService) captureDeriving(ctx context.Context, hub derivingHub, lay
 		default:
 			var gaveUp derivedLayerGaveUp
 			errors.As(err, &gaveUp)
-			s.derivedFailures.remember(layer.device, err.Error(), gaveUp.lasting)
+			s.derivedFailures.remember(s.cameraFailureKey(layer.device), err.Error(), gaveUp.lasting)
 			hub.rawNotOffered(fixedReason("pictures cannot be decoded from this camera's frames: " + err.Error()))
 			s.logger.Error("pictures cannot be decoded from this camera's frames; its own frames are still handed on",
 				zap.String("device", layer.device), zap.Duration("retried_after", captureFailureRetryAfter), zap.Error(err))

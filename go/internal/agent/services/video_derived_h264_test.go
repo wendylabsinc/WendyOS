@@ -506,7 +506,7 @@ func TestCaptureDeriving_APictureLayerThatGivesUpLeavesTheCaptureToItsViewers(t 
 	if err := h.subscriberErr(idViewer); err != nil || len(viewer) != 0 {
 		t.Errorf("the viewer was turned away: %v", err)
 	}
-	if why, failed := svc.derivedFailures.recent("/dev/video4"); !failed || !strings.Contains(why, "no such decoder") {
+	if why, failed := svc.derivedFailures.recent(svc.cameraFailureKey("/dev/video4")); !failed || !strings.Contains(why, "no such decoder") {
 		t.Errorf("the failure is not remembered for the share policy: %q, %v", why, failed)
 	}
 	if _, _, err := h.subscribePixels(); !errors.Is(err, errPixelsUnavailable) {

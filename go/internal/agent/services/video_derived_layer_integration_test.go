@@ -455,7 +455,7 @@ func startH264PicturesTest(t *testing.T, gstPath string, available map[string]bo
 // whyPicturesGivenUp is the reason the capture remembers once the layer has
 // given the camera's pictures up.
 func (p *h264PicturesTest) whyPicturesGivenUp() (why string, givenUp bool) {
-	return p.svc.derivedFailures.recent(usbCam().GetPath())
+	return p.svc.derivedFailures.recent(p.svc.cameraFailureKey(usbCam().GetPath()))
 }
 
 func (p *h264PicturesTest) readPictures() (leave func()) {

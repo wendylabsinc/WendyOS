@@ -15,6 +15,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -114,7 +115,7 @@ func TestShareDecision_H264CameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *
 		"decoding failed recently": {
 			func(t *testing.T) *VideoService {
 				s := hcService(t, "avdec_h264")
-				s.derivedFailures.remember(usbCam().GetPath(), "the decoder gave no picture", false)
+				s.derivedFailures.remember(s.cameraFailureKey(usbCam().GetPath()), "the decoder gave no picture", false)
 				return s
 			}, hcNativeMode, "decoding this camera's frames failed: the decoder gave no picture",
 		},
@@ -392,7 +393,7 @@ func TestCameraShares_PicturesGivenUpAtRunTimeHoldCannotServeAndTheNextCreateSer
 			node.next(t)
 
 			// What captureDeriving does when the camera's picture layer gives up.
-			h.s.derivedFailures.remember("/dev/video2", tc.gaveUp.msg, tc.gaveUp.lasting)
+			h.s.derivedFailures.remember(h.s.cameraFailureKey("/dev/video2"), tc.gaveUp.msg, tc.gaveUp.lasting)
 			hub.rawNotOffered(fixedReason("pictures cannot be decoded from this camera's frames: " + tc.gaveUp.msg))
 
 			whyNoPictures := "decoding this camera's frames failed: " + tc.gaveUp.msg
@@ -454,7 +455,7 @@ func TestCameraShares_ASourceTheCameraRefusedAtCaptureIsNotDeclaredAgain(t *test
 
 	// What captureNatively does when the H.264 source gives way.
 	const refusal = "VIDIOC_S_FMT H264 rejected: invalid argument"
-	h.s.sourceRefusals.remember(sourceRefusalKey("/dev/video2", "H.264"), refusal, false)
+	h.s.sourceRefusals.remember(h.s.sourceRefusalKey("/dev/video2", "H.264"), refusal, false)
 
 	if own, declined, native := h.s.ownFramesAtDefaults("/dev/video2"); declined != "" || !native || own.codec != videoCodecMJPEG {
 		t.Fatalf("own frames = %+v (declined %q, native %v), want the JPEG source's", own, declined, native)
@@ -500,5 +501,68 @@ func TestCameraShareState_NamesTheDecoderOfAPictureNodesPictures(t *testing.T) {
 	want := "cv-a [format pixels, stamp time] (reading; pictures decoded by avdec_h264), cv-n [format native, stamp time] (reading)"
 	if !csWaitFor(2*time.Second, func() bool { return h.reportOf("/dev/video2")["share_state"] == want }) {
 		t.Fatalf("share_state = %q\nwant         %q", h.reportOf("/dev/video2")["share_state"], want)
+	}
+}
+
+// What failed is remembered for the camera, not for the path it was at: another
+// camera plugged in there starts clean, and the first one still has its
+// failure when it comes back, wherever udev puts it.
+func TestCaptureFailures_AreRememberedForTheCameraNotItsPath(t *testing.T) {
+	h := newCSHarness(t, csH264Cam())
+	hcCanDecode(h.s, "avdec_h264")
+	reorders, other := csH264Cam(), csH264Cam()
+	other.name, other.id = "Other H264", camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "Other H264"}
+	plugAt := func(base string, cam csCamera) {
+		cam.base = base
+		h.mu.Lock()
+		h.cams = map[string]csCamera{base: cam}
+		h.mu.Unlock()
+	}
+	servedAt := func(path string) string {
+		t.Helper()
+		dev := &agentpb.VideoDevice{Path: path, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB}
+		return h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.Format
+	}
+
+	h.s.derivedFailures.remember(h.s.cameraFailureKey("/dev/video2"), errDerivedFramesReordered.Error(), true)
+	h.s.sourceRefusals.remember(h.s.sourceRefusalKey("/dev/video2", "JPEG"), "no usable frame", false)
+	if got := servedAt("/dev/video2"); got != appconfig.CameraFormatNative {
+		t.Fatalf("the camera whose stream reorders is served %s, want its own frames", got)
+	}
+
+	plugAt("video2", other)
+	if got := servedAt("/dev/video2"); got != appconfig.CameraFormatPixels {
+		t.Errorf("another camera at the same path is served %s: it inherited the first one's failure", got)
+	}
+	if _, refused := h.s.sourceRefusals.recent(h.s.sourceRefusalKey("/dev/video2", "JPEG")); refused {
+		t.Error("another camera at the same path inherited the first one's source refusal")
+	}
+
+	plugAt("video6", reorders)
+	if got := servedAt("/dev/video6"); got != appconfig.CameraFormatNative {
+		t.Errorf("the first camera, back at another path, is served %s: its failure was forgotten", got)
+	}
+}
+
+func TestCameraFailureKey_PrefersTheSerialThenTheSysfsIdentityThenThePath(t *testing.T) {
+	s := &VideoService{}
+	s.cameraIdentity = func(base string) (camera.Identity, error) {
+		if base == "video4" {
+			return camera.Identity{Device: csPort("1-3"), Index: "0", Name: "Brio 101"}, nil
+		}
+		return camera.Identity{}, errors.New("no device link")
+	}
+	s.readStableNames = func() map[string]stableNames {
+		return map[string]stableNames{"/dev/video0": {byID: "usb-Acme_Camera_SN1-video-index0", byPath: "pci-0000:00:14.0-usb-0:2:1.0"},
+			"/dev/video4": {byPath: "pci-0000:00:14.0-usb-0:3:1.0"}}
+	}
+	for path, want := range map[string]string{
+		"/dev/video0": "by-id:usb-Acme_Camera_SN1-video-index0",
+		"/dev/video4": "sysfs\x00" + csPort("1-3") + "\x000\x00Brio 101",
+		"/dev/video9": "/dev/video9",
+	} {
+		if got := s.cameraFailureKey(path); got != want {
+			t.Errorf("key of %s = %q, want %q", path, got, want)
+		}
 	}
 }

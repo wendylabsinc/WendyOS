@@ -228,7 +228,7 @@ func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testin
 			func(t *testing.T) *VideoService {
 				s := jpegCamera(t)
 				sfCanDeriveFrames(s)
-				s.derivedFailures.remember(usbCam().GetPath(), "the encoder gave no frame", false)
+				s.derivedFailures.remember(s.cameraFailureKey(usbCam().GetPath()), "the encoder gave no frame", false)
 				return s
 			},
 			sfPixelsMode,
