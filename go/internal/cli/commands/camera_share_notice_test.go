@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -184,5 +185,53 @@ func TestCameraShareNotice_AnEntryNamingACameraByItsStableIDGivesItsFormatAndSta
 		if got != want {
 			t.Errorf("allowlist %q:\ngot  %q\nwant %q", entry, got, want)
 		}
+		if lines := cameraAllowlistNotices([]*appconfig.AppConfig{cfg}, []*hwCap{c920Row()}); len(lines) != 0 {
+			t.Errorf("allowlist %q names the camera, yet: %q", entry, lines)
+		}
+	}
+}
+
+func TestCameraAllowlistNotices_OneLineForEachEntryThatNamesNoCameraOnTheDevice(t *testing.T) {
+	typo := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{c920StableID + "0", "/dev/video0"}, Format: appconfig.CameraFormatNative},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"HD Pro Webcam C920", "HD Pro Webcam C920: HD Pro Webc"}, Format: appconfig.CameraFormatNative},
+	}}
+	sameTypo := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Allowlist: []string{"HD Pro Webcam C920"}}}}
+	direct := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Mode: "direct", Allowlist: []string{"/dev/video9"}}}}
+	const hint = `, so its entitlement's format and stamp reach none. "wendy device camera list --json" prints each camera's stable_id, path and name.`
+	want := []string{
+		`Camera: allowlist entry "` + c920StableID + `0" names no camera on this device` + hint,
+		`Camera: allowlist entry "HD Pro Webcam C920" names no camera on this device` + hint,
+	}
+	got := cameraAllowlistNotices([]*appconfig.AppConfig{typo, nil, sameTypo, direct}, []*hwCap{c920Row()})
+	if !slices.Equal(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+type listingHW struct {
+	agentpb.WendyAgentServiceClient
+	rows []*hwCap
+}
+
+func (hw listingHW) ListHardwareCapabilities(context.Context, *agentpb.ListHardwareCapabilitiesRequest, ...grpc.CallOption) (*agentpb.ListHardwareCapabilitiesResponse, error) {
+	return &agentpb.ListHardwareCapabilitiesResponse{Capabilities: hw.rows}, nil
+}
+
+func TestPrintCameraShareNotice_AnEntryThatNamesNoCameraIsSaidUnderTheShareLine(t *testing.T) {
+	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"by-id:usb-Typo-video-index0"}, Format: appconfig.CameraFormatNative},
+	}}
+	conn := &grpcclient.AgentConnection{AgentService: listingHW{rows: []*hwCap{c920Row()}}}
+	lines := strings.Split(strings.TrimSpace(captureStderr(t, func() { printCameraShareNotice(context.Background(), conn, cfg) })), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "format pixels, stamp time") ||
+		!strings.Contains(lines[1], `allowlist entry "by-id:usb-Typo-video-index0" names no camera on this device`) {
+		t.Fatalf("printed %q, want the share line with the defaults and one line for the entry", lines)
+	}
+
+	// An agent that shares nothing gives no node for an entry to configure.
+	conn = &grpcclient.AgentConnection{AgentService: listingHW{rows: []*hwCap{shareRow("Brio 101 (video0)", "")}}}
+	if out := captureStderr(t, func() { printCameraShareNotice(context.Background(), conn, cfg) }); out != "" {
+		t.Fatalf("an agent that shares no camera printed %q", out)
 	}
 }

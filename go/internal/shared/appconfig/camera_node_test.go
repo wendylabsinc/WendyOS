@@ -654,6 +654,28 @@ func TestCameraNodeSettings_TheMostSpecificIdentifierDecidesInAnyEntryOrder(t *t
 	}
 }
 
+func TestCameraAllowlistEntriesNamingNoCamera(t *testing.T) {
+	brio := CameraIdentity{Path: "/dev/video2", Name: "Brio 101"}
+	entitlements := []Entitlement{
+		{Type: EntitlementCamera, Allowlist: []string{"by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", "by-id:usb-046d_HD_Pro_Webcam_C920-video-index1"}, Format: "native"},
+		{Type: EntitlementVideo, Allowlist: []string{"v4l2:/dev/video2", "/dev/video4", "Brio 100"}},
+		{Type: EntitlementCamera, Allowlist: []string{"Brio 101", "/dev/video4"}},
+		{Type: EntitlementCamera},
+		{Type: EntitlementNetwork, Allowlist: []string{"/dev/video9"}},
+	}
+	want := []string{"by-id:usb-046d_HD_Pro_Webcam_C920-video-index1", "/dev/video4", "Brio 100"}
+	if got := CameraAllowlistEntriesNamingNoCamera(entitlements, []CameraIdentity{c920, brio}); !slices.Equal(got, want) {
+		t.Errorf("entries naming no camera = %q, want %q", got, want)
+	}
+	if got := CameraAllowlistEntriesNamingNoCamera(entitlements, nil); len(got) != 6 {
+		t.Errorf("on a device without cameras, entries naming no camera = %q, want all 6 distinct entries", got)
+	}
+	direct := []Entitlement{{Type: EntitlementCamera, Mode: CameraModeDirect, Allowlist: []string{"/dev/video4"}}}
+	if got := CameraAllowlistEntriesNamingNoCamera(direct, []CameraIdentity{c920}); len(got) != 0 {
+		t.Errorf("a direct entry gets no node to configure, yet its entries are reported: %q", got)
+	}
+}
+
 func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -102,8 +102,33 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*agentpb.ListHardware
 	return fmt.Sprintf("Camera: this app shares %s. For the real device (its own formats, sizes and controls), set \"mode\": \"direct\" on the camera entitlement.", strings.Join(entries, "; "))
 }
 
+// cameraAllowlistNotices returns one line for each allowlist entry of a sharing
+// config that names none of the cameras the agent lists, so a mistyped entry
+// shows at deploy.
+func cameraAllowlistNotices(cfgs []*appconfig.AppConfig, cams []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability) []string {
+	present := make([]appconfig.CameraIdentity, len(cams))
+	for i, c := range cams {
+		present[i] = cameraIdentityOf(c)
+	}
+	var lines []string
+	for _, cfg := range cfgs {
+		if cfg == nil || appconfig.CameraShareChoice(cfg.Entitlements) != appconfig.CameraShareShared {
+			continue
+		}
+		for _, entry := range appconfig.CameraAllowlistEntriesNamingNoCamera(cfg.Entitlements, present) {
+			line := fmt.Sprintf("Camera: allowlist entry %q names no camera on this device, so its entitlement's format and stamp reach none. "+
+				"\"wendy device camera list --json\" prints each camera's stable_id, path and name.", entry)
+			if !slices.Contains(lines, line) {
+				lines = append(lines, line)
+			}
+		}
+	}
+	return lines
+}
+
 // printCameraShareNotice prints the notice when the agent says the app's
-// camera will be shared. Any failure or delay prints nothing.
+// camera will be shared, and under it a line for each allowlist entry that
+// names no camera. Any failure or delay prints nothing.
 func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnection, cfgs ...*appconfig.AppConfig) {
 	if !anyCameraShared(cfgs) || conn == nil || conn.AgentService == nil {
 		return
@@ -115,7 +140,12 @@ func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnectio
 	if err != nil {
 		return
 	}
-	if line := cameraShareNotice(cfgs, resp.GetCapabilities()); line != "" {
-		cliNotice("%s", line)
+	line := cameraShareNotice(cfgs, resp.GetCapabilities())
+	if line == "" {
+		return
+	}
+	cliNotice("%s", line)
+	for _, unmatched := range cameraAllowlistNotices(cfgs, resp.GetCapabilities()) {
+		cliNotice("%s", unmatched)
 	}
 }

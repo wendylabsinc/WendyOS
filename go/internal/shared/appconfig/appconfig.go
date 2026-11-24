@@ -664,6 +664,30 @@ func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (form
 	return format, stamp, conflicts
 }
 
+// CameraAllowlistEntriesNamingNoCamera lists, in manifest order and once each,
+// the allowlist entries that name none of cameras. A direct entry configures
+// no node, so its allowlist is not looked at.
+func CameraAllowlistEntriesNamingNoCamera(entitlements []Entitlement, cameras []CameraIdentity) []string {
+	var naming []string
+	for _, camera := range cameras {
+		for _, accepted := range camera.spellings() {
+			naming = append(naming, accepted...)
+		}
+	}
+	var unmatched []string
+	for _, e := range entitlements {
+		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
+			continue
+		}
+		for _, entry := range e.Allowlist {
+			if !slices.Contains(naming, entry) && !slices.Contains(unmatched, entry) {
+				unmatched = append(unmatched, entry)
+			}
+		}
+	}
+	return unmatched
+}
+
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
 	Streams   map[string]RecordingStream `json:"streams,omitempty"`
