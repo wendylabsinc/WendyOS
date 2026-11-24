@@ -237,6 +237,22 @@ func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testin
 			sfPixelsMode,
 			sfNotWhole + "deriving pictures and H.264 from this camera's frames failed recently: the encoder gave no frame",
 		},
+		// A native node carries the camera's own frames, which no encoder
+		// makes. It is refused all the same: a capture hands the camera's
+		// frames on whole only when it can also derive H.264 from them.
+		"only the H.264 encoder is missing, for native too": {
+			func(t *testing.T) *VideoService {
+				s := jpegCamera(t)
+				sfCanDeriveFrames(s)
+				s.gstMemo.mu.Lock()
+				delete(s.gstMemo.available, "x264enc")
+				s.gstMemo.mu.Unlock()
+				return s
+			},
+			sfPixelsMode,
+			sfNotWhole + "pictures and H.264 cannot be derived from its frames on this device: no supported GStreamer encoder found " +
+				"(checked 4 elements); install gst-plugins-ugly (x264enc) or gst-plugins-good (vp8enc+webmmux)",
+		},
 	}
 	for name, tc := range cases {
 		for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
