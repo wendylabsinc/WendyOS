@@ -184,9 +184,11 @@ func runDerivedLayer(t *testing.T, layer *derivedLayer) (stop func() error) {
 func waitForLaunches(t *testing.T, launchLog string, n int) []string {
 	t.Helper()
 	var launched []string
-	waitUntil(t, "the derived layer has started its child", func() bool {
+	// A launch creates the log before it writes its line, and an empty log
+	// reads as one empty entry.
+	waitUntil(t, "the child pipeline has started", func() bool {
 		launched = launchedPipelines(t, launchLog)
-		return len(launched) >= n
+		return len(launched) >= n && launched[len(launched)-1] != ""
 	})
 	if len(launched) != n {
 		t.Fatalf("%d child pipelines started, want %d: %q", len(launched), n, launched)

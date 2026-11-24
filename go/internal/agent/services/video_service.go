@@ -1215,6 +1215,10 @@ type VideoService struct {
 	// stored control even when the write fails -- must be testable without one.
 	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
 
+	// captureV4L2 replaces captureV4L2Native, so the choice between capture
+	// paths is testable without a /dev/video node.
+	captureV4L2 func(ctx context.Context, emit func([]byte, frameTimestamp) bool, path string, cfg v4l2CaptureConfig) error
+
 	// encoderIdleGrace is how long a local camera's pipeline keeps its H.264
 	// encoder after the last viewer or recording leaves while raw or pixel
 	// subscribers remain (runShapedPipelines). Zero means defaultEncoderIdleGrace.
@@ -2401,6 +2405,7 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 		// The camera sends H.264 and the producer depayloads it without ever
 		// holding a decoded frame, so there is nothing raw to offer.
 		h.rawNotOffered(fixedReason("network cameras deliver encoded video only"))
+		h.nativeNotOffered(fixedReason("network cameras are read as an RTSP byte stream, not as whole frames"))
 		err = s.runIPProducer(ctx, broadcast, path, req)
 	} else if s.sensorFrames != nil && isSensorLinkCameraPath(path) {
 		err = s.streamSensorLinkCamera(ctx, broadcast, path, req, h)
@@ -2463,6 +2468,7 @@ func (s *VideoService) captureNode(ctx context.Context, broadcast func([]byte, f
 		// The ISP pipeline (libcamerasrc / Argus) produces processed video for
 		// the encoder; the sensor's own frames never reach the agent as bytes.
 		h.rawNotOffered(fixedReason("CSI cameras are captured through the ISP pipeline; raw frames are not offered"))
+		h.nativeNotOffered(fixedReason(csiNativeWhy))
 		return s.streamGStreamer(ctx, broadcast, path, req, transport, libcameraID, pipeWireSource{}, noRawSink{})
 	}
 	return s.captureLocalCamera(ctx, broadcast, path, req, transport, libcameraID, h)
@@ -2472,6 +2478,7 @@ func (s *VideoService) captureNode(ctx context.Context, broadcast func([]byte, f
 type hubSink interface {
 	rawSink
 	pixelSink
+	nativeSink
 	encodeDemand
 }
 
@@ -2494,6 +2501,17 @@ var _ derivingHub = (*deviceHub)(nil)
 type tapDeliveries struct {
 	hubSink
 	delivered *atomic.Bool
+	// whyNotNative, when set, is the reason the caller turned to a pipeline
+	// instead of a native capture. It replaces the pipeline's own, which can
+	// only say what the pipeline does.
+	whyNotNative func() string
+}
+
+func (t tapDeliveries) nativeNotOffered(reason func() string) {
+	if t.whyNotNative != nil {
+		reason = t.whyNotNative
+	}
+	t.hubSink.nativeNotOffered(reason)
 }
 
 // pixelsFromHeldCamera passes the held-camera mark on to the hub; the embedded
@@ -2525,30 +2543,46 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	// encoder delivers nothing else. Atomic, because the tap's pump runs on a goroutine of
 	// its own.
 	var delivered atomic.Bool
+	deriving, _ := sink.(derivingHub)
+	// gstSink is the sink of the GStreamer capture a native capture gave way to.
+	gstSink := func(string) rawSink { return sink }
 	if hub, ok := sink.(hubSink); ok {
 		sink = tapDeliveries{hubSink: hub, delivered: &delivered}
-	}
-	// The native path hands us the camera's own H.264 and never sees a decoded
-	// frame, so it is the one local source with no raw frames to offer. Its first
-	// delivered frame is the proof it is the path in use, and the moment a raw
-	// subscriber can be told rather than left waiting.
-	nativePhase := true
-	send := func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
-		ok := broadcast(data, stamp, codec)
-		if ok && nativePhase && !delivered.Load() {
-			sink.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
+		gstSink = func(whyNotNative string) rawSink {
+			return tapDeliveries{hubSink: hub, delivered: &delivered, whyNotNative: fixedReason(whyNotNative)}
 		}
-		if ok {
-			delivered.Store(true)
-		}
-		return ok
 	}
+	// A native capture hands on the camera's own frames and never sees a decoded
+	// one. Its first delivered frame is the proof it is the path in use, and the
+	// moment its raw, pixel and native subscribers can be told rather than left
+	// waiting: sendDeciding makes that capture's decision there.
+	sendDeciding := func(decideOnFirstNativeFrame func()) func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
+		return func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
+			ok := broadcast(data, stamp, codec)
+			if ok && decideOnFirstNativeFrame != nil && !delivered.Load() {
+				decideOnFirstNativeFrame()
+				if native, isNative := sink.(nativeSink); isNative {
+					native.nativeOffered()
+				}
+			}
+			if ok {
+				delivered.Store(true)
+			}
+			return ok
+		}
+	}
+	send := sendDeciding(nil)
 
-	err := s.streamV4L2Native(ctx, send, path, req)
-	nativePhase = false
+	err := s.streamV4L2Native(ctx, sendDeciding(func() {
+		sink.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
+	}), path, req)
 	if _, ok := err.(nativeH264NotSupported); ok {
-		s.logger.Info("native H.264 not supported, falling back to GStreamer", zap.String("device", path))
-		err = s.streamGStreamer(ctx, send, path, req, transport, libcameraID, pipeWireSource{}, sink)
+		var whyNotNative string
+		whyNotNative, err = s.captureNativeJPEGDeriving(ctx, sendDeciding, path, req, deriving, sink)
+		if whyNotNative != "" {
+			s.logger.Info("no native capture, falling back to GStreamer", zap.String("device", path), zap.String("reason", whyNotNative))
+			err = s.streamGStreamer(ctx, send, path, req, transport, libcameraID, pipeWireSource{}, gstSink(whyNotNative))
+		}
 	}
 	if !isCameraInUse(err) || delivered.Load() || ctx.Err() != nil {
 		return err
@@ -2585,6 +2619,77 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	}
 	s.logger.Warn("PipeWire capture failed for a held camera",
 		zap.String("device", path), zap.Error(pwErr))
+	return err
+}
+
+// captureNativeJPEGDeriving captures a camera's JPEG frames whole and runs the
+// layer that derives pictures and H.264 from them. A non-empty whyNotNative
+// says no frame was delivered this way and why.
+func (s *VideoService) captureNativeJPEGDeriving(ctx context.Context, sendDeciding func(decideOnFirstNativeFrame func()) func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, hub derivingHub, sink rawSink) (whyNotNative string, err error) {
+	width, height, ok := nativeJPEGCaptureSize(path, req)
+	switch {
+	case req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW:
+		return "the camera was started for a raw frame request, which captures it uncompressed", nil
+	case !ok && thermalCaptureProfile(path) != nil:
+		return "thermal cameras are captured uncompressed, for their measurements", nil
+	case !ok:
+		return "the camera offers neither H.264 nor JPEG at the capture size", nil
+	case hub == nil:
+		return "the capture does not feed a camera hub", nil
+	}
+	layer, err := s.derivedLayerFor(hub, videoCodecMJPEG, path, width, height, req.GetFramerate())
+	if err != nil {
+		return fmt.Sprintf("pictures and H.264 cannot be derived from the camera's JPEG frames on this device (%v), so GStreamer captures it", err), nil
+	}
+	send := sendDeciding(func() { layer.offerTo(sink) })
+	err = s.captureDeriving(ctx, hub, layer, func(ctx context.Context) error {
+		return s.captureNativeJPEG(ctx, send, path, width, height, req.GetFramerate())
+	})
+	if notSupported, ok := err.(nativeJPEGNotSupported); ok {
+		return "the camera's JPEG frames could not be captured whole: " + notSupported.msg, nil
+	}
+	return "", err
+}
+
+func (s *VideoService) derivedLayerFor(hub derivingHub, format agentpb.VideoCodec, path string, width, height, framerate uint32) (*derivedLayer, error) {
+	gstPath, available, err := s.gstElements()
+	if err != nil {
+		return nil, fmt.Errorf("GStreamer is not usable: %w", err)
+	}
+	return newDerivedLayer(derivedLayerConfig{
+		logger: s.logger, device: path, format: format, gstPath: gstPath, available: available,
+		width: width, height: height, framerate: framerate, grace: s.encoderGrace(),
+		demand: hub, publish: hub.broadcastDerivedFrom,
+	})
+}
+
+// captureDeriving runs a native capture with layer deriving from the frames
+// it produces into hub. A layer that gives up ends the capture, with the
+// layer's error: the hub's viewers and pixel readers would otherwise wait on
+// frames that will not come.
+func (s *VideoService) captureDeriving(ctx context.Context, hub derivingHub, layer *derivedLayer, capture func(context.Context) error) error {
+	detach := hub.feedDerivedLayer(layer)
+	defer detach()
+	captureCtx, stopCapture := context.WithCancel(ctx)
+	defer stopCapture()
+	layerCtx, stopLayer := context.WithCancel(ctx)
+	defer stopLayer()
+	layerEnded := make(chan error, 1)
+	var layerGaveUp atomic.Bool
+	go func() {
+		err := layer.run(layerCtx)
+		if layerCtx.Err() == nil {
+			layerGaveUp.Store(true)
+			stopCapture()
+		}
+		layerEnded <- err
+	}()
+	err := capture(captureCtx)
+	stopLayer()
+	layerErr := <-layerEnded
+	if layerGaveUp.Load() && ctx.Err() == nil {
+		return layerErr
+	}
 	return err
 }
 
@@ -2975,6 +3080,9 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 					continue
 				}
 			}
+			if !codecIsOnTheWire(frame.codec) {
+				continue
+			}
 			data := frame.data
 			if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
 				if data = vp8.next(frame); len(data) == 0 {
@@ -3155,7 +3263,7 @@ func (s *VideoService) setV4L2FrameInterval(fd int, path string, fps uint32) {
 }
 
 func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
-	return s.captureV4L2Native(ctx, s.nativeH264Emit(path, broadcast), path, v4l2CaptureConfig{
+	return s.v4l2Capture(ctx, s.nativeH264Emit(path, broadcast), path, v4l2CaptureConfig{
 		pixelFormat:   v4l2PixFmtH264,
 		width:         req.GetWidth(),
 		height:        req.GetHeight(),
@@ -3189,6 +3297,13 @@ func (s *VideoService) captureDepthZ16(ctx context.Context, emit func([]byte, fr
 // fourccName renders a V4L2 pixel format for error messages ('Z16 ', 'H264').
 func fourccName(pixfmt uint32) string {
 	return string([]byte{byte(pixfmt), byte(pixfmt >> 8), byte(pixfmt >> 16), byte(pixfmt >> 24)})
+}
+
+func (s *VideoService) v4l2Capture(ctx context.Context, emit func([]byte, frameTimestamp) bool, path string, cfg v4l2CaptureConfig) error {
+	if s.captureV4L2 != nil {
+		return s.captureV4L2(ctx, emit, path, cfg)
+	}
+	return s.captureV4L2Native(ctx, emit, path, cfg)
 }
 
 // captureV4L2Native owns one V4L2 capture from open to close: S_FMT, two mmap
@@ -3721,6 +3836,9 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	} else {
 		sink.rawNotOffered(plan.rawRefusalReason())
 	}
+	if native, ok := sink.(nativeSink); ok {
+		native.nativeNotOffered(plan.nativeRefusalReason())
+	}
 	if tapFmt != nil && !plan.tapOnly {
 		go s.pumpRawTap(ctx, rawR, tapFmt, sink, path, nil) //nolint:errcheck // nil liveness: the pump only logs
 	}
@@ -4061,6 +4179,23 @@ type gstPipelinePlan struct {
 	// encoder. Its zero value means "encodes", so plans built elsewhere
 	// (planSharedJPEGPipeline, planJPEGFeedPipeline, the Argus branch) stay valid.
 	tapOnly bool
+	// nativeWhy says why this pipeline delivers none of the camera's own whole
+	// frames: the reason a native subscriber is refused with.
+	nativeWhy string
+}
+
+const (
+	csiNativeWhy        = "CSI cameras are captured through the ISP pipeline, which hands the agent no camera frames"
+	pipeWireNativeWhy   = "another client holds the camera, so it is read through PipeWire"
+	gstDecodedNativeWhy = "the camera's JPEG frames are decoded inside its GStreamer pipeline"
+	gstEncodedNativeWhy = "the camera sends uncompressed frames, which a GStreamer pipeline encodes"
+)
+
+func (p gstPipelinePlan) nativeRefusalReason() func() string {
+	if p.nativeWhy == "" {
+		return fixedReason("the camera is captured through a GStreamer pipeline")
+	}
+	return fixedReason(p.nativeWhy)
 }
 
 // rawRefusalReason is the reason a raw subscriber is refused with, as a
@@ -4239,13 +4374,17 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 	// worth promising (see video_raw_tap.go). The format is pinned to what the tap
 	// reports, so the bytes on fd 3 are exactly what RawFormat says they are.
 	rawCapture := !strings.HasPrefix(src, "libcamerasrc") && !usingPipeWire && !useMJPEG
+	plan.nativeWhy = gstEncodedNativeWhy
 	switch {
 	case strings.HasPrefix(src, "libcamerasrc"):
 		plan.rawWhy = "CSI cameras are captured through the ISP pipeline; raw frames are not offered"
+		plan.nativeWhy = csiNativeWhy
 	case usingPipeWire:
 		plan.rawWhy = pipeWireRawWhy
+		plan.nativeWhy = pipeWireNativeWhy
 	case useMJPEG:
 		plan.rawWhy = mjpegRawWhy(capW, capH)
+		plan.nativeWhy = gstDecodedNativeWhy
 		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.
 		plan.pixels = mjpegPixelsFormat(capW, capH)
 	case capW == 0 || capH == 0:

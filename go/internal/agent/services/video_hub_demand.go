@@ -66,7 +66,16 @@ type encodeDemand interface {
 	setPipelineEncodes(bool)
 }
 
+// nativeSink is the part of a hub a producer tells, on every start, whether
+// that start delivers the camera's own whole frames. Reached by type assertion
+// on the sink, like pixelSink.
+type nativeSink interface {
+	nativeOffered()
+	nativeNotOffered(reason func() string)
+}
+
 var (
+	_ nativeSink     = (*deviceHub)(nil)
 	_ rawSink        = (*deviceHub)(nil)
 	_ pixelSink      = (*deviceHub)(nil)
 	_ heldCameraSink = (*deviceHub)(nil)
@@ -149,6 +158,13 @@ func (h *deviceHub) wantKind(kind frameKind) bool {
 
 func errNativeUnavailable(reason string) error {
 	return status.Error(codes.FailedPrecondition, "native frames are not available for this camera: "+reason)
+}
+
+// nativeOffered lifts a refusal an earlier start of this hub made.
+func (h *deviceHub) nativeOffered() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.demand.nativeRefused = nil
 }
 
 func (h *deviceHub) nativeNotOffered(reason func() string) {

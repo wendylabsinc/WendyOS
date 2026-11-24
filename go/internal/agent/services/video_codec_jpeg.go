@@ -6,6 +6,11 @@ import agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 // VideoFrame that leaves the agent.
 const videoCodecMJPEG agentpb.VideoCodec = 3
 
+func codecIsOnTheWire(codec agentpb.VideoCodec) bool {
+	_, defined := agentpb.VideoCodec_name[int32(codec)]
+	return defined
+}
+
 func codecIndexName(codec agentpb.VideoCodec) string {
 	if codec == videoCodecMJPEG {
 		return "VIDEO_CODEC_MJPEG"

@@ -108,7 +108,10 @@ func TestMJPEGCameraPixelsAndEncoderOnDemand(t *testing.T) {
 	svcCtx, svcCancel := context.WithCancel(ctx)
 	var tapReads atomic.Int64 // whole frames the tap pumps have read off fd 3
 	svc := &VideoService{
-		tapFrameRead:      func(string) { tapReads.Add(1) },
+		tapFrameRead: func(string) { tapReads.Add(1) },
+		// An empty element listing makes the derived layer unavailable, so this
+		// camera takes the GStreamer capture this fixture is about.
+		gstMemo:           gstElementsMemo{gstPath: launch, available: map[string]bool{}},
 		logger:            logger,
 		ctx:               svcCtx,
 		cancel:            svcCancel,

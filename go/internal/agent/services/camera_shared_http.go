@@ -337,8 +337,10 @@ func pumpSharedJPEG(ctx context.Context, out io.Writer, client *http.Client, end
 }
 
 func planSharedJPEGPipeline(gst, path string, req *agentpb.StreamVideoRequest, enc gstEncoderResult, first sharedCameraJPEG) (gstPipelinePlan, error) {
-	return planJPEGFeedPipeline(gst, path, req, enc, first.width, first.height,
+	plan, err := planJPEGFeedPipeline(gst, path, req, enc, first.width, first.height,
 		"app-owned JPEG capture", "camera owner publishes JPEG; original raw frames are not available")
+	plan.nativeWhy = "another application holds the camera and the agent re-encodes the JPEG feed it publishes"
+	return plan, err
 }
 
 // planJPEGFeedPipeline encodes whole width x height JPEG frames written to the

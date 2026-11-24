@@ -72,6 +72,7 @@ func (f *nativeJPEGFrames) emit(buffer []byte, stamp frameTimestamp) bool {
 		return f.drop("the buffer is not a JPEG image", len(buffer))
 	}
 	f.delivered = true
+	stamp.native = true
 	return f.broadcast(frame, stamp, videoCodecMJPEG)
 }
 
@@ -115,5 +116,5 @@ func (s *VideoService) captureNativeJPEG(ctx context.Context, broadcast func([]b
 		return status.Errorf(codes.Internal, "native JPEG capture of %s needs the size nativeJPEGCaptureSize chose, got %dx%d", path, width, height)
 	}
 	frames := &nativeJPEGFrames{broadcast: broadcast, logger: s.logger, device: path}
-	return frames.captureResult(s.captureV4L2Native(ctx, frames.emit, path, nativeJPEGCaptureConfig(width, height, framerate)))
+	return frames.captureResult(s.v4l2Capture(ctx, frames.emit, path, nativeJPEGCaptureConfig(width, height, framerate)))
 }
