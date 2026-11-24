@@ -923,6 +923,122 @@ func TestRecover_SameModelCamerasThatSwapPathsKeepTheirSettingsNotTheirPathsEntr
 	}
 }
 
+// A camera with an h264 or native node and a "frame" stamp goes while its app
+// reads and comes back: the node covers it again and is fed again. An h264
+// node resumes on a frame the app can decode alone. The sample IDs come from a
+// counter kept for the camera's path, so they go on where they were when the
+// camera is back at its path, and start again at 1, repeating IDs the app has
+// read, when it is back at another one.
+func TestRecover_ANodeWithAFrameStampIsCoveredAndFedAgainAfterAReplug(t *testing.T) {
+	elsewhere := csBrio()
+	elsewhere.base = "video2"
+	for _, tc := range []struct {
+		name        string
+		format      string
+		back        csCamera
+		wantNumbers []uint64
+	}{
+		{"h264, back at its path", appconfig.CameraFormatH264, csBrio(), []uint64{3, 4, 5}},
+		{"native, back at its path", appconfig.CameraFormatNative, csBrio(), []uint64{3, 4, 5}},
+		{"h264, back at another path", appconfig.CameraFormatH264, elsewhere, []uint64{1, 2, 3}},
+		{"native, back at another path", appconfig.CameraFormatNative, elsewhere, []uint64{1, 2, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := shareRetryBackoff
+			shareRetryBackoff = []time.Duration{5 * time.Millisecond, time.Hour}
+			t.Cleanup(func() { shareRetryBackoff = prev }) // after the harness's Shutdown
+			h := newCSHarness(t, csBrio())
+			sfCanDeriveFrames(h.s)
+			fp := installFakeProducers(h.s)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a",
+				[]appconfig.Entitlement{sfCameraEntitlement(tc.format, appconfig.CameraStampFrame)})
+			if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			h.watch()
+			records := h.records("cv-a")
+			if len(records) != 1 || records[0].mode.Format != tc.format {
+				t.Fatalf("records = %+v; logs: %v", records, h.logs.All())
+			}
+			node := records[0].io.(*csNode)
+
+			// One camera frame as its capture hands it to the hub, which numbers
+			// it, and for an h264 node the access unit made from it.
+			capture := func(hub *deviceHub, randomAccess bool) (sampleID uint64, size int) {
+				own := sfJPEGFrame(0, 1_000_000_000)
+				hub.produce(own)
+				if tc.format != appconfig.CameraFormatH264 {
+					return own.sampleID, len(own.data)
+				}
+				unit := sfH264Frame(0, randomAccess)
+				if _, err := hub.broadcastDerivedFrom(own, unit); err != nil {
+					t.Fatal(err)
+				}
+				return own.sampleID, len(unit.data)
+			}
+			wantWrite := func(what string, sampleID uint64, size int) {
+				t.Helper()
+				if e := node.next(t); e.stamp != stampWithSampleID(sampleID) || e.size != size {
+					t.Fatalf("%s: the node got %+v, want the %d-byte frame stamped with sample ID %d", what, e, size, sampleID)
+				}
+			}
+
+			node.send(t, 1)
+			if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 }) {
+				t.Fatalf("the camera did not start; logs: %v", h.logs.All())
+			}
+			for i, randomAccess := range []bool{true, false} {
+				sampleID, size := capture(fp.hub(0), randomAccess)
+				if sampleID != uint64(i+1) {
+					t.Fatalf("the camera's frame %d is numbered %d", i+1, sampleID)
+				}
+				wantWrite("before the replug", sampleID, size)
+			}
+
+			h.unplug("video0")
+			fp.hub(0).cancel() // its capture ends with the camera
+			h.waitLogged("retrying in 1h0m0s", 1)
+			if st := records[0].pump.State(); st != (shareState{Phase: shareUnplugged}) {
+				t.Fatalf("state with the camera away = %+v, want %q", st, shareUnplugged)
+			}
+
+			backAt := "/dev/" + tc.back.base
+			h.plug(tc.back)
+			h.waitLogged("camera share: covered "+backAt+" for cv-a again in ", 1)
+			if covers, want := h.coverList(), (csCover{11, "/dev/video255", backAt, cameraShareRecoverTimeout}); len(covers) != 2 || covers[1] != want {
+				t.Errorf("covers = %+v, want the start's and %+v", covers, want)
+			}
+			if !csWaitFor(2*time.Second, func() bool { return fp.count() == 2 }) {
+				t.Fatalf("the camera did not start again within 2 s of coming back; logs: %v", h.logs.All())
+			}
+			if hub := currentHub(h.s, backAt); hub != fp.hub(1) {
+				t.Fatalf("the capture that started is not the one of %s", backAt)
+			}
+
+			var numbers []uint64
+			var sizes []int
+			for _, randomAccess := range []bool{false, true, false} {
+				sampleID, size := capture(fp.hub(1), randomAccess)
+				numbers, sizes = append(numbers, sampleID), append(sizes, size)
+			}
+			if !reflect.DeepEqual(numbers, tc.wantNumbers) {
+				t.Fatalf("sample IDs after the replug = %v, want %v", numbers, tc.wantNumbers)
+			}
+			for i := range numbers {
+				if i == 0 && tc.format == appconfig.CameraFormatH264 {
+					continue // not decodable alone: the app has none of the frames before it
+				}
+				wantWrite("after the replug", numbers[i], sizes[i])
+			}
+			node.noWriteWithin(t, 20*time.Millisecond)
+			want := "cv-a [" + describeShareSettings(tc.format, appconfig.CameraStampFrame) + "] (reading)"
+			if !csWaitFor(2*time.Second, func() bool { return h.reportOf(backAt)["share_state"] == want }) {
+				t.Errorf("share_state = %q, want %q", h.reportOf(backAt)["share_state"], want)
+			}
+		})
+	}
+}
+
 func TestCameraShareState_Version1LoadsAsPixelsWithCaptureTimes(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	stored := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 15}
