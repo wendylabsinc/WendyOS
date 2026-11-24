@@ -61,13 +61,25 @@ func TestCameraShareNotice_NamesEachCamerasFormatAndStampFromTheEntitlement(t *t
 	c920 := shareRowAt("C920 (video4)", "/dev/video4", map[string]string{
 		"pixels": "640x480 YUYV, 30 fps", "native": "640x480 MJPG, 30 fps", "h264": "640x480 H264, 30 fps"})
 	rawOnly := shareRowAt("UYVY Cam (video6)", "/dev/video6", map[string]string{"pixels": "640x480 UYVY, 30 fps"})
+	rawOnly.Properties[camerashare.KeyUnavailableOfFormat("native")] = "the camera's own frames are not captured whole: the camera offers no JPEG at 640x480"
 	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{"C920"}, Format: appconfig.CameraFormatH264},
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{"UYVY Cam"}, Format: appconfig.CameraFormatNative},
 	}}
 	got := cameraShareNotice([]*appconfig.AppConfig{cfg}, []*hwCap{brio, c920, rawOnly})
-	want := `Camera: this app shares Brio 101 (video0) at 1280x720 MJPG, 30 fps, format native, stamp frame; C920 (video4) at 640x480 H264, 30 fps, format h264, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	want := `Camera: this app shares Brio 101 (video0) at 1280x720 MJPG, 30 fps, format native, stamp frame; C920 (video4) at 640x480 H264, 30 fps, format h264, stamp time; UYVY Cam (video6) at 640x480 UYVY, 30 fps, format pixels, stamp time (asked for native; serving pixels because the camera's own frames are not captured whole: the camera offers no JPEG at 640x480). For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+// An agent from before node formats shares every camera as pixels and says
+// nothing about the others; the notice does not promise the format asked for.
+func TestCameraShareNotice_AnAgentThatDoesNotKnowTheFormatServesPixels(t *testing.T) {
+	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame}}}
+	got := cameraShareNotice([]*appconfig.AppConfig{cfg}, []*hwCap{shareRow("Brio 101 (video0)", "1280x720 YUYV, 30 fps")})
+	want := `Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps, format pixels, stamp frame (asked for h264; serving pixels because the agent on this device does not offer that format). For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
