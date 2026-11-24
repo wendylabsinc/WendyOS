@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -87,5 +88,32 @@ func TestLoadOrCreateRefusesToCreateUnderSudo(t *testing.T) {
 	b, _ := PublicKeyDER(loaded)
 	if !bytes.Equal(a, b) {
 		t.Fatal("loaded a different key under sudo")
+	}
+}
+
+// Under plain sudo HOME is root's; the key is still the invoking user's, and
+// an explicit WENDY_CONFIG_DIR (the Thor re-exec) is kept.
+func TestPathUnderSudoIsTheInvokingUsersKey(t *testing.T) {
+	origEUID, origLookup := geteuid, lookupUID
+	t.Cleanup(func() { geteuid, lookupUID = origEUID, origLookup })
+	userHome := t.TempDir()
+	geteuid = func() int { return 0 }
+	lookupUID = func(uid string) (*user.User, error) { return &user.User{Uid: uid, HomeDir: userHome}, nil }
+	t.Setenv("HOME", t.TempDir()) // root's
+	t.Setenv("SUDO_UID", "1000")
+	t.Setenv("WENDY_CONFIG_DIR", "")
+
+	got, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(userHome, ".wendy", FileName); got != want {
+		t.Errorf("Path() = %q, want the invoking user's %q", got, want)
+	}
+
+	pinned := t.TempDir()
+	t.Setenv("WENDY_CONFIG_DIR", pinned)
+	if got, _ := Path(); got != filepath.Join(pinned, FileName) {
+		t.Errorf("Path() with WENDY_CONFIG_DIR = %q, want it kept", got)
 	}
 }

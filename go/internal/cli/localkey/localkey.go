@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -32,8 +33,17 @@ import (
 // FileName is the key's file in the CLI config directory.
 const FileName = "local-operator-key.pem"
 
-// Path is where the key lives.
+// Path is where the key lives. Under sudo it is the invoking user's key:
+// sudo resets HOME to root's, where that user's CLI never looks, and a key of
+// root's own there would be seeded instead of theirs.
 func Path() (string, error) {
+	if uid := os.Getenv("SUDO_UID"); geteuid() == 0 && uid != "" && uid != "0" && os.Getenv("WENDY_CONFIG_DIR") == "" {
+		u, err := lookupUID(uid)
+		if err != nil {
+			return "", fmt.Errorf("finding the home of the user who ran sudo (uid %s): %w", uid, err)
+		}
+		return filepath.Join(u.HomeDir, ".wendy", FileName), nil
+	}
 	dir, err := config.ConfigDir()
 	if err != nil {
 		return "", err
@@ -41,8 +51,11 @@ func Path() (string, error) {
 	return filepath.Join(dir, FileName), nil
 }
 
-// geteuid is a variable so tests can run as root.
-var geteuid = os.Geteuid
+// geteuid and lookupUID are variables so tests can run as root.
+var (
+	geteuid   = os.Geteuid
+	lookupUID = user.LookupId
+)
 
 // LoadOrCreate returns the key at path, generating it when absent.
 func LoadOrCreate(path string) (crypto.Signer, error) {
