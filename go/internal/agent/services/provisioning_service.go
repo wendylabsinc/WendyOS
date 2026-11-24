@@ -172,8 +172,11 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 			// The registry encryption key belongs to an enrollment. A registration
 			// retry during a reset's cleanup window can write it again after
 			// clearCredentialFiles; an unenrolled start removes that orphan.
-			if err := os.Remove(filepath.Join(configPath, deviceEncryptionKeyFile)); err != nil && !os.IsNotExist(err) {
-				logger.Error("Removing the device encryption key of a past enrollment failed", zap.Error(err))
+			// A postbox pull finishing in that window can rewrite its state.
+			for _, f := range []string{deviceEncryptionKeyFile, postboxStateFile} {
+				if err := os.Remove(filepath.Join(configPath, f)); err != nil && !os.IsNotExist(err) {
+					logger.Error("Removing a file of a past enrollment failed", zap.String("file", f), zap.Error(err))
+				}
 			}
 		}
 	} else {
@@ -560,6 +563,8 @@ func (s *ProvisioningService) clearCredentialFiles() error {
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
 		filepath.Join(s.configPath, "acme-account-key.pem"),
+		// Held deployment statements, config values in plaintext included.
+		filepath.Join(s.configPath, postboxStateFile),
 	}
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
