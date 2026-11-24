@@ -428,7 +428,12 @@ final class SiteRobotMapModel: ObservableObject {
             actions.submit {
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 do {
-                    try await SiteRobotClient.shared.align(h, sequence: request, frame: f, position: anchor, yaw: yaw)
+                    var geometry: SiteRobotGeometryPacket?
+                    if let url = self.geometryURL, url.pathExtension != "scn" {
+                        geometry = try await SiteRobotGeometry.semantic(url, scale: self.geometryScale)
+                    }
+                    guard request == self.actionGeneration, epoch == self.generation else { return }
+                    try await SiteRobotClient.shared.align(h, sequence: request, frame: f, position: anchor, yaw: yaw, geometry: geometry)
                     guard request == self.actionGeneration, self.generation == epoch else { return }
                     self.explorationEpoch = UUID()
                     self.placing = false; self.error = nil
