@@ -78,9 +78,16 @@ git tag macos-v0.1.0 <commit>
 git push origin macos-v0.1.0
 ```
 
-Alternatively, run **macOS app release** in Actions with an existing
-`macos-vX.Y.Z` tag. Both triggers build the tagged commit. The tag supplies the
-app version; the workflow run number supplies the app and extension build number.
+Alternatively, dispatch the workflow using an existing release tag as its ref:
+
+```sh
+gh workflow run macos-app.yml --ref macos-v0.1.0
+```
+
+Manual runs from branches are rejected. Both triggers build the commit recorded
+by GitHub for the selected tag, keeping execution in that tag's context. The tag
+supplies the app version; the workflow run number supplies the app and extension
+build number.
 The workflow publishes `wendy-macos-arm64-X.Y.Z.zip` and its `.sha256` checksum
 as a GitHub release. It does not change the repository's latest release.
 The ZIP contains `WendyDesktop.app`, ready to move into `/Applications`.
