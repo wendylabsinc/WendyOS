@@ -37,8 +37,9 @@ trap 'rm -f "$output/"*.test' EXIT
 services=./go/internal/agent/services
 devcover=./go/internal/agent/devcover
 share_test=TestCameraShareTwoReadersDecodeRealFrames
+jpeg_camera_test=TestCameraShareNodesFollowTheirEntitlements
 h264_camera_test=TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements
-share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO TestCameraShareNodesFollowTheirEntitlements "$h264_camera_test" TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength TestShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)
+share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO "$jpeg_camera_test" "$h264_camera_test" TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength TestShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)
 cover_test=TestCover_BindsSourceInsideTargetNamespaceOnly
 
 python3 - "$output" <<'PY'
@@ -57,10 +58,15 @@ mutations = {
     'fresh-start-disabled': ('go/internal/agent/services/camera_share_node.go',
                              'fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 1}',
                              'fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 0}'),
-    # A picture carries the sample ID of the frame after the one it shows.
+    # A derived frame carries the sample ID of the frame after the one it shows.
     'next-sample-id': ('go/internal/agent/services/video_service.go',
                        'derived.sampleID = source.sampleID',
                        'derived.sampleID = source.sampleID + 1'),
+    # A derived frame does not inherit its source's kernel capture time, so a
+    # "time" node stamps it with the agent's clock instead.
+    'capture-time-not-inherited': ('go/internal/agent/services/video_service.go',
+                                   'source.nativeNs, source.nativeClock, source.nativeFlags',
+                                   'source.nativeNs, "", source.nativeFlags'),
     # A cover never enters the container's mount namespace.
     'no-setns': ('go/internal/agent/devcover/cover_linux.go',
                  'unix.Setns(n.fd, unix.CLONE_NEWNS)',
@@ -80,6 +86,7 @@ go test -race -tags regression_camera_fixture -c -o "$output/services.test" "$se
 go test -race -tags regression_camera_fixture -overlay "$output/sharing-disabled.json" -c -o "$output/sharing-disabled.test" "$services"
 go test -race -tags regression_camera_fixture -overlay "$output/fresh-start-disabled.json" -c -o "$output/fresh-start-disabled.test" "$services"
 go test -race -tags regression_camera_fixture -overlay "$output/next-sample-id.json" -c -o "$output/next-sample-id.test" "$services"
+go test -race -tags regression_camera_fixture -overlay "$output/capture-time-not-inherited.json" -c -o "$output/capture-time-not-inherited.test" "$services"
 go test -race -tags regression_camera_fixture -c -o "$output/devcover.test" "$devcover"
 go test -race -tags regression_camera_fixture -overlay "$output/no-setns.json" -c -o "$output/no-setns.test" "$devcover"
 
@@ -140,12 +147,27 @@ if run_share "$output/fresh-start-disabled.test" "^${fresh_test}\$" > "$output/f
 fi
 require_rejected "$output/fresh-start-disabled.log" fresh-start-disabled "$fresh_test" 'FRESH_CAPTURE_CONTRACT:'
 
-if run_share "$output/next-sample-id.test" "^${h264_camera_test}\$" > "$output/next-sample-id.log" 2>&1; then
-  cat "$output/next-sample-id.log"
-  echo 'Regression did not reject next-sample-id' >&2
-  exit 1
-fi
-require_rejected "$output/next-sample-id.log" next-sample-id "$h264_camera_test" 'but shows luma'
+# Both camera tests must reject each control, with the message of the join
+# across nodes: a frame that shows another frame than its stamp names, and a
+# frame stamped with a time the camera's own frames do not carry.
+require_cameras_rejected() {
+  local mutation=$1 message=$2 log="$output/$1.log"
+  if run_share "$output/$mutation.test" "^(${jpeg_camera_test}|${h264_camera_test})\$" > "$log" 2>&1; then
+    cat "$log"
+    echo "Regression did not reject $mutation" >&2
+    exit 1
+  fi
+  cat "$log"
+  for test_name in "$jpeg_camera_test" "$h264_camera_test"; do
+    grep -q "^--- FAIL: $test_name " "$log" || { echo "Regression did not reject $mutation in $test_name" >&2; exit 1; }
+  done
+  if [[ "$(grep -cF "$message" "$log")" -lt 2 ]]; then
+    echo "Regression rejected $mutation without, in both tests: $message" >&2
+    exit 1
+  fi
+}
+require_cameras_rejected next-sample-id 'but shows luma'
+require_cameras_rejected capture-time-not-inherited "none of the camera's own frames"
 
 mapfile -t cover_tests < <("$output/devcover.test" -test.list '.*' | grep '^Test')
 if [[ ${#cover_tests[@]} -eq 0 ]]; then

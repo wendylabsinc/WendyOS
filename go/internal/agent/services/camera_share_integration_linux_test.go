@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -220,53 +221,72 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 // nodes: one capture of one JPEG camera fills a node of the camera's own
 // frames, a node of H.264 and a node of decoded pictures for each stamp, the
 // "frame" ones stamped with their frame's sample ID and the "time" ones with
-// its capture time.
+// its capture time. The camera sends flat gray frames, each of its own shade,
+// so that under one stamp the JPEG on the native node, the access unit on the
+// h264 node and the picture on the pixels node must be the same frame.
 func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 	requireShareCaptureFixture(t)
+	gstPath, available, skip := derivedTestGStreamer(t)
+	jpegs := derivedTestJPEGs(t)
+	shadeOf := map[string]int{}
+	for i, jpeg := range jpegs {
+		if _, twice := shadeOf[string(jpeg)]; twice {
+			t.Fatalf("the camera's frames: frame %d is the same bytes as an earlier one, so a buffer cannot be told to hold either", i)
+		}
+		shadeOf[string(jpeg)] = derivedTestShade(uint64(i))
+	}
 	cells := shareCells()
-	fx := startShareCaptureFixture(t, shareCellIDs(cells)...)
+	fx := startShareFixture(t, jpegFixtureCamera(jpegs), shareCellIDs(cells)...)
 	readers := createShareCells(t, fx, cells, map[string]uint32{
 		appconfig.CameraFormatNative: v4l2PixFmtMJPEG,
 		appconfig.CameraFormatH264:   v4l2PixFmtH264,
 		appconfig.CameraFormatPixels: v4l2PixFmtYUYV,
 	})
-	const wantFrames = 10
+	const wantFrames = 20
 	read := readShareCells(t, fx, cells, readers, wantFrames)
 
 	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
+	shown := map[string][]shareShown{}
 	for _, cell := range cells {
-		frames := read[cell.id].frames
+		frames, sequences := read[cell.id].frames, readers[cell.id].sequences
 		switch cell.format {
 		case appconfig.CameraFormatNative:
 			for i, frame := range frames {
-				if whole, ok := jpegFrameInBuffer(frame); !ok || len(whole) != len(frame) {
-					t.Fatalf("%s: frame %d (%d bytes) is not one whole JPEG image", cell.id, i, len(frame))
+				shade, fed := shadeOf[string(frame)]
+				if !fed {
+					t.Fatalf("%s: frame %d (%d bytes) is not, byte for byte, one of the %d JPEG frames the camera sends", cell.id, i, len(frame), len(jpegs))
 				}
+				shown[cell.id] = append(shown[cell.id], shareShown{own: true, shade: shade})
 			}
 		case appconfig.CameraFormatH264:
 			if _, randomAccess := h264RandomAccessOffset(frames[0]); !randomAccess {
 				t.Fatalf("%s: the first frame (%d bytes) cannot be decoded on its own: it holds no parameter sets followed by an IDR slice.\n%s",
-					cell.id, len(frames[0]), describeH264Buffers(frames[:3], readers[cell.id].sequences))
+					cell.id, len(frames[0]), describeH264Buffers(frames[:3], sequences))
 			}
-			for i, unit := range frames {
-				if _, _, ok := h264NextNAL(unit, 0); !ok {
-					t.Fatalf("%s: frame %d (%d bytes) holds no NAL unit", cell.id, i, len(unit))
+			for i := 1; i < len(frames); i++ {
+				if sequences[i] != sequences[i-1]+1 {
+					t.Logf("%s: this test's reader got kernel sequence %d and then %d: if it lost frames the node carried, what it read does not decode in order, and that says nothing of the node",
+						cell.id, sequences[i-1], sequences[i])
+					break
 				}
+			}
+			// A buffer that holds less than its access unit does not decode to
+			// its frame's gray level.
+			for _, picture := range decodeTestH264(t, gstPath, available, skip, frames) {
+				shown[cell.id] = append(shown[cell.id], shareShown{luma: yuyvMeanLuma(picture)})
 			}
 		case appconfig.CameraFormatPixels:
 			for i, frame := range frames {
-				if problem := sharePictureProblem(frame, frameBytes); problem != "" {
-					t.Fatalf("%s: frame %d: %s", cell.id, i, problem)
+				if len(frame) != frameBytes {
+					t.Fatalf("%s: frame %d is %d bytes, want a %d-byte picture", cell.id, i, len(frame), frameBytes)
 				}
+				shown[cell.id] = append(shown[cell.id], shareShown{luma: yuyvMeanLuma(frame)})
 			}
 		}
 	}
 	checkShareCellStamps(t, fx, cells, read)
-	checkShareCellStates(t, fx, cells)
-	for _, cell := range cells {
-		stamps := read[cell.id].stamps
-		t.Logf("%s read %d frames, stamped %d to %d", cell.id, len(stamps), stamps[0], stamps[len(stamps)-1])
-	}
+	checkShareCellsShowOneFrameUnderOneStamp(t, fx, cells, read, readers, shown)
+	checkShareCellStates(t, fx)
 
 	for _, cell := range cells {
 		readers[cell.id].close()
@@ -277,7 +297,8 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 	}
 }
 
-// The fixture's camera is fed the stream encodeTestH264 makes.
+// Compile-time checks that the fixture's camera has the size of the stream
+// encodeTestH264 makes for it: an array type of negative length does not build.
 var (
 	_ [pixelsFixtureWidth - derivedTestWidth]byte
 	_ [derivedTestWidth - pixelsFixtureWidth]byte
@@ -289,7 +310,7 @@ var (
 // comes: the nodes of its own frames and of H.264 carry the camera's access
 // units whole, from one decoding can start on, and a node of decoded pictures
 // shows, under every sample ID or capture time it is stamped with, the picture
-// of the access unit the compressed nodes carry under that stamp.
+// of the access unit the native node carries under that stamp.
 //
 // The camera is a v4l2loopback node fed a generated stream of flat gray
 // frames, each of its own shade, as a loop of one group of pictures.
@@ -337,14 +358,19 @@ func TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements(t *testing.T) {
 	const wantFrames = 20
 	read := readShareCells(t, fx, cells, readers, wantFrames)
 
-	// carried is the shade of the frame the compressed nodes of each stamp
-	// carried under each buffer timestamp.
-	carried := map[string]map[int64]int{appconfig.CameraStampTime: {}, appconfig.CameraStampFrame: {}}
+	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
+	shown := map[string][]shareShown{}
 	for _, cell := range cells {
+		frames, sequences := read[cell.id].frames, readers[cell.id].sequences
 		if formatCarriesPictures(cell.format) {
+			for i, frame := range frames {
+				if len(frame) != frameBytes {
+					t.Fatalf("%s: frame %d is %d bytes, want a %d-byte picture", cell.id, i, len(frame), frameBytes)
+				}
+				shown[cell.id] = append(shown[cell.id], shareShown{luma: yuyvMeanLuma(frame)})
+			}
 			continue
 		}
-		frames, stamps, sequences := read[cell.id].frames, read[cell.id].stamps, readers[cell.id].sequences
 		if _, randomAccess := h264RandomAccessOffset(frames[0]); !randomAccess {
 			t.Fatalf("%s: the first frame (%d bytes) cannot be decoded on its own: it holds no parameter sets followed by an IDR slice.\n%s",
 				cell.id, len(frames[0]), describeH264Buffers(frames[:3], sequences))
@@ -355,51 +381,12 @@ func TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements(t *testing.T) {
 				t.Fatalf("%s: frame %d (%d bytes) is not one access unit of the camera's, whole: none of the %d it sends is these bytes.\n%s",
 					cell.id, i, len(unit), len(stream), describeH264Buffers(frames[i:i+1], sequences[i:]))
 			}
-			if other, seen := carried[cell.stamp][stamps[i]]; seen && other != shade {
-				t.Fatalf("%s: frame %d is stamped %d and holds the frame of shade %d; another node holds the frame of shade %d under that stamp",
-					cell.id, i, stamps[i], shade, other)
-			}
-			carried[cell.stamp][stamps[i]] = shade
+			shown[cell.id] = append(shown[cell.id], shareShown{own: true, shade: shade})
 		}
-	}
-
-	// A decoder gives a gray level back as it is, or scaled into video range.
-	lumasOf := func(shade int) (full, video int) { return shade, 16 + shade*219/255 }
-	near := func(luma, want int) bool { return luma >= want-4 && luma <= want+4 }
-	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
-	for _, cell := range cells {
-		if !formatCarriesPictures(cell.format) {
-			continue
-		}
-		joined := 0
-		for i, picture := range read[cell.id].frames {
-			if len(picture) != frameBytes {
-				t.Fatalf("%s: frame %d is %d bytes, want a %d-byte picture", cell.id, i, len(picture), frameBytes)
-			}
-			stamp := read[cell.id].stamps[i]
-			shade, known := carried[cell.stamp][stamp]
-			if !known {
-				continue
-			}
-			joined++
-			full, video := lumasOf(shade)
-			if luma := yuyvMeanLuma(picture); !near(luma, full) && !near(luma, video) {
-				t.Fatalf("%s: frame %d is stamped %d but shows luma %d; the access unit the compressed nodes carry under that stamp is gray level %d, which decodes to %d or %d",
-					cell.id, i, stamp, luma, shade, full, video)
-			}
-		}
-		if joined < wantFrames/4 {
-			t.Fatalf("%s: %d of its %d pictures are stamped as a frame the compressed nodes carried, want at least %d to compare",
-				cell.id, joined, len(read[cell.id].frames), wantFrames/4)
-		}
-		t.Logf("%s: %d of %d pictures show the frame the compressed nodes carry under their stamp", cell.id, joined, len(read[cell.id].frames))
 	}
 	checkShareCellStamps(t, fx, cells, read)
-	checkShareCellStates(t, fx, cells)
-	for _, cell := range cells {
-		stamps := read[cell.id].stamps
-		t.Logf("%s read %d frames, stamped %d to %d", cell.id, len(stamps), stamps[0], stamps[len(stamps)-1])
-	}
+	checkShareCellsShowOneFrameUnderOneStamp(t, fx, cells, read, readers, shown)
+	checkShareCellStates(t, fx)
 
 	for _, cell := range cells {
 		readers[cell.id].close()
@@ -407,6 +394,92 @@ func TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements(t *testing.T) {
 	}
 	if problem := waitShareNodesRemoved(fx.svc, fx.made, fx.statePath, 15*time.Second); problem != "" {
 		t.Fatal(problem)
+	}
+}
+
+// shareShown is what one frame a reader took off a node shows: the gray level
+// of the camera's frame it holds byte for byte (own), or else the luma of the
+// picture it is or decodes to.
+type shareShown struct {
+	own         bool
+	shade, luma int
+}
+
+// shareCellsReadApart is how many of a node's frames may lie outside what the
+// reader of the camera's own frames took: the readers stop a frame or two
+// apart.
+const shareCellsReadApart = 2
+
+// checkShareCellsShowOneFrameUnderOneStamp fails unless, for each stamp, every
+// frame of the h264 and pixels nodes shows the frame of the camera that the
+// native node holds under the same buffer timestamp. The native node's bytes
+// say which frame that is.
+//
+// A frame whose timestamp the native node's reader did not take is accounted
+// for only where that reader took nothing: before its first frame, after its
+// last, or between two frames whose kernel sequence numbers show that it lost
+// one. Any other timestamp is one the camera's own frames do not carry.
+func checkShareCellsShowOneFrameUnderOneStamp(t *testing.T, fx *shareCaptureFixture, cells []shareCell,
+	read map[string]*shareCellFrames, readers map[string]*shareAppReader, shown map[string][]shareShown) {
+	t.Helper()
+	hub, _ := hubOf(fx.svc, fx.path)
+	hubDrops := func() (dropped uint64) {
+		if hub == nil {
+			return 0
+		}
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		for _, n := range hub.subDrops {
+			dropped += n
+		}
+		return dropped
+	}
+	for _, own := range cells {
+		if own.format != appconfig.CameraFormatNative {
+			continue
+		}
+		ownStamps, ownSequences := read[own.id].stamps, readers[own.id].sequences
+		carried := map[int64]int{}
+		for i, stamp := range ownStamps {
+			carried[stamp] = shown[own.id][i].shade
+		}
+		notTaken := func(stamp int64) bool {
+			after := sort.Search(len(ownStamps), func(i int) bool { return ownStamps[i] > stamp })
+			return after == 0 || after == len(ownStamps) || ownSequences[after] != ownSequences[after-1]+1
+		}
+		for _, cell := range cells {
+			if cell.stamp != own.stamp || cell.id == own.id {
+				continue
+			}
+			var gray decodedGray
+			apart := 0
+			stamps := read[cell.id].stamps
+			for i, stamp := range stamps {
+				shade, taken := carried[stamp]
+				if !taken {
+					if !notTaken(stamp) {
+						t.Fatalf("%s: frame %d is stamped %d, which none of the camera's own frames on %s carries: its reader took %d frames stamped %d to %d and its kernel sequence numbers show none lost around that stamp (the hub dropped %d frames for its subscribers)",
+							cell.id, i, stamp, own.id, len(ownStamps), ownStamps[0], ownStamps[len(ownStamps)-1], hubDrops())
+					}
+					apart++
+					continue
+				}
+				switch got := shown[cell.id][i]; {
+				case got.own && got.shade != shade:
+					t.Fatalf("%s: frame %d is stamped %d but holds the camera's frame of gray level %d; %s holds the frame of gray level %d under that stamp",
+						cell.id, i, stamp, got.shade, own.id, shade)
+				case !got.own && !gray.shows(got.luma, shade):
+					t.Fatalf("%s: frame %d is stamped %d but shows luma %d; the camera's frame %s holds under that stamp is gray level %d, which decodes to %s",
+						cell.id, i, stamp, got.luma, own.id, shade, gray.lumasOf(shade))
+				}
+			}
+			if apart > shareCellsReadApart {
+				t.Fatalf("%s: %d of its %d frames are stamped as none of the camera's own frames on %s that its reader took is (those are stamped %d to %d), want at most %d; its stamps: %v",
+					cell.id, apart, len(stamps), own.id, ownStamps[0], ownStamps[len(ownStamps)-1], shareCellsReadApart, stamps)
+			}
+			t.Logf("%s: %d of %d frames show the frame %s holds under their stamp (stamps %d to %d)",
+				cell.id, len(stamps)-apart, len(stamps), own.id, stamps[0], stamps[len(stamps)-1])
+		}
 	}
 }
 
@@ -497,9 +570,11 @@ type shareCellFrames struct {
 	err    error
 }
 
-// readShareCells starts every reader and reads them together until each has
-// want frames; the readers that got there first read on meanwhile, so all of
-// them hold the capture's last frames.
+// readShareCells reads every reader until each has want frames; the readers
+// that got there first read on meanwhile, so all of them hold the capture's
+// last frames. The readers of the camera's own frames start first and have a
+// frame before any other starts, so no other node carries a frame from before
+// theirs.
 //
 // Every reader dequeues from its STREAMON on, as an app does. A node keeps
 // only its newest shareNodeBuffers frames: a reader that streams and then
@@ -507,11 +582,6 @@ type shareCellFrames struct {
 // it can start on.
 func readShareCells(t *testing.T, fx *shareCaptureFixture, cells []shareCell, readers map[string]*shareAppReader, want int) map[string]*shareCellFrames {
 	t.Helper()
-	for _, cell := range cells {
-		if err := readers[cell.id].start(); err != nil {
-			t.Fatalf("%s: reader STREAMON: %v", cell.id, err)
-		}
-	}
 	var mu sync.Mutex
 	read := map[string]*shareCellFrames{}
 	for _, cell := range cells {
@@ -529,26 +599,53 @@ func readShareCells(t *testing.T, fx *shareCaptureFixture, cells []shareCell, re
 		return enough
 	}
 	var reading sync.WaitGroup
-	for _, cell := range cells {
-		reader, got := readers[cell.id], read[cell.id]
-		reading.Go(func() {
-			for {
-				frame, stamp, err := reader.next(fx.ctx, 15*time.Second)
-				mu.Lock()
-				switch {
-				case finished():
-				case err != nil:
-					got.err = fmt.Errorf("frame %d: %w", len(got.frames), err)
-				default:
-					got.frames, got.stamps = append(got.frames, frame), append(got.stamps, stamp)
-				}
-				done := finished()
-				mu.Unlock()
-				if done {
-					return
-				}
+	start := func(own bool) {
+		for _, cell := range cells {
+			if (cell.format == appconfig.CameraFormatNative) != own {
+				continue
 			}
-		})
+			reader, got := readers[cell.id], read[cell.id]
+			if err := reader.start(); err != nil {
+				mu.Lock()
+				got.err = fmt.Errorf("reader STREAMON: %w", err)
+				mu.Unlock()
+				continue
+			}
+			reading.Go(func() {
+				for {
+					frame, stamp, err := reader.next(fx.ctx, 15*time.Second)
+					mu.Lock()
+					switch {
+					case finished():
+					case err != nil:
+						got.err = fmt.Errorf("frame %d: %w", len(got.frames), err)
+					default:
+						got.frames, got.stamps = append(got.frames, frame), append(got.stamps, stamp)
+					}
+					done := finished()
+					mu.Unlock()
+					if done {
+						return
+					}
+				}
+			})
+		}
+	}
+	start(true)
+	failed, waiting := false, true
+	for waiting && !failed {
+		time.Sleep(5 * time.Millisecond)
+		mu.Lock()
+		waiting = false
+		for _, cell := range cells {
+			got := read[cell.id]
+			failed = failed || got.err != nil
+			waiting = waiting || (cell.format == appconfig.CameraFormatNative && len(got.frames) == 0)
+		}
+		mu.Unlock()
+	}
+	if !failed {
+		start(false)
 	}
 	reading.Wait()
 	for _, cell := range cells {
@@ -602,33 +699,24 @@ func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCe
 	}
 }
 
-// checkShareCellStates fails unless the camera's share state lists every cell
-// as reading. A pixels entry names the decoder of its pictures, which differs
-// by device.
-func checkShareCellStates(t *testing.T, fx *shareCaptureFixture, cells []shareCell) {
+// checkShareCellStates fails unless the camera's share state lists the six
+// cells of shareCells as reading. A pixels entry names the decoder of its
+// pictures, which differs by device.
+func checkShareCellStates(t *testing.T, fx *shareCaptureFixture) {
 	t.Helper()
 	state := fx.svc.CameraShareReport(fx.ctx)[fx.path][camerashare.KeyState]
 	decoder := fx.svc.pictureDecoderAt(fx.path)
 	if decoder == "" {
 		t.Fatalf("the capture reports no decoder for the pictures it makes; share state: %q", state)
 	}
-	ids := shareCellIDs(cells)
-	slices.Sort(ids)
-	var want []string
-	for _, id := range ids {
-		for _, cell := range cells {
-			if cell.id != id {
-				continue
-			}
-			phase := "reading"
-			if cell.format == appconfig.CameraFormatPixels {
-				phase += "; pictures decoded by " + decoder
-			}
-			want = append(want, fmt.Sprintf("%s [%s] (%s)", cell.id, describeShareSettings(cell.format, cell.stamp), phase))
-		}
-	}
-	if state != strings.Join(want, ", ") {
-		t.Fatalf("share state = %q\nwant        %q", state, strings.Join(want, ", "))
+	want := "ci-app-h264-frame [format h264, stamp frame] (reading), " +
+		"ci-app-h264-time [format h264, stamp time] (reading), " +
+		"ci-app-native-frame [format native, stamp frame] (reading), " +
+		"ci-app-native-time [format native, stamp time] (reading), " +
+		"ci-app-pixels-frame [format pixels, stamp frame] (reading; pictures decoded by " + decoder + "), " +
+		"ci-app-pixels-time [format pixels, stamp time] (reading; pictures decoded by " + decoder + ")"
+	if state != want {
+		t.Fatalf("share state = %q\nwant        %q", state, want)
 	}
 }
 
@@ -656,11 +744,11 @@ type shareFixtureCamera struct {
 	listed func(path string) (ok bool, lists string)
 }
 
-// A camera of 320x240 red/green JPEG at 15 fps.
-func jpegFixtureCamera() shareFixtureCamera {
+// A camera that sends the given 320x240 JPEG frames in turn at 15 fps.
+func jpegFixtureCamera(frames [][]byte) shareFixtureCamera {
 	return shareFixtureCamera{
 		feed: func(t *testing.T, ctx context.Context, path string) *fixtureFeed {
-			return feedMJPEG(t, ctx, path, redGreenJPEG(t, pixelsFixtureWidth, pixelsFixtureHeight))
+			return feedFixtureFrames(t, ctx, path, ros2camera.CodecMJPEG, frames)
 		},
 		listed: func(path string) (bool, string) {
 			w, h := bestDefaultFrameSizeForDevice(path)
@@ -672,7 +760,7 @@ func jpegFixtureCamera() shareFixtureCamera {
 
 func startShareCaptureFixture(t *testing.T, containers ...string) *shareCaptureFixture {
 	t.Helper()
-	return startShareFixture(t, jpegFixtureCamera(), containers...)
+	return startShareFixture(t, jpegFixtureCamera([][]byte{redGreenJPEG(t, pixelsFixtureWidth, pixelsFixtureHeight)}), containers...)
 }
 
 func startShareFixture(t *testing.T, cam shareFixtureCamera, containers ...string) *shareCaptureFixture {
@@ -692,7 +780,6 @@ func startShareFixture(t *testing.T, cam shareFixtureCamera, containers ...strin
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	t.Cleanup(cancel)
 
-	// Step 1: the camera.
 	path := createPixelsFixtureNode(t, ctx, logger)
 	fx.fedFrom = monotonicNs()
 	feed := cam.feed(t, ctx, path)
@@ -718,7 +805,7 @@ func startShareFixture(t *testing.T, cam shareFixtureCamera, containers ...strin
 	}
 	fixtureID := camera.Identity{Device: "wendy-test-fixture:" + base, Index: "0", Name: cameraName}
 
-	// Step 2: the service, as NewVideoService wires it for local cameras, with
+	// The service, as NewVideoService wires it for local cameras, with
 	// a loopback manager, registry and state file of its own.
 	prevStatePath := cameraSharesPath
 	statePath := filepath.Join(t.TempDir(), "camera-shares.json")
@@ -791,7 +878,7 @@ func startShareFixture(t *testing.T, cam shareFixtureCamera, containers ...strin
 		}
 		svc.Shutdown()
 		if err := feed.stop(); err != nil {
-			t.Errorf("MJPEG feed failed: %v", err)
+			t.Errorf("camera feed failed: %v", err)
 		}
 		var launches []any
 		for _, entry := range logs.FilterMessage("starting camera pipeline").All() {
