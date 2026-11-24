@@ -2,6 +2,7 @@ package sitenav
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -16,7 +17,9 @@ func TestTrackingRecoversTranslationAndHeadingDrift(t *testing.T) {
 	position, yaw := Point{2.1, 3.2}, .7
 	cloud := fixtureSurfaceCloud(t, a, position, yaw)
 	prior := PoseCandidate{Position: Point{2.32, 3.04}, Rotation: .78}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// Check accuracy independently of runner speed and race instrumentation.
+	// The production caller still caps each tracking attempt at 500ms.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	started := time.Now()
 	fits, err := TrackSurfaces(ctx, m, RegistrationInput{Cloud: cloud}, prior)
@@ -31,6 +34,31 @@ func TestTrackingRecoversTranslationAndHeadingDrift(t *testing.T) {
 		t.Fatalf("wrong correction: %+v", fit)
 	}
 	t.Log("tracking duration", time.Since(started))
+}
+
+func TestTrackingDiscardsResultsWhenContextEnds(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancelled", true: "expired"}[deadline], func(t *testing.T) {
+			a, furniture := semanticFixture(t)
+			m, err := NewLayeredRoom(a, furniture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cloud := fixtureSurfaceCloud(t, a, Point{2.1, 3.2}, .7)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			want := context.Canceled
+			if deadline {
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer cancel()
+				want = context.DeadlineExceeded
+			}
+			fits, err := TrackSurfaces(ctx, m, RegistrationInput{Cloud: cloud}, PoseCandidate{Position: Point{2.32, 3.04}, Rotation: .78})
+			if !errors.Is(err, want) || len(fits) != 0 {
+				t.Fatalf("ended context returned fits=%v, err=%v; want %v", fits, err, want)
+			}
+		})
+	}
 }
 
 func TestAutomaticTrackingRejectsUncertainOrExcessiveCorrections(t *testing.T) {
