@@ -360,7 +360,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	case <-time.After(20 * time.Second):
 		cancel()
 		<-c.done
-		return nil, errors.New("timed out waiting for first encoded camera frame")
+		return nil, errors.New("timed out waiting for the first camera frame")
 	}
 }
 
@@ -700,6 +700,10 @@ func (c *cameraCapture) run() {
 			}
 			c.result.Drops = &drops
 		}
+		if c.mode != captureModeSnapshot && c.snapshotNumber > 0 {
+			*c.result.Drops += c.missedIntervals
+			c.result.DropAccounting = "missed_snapshot_intervals_then_" + c.result.DropAccounting
+		}
 		c.finishResultDetail(end)
 		c.finishMapping(c.result.Count)
 		c.result.Mappings = append([]data.ClockMapping(nil), c.mappingSummaries...)
@@ -941,7 +945,8 @@ func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 		if !frame.auAligned {
 			if c.mode == captureModeSnapshot {
 				c.mode = "continuous"
-				c.notes = append(c.notes, "snapshot stills require a transport that delivers whole access units (native V4L2 H.264); this stream arrives as byte chunks, so the source records continuously instead")
+				c.notes = append(c.notes, "snapshot stills require a camera that delivers whole frames (one the agent captures natively); this stream arrives as byte chunks, so the source records continuously instead")
+				c.stillsGiveWayToVideo(frame)
 			}
 			if c.rateCap > 0 {
 				c.notes = append(c.notes, fmt.Sprintf("rate cap %.3g Hz cannot be enforced at GOP granularity on this transport's byte-chunked stream without corrupting it; recording at the stream rate", c.rateCap))
@@ -1208,7 +1213,7 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 //
 // The capture asks the hub for the camera's own frames (subscriptionKindsFor).
 // A camera captured as JPEG delivers whole pictures, and each still is one of
-// them, byte for byte; no encoder runs for the source. A camera whose own
+// them, byte for byte; the source asks for no encoding. A camera whose own
 // frames are H.264, or whose own frames are refused so that its video is taken
 // instead, yields key frame stills.
 //
@@ -1286,20 +1291,30 @@ func (c *cameraCapture) writeSnapshot(frame *videoFrame) error {
 		actual := canonical - c.session.RequestBootNanos
 		c.result.ActualOffset = &actual
 	}
+	if c.nothingStoredSince != 0 {
+		c.noteStorageResumed(receipt)
+	}
+	c.lastStoredReceipt = receipt
 	return nil
 }
 
-// finishSnapshotAccounting reports missed snapshot intervals as the capture's
-// drop count: every fully elapsed interval that produced no still, including
-// the tail after the last snapshot up to end (a receipt on CLOCK_BOOTTIME;
-// zero skips the tail when no end receipt is available).
-func (c *cameraCapture) finishSnapshotAccounting(end int64) {
+// countIntervalsMissedBefore adds every fully elapsed interval after the last
+// still and before end, a receipt on CLOCK_BOOTTIME.
+func (c *cameraCapture) countIntervalsMissedBefore(end int64) {
 	if c.interval > 0 && end > c.session.RequestBootNanos {
 		endIdx := (end - c.session.RequestBootNanos) / c.interval
 		if tail := endIdx - 1 - c.lastSnapshotIdx; tail > 0 {
 			c.missedIntervals += uint64(tail)
 		}
 	}
+}
+
+// finishSnapshotAccounting reports missed snapshot intervals as the capture's
+// drop count: every fully elapsed interval that produced no still, including
+// the tail after the last snapshot up to end (zero skips the tail when no end
+// receipt is available).
+func (c *cameraCapture) finishSnapshotAccounting(end int64) {
+	c.countIntervalsMissedBefore(end)
 	missed := c.missedIntervals
 	c.result.Drops = &missed
 	c.result.DropAccounting = "missed_snapshot_intervals"

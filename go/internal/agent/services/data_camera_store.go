@@ -467,10 +467,37 @@ func (c *cameraCapture) recordedStreamChanged() {
 }
 
 func (c *cameraCapture) noteStorageResumed(receipt int64) {
-	c.notes = append(c.notes, fmt.Sprintf(
-		"nothing was stored for %s between the camera's last own frame and the first video frame; the recording has a discontinuity there, and the number of frames lost across the gap is not knowable",
-		time.Duration(receipt-c.nothingStoredSince).Round(time.Millisecond)))
+	gap := time.Duration(receipt - c.nothingStoredSince).Round(time.Millisecond)
+	if c.snapshotNumber > 0 {
+		c.notes = append(c.notes, fmt.Sprintf(
+			"nothing was stored for %s between the last still of the camera's own frames and the first video frame; the recording has a discontinuity there", gap))
+	} else {
+		c.notes = append(c.notes, fmt.Sprintf(
+			"nothing was stored for %s between the camera's last own frame and the first video frame; the recording has a discontinuity there, and the number of frames lost across the gap is not knowable", gap))
+	}
 	c.nothingStoredSince = 0
+}
+
+// stillsGiveWayToVideo closes the snapshot accounting of a source that stored
+// stills and goes on recording continuously from first. The intervals without
+// a still stay counted, and the subscription's drops up to here, which are
+// frames discarded between stills, do not become losses of the video.
+func (c *cameraCapture) stillsGiveWayToVideo(first *videoFrame) {
+	if c.snapshotNumber == 0 {
+		return
+	}
+	receipt := first.receiptBootNanos
+	if receipt == 0 {
+		_, receipt, _, _ = c.receiptNow()
+	}
+	c.countIntervalsMissedBefore(receipt)
+	c.notes = append(c.notes, fmt.Sprintf(
+		"%d still(s) were stored and %d snapshot interval(s) passed without one before the source went on recording continuously; its frame count adds the video frames stored since to those stills, and its drop count adds the frames lost since to those intervals",
+		c.snapshotNumber, c.missedIntervals))
+	if c.hub != nil {
+		c.carriedDrops = 0
+		c.dropBaseline = c.hub.drops(c.subID)
+	}
 }
 
 func (c *cameraCapture) rejoinSubscriptions() error {
