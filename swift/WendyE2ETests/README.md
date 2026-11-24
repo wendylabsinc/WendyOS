@@ -207,7 +207,8 @@ ranges intersecting Go coverage block spans. Each block's statements count once;
 a block is covered when its counter is positive. **This is a block/line overlap
 approximation:** comment or formatting edits inside a block may count, and whole
 blocks (including several blocks on one physical line) contribute. No semantic
-Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, generated
+Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the repository’s `go/internal/testfixture/`
+test helpers, generated
 files (header or `linguist-generated` attribute), nonproduction paths and test-only
 hooks are excluded. Production `go/` paths such as simulator code remain eligible.
 Changed eligible files absent from the measured build are explicitly incomplete;

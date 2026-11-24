@@ -169,6 +169,7 @@ struct E2EGitComparison {
         for path in try changedPaths()
         where path.hasPrefix("go/") && path.hasSuffix(".go") && !path.hasSuffix("_test.go")
             && !path.split(separator: "/").contains("testdata")
+            && !path.hasPrefix("go/internal/testfixture/")
             && !GoCoverage.hookPaths.contains(path)
         {
             guard let text = try blob(head, path: path), try !GoCoverage.generated(text) else {
