@@ -371,6 +371,98 @@ func TestCreateCameraShares_EachCamerasNodeFollowsItsEntitlement(t *testing.T) {
 	}
 }
 
+// One app with a node on each of three cameras, two that produce JPEG and one
+// that produces H.264. A frame of every camera, on every plane its hub has,
+// is delivered before any node is read: each node holds only its own camera's
+// frame of its own format, whole, with the stamp its entry asks for.
+func TestCreateCameraShares_AJPEGAndAnH264CameraInOneAppEachFillTheirOwnNode(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csH264Cam(), csC920())
+	h.s.gstMemo.available = map[string]bool{"gdpdepay": true, "gdppay": true, "h264parse": true, "avdec_h264": true, "jpegdec": true, "x264enc": true}
+	fp := installFakeProducers(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "/dev/video0"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "Logi H264"),
+		sfCameraEntitlement("", appconfig.CameraStampFrame, "C920"),
+	})
+
+	brioJPEG, brioPicture, brioUnit := sfJPEGFrame(7, 9_000_000_000), sfDerivedPicture(7, 9_000_000_000), sfH264Frame(7, true)
+	logiUnit, logiPicture := hcOwnFrame(41, true, 5_000_000_000), sfDerivedPicture(41, 5_000_000_000)
+	c920JPEG, c920Picture, c920Unit := sfJPEGFrame(3, 2_000_000_000), sfDerivedPicture(3, 2_000_000_000), sfH264Frame(3, true)
+	type node struct {
+		mode   sharedMode
+		stamp  string
+		kind   frameKind
+		planes []*videoFrame
+		own    *videoFrame
+		stamps shareFrameStamp
+	}
+	want := map[string]node{
+		"Brio 101": {sfNativeMode, appconfig.CameraStampFrame, nativeFrames,
+			[]*videoFrame{brioPicture, brioUnit, brioJPEG}, brioJPEG, stampWithSampleID(7)},
+		"Logi H264": {hcH264Mode, appconfig.CameraStampTime, encodedFrames,
+			[]*videoFrame{logiPicture, logiUnit}, logiUnit, stampWithCaptureTime(5_000_000_000)},
+		"C920": {sfPixelsMode, appconfig.CameraStampFrame, pixelFrames,
+			[]*videoFrame{c920JPEG, c920Unit, c920Picture}, c920Picture, stampWithSampleID(3)},
+	}
+	records := h.records("cv-a")
+	if len(records) != len(want) {
+		t.Fatalf("records = %d, want %d; logs: %v", len(records), len(want), h.logs.All())
+	}
+	for _, r := range records {
+		w := want[r.cameraName]
+		if r.mode != w.mode || r.stamp != w.stamp || r.askedFormat != "" {
+			t.Fatalf("%s: record holds %s (asked %q), want %s", r.cameraName, describeShareNode(r.mode, r.stamp), r.askedFormat, describeShareNode(w.mode, w.stamp))
+		}
+		r.io.(*csNode).send(t, 1)
+	}
+	for _, r := range records {
+		var kinds []frameKind
+		if !csWaitFor(2*time.Second, func() bool {
+			hub := currentHub(h.s, r.cameraPath)
+			if hub == nil {
+				return false
+			}
+			hub.mu.Lock()
+			defer hub.mu.Unlock()
+			kinds = kinds[:0]
+			for _, sub := range hub.subs {
+				kinds = append(kinds, sub.kind)
+			}
+			return len(kinds) == 1
+		}) {
+			t.Fatalf("%s: its camera did not start for its node alone; logs: %v", r.cameraName, h.logs.All())
+		}
+		if w := want[r.cameraName]; kinds[0] != w.kind {
+			t.Errorf("%s: hub subscription is of kind %v, want %v", r.cameraName, kinds[0], w.kind)
+		}
+	}
+	if fp.count() != len(want) {
+		t.Fatalf("%d captures started, want one for each camera", fp.count())
+	}
+
+	for _, r := range records {
+		for _, f := range want[r.cameraName].planes {
+			currentHub(h.s, r.cameraPath).broadcast(f)
+		}
+	}
+	for _, r := range records {
+		w, written := want[r.cameraName], r.io.(*csNode)
+		if e := written.next(t); e.size != len(w.own.data) || e.stamp != w.stamps {
+			t.Errorf("%s: its node got %+v, want the %d-byte frame stamped %+v", r.cameraName, e, len(w.own.data), w.stamps)
+		}
+		written.noWriteWithin(t, 20*time.Millisecond)
+	}
+	for path, state := range map[string]string{
+		"/dev/video0": "cv-a [format native, stamp frame] (reading)",
+		"/dev/video2": "cv-a [format h264, stamp time] (reading)",
+		"/dev/video4": "cv-a [format pixels, stamp frame] (reading)",
+	} {
+		if got := h.reportOf(path)["share_state"]; got != state {
+			t.Errorf("%s: share_state = %q, want %q", path, got, state)
+		}
+	}
+}
+
 func TestCreateCameraShares_NoEntitlementSettingsIsPixelsWithCaptureTimes(t *testing.T) {
 	for name, entitlements := range map[string][]appconfig.Entitlement{
 		"no entitlements":      nil,
