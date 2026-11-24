@@ -1535,7 +1535,8 @@ func main() {
 			return fmt.Errorf("building its TLS config: %w", err)
 		}
 		authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedKeyListener, Keys: accessKeys}
-		srv := grpc.NewServer(append(remoteSeenOptions(),
+		// The authorizer first: a refused call must not approve an agent on trial.
+		srv := grpc.NewServer(append([]grpc.ServerOption{
 			grpc.Creds(credentials.NewTLS(tlsConfig)),
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
@@ -1543,7 +1544,7 @@ func main() {
 			grpc.ChainStreamInterceptor(authz.Stream()),
 			grpc.InitialWindowSize(8*1024*1024),
 			grpc.InitialConnWindowSize(16*1024*1024),
-		)...)
+		}, remoteSeenOptions()...)...)
 		registerAuthenticatedServices(srv)
 		logUnmappedMethods(logger, srv)
 		lis, err := listenForAccess(accessPolicy, strconv.Itoa(mtlsPortNum))
@@ -1610,11 +1611,13 @@ func main() {
 	if !alreadyProvisioned {
 		// Closed: the plaintext port answers GetAccess, and the keyless apps
 		// set when the owner switched it on; everything else is refused.
-		plainOpts := remoteSeenOptions()
+		// The authorizer first: a refused call must not approve an agent on trial.
+		var plainOpts []grpc.ServerOption
 		if closedAccess {
 			authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedKeylessListener, Keys: accessKeys}
 			plainOpts = append(plainOpts, grpc.ChainUnaryInterceptor(authz.Unary()), grpc.ChainStreamInterceptor(authz.Stream()))
 		}
+		plainOpts = append(plainOpts, remoteSeenOptions()...)
 		agentServer = grpc.NewServer(append(plainOpts,
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
