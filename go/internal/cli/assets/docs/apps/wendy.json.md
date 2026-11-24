@@ -48,7 +48,7 @@ Use `"linux"` for WendyOS/Linux container targets. Omit to target the default Li
 
 Use `"darwin"` for native macOS apps on a [Headless Mac](/docs/installation/wendy-agent-macos) target. The CLI builds the app on a Mac development machine, syncs the build output to the Mac agent, and launches it as a native macOS process. Darwin apps run natively and non-containerized; they do not use a Linux container runtime.
 
-> **Headless Mac:** A Mac target accepts `"darwin"` and the Linux values (`"linux"`, `"linux/<arch>"`, `"wendyos"`). With a Linux value the app is built as a container image, pushed to the registry embedded in the Mac agent, and run through Apple `container` or Docker on the Mac. Any other `platform` value is rejected as a project/target mismatch before any build. See [Headless Mac — supported project types](/docs/clients/wendy-cli/commands/run#headless-mac--supported-project-types).
+> **Headless Mac:** A Mac target accepts `"darwin"` and the Linux values (`"linux"`, `"linux/<arch>"`, `"wendyos"`). With a Linux value the app is built as a container image, pushed to the registry embedded in the Mac agent, and run through Apple `container` or Docker on the Mac. Any other `platform` value is rejected as a project/target mismatch before any build. See [Headless Mac — supported project types](/docs/advanced/clients/wendy-cli/commands/run#headless-mac--supported-project-types).
 
 Minimal SwiftPM/Linux container configuration:
 
