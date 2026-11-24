@@ -35,7 +35,49 @@ func TestCameraShareNotice_OneLineNamingEachCameraAndDirect(t *testing.T) {
 		shareRow("Brio 101 (video0)", "1280x720 YUYV, 30 fps"),
 		shareRow("C270 HD WEBCAM (video2)", "640x480 YUYV, 30 fps"),
 	})
-	want := `Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps; C270 HD WEBCAM (video2) at 640x480 YUYV, 30 fps. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	want := `Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps, format pixels, stamp time; C270 HD WEBCAM (video2) at 640x480 YUYV, 30 fps, format pixels, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+// shareRowAt is a camera row at a device path with the mode of every node
+// format the agent can share it in.
+func shareRowAt(desc, path string, modes map[string]string) *hwCap {
+	props := map[string]string{}
+	for format, mode := range modes {
+		key := camerashare.KeyMode
+		if format != appconfig.CameraFormatPixels {
+			key = camerashare.KeyModeOfFormat(format)
+		}
+		props[key] = mode
+	}
+	return &hwCap{Category: "camera", Description: desc, DevicePath: path, Properties: props}
+}
+
+func TestCameraShareNotice_NamesEachCamerasFormatAndStampFromTheEntitlement(t *testing.T) {
+	brio := shareRowAt("Brio 101 (video0)", "/dev/video0", map[string]string{
+		"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 MJPG, 30 fps", "h264": "1280x720 H264, 30 fps"})
+	c920 := shareRowAt("C920 (video4)", "/dev/video4", map[string]string{
+		"pixels": "640x480 YUYV, 30 fps", "native": "640x480 MJPG, 30 fps", "h264": "640x480 H264, 30 fps"})
+	rawOnly := shareRowAt("UYVY Cam (video6)", "/dev/video6", map[string]string{"pixels": "640x480 UYVY, 30 fps"})
+	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"C920"}, Format: appconfig.CameraFormatH264},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"UYVY Cam"}, Format: appconfig.CameraFormatNative},
+	}}
+	got := cameraShareNotice([]*appconfig.AppConfig{cfg}, []*hwCap{brio, c920, rawOnly})
+	want := `Camera: this app shares Brio 101 (video0) at 1280x720 MJPG, 30 fps, format native, stamp frame; C920 (video4) at 640x480 H264, 30 fps, format h264, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestCameraShareNotice_ServicesWithDifferentSettingsEachNameTheirs(t *testing.T) {
+	row := shareRowAt("Brio 101 (video0)", "/dev/video0", map[string]string{"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 MJPG, 30 fps"})
+	native := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Format: appconfig.CameraFormatNative}}}
+	got := cameraShareNotice([]*appconfig.AppConfig{shareCfg(""), native, shareCfg("")}, []*hwCap{row})
+	want := `Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps, format pixels, stamp time; Brio 101 (video0) at 1280x720 MJPG, 30 fps, format native, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
