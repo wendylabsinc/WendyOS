@@ -129,99 +129,110 @@ packages linked into the measured binaries. They are never averages of tests.
 This is platform-specific coverage of linked main-module Go packages; third-party
 dependencies, unlinked packages and non-Go source are outside its scope.
 
-`coverage/source.json` records source content identity, revision, Go version,
-binary provenance and package/file scope. Generated Go files (identified by the
-standard generated-code header) and the test-only hooks are excluded from derived
-handwritten-source profiles, including when mixed with handwritten files in one
-package. Original native metadata and counters remain intact. `test.json` and
-`attempt.json` carry coverage status and summaries; `coverage/summary.json` also
-lists skipped tests, tests without Go observations and incomplete intervals.
-No data has no percentage. Collection errors fail the attempt while preserving
-the original test result. Timeouts and missing counters remain incomplete.
-Existing attempt IDs cannot be reused in coverage mode.
+Execution records source/build provenance in `coverage/source.json`, interval
+receipts in `coverage/tests.json`, and native metadata/counters under
+`observations/<suite>/<test>/coverage/go/`. The existing shell/Make entry points
+only coordinate execution; their private `_capture` CLI calls perform collection
+in Swift. There is no separate public coverage command family. The managed Go
+Agent resets once before each test and exports after test-owned cleanup, while
+still alive; all sessions of that test share an interval. Ordinary builds omit
+the instrumentation hooks. Missing counters, crashed participants and timeouts
+remain explicit incomplete evidence, without hiding the original test failure.
 
-Full-source per-test `coverage.out` files are reproducible and are not retained
-by default. After unpacking native evidence, generate them on demand with the
-matching source checkout:
+### Aggregate, then display
 
-```bash
-python3 Scripts/E2ECoverage.py report --run-dir /path/to/attempt --per-test
-```
-
-CI removes instrumented executables after recording their hashes and Go build
-settings in `coverage/source.json`. The embedded report and downstream AI inputs
-retain command logs, recordings, test results, coverage totals and provenance;
-they omit duplicate native archives, profiles and binaries. The original native
-archive and overall source profile remain in the raw attempt artifact.
-
-The existing E2E report overview displays the run's total Go statement coverage
-from `attempt.json`. Incomplete, no-data and uncollected results are labeled
-explicitly. Reports containing several attempts show “Multiple attempts” instead
-of averaging percentages. Existing per-test and command timings remain visible
-in both normal and coverage runs.
-
-A detailed Go source HTML view is generated only when requested, using the same
-source checkout:
+With the matching source checkout, use the existing aggregation command:
 
 ```bash
-python3 Scripts/E2ECoverage.py report --run-dir /path/to/attempt --html
+swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs \
+  /path/to/swift-e2e-tests.RUN.TARGET.0001
+swift run swift-e2e-testing report --run-dir /path/to/runs/swift-e2e-tests.RUN
 ```
 
-The **Swift E2E Tests** workflow always enables coverage on its active Ubuntu
-route. It renders the existing E2E HTML overview at `report/index.html` inside the
-raw run artifact, independently of AI analysis, including failed test runs.
-The `quiet` input defaults to false, preserving normal CI analysis and reporting;
-set `quiet: true` for diagnostic validation without AI, GitHub comments or Slack
-notifications. Omit `tests` to run all product specs on the isolated Ubuntu runner.
-Use selective `tests` filters on shared machines; the full suite includes
-operations unsuitable for them. Paused macOS, remote and Windows routes stay
-paused.
+`aggregate` saves per-test participant/completeness summaries, derives per-attempt
+source totals, and computes one consolidated native
+source union with standard Go covdata `-pcombine`; it never averages percentages.
+It verifies source identities, immutable revisions and linked file/package scopes
+before combining attempts. Incompatible evidence is incomplete, not a smaller
+successful denominator. The run's `coverage/summary.json` saves totals and scope;
+`coverage/coverage.out` is its one overall profile. Generated Go files and test-only
+hooks are excluded by file from derived handwritten-source totals. Native data
+remains lossless. Non-Go and unlinked source are outside the overall build scope.
 
-Framework verification (real instrumented fixture binaries using the Agent hook,
-separate from product E2E assertions): `python3 Scripts/E2ECoverage_test.py -v`.
-
-### Compare coverage and specs with a Git diff
-
-The overall Go total remains the run's source union. A second, informational
-number reports statements in coverage blocks touched by added/modified executable
-Go lines, identified using tokens. A block counts once even when several changed lines or hunks touch it;
-this is **block granularity**, not an exact count of only the changed statements.
-Several blocks on one edited physical line can contribute.
-Comments, blank/formatting-only changes, removed statements, pure renames,
-`_test.go`, Go `testdata`, generated sources (standard header or
-`linguist-generated` attribute), and the test-only coverage hooks are excluded.
-Production Go under `go/`, including simulator code, remains eligible. Eligible
-source missing from the instrumented build makes the result incomplete with no
-percentage. No eligible changes means **Not applicable**, never 100%.
-
-Use the existing overall profile; native evidence need not be unpacked:
+Aggregation compacts each input attempt in place: binaries (after recording
+hashes/settings) and reproducible per-test profiles are omitted, while native
+files use standard `coverage/go-native.tar.gz` with hard links for repeated
+metadata. SHA-256 manifests are verified before originals are removed. Restore
+original paths inside the downloaded raw attempt with:
 
 ```bash
-python3 Scripts/E2EDiff.py --run-dir /path/to/attempt --base-ref origin/main
+tar -xzf coverage/go-native.tar.gz
 ```
 
-The adapter resolves the merge base against the **tested** revision. Reusable
-input can instead be an ordinary unified Git diff, including a filtered diff:
+Reaggregation reads an existing native archive in scratch space, so it requires
+no new test execution or permanent unpack. Supply all raw attempts for a run
+when reaggregating coverage; use a fresh output directory for a subset. The embedded run report and AI inputs
+retain logs, recordings, test results and derived metadata without duplicating
+native archives or profiles. Standard Go tools can derive additional profiles or
+an optional source HTML view; HTML is not produced during collection:
 
 ```bash
-git diff BASE TESTED -- go/internal/example > /path/to/changes.patch
-python3 Scripts/E2EDiff.py --run-dir /path/to/attempt \
-  --diff /path/to/changes.patch --base-revision BASE --source-revision TESTED
+go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
 ```
 
-Both revision IDs, the literal patch hash, profile hash and Go source identity
-are recorded in `coverage/diff.json`; the patch is retained beside it. Selected
-hunk positions/content must match both revisions. Omitted hunks stay omitted.
-Wrong-source, malformed or unavailable input is explicitly unavailable, without
-changing product test selection, assertions or success. The comparison requires
-the committed Go source corresponding to the recorded build. Tests use real Git
-diffs and instrumented Go output: `python3 Scripts/E2EDiff_test.py -v`.
+`report` only displays the saved aggregation results. It requires no Git access
+to calculate coverage or spec changes. Existing noncoverage runs remain readable;
+not-collected, no-data and incomplete results retain honest labels. Existing
+per-test/command timings and product assertions are unchanged.
 
-The same comparison snapshots annotate **NEW** and **MODIFIED** specs in HTML.
+### Optional Git comparison
+
+Aggregation uses the same Git range convention as optional AI `review --diff`:
+
+```bash
+swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs \
+  --diff origin/main...TESTED /path/to/swift-e2e-tests.RUN.TARGET.0001
+```
+
+`BASE...TESTED` resolves an immutable merge base; `BASE..TESTED` uses the explicit
+base. TESTED must match the recorded run revision. Reaggregate with another base
+to change the comparison without rerunning tests. The run saves revisions,
+source/profile identity, metric results and spec entries in `comparison.json`
+and `coverage/summary.json`. No patch, patch archive or whole-patch AI prompt is
+stored. The unreleased earlier patch-file/reference-comparison interface has
+been removed; full reference generation remains independent.
+
+Changed-code coverage uses `git diff --unified=0` new-side added/changed line
+ranges intersecting Go coverage block spans. Each block's statements count once;
+a block is covered when its counter is positive. **This is a block/line overlap
+approximation:** comment or formatting edits inside a block may count, and whole
+blocks (including several blocks on one physical line) contribute. No semantic
+Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, generated
+files (header or `linguist-generated` attribute), nonproduction paths and test-only
+hooks are excluded. Production `go/` paths such as simulator code remain eligible.
+Changed eligible files absent from the measured build are explicitly incomplete;
+no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
+unresolvable range produce an unavailable comparison, without thresholds or test
+selection changes. This intentional approximation replaces the old token-based
+metric; results need not equal that metric.
+
 The existing reference parser compares suite/test identities and bounded
-declaration content (including attached prose and traits). Helper-file edits do
-not create new specs. Badges describe declaration changes, independently of test
-outcomes, and select no causal tests; the full suite remains visible.
+attribute/declaration content. Aggregate saves **Added**, **Changed**, and
+**Removed** spec entries. Helper-only edits do not invent new specs. Report
+attaches Added/Changed labels to current declarations independently of outcomes;
+Removed specs appear as comparison entries, never executed/passing tests. The
+full suite remains visible. Optional AI review keeps its existing `--diff RANGE`
+behavior and can inspect the matching repository plus these recorded results;
+it is not required to collect, aggregate or display coverage.
+
+The **Swift E2E Tests** workflow enables coverage on every active Ubuntu route
+and automatically aggregates/renders its artifact, including failed test runs.
+`quiet=true` skips AI/GitHub/Slack reporting; normal reporting remains enabled by
+default. `diff_base_ref` requests the optional aggregate comparison against that
+base and the tested head. Omit `tests` for the full isolated Ubuntu suite. Paused
+Mac, remote and Windows routes remain paused; never run the full suite on a
+shared Mac. Framework checks use real instrumented Go fixtures in the Swift
+`native Go coverage` and aggregate comparison suites, separate from product specs.
 
 The report automatically reads a single attempt's comparison. Standalone HTML
 reference generation accepts `swift-e2e-testing reference --format html

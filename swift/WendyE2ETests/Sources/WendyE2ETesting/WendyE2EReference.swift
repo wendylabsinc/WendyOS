@@ -48,8 +48,6 @@ public enum WendyE2EReference {
         public var declarationSource = ""
         public var declarationStartLine = 0
         public var declarationEndLine = 0
-        public var inheritedSuiteTraitRange: ClosedRange<Int>?
-        public var change: Change?
 
         /// Compatibility view: true only for unconditional disabling traits.
         /// False does not imply enabled; inspect `availability` for conditional tests.
@@ -87,11 +85,6 @@ public enum WendyE2EReference {
             self.availability = availability
             self.availabilityReason = availabilityReason
         }
-    }
-
-    public enum Change: String, Sendable {
-        case new = "NEW"
-        case modified = "MODIFIED"
     }
 
     public struct SourceLocation: Sendable, Equatable, Encodable {

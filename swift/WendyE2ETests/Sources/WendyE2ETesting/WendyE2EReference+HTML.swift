@@ -74,7 +74,7 @@ private func renderHTMLBody(
                 entryTitle: entry.title
             )
             html.append(
-                "<h3 id=\"\(escapeHTMLAttribute(WendyE2EReference.markdownAnchor(forTitle: title)))\">\(renderInlineHTML(title))\(entry.change.map { " <code>\($0.rawValue)</code>" } ?? "")</h3>"
+                "<h3 id=\"\(escapeHTMLAttribute(WendyE2EReference.markdownAnchor(forTitle: title)))\">\(renderInlineHTML(title))</h3>"
             )
             appendHTMLMetadata(
                 availability: entry.availability,

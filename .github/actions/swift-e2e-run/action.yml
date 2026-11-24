@@ -478,32 +478,21 @@ runs:
         set -euo pipefail
         attempt_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
         report_staging="${RUNNER_TEMP}/wendy-report/${RUN_ID}"
-        python3 swift/Scripts/E2ECoverage.py pack --run-dir "$attempt_dir"
-        if [[ -f "$attempt_dir/coverage/source.json" ]]; then
-          base_ref="$DIFF_BASE_REF"
-          if [[ -z "$base_ref" ]]; then
-            base_ref="$(python3 - <<'PY'
-        import json, os
-        from pathlib import Path
-        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-        before = event.get('before', '')
-        print(event.get('pull_request', {}).get('base', {}).get('sha')
-              or (before if before and set(before) != {'0'} else 'origin/main'))
-        PY
-            )"
-            if [[ "$(git rev-parse "$base_ref" 2>/dev/null || true)" == "$GITHUB_SHA" ]]; then
-              base_ref="$GITHUB_SHA^"
-            fi
-          fi
-          # Informational: malformed/unavailable comparisons are labeled in the
-          # artifact and HTML, without changing test selection or test status.
-          python3 swift/Scripts/E2EDiff.py --run-dir "$attempt_dir" --base-ref="$base_ref"
-        fi
-        bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" "$attempt_dir"
+        aggregate_args=()
+        [[ -z "$DIFF_BASE_REF" ]] || aggregate_args+=(--diff "$DIFF_BASE_REF...$GITHUB_SHA")
+        set +e
+        bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" "${aggregate_args[@]}" "$attempt_dir"
+        aggregate_status=$?
+        set -e
         reports=("$report_staging"/*)
         [[ ${#reports[@]} -eq 1 && -d "${reports[0]}" ]]
+        set +e
         bash swift/Scripts/E2EReport.sh --run-dir "${reports[0]}"
+        report_status=$?
+        set -e
         mv "${reports[0]}" "$attempt_dir/report"
+        [[ "$aggregate_status" == 0 ]] || exit "$aggregate_status"
+        exit "$report_status"
 
     - name: Upload Swift E2E run (Unix)
       if: always() && runner.os != 'Windows'

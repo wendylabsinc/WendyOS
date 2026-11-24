@@ -29,12 +29,6 @@ struct ReportCommand: ParsableCommand {
     @Option(name: .long, help: "Swift E2E run directory. Writes index.html.")
     var runDir: String
 
-    @Option(
-        name: .long,
-        help: "Validated coverage/diff.json; otherwise use the single attempt's comparison."
-    )
-    var comparison: String?
-
     mutating func run() throws {
         let packageURL = URL(fileURLWithPath: packageDir)
         let testsURL = URL(
@@ -54,7 +48,7 @@ struct ReportCommand: ParsableCommand {
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
         let testResults = try loadRunTestResults(in: runURL)
-        let comparisonData = try e2eRunComparison(at: runURL, explicit: comparison)
+        let comparisonData = try E2ERunComparison.load(in: runURL)
         let files = try parseTests(
             in: testsURL,
             packageURL: packageURL,
@@ -70,6 +64,7 @@ struct ReportCommand: ParsableCommand {
             files: files,
             aiReviews: aiReviews,
             reviewOutcome: ProcessInfo.processInfo.environment["WENDY_E2E_REVIEW_OUTCOME"],
+            comparison: comparisonData,
             outputURL: outputURL
         )
     }
@@ -370,7 +365,7 @@ private struct ReportTestCase {
     var recordName = ""
     var aiReviews: [E2EReview] = []
     var commands: [CommandRun] = []
-    var change: WendyE2EReference.Change?
+    var change: String?
 
     var aiReviewMarkdown: String {
         aiReviews.map { review in
@@ -923,7 +918,7 @@ private func parseTests(
     records: [E2ETestIdentityKey: [CommandRun]],
     aiReviews: RunAIReviews,
     testResults: [E2ETestIdentityKey: ReportRunTestResult],
-    comparison: E2EDiffComparison? = nil
+    comparison: E2ERunComparison? = nil
 ) throws -> [ReportTestFile] {
     let sourceURLs = try swiftTestFiles(in: testsURL)
     var files: [ReportTestFile] = []
@@ -968,21 +963,23 @@ private func parseTests(
             }
         }
 
-        if let comparison {
-            let parsed = try WendyE2EReference.parseFile(at: sourceURL.path)
-            let annotated = try comparison.annotate(
-                parsed,
-                at: sourceURL.path,
-                sourceFilePath: e2ePackageRelativePath(from: packageURL, to: sourceURL)
-            )
-            var changes: [Int: WendyE2EReference.Change] = [:]
-            for document in annotated {
-                for entry in document.sections.flatMap(\.entries) {
-                    changes[entry.sourceLocation.line] = entry.change
+        if let comparison, comparison.status == "compared" {
+            let path = e2ePackageRelativePath(from: packageURL, to: sourceURL)
+            let entries = comparison.specs.filter { $0.path == path && $0.change != "Removed" }
+            if !entries.isEmpty {
+                let hash = try CoverageIO.sha256(Data(source.utf8))
+                guard
+                    entries.allSatisfy({
+                        $0.sourceSHA256 == hash && ["Added", "Changed"].contains($0.change)
+                    })
+                else {
+                    throw ValidationError(
+                        "Rendered source differs from saved spec comparison: " + path
+                    )
                 }
-            }
-            for i in tests.indices {
-                tests[i].change = changes[tests[i].funcLine]
+                for i in tests.indices {
+                    tests[i].change = entries.first { $0.line == tests[i].funcLine }?.change
+                }
             }
         }
 
@@ -1170,6 +1167,7 @@ private func renderReport(
     files: [ReportTestFile],
     aiReviews: RunAIReviews,
     reviewOutcome: String?,
+    comparison: E2ERunComparison? = nil,
     outputURL: URL
 ) throws {
     let tests = files.flatMap(\.tests)
@@ -1204,21 +1202,32 @@ private func renderReport(
     let reviewHTML = renderRunAIReview(aiReviews.root)
     let targetOverview = try renderTargetOverview(buildTargetOverview(runURL: runURL, files: files))
     let coverageAttempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
-    // Each attempt owns its source union. Several attempts require a native
-    // source merge; percentages must never be averaged into a run total.
-    let goCoverageTotal =
-        coverageAttempts.count > 1
-        ? "Multiple attempts"
-        : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
-    let goDiffCoverageTotal =
-        coverageAttempts.count > 1
-        ? "Multiple attempts"
-        : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
+    let savedCoverageURL = runURL.appendingPathComponent("coverage/summary.json")
+    let savedCoverage =
+        try CoverageIO.exists(savedCoverageURL) ? CoverageIO.read(savedCoverageURL) : nil
+    let goCoverageTotal: String
+    let goDiffCoverageTotal: String
+    if let savedCoverage {
+        goCoverageTotal = e2eGoCoverageTotal(savedCoverage)
+        goDiffCoverageTotal = e2eGoDiffCoverageTotal(
+            savedCoverage["diff"] as? [String: Any],
+            revision: savedCoverage["sourceRevision"] as? String
+        )
+    } else {
+        goCoverageTotal =
+            coverageAttempts.count > 1
+            ? "Multiple attempts"
+            : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
+        goDiffCoverageTotal =
+            coverageAttempts.count > 1
+            ? "Multiple attempts"
+            : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
+    }
     let testCards = renderCards(files: files)
 
     template.replaceSubrange(
         start.lowerBound..<footerStart.lowerBound,
-        with: reviewHTML + testCards + "\n\n"
+        with: reviewHTML + testCards + renderRemovedSpecs(comparison) + "\n\n"
     )
 
     let replacements: [String: String] = [
@@ -1230,7 +1239,7 @@ private func renderReport(
         "{{REVIEW_AGGREGATE_LINK}}": renderReviewAggregateLink(runURL: runURL),
         "{{TARGET_OVERVIEW}}": targetOverview,
         "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
-        "{{GO_DIFF_COVERAGE_TOTAL}}": escapeHTML(goDiffCoverageTotal),
+        "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal,
         "{{TESTS_PASSED_COUNT}}": String(passed),
         "{{TESTS_FLAKED_COUNT}}": String(flaked),
         "{{TESTS_SKIPPED_COUNT}}": String(skipped),
@@ -1276,6 +1285,20 @@ private func renderReport(
     print(
         "tests=\(total) passed=\(passed) flaked=\(flaked) skipped=\(skipped) failed=\(failed) unknown=\(unknown) commands=\(commandCount)"
     )
+}
+
+private func renderRemovedSpecs(_ comparison: E2ERunComparison?) -> String {
+    guard let comparison, comparison.status == "compared" else { return "" }
+    let removed = comparison.specs.filter { $0.change == "Removed" }
+    guard !removed.isEmpty else { return "" }
+    let entries = removed.map {
+        "<li><span class=\"badge\" data-spec-change=\"Removed\">Removed</span> "
+            + escapeHTML($0.suite + " › " + $0.name)
+            + " <code>" + escapeHTML($0.path + ":" + String($0.line)) + "</code></li>"
+    }.joined(separator: "\n")
+    return
+        "<section class=\"card\" data-comparison-removed><h2>Removed specs</h2><p>Comparison entries from the base revision; not executed test outcomes.</p><ul>"
+        + entries + "</ul></section>"
 }
 
 private func runID(outputURL: URL) -> String {
@@ -1497,7 +1520,7 @@ private func renderCards(files: [ReportTestFile]) -> String {
             let pathText = "\(test.suite) › \(test.name)"
             let changeBadge =
                 test.change.map {
-                    "<span class=\"badge\" data-spec-change=\"\($0.rawValue)\" title=\"Spec declaration change; independent of test outcome\">\($0.rawValue)</span>"
+                    "<span class=\"badge\" data-spec-change=\"\(escapeHTML($0))\" title=\"Spec declaration change; independent of test outcome\">\(escapeHTML($0))</span>"
                 } ?? ""
 
             cards.append(

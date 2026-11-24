@@ -87,7 +87,9 @@ struct `aggregate command` {
             "--package-dir", packageURL.path,
             attemptURL.path,
         ])
-        try command.run()
+        // Deliberately malformed coverage payload remains inspectable, while
+        // aggregate now reports its collection failure rather than copying it silently.
+        #expect(throws: ExitCode.self) { try command.run() }
 
         let runURL = outputURL.appendingPathComponent(
             "swift-e2e-tests.local0000",

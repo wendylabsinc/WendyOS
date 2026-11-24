@@ -9,6 +9,7 @@ struct SwiftE2ETestingCLI: AsyncParsableCommand {
         abstract: "Utilities for Swift E2E behavioral specs.",
         subcommands: [
             ReferenceCommand.self,
+            CaptureCommand.self,
             AggregateCommand.self,
             ReportCommand.self,
             ReviewCommand.self,
@@ -42,9 +43,6 @@ struct ReferenceCommand: ParsableCommand {
     @Option(name: [.short, .long], help: "Write generated files and index to this directory.")
     var output: String?
 
-    @Option(name: .long, help: "Validated coverage/diff.json for NEW/MODIFIED spec annotations.")
-    var comparison: String?
-
     @Argument(help: "Swift test files or directories containing Swift test files.")
     var paths: [String] = []
 
@@ -59,17 +57,13 @@ struct ReferenceCommand: ParsableCommand {
         )
         try validateFormatOption()
         let sourceFiles = try paths.flatMap(referenceSourceFiles)
-        let comparisonData = try comparison.map {
-            try E2EDiffComparison(at: URL(fileURLWithPath: $0))
-        }
 
         if let output {
             let fileCount = try writeReferenceFiles(
                 sourceFiles: sourceFiles,
                 outputDirectory: output,
                 format: format,
-                options: options,
-                comparison: comparisonData
+                options: options
             )
             print("Wrote \(fileCount) \(format.description) reference file(s) to \(output)")
             return
@@ -79,7 +73,7 @@ struct ReferenceCommand: ParsableCommand {
         for sourceFile in sourceFiles {
             let parsed = try WendyE2EReference.parseFile(at: sourceFile)
             documents.append(
-                contentsOf: try comparisonData?.annotate(parsed, at: sourceFile) ?? parsed
+                contentsOf: parsed
             )
         }
         print(try format.render(documents, options: options), terminator: "")
@@ -176,14 +170,13 @@ private func writeReferenceFiles(
     sourceFiles: [String],
     outputDirectory: String,
     format: ReferenceFormat,
-    options: WendyE2EReference.RenderOptions,
-    comparison: E2EDiffComparison? = nil
+    options: WendyE2EReference.RenderOptions
 ) throws -> Int {
     // Validate every source before creating output; malformed input must not
     // leave a successful-looking partial reference directory.
     let sourceDocuments = try sourceFiles.map { sourceFile in
         let parsed = try WendyE2EReference.parseFile(at: sourceFile)
-        return try comparison?.annotate(parsed, at: sourceFile) ?? parsed
+        return parsed
     }
     let outputURL = URL(fileURLWithPath: outputDirectory)
     try FileManager.default.createDirectory(

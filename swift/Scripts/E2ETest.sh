@@ -1245,9 +1245,9 @@ finalize_attempt() {
     write_attempt_info "$status"
   fi
   if [[ "$COVERAGE" == "true" && -f "$RUN_DIR/coverage/tests.json" ]]; then
-    coverage_report_args=()
-    [[ -z "$COVERAGE_CONTROL" ]] || coverage_report_args+=(--control "$COVERAGE_CONTROL")
-    python3 "$SCRIPT_DIR/E2ECoverage.py" report --run-dir "$RUN_DIR" "${coverage_report_args[@]}"
+    coverage_finish_args=()
+    [[ -z "$COVERAGE_CONTROL" ]] || coverage_finish_args+=(--control "$COVERAGE_CONTROL")
+    "$COVERAGE_TOOL" _capture --phase finish --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" "${coverage_finish_args[@]}"
     coverage_status=$?
     if [[ "$status" == 0 && "$coverage_status" != 0 ]]; then
       status=$coverage_status
@@ -1292,7 +1292,9 @@ prepare_managed_agent_auth_fixture
 if [[ "$COVERAGE" == "true" ]]; then
   coverage_prepare_args=()
   [[ "$MANAGED_AGENT" != "true" ]] || coverage_prepare_args+=(--managed-agent)
-  python3 "$SCRIPT_DIR/E2ECoverage.py" prepare --run-dir "$RUN_DIR" "${coverage_prepare_args[@]}"
+  swift build --package-path "$PACKAGE_DIR" --product swift-e2e-testing
+  COVERAGE_TOOL="$(swift build --package-path "$PACKAGE_DIR" --show-bin-path)/swift-e2e-testing"
+  "$COVERAGE_TOOL" _capture --phase prepare --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" "${coverage_prepare_args[@]}"
   # Setup, version checks and readiness polling are outside test intervals.
   export GOCOVERDIR="$RUN_DIR/coverage/bootstrap"
   mkdir -p "$GOCOVERDIR"
@@ -1363,7 +1365,7 @@ set +e
   # inherits this environment before spawning swift test.
   export "${SWIFT_TEST_ENV[@]}"
   if [[ "$COVERAGE" == "true" ]]; then
-    coverage_args=(python3 "$SCRIPT_DIR/E2ECoverage.py" run --run-dir "$RUN_DIR")
+    coverage_args=("$COVERAGE_TOOL" _capture --phase run --run-dir "$RUN_DIR")
     for filter in "${TEST_FILTERS[@]}"; do
       coverage_args+=(--filter "$filter")
     done

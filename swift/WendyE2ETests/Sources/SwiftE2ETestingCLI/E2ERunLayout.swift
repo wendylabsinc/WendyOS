@@ -3,18 +3,24 @@ import Foundation
 func e2eAttemptGoDiffCoverageTotal(at attemptURL: URL) -> String {
     guard let info = e2eAttemptJSON(at: attemptURL),
         let coverage = info["coverage"] as? [String: Any],
-        let diff = coverage["diff"] as? [String: Any],
-        let status = diff["status"] as? String
+        let diff = coverage["diff"] as? [String: Any]
     else { return "Not compared" }
+    return e2eGoDiffCoverageTotal(
+        diff,
+        revision: (info["git"] as? [String: Any])?["commit"] as? String
+    )
+}
+
+func e2eGoDiffCoverageTotal(_ value: [String: Any]?, revision: String?) -> String {
+    guard let diff = value, let status = diff["status"] as? String else { return "Not compared" }
     let provenance = diff["provenance"] as? [String: Any]
     if status != "unavailable" {
         guard let base = provenance?["baseRevision"] as? String, base.count == 40,
-            let current = provenance?["sourceRevision"] as? String, current.count == 40,
-            let patch = provenance?["patchSHA256"] as? String, patch.count == 64
+            let current = provenance?["sourceRevision"] as? String, current.count == 40
         else { return "Unavailable: missing comparison provenance" }
     }
     if let current = provenance?["sourceRevision"] as? String,
-        (info["git"] as? [String: Any])?["commit"] as? String != current
+        revision != current
     {
         return "Unavailable: comparison revision differs from the run"
     }
@@ -45,7 +51,7 @@ func e2eAttemptGoDiffCoverageTotal(at attemptURL: URL) -> String {
             let provenance = diff["provenance"] as? [String: Any],
             let base = provenance["baseRevision"] as? String,
             let current = provenance["sourceRevision"] as? String,
-            (info["git"] as? [String: Any])?["commit"] as? String == current
+            revision == current
         else { return "Unavailable: invalid comparison totals or revision" }
         return String(format: "%.3f%%", percent)
             + " (\(covered)/\(statements) statements in \(blocks) blocks; \(base.prefix(9)) → \(current.prefix(9)))"
@@ -89,7 +95,13 @@ func e2eAttemptGoCoverageTotal(at attemptURL: URL) -> String {
     guard let coverage = e2eAttemptJSON(at: attemptURL)?["coverage"] as? [String: Any] else {
         return "Not collected"
     }
+    return e2eGoCoverageTotal(coverage)
+}
+
+func e2eGoCoverageTotal(_ coverage: [String: Any]) -> String {
     switch coverage["status"] as? String {
+    case "not-collected":
+        return "Not collected"
     case "no-data":
         return "No data"
     case "collected":

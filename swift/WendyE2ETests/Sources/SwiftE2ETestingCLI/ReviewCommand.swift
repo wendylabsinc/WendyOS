@@ -67,6 +67,7 @@ extension ReviewCommand {
         runURL: URL,
         repoURL: URL
     ) async throws {
+        try validateRecordedReviewRevision(runURL: runURL, repoURL: repoURL)
         let reviewMode = try ReviewMode(diff: diff)
         let context = try reviewMode.prepareContext(runURL: runURL, repoURL: repoURL)
         let promptURL = URL(
@@ -647,6 +648,19 @@ private func runPromptHeader(
         "",
     ]
 
+    let comparison = runURL.appendingPathComponent("comparison.json")
+    let coverage = runURL.appendingPathComponent("coverage/summary.json")
+    if FileManager.default.fileExists(atPath: comparison.path) {
+        lines.append(
+            "- Saved aggregate comparison/results and immutable revisions: `\(comparison.path)`"
+        )
+        lines.append(
+            "- Added/Changed/Removed spec entries are comparison information, not causal test selection or executed outcomes."
+        )
+    }
+    if FileManager.default.fileExists(atPath: coverage.path) {
+        lines.append("- Saved measured source-union and changed-block coverage: `\(coverage.path)`")
+    }
     appendReviewContext(context, repoURL: repoURL, to: &lines)
     return lines
 }
@@ -1232,4 +1246,41 @@ private func formatSeconds(_ value: Double) -> String {
         return String(Int(value))
     }
     return String(format: "%.3f", value)
+}
+
+// New aggregate metadata pins repository investigation to the tested revision.
+// Older runs without this metadata preserve their existing review behavior.
+func validateRecordedReviewRevision(runURL: URL, repoURL: URL) throws {
+    guard
+        CoverageIO.exists(runURL.appendingPathComponent("comparison.json"))
+            || CoverageIO.exists(runURL.appendingPathComponent("coverage/summary.json"))
+    else { return }
+    let attempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
+    let revisions = try Set(
+        attempts.compactMap {
+            (try CoverageIO.read($0.appendingPathComponent("attempt.json"))["git"] as? [String: Any])?[
+                "commit"
+            ] as? String
+        }
+    )
+    let current = try CoverageIO.command(["git", "rev-parse", "HEAD"], cwd: repoURL)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard revisions.count == 1 && revisions.first == current else {
+        throw ValidationError("AI review requires the repository at the recorded tested revision")
+    }
+    for attempt in attempts {
+        let path = attempt.appendingPathComponent("coverage/source.json")
+        if CoverageIO.exists(path) {
+            let source = try CoverageIO.read(path)
+            try GoCoverage.validateSource(source)
+            guard
+                try CoverageIO.sourceID(
+                    repo: repoURL,
+                    paths: GoCoverage.sourcePaths(source["files"] as! [String: Any])
+                ) == source["sourceID"] as? String
+            else {
+                throw ValidationError("AI review repository source differs from recorded coverage")
+            }
+        }
+    }
 }
