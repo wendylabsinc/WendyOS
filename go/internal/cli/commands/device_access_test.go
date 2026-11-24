@@ -80,7 +80,7 @@ func TestDeviceAccessCommandsEndToEnd(t *testing.T) {
 
 	dev := closedtest.Start(t, dir)
 	mustRun(t, dev.Addr, "Access: Open", "device", "access")
-	mustRun(t, dev.Addr, "Closed. This computer's key "+ownerFP+" is the owner", "device", "access", "close")
+	mustRun(t, dev.Addr, "Closed. This computer's key "+ownerFP+" is the owner", "device", "access", "close", "--yes")
 	if dev.Restarts.Load() != 1 {
 		t.Fatalf("close asked for %d restarts, want 1", dev.Restarts.Load())
 	}
@@ -117,7 +117,7 @@ func TestDeviceAccessCommandsEndToEnd(t *testing.T) {
 	}
 
 	useComputerKey(t, owner)
-	mustRun(t, dev.Addr, "Removed "+bobFP+".", "device", "keys", "remove", bobFP)
+	mustRun(t, dev.Addr, "Removed "+bobFP+".", "device", "keys", "remove", bobFP, "--yes")
 	mustRun(t, dev.Addr, "Keyless apps on", "device", "access", "keyless", "on")
 
 	// bob, no longer trusted, gets in keyless.
@@ -125,7 +125,7 @@ func TestDeviceAccessCommandsEndToEnd(t *testing.T) {
 	mustRun(t, dev.Addr, "Your role: none (connected without a key)", "device", "access")
 
 	useComputerKey(t, owner)
-	mustRun(t, dev.Addr, "Open. Every key was dropped", "device", "access", "open")
+	mustRun(t, dev.Addr, "Open. Every key was dropped", "device", "access", "open", "--yes")
 	if _, err := os.Stat(filepath.Join(dir, trustedkeys.FileName)); !os.IsNotExist(err) {
 		t.Fatal("access file left after open")
 	}
@@ -248,4 +248,23 @@ func TestReadPublicKeyArgRefusesPrivateKeysAndJunk(t *testing.T) {
 	if _, err := readPublicKeyArg("-", strings.NewReader("not a key")); err == nil {
 		t.Fatal("junk accepted")
 	}
+}
+
+// Changing who may reach a device asks first; without a terminal it needs
+// --yes and changes nothing.
+func TestDeviceAccessChangesNeedYesWithoutATerminal(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	setPinCache(t)
+	useLocalKey(t)
+	dev := closedtest.Start(t, t.TempDir())
+	for _, args := range [][]string{
+		{"device", "access", "close"},
+		{"device", "access", "open"},
+		{"device", "keys", "remove", "sha256:00"},
+	} {
+		if _, err := runWendy(t, dev.Addr, args...); err == nil || !strings.Contains(err.Error(), "--yes") {
+			t.Errorf("wendy %s: err = %v, want a request for --yes", strings.Join(args, " "), err)
+		}
+	}
+	mustRun(t, dev.Addr, "Access: Open", "device", "access")
 }

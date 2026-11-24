@@ -29,6 +29,7 @@ import (
 // through verbatim.
 
 func newDeviceAccessCmd() *cobra.Command {
+	var closeYes, openYes bool
 	cmd := &cobra.Command{
 		Use:   "access",
 		Short: "Show or change who may use a device that is not enrolled",
@@ -42,11 +43,15 @@ func newDeviceAccessCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.AddCommand(&cobra.Command{
+	closeCmd := &cobra.Command{
 		Use:   "close",
 		Short: "Close an Open device: only trusted keys get in, this computer's key is the first owner",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if ok, err := confirmAccessChange(cmd.OutOrStdout(), closeYes,
+				"Closing the device lets only trusted keys in: this computer's key becomes its owner, and every other computer needs an owner to add its key"); !ok {
+				return err
+			}
 			key, err := localOperatorKeyFn()
 			if err != nil {
 				return err
@@ -59,16 +64,24 @@ func newDeviceAccessCmd() *cobra.Command {
 				return runDeviceAccessClose(cmd.Context(), c, cmd.OutOrStdout(), spki, localKeyLabel(), jsonOutput)
 			})
 		},
-	}, &cobra.Command{
+	}
+	closeCmd.Flags().BoolVarP(&closeYes, "yes", "y", false, "Close without asking for confirmation")
+	openCmd := &cobra.Command{
 		Use:   "open",
 		Short: "Open a Closed device to anyone on its network and drop every key (owner only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if ok, err := confirmAccessChange(cmd.OutOrStdout(), openYes,
+				"Opening the device drops every trusted key and lets anyone on its network in"); !ok {
+				return err
+			}
 			return withAccessClient(cmd.Context(), func(c agentpbv2.WendyAccessServiceClient, conn *grpcclient.AgentConnection) error {
 				return runDeviceAccessOpen(cmd.Context(), c, conn, cmd.OutOrStdout(), jsonOutput)
 			})
 		},
-	}, &cobra.Command{
+	}
+	openCmd.Flags().BoolVarP(&openYes, "yes", "y", false, "Open without asking for confirmation")
+	cmd.AddCommand(closeCmd, openCmd, &cobra.Command{
 		Use:   "keyless <on|off>",
 		Short: "Let callers without a key deploy and manage apps on a Closed device (owner only)",
 		Long: "Switch the one keyless feature set of a Closed device: deploying and managing apps\n" +
@@ -243,17 +256,42 @@ func newDeviceKeysAddCmd() *cobra.Command {
 }
 
 func newDeviceKeysRemoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:   "remove <fingerprint>",
 		Short: "Stop trusting a key on the device",
 		Long:  "Stop trusting a key on the device. The fingerprint is the one 'wendy device keys list' prints.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if ok, err := confirmAccessChange(cmd.OutOrStdout(), yes,
+				fmt.Sprintf("Removing key %s stops it reaching the device; if it is this computer's key, this computer loses access", args[0])); !ok {
+				return err
+			}
 			return withAccessClient(cmd.Context(), func(c agentpbv2.WendyAccessServiceClient, _ *grpcclient.AgentConnection) error {
 				return runDeviceKeysRemove(cmd.Context(), c, cmd.OutOrStdout(), args[0], jsonOutput)
 			})
 		},
 	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Remove without asking for confirmation")
+	return cmd
+}
+
+// confirmAccessChange asks before a change of who may reach the device, like
+// 'wendy device reboot': without a terminal it needs --yes. ok is false when
+// the change must not go ahead; err is nil when the user declined.
+func confirmAccessChange(out io.Writer, assumeYes bool, what string) (ok bool, err error) {
+	if assumeYes {
+		return true, nil
+	}
+	if !isInteractiveTerminal() || jsonOutput {
+		return false, fmt.Errorf("%s; pass --yes to go ahead", what)
+	}
+	fmt.Fprintln(out, what+".")
+	if !confirmDefaultNoFn("Continue?") {
+		fmt.Fprintln(out, "Aborted; nothing was changed.")
+		return false, nil
+	}
+	return true, nil
 }
 
 var trustedKeyRoles = map[string]agentpbv2.TrustedKeyRole{
