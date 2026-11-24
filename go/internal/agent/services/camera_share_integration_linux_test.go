@@ -673,9 +673,7 @@ func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCe
 	if n := hubCount(fx.svc); n != 1 {
 		t.Fatalf("%d hubs run while %d apps read one camera, want 1", n, len(cells))
 	}
-	fx.svc.mu.Lock()
-	minted := fx.svc.sampleSeqs[fx.path].Load()
-	fx.svc.mu.Unlock()
+	minted := mintedSampleCount(t, fx.svc, fx.path)
 	earliest, now := fx.fedFrom/1000*1000, monotonicNs()
 	for _, cell := range cells {
 		stamps := read[cell.id].stamps
@@ -982,6 +980,28 @@ func shareRefusalReason(logs *observer.ObservedLogs, containerID string) string 
 		}
 	}
 	return fmt.Sprintf("no reason was logged (camera share lines: %q)", said)
+}
+
+// mintedSampleCount is how many sample IDs the capture of the camera at path
+// has minted. The counter is the product's, under the product's own key for
+// that camera, which is not its path.
+func mintedSampleCount(t *testing.T, svc *VideoService, path string) uint64 {
+	t.Helper()
+	// Before svc.mu, as sampleSeqKey asks: it reads udev's names and sysfs.
+	key := svc.sampleSeqKey(path)
+	seq, keys := func() (*atomic.Uint64, []string) {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		keys := make([]string, 0, len(svc.sampleSeqs))
+		for known := range svc.sampleSeqs {
+			keys = append(keys, known)
+		}
+		return svc.sampleSeqs[key], keys
+	}()
+	if seq == nil {
+		t.Fatalf("the service has no sample counter for the camera at %s under its key %q; it has counters for %q", path, key, keys)
+	}
+	return seq.Load()
 }
 
 func hubCount(svc *VideoService) int {

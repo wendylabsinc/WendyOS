@@ -113,7 +113,7 @@ func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 	video := campaignRuntimeVideo(func() ([]string, error) { return []string{"/dev/video1890"}, nil }, func(string) (string, error) { return "Generated sample ledger source", nil })
 	sequence := new(atomic.Uint64)
 	sequence.Store((1 << 63) + 1234567)
-	video.sampleSeqs["/dev/video1890"] = sequence
+	video.sampleSeqs[video.sampleSeqKey("/dev/video1890")] = sequence
 	var producers sync.WaitGroup
 	video.startProducer = func(producerCtx context.Context, h *deviceHub, path string, _ *agentpb.StreamVideoRequest) {
 		producers.Add(1)
