@@ -18,17 +18,86 @@ type nativeJPEGNotSupported struct{ msg string }
 
 func (e nativeJPEGNotSupported) Error() string { return e.msg }
 
-// Webcams follow the end marker with zeros, FF bytes or vendor data, so the
-// frame ends at the last end marker in the buffer.
+// The JPEG markers the frame gate tells apart; every other marker opens a
+// segment that carries its own length.
+const (
+	jpegMarkerPrefix       = 0xFF
+	jpegStartOfImage       = 0xD8
+	jpegEndOfImage         = 0xD9
+	jpegStartOfScan        = 0xDA
+	jpegTemporary          = 0x01
+	jpegFirstRestart       = 0xD0
+	jpegLastRestart        = 0xD7
+	jpegStuffedPrefix      = 0x00
+	jpegSegmentLengthBytes = 2
+)
+
+// jpegFrameInBuffer returns the one whole JPEG image a capture buffer starts
+// with. Webcams follow the end marker with zeros, FF bytes or vendor data,
+// which are left out.
+//
+// The end of the image is found by reading it, not by searching for an end
+// marker: an application segment may hold a thumbnail, a whole image with an
+// end marker of its own, so the segments before a scan are stepped over by
+// their lengths, and an end marker counts only where a marker can stand
+// between the entropy-coded bytes of a scan.
 func jpegFrameInBuffer(buffer []byte) (frame []byte, ok bool) {
-	if len(buffer) < 2 || buffer[0] != 0xFF || buffer[1] != 0xD8 {
+	if len(buffer) < 2 || buffer[0] != jpegMarkerPrefix || buffer[1] != jpegStartOfImage {
 		return nil, false
 	}
-	endMarker := bytes.LastIndex(buffer, []byte{0xFF, 0xD9})
-	if endMarker <= 2 {
-		return nil, false
+	scans := 0
+	for at := 2; at+1 < len(buffer); {
+		if buffer[at] != jpegMarkerPrefix {
+			return nil, false
+		}
+		marker := buffer[at+1]
+		switch {
+		case marker == jpegMarkerPrefix:
+			at++
+		case marker == jpegEndOfImage:
+			if scans == 0 {
+				return nil, false
+			}
+			return buffer[:at+2], true
+		case marker == jpegTemporary || (marker >= jpegFirstRestart && marker <= jpegLastRestart):
+			at += 2
+		default:
+			if at+2+jpegSegmentLengthBytes > len(buffer) {
+				return nil, false
+			}
+			length := int(buffer[at+2])<<8 | int(buffer[at+3])
+			if length < jpegSegmentLengthBytes || at+2+length > len(buffer) {
+				return nil, false
+			}
+			at += 2 + length
+			if marker == jpegStartOfScan {
+				scans++
+				at = jpegScanEnd(buffer, at)
+			}
+		}
 	}
-	return buffer[:endMarker+2], true
+	return nil, false
+}
+
+// jpegScanEnd returns where the entropy-coded data starting at from ends: at
+// the first marker that is neither a stuffed FF byte nor a restart marker, or
+// at the end of the buffer when the scan is cut short.
+func jpegScanEnd(buffer []byte, from int) int {
+	for at := from; ; {
+		next := bytes.IndexByte(buffer[at:], jpegMarkerPrefix)
+		if next < 0 || at+next+1 >= len(buffer) {
+			return len(buffer)
+		}
+		at += next
+		switch following := buffer[at+1]; {
+		case following == jpegMarkerPrefix:
+			at++
+		case following == jpegStuffedPrefix || (following >= jpegFirstRestart && following <= jpegLastRestart):
+			at += 2
+		default:
+			return at
+		}
+	}
 }
 
 func cameraOffersJPEGAt(devicePath string, width, height uint32) bool {

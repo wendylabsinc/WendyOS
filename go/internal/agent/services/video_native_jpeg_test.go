@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,25 +28,69 @@ func encodeTestJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
+// jpegSegment is a marker segment with its two-byte length, which counts
+// itself and the payload.
+func jpegSegment(marker byte, payload ...byte) []byte {
+	size := len(payload) + 2
+	return append([]byte{0xFF, marker, byte(size >> 8), byte(size)}, payload...)
+}
+
+// jpegScan is a start-of-scan segment followed by entropy-coded data, which
+// the caller writes with its byte stuffing and restart markers in place.
+func jpegScan(entropyCoded ...byte) []byte {
+	return append(jpegSegment(0xDA, 1, 1, 0, 0, 63, 0), entropyCoded...)
+}
+
+var (
+	jpegStart = []byte{0xFF, 0xD8}
+	jpegEnd   = []byte{0xFF, 0xD9}
+)
+
 func TestJPEGFrameInBuffer(t *testing.T) {
 	whole := encodeTestJPEG(t, 64, 48)
 	join := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
-	endMarkerMidData := join(whole[:len(whole)-2], []byte{0xFF, 0xD9, 0x12, 0x34}, whole[len(whole)-2:])
-	smallest := []byte{0xFF, 0xD8, 0x00, 0xFF, 0xD9}
+	tables := join(jpegSegment(0xDB, 0, 1, 2, 3), jpegSegment(0xC0, 8, 0, 48, 0, 64, 1, 1, 0x11, 0))
+	// The thumbnail in an application segment is a whole JPEG of its own, and
+	// its end marker is the last one in a buffer cut inside the main image.
+	thumbnail := join(jpegStart, tables, jpegScan(0x12, 0x34), jpegEnd)
+	withThumbnail := join(jpegStart, jpegSegment(0xE1, thumbnail...), tables, jpegScan(0x55, 0x66, 0x77), jpegEnd)
+	cutInsideTheMainImage := withThumbnail[:len(withThumbnail)-4]
+	stuffedAndRestarted := join(jpegStart, tables, jpegSegment(0xDD, 0, 4),
+		jpegScan(0x11, 0xFF, 0x00, 0x22, 0xFF, 0xD0, 0x33, 0xFF, 0xD7, 0xFF, 0x00, 0xD9, 0x44), jpegEnd)
+	progressive := join(jpegStart, jpegSegment(0xDB, 0, 1), jpegSegment(0xC2, 8, 0, 48, 0, 64, 1, 1, 0x11, 0),
+		jpegSegment(0xC4, 0, 1), jpegScan(0x10, 0x20),
+		jpegSegment(0xC4, 0x10, 1), jpegScan(0x30, 0xFF, 0x00, 0x40),
+		jpegScan(0x50), jpegEnd)
+	fillBytesBeforeAMarker := join(jpegStart, []byte{0xFF, 0xFF}, tables, jpegScan(0x01, 0xFF), jpegEnd)
 	cases := []struct {
 		name string
 		data []byte
 		want []byte
 	}{
 		{"complete image", whole, whole},
-		{"one byte between the markers", smallest, smallest},
 		{"zero padding after the end marker", join(whole, make([]byte, 4096)), whole},
 		{"FF padding after the end marker", join(whole, bytes.Repeat([]byte{0xFF}, 64)), whole},
 		{"vendor data after the end marker", join(whole, []byte{0x01, 0x02, 0xFF, 0xD8, 0x7F}), whole},
-		{"end marker inside the data with real data after it", endMarkerMidData, endMarkerMidData},
-		{"end marker inside the data, padded", join(endMarkerMidData, make([]byte, 16)), endMarkerMidData},
-		{"no end marker", whole[:len(whole)-2], nil},
-		{"no end marker, padded", join(whole[:len(whole)-2], make([]byte, 16)), nil},
+		{"vendor data holding another end marker", join(whole, []byte{0x12, 0x34, 0xFF, 0xD9}), whole},
+		{"image with a thumbnail", withThumbnail, withThumbnail},
+		{"image with a thumbnail, padded", join(withThumbnail, make([]byte, 16)), withThumbnail},
+		{"cut inside the main image after a whole thumbnail", cutInsideTheMainImage, nil},
+		{"cut inside the main image after a whole thumbnail, padded", join(cutInsideTheMainImage, make([]byte, 16)), nil},
+		{"cut inside the thumbnail's segment", withThumbnail[:len(jpegStart)+10], nil},
+		{"byte stuffing and restart markers in the scan", stuffedAndRestarted, stuffedAndRestarted},
+		{"progressive image with several scans", progressive, progressive},
+		{"progressive image cut inside its second scan", progressive[:len(progressive)-len(jpegScan(0x50))-len(jpegEnd)-2], nil},
+		{"progressive image cut after its first scan", progressive[:bytes.Index(progressive, jpegSegment(0xC4, 0x10, 1))], nil},
+		{"fill bytes before a marker", fillBytesBeforeAMarker, fillBytesBeforeAMarker},
+		{"scan cut before the end marker", whole[:len(whole)-2], nil},
+		{"scan cut before the end marker, padded with zeros", join(whole[:len(whole)-2], make([]byte, 16)), nil},
+		{"scan cut in the middle", whole[:len(whole)-40], nil},
+		{"scan cut on a marker's first byte", join(jpegStart, tables, jpegScan(0x01), []byte{0xFF}), nil},
+		{"end marker before any scan", join(jpegStart, tables, jpegEnd), nil},
+		{"segment length shorter than itself", join(jpegStart, []byte{0xFF, 0xDB, 0x00, 0x01}, jpegScan(0x01), jpegEnd), nil},
+		{"segment longer than the buffer", join(jpegStart, []byte{0xFF, 0xE0, 0x40, 0x00}, jpegScan(0x01), jpegEnd), nil},
+		{"bytes that are no marker where a segment should start", join(jpegStart, []byte{0x11, 0x22}), nil},
+		{"one byte between the markers", []byte{0xFF, 0xD8, 0x00, 0xFF, 0xD9}, nil},
 		{"no start marker", whole[2:], nil},
 		{"nothing between the markers", []byte{0xFF, 0xD8, 0xFF, 0xD9}, nil},
 		{"nothing between the markers, padded", []byte{0xFF, 0xD8, 0xFF, 0xD9, 0x00, 0x00}, nil},
@@ -57,6 +103,72 @@ func TestJPEGFrameInBuffer(t *testing.T) {
 		got, ok := jpegFrameInBuffer(c.data)
 		if ok != (c.want != nil) || !bytes.Equal(got, c.want) {
 			t.Errorf("%s: jpegFrameInBuffer = %d bytes, %v; want %d bytes, %v", c.name, len(got), ok, len(c.want), c.want != nil)
+		}
+	}
+}
+
+// What the standard library decodes as a picture is what the gate hands on,
+// for the baseline images a webcam sends and with restart intervals.
+func TestJPEGFrameInBufferHandsOnEveryImageTheDecoderReads(t *testing.T) {
+	for _, size := range [][2]int{{16, 16}, {64, 48}, {641, 479}} {
+		picture := image.NewRGBA(image.Rect(0, 0, size[0], size[1]))
+		for i := range picture.Pix {
+			picture.Pix[i] = byte(i*31 + i>>8)
+		}
+		for _, quality := range []int{1, 50, 100} {
+			var encoded bytes.Buffer
+			if err := jpeg.Encode(&encoded, picture, &jpeg.Options{Quality: quality}); err != nil {
+				t.Fatal(err)
+			}
+			padded := append(append([]byte{}, encoded.Bytes()...), make([]byte, 33)...)
+			frame, ok := jpegFrameInBuffer(padded)
+			if !ok || !bytes.Equal(frame, encoded.Bytes()) {
+				t.Fatalf("%dx%d at quality %d: the gate handed on %d of %d bytes, whole %v", size[0], size[1], quality, len(frame), encoded.Len(), ok)
+			}
+			if _, err := jpeg.Decode(bytes.NewReader(frame)); err != nil {
+				t.Fatalf("%dx%d at quality %d: the frame handed on does not decode: %v", size[0], size[1], quality, err)
+			}
+			if _, cut := jpegFrameInBuffer(padded[:encoded.Len()/2]); cut {
+				t.Fatalf("%dx%d at quality %d: half the image was handed on as whole", size[0], size[1], quality)
+			}
+		}
+	}
+}
+
+// Frames from an encoder other than the standard library's are handed on whole
+// too: the ones GStreamer's jpegenc writes.
+func TestJPEGFrameInBufferHandsOnTheFramesGStreamerEncodes(t *testing.T) {
+	skip := func(why string) {
+		if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
+			t.Fatal(why)
+		}
+		t.Skip(why)
+	}
+	gstLaunch, err := exec.LookPath("gst-launch-1.0")
+	if err != nil {
+		skip("GStreamer is not installed")
+	}
+	dir := t.TempDir()
+	encode := exec.Command(gstLaunch, "-q", "videotestsrc", "num-buffers=4", "pattern=ball", "!",
+		"video/x-raw,width=320,height=240", "!", "jpegenc", "!", "multifilesink", "location="+filepath.Join(dir, "frame-%02d.jpg"))
+	if out, err := encode.CombinedOutput(); err != nil {
+		skip(fmt.Sprintf("GStreamer could not encode JPEG frames: %v: %s", err, out))
+	}
+	names, err := filepath.Glob(filepath.Join(dir, "frame-*.jpg"))
+	if err != nil || len(names) != 4 {
+		t.Fatalf("GStreamer wrote %d frame(s) (%v), want 4", len(names), err)
+	}
+	for _, name := range names {
+		encoded, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, ok := jpegFrameInBuffer(append(append([]byte{}, encoded...), make([]byte, 64)...))
+		if !ok || !bytes.Equal(frame, encoded) {
+			t.Errorf("%s: the gate handed on %d of %d bytes, whole %v", filepath.Base(name), len(frame), len(encoded), ok)
+		}
+		if _, cut := jpegFrameInBuffer(encoded[:len(encoded)/2]); cut {
+			t.Errorf("%s: half the image was handed on as whole", filepath.Base(name))
 		}
 	}
 }
