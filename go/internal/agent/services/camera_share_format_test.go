@@ -16,6 +16,9 @@ import (
 	"time"
 	"unsafe"
 
+	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -821,6 +824,103 @@ func TestCreateCameraShares_AContainerCreatedAgainFollowsItsNewSettings(t *testi
 			}
 		}
 	})
+}
+
+// Two cameras of one model, told apart in the app's entitlements by their
+// paths. A record follows its camera by the port it is on, not by its path, so
+// when the two come back with their paths swapped each node keeps its settings
+// and covers its camera's new path. The path an entry names then serves the
+// other entry's settings, without a warning, until the next create reads the
+// allowlists again.
+func TestRecover_SameModelCamerasThatSwapPathsKeepTheirSettingsNotTheirPathsEntries(t *testing.T) {
+	left := csBrio()
+	right := csCamera{"video2", "Brio 101", left.formats, camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "Brio 101"}}
+	h := newCSHarness(t, left, right)
+	sfCanDeriveFrames(h.s)
+	entitlements := []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "/dev/video0"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "/dev/video2"),
+	}
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	h.watch()
+
+	type node struct {
+		path  string
+		mode  sharedMode
+		stamp string
+		nr    int
+	}
+	nodes := func() map[string]node {
+		out := map[string]node{}
+		views := h.view("cv-a")
+		for i, r := range h.records("cv-a") {
+			out[views[i].camera.Device] = node{views[i].path, r.mode, r.stamp, views[i].node}
+		}
+		return out
+	}
+	asEntered := map[string]node{
+		left.id.Device:  {"/dev/video0", sfNativeMode, appconfig.CameraStampFrame, 255},
+		right.id.Device: {"/dev/video2", sfH264Mode, appconfig.CameraStampTime, 254},
+	}
+	if got := nodes(); !reflect.DeepEqual(got, asEntered) {
+		t.Fatalf("nodes at the create = %+v, want %+v; logs: %v", got, asEntered, h.logs.All())
+	}
+	created := h.records("cv-a")
+
+	h.unplug("video0")
+	h.unplug("video2")
+	h.plug(csCamera{"video0", "Brio 101", left.formats, right.id})
+	h.waitLogged("camera share: covered /dev/video0 for cv-a again in ", 1)
+	h.plug(csCamera{"video2", "Brio 101", left.formats, left.id})
+	h.waitLogged("camera share: covered /dev/video2 for cv-a again in ", 1)
+
+	swapped := map[string]node{
+		left.id.Device:  {"/dev/video2", sfNativeMode, appconfig.CameraStampFrame, 255},
+		right.id.Device: {"/dev/video0", sfH264Mode, appconfig.CameraStampTime, 254},
+	}
+	if got := nodes(); !reflect.DeepEqual(got, swapped) {
+		t.Fatalf("nodes after the swap = %+v, want %+v", got, swapped)
+	}
+	if records := h.records("cv-a"); len(records) != 2 || records[0] != created[0] || records[1] != created[1] || len(h.openedNodes()) != 2 {
+		t.Errorf("the swap made a share again: %+v with %d nodes opened", records, len(h.openedNodes()))
+	}
+	wantCovers := []csCover{{pid: 11, src: "/dev/video254", dst: "/dev/video0"}, {pid: 11, src: "/dev/video255", dst: "/dev/video2"}}
+	if got := coversWithout(h.coverList()[2:]); !reflect.DeepEqual(got, wantCovers) {
+		t.Errorf("covers after the swap = %+v, want %+v", got, wantCovers)
+	}
+	// What the app now reads at each path is the other path's entry.
+	for path, state := range map[string]string{
+		"/dev/video0": "cv-a [format h264, stamp time] (idle)",
+		"/dev/video2": "cv-a [format native, stamp frame] (idle)",
+	} {
+		if got := h.reportOf(path)["share_state"]; got != state {
+			t.Errorf("%s: share_state = %q, want %q", path, got, state)
+		}
+	}
+	if warned := h.logs.FilterLevelExact(zap.WarnLevel).All(); len(warned) != 0 {
+		t.Errorf("warnings = %v, want none: today nothing says a path serves another entry's settings", warned)
+	}
+
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+	h.drainRemovals()
+	asEnteredAgain := map[string]node{
+		right.id.Device: {path: "/dev/video0", mode: sfNativeMode, stamp: appconfig.CameraStampFrame},
+		left.id.Device:  {path: "/dev/video2", mode: sfH264Mode, stamp: appconfig.CameraStampTime},
+	}
+	got := nodes()
+	for port, n := range got {
+		n.nr = 0
+		got[port] = n
+	}
+	if !reflect.DeepEqual(got, asEnteredAgain) {
+		t.Fatalf("nodes after the next create = %+v, want %+v; logs: %v", got, asEnteredAgain, h.logs.All())
+	}
+	if n := h.logged("camera share: cv-a was created again: its share of Brio 101 was "); n != 2 {
+		t.Errorf("%d shares were made again, want both; logs: %v", n, h.logs.All())
+	}
 }
 
 func TestCameraShareState_Version1LoadsAsPixelsWithCaptureTimes(t *testing.T) {
