@@ -4093,6 +4093,37 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	return planGStreamerPipelineShaped(pipelineShape{encode: true}, gstPath, devicePath, req, encoder, hasH264Parse, transport, libcameraID, pw, available)
 }
 
+func resolveV4L2CaptureSize(devicePath string, req *agentpb.StreamVideoRequest, thermalCapture *agentpb.ThermalCamera, stackedRowsCroppable bool) (capW, capH uint32) {
+	// "Default" must not mean "smallest": with no width/height the source
+	// negotiates its first mode, which on UVC is the smallest.
+	capW, capH = req.GetWidth(), req.GetHeight()
+	if capW == 0 || capH == 0 {
+		if bw, bh := bestDefaultFrameSizeForDevice(devicePath); bw > 0 && bh > 0 {
+			if capW == 0 {
+				capW = bw
+			}
+			if capH == 0 {
+				capH = bh
+			}
+			// A stacked thermal module's "device default" is its stacked mode —
+			// the picture plus the metadata rows — as long as videocrop can hide
+			// those rows from viewers. Then one capture serves both audiences: the
+			// companion app sees exactly the picture it saw before, and a raw
+			// subscriber joining at the default gets the temperature rows too,
+			// instead of being refused because a viewer already pinned the plain
+			// mode. Only for a true default: a caller naming a size gets that size.
+			if req.GetWidth() == 0 && req.GetHeight() == 0 && stackedRowsCroppable {
+				if thermalCapture != nil {
+					capW, capH = thermalCapture.CaptureWidth, thermalCapture.CaptureHeight
+				} else if sw, sh := stackedModeAbove(devicePath, capW, capH); sh > 0 {
+					capW, capH = sw, sh
+				}
+			}
+		}
+	}
+	return capW, capH
+}
+
 // planGStreamerPipelineShaped is planGStreamerPipeline with a choice of shape
 // (see video_pipeline_shape.go): with and without the encoder branch.
 func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string, req *agentpb.StreamVideoRequest, encoder string, hasH264Parse bool, transport camera.Transport, libcameraID string, pw pipeWireSource, available map[string]bool) (gstPipelinePlan, error) {
@@ -4152,32 +4183,9 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 				fmt.Sprintf("video/x-raw,width=%d,height=%d", req.GetWidth(), req.GetHeight()))
 		}
 	} else {
-		// "Default" must not mean "smallest": with no width/height the source
-		// negotiates its first mode, which on UVC is the smallest.
 		capW, capH = req.GetWidth(), req.GetHeight()
-		if (capW == 0 || capH == 0) && !strings.HasPrefix(src, "libcamerasrc") {
-			if bw, bh := bestDefaultFrameSizeForDevice(devicePath); bw > 0 && bh > 0 {
-				if capW == 0 {
-					capW = bw
-				}
-				if capH == 0 {
-					capH = bh
-				}
-				// A stacked thermal module's "device default" is its stacked mode —
-				// the picture plus the metadata rows — as long as videocrop can hide
-				// those rows from viewers. Then one capture serves both audiences: the
-				// companion app sees exactly the picture it saw before, and a raw
-				// subscriber joining at the default gets the temperature rows too,
-				// instead of being refused because a viewer already pinned the plain
-				// mode. Only for a true default: a caller naming a size gets that size.
-				if req.GetWidth() == 0 && req.GetHeight() == 0 && available["videocrop"] {
-					if thermalCapture != nil {
-						capW, capH = thermalCapture.CaptureWidth, thermalCapture.CaptureHeight
-					} else if sw, sh := stackedModeAbove(devicePath, capW, capH); sh > 0 {
-						capW, capH = sw, sh
-					}
-				}
-			}
+		if !strings.HasPrefix(src, "libcamerasrc") {
+			capW, capH = resolveV4L2CaptureSize(devicePath, req, thermalCapture, available["videocrop"])
 		}
 		if capW > 0 {
 			capsParts = append(capsParts, fmt.Sprintf("width=%d", capW))
@@ -4202,9 +4210,8 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 	// The PipeWire path negotiates whatever the graph serves, so it selects no
 	// capture format of its own.
 	useMJPEG := !strings.HasPrefix(src, "libcamerasrc") && !usingPipeWire &&
-		capW > 0 && capH > 0 &&
 		available["jpegdec"] &&
-		deviceSupportsMJPEGSize(devicePath, capW, capH)
+		cameraOffersJPEGAt(devicePath, capW, capH)
 
 	// Raw tap: only a v4l2src pipeline that already captures raw video has frames
 	// worth promising (see video_raw_tap.go). The format is pinned to what the tap
