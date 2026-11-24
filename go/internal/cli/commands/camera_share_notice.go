@@ -54,29 +54,62 @@ func cameraIdentityOf(c *cameraRow) appconfig.CameraIdentity {
 	}
 }
 
-// agentMatchesStableIDs reports whether the agent that listed cams matches an
-// allowlist entry by stable id and "v4l2:" path. Such an agent puts the
-// stable_id key on every camera row it reports on; one from before matches
-// only a camera's exact device path or exact name.
-func agentMatchesStableIDs(cams []*cameraRow) bool {
-	return slices.ContainsFunc(cams, func(c *cameraRow) bool {
-		_, keyed := c.GetProperties()[camerashare.KeyStableID]
-		return keyed
-	})
+// agentGeneration is what the agent that listed a device's camera rows does
+// with a camera entitlement's format, stamp and allowlist, as far as its rows
+// tell.
+type agentGeneration int
+
+const (
+	// agentUndetermined shares no camera present and says no more: it is one
+	// of the two generations below.
+	agentUndetermined agentGeneration = iota
+	// agentWithoutNodeSettings reports only share_mode. Every camera it shares
+	// gets pictures stamped with capture times: it reads no format, stamp or
+	// allowlist.
+	agentWithoutNodeSettings
+	// agentMatchingPathOrName reports a mode or a reason per format, and
+	// matches an allowlist entry only against a camera's exact device path or
+	// exact name.
+	agentMatchingPathOrName
+	// agentMatchingStableIDs puts the stable_id key on the rows of the cameras
+	// it lists, and also matches stable ids and "v4l2:" paths.
+	agentMatchingStableIDs
+)
+
+func agentGenerationOf(cams []*cameraRow) agentGeneration {
+	generation := agentUndetermined
+	for _, c := range cams {
+		props := c.GetProperties()
+		if _, keyed := props[camerashare.KeyStableID]; keyed {
+			return agentMatchingStableIDs
+		}
+		for _, format := range appconfig.CameraFormats[1:] {
+			if props[camerashare.KeyModeOfFormat(format)] != "" || props[camerashare.KeyUnavailableOfFormat(format)] != "" {
+				generation = agentMatchingPathOrName
+			}
+		}
+		if generation == agentUndetermined && props[camerashare.KeyMode] != "" {
+			generation = agentWithoutNodeSettings
+		}
+	}
+	return generation
 }
 
 // nodeSettingsOf resolves a camera's node settings as its agent will.
-func nodeSettingsOf(entitlements []appconfig.Entitlement, c *cameraRow, byStableID bool) (format, stamp string, conflicts []string) {
-	if byStableID {
+func nodeSettingsOf(entitlements []appconfig.Entitlement, c *cameraRow, generation agentGeneration) (format, stamp string, conflicts []string) {
+	switch generation {
+	case agentMatchingStableIDs:
 		return appconfig.CameraNodeSettings(entitlements, cameraIdentityOf(c))
+	case agentWithoutNodeSettings:
+		return appconfig.CameraFormats[0], appconfig.CameraStamps[0], nil
 	}
 	return appconfig.CameraNodeSettingsByPathOrName(entitlements, c.GetDevicePath(), cameraNameOf(c.GetDescription()))
 }
 
 // entryNames reports whether the camera's agent matches an allowlist entry to
-// the camera.
-func entryNames(entry string, c *cameraRow, byStableID bool) bool {
-	if byStableID {
+// the camera, or would if it read allowlists.
+func entryNames(entry string, c *cameraRow, generation agentGeneration) bool {
+	if generation == agentMatchingStableIDs {
 		return cameraIdentityOf(c).NamedBy(entry)
 	}
 	return entry != "" && (entry == c.GetDevicePath() || entry == cameraNameOf(c.GetDescription()))
@@ -103,8 +136,8 @@ func sharedThroughANode(c *cameraRow) bool {
 // agentSharesCameras reports whether the agent's rows say camera sharing is in
 // effect, with or without a camera that can be shared.
 func agentSharesCameras(cams []*cameraRow) bool {
-	return agentMatchesStableIDs(cams) || slices.ContainsFunc(cams, func(c *cameraRow) bool {
-		return sharedThroughANode(c) || c.GetProperties()[camerashare.KeyUnavailable] != ""
+	return agentGenerationOf(cams) != agentUndetermined || slices.ContainsFunc(cams, func(c *cameraRow) bool {
+		return c.GetProperties()[camerashare.KeyUnavailable] != ""
 	})
 }
 
@@ -133,11 +166,11 @@ func appendOnce(lines []string, line string) []string {
 // nothing will be shared: no config asks for sharing, or no camera row carries
 // a share mode (an older agent, or no shareable camera).
 func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
-	byStableID := agentMatchesStableIDs(cams)
+	generation := agentGenerationOf(cams)
 	var entries []string
 	for _, c := range cams {
 		for _, cfg := range sharingConfigs(cfgs) {
-			asked, stamp, _ := nodeSettingsOf(cfg.Entitlements, c, byStableID)
+			asked, stamp, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
 			served, mode := servedNodeOf(c, asked)
 			if mode == "" {
 				continue
@@ -160,17 +193,18 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 }
 
 // cameraSettingsConflictNotices returns one line for each shared camera whose
-// entries differ on a setting, in the sentences the agent logs and keeps in
-// the camera's share state.
+// entries differ on a setting as the device's agent matches them, in the
+// resolver's sentences. An agent built with this resolver logs the same ones
+// and keeps them in the camera's share state.
 func cameraSettingsConflictNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []string {
-	byStableID := agentMatchesStableIDs(cams)
+	generation := agentGenerationOf(cams)
 	var lines []string
 	for _, c := range cams {
 		if !sharedThroughANode(c) {
 			continue
 		}
 		for _, cfg := range sharingConfigs(cfgs) {
-			if _, _, conflicts := nodeSettingsOf(cfg.Entitlements, c, byStableID); len(conflicts) > 0 {
+			if _, _, conflicts := nodeSettingsOf(cfg.Entitlements, c, generation); len(conflicts) > 0 {
 				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: %s.", c.GetDescription(), strings.Join(conflicts, "; ")))
 			}
 		}
@@ -178,19 +212,30 @@ func cameraSettingsConflictNotices(cfgs []*appconfig.AppConfig, cams []*cameraRo
 	return lines
 }
 
+// isLaterSpelling reports whether an allowlist entry is written in a form
+// only an agent that matches stable ids reads: a path after "v4l2:", or a
+// stable id with its scheme.
+func isLaterSpelling(entry string) bool {
+	return slices.ContainsFunc([]string{"v4l2:", "by-id:", "by-path:"}, func(scheme string) bool { return strings.HasPrefix(entry, scheme) })
+}
+
 // cameraAllowlistNotices returns a line for each allowlist entry of a sharing
 // config that configures no node: one that selects no shared camera, or names
-// a camera the app reads without a share node. Against an agent from before
-// stable ids, the entries that are neither a device path nor a camera's name
-// share one line, since that agent matches nothing else.
+// a camera the app reads without a share node. Against an agent that matches
+// only a device path or a name, the entries written in a later spelling share
+// one line that says so. It returns nothing for an agent that reads no
+// allowlist: agentWithoutNodeSettingsNotice speaks for that one.
 func cameraAllowlistNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []string {
-	byStableID := agentMatchesStableIDs(cams)
-	var lines, unmatchable []string
+	generation := agentGenerationOf(cams)
+	if generation == agentWithoutNodeSettings {
+		return nil
+	}
+	var lines, laterSpellings []string
 	for _, cfg := range sharingConfigs(cfgs) {
 		for _, entry := range appconfig.CameraAllowlistEntries(cfg.Entitlements) {
 			var named []*cameraRow
 			for _, c := range cams {
-				if entryNames(entry, c, byStableID) {
+				if entryNames(entry, c, generation) {
 					named = append(named, c)
 				}
 			}
@@ -203,19 +248,38 @@ func cameraAllowlistNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []st
 				}
 				lines = appendOnce(lines, fmt.Sprintf("Camera: allowlist entry %q names %s, which is not shared through a node%s, so the entry configures nothing.",
 					entry, named[0].GetDescription(), why))
-			case !byStableID && !strings.HasPrefix(entry, "/"):
-				unmatchable = appendOnce(unmatchable, fmt.Sprintf("%q", entry))
+			case generation == agentMatchingPathOrName && isLaterSpelling(entry):
+				laterSpellings = appendOnce(laterSpellings, fmt.Sprintf("%q", entry))
 			default:
 				lines = appendOnce(lines, fmt.Sprintf("Camera: allowlist entry %q selects no shared camera's node on this device, so its entitlement's format and stamp reach none. "+
 					"\"wendy device camera list --json\" prints each camera's stable_id, path and name.", entry))
 			}
 		}
 	}
-	if len(unmatchable) > 0 {
+	if len(laterSpellings) > 0 {
 		lines = append(lines, fmt.Sprintf("Camera: the agent on this device predates stable id and \"v4l2:\" allowlist entries and matches an entry only against a camera's device path or name, "+
-			"so these select no camera's node: %s. Update the agent, or name the camera by its device path or name.", strings.Join(unmatchable, ", ")))
+			"so these select no camera's node: %s. Update the agent, or name the camera by its device path or name.", strings.Join(laterSpellings, ", ")))
 	}
 	return lines
+}
+
+// agentWithoutNodeSettingsNotice returns the line for an app that sets a
+// camera entry's format, stamp or allowlist on a device whose agent reads none
+// of them, and "" otherwise.
+func agentWithoutNodeSettingsNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
+	if agentGenerationOf(cams) != agentWithoutNodeSettings {
+		return ""
+	}
+	for _, cfg := range sharingConfigs(cfgs) {
+		for _, e := range cfg.Entitlements {
+			isCamera := e.Type == appconfig.EntitlementCamera || e.Type == appconfig.EntitlementVideo
+			if isCamera && (e.Format != "" || e.Stamp != "" || len(e.Allowlist) > 0) {
+				return "Camera: the agent on this device does not read a camera entitlement's format, stamp or allowlist: " +
+					"every shared camera's node carries pictures stamped with the capture time until the agent is updated."
+			}
+		}
+	}
+	return ""
 }
 
 // printCameraShareNotice prints the notice when the agent says the app's
@@ -235,6 +299,9 @@ func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnectio
 	}
 	var lines []string
 	if line := cameraShareNotice(cfgs, resp.GetCapabilities()); line != "" {
+		lines = append(lines, line)
+	}
+	if line := agentWithoutNodeSettingsNotice(cfgs, resp.GetCapabilities()); line != "" {
 		lines = append(lines, line)
 	}
 	lines = append(lines, cameraSettingsConflictNotices(cfgs, resp.GetCapabilities())...)
