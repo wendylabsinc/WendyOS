@@ -8,11 +8,13 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/cli/closedtest"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/localkey"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // `wendy device enroll` reaches a Closed device over this computer's local
@@ -76,5 +78,35 @@ func TestEnrollClosedDeviceOverLocalKey(t *testing.T) {
 				t.Fatalf("operator key got past the owner check: device started=%v, Cloud reserved the name=%v", agent.req != nil, cloud.req != nil)
 			}
 		})
+	}
+}
+
+// A caller without a key (the keyless listener, keyless apps on) is refused
+// before Cloud reserves the name; an Open device passes.
+func TestEnrollCheckRunsOnKeylessConnections(t *testing.T) {
+	owner, _ := localkey.LoadOrCreate(t.TempDir() + "/" + localkey.FileName)
+	dir := closedDir(t, owner)
+	keys, _ := trustedkeys.Open(dir + "/" + trustedkeys.FileName)
+	if err := keys.SetKeylessApps(true, keys.List()[0].Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, addr string
+		refused    bool
+	}{
+		{"closed, keyless", closedtest.Start(t, dir).Addr, true},
+		{"open", closedtest.Start(t, t.TempDir()).Addr, false},
+	} {
+		conn, err := grpc.NewClient(c.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = cloudenroll.RequireClosedDeviceOwner(ctx, conn)
+		cancel()
+		if c.refused != (err != nil) || (c.refused && !strings.Contains(err.Error(), "owner key")) {
+			t.Errorf("%s: err = %v, refused want %v", c.name, err, c.refused)
+		}
 	}
 }
