@@ -10,11 +10,19 @@ type nativeJPEGNotSupported struct{ msg string }
 
 func (e nativeJPEGNotSupported) Error() string { return e.msg }
 
-func wholeJPEG(data []byte) bool {
-	n := len(data)
-	return n >= 4 &&
-		data[0] == 0xFF && data[1] == 0xD8 &&
-		data[n-2] == 0xFF && data[n-1] == 0xD9
+// Some webcams fill the rest of the buffer with zero bytes after the end
+// marker.
+func jpegWithoutPadding(data []byte) (jpeg []byte, ok bool) {
+	end := len(data)
+	for end > 0 && data[end-1] == 0x00 {
+		end--
+	}
+	if end < 4 ||
+		data[0] != 0xFF || data[1] != 0xD8 ||
+		data[end-2] != 0xFF || data[end-1] != 0xD9 {
+		return nil, false
+	}
+	return data[:end], true
 }
 
 func cameraOffersJPEGAt(devicePath string, width, height uint32) bool {
@@ -37,10 +45,11 @@ func nativeJPEGCaptureSize(devicePath string, req *agentpb.StreamVideoRequest) (
 
 func nativeJPEGEmit(broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool) func([]byte, frameTimestamp) bool {
 	return func(data []byte, stamp frameTimestamp) bool {
-		if !stamp.auAligned || !wholeJPEG(data) {
+		jpeg, ok := jpegWithoutPadding(data)
+		if !stamp.auAligned || !ok {
 			return true
 		}
-		return broadcast(data, stamp, videoCodecMJPEG)
+		return broadcast(jpeg, stamp, videoCodecMJPEG)
 	}
 }
 

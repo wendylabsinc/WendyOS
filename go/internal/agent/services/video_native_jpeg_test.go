@@ -26,25 +26,35 @@ func encodeTestJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-func TestWholeJPEG(t *testing.T) {
+func TestJPEGWithoutPadding(t *testing.T) {
 	whole := encodeTestJPEG(t, 64, 48)
+	join := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	endMarkerMidData := join(whole[:len(whole)-2], []byte{0xFF, 0xD9, 0x12, 0x34}, whole[len(whole)-2:])
 	cases := []struct {
 		name string
 		data []byte
-		want bool
+		want []byte
 	}{
-		{"complete image", whole, true},
-		{"smallest possible", []byte{0xFF, 0xD8, 0xFF, 0xD9}, true},
-		{"end marker cut off", whole[:len(whole)-2], false},
-		{"start marker cut off", whole[2:], false},
-		{"padded after the end marker", append(append([]byte{}, whole...), 0x00), false},
-		{"start marker only", []byte{0xFF, 0xD8}, false},
-		{"start and end markers overlap", []byte{0xFF, 0xD8, 0xD9}, false},
-		{"empty", nil, false},
+		{"complete image", whole, whole},
+		{"smallest possible", []byte{0xFF, 0xD8, 0xFF, 0xD9}, []byte{0xFF, 0xD8, 0xFF, 0xD9}},
+		{"zero padding after the end marker", join(whole, make([]byte, 4096)), whole},
+		{"one zero byte after the end marker", join(whole, []byte{0x00}), whole},
+		{"end marker inside the data with real data after it", endMarkerMidData, endMarkerMidData},
+		{"end marker inside the data, padded", join(endMarkerMidData, make([]byte, 16)), endMarkerMidData},
+		{"no end marker", whole[:len(whole)-2], nil},
+		{"no end marker, padded", join(whole[:len(whole)-2], make([]byte, 16)), nil},
+		{"non-zero bytes after the end marker", join(whole, []byte{0x01, 0x02}), nil},
+		{"non-zero byte after the padding", join(whole, make([]byte, 16), []byte{0x01}), nil},
+		{"no start marker", whole[2:], nil},
+		{"start marker only", []byte{0xFF, 0xD8}, nil},
+		{"start and end markers overlap", []byte{0xFF, 0xD8, 0xD9}, nil},
+		{"only padding", make([]byte, 16), nil},
+		{"empty", nil, nil},
 	}
 	for _, c := range cases {
-		if got := wholeJPEG(c.data); got != c.want {
-			t.Errorf("%s: wholeJPEG = %v, want %v", c.name, got, c.want)
+		got, ok := jpegWithoutPadding(c.data)
+		if ok != (c.want != nil) || !bytes.Equal(got, c.want) {
+			t.Errorf("%s: jpegWithoutPadding = %d bytes, %v; want %d bytes, %v", c.name, len(got), ok, len(c.want), c.want != nil)
 		}
 	}
 }
@@ -71,7 +81,8 @@ func TestNativeJPEGEmitBroadcastsWholeFramesAndDropsTheRest(t *testing.T) {
 		{"first whole frame", whole, frameTimestamp{auAligned: true, sequence: 1}},
 		{"truncated by the camera", whole[:len(whole)-2], frameTimestamp{auAligned: true, sequence: 2}},
 		{"truncated by the size cap", whole, frameTimestamp{auAligned: false, sequence: 3}},
-		{"next whole frame", whole, frameTimestamp{auAligned: true, sequence: 4}},
+		{"trailing non-zero bytes", append(append([]byte{}, whole...), 0x01), frameTimestamp{auAligned: true, sequence: 4}},
+		{"whole frame padded with zeros", append(append([]byte{}, whole...), make([]byte, 512)...), frameTimestamp{auAligned: true, sequence: 5}},
 	} {
 		if !emit(f.data, f.stamp) {
 			t.Fatalf("%s stopped the capture", f.name)
@@ -81,7 +92,7 @@ func TestNativeJPEGEmitBroadcastsWholeFramesAndDropsTheRest(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("broadcast %d frames, want the 2 whole ones", len(sent))
 	}
-	for i, wantSequence := range []uint32{1, 4} {
+	for i, wantSequence := range []uint32{1, 5} {
 		got := sent[i]
 		if got.codec != videoCodecMJPEG || !got.stamp.auAligned || got.stamp.sequence != wantSequence || !bytes.Equal(got.data, whole) {
 			t.Errorf("frame %d: codec=%d auAligned=%v sequence=%d len=%d, want JPEG codec, aligned, sequence %d, the whole image",
