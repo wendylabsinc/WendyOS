@@ -90,8 +90,6 @@ func cameraShareContainers(infos []containerCameraInfo) []services.CameraShareCo
 	return out
 }
 
-// createCameraShares passes on the entitlements the container's labels carry,
-// which is what every later reader of the container sees.
 func (c *Client) createCameraShares(ctx context.Context, containerID, appID string, labels map[string]string) {
 	if c.cameraShareProvider == nil {
 		return

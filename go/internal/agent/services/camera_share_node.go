@@ -159,7 +159,6 @@ type shareNodeWriter struct {
 	buffers   [][]byte
 	next      int
 	streaming bool
-	// oversized counts the frames dropped for exceeding the mode's maximum.
 	oversized uint64
 	closed    bool
 	closeErr  error

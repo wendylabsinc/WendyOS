@@ -102,7 +102,8 @@ type shareContainer struct {
 }
 
 // shareRecord is one camera shared with one container through one node.
-// cameraName, mode and stamp never change once the record is stored. Everything else
+// cameraName, mode, stamp, askedFormat and askedWhyNot never change once the
+// record is stored. Everything else
 // is guarded by cameraShares.mu: cameraPath follows the camera, and
 // cameraAbsent says its last resolve did not find it; camera moves to the
 // camera's new port when it is followed there; node and nodeMade change when
@@ -118,10 +119,13 @@ type shareRecord struct {
 	// different camera that takes the path does not inherit them.
 	cameraAbsent bool
 	mode         sharedMode
-	// stamp is what the node's buffer timestamps hold (appconfig.CameraStamps).
-	stamp  string
-	node   int
-	camera camera.Identity
+	stamp        string
+	// askedFormat is the format the app's entitlement asked for when the
+	// camera could not be declared in it and the node serves pictures
+	// instead; askedWhyNot is why it could not. Both are empty otherwise.
+	askedFormat, askedWhyNot string
+	node                     int
+	camera                   camera.Identity
 	// siblings are the ports (Identity.Device) of cameras of the same name and
 	// index seen present while this record's camera was present too, sorted.
 	// A camera on one of them is another camera, so the record never follows
@@ -305,20 +309,22 @@ func firstClosed(a, b <-chan struct{}) <-chan struct{} {
 	return out
 }
 
-// shareFrameKinds is the hub subscription that serves each node format.
 var shareFrameKinds = map[string]frameKind{
 	appconfig.CameraFormatPixels: pixelFrames,
 	appconfig.CameraFormatNative: nativeFrames,
 	appconfig.CameraFormatH264:   encodedFrames,
 }
 
+func hubLacksFramesFor(err error) bool {
+	return errors.Is(err, errPixelsUnavailable) || isNativeRefusal(err)
+}
+
 // joinHubForShare is a share node's join. It subscribes for the frames of the
 // mode's format at defaults; a hub that already runs at the shared mode is
-// joined as it is. A
-// hub that runs at another mode is waited for when a recording holds it
-// (*shareWaitError, at once) and otherwise taken over: its explicit viewers'
-// streams end with a message that names the shared mode, its parameter-less
-// subscribers rejoin, and the camera restarts at defaults.
+// joined as it is. A hub that runs at another mode is waited for when a
+// recording holds it (*shareWaitError, at once) and otherwise taken over: its
+// explicit viewers' streams end with a message that names the shared mode, its
+// parameter-less subscribers rejoin, and the camera restarts at defaults.
 //
 // It never waits on a recording, but it is not instant: each of its
 // maxHubRetries attempts can wait on a dying hub inside getOrCreateHubKind (up
@@ -338,14 +344,15 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil
 		case err == nil:
 			h.unsubscribe(id)
-		case errors.Is(err, errPixelsUnavailable) && s.liveHubAtOtherMode(path, mode):
-			// The producer has no decoded tap at the mode a viewer chose: a
-			// size MJPEG does not cover and whose raw frame is too large, say.
-			// The shared mode has one (shareDecisionFor chose it from the tap),
-			// so the camera is taken over exactly as for any other mode.
+		case hubLacksFramesFor(err) && s.liveHubAtOtherMode(path, mode):
+			// The producer has none of the node's frames at the mode a viewer
+			// chose: no decoded tap at a size MJPEG does not cover, say, or
+			// no whole frames of the camera's own. The shared mode has them
+			// (shareDecisionFor chose it from them), so the camera is taken
+			// over exactly as for any other mode.
 		default:
-			// Any other failure, or a pixel refusal at the shared mode itself:
-			// a takeover would change nothing, so the pump is told why.
+			// Any other failure, or a refusal at the shared mode itself: a
+			// takeover would change nothing, so the pump is told why.
 			return nil, err
 		}
 		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode, kind)
@@ -440,7 +447,6 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 	return &hubShareSubscription{hub: h, id: id, ch: ch}, false, nil
 }
 
-// hubShareSubscription is a share pump's subscription on a hub.
 type hubShareSubscription struct {
 	hub   *deviceHub
 	id    int

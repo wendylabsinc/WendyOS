@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -20,9 +21,20 @@ import (
 )
 
 var (
+	sfPixelsMode = sharedMode{1280, 720, "YUYV", 2560, 30, "pixels", 0}
 	sfNativeMode = sharedMode{Width: 1280, Height: 720, Fourcc: "MJPG", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes}
 	sfH264Mode   = sharedMode{Width: 1280, Height: 720, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatH264, MaxFrameBytes: maxFrameBytes}
 )
+
+// The test services list only jpegdec, as a device that cannot derive pictures
+// and H.264 from a camera's own frames; sfCanDeriveFrames makes one that can.
+func sfCanDeriveFrames(s *VideoService) {
+	s.gstMemo.mu.Lock()
+	s.gstMemo.available = map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true}
+	s.gstMemo.mu.Unlock()
+}
+
+const sfCannotDerive = "the camera's own frames are not captured whole: pictures and H.264 cannot be derived from its frames on this device: GStreamer lacks gdpdepay, gdppay, h264parse"
 
 func sfCameraEntitlement(format, stamp string, allowlist ...string) appconfig.Entitlement {
 	return appconfig.Entitlement{Type: appconfig.EntitlementCamera, Format: format, Stamp: stamp, Allowlist: allowlist}
@@ -43,8 +55,9 @@ var (
 	sfH264InterSlice    = []byte{0, 0, 0, 1, 0x41, 0x9A, 0x02}
 )
 
-// sfH264Frame is one whole H.264 access unit: a random-access one carries its
-// parameter sets and an IDR slice.
+// sfH264Frame is one whole H.264 access unit made from the camera frame with
+// this sample ID: a random-access one carries its parameter sets and an IDR
+// slice.
 func sfH264Frame(sampleID uint64, randomAccess bool) *videoFrame {
 	data := append([]byte(nil), sfH264InterSlice...)
 	if randomAccess {
@@ -54,14 +67,63 @@ func sfH264Frame(sampleID uint64, randomAccess bool) *videoFrame {
 		tsNs: uint64(time.Now().UnixNano())}
 }
 
-func sfPictureFrame(sampleID uint64) *videoFrame {
+// sfDerivedPicture is a picture decoded from the camera frame with this sample
+// ID: it has that frame's identity and kernel capture time.
+func sfDerivedPicture(sampleID uint64, kernelNs int64) *videoFrame {
 	f := spModeFrame(uint64(time.Now().UnixNano()))
-	f.codec, f.sampleID = agentpb.VideoCodec_VIDEO_CODEC_RAW, sampleID
+	f.codec, f.sampleID, f.nativeNs, f.nativeClock = agentpb.VideoCodec_VIDEO_CODEC_RAW, sampleID, kernelNs, v4l2MonotonicClock
+	return f
+}
+
+// sfTapPicture is a picture off a GStreamer pipeline's tap, as pumpRawTap
+// broadcasts it: no sample ID and no kernel capture time.
+func sfTapPicture(wallNs uint64) *videoFrame {
+	f := spModeFrame(wallNs)
+	f.codec = agentpb.VideoCodec_VIDEO_CODEC_RAW
 	return f
 }
 
 func sfPumpAs(mode sharedMode, stamp string) func(*sharePump) {
 	return func(p *sharePump) { p.mode, p.stamp = mode, stamp }
+}
+
+// sfRecheckEvery sets how often a pump looks again at a camera that cannot
+// serve its node.
+func sfRecheckEvery(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := shareCannotServeRecheck
+	shareCannotServeRecheck = d
+	t.Cleanup(func() { shareCannotServeRecheck = prev })
+}
+
+// sfVerdict is a pump's unserved answer a test can change.
+type sfVerdict struct {
+	mu     sync.Mutex
+	reason string
+	asked  int
+}
+
+func (v *sfVerdict) set(reason string) {
+	v.mu.Lock()
+	v.reason = reason
+	v.mu.Unlock()
+}
+
+func (v *sfVerdict) unserved() string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.asked++
+	return v.reason
+}
+
+func (v *sfVerdict) timesAsked() int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.asked
+}
+
+func sfUnserved(v *sfVerdict) func(*sharePump) {
+	return func(p *sharePump) { p.unserved = v.unserved }
 }
 
 func (h *sharePumpHarness) noWriteWithin(t *testing.T, d time.Duration) {
@@ -73,17 +135,48 @@ func (h *sharePumpHarness) noWriteWithin(t *testing.T, d time.Duration) {
 	}
 }
 
+// phasesSeen records every state a pump is in from now on, sampled as fast as
+// the scheduler allows, until the returned function is called.
+func (h *sharePumpHarness) phasesSeen() (stop func() map[sharePhase]bool) {
+	seen := map[sharePhase]bool{}
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			seen[h.pump.State().Phase] = true
+			select {
+			case <-done:
+				return
+			case <-time.After(50 * time.Microsecond):
+			}
+		}
+	}()
+	return func() map[sharePhase]bool {
+		close(done)
+		<-stopped
+		return seen
+	}
+}
+
+func (h *sharePumpHarness) expectState(t *testing.T, want shareState) {
+	t.Helper()
+	if !csWaitFor(spWait, func() bool { return h.pump.State() == want }) {
+		t.Fatalf("state = %+v, want %+v", h.pump.State(), want)
+	}
+}
+
 func TestShareDecision_EachFormatDeclaresItsOwnModeAtOneSizeAndRate(t *testing.T) {
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{5, 15, 30})
+	sfCanDeriveFrames(s)
 	want := map[string]sharedMode{
-		appconfig.CameraFormatPixels: {1280, 720, "YUYV", 2560, 30, "pixels", 0},
+		appconfig.CameraFormatPixels: sfPixelsMode,
 		appconfig.CameraFormatNative: sfNativeMode,
 		appconfig.CameraFormatH264:   sfH264Mode,
 	}
 	for _, format := range appconfig.CameraFormats {
 		d := s.shareDecisionFor(context.Background(), usbCam(), format)
-		if !d.Shared {
-			t.Fatalf("%s: not shared: %s", format, d.Reason)
+		if !d.Shared || d.AskedFormat != "" {
+			t.Fatalf("%s: decision = %+v", format, d)
 		}
 		if d.Mode != want[format] {
 			t.Errorf("%s: Mode = %+v, want %+v", format, d.Mode, want[format])
@@ -91,46 +184,105 @@ func TestShareDecision_EachFormatDeclaresItsOwnModeAtOneSizeAndRate(t *testing.T
 		if d.Mode.pixelFormat() == 0 || d.Mode.bufferBytes() <= 0 {
 			t.Errorf("%s: no node can declare %+v", format, d.Mode)
 		}
-		pixels := want[appconfig.CameraFormatPixels]
-		if d.Mode.Width != pixels.Width || d.Mode.Height != pixels.Height || d.Mode.FPS != pixels.FPS {
-			t.Errorf("%s: %s differs in size or rate from the picture mode %s", format, d.Mode, pixels)
+		if d.Mode.Width != sfPixelsMode.Width || d.Mode.Height != sfPixelsMode.Height || d.Mode.FPS != sfPixelsMode.FPS {
+			t.Errorf("%s: %s differs in size or rate from the picture mode %s", format, d.Mode, sfPixelsMode)
 		}
 	}
-	if got := map[string]uint32{"MJPG": sfNativeMode.pixelFormat(), "H264": sfH264Mode.pixelFormat()}; got["MJPG"] != v4l2PixFmtMJPEG || got["H264"] != v4l2PixFmtH264 {
-		t.Errorf("pixel formats = %#x", got)
+	if sfNativeMode.pixelFormat() != v4l2PixFmtMJPEG || sfH264Mode.pixelFormat() != v4l2PixFmtH264 {
+		t.Errorf("pixel formats = %#x, %#x", sfNativeMode.pixelFormat(), sfH264Mode.pixelFormat())
 	}
 	if got := describeShareNode(sfNativeMode, appconfig.CameraStampFrame); got != "1280x720 MJPG, 30 fps, format native, stamp frame" {
 		t.Errorf("describeShareNode = %q", got)
 	}
 }
 
-func TestShareDecision_CompressedFormatsNeedTheCamerasOwnFramesWhole(t *testing.T) {
-	s := shareTestService(t, []uint32{v4l2PixFmtUYVY}, map[uint32][][2]uint32{v4l2PixFmtUYVY: {{640, 480}}}, nil)
-	if d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels); !d.Shared {
-		t.Fatalf("pixels: not shared: %s", d.Reason)
+// One node for every camera comes first: a format the camera cannot provide
+// is served as pictures, and the decision says which format was asked for and
+// why it could not be had. What decides is the check the capture itself makes.
+func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testing.T) {
+	jpegCamera := func(t *testing.T) *VideoService {
+		return shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
 	}
-	for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
-		d := s.shareDecisionFor(context.Background(), usbCam(), format)
-		want := fmt.Sprintf("no shared mode for format %q: the camera's own frames are not captured whole: the camera offers no JPEG at 640x480", format)
-		if d.Shared || d.Reason != want {
-			t.Errorf("%s: decision = %+v, want the refusal %q", format, d, want)
+	cases := map[string]struct {
+		service  func(t *testing.T) *VideoService
+		pictures sharedMode
+		whyNot   string
+	}{
+		"the camera has no JPEG": {
+			func(t *testing.T) *VideoService {
+				s := shareTestService(t, []uint32{v4l2PixFmtUYVY}, map[uint32][][2]uint32{v4l2PixFmtUYVY: {{640, 480}}}, nil)
+				sfCanDeriveFrames(s)
+				return s
+			},
+			sharedMode{640, 480, "UYVY", 1280, 30, "pixels", 0},
+			"the camera's own frames are not captured whole: the camera offers no JPEG at 640x480",
+		},
+		"the device cannot derive from its frames": {jpegCamera, sfPixelsMode, sfCannotDerive},
+		"deriving from its frames failed recently": {
+			func(t *testing.T) *VideoService {
+				s := jpegCamera(t)
+				sfCanDeriveFrames(s)
+				s.derivedFailures.remember(usbCam().GetPath(), "the encoder gave no frame")
+				return s
+			},
+			sfPixelsMode,
+			"the camera's own frames are not captured whole: deriving pictures and H.264 from this camera's frames failed recently: the encoder gave no frame",
+		},
+	}
+	for name, tc := range cases {
+		for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
+			t.Run(name+"/"+format, func(t *testing.T) {
+				s := tc.service(t)
+				d := s.shareDecisionFor(context.Background(), usbCam(), format)
+				want := shareDecision{Shared: true, Mode: tc.pictures, AskedFormat: format, AskedWhyNot: tc.whyNot}
+				if d != want {
+					t.Errorf("decision = %+v\nwant       %+v", d, want)
+				}
+				if alone := s.shareDecisionsFor(usbCam(), format)[format]; alone.Shared || alone.Reason != tc.whyNot {
+					t.Errorf("the format on its own: %+v, want the refusal %q", alone, tc.whyNot)
+				}
+			})
 		}
 	}
 }
 
-func TestShareDecision_ACameraNoFormatSharesGivesItsReasonForEveryFormat(t *testing.T) {
-	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
-	dev := usbCam()
-	dev.Transport = agentpb.VideoTransport_VIDEO_TRANSPORT_CSI
-	for format, d := range s.shareDecisionsFor(dev, appconfig.CameraFormats...) {
-		if d.Shared || d.Reason != "CSI cameras are not shared yet" {
-			t.Errorf("%s: decision = %+v", format, d)
+func TestShareDecision_ACameraWithNoModeAtAllStaysUnsharedWithItsReason(t *testing.T) {
+	cases := map[string]struct {
+		service func(t *testing.T) (*VideoService, *agentpb.VideoDevice)
+		reason  string
+	}{
+		"a camera no format shares": {
+			func(t *testing.T) (*VideoService, *agentpb.VideoDevice) {
+				s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
+				sfCanDeriveFrames(s)
+				dev := usbCam()
+				dev.Transport = agentpb.VideoTransport_VIDEO_TRANSPORT_CSI
+				return s, dev
+			},
+			"CSI cameras are not shared yet",
+		},
+		"no pictures either": {
+			func(t *testing.T) (*VideoService, *agentpb.VideoDevice) {
+				return shareTestService(t, []uint32{v4l2PixFmtYUYV}, map[uint32][][2]uint32{}, nil), usbCam()
+			},
+			"no shared mode: camera advertises no discrete frame size to capture raw frames at",
+		},
+	}
+	for name, tc := range cases {
+		for _, format := range appconfig.CameraFormats {
+			t.Run(name+"/"+format, func(t *testing.T) {
+				s, dev := tc.service(t)
+				if d := s.shareDecisionFor(context.Background(), dev, format); d != (shareDecision{Reason: tc.reason}) {
+					t.Errorf("decision = %+v, want only the reason %q", d, tc.reason)
+				}
+			})
 		}
 	}
 }
 
 func TestCreateCameraShares_EachCamerasNodeFollowsItsEntitlement(t *testing.T) {
 	h := newCSHarness(t, csBrio(), csC920(), csCam6())
+	sfCanDeriveFrames(h.s)
 	fp := installFakeProducers(h.s)
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
 		sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "/dev/video0"),
@@ -146,7 +298,7 @@ func TestCreateCameraShares_EachCamerasNodeFollowsItsEntitlement(t *testing.T) {
 	want := map[string]node{
 		"Brio 101": {sfNativeMode, appconfig.CameraStampFrame, nativeFrames},
 		"C920":     {sfH264Mode, appconfig.CameraStampTime, encodedFrames},
-		"Cam Six":  {sharedMode{1280, 720, "YUYV", 2560, 30, "pixels", 0}, appconfig.CameraStampTime, pixelFrames},
+		"Cam Six":  {sfPixelsMode, appconfig.CameraStampTime, pixelFrames},
 	}
 	records := h.records("cv-a")
 	if len(records) != len(want) {
@@ -158,8 +310,8 @@ func TestCreateCameraShares_EachCamerasNodeFollowsItsEntitlement(t *testing.T) {
 	}
 	for i, r := range records {
 		w := want[r.cameraName]
-		if r.mode != w.mode || r.stamp != w.stamp {
-			t.Errorf("%s: record holds %s, want %s", r.cameraName, describeShareNode(r.mode, r.stamp), describeShareNode(w.mode, w.stamp))
+		if r.mode != w.mode || r.stamp != w.stamp || r.askedFormat != "" {
+			t.Errorf("%s: record holds %s (asked %q), want %s", r.cameraName, describeShareNode(r.mode, r.stamp), r.askedFormat, describeShareNode(w.mode, w.stamp))
 		}
 		if got := opened[shareNodePath(r.node)]; got != w.mode {
 			t.Errorf("%s: node declares %+v, want %+v", r.cameraName, got, w.mode)
@@ -189,6 +341,10 @@ func TestCreateCameraShares_EachCamerasNodeFollowsItsEntitlement(t *testing.T) {
 	if got, want := h.reportOf("/dev/video0")["share_state"], "cv-a [format native, stamp frame] (reading)"; got != want {
 		t.Errorf("share_state = %q, want %q", got, want)
 	}
+	if row := h.reportOf("/dev/video0"); row["share_mode"] != "1280x720 YUYV, 30 fps" || row["share_mode_native"] != "1280x720 MJPG, 30 fps" ||
+		row["share_mode_h264"] != "1280x720 H264, 30 fps" || row["share_unavailable_native"] != "" || row["share_unavailable_h264"] != "" {
+		t.Errorf("the camera's modes by format = %v", row)
+	}
 
 	shares := h.stateShares("cv-a")
 	if len(shares) != 3 {
@@ -217,31 +373,181 @@ func TestCreateCameraShares_NoEntitlementSettingsIsPixelsWithCaptureTimes(t *tes
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newCSHarness(t, csBrio())
+			sfCanDeriveFrames(h.s)
 			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
 			records := h.records("cv-a")
 			if len(records) != 1 {
 				t.Fatalf("records = %d; logs: %v", len(records), h.logs.All())
 			}
-			if r := records[0]; r.mode != (sharedMode{1280, 720, "YUYV", 2560, 30, "pixels", 0}) || r.stamp != appconfig.CameraStampTime {
-				t.Fatalf("record holds %s", describeShareNode(r.mode, r.stamp))
+			if r := records[0]; r.mode != sfPixelsMode || r.stamp != appconfig.CameraStampTime || r.askedFormat != "" {
+				t.Fatalf("record holds %s (asked %q)", describeShareNode(r.mode, r.stamp), r.askedFormat)
+			}
+			if st := records[0].pump.State(); st != (shareState{Phase: shareIdle}) {
+				t.Fatalf("state = %+v, want idle", st)
 			}
 		})
 	}
 }
 
-func TestCreateCameraShares_AFormatTheCameraCannotCarryGivesTheRealCamera(t *testing.T) {
-	h := newCSHarness(t, csBrio())
-	prev := deviceSupportsMJPEGSize
-	deviceSupportsMJPEGSize = func(string, uint32, uint32) bool { return false }
-	t.Cleanup(func() { deviceSupportsMJPEGSize = prev })
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")})
+// An app that asks for a format its camera cannot provide still gets a node
+// for the camera, of pictures, and every report of the share says so. Its
+// other settings, and other apps' nodes, are as they would be.
+func TestCreateCameraShares_AFormatTheCameraCannotProvideGetsAPicturesNodeThatSaysSo(t *testing.T) {
+	for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
+		t.Run(format, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			fp := installFakeProducers(h.s)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(format, "")})
+			h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", nil)
 
-	want := `camera share: cv-a gets the real camera Brio 101 (/dev/video0): no shared mode for format "native": the camera's own frames are not captured whole: the camera offers no JPEG at 1280x720`
-	if n := h.logged(want); n != 1 {
-		t.Errorf("refusal logged %d times; logs: %v", n, h.logs.All())
+			records := h.records("cv-a")
+			if len(records) != 1 || len(h.records("cv-b")) != 1 {
+				t.Fatalf("records = %d and %d, want a node each; logs: %v", len(records), len(h.records("cv-b")), h.logs.All())
+			}
+			r := records[0]
+			if r.mode != sfPixelsMode || r.stamp != appconfig.CameraStampTime || r.askedFormat != format || r.askedWhyNot != sfCannotDerive {
+				t.Fatalf("record holds %s, asked %q (%q)", describeShareNode(r.mode, r.stamp), r.askedFormat, r.askedWhyNot)
+			}
+			if got := r.io.(*csNode).mode; got != sfPixelsMode {
+				t.Errorf("the node declares %+v, want pictures", got)
+			}
+			said := "asked for " + format + "; serving pixels because " + sfCannotDerive
+			var warned int
+			for _, e := range h.logs.All() {
+				if e.Message == "camera share: cv-a: Brio 101 (/dev/video0): "+said && e.Level.String() == "warn" {
+					warned++
+				}
+			}
+			if warned != 1 {
+				t.Errorf("warned %d times that pictures are served instead; logs: %v", warned, h.logs.All())
+			}
+			row := h.reportOf("/dev/video0")
+			wantState := "cv-a [format pixels, stamp time] (idle; " + said + "), cv-b [format pixels, stamp time] (idle)"
+			if row["share_state"] != wantState {
+				t.Errorf("share_state = %q\nwant         %q", row["share_state"], wantState)
+			}
+			if row["share_mode"] != "1280x720 YUYV, 30 fps" || row["share_mode_"+format] != "" || row["share_unavailable_"+format] != sfCannotDerive || row["share_unavailable"] != "" {
+				t.Errorf("the camera's row = %v", row)
+			}
+			if sh := h.stateShares("cv-a")[0]; sh["askedFormat"] != format || sh["askedWhyNot"] != sfCannotDerive {
+				t.Errorf("state file share = %v", sh)
+			}
+
+			r.io.(*csNode).send(t, 1)
+			if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 }) {
+				t.Fatalf("the camera did not start; logs: %v", h.logs.All())
+			}
+			wall := uint64(time.Now().UnixNano())
+			fp.hub(0).broadcast(sfTapPicture(wall))
+			if e := r.io.(*csNode).next(t); e.size != len(sfTapPicture(wall).data) || e.stamp.holdsSampleID {
+				t.Errorf("the node got %+v, want the picture with its capture time", e)
+			}
+		})
 	}
-	if len(h.records("cv-a")) != 0 || len(h.openedNodes()) != 0 {
-		t.Error("a node was made for a format the camera cannot carry")
+}
+
+func TestCreateCameraShares_AnAskedFormatSurvivesAnAgentRestartInTheState(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")})
+	state, err := os.ReadFile(cameraSharesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.s.Shutdown()
+	h = newCSHarness(t, csBrio())
+	h.loop.aux[255] = "Brio 101"
+	h.writeState(string(state))
+	h.s.loadCameraShares()
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a"}})
+	want := "cv-a [format pixels, stamp time] (idle; asked for native; serving pixels because " + sfCannotDerive + ")"
+	if got := h.reportOf("/dev/video0")["share_state"]; got != want {
+		t.Errorf("share_state = %q\nwant         %q", got, want)
+	}
+}
+
+// A "frame" stamp on a camera whose pictures carry no frame number: the node
+// exists, the camera is never opened for it, and its state says why from the
+// moment it is made.
+func TestCreateCameraShares_AFrameStampNodeWithNoFrameNumbersIsNotJoinedAndSaysWhy(t *testing.T) {
+	sfRecheckEvery(t, 5*time.Millisecond)
+	h := newCSHarness(t, csBrio())
+	fp := installFakeProducers(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement("", appconfig.CameraStampFrame)})
+	records := h.records("cv-a")
+	if len(records) != 1 || records[0].mode != sfPixelsMode || records[0].stamp != appconfig.CameraStampFrame {
+		t.Fatalf("records = %+v; logs: %v", records, h.logs.All())
+	}
+	r := records[0]
+	why := `the camera's own frames are not captured whole (pictures and H.264 cannot be derived from its frames on this device: GStreamer lacks gdpdepay, gdppay, h264parse), so its pictures carry no frame number for the "frame" stamp`
+	want := "cv-a [format pixels, stamp frame] (cannot serve: " + why + ")"
+	if !csWaitFor(2*time.Second, func() bool { return h.reportOf("/dev/video0")["share_state"] == want }) {
+		t.Fatalf("share_state with no reader = %q\nwant                         %q", h.reportOf("/dev/video0")["share_state"], want)
+	}
+
+	r.io.(*csNode).send(t, 1)
+	time.Sleep(50 * time.Millisecond) // ten rechecks
+	if fp.count() != 0 {
+		t.Fatalf("the camera was opened %d times for a node it cannot serve", fp.count())
+	}
+	if got := h.reportOf("/dev/video0")["share_state"]; got != want {
+		t.Fatalf("share_state with a reader = %q\nwant                       %q", got, want)
+	}
+
+	// The camera's frames can be captured whole now: the next look joins.
+	sfCanDeriveFrames(h.s)
+	if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 }) {
+		t.Fatalf("the camera did not start once it could serve the node; logs: %v", h.logs.All())
+	}
+	fp.hub(0).broadcast(sfDerivedPicture(77, 5_000_000_000))
+	if e := r.io.(*csNode).next(t); e.stamp != stampWithSampleID(77) {
+		t.Errorf("buffer stamp = %+v, want sample ID 77", e.stamp)
+	}
+	if !csWaitFor(2*time.Second, func() bool {
+		return h.reportOf("/dev/video0")["share_state"] == "cv-a [format pixels, stamp frame] (reading)"
+	}) {
+		t.Errorf("share_state after a frame = %q", h.reportOf("/dev/video0")["share_state"])
+	}
+}
+
+// A container created again while a record of an earlier one is still there
+// gets the node its own entitlements ask for.
+func TestCreateCameraShares_AContainerCreatedAgainFollowsItsNewSettings(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
+	stale := h.records("cv-a")[0]
+	staleNode := stale.io.(*csNode)
+
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
+	if records := h.records("cv-a"); len(records) != 1 || records[0] != stale || len(h.openedNodes()) != 1 {
+		t.Fatalf("a create with the same settings made the share again: %+v", records)
+	}
+
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame)})
+	h.drainRemovals()
+	records := h.records("cv-a")
+	if len(records) != 1 || records[0] == stale {
+		t.Fatalf("records = %+v, want one new record; logs: %v", records, h.logs.All())
+	}
+	r := records[0]
+	if r.mode != sfNativeMode || r.stamp != appconfig.CameraStampFrame || r.io.(*csNode).mode != sfNativeMode || r.pump.stamp != appconfig.CameraStampFrame {
+		t.Errorf("the new share is %s", describeShareNode(r.mode, r.stamp))
+	}
+	if staleNode.closes.Load() != 1 || !reflect.DeepEqual(h.loop.removedAux(), []int{stale.node}) {
+		t.Errorf("the stale node: closed %d times, removed nodes %v", staleNode.closes.Load(), h.loop.removedAux())
+	}
+	if n := h.logged("camera share: cv-a was created again: its share of Brio 101 was 1280x720 YUYV, 30 fps, format pixels, stamp time and is made again as 1280x720 MJPG, 30 fps, format native, stamp frame"); n != 1 {
+		t.Errorf("the replacement was logged %d times; logs: %v", n, h.logs.All())
+	}
+	if shares := h.stateShares("cv-a"); len(shares) != 1 || shares[0]["format"] != "native" || shares[0]["stamp"] != "frame" {
+		t.Errorf("state file shares = %v", shares)
+	}
+
+	// Only the stamp differs.
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")})
+	h.drainRemovals()
+	if records := h.records("cv-a"); len(records) != 1 || records[0].mode != sfNativeMode || records[0].stamp != appconfig.CameraStampTime {
+		t.Errorf("after a create with another stamp: %+v", records)
 	}
 }
 
@@ -262,8 +568,54 @@ func TestCameraShareState_Version1LoadsAsPixelsWithCaptureTimes(t *testing.T) {
 	}
 }
 
+// An agent that knows only version 1 ignores a version 2 file and leaves
+// running apps' nodes without a writer, so the file is version 1, exactly as
+// that agent wrote it, whenever no share needs more.
+func TestCameraShareState_IsVersion2OnlyWhileSomeShareNeedsIt(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
+	version1 := map[string]any{
+		"version": float64(1),
+		"containers": map[string]any{"cv-a": map[string]any{
+			"app": "sh.wendy.cv-a",
+			"shares": []any{map[string]any{
+				"camera": map[string]any{"device": csPort("1-2.1"), "index": "0", "name": "Brio 101"},
+				"path":   "/dev/video0",
+				"mode": map[string]any{"width": float64(1280), "height": float64(720), "fourcc": "YUYV",
+					"bytesPerLine": float64(2560), "fps": float64(30)},
+				"node": float64(255),
+			}},
+		}},
+	}
+	if state := h.stateFile(); !reflect.DeepEqual(state, version1) {
+		t.Fatalf("state file with only pixels/time shares = %+v\nwant the version 1 file %+v", state, version1)
+	}
+
+	for name, entitlement := range map[string]appconfig.Entitlement{
+		"a format": sfCameraEntitlement(appconfig.CameraFormatH264, ""),
+		"a stamp":  sfCameraEntitlement("", appconfig.CameraStampFrame),
+	} {
+		h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", []appconfig.Entitlement{entitlement})
+		if v := h.stateFile()["version"]; v != float64(2) {
+			t.Fatalf("%s: state file version = %v, want 2", name, v)
+		}
+		for id, wantFormat := range map[string]string{"cv-a": "pixels", "cv-b": h.records("cv-b")[0].mode.Format} {
+			if sh := h.stateShares(id)[0]; sh["format"] != wantFormat || sh["stamp"] != h.records(id)[0].stamp {
+				t.Fatalf("%s: version 2 share of %s = %v", name, id, sh)
+			}
+		}
+		h.s.RemoveCameraShares("cv-b")
+		h.drainRemovals()
+		if state := h.stateFile(); !reflect.DeepEqual(state, version1) {
+			t.Fatalf("%s: state file after the share that needed version 2 went = %+v\nwant %+v", name, state, version1)
+		}
+	}
+}
+
 func TestCameraShareState_Version2KeepsEachSharesSettingsAcrossAnAgentRestart(t *testing.T) {
 	h := newCSHarness(t, csBrio(), csC920())
+	sfCanDeriveFrames(h.s)
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
 		sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "Brio 101"),
 		sfCameraEntitlement(appconfig.CameraFormatH264, appconfig.CameraStampFrame, "C920"),
@@ -292,6 +644,7 @@ func TestCameraShareState_Version2KeepsEachSharesSettingsAcrossAnAgentRestart(t 
 	}
 	h.s.Shutdown()
 	h = newCSHarness(t, csBrio(), csC920())
+	sfCanDeriveFrames(h.s)
 	fp := installFakeProducers(h.s)
 	for nr, label := range nodes {
 		h.loop.aux[nr] = label
@@ -373,6 +726,7 @@ func TestCameraShareState_AShareWithSettingsThisAgentDoesNotKnowIsDropped(t *tes
 
 func TestCameraShares_AppsWithDifferentFormatsOnOneCameraAllGetFrames(t *testing.T) {
 	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
 	fp := installFakeProducers(h.s)
 	apps := []struct{ id, format, stamp string }{
 		{"cv-a", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
@@ -406,12 +760,12 @@ func TestCameraShares_AppsWithDifferentFormatsOnOneCameraAllGetFrames(t *testing
 
 	// One camera frame, as the hub delivers it on each plane.
 	hub := fp.hub(0)
-	jpeg, picture, accessUnit := sfJPEGFrame(7, 9_000_000_000), sfPictureFrame(7), sfH264Frame(7, true)
+	jpeg, picture, accessUnit := sfJPEGFrame(7, 9_000_000_000), sfDerivedPicture(7, 9_000_000_000), sfH264Frame(7, true)
 	for _, f := range []*videoFrame{jpeg, picture, accessUnit} {
 		hub.broadcast(f)
 	}
-	if e := nodes["cv-a"].next(t); e.size != len(picture.data) || e.stamp.holdsSampleID {
-		t.Errorf("pixels node got %+v, want the %d-byte picture with its capture time", e, len(picture.data))
+	if e := nodes["cv-a"].next(t); e.size != len(picture.data) || e.stamp != stampWithCaptureTime(9_000_000_000) {
+		t.Errorf("pixels node got %+v, want the %d-byte picture with its kernel capture time", e, len(picture.data))
 	}
 	if e := nodes["cv-b"].next(t); e.size != len(jpeg.data) || e.stamp != stampWithSampleID(7) {
 		t.Errorf("native node got %+v, want the %d-byte JPEG stamped with sample ID 7", e, len(jpeg.data))
@@ -439,47 +793,80 @@ func TestCameraShares_AppsWithDifferentFormatsOnOneCameraAllGetFrames(t *testing
 }
 
 func TestJoinHubForShare_TakesAViewersCameraOverForEveryNodeFormat(t *testing.T) {
+	type refusal func(*deviceHub)
+	refusals := map[string]refusal{
+		"the viewer's hub takes the subscription": func(*deviceHub) {},
+		"the viewer's hub has none of the node's frames": func(h *deviceHub) {
+			h.rawNotOffered(fixedReason("no tap at this size"))
+			h.nativeNotOffered(fixedReason("the camera offers no JPEG at 640x480"))
+		},
+	}
 	for _, tc := range []struct {
 		mode   sharedMode
 		own    *videoFrame
 		others []*videoFrame
 	}{
-		{sfNativeMode, sfJPEGFrame(1, 1), []*videoFrame{sfPictureFrame(1), sfH264Frame(1, true)}},
-		{sfH264Mode, sfH264Frame(1, true), []*videoFrame{sfPictureFrame(1), sfJPEGFrame(1, 1)}},
-		{spMode, sfPictureFrame(1), []*videoFrame{sfJPEGFrame(1, 1), sfH264Frame(1, true)}},
+		{sfNativeMode, sfJPEGFrame(1, 1), []*videoFrame{sfDerivedPicture(1, 1), sfH264Frame(1, true)}},
+		{sfH264Mode, sfH264Frame(1, true), []*videoFrame{sfDerivedPicture(1, 1), sfJPEGFrame(1, 1)}},
+		{sfPixelsMode, sfDerivedPicture(1, 1), []*videoFrame{sfJPEGFrame(1, 1), sfH264Frame(1, true)}},
 	} {
-		t.Run(tc.mode.Format, func(t *testing.T) {
-			svc := newTestVideoService(nil, nil)
-			fp := installFakeProducers(svc)
-			ctx := context.Background()
-			viewerReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480}
-			oldHub, viewerID, _, err := svc.getOrCreateHub(ctx, "/dev/video0", viewerReq, hubHolderStreamClient)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer oldHub.unsubscribe(viewerID)
-
-			share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, tc.mode)
-			if err != nil {
-				t.Fatalf("share join: %v", err)
-			}
-			defer share.Leave()
-			newHub := currentHub(svc, "/dev/video0")
-			if newHub == nil || newHub == oldHub || fp.count() != 2 || hubParams(newHub) != [3]uint32{} {
-				t.Fatalf("the camera was not restarted at its defaults: %d producers", fp.count())
-			}
-			for _, f := range append(tc.others, tc.own) {
-				newHub.broadcast(f)
-			}
-			select {
-			case f := <-share.Frames():
-				if f != tc.own {
-					t.Fatalf("the share received a %s frame, want only its format's", describeNodeFrame(f))
+		for name, refuse := range refusals {
+			t.Run(tc.mode.Format+"/"+name, func(t *testing.T) {
+				svc := newTestVideoService(nil, nil)
+				fp := installFakeProducers(svc)
+				ctx := context.Background()
+				viewerReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480}
+				oldHub, viewerID, _, err := svc.getOrCreateHub(ctx, "/dev/video0", viewerReq, hubHolderStreamClient)
+				if err != nil {
+					t.Fatal(err)
 				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("the share received no frame of its format")
-			}
-		})
+				defer oldHub.unsubscribe(viewerID)
+				refuse(oldHub)
+
+				share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, tc.mode)
+				if err != nil {
+					t.Fatalf("share join: %v", err)
+				}
+				defer share.Leave()
+				newHub := currentHub(svc, "/dev/video0")
+				if newHub == nil || newHub == oldHub || fp.count() != 2 || hubParams(newHub) != [3]uint32{} {
+					t.Fatalf("the camera was not restarted at its defaults: %d producers", fp.count())
+				}
+				for _, f := range append(tc.others, tc.own) {
+					newHub.broadcast(f)
+				}
+				select {
+				case f := <-share.Frames():
+					if f != tc.own {
+						t.Fatalf("the share received a %s frame, want only its format's", describeNodeFrame(f))
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("the share received no frame of its format")
+				}
+			})
+		}
+	}
+}
+
+// A hub at the shared mode that has none of the node's frames is not taken
+// over: restarting the camera the same way would change nothing.
+func TestJoinHubForShare_ARefusalAtTheSharedModeIsReportedNotTakenOver(t *testing.T) {
+	svc := newTestVideoService(nil, nil)
+	fp := installFakeProducers(svc)
+	ctx := context.Background()
+	hub, id, _, err := svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0}, hubHolderStreamClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.unsubscribe(id)
+	hub.nativeNotOffered(fixedReason("JPEG: the camera offers no JPEG at 1280x720"))
+
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, sfNativeMode)
+	if !isNativeRefusal(err) || refusalText(err) != "native frames are not available for this camera: JPEG: the camera offers no JPEG at 1280x720" {
+		t.Fatalf("share join: %v, want the hub's refusal", err)
+	}
+	if fp.count() != 1 || currentHub(svc, "/dev/video0") != hub {
+		t.Fatalf("the camera was restarted (%d producers) for a refusal a restart cannot lift", fp.count())
 	}
 }
 
@@ -493,19 +880,20 @@ func TestSharePump_TimeStampIsTheKernelCaptureTimeWhenTheFrameHasOne(t *testing.
 	h := startSharePump(t, newSpJoiner(spSubResult(sub)), clocks)
 	h.node.send(t, 1)
 
-	onKernelClock := spModeFrame(uint64(nowWall - 40_000_000))
-	onKernelClock.nativeNs, onKernelClock.nativeClock = 49_990_000_000, v4l2MonotonicClock
-	sub.frames <- onKernelClock
+	derived := sfDerivedPicture(5, 49_990_000_000)
+	derived.tsNs = uint64(nowWall - 40_000_000)
+	sub.frames <- derived
 	if e := h.node.next(t); e.stamp != stampWithCaptureTime(49_990_000_000) {
 		t.Errorf("stamp = %+v, want the kernel capture time", e.stamp)
 	}
 
 	for name, f := range map[string]func(*videoFrame){
+		"a tap picture":    func(*videoFrame) {},
 		"agent wall clock": func(f *videoFrame) { f.nativeNs, f.nativeClock = nowWall-40_000_000, "CLOCK_REALTIME_AGENT_CAPTURE" },
 		"unknown clock":    func(f *videoFrame) { f.nativeNs, f.nativeClock = 123, "V4L2_TIMESTAMP_UNKNOWN" },
 		"no kernel time":   func(f *videoFrame) { f.nativeClock = v4l2MonotonicClock },
 	} {
-		frame := spModeFrame(uint64(nowWall - 40_000_000))
+		frame := sfTapPicture(uint64(nowWall - 40_000_000))
 		f(frame)
 		sub.frames <- frame
 		if e := h.node.next(t); e.stamp != stampWithCaptureTime(nowMono-40_000_000) {
@@ -514,36 +902,200 @@ func TestSharePump_TimeStampIsTheKernelCaptureTimeWhenTheFrameHasOne(t *testing.
 	}
 }
 
-func TestSharePump_FrameStampHoldsTheSampleIDAndNeverWritesAFrameWithoutOne(t *testing.T) {
-	without, with := newSpFakeSub(), newSpFakeSub()
-	j := newSpJoiner(spSubResult(without), spSubResult(with))
+const (
+	sfNoFrameNumber = `the camera's frames carry no frame number for the "frame" stamp`
+	sfNotWholeH264  = "the camera's H.264 is not arriving as whole frames, so there is none to put in a buffer"
+)
+
+// While the camera cannot serve the node the pump stays out of the hub: with
+// no reader, with a reader, and at every recheck.
+func TestSharePump_ACameraThatCannotServeTheNodeIsNotJoined(t *testing.T) {
+	sfRecheckEvery(t, 2*time.Millisecond)
+	verdict := &sfVerdict{reason: "no frame numbers here"}
+	sub := newSpFakeSub()
+	j := newSpJoiner(spSubResult(sub))
+	h := startSharePump(t, j, sfPumpAs(spMode, appconfig.CameraStampFrame), sfUnserved(verdict))
+	cannot := shareState{shareCannotServe, "no frame numbers here"}
+
+	h.expectState(t, cannot)
+	h.node.send(t, 1)
+	asked := verdict.timesAsked()
+	if !csWaitFor(spWait, func() bool { return verdict.timesAsked() >= asked+5 }) {
+		t.Fatal("the pump does not look again while an app reads")
+	}
+	if j.count() != 0 || h.pump.State() != cannot {
+		t.Fatalf("joins = %d, state = %+v; want no join and %+v", j.count(), h.pump.State(), cannot)
+	}
+	if n := h.logged("camera share: app1: cam0 cannot serve its node (format pixels, stamp frame): no frame numbers here; it gets no frames until the camera can, checked every 2ms"); n != 1 {
+		t.Errorf("the reason was logged %d times, want once; logs: %v", n, h.logs.All())
+	}
+
+	// The reader gives up: the state still says why it got nothing.
+	h.node.send(t, 0)
+	asked = verdict.timesAsked()
+	if !csWaitFor(spWait, func() bool { return verdict.timesAsked() >= asked+5 }) {
+		t.Fatal("the pump does not look again with no reader")
+	}
+	if j.count() != 0 || h.pump.State() != cannot {
+		t.Fatalf("with no reader: joins = %d, state = %+v", j.count(), h.pump.State())
+	}
+
+	// The camera can serve the node now. With no reader that makes it idle;
+	// with one, the pump joins and the first frame makes it reading.
+	verdict.set("")
+	h.expectState(t, shareState{Phase: shareIdle})
+	if j.count() != 0 {
+		t.Fatalf("joined %d times with no reader", j.count())
+	}
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	sub.frames <- sfDerivedPicture(1234567890123, 1)
+	if e := h.node.next(t); e.stamp != stampWithSampleID(1234567890123) {
+		t.Errorf("stamp = %+v, want sample ID 1234567890123", e.stamp)
+	}
+	h.expectState(t, shareState{Phase: shareReading})
+}
+
+// Each way a capture shows, after the join, that it cannot serve the node:
+// nothing is written, the pump leaves the hub, the state is "cannot serve"
+// with the reason and never "reading" until a frame is written, and the next
+// look comes on the slow timer, not the backoff.
+func TestSharePump_ACaptureThatCannotServeTheNodeIsLeftAndSaysWhy(t *testing.T) {
+	chunk := sfH264Frame(1, true)
+	chunk.auAligned = false
+	vp8 := &videoFrame{data: []byte{1, 2, 3}, codec: agentpb.VideoCodec_VIDEO_CODEC_VP8, sampleID: 1}
+	ownH264 := sfH264Frame(1, true)
+	ownH264.native = true
+	refusal := errNativeUnavailable("JPEG: the camera offers no JPEG at 1280x720")
+	const refused = "native frames are not available for this camera: JPEG: the camera offers no JPEG at 1280x720"
+
+	cases := map[string]struct {
+		mode   sharedMode
+		stamp  string
+		shows  func(sub *spFakeSub)
+		reason string
+		serves *videoFrame
+		stamps shareFrameStamp
+	}{
+		"a picture with no frame number on a frame stamp node": {
+			spMode, appconfig.CameraStampFrame,
+			func(sub *spFakeSub) { sub.frames <- sfTapPicture(uint64(time.Now().UnixNano())) },
+			sfNoFrameNumber, sfDerivedPicture(9, 1), stampWithSampleID(9),
+		},
+		"H.264 arriving in chunks": {
+			sfH264Mode, appconfig.CameraStampTime,
+			func(sub *spFakeSub) { sub.frames <- chunk },
+			sfNotWholeH264, sfH264Frame(9, true), shareFrameStamp{},
+		},
+		"VP8 on an h264 node": {
+			sfH264Mode, appconfig.CameraStampTime,
+			func(sub *spFakeSub) { sub.frames <- vp8 },
+			"camera frames are VP8, the node declares 1280x720 H264, 30 fps", sfH264Frame(9, true), shareFrameStamp{},
+		},
+		"the camera's own H.264 on a JPEG node": {
+			sfNativeMode, appconfig.CameraStampFrame,
+			func(sub *spFakeSub) { sub.frames <- ownH264 },
+			"camera frames are H.264, the node declares 1280x720 MJPG, 30 fps", sfJPEGFrame(9, 1), stampWithSampleID(9),
+		},
+		"the producer turns native subscribers away": {
+			sfNativeMode, appconfig.CameraStampFrame,
+			func(sub *spFakeSub) { sub.err = refusal; close(sub.frames) },
+			refused, sfJPEGFrame(9, 1), stampWithSampleID(9),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sfRecheckEvery(t, time.Hour)
+			first, second, third := newSpFakeSub(), newSpFakeSub(), newSpFakeSub()
+			j := newSpJoiner(spSubResult(first), spSubResult(second), spSubResult(third))
+			h := startSharePump(t, j, sfPumpAs(tc.mode, tc.stamp))
+			cannot := shareState{shareCannotServe, tc.reason}
+
+			h.node.send(t, 1)
+			j.waitJoin(t)
+			h.expectState(t, shareState{Phase: shareReading})
+			tc.shows(first)
+			spWaitClosed(t, first.left, "the pump to leave the hub")
+			h.expectState(t, cannot)
+
+			// The backoff here is 2 and 4 ms; the recheck is an hour.
+			phases := h.phasesSeen()
+			time.Sleep(40 * time.Millisecond)
+			if j.count() != 1 {
+				t.Fatalf("joined %d times: a camera that cannot serve the node is retried on the backoff", j.count())
+			}
+
+			// A look that joins and finds the same holds the same state.
+			h.pump.Nudge()
+			j.waitJoin(t)
+			tc.shows(second)
+			spWaitClosed(t, second.left, "the pump to leave the hub again")
+			h.pump.Nudge()
+			j.waitJoin(t)
+			time.Sleep(5 * time.Millisecond)
+			if seen := phases(); len(seen) != 1 || !seen[shareCannotServe] || h.pump.State() != cannot {
+				t.Fatalf("states seen while the camera could not serve the node = %v, now %+v; want only %+v", seen, h.pump.State(), cannot)
+			}
+			if n := h.logged("cannot serve its node"); n != 1 {
+				t.Errorf("the reason was logged %d times, want once", n)
+			}
+
+			third.frames <- tc.serves
+			e := h.node.next(t)
+			if e.size != len(tc.serves.data) || e.stamp.holdsSampleID != tc.stamps.holdsSampleID || e.stamp.sampleID != tc.stamps.sampleID {
+				t.Fatalf("the first write = %+v, want the %d-byte frame the camera can now serve", e, len(tc.serves.data))
+			}
+			h.expectState(t, shareState{Phase: shareReading})
+			if all := h.node.all(); len(all) != 1 {
+				t.Errorf("node writes = %+v, want only that frame", all)
+			}
+		})
+	}
+}
+
+func TestSharePump_ARefusalOfNativeFramesAtTheJoinIsNotRetriedOnTheBackoff(t *testing.T) {
+	sfRecheckEvery(t, time.Hour)
+	refusal := errNativeUnavailable("JPEG: the camera offers no JPEG at 1280x720")
+	served := newSpFakeSub()
+	j := newSpJoiner(spErrResult(refusal), spSubResult(served))
+	h := startSharePump(t, j, sfPumpAs(sfNativeMode, appconfig.CameraStampTime))
+
+	h.node.send(t, 1)
+	j.waitJoin(t)
+	h.expectState(t, shareState{shareCannotServe, "native frames are not available for this camera: JPEG: the camera offers no JPEG at 1280x720"})
+	time.Sleep(40 * time.Millisecond)
+	if j.count() != 1 || h.logged("retrying in") != 0 {
+		t.Fatalf("joins = %d, backoff lines = %d; want the slow recheck only", j.count(), h.logged("retrying in"))
+	}
+
+	h.pump.Nudge()
+	j.waitJoin(t)
+	served.frames <- sfJPEGFrame(9, 77_000_000_000)
+	if e := h.node.next(t); e.stamp != stampWithCaptureTime(77_000_000_000) || e.size != len(sfJPEGFrame(9, 0).data) {
+		t.Fatalf("write = %+v, want the camera's own frame at its kernel capture time", e)
+	}
+	h.expectState(t, shareState{Phase: shareReading})
+}
+
+// An ordinary failure after a camera could not serve the node is retried on
+// the backoff again, and shows as itself.
+func TestSharePump_AnOrdinaryFailureAfterCannotServeUsesTheBackoff(t *testing.T) {
+	sfRecheckEvery(t, time.Hour)
+	first, last := newSpFakeSub(), newSpFakeSub()
+	j := newSpJoiner(spSubResult(first), spErrResult(errors.New("boom")), spSubResult(last))
 	h := startSharePump(t, j, sfPumpAs(spMode, appconfig.CameraStampFrame))
 
 	h.node.send(t, 1)
 	j.waitJoin(t)
-	without.frames <- sfPictureFrame(0)
-	spWaitClosed(t, without.left, "the pump to leave a capture whose frames have no sample ID")
-	if s := h.waitState(t, shareNoFrames); s.Detail != `the camera's frames carry no frame number for the "frame" stamp` {
-		t.Fatalf("Detail = %q", s.Detail)
-	}
-	if n := h.logged(`camera share: app1: cam0 cannot serve its node (format pixels, stamp frame): the camera's frames carry no frame number for the "frame" stamp; not writing its frames, retrying in`); n != 1 {
-		t.Errorf("reason logged %d times; logs: %v", n, h.logs.All())
-	}
-
-	// The camera is captured another way by the next join.
+	first.frames <- sfTapPicture(1)
+	h.expectState(t, shareState{shareCannotServe, sfNoFrameNumber})
+	h.pump.Nudge()
 	j.waitJoin(t)
-	if s := h.pump.State(); s.Phase != shareNoFrames {
-		t.Errorf("state before a frame is written = %+v, want it to stay no frames", s)
+	j.waitJoin(t) // after the backoff, with no nudge
+	if n := h.logged("joining cam0 failed while the app reads: boom; retrying in"); n != 1 {
+		t.Fatalf("backoff lines = %d, want 1; logs: %v", n, h.logs.All())
 	}
-	with.frames <- sfPictureFrame(1234567890123)
-	e := h.node.next(t)
-	if e.stamp != stampWithSampleID(1234567890123) {
-		t.Errorf("stamp = %+v, want sample ID 1234567890123", e.stamp)
-	}
-	h.waitState(t, shareReading)
-	if all := h.node.all(); len(all) != 1 {
-		t.Errorf("node writes = %+v, want only the frame with a sample ID", all)
-	}
+	h.expectState(t, shareState{Phase: shareReading})
 }
 
 func TestSharePump_H264StartsOnARandomAccessFrameAndWritesWholeAccessUnits(t *testing.T) {
@@ -562,7 +1114,7 @@ func TestSharePump_H264StartsOnARandomAccessFrameAndWritesWholeAccessUnits(t *te
 	if e := h.node.next(t); e.stamp != stampWithSampleID(4) || e.size != len(inter.data) {
 		t.Fatalf("second write = %+v, want frame 4 whole", e)
 	}
-	h.waitState(t, shareReading)
+	h.expectState(t, shareState{Phase: shareReading})
 
 	// A frame that does not reach the app breaks the chain: the next written
 	// is again one the app can decode alone.
@@ -577,80 +1129,53 @@ func TestSharePump_H264StartsOnARandomAccessFrameAndWritesWholeAccessUnits(t *te
 	if e := h.node.next(t); e.stamp != stampWithSampleID(7) {
 		t.Fatalf("write after a dropped frame = %+v, want the next random-access frame, 7", e)
 	}
-	h.waitState(t, shareReading)
+	h.expectState(t, shareState{Phase: shareReading})
 }
 
-func TestSharePump_H264ThatIsNotWholeAccessUnitsIsNeverWritten(t *testing.T) {
-	chunked, whole := newSpFakeSub(), newSpFakeSub()
-	j := newSpJoiner(spSubResult(chunked), spSubResult(whole))
-	h := startSharePump(t, j, sfPumpAs(sfH264Mode, appconfig.CameraStampTime))
-
-	h.node.send(t, 1)
-	j.waitJoin(t)
-	chunk := sfH264Frame(1, true)
-	chunk.auAligned = false
-	chunked.frames <- chunk
-	spWaitClosed(t, chunked.left, "the pump to leave a capture whose H.264 is a byte stream")
-	want := "the camera's H.264 is not arriving as whole frames, so there is none to put in a buffer"
-	if s := h.waitState(t, shareNoFrames); s.Detail != want {
-		t.Fatalf("Detail = %q, want %q", s.Detail, want)
-	}
-
-	// The camera is back on the path that makes whole access units.
-	j.waitJoin(t)
-	whole.frames <- sfH264Frame(2, true)
-	if e := h.node.next(t); e.size != len(sfH264Frame(2, true).data) || e.stamp.holdsSampleID {
-		t.Fatalf("write = %+v, want the whole access unit with its capture time", e)
-	}
-	h.waitState(t, shareReading)
-	if all := h.node.all(); len(all) != 1 {
-		t.Errorf("node writes = %+v, want only the whole access unit", all)
-	}
-}
-
-func TestSharePump_NativeRefusedByTheHubSaysWhyAndRecovers(t *testing.T) {
-	refusal := errNativeUnavailable("JPEG: the camera offers no JPEG at 1280x720")
-	refusedLater, served := newSpFakeSub(), newSpFakeSub()
-	refusedLater.err = refusal
-	close(refusedLater.frames)
-	j := newSpJoiner(spErrResult(refusal), spSubResult(refusedLater), spSubResult(served))
-	h := startSharePump(t, j, sfPumpAs(sfNativeMode, appconfig.CameraStampTime))
-
-	h.node.send(t, 1)
-	want := "native frames are not available for this camera: JPEG: the camera offers no JPEG at 1280x720"
-	for join, how := range []string{"refused at the join", "turned away by the producer"} {
-		j.waitJoin(t)
-		if !csWaitFor(spWait, func() bool { return h.pump.State() == shareState{shareNoFrames, want} }) {
-			t.Fatalf("join %d (%s): state = %+v, want no frames with %q", join+1, how, h.pump.State(), want)
-		}
-	}
-	h.noWriteWithin(t, 20*time.Millisecond)
-
-	j.waitJoin(t)
-	served.frames <- sfJPEGFrame(9, 77_000_000_000)
-	if e := h.node.next(t); e.stamp != stampWithCaptureTime(77_000_000_000) || e.size != len(sfJPEGFrame(9, 0).data) {
-		t.Fatalf("write = %+v, want the camera's own frame at its kernel capture time", e)
-	}
-	h.waitState(t, shareReading)
-}
-
-func TestSharePump_FramesOfAnotherCodecThanTheNodeDeclaresAreNotWritten(t *testing.T) {
+// A jump in sample IDs is a frame the pump never got (the hub dropped it for a
+// slow pump, or none was made from that camera frame): what follows cannot be
+// decoded until the next random-access frame.
+func TestSharePump_H264SkipsToARandomAccessFrameAfterAGapInSampleIDs(t *testing.T) {
 	sub := newSpFakeSub()
-	h := startSharePump(t, newSpJoiner(spSubResult(sub)), sfPumpAs(sfNativeMode, appconfig.CameraStampTime))
+	h := startSharePump(t, newSpJoiner(spSubResult(sub)), sfPumpAs(sfH264Mode, appconfig.CameraStampFrame))
 	h.node.send(t, 1)
 
-	ownH264 := sfH264Frame(1, true)
-	ownH264.native = true
-	sub.frames <- ownH264
-	want := "camera frames are H.264, the node declares 1280x720 MJPG, 30 fps"
-	if s := h.waitState(t, shareNoFrames); s.Detail != want {
-		t.Fatalf("Detail = %q, want %q", s.Detail, want)
+	for _, f := range []*videoFrame{
+		sfH264Frame(10, true), sfH264Frame(11, false),
+		sfH264Frame(13, false), sfH264Frame(14, false), // 12 never came
+		sfH264Frame(15, true), sfH264Frame(16, false),
+		sfH264Frame(18, true), // 17 never came, and this one stands alone
+		sfH264Frame(19, false),
+	} {
+		sub.frames <- f
 	}
-	sub.frames <- sfPictureFrame(2)
+	var written []uint64
+	for range 6 {
+		written = append(written, h.node.next(t).stamp.sampleID)
+	}
+	if want := []uint64{10, 11, 15, 16, 18, 19}; !reflect.DeepEqual(written, want) {
+		t.Fatalf("written sample IDs = %v, want %v", written, want)
+	}
 	h.noWriteWithin(t, 20*time.Millisecond)
-	sub.frames <- sfJPEGFrame(3, 1)
-	h.node.next(t)
-	h.waitState(t, shareReading)
+	h.expectState(t, shareState{Phase: shareReading})
+}
+
+// The camera's own frames each stand alone, so a gap costs only the frames
+// that were lost.
+func TestSharePump_AGapInSampleIDsCostsANativeNodeNothingMore(t *testing.T) {
+	sub := newSpFakeSub()
+	h := startSharePump(t, newSpJoiner(spSubResult(sub)), sfPumpAs(sfNativeMode, appconfig.CameraStampFrame))
+	h.node.send(t, 1)
+	for _, id := range []uint64{4, 5, 9, 10} {
+		sub.frames <- sfJPEGFrame(id, 1)
+	}
+	var written []uint64
+	for range 4 {
+		written = append(written, h.node.next(t).stamp.sampleID)
+	}
+	if want := []uint64{4, 5, 9, 10}; !reflect.DeepEqual(written, want) {
+		t.Fatalf("written sample IDs = %v, want %v", written, want)
+	}
 }
 
 // sfWriter is a node writer over memory, with its queue ioctl recorded.
@@ -773,14 +1298,20 @@ func TestShareNodeWriter_BufferTimestampHoldsTheCaptureTimeOrTheSampleID(t *test
 		t.Errorf("capture time stamped as %d s %d µs, want 12345 s 678901 µs", sec, usec)
 	}
 
-	for _, id := range []uint64{1, 999_999, 1_000_000, 1234567890123, 1<<63 + 5} {
+	// A reader recovers the ID as seconds*1e6 + microseconds.
+	for id, want := range map[uint64][2]int64{
+		1:                  {0, 1},
+		999_999:            {0, 999_999},
+		1_000_000:          {1, 0},
+		1_234_567_890_123:  {1_234_567, 890_123},
+		92_233_720_368_547: {92_233_720, 368_547},
+	} {
 		if err := w.WriteFrame([]byte{1}, stampWithSampleID(id)); err != nil {
 			t.Fatalf("sample ID %d: %v", id, err)
 		}
 		last := (*queued)[len(*queued)-1]
-		sec, usec := sfBufferTimeval(&last)
-		if uint64(sec) != id/1_000_000 || uint64(usec) != id%1_000_000 || uint64(sec)*1_000_000+uint64(usec) != id {
-			t.Errorf("sample ID %d stamped as %d s %d µs", id, sec, usec)
+		if sec, usec := sfBufferTimeval(&last); sec != want[0] || usec != want[1] {
+			t.Errorf("sample ID %d stamped as %d s %d µs, want %d s %d µs", id, sec, usec, want[0], want[1])
 		}
 		if last.flags()&v4l2BufFlagTimestampCopy == 0 {
 			t.Errorf("sample ID %d: the buffer does not say its timestamp is the writer's", id)
@@ -793,10 +1324,5 @@ func TestShareNodeWriter_BufferTimestampHoldsTheCaptureTimeOrTheSampleID(t *test
 	}
 	if len(*queued) != before {
 		t.Error("a frame with sample ID 0 was queued")
-	}
-	var viaTwoPlane, viaShare v4l2Buf
-	setLoopbackSampleID(&viaTwoPlane, 1234567890123)
-	if err := stampWithSampleID(1234567890123).writeTo(&viaShare); err != nil || viaShare != viaTwoPlane {
-		t.Errorf("a share node's sample ID encoding differs from the two-plane writer's (%v)", err)
 	}
 }

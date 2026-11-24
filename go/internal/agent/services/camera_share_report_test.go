@@ -29,11 +29,11 @@ func TestCameraShareReport_NamesModeAppsAndStates(t *testing.T) {
 	got := h.s.CameraShareReport(context.Background())["/dev/video0"]
 	dev := &agentpb.VideoDevice{Path: "/dev/video0", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB}
 	want := map[string]string{
-		"share_mode":        h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.String(),
-		"share_mode_native": "1280x720 MJPG, 30 fps",
-		"share_mode_h264":   "1280x720 H264, 30 fps",
-		"shared_with":       "cv-a, cv-b, cv-c",
-		"share_state":       "cv-a [format pixels, stamp time] (reading), cv-b [format pixels, stamp time] (waiting: held by cv-x at 1920x1080), cv-c [format pixels, stamp time] (not sharing: took the real camera after a replug)",
+		"share_mode":               h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.String(),
+		"share_unavailable_native": sfCannotDerive,
+		"share_unavailable_h264":   sfCannotDerive,
+		"shared_with":              "cv-a, cv-b, cv-c",
+		"share_state":              "cv-a [format pixels, stamp time] (reading), cv-b [format pixels, stamp time] (waiting: held by cv-x at 1920x1080), cv-c [format pixels, stamp time] (not sharing: took the real camera after a replug)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("report = %#v, want %#v", got, want)

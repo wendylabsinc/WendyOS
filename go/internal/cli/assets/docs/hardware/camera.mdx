@@ -154,6 +154,12 @@ Two optional keys on the camera entitlement set what the node carries:
 { "type": "camera", "format": "pixels", "stamp": "time" }
 ```
 
+An app gets a node for every shared camera. A camera that cannot provide the
+`format` asked for is served as `"pixels"` instead: the deploy notice and the
+camera's status say `asked for <format>; serving pixels because <reason>`. A
+`"frame"` stamp is never replaced by a time: a node whose camera's frames
+carry no frame number gets no frames, and its status says why.
+
 An app gets one node per camera. An entry's `allowlist` selects which cameras
 its `format` and `stamp` apply to, by device path or camera name; an entry
 without one applies to every camera. Two `camera` or `video` entries that
@@ -206,13 +212,14 @@ While a camera is shared:
 The Status column of `wendy device camera list` shows
 `shared: <app> [format <format>, stamp <stamp>] (<state>), ...` for each app
 sharing the camera. When the camera cannot fill a node in its format or with
-its stamp, the state is `no frames` with the reason, and the node gets frames
-again once the camera can. The same detail is in the JSON from
-`wendy device hardware list --category camera --json` as the properties
-`share_mode`, `share_unavailable`, `shared_with` and `share_state`, with
-`share_mode_native` and `share_mode_h264` for the mode of a node in those
-formats. A camera that is not shared carries `share_unavailable` with the
-reason.
+its stamp, the state is `cannot serve` with the reason; the node gets no frames
+until the camera can, which the agent checks once a minute. The same detail is
+in the JSON from `wendy device hardware list --category camera --json` as the
+properties `share_mode`, `share_unavailable`, `shared_with` and `share_state`,
+with `share_mode_native` and `share_mode_h264` for the mode of a node in those
+formats, or `share_unavailable_native` and `share_unavailable_h264` for why the
+camera has none. A camera that is not shared carries `share_unavailable` with
+the reason.
 
 ### Behavior to know about
 

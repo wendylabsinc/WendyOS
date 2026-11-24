@@ -156,8 +156,21 @@ func (h *deviceHub) wantKind(kind frameKind) bool {
 	return false
 }
 
-func errNativeUnavailable(reason string) error {
-	return status.Error(codes.FailedPrecondition, "native frames are not available for this camera: "+reason)
+// nativeUnavailable is the refusal a native subscriber is given. It reads and
+// travels as the FailedPrecondition status it has always been.
+type nativeUnavailable struct{ reason string }
+
+func (e nativeUnavailable) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, "native frames are not available for this camera: "+e.reason)
+}
+
+func (e nativeUnavailable) Error() string { return e.GRPCStatus().Err().Error() }
+
+func errNativeUnavailable(reason string) error { return nativeUnavailable{reason: reason} }
+
+func isNativeRefusal(err error) bool {
+	var refusal nativeUnavailable
+	return errors.As(err, &refusal)
 }
 
 func (h *deviceHub) nativeOffered() {

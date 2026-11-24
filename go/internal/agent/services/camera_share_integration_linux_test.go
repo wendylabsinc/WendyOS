@@ -244,6 +244,12 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 			t.Fatalf("%s: camera was not shared: %s", app.id, shareRefusalReason(fx.logs, app.id))
 		}
 		fx.made = append(fx.made, r.node)
+		if r.askedFormat == app.format {
+			if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
+				t.Fatalf("required: a %s node: %s", app.format, r.askedWhyNot)
+			}
+			t.Skipf("this device serves pixels for %s: %s", app.format, r.askedWhyNot)
+		}
 		if r.mode.Format != app.format || r.stamp != app.stamp || r.mode.pixelFormat() != app.pixelFormat ||
 			r.mode.Width != pixelsFixtureWidth || r.mode.Height != pixelsFixtureHeight {
 			t.Fatalf("%s shares at %s, want %dx%d %s as %s", app.id, describeShareNode(r.mode, r.stamp),
@@ -278,14 +284,8 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 		for len(frames) < wantFrames {
 			frame, stamp, err := readers[id].next(ctx, 15*time.Second)
 			if err != nil {
-				state := svc.CameraShareReport(ctx)[path][camerashare.KeyState]
-				if len(frames) == 0 && strings.Contains(state, "not available for this camera") {
-					if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
-						t.Fatalf("required: the camera's own frames captured whole: %s", state)
-					}
-					t.Skipf("this device does not capture the camera's own frames whole: %s", state)
-				}
-				t.Fatalf("%s: frame %d: %v; share state: %s; feed: %v", id, len(frames), err, state, fx.feed.err())
+				t.Fatalf("%s: frame %d: %v; share state: %s; feed: %v", id, len(frames), err,
+					svc.CameraShareReport(ctx)[path][camerashare.KeyState], fx.feed.err())
 			}
 			frames, stamps = append(frames, frame), append(stamps, stamp)
 		}

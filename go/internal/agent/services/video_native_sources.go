@@ -72,20 +72,35 @@ var nativeH264Source = nativeCaptureSource{
 	},
 }
 
+// wholeJPEGCapture is the size and rate at which a camera is captured as whole
+// JPEG frames for a request, or why it is not captured that way. A capture
+// and a camera share asking whether its node can be filled read this one
+// answer.
+func (s *VideoService) wholeJPEGCapture(path string, req *agentpb.StreamVideoRequest) (width, height, framerate uint32, declined string) {
+	width, height, declined = nativeJPEGCapture(path, req)
+	if declined != "" {
+		return 0, 0, 0, declined
+	}
+	if why, failed := s.derivedFailures.recent(path); failed {
+		return 0, 0, 0, "deriving pictures and H.264 from this camera's frames failed recently: " + why
+	}
+	framerate = nativeJPEGFrameRate(path, req, width, height)
+	if _, err := s.derivedLayerFor(nil, videoCodecMJPEG, path, width, height, framerate); err != nil {
+		return 0, 0, 0, fmt.Sprintf("pictures and H.264 cannot be derived from its frames on this device: %v", err)
+	}
+	return width, height, framerate, ""
+}
+
 var nativeJPEGSource = nativeCaptureSource{
 	format: "JPEG",
 	accept: func(s *VideoService, cam localCamera) (func(context.Context) error, string) {
-		width, height, declined := nativeJPEGCapture(cam.path, cam.req)
+		width, height, framerate, declined := s.wholeJPEGCapture(cam.path, cam.req)
 		if declined != "" {
 			return nil, declined
 		}
 		if cam.hub == nil {
 			return nil, "the capture does not feed a camera hub"
 		}
-		if why, failed := s.derivedFailures.recent(cam.path); failed {
-			return nil, "deriving pictures and H.264 from this camera's frames failed recently: " + why
-		}
-		framerate := nativeJPEGFrameRate(cam.path, cam.req, width, height)
 		layer, err := s.derivedLayerFor(cam.hub, videoCodecMJPEG, cam.path, width, height, framerate)
 		if err != nil {
 			return nil, fmt.Sprintf("pictures and H.264 cannot be derived from its frames on this device: %v", err)
@@ -159,16 +174,21 @@ func (f *derivedLayerFailures) recent(device string) (why string, failed bool) {
 	return failure.why, true
 }
 
+// derivedLayerFor builds the layer that derives from a camera's frames for hub.
+// Without a hub it only answers whether such a layer can be built here.
 func (s *VideoService) derivedLayerFor(hub derivingHub, format agentpb.VideoCodec, path string, width, height, framerate uint32) (*derivedLayer, error) {
 	gstPath, available, err := s.gstElements()
 	if err != nil {
 		return nil, fmt.Errorf("GStreamer is not usable: %w", err)
 	}
-	return newDerivedLayer(derivedLayerConfig{
+	cfg := derivedLayerConfig{
 		logger: s.logger, device: path, format: format, gstPath: gstPath, available: available,
 		width: width, height: height, framerate: framerate, grace: s.encoderGrace(),
-		demand: hub, publish: hub.broadcastDerivedFrom,
-	})
+	}
+	if hub != nil {
+		cfg.demand, cfg.publish = hub, hub.broadcastDerivedFrom
+	}
+	return newDerivedLayer(cfg)
 }
 
 // A layer that gives up ends the capture, with the layer's error: the hub's

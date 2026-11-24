@@ -581,7 +581,7 @@ func TestCreateCameraShares_OneNodePerSharedCameraLabelledWithItsName(t *testing
 
 	state := h.stateFile()
 	want := map[string]any{
-		"version": float64(2),
+		"version": float64(1),
 		"containers": map[string]any{"cv-a": map[string]any{
 			"app": "sh.wendy.cv-a",
 			"shares": []any{map[string]any{
@@ -589,9 +589,7 @@ func TestCreateCameraShares_OneNodePerSharedCameraLabelledWithItsName(t *testing
 				"path":   "/dev/video0",
 				"mode": map[string]any{"width": float64(1280), "height": float64(720), "fourcc": "YUYV",
 					"bytesPerLine": float64(2560), "fps": float64(30)},
-				"format": "pixels",
-				"stamp":  "time",
-				"node":   float64(255),
+				"node": float64(255),
 			}},
 		}},
 	}

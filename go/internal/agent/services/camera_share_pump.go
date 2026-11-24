@@ -18,7 +18,7 @@ import (
 
 // shareSubscription is the pump's view of its place in a camera's hub.
 type shareSubscription interface {
-	// Frames delivers the frames subscribed for; it closes when the capture ends.
+	// Frames closes when the capture ends.
 	Frames() <-chan *videoFrame
 	// Restarted reports that the capture ended because the hub restarted it
 	// (so a join at once will succeed), not because it failed.
@@ -46,6 +46,8 @@ const (
 	shareWaiting   sharePhase = "waiting"
 	shareNoFrames  sharePhase = "no frames"
 	shareUnplugged sharePhase = "camera unplugged"
+	// In this phase the pump is not in the hub.
+	shareCannotServe sharePhase = "cannot serve"
 )
 
 type shareState struct {
@@ -56,6 +58,12 @@ type shareState struct {
 // shareRetryBackoff is how long the pump waits before joining again after a
 // failure; the last value repeats. A variable so tests can shorten it.
 var shareRetryBackoff = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
+
+// shareCannotServeRecheck is how long a pump whose camera cannot serve its node
+// waits before it looks again. Looking can mean joining, which opens the real
+// camera, so this is slow where shareRetryBackoff is fast. A variable so tests
+// can shorten it.
+var shareCannotServeRecheck = time.Minute
 
 // shareQuickRejoins is how many consecutive rejoins without a written frame
 // happen at once (a restart, a wait that ends) before the pump backs off.
@@ -76,6 +84,9 @@ type sharePump struct {
 	// (camera_share.go clears a "took the real camera" note then). It is set
 	// before Run starts and called without mu.
 	onReading func()
+	// unserved, when set, must not capture. It is set before Run starts and
+	// called without mu.
+	unserved func() string
 
 	// Clocks, replaceable in tests.
 	nowMono func() int64
@@ -103,17 +114,19 @@ type sharePump struct {
 	writeLogged, writeFailed bool
 	// awaitRandomAccess: the next frame written must be decodable without the
 	// frames before it, because the app has none of them (a new subscription)
-	// or misses one (a frame that was not written).
+	// or misses one (a frame that was not written, or one the pump never got).
 	awaitRandomAccess bool
-	// unserved is why the pump left its last capture: its frames could not
-	// serve the node (cannotServe). Until a frame is written the state stays
-	// "no frames" with it across joins, and each reason is logged once.
-	unserved string
+	lastSampleID      uint64 // of the subscription's latest frame
+	// blocked is why the camera cannot serve the node (cannotServe), or "".
+	// While it is set the state is "cannot serve" with it, whether or not an
+	// app reads, until a frame is written or another failure takes its place.
+	blocked string
 	// quick counts rejoins since the last written frame that did not wait for
 	// a backoff; past shareQuickRejoins the pump backs off instead.
 	quick   int
 	retry   <-chan time.Time
 	waiting <-chan struct{}
+	recheck <-chan time.Time
 }
 
 func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode sharedMode, stamp string, join func(ctx context.Context) (shareSubscription, error)) *sharePump {
@@ -130,8 +143,8 @@ func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode
 }
 
 // Nudge tells the pump its camera may be back (a replug, or a /dev watch that
-// lost events): a pump waiting out a backoff while an app reads joins at once
-// instead of after up to the last backoff step. It never blocks, and does
+// lost events): a pump waiting out a backoff or a recheck while an app reads
+// looks at once instead of when its timer fires. It never blocks, and does
 // nothing to a pump that is reading, idle, or waiting for a recording.
 func (p *sharePump) Nudge() {
 	select {
@@ -165,6 +178,10 @@ func (p *sharePump) setState(phase sharePhase, detail string) {
 func (p *sharePump) Run(ctx context.Context) {
 	defer p.leave()
 	counts := p.node.Counts()
+	// Before any app reads: the state says why from the start.
+	if reason := p.unservedNow(); reason != "" {
+		p.cannotServe(ctx, reason)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -186,17 +203,24 @@ func (p *sharePump) Run(ctx context.Context) {
 				continue
 			}
 			p.start(ctx)
+		case <-p.recheck:
+			p.recheck = nil
+			if p.reading && p.leftMeanwhile(ctx, counts) {
+				continue
+			}
+			p.lookAgain(ctx)
 		case <-p.nudge:
-			// Only a backoff is cut short: a recording's wait ends on its
-			// own, and a pump that is reading or idle has nothing to retry.
-			if p.retry == nil || !p.reading {
+			// Only a backoff or a recheck is cut short: a recording's wait
+			// ends on its own, and a pump that is reading or idle with a
+			// camera that serves it has nothing to retry.
+			if (p.retry == nil || !p.reading) && p.recheck == nil {
 				continue
 			}
-			p.retry = nil
-			if p.leftMeanwhile(ctx, counts) {
+			p.retry, p.recheck = nil, nil
+			if p.reading && p.leftMeanwhile(ctx, counts) {
 				continue
 			}
-			p.start(ctx)
+			p.lookAgain(ctx)
 		case <-p.waiting:
 			p.waiting = nil
 			if p.leftMeanwhile(ctx, counts) {
@@ -214,7 +238,8 @@ func (p *sharePump) Run(ctx context.Context) {
 
 // leftMeanwhile reports whether a 0 was already pending when a timer fired, in
 // which case it has been handled and the camera must not start. A pending 1
-// changes nothing: the caller starts.
+// changes nothing: the caller starts. Only for a pump with a reader: it takes
+// a pending 1 off the channel.
 func (p *sharePump) leftMeanwhile(ctx context.Context, counts <-chan uint32) bool {
 	select {
 	case n, ok := <-counts:
@@ -245,12 +270,37 @@ func (p *sharePump) handleCount(ctx context.Context, n uint32) {
 	}
 }
 
-// start joins the hub; it is called with the count at 1. After a capture the
-// pump left because it could not serve the node, the state stays "no frames"
-// until a frame is written (unserved).
+func (p *sharePump) unservedNow() string {
+	if p.unserved == nil {
+		return ""
+	}
+	return p.unserved()
+}
+
+func (p *sharePump) lookAgain(ctx context.Context) {
+	if p.reading {
+		p.start(ctx)
+		return
+	}
+	if reason := p.unservedNow(); reason != "" {
+		p.cannotServe(ctx, reason)
+		return
+	}
+	p.blocked = ""
+	p.setState(shareIdle, "")
+}
+
+// start joins the hub; it is called with the count at 1. A camera that cannot
+// serve the node is not joined at all. After a capture the pump left because
+// it could not serve the node, the state stays "cannot serve" until a frame is
+// written (blocked).
 func (p *sharePump) start(ctx context.Context) {
-	p.retry, p.waiting = nil, nil
+	p.retry, p.waiting, p.recheck = nil, nil, nil
 	if ctx.Err() != nil {
+		return
+	}
+	if reason := p.unservedNow(); reason != "" {
+		p.cannotServe(ctx, reason)
 		return
 	}
 	sub, err := p.join(ctx)
@@ -261,7 +311,7 @@ func (p *sharePump) start(ctx context.Context) {
 	p.sub, p.frames = sub, sub.Frames()
 	p.dropped, p.writeLogged, p.writeFailed, p.mismatch = false, false, false, ""
 	p.awaitRandomAccess = true
-	if p.unserved == "" {
+	if p.blocked == "" {
 		p.setState(shareReading, "")
 	}
 	if p.onReading != nil {
@@ -273,6 +323,11 @@ func (p *sharePump) joinFailed(ctx context.Context, err error) {
 	if ctx.Err() != nil {
 		return
 	}
+	if isNativeRefusal(err) {
+		p.cannotServe(ctx, refusalText(err))
+		return
+	}
+	p.blocked = ""
 	var wait *shareWaitError
 	switch {
 	case errors.As(err, &wait):
@@ -314,6 +369,10 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 	}
 	restarted, cerr := sub.Restarted(), sub.Err()
 	sub.Leave()
+	if isNativeRefusal(cerr) {
+		p.cannotServe(ctx, refusalText(cerr))
+		return
+	}
 	if restarted && p.quick < shareQuickRejoins {
 		p.quick++
 		p.start(ctx)
@@ -331,6 +390,7 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 	case cerr != nil:
 		detail = refusalText(cerr)
 	}
+	p.blocked = ""
 	p.setState(shareNoFrames, detail)
 	p.retry = time.After(d)
 }
@@ -405,34 +465,40 @@ func (p *sharePump) unservable(f *videoFrame) string {
 	return ""
 }
 
-// cannotServe leaves a capture whose frames cannot serve the node and joins
-// again after a backoff: the camera may be captured another way by then.
+// cannotServe is for a camera that, as it is captured, has no frames for the
+// node: the pump leaves the hub if it is in it, holds "cannot serve" with the
+// reason, and looks again every shareCannotServeRecheck. The fast backoff is
+// for failures that pass.
 func (p *sharePump) cannotServe(ctx context.Context, reason string) {
 	p.leave()
 	if ctx.Err() != nil {
 		return
 	}
-	d := p.nextDelay()
-	if p.unserved != reason {
-		p.unserved = reason
-		p.logger.Warn(fmt.Sprintf("camera share: %s: %s cannot serve its node (%s): %s; not writing its frames, retrying in %s",
-			p.app, p.camera, describeShareSettings(p.mode.Format, p.stamp), reason, d))
+	if p.blocked != reason {
+		p.blocked = reason
+		p.logger.Warn(fmt.Sprintf("camera share: %s: %s cannot serve its node (%s): %s; it gets no frames until the camera can, checked every %s",
+			p.app, p.camera, describeShareSettings(p.mode.Format, p.stamp), reason, shareCannotServeRecheck))
 	}
-	p.setState(shareNoFrames, reason)
-	p.retry = time.After(d)
+	p.setState(shareCannotServe, reason)
+	p.recheck = time.After(shareCannotServeRecheck)
 }
 
-// write puts one hub frame on the node. A frame that is not the node's mode is
-// dropped, and while frames are dropped the state says so ("no frames", with
-// both formats), not "reading": the app gets nothing. A matching frame puts it
-// back to "reading". A frame that shows the capture cannot serve the node ends
-// the subscription (cannotServe).
+// write puts one hub frame on the node. A picture that is not the node's mode
+// is dropped, and while pictures are dropped the state says so ("no frames",
+// with both formats), not "reading": the app gets nothing. A matching one puts
+// it back to "reading". A frame that shows the capture cannot serve the node
+// (another codec than the node declares, part of a frame, no frame number for
+// a "frame" stamp) ends the subscription (cannotServe).
 func (p *sharePump) write(ctx context.Context, f *videoFrame) {
 	if f == nil {
 		return
 	}
 	if !p.mode.carries(f) {
 		detail := fmt.Sprintf("camera frames are %s, the node declares %s", describeNodeFrame(f), p.mode)
+		if p.mode.compressed() {
+			p.cannotServe(ctx, detail)
+			return
+		}
 		if !p.dropped {
 			p.dropped = true
 			p.logger.Warn(fmt.Sprintf("camera share: %s: %s; not writing them", p.app, detail))
@@ -446,6 +512,12 @@ func (p *sharePump) write(ctx context.Context, f *videoFrame) {
 	if reason := p.unservable(f); reason != "" {
 		p.cannotServe(ctx, reason)
 		return
+	}
+	if sampleGap(p.lastSampleID, f.sampleID) {
+		p.awaitRandomAccess = true
+	}
+	if f.sampleID != 0 {
+		p.lastSampleID = f.sampleID
 	}
 	if p.awaitRandomAccess {
 		if !decodableAlone(f) {
@@ -465,8 +537,8 @@ func (p *sharePump) write(ctx context.Context, f *videoFrame) {
 		}
 		return
 	}
-	if p.writeFailed || p.mismatch != "" || p.unserved != "" {
-		p.writeFailed, p.mismatch, p.unserved = false, "", ""
+	if p.writeFailed || p.mismatch != "" || p.blocked != "" {
+		p.writeFailed, p.mismatch, p.blocked = false, "", ""
 		p.setState(shareReading, "")
 	}
 	p.attempt = 0
@@ -479,13 +551,18 @@ func (p *sharePump) stop() {
 	p.leave()
 	p.attempt = 0
 	p.quick = 0
-	p.writeFailed, p.mismatch, p.unserved = false, "", ""
-	p.setState(shareIdle, "")
+	p.writeFailed, p.mismatch = false, ""
+	if p.blocked == "" {
+		p.setState(shareIdle, "")
+		return
+	}
+	p.setState(shareCannotServe, p.blocked)
+	p.recheck = time.After(shareCannotServeRecheck)
 }
 
 // leave drops the subscription and its queued frames.
 func (p *sharePump) leave() {
-	p.retry, p.waiting = nil, nil
+	p.retry, p.waiting, p.recheck = nil, nil, nil
 	sub, frames := p.sub, p.frames
 	p.sub, p.frames = nil, nil
 	if sub == nil {
