@@ -42,6 +42,12 @@ func EntitlementAnnotationValue(e Entitlement) string {
 	if e.Mode != "" {
 		parts = append(parts, "mode="+e.Mode)
 	}
+	if e.Format != "" {
+		parts = append(parts, "format="+e.Format)
+	}
+	if e.Stamp != "" {
+		parts = append(parts, "stamp="+e.Stamp)
+	}
 	if e.Name != "" {
 		parts = append(parts, "name="+e.Name)
 	}
@@ -97,6 +103,10 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 		switch key {
 		case "mode":
 			ent.Mode = val
+		case "format":
+			ent.Format = val
+		case "stamp":
+			ent.Stamp = val
 		case "name":
 			ent.Name = val
 		case "path":

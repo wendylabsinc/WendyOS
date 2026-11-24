@@ -143,12 +143,12 @@ var allowedKeys = map[string][]string{
 	EntitlementBluetooth:     {"type", "mode"},
 	EntitlementAvahi:         {"type"},
 	EntitlementNAN:           {"type"},
-	EntitlementVideo:         {"type", "mode", "allowlist"},
+	EntitlementVideo:         {"type", "mode", "allowlist", "format", "stamp"},
 	EntitlementGPU:           {"type"},
 	EntitlementNPU:           {"type"},
 	EntitlementPersist:       {"type", "name", "path"},
 	EntitlementAudio:         {"type"},
-	EntitlementCamera:        {"type", "mode", "allowlist", "user", "password"},
+	EntitlementCamera:        {"type", "mode", "allowlist", "format", "stamp", "user", "password"},
 	EntitlementUSB:           {"type"},
 	EntitlementI2C:           {"type", "device"},
 	EntitlementGPIO:          {"type", "pins"},
@@ -467,7 +467,7 @@ const (
 func CameraShareChoice(entitlements []Entitlement) string {
 	choice := ""
 	for _, e := range entitlements {
-		if e.Type != EntitlementCamera && e.Type != EntitlementVideo {
+		if !isCameraEntitlement(e) {
 			continue
 		}
 		if e.Mode == CameraModeDirect {
@@ -478,12 +478,73 @@ func CameraShareChoice(entitlements []Entitlement) string {
 	return choice
 }
 
+// What a camera entitlement's node carries: decoded pictures or the camera's own
+// frames.
+const (
+	CameraFormatPixels = "pixels"
+	CameraFormatNative = "native"
+)
+
+// What the timestamp field of each frame on the node holds: the capture time or
+// the agent's frame number.
+const (
+	CameraStampTime  = "time"
+	CameraStampFrame = "frame"
+)
+
+// CameraFormats and CameraStamps list the accepted values; the first of each is
+// the default. wendy.schema.json repeats them as enums.
+var (
+	CameraFormats = []string{CameraFormatPixels, CameraFormatNative}
+	CameraStamps  = []string{CameraStampTime, CameraStampFrame}
+)
+
+func isCameraEntitlement(e Entitlement) bool {
+	return e.Type == EntitlementCamera || e.Type == EntitlementVideo
+}
+
+// CameraNodeSettings reports the format and stamp of the node an app gets for
+// the camera with the given device path and name. The entry whose allowlist
+// names the camera decides, then the entry without an allowlist, then the
+// defaults. Values are not validated here: one that Validate would reject is
+// returned as written.
+func CameraNodeSettings(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string) {
+	var chosen Entitlement
+	fallbackFound := false
+	for _, e := range entitlements {
+		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
+			continue
+		}
+		if len(e.Allowlist) == 0 {
+			if !fallbackFound {
+				chosen, fallbackFound = e, true
+			}
+			continue
+		}
+		if (cameraPath != "" && slices.Contains(e.Allowlist, cameraPath)) ||
+			(cameraName != "" && slices.Contains(e.Allowlist, cameraName)) {
+			chosen = e
+			break
+		}
+	}
+	format, stamp = chosen.Format, chosen.Stamp
+	if format == "" {
+		format = CameraFormats[0]
+	}
+	if stamp == "" {
+		stamp = CameraStamps[0]
+	}
+	return format, stamp
+}
+
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
 	Streams   map[string]RecordingStream `json:"streams,omitempty"`
 	Type      string                     `json:"type"`
 	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video, Camera ("direct")
 	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
+	Format    string                     `json:"format,omitempty"`    // Camera, Video
+	Stamp     string                     `json:"stamp,omitempty"`     // Camera, Video
 	Name      string                     `json:"name,omitempty"`      // Persist
 	Path      string                     `json:"path,omitempty"`      // Persist
 	Device    string                     `json:"device,omitempty"`    // I2C, Serial
@@ -573,6 +634,58 @@ func validateAllowlistEntries(allowlist []string, prefix string, index int) erro
 	return nil
 }
 
+func validateCameraNodeSetting(e Entitlement, key, value string, accepted []string, prefix string, index int) error {
+	if value == "" {
+		return nil
+	}
+	if !slices.Contains(accepted, value) {
+		quoted := make([]string, len(accepted))
+		for i, v := range accepted {
+			quoted[i] = fmt.Sprintf("%q", v)
+		}
+		return fmt.Errorf("%s[%d]: %s %s must be one of %s; got %q", prefix, index, e.Type, key, strings.Join(quoted, ", "), value)
+	}
+	if e.Mode == CameraModeDirect {
+		return fmt.Errorf("%s[%d]: %s %s cannot be combined with mode %q: the app gets the real device, so there is no camera node to configure", prefix, index, e.Type, key, CameraModeDirect)
+	}
+	return nil
+}
+
+// validateCameraClaims rejects two camera or video entries that claim the same
+// camera: an entry without an allowlist claims every camera, and an entry with
+// one claims the cameras it lists, compared as exact strings.
+func validateCameraClaims(entitlements []Entitlement, prefix string) error {
+	for j, later := range entitlements {
+		if !isCameraEntitlement(later) {
+			continue
+		}
+		for i, earlier := range entitlements[:j] {
+			if !isCameraEntitlement(earlier) {
+				continue
+			}
+			var overlap string
+			switch {
+			case len(earlier.Allowlist) == 0 && len(later.Allowlist) == 0:
+				overlap = "neither has an allowlist"
+			case len(earlier.Allowlist) == 0:
+				overlap = fmt.Sprintf("%s[%d] has no allowlist, so it claims every camera", prefix, i)
+			case len(later.Allowlist) == 0:
+				overlap = fmt.Sprintf("%s[%d] has no allowlist, so it claims every camera", prefix, j)
+			default:
+				shared := slices.IndexFunc(later.Allowlist, func(camera string) bool {
+					return slices.Contains(earlier.Allowlist, camera)
+				})
+				if shared < 0 {
+					continue
+				}
+				overlap = fmt.Sprintf("both allowlists contain %q", later.Allowlist[shared])
+			}
+			return fmt.Errorf("%s[%d] and %s[%d] claim the same camera: %s; an app gets one node per camera, so only one camera or video entry may claim it", prefix, i, prefix, j, overlap)
+		}
+	}
+	return nil
+}
+
 // validateEntitlements checks a slice of entitlements for required fields and
 // valid types. The prefix string is used in error messages (e.g.
 // "entitlement" for top-level or "services[\"foo\"].entitlement" for service-
@@ -652,6 +765,13 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			if !isValidSerialDevice(e.Device) {
 				return fmt.Errorf("%s[%d]: serial device must be a bare USB tty node name like ttyACM0 or ttyUSB0, got %q", prefix, i, e.Device)
 			}
+		case EntitlementCamera, EntitlementVideo:
+			if err := validateCameraNodeSetting(e, "format", e.Format, CameraFormats, prefix, i); err != nil {
+				return err
+			}
+			if err := validateCameraNodeSetting(e, "stamp", e.Stamp, CameraStamps, prefix, i); err != nil {
+				return err
+			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
 		case EntitlementArduinoBridge:
@@ -664,6 +784,10 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 				return fmt.Errorf("%s[%d]: http port must be between 1 and 65535, got %d", prefix, i, e.Port)
 			}
 		}
+	}
+
+	if err := validateCameraClaims(entitlements, prefix); err != nil {
+		return err
 	}
 
 	mcpCount := 0

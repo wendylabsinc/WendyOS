@@ -285,6 +285,18 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Allowed video device paths."
+            },
+            "format": {
+              "type": "string",
+              "enum": ["pixels", "native"],
+              "default": "pixels",
+              "description": "What the app's camera node carries: \"pixels\" for decoded pictures, \"native\" for the camera's own frames (for example MJPEG or H.264)."
+            },
+            "stamp": {
+              "type": "string",
+              "enum": ["time", "frame"],
+              "default": "time",
+              "description": "What each frame's timestamp field holds on the app's camera node: \"time\" for the capture time, \"frame\" for the agent's frame number."
             }
           },
           "required": ["type"],
@@ -344,6 +356,18 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Allowed camera device paths. Accepted for compatibility with the deprecated video entitlement."
+            },
+            "format": {
+              "type": "string",
+              "enum": ["pixels", "native"],
+              "default": "pixels",
+              "description": "What the app's camera node carries: \"pixels\" for decoded pictures, \"native\" for the camera's own frames (for example MJPEG or H.264)."
+            },
+            "stamp": {
+              "type": "string",
+              "enum": ["time", "frame"],
+              "default": "time",
+              "description": "What each frame's timestamp field holds on the app's camera node: \"time\" for the capture time, \"frame\" for the agent's frame number."
             },
             "user": {
               "type": "string",

@@ -589,3 +589,23 @@ func TestProjectNetworkDefaultsAndModeChange(t *testing.T) {
 		t.Fatal(data)
 	}
 }
+
+func TestProjectEditsCameraNodeFormatAndStamp(t *testing.T) {
+	_, path := projectTestSetup(t, `{"appId":"robot","entitlements":[{"type":"camera"}]}`)
+	if _, err := projectTestCommand(t, "edit", "camera", "--format", "native", "--stamp", "frame", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	saved := readProjectTestFile(t, path)
+	for _, want := range []string{`"format": "native"`, `"stamp": "frame"`} {
+		if !strings.Contains(saved, want) {
+			t.Errorf("missing %s in %s", want, saved)
+		}
+	}
+	_, err := projectTestCommand(t, "edit", "camera", "--format", "h264", "--file", path)
+	if err == nil || !strings.Contains(err.Error(), `camera format must be one of "pixels", "native"`) {
+		t.Fatalf("error = %v, want the accepted formats", err)
+	}
+	if readProjectTestFile(t, path) != saved {
+		t.Fatal("rejected format changed the file")
+	}
+}

@@ -74,7 +74,11 @@ func projectFields(name string) []projectField {
 	case "bluetooth":
 		return []projectField{{"mode", "mode", "Bluetooth mode", "Optional Bluetooth access mode", "string", "", false}}
 	case "camera", "video":
-		return []projectField{{"allowlist", "allowlist", "Allowed cameras", "Comma-separated camera names or paths; empty for all", "list", "", false}}
+		return []projectField{
+			{"allowlist", "allowlist", "Allowed cameras", "Comma-separated camera names or paths; empty for all", "list", "", false},
+			{"format", "format", "Camera node format", cameraNodeFieldHint(appconfig.CameraFormats), "string", "", false},
+			{"stamp", "stamp", "Camera node stamp", cameraNodeFieldHint(appconfig.CameraStamps), "string", "", false},
+		}
 	case "episode-write":
 		return []projectField{{"streams", "streams", "Recording streams", "JSON object of recording streams; use edit --raw for larger configurations", "object", "", false}}
 	case "ros2":
@@ -86,6 +90,10 @@ func projectFields(name string) []projectField {
 		}
 	}
 	return nil
+}
+
+func cameraNodeFieldHint(accepted []string) string {
+	return strings.Join(accepted, " or ") + "; empty for " + accepted[0]
 }
 
 func findProjectFeature(name string) (projectFeature, bool) {

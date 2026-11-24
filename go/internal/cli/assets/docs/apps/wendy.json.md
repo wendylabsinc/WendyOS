@@ -442,6 +442,7 @@ Camera / V4L2 device access.
 { "type": "camera" }
 { "type": "camera", "mode": "direct" }
 { "type": "camera", "allowlist": ["/dev/video0"] }
+{ "type": "camera", "format": "pixels", "stamp": "time" }
 { "type": "camera", "user": "admin", "password": "secret" }
 ```
 
@@ -449,8 +450,12 @@ Camera / V4L2 device access.
 |-------|-------------|
 | `mode` | Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares. |
 | `allowlist` | Restrict access to specific device paths. Omit to allow all cameras. |
+| `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example MJPEG or H.264. |
+| `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |
+
+An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries may not claim the same camera, and neither key can be combined with `"mode": "direct"`.
 
 > **Security:** `user`/`password` set here are stored in **plaintext** in `wendy.json` and deployed as-is. Prefer the interactive `wendy device camera login` command, which keeps credentials out of the app config.
 

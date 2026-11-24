@@ -140,6 +140,24 @@ When the app is deployed, it gets a node for every shared camera plugged in at
 that moment, not only for the one it opens, so each of those cameras counts as
 shared by the app (see below).
 
+### Choose what the node carries
+
+Two optional keys on the camera entitlement set what the node carries:
+
+- `format`: `"pixels"` (default) for decoded pictures, or `"native"` for the
+  camera's own frames, for example MJPEG or H.264.
+- `stamp`: `"time"` (default) makes each frame's timestamp its capture time;
+  `"frame"` puts the agent's frame number in the timestamp field instead.
+
+```json
+{ "type": "camera", "format": "pixels", "stamp": "time" }
+```
+
+An app gets one node per camera. An entry's `allowlist` selects which cameras
+its `format` and `stamp` apply to, by device path or camera name; an entry
+without one applies to every camera. Two `camera` or `video` entries may not
+claim the same camera, and neither key can be combined with `"mode": "direct"`.
+
 ### Apps that need `"mode": "direct"`
 
 Some apps cannot work with the shared mode:

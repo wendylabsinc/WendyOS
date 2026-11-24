@@ -367,6 +367,19 @@ Omit to share the camera with other apps at its shared mode (one size up to 1280
 { "type": "camera", "mode": "direct" }
 ```
 
+`format` and `stamp` choose what the app's camera node carries. Both are optional, and the defaults are what an app gets without them.
+
+| Key | Values |
+|-----|--------|
+| `format` | `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example MJPEG or H.264. |
+| `stamp` | `"time"` (default): each frame's timestamp is its capture time. `"frame"`: each frame's timestamp field holds the agent's frame number instead. |
+
+```json
+{ "type": "camera", "format": "pixels", "stamp": "time" }
+```
+
+An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries may not claim the same camera. Neither key can be combined with `"mode": "direct"`, which has no node to configure.
+
 ## Audio
 
 The audio entitlement grants a container playback and capture access, both through the host's PipeWire session and through raw ALSA. One entitlement covers speakers and microphones alike.
